@@ -1,0 +1,45 @@
+name: Release
+
+# Cut a release by pushing a version tag, e.g.:  git tag v0.0.1 && git push origin v0.0.1
+# Builds the image from the Dockerfile and pushes it to Docker Hub klattm/hestia
+# as :<version>, :<major>.<minor>, and :latest.
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  image:
+    name: build & push image → klattm/hestia
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Re-run the gate so a tag can never publish an image that doesn't pass tests.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - name: Unit tests + 100% coverage gate
+        run: |
+          python -m pip install --upgrade coverage
+          python -m coverage run -m unittest discover -s tests
+          python -m coverage report --fail-under=100
+
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - uses: docker/metadata-action@v5
+        id: meta
+        with:
+          images: klattm/hestia
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
