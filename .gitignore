@@ -11,6 +11,7 @@ __pycache__/
 # test / coverage artifacts
 .coverage
 .coverage.*
+coverage.xml
 htmlcov/
 .pytest_cache/
 
