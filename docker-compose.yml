@@ -1,0 +1,24 @@
+services:
+  hestia:
+    build: .
+    container_name: hestia
+    # host networking is MANDATORY in production: it preserves the device's real
+    # source IP, lets the host iptables PREROUTING redirect + the 192.168.x NIC
+    # alias reach :8925, lets Apache on the host proxy to 127.0.0.1:8927, and puts
+    # the container on the LAN so LAN-local pollers (Tuya baby-monitor :6668) are
+    # reachable. Bridge + port-map cannot replicate the alias binding or LAN reach.
+    network_mode: host
+    init: true                # tini as PID1: reap zombies + forward SIGTERM
+    restart: unless-stopped   # = systemd Restart=on-failure (auto-restart, survives daemon restart)
+    environment:
+      # State lives on the /data volume — NEVER in the ephemeral container cwd, or
+      # a Phase-3 graduation (registry.mode=standalone) silently reverts to proxy
+      # and all automation rules are wiped on any rebuild/recreate.
+      HESTIA_REGISTRY: /data/registry.json
+      HESTIA_AUTOMATIONS: /data/automations.json
+      # HESTIA_MODE is intentionally UNSET so the persisted registry.mode is the
+      # single source of truth (env would override it, defeating graduation).
+    volumes:
+      - ./data:/data          # rw runtime state (registry.json + automations.json); gitignored
+      - /etc/localtime:/etc/localtime:ro   # inherit the HOST timezone — the slim base is UTC, which would
+                                           # shift time/cron rules off local (presence/sun are TZ-independent)

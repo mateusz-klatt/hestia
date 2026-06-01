@@ -1,0 +1,30 @@
+# Protocol captures + analysis artifacts (your own local recordings)
+captures/
+*.pcap
+*.pcapng
+flows/
+
+# Python
+__pycache__/
+*.pyc
+
+# test / coverage artifacts
+.coverage
+.coverage.*
+htmlcov/
+.pytest_cache/
+
+# Claude Code / MCP runtime + browsing artifacts (locks, scheduled tasks, page cache)
+.claude/
+.playwright-mcp/
+
+# Runtime state — never checked in. A bare `python -m hestia` writes these to the
+# working dir; under Docker they live on the bind-mounted data/ volume
+# (HESTIA_REGISTRY / HESTIA_AUTOMATIONS point at /data/).
+registry.json
+automations.json
+data/
+
+# Local secrets + per-deployment Docker overrides
+.env
+docker-compose.override.yml

@@ -1,0 +1,1276 @@
+"""Transparent proxy: device ↔ hestia ↔ the Keemple cloud.
+
+The gateway is redirected to us (a Pi-hole override of ``gateway.keemple.com`` →
+this host). For every device connection we open an upstream socket to the real
+cloud (``1.2.3.4:8925``) and relay **raw bytes verbatim** in both directions
+— we never reserialize the stream, so we cannot corrupt it. In parallel we *tap*
+a copy through a `Deframer`: decode + log every frame and feed device reports
+into a shared `State`.
+
+This is also where we *inject*: a newline-JSON control listener
+(``127.0.0.1:8926``) forges commands with `hestia.commands` and writes them
+straight to the device — letting us drive live devices through the proxy while
+the cloud stays in charge. That control surface is the seed of the future Home
+Assistant API (newline-delimited JSON, not MQTT) and reuses the same session /
+reader / writer the standalone server will need.
+
+All mutable state lives in a `ProxyRuntime` passed explicitly (no module
+globals), which keeps the moving parts unit-testable. The control port is
+unauthenticated, so it refuses to bind beyond loopback without an explicit
+opt-in. Injected command sequence numbers avoid the ``0x7e`` frame delimiter so a
+forged frame never embeds a false flag byte.
+
+Run:  python -m hestia.proxy
+Env:  HESTIA_CLOUD_HOST (seed / literal pin) / HESTIA_CLOUD_HOSTNAME (opt-in DoH
+      resolution) / HESTIA_CLOUD_PORT / HESTIA_LISTEN_HOST /
+      HESTIA_LISTEN_PORT / HESTIA_CONTROL_HOST / HESTIA_CONTROL_PORT /
+      HESTIA_CONTROL_ALLOW_REMOTE (=1 to allow a non-loopback control bind)
+"""
+from __future__ import annotations
+
+import asyncio
+import datetime
+import json
+import logging
+import math
+import os
+import signal
+import time
+from dataclasses import dataclass, field
+
+from . import commands, resolve
+from .automations import AutomationEngine, AutomationStore, Rule, read_present_macs
+from .classifier import Classifier, DeviceType
+from .protocol import FLAG, FRAME_TYPES, Deframer, Frame
+from .registry import Registry
+from .state import State, tlv_value
+from .tuya import TuyaDevice, TuyaError
+from . import flipper, sensor433, weather
+
+log = logging.getLogger("hestia.proxy")
+
+CLOUD_HOST = os.environ.get("HESTIA_CLOUD_HOST", "1.2.3.4")   # seed / literal pin
+CLOUD_HOSTNAME = os.environ.get("HESTIA_CLOUD_HOSTNAME")          # opt-in: DoH-resolve this instead
+CLOUD_PORT = int(os.environ.get("HESTIA_CLOUD_PORT", "8925"))
+LISTEN_HOST = os.environ.get("HESTIA_LISTEN_HOST", "0.0.0.0")
+LISTEN_PORT = int(os.environ.get("HESTIA_LISTEN_PORT", "8925"))
+CONTROL_HOST = os.environ.get("HESTIA_CONTROL_HOST", "127.0.0.1")
+CONTROL_PORT = int(os.environ.get("HESTIA_CONTROL_PORT", "8926"))
+REGISTRY_PATH = os.environ.get("HESTIA_REGISTRY", "registry.json")
+AUTOMATIONS_PATH = os.environ.get("HESTIA_AUTOMATIONS", "automations.json")
+# DHCP lease file for `presence` automation triggers (dnsmasq format). Pi-hole uses
+# `/etc/pihole/dhcp.leases`; set HESTIA_LEASES to it. hestia must be able to READ this file.
+LEASES_PATH = os.environ.get("HESTIA_LEASES", "/var/lib/misc/dnsmasq.leases")
+AUTOSAVE_SECS = float(os.environ.get("HESTIA_AUTOSAVE_SECS", "30"))
+def _scheduler_interval(raw: str) -> float:
+    """Parse HESTIA_SCHEDULER_SECS, clamped to [1, 59] — under 60 so every minute is
+    observed, at least 1 so a misconfigured value can't busy-loop the scheduler. A
+    non-numeric or non-finite (NaN/Infinity) value falls back to the 20 s default rather
+    than producing a pathological sleep."""
+    try:
+        value = float(raw)
+    except ValueError:
+        return 20.0
+    if not math.isfinite(value):
+        return 20.0
+    return min(max(value, 1.0), 59.0)
+
+
+SCHEDULER_SECS = _scheduler_interval(os.environ.get("HESTIA_SCHEDULER_SECS", "20"))
+
+
+def _coord(raw: "str | None", lo: float, hi: float) -> "float | None":
+    """Parse a coordinate env var (decimal degrees) to a float in ``[lo, hi]``, or ``None`` when
+    unset / malformed / non-finite / out of range — so an unset or bad ``HESTIA_LAT``/``HESTIA_LON``
+    simply disables `sun` automation rules instead of crashing startup."""
+    if raw is None:
+        return None
+    try:
+        value = float(raw)
+    except ValueError:
+        return None
+    if not math.isfinite(value) or not lo <= value <= hi:
+        return None
+    return value
+
+
+# Deployment location for `sun` (sunrise/sunset) automation triggers; unset → sun rules don't fire.
+HESTIA_LAT = _coord(os.environ.get("HESTIA_LAT"), -90.0, 90.0)
+HESTIA_LON = _coord(os.environ.get("HESTIA_LON"), -180.0, 180.0)
+WEB_HOST = os.environ.get("HESTIA_WEB_HOST", "127.0.0.1")
+WEB_PORT = int(os.environ.get("HESTIA_WEB_PORT", "8927"))
+
+# Tuya baby-monitor (Neno) temperature poller — reads the crib temp (DP, ÷scale = °C) over the LAN,
+# cloud-free, into State.crib_temp + the `crib_temp` global-field triggers. OFF (zero network) unless
+# HESTIA_NIANIA_IP/ID/KEY are all set. The Neno LUI is a Tuya v3.3 device22; its temp is local DP 238.
+NIANIA_IP = os.environ.get("HESTIA_NIANIA_IP", "")
+NIANIA_ID = os.environ.get("HESTIA_NIANIA_ID", "")
+NIANIA_KEY = os.environ.get("HESTIA_NIANIA_KEY", "")
+
+
+def _int_env(raw: "str | None", default: int) -> int:
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return default
+
+
+def _pos_float_env(raw: "str | None", default: float) -> float:
+    """A finite, strictly-positive float (else the default) — for HESTIA_NIANIA_SCALE."""
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return default
+    return value if math.isfinite(value) and value > 0 else default
+
+
+def _clamp_secs(raw: "str | None", default: float, lo: float, hi: float) -> float:
+    """A poll-interval seconds value clamped to ``[lo, hi]``; non-numeric/non-finite → ``default``.
+    Shared by the baby-monitor and weather pollers so a misconfigured interval can't busy-loop or stall."""
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return default
+    if not math.isfinite(value):
+        return default
+    return min(max(value, lo), hi)
+
+
+def _niania_interval(raw: "str | None") -> float:
+    """HESTIA_NIANIA_SECS clamped to [30, 3600]; non-numeric/non-finite → 90 s default."""
+    return _clamp_secs(raw, 90.0, 30.0, 3600.0)
+
+
+def _truthy_env(raw: "str | None") -> bool:
+    """True ONLY for an explicit opt-in token (``1/true/yes/on``, case-insensitive). An unset / blank /
+    false-ish / unknown value is False — so a feature that performs network egress (the weather poller)
+    can never be enabled by accident."""
+    return raw is not None and raw.strip().lower() in ("1", "true", "yes", "on")
+
+
+NIANIA_TEMP_DP = _int_env(os.environ.get("HESTIA_NIANIA_TEMP_DP"), 238)
+NIANIA_SCALE = _pos_float_env(os.environ.get("HESTIA_NIANIA_SCALE"), 10.0)
+NIANIA_SECS = _niania_interval(os.environ.get("HESTIA_NIANIA_SECS", "90"))
+
+# Outdoor temperature poller (Open-Meteo) — OPT-IN, OFF by default → zero network egress unless
+# HESTIA_OUTDOOR_TEMP is an explicit truthy token. When enabled it sends HESTIA_LAT/LON to
+# api.open-meteo.com over HTTPS to fill State.outdoor_temp + the `outdoor_temp` global-field triggers.
+OUTDOOR_TEMP_ENABLED = _truthy_env(os.environ.get("HESTIA_OUTDOOR_TEMP"))
+OUTDOOR_SECS = _clamp_secs(os.environ.get("HESTIA_OUTDOOR_SECS"), 600.0, 60.0, 3600.0)
+
+# Which feeder fills outdoor_temp when the feature is enabled: "open-meteo" (default) = the cloud
+# forecast (hestia.weather); "local" = a 433 MHz sensor via rtl_433 (on-LAN, zero egress). Mutually
+# exclusive — at most one feeder polls; an unknown/typo value disables outdoor_temp (fail-safe).
+OUTDOOR_TEMP_SOURCE = os.environ.get("HESTIA_OUTDOOR_TEMP_SOURCE", "open-meteo").strip().lower()
+
+# Local 433 MHz sensor (rtl_433) feeder — used only when OUTDOOR_TEMP_SOURCE == "local". rtl_433 is an
+# external system binary. RTL433_DEVICE must be a DEDICATED SDR/rtl_tcp endpoint (NOT one shared with an
+# FM/RDS receiver — a reception window retunes/monopolises the dongle). MODEL/ID/PROTOCOL narrow which sensor.
+RTL433_DEVICE = os.environ.get("HESTIA_RTL433_DEVICE", sensor433.DEFAULT_DEVICE)
+RTL433_MODEL = os.environ.get("HESTIA_RTL433_MODEL")        # None/"" -> no model filter
+RTL433_ID = os.environ.get("HESTIA_RTL433_ID")              # None/"" -> no id filter
+RTL433_PROTOCOL = os.environ.get("HESTIA_RTL433_PROTOCOL")  # None/"" -> all default decoders
+RTL433_WINDOW = _clamp_secs(os.environ.get("HESTIA_RTL433_WINDOW"), 60.0, 15.0, 600.0)
+
+# Flipper Zero IR transmit (HESTIA_FLIPPER truthy = enabled). Drives the Flipper over USB-serial via its
+# RPC protobuf protocol to transmit a saved `.ir` signal (see hestia.flipper). OFF by default → no serial
+# access at all, the `ir` control op errors, and `ir` rule actions are skipped. FLIPPER_DEV is the CDC
+# serial port. IR_OP_TIMEOUT bounds how long a control-op request waits for its transmit; IR_QUEUE_MAX
+# bounds the transmit backlog (a full queue drops fire-and-forget rule actions / errors the control op).
+FLIPPER_ENABLED = _truthy_env(os.environ.get("HESTIA_FLIPPER"))
+FLIPPER_DEV = os.environ.get("HESTIA_FLIPPER_DEV", flipper.DEFAULT_DEVICE)
+IR_OP_TIMEOUT = _clamp_secs(os.environ.get("HESTIA_IR_OP_TIMEOUT"), 20.0, 5.0, 120.0)
+IR_QUEUE_MAX = 16
+
+# Klima dashboard panel: hestia parses the SIGNAL NAMES of a local copy of the generated klima `.ir`
+# (HESTIA_KLIMA_IR, default <repo>/tools/klima.ir from tools/gen_klima_ir.py) into a mode+temp picker,
+# and transmits the chosen signal from the on-Flipper SD file HESTIA_KLIMA_IR_FILE (default
+# /ext/infrared/klima.ir — where the generator uploads it; FAT32 is case-insensitive). A missing /
+# unreadable file → the panel simply does not appear (IR control is unaffected). NB a future Docker
+# image must also ship the .ir (or set HESTIA_KLIMA_IR), else the panel is absent there — graceful.
+KLIMA_IR_PATH = os.environ.get("HESTIA_KLIMA_IR") or os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tools", "klima.ir")
+KLIMA_IR_FILE = os.environ.get("HESTIA_KLIMA_IR_FILE", "/ext/infrared/klima.ir")
+_KLIMA_MAX_BYTES = 1_000_000   # cap the import-time read of HESTIA_KLIMA_IR (a regular .ir file is ~KB)
+
+
+def _ir_buttons(raw: "str | None") -> list:
+    """Parse ``HESTIA_IR_BUTTONS`` — an optional JSON array of ``{"label","file","button"}`` the
+    dashboard renders as one-tap IR buttons. Keep only well-formed entries; any parse error / non-list
+    → ``[]`` (the dashboard simply shows no IR buttons). Pure (no I/O) so it is import-time safe."""
+    try:
+        items = json.loads(raw) if raw else []
+    except (ValueError, TypeError):
+        return []
+    if not isinstance(items, list):
+        return []
+    out = []
+    for it in items:
+        if (isinstance(it, dict) and isinstance(it.get("label"), str) and it["label"]
+                and isinstance(it.get("file"), str) and it["file"]
+                and isinstance(it.get("button"), str) and it["button"]):
+            out.append({"label": it["label"], "file": it["file"], "button": it["button"]})
+    return out
+
+
+IR_BUTTONS = _ir_buttons(os.environ.get("HESTIA_IR_BUTTONS"))
+
+
+def _klima_signals(path: str, sd_file: str) -> dict:
+    """Parse the signal NAMES of a Flipper ``.ir`` file into a structured klima control map for the
+    dashboard: ``{"file", "modes": {mode:[sorted temps]}, "power_on": {mode:[sorted temps]}, "presets":
+    [...]}``. ``"<mode>_<temp>"`` (temp all-digits) is a SET-MODE signal (adjusts a running unit) →
+    ``modes``; an ``"on_"`` prefix marks the POWER-ON-to-mode class (turns an OFF unit on directly into
+    that mode+temp) → ``power_on``; any other name (``off``, ``fan``, ``on_fan``) is a preset. A missing/
+    unreadable file, or one with no signals, → ``{}`` (the panel just doesn't show). Data-driven (no
+    hard-coded mode list) and total — it never raises (undecodable bytes are replaced, I/O errors
+    swallowed) — so it is safe to call once at import like ``IR_BUTTONS``."""
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            blob = fh.read(_KLIMA_MAX_BYTES)             # bound memory: a real .ir is ~KB, never MB
+    except OSError:
+        return {}
+    names = [ln.split(":", 1)[1].strip() for ln in blob.splitlines() if ln.startswith("name:")]
+    modes: "dict[str, set]" = {}
+    power_on: "dict[str, set]" = {}
+    presets: list = []
+    for name in names:
+        if not name:
+            continue
+        group, key = (power_on, name[3:]) if name.startswith("on_") else (modes, name)
+        mode, sep, temp = key.rpartition("_")
+        # ASCII decimal + bounded length so int() is ALWAYS safe: str.isdigit() is also true for
+        # superscripts / other-script digits (e.g. "²") that int() REJECTS, and a giant digit run trips
+        # int()'s string-conversion limit — either would raise at import. Such names fall to presets.
+        if sep and mode and temp.isascii() and temp.isdigit() and len(temp) <= 3:
+            group.setdefault(mode, set()).add(int(temp))
+        elif name not in presets:
+            presets.append(name)
+    if not modes and not power_on and not presets:
+        return {}
+    return {"file": sd_file,
+            "modes": {m: sorted(modes[m]) for m in sorted(modes)},
+            "power_on": {m: sorted(power_on[m]) for m in sorted(power_on)},
+            "presets": presets}
+
+
+KLIMA = _klima_signals(KLIMA_IR_PATH, KLIMA_IR_FILE)
+
+
+def _niania_device():
+    """A configured Tuya baby-monitor ``TuyaDevice`` (set to query the temp DP), or ``None`` when not
+    configured (HESTIA_NIANIA_IP/ID/KEY) or the key is malformed → the poller no-ops, zero network."""
+    if not (NIANIA_IP and NIANIA_ID and NIANIA_KEY):
+        return None
+    try:
+        dev = TuyaDevice(NIANIA_IP, NIANIA_ID, NIANIA_KEY, timeout=5.0)
+    except TuyaError as exc:
+        log.warning("niania: bad config (%s) — crib-temperature polling disabled", exc)
+        return None
+    dev.dps_to_request = [NIANIA_TEMP_DP]
+    return dev
+
+# A function-button press (D->C) makes the cloud push its scene reaction — a batch
+# [1e 32] (C->D) — within a fraction of a second. We learn that reaction by
+# correlating the two within this window (see ProxySession._observe / §5.7a).
+SCENE_CAPTURE_WINDOW = 2.0
+
+# (type, cmd) pairs that are pure plumbing — logged at DEBUG, not INFO.
+_NOISE = {(0x66, 0x01), (0x64, 0x03), (0x00, 0x00), (0x1E, 0x0A)}
+_LOOPBACK = {"127.0.0.1", "::1", "localhost"}
+_TRUE = {"true", "1", "on", "yes"}
+_FALSE = {"false", "0", "off", "no"}
+
+
+def _safe_seq_counter(start: int = 0x00010000):
+    """Yield increasing 4-byte command sequence numbers whose big-endian encoding
+    never contains FLAG (0x7e).
+
+    The protocol does not byte-stuff, so a 0x7e inside a forged frame would read
+    as a false delimiter; the cloud avoids this with small values, and so must
+    we. Starts above the cloud's observed range and wraps rather than overflowing.
+    """
+    value = start
+    while True:
+        if FLAG not in value.to_bytes(4, "big"):
+            yield value
+        value = value + 1 if value < 0xFFFFFFFF else start
+
+
+def _int(value) -> int:
+    """Accept ints or hex/dec strings ('0x0e', '14') from JSON control ops."""
+    return int(value, 0) if isinstance(value, str) else int(value)
+
+
+def _bool(value) -> bool:
+    """Strictly parse a control boolean: a real JSON bool, or an explicit
+    true/false-like string. Reject anything ambiguous, so a switch or thermostat
+    never silently does the opposite of what was asked (``bool("false")`` is True)."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        token = value.strip().lower()
+        if token in _TRUE:
+            return True
+        if token in _FALSE:
+            return False
+    raise ValueError(f"expected a boolean, got {value!r}")
+
+
+def _require_safe_control_bind(host: str) -> None:
+    """The control port is unauthenticated and can forge arbitrary device
+    commands, so refuse to expose it beyond loopback without an explicit opt-in."""
+    if host not in _LOOPBACK and os.environ.get("HESTIA_CONTROL_ALLOW_REMOTE") != "1":
+        raise RuntimeError(
+            f"refusing to bind the unauthenticated control port to {host!r}; "
+            "set HESTIA_CONTROL_ALLOW_REMOTE=1 to override (not recommended)"
+        )
+
+
+# --- Event bus: fan-out of `[1e 09]` activity + discovery diffs to SSE clients ---
+
+_CLOSED_SENTINEL = object()                                  # marker pushed on shutdown
+
+
+class Subscription:
+    """One SSE client's view onto the event bus. ``close()`` is **synchronous**
+    (def, not async def) — it is invoked both from inside the event loop via
+    ``_in_loop_sync(sub.close)`` AND from a worker thread via
+    ``loop.call_soon_threadsafe(sub.close)``. An ``async def`` would silently
+    leak the subscription on the fallback path."""
+
+    def __init__(self, bus: "EventBus", queue: asyncio.Queue, sem: asyncio.Semaphore):
+        self.bus = bus
+        self.queue = queue
+        self.sem = sem
+
+    def close(self) -> None:
+        if self.queue is None:
+            return                                            # idempotent
+        self.bus._drop(self.queue)
+        self.sem.release()
+        self.queue = None
+
+
+class EventBus:
+    """Loop-owned fan-out for activity / discovery events.
+
+    All methods run in the asyncio loop thread (HTTP handlers reach the bus
+    only through ``_call_loop``). ``publish`` is non-blocking — a slow
+    subscriber's full queue silently drops the event rather than back-pressuring
+    the proxy/standalone session. ``close()`` forces a ``_CLOSED_SENTINEL`` into
+    every subscriber queue, draining one stale event if needed so the sentinel
+    reaches even a full-queue subscriber — guarantees clean SSE handler exit on
+    shutdown without spurious bridge-timeout warnings."""
+
+    def __init__(self, max_subs: int = 8):
+        self._subs: "set[asyncio.Queue]" = set()
+        self._sem = asyncio.Semaphore(max_subs)
+        self._closing = False
+
+    async def try_subscribe(self, maxsize: int = 64) -> "Subscription | None":
+        """Returns ``None`` if the cap is reached or the bus is closing; else a
+        ready subscription. Double-checks ``_closing`` after the acquire to
+        avoid handing out a subscription the shutdown sentinel has missed."""
+        if self._closing or self._sem.locked():
+            return None
+        await self._sem.acquire()
+        if self._closing:
+            self._sem.release()
+            return None
+        q: asyncio.Queue = asyncio.Queue(maxsize=maxsize)
+        self._subs.add(q)
+        return Subscription(self, q, self._sem)
+
+    def _drop(self, q: asyncio.Queue) -> None:
+        self._subs.discard(q)
+
+    def publish(self, event) -> None:
+        if self._closing:
+            return                                            # deterministic post-close no-op
+        for q in list(self._subs):                            # snapshot — handlers may unsubscribe mid-iteration
+            try:
+                q.put_nowait(event)
+            except asyncio.QueueFull:
+                pass                                          # slow consumer; never back-pressure publisher
+
+    def close(self) -> None:
+        """Push ``_CLOSED_SENTINEL`` into every subscriber queue so SSE handlers
+        wake from ``_wait_event`` and exit cleanly. If a queue is full, drain
+        one event to make room — the operator's shutdown intent takes priority
+        over a pending activity event."""
+        self._closing = True
+        for q in list(self._subs):
+            while True:
+                try:
+                    q.put_nowait(_CLOSED_SENTINEL)
+                    break
+                except asyncio.QueueFull:
+                    try:
+                        q.get_nowait()                        # drop one stale event
+                    except asyncio.QueueEmpty:                # racy emptied → give up
+                        break
+
+
+@dataclass
+class ProxyConfig:
+    """Where the proxy listens and what it dials upstream."""
+    listen_host: str = LISTEN_HOST
+    listen_port: int = LISTEN_PORT
+    cloud_host: str = CLOUD_HOST
+    cloud_port: int = CLOUD_PORT
+    control_host: str = CONTROL_HOST
+    control_port: int = CONTROL_PORT
+    registry_path: str = REGISTRY_PATH
+    automations_path: str = AUTOMATIONS_PATH
+    web_host: str = WEB_HOST
+    web_port: int = WEB_PORT
+
+
+@dataclass
+class ProxyRuntime:
+    """Shared mutable state for one running proxy (replaces module globals).
+
+    `save_lock` serialises every registry write so two `os.replace` operations
+    can never race — without it, the default `ThreadPoolExecutor` runs writes
+    concurrently and a stale autosave snapshot can clobber a fresh user edit."""
+    state: State = field(default_factory=State)
+    sessions: list = field(default_factory=list)
+    classifier: Classifier = field(default_factory=Classifier)
+    registry: Registry = field(default_factory=lambda: Registry(REGISTRY_PATH))
+    save_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    event_bus: EventBus = field(default_factory=EventBus)
+    # Which session implementation is running — automations carry a `modes` allow-list so
+    # a rule can opt out of one mode (e.g. skip proxy if it duplicates a cloud automation).
+    mode: str = "proxy"
+    engine: AutomationEngine = field(
+        default_factory=lambda: AutomationEngine(AutomationStore(AUTOMATIONS_PATH)))
+    # Location for `sun` triggers (decimal degrees, N/E positive); default from HESTIA_LAT/LON env,
+    # None when unset/invalid → sun rules are skipped. The engine reads these in `on_time`.
+    lat: "float | None" = HESTIA_LAT
+    lon: "float | None" = HESTIA_LON
+    # Flipper IR transmit backlog. Created in ``main()`` only when ``HESTIA_FLIPPER`` is enabled; ``None``
+    # otherwise, so every IR entry point (the ``ir`` control op, ``_ir_worker``, the engine's ``_fire``)
+    # degrades to a clean no-op in BOTH proxy and standalone modes when the feature is off. FIFO of
+    # ``(ir_file, button, future|None)`` drained by ``_ir_worker``.
+    ir_queue: "asyncio.Queue | None" = None
+
+    def __post_init__(self) -> None:
+        self._seq = _safe_seq_counter()
+
+    def next_seq(self) -> int:
+        return next(self._seq)
+
+
+def summarize(frame: Frame) -> str:
+    """One compact line for live logging (Frame.__str__ is multi-line/verbose)."""
+    if len(frame.body) < 4:
+        return f"[short] {frame.body.hex()}"
+    tname = FRAME_TYPES.get(frame.type, f"{frame.type:#04x}")
+    tlvs = " ".join(f"{t.tag:#06x}={t.value.hex()}" for t in frame.tlvs())
+    bad = "" if frame.checksum_ok else " !cksum"
+    return f"[{tname} c{frame.cmd:02x}]{bad} {tlvs}".rstrip()
+
+
+async def _close(writer: "asyncio.StreamWriter | None") -> None:
+    if writer is None:
+        return
+    try:
+        writer.close()
+        await writer.wait_closed()
+    except OSError:
+        pass
+
+
+class ProxySession:
+    """One device↔cloud pairing: raw relay both ways plus a decoding tap."""
+
+    def __init__(self, rt, dev_reader, dev_writer, cloud_host, cloud_port):
+        self.rt = rt
+        self.dev_reader = dev_reader
+        self.dev_writer = dev_writer
+        self.cloud_host = cloud_host
+        self.cloud_port = cloud_port
+        self.peer = dev_writer.get_extra_info("peername")
+        # A function-button press (D->C) awaiting its cloud scene reaction (C->D),
+        # as (node, scene_id, monotonic_ts). Session-local: the press and its batch
+        # both flow through THIS session's _observe, so a press can never be matched
+        # to another stream's traffic, and it is discarded with the session.
+        self._pending_scene = None
+
+    async def run(self) -> None:
+        try:
+            cloud_reader, cloud_writer = await asyncio.open_connection(
+                self.cloud_host, self.cloud_port
+            )
+        except OSError as exc:
+            log.error("upstream %s:%d unreachable for %s: %r",
+                      self.cloud_host, self.cloud_port, self.peer, exc)
+            await _close(self.dev_writer)
+            return
+
+        log.info("+ device %s <-> cloud %s:%d", self.peer, self.cloud_host, self.cloud_port)
+        self.rt.sessions.append(self)
+        up = asyncio.create_task(self._pump(self.dev_reader, cloud_writer, "D->C"))
+        down = asyncio.create_task(self._pump(cloud_reader, self.dev_writer, "C->D"))
+        try:
+            done, _ = await asyncio.wait({up, down}, return_when=asyncio.FIRST_COMPLETED)
+            for task in done:
+                exc = task.exception()
+                if exc is not None:
+                    log.warning("pump for %s failed: %r", self.peer, exc)
+        finally:
+            for task in (up, down):
+                task.cancel()
+            await asyncio.gather(up, down, return_exceptions=True)
+            await _close(cloud_writer)
+            await _close(self.dev_writer)
+            self.rt.sessions.remove(self)   # always present once we reach here
+            log.info("- device %s", self.peer)
+
+    async def _pump(self, reader, writer, direction) -> None:
+        """Relay raw bytes from reader to writer, tapping a decoded copy."""
+        deframer = Deframer()
+        while True:
+            data = await reader.read(4096)
+            if not data:
+                break
+            writer.write(data)            # verbatim — the stream is never rebuilt
+            await writer.drain()
+            for body in deframer.feed(data):
+                for raw in self._observe(Frame(body), direction):
+                    await self.inject_to_device(raw)   # automation actions -> the DEVICE,
+                                                       # never `writer` (cloud-bound for D->C)
+
+    def _observe(self, frame: Frame, direction: str) -> "list[bytes]":
+        if len(frame.body) < 4:           # a mis-split / corrupt fragment
+            log.debug("%s [short] %s", direction, frame.body.hex())
+            return []
+        level = logging.DEBUG if (frame.type, frame.cmd) in _NOISE else logging.INFO
+        log.log(level, "%s %s", direction, summarize(frame))
+        injects: "list[bytes]" = []
+        if frame.checksum_ok:             # don't act on a corrupt frame
+            changed = self.rt.state.apply(frame)
+            node_b = tlv_value(frame, 0x0047) if (frame.type, frame.cmd) == (0x1E, 0x09) else None
+            if node_b:                                   # changed is only ever non-empty here
+                for key, value in changed.items():
+                    log.info("  ~ [%#04x] %s = %s", node_b[0], key, value)
+            scene = changed.pop("scene", None)           # a button press: an event, not state
+            if scene and node_b and direction == "D->C":  # press → await its cloud reaction
+                self._pending_scene = (node_b[0], scene["id"], time.monotonic())
+            if _feed_discovery(self.rt, frame):          # identity changed → full refetch
+                self.rt.event_bus.publish({"type": "discovery_changed"})
+            elif changed and node_b:                     # live value(s) → cheap cell patch
+                self.rt.event_bus.publish(
+                    {"type": "state", "node": node_b[0], "fields": changed})
+            if node_b:
+                event = {"type": "activity", "node": node_b[0], "ts": time.time()}
+                if scene:                                # function-button scene rides the flash
+                    event["scene"] = scene
+                self.rt.event_bus.publish(event)         # heatmap: row flashes (every event)
+            self._capture_scene_batch(frame, direction)
+            # Automations: only device->cloud reports yield changed/scene, so gate on D->C
+            # (belt-and-suspenders + skips per-heartbeat iteration).
+            if direction == "D->C" and node_b and (changed or scene):
+                injects = self.rt.engine.on_event(self.rt, node_b[0], changed, scene)
+        return injects
+
+    def _capture_scene_batch(self, frame: Frame, direction: str) -> None:
+        """Learn the cloud's reaction to a function-button press so standalone mode
+        can replay it (§5.7a). When a batch ``[1e 32]`` (cloud->device) arrives within
+        ``SCENE_CAPTURE_WINDOW`` of a press, store its ``0x005a`` element block keyed by
+        ``(node, scene_id)``. First eligible batch wins, then the pending press is
+        consumed; a ``[1e 32]`` with no ``0x005a`` leaves the press pending, and a stale
+        press (outside the window) is inert. Only checksum-valid frames reach here.
+
+        Heuristic limit: one pending slot per session means two presses on *different*
+        nodes within the window can cross-attribute the batch. The window is short, a
+        human presses one button at a time, re-pressing re-learns, and replay is
+        standalone-only — so a mis-learn cannot actuate until the operator verifies it
+        via the ``scenes`` control op and the "learned scene" log line."""
+        if direction != "C->D" or (frame.type, frame.cmd) != (0x1E, 0x32):
+            return
+        pend = self._pending_scene
+        if not pend:
+            return
+        if time.monotonic() - pend[2] > SCENE_CAPTURE_WINDOW:
+            self._pending_scene = None               # stale press → forget it (explicit lifecycle)
+            return
+        elements = tlv_value(frame, 0x005A)
+        if not elements:                             # not a switch-batch; leave the press pending
+            return
+        if self.rt.registry.record_scene(pend[0], pend[1], elements.hex()):
+            log.info("learned scene %d for node %#04x (%d-byte batch)",
+                     pend[1], pend[0], len(elements))
+        self._pending_scene = None                   # first eligible batch consumed
+
+    async def inject_to_device(self, raw: bytes) -> None:
+        self.dev_writer.write(raw)
+        await self.dev_writer.drain()
+        log.info("INJECT -> %s %s", self.peer, raw.hex())
+
+
+# --- Control: newline-JSON op -> forged command injected to the device --------
+
+def build_command(rt, op) -> bytes:
+    """Translate one control op into a complete device-command frame."""
+    if not isinstance(op, dict):
+        raise ValueError("expected a JSON object")
+    handler = _OPS.get(op.get("op"))
+    if handler is None:
+        raise ValueError(f"unknown op {op.get('op')!r}")
+    return handler(rt, op)
+
+
+_OPS = {
+    "raw": lambda rt, op: bytes.fromhex(op["hex"]),
+    "cover": lambda rt, op: commands.set_cover(rt.next_seq(), _int(op["node"]), _int(op["value"])),
+    "level": lambda rt, op: commands.set_level(rt.next_seq(), _int(op["node"]), _int(op["value"])),
+    "switch": lambda rt, op: commands.set_switch(rt.next_seq(), _int(op["node"]), _bool(op["on"])),
+    "lights": lambda rt, op: commands.set_lights(rt.next_seq(), [(_int(c), _int(v)) for c, v in op["channels"]]),
+    "thermostat": lambda rt, op: commands.set_thermostat(rt.next_seq(), _int(op["node"]), float(op["celsius"])),
+    "thermostat_power": lambda rt, op: commands.set_thermostat_power(rt.next_seq(), _int(op["node"]), _bool(op["on"])),
+}
+
+
+def globals_snapshot(state: State) -> dict:
+    """The node-less GLOBAL automation fields (°C, or ``None`` when their poller is off) — surfaced to the
+    dashboard (``/api/discovery``) and the ``state`` control op. ``None`` serialises to JSON ``null``; the
+    UI renders "—"."""
+    return {"crib_temp": state.crib_temp, "outdoor_temp": state.outdoor_temp}
+
+
+def state_snapshot(state: State) -> dict:
+    def hexkeys(mapping):
+        return {f"{k:#04x}": v for k, v in mapping.items()}
+    return {
+        "doors": hexkeys(state.doors),
+        "levels": hexkeys(state.levels),
+        "switches": hexkeys(state.switches),
+        "thermostat_setpoint": hexkeys(state.thermostat_setpoint),
+        "thermostat_on": hexkeys(state.thermostat_on),
+        "temperature": hexkeys(state.temperature),
+        # multi-gang: node→{ep:on}; stringify both key levels for clean JSON.
+        "gang": {f"{n:#04x}": {str(ep): on for ep, on in eps.items()} for n, eps in state.gang.items()},
+        "globals": globals_snapshot(state),
+    }
+
+
+def _feed_discovery(rt, frame) -> bool:
+    """Tap one frame into device-type discovery. Only the *affected* nodes get
+    mirrored to the registry: every roster node on a `[1e 15]`, the single
+    `0x0047` node on a `[1e 09]` event, and nothing for other frames — so a
+    heartbeat doesn't churn 22 entries' `last_seen` or dirty the file.
+
+    Returns True iff a node's discovery *identity* (new node / type / power /
+    battery) changed — the caller publishes a full `discovery_changed` then, vs a
+    cheap `state` delta for a pure live-state change."""
+    rt.classifier.ingest_roster(frame)
+    rt.classifier.observe(frame)
+    if (frame.type, frame.cmd) == (0x1E, 0x15):
+        affected = list(rt.classifier.nodes.keys())
+    elif (frame.type, frame.cmd) == (0x1E, 0x09):
+        node_b = tlv_value(frame, 0x0047)
+        affected = [node_b[0]] if node_b else []
+    else:
+        return False
+    report = rt.classifier.report()
+    identity_changed = False
+    for node in affected:
+        info = report[node]   # classifier.observe/ingest_roster already added the node
+        if rt.registry.observe(node, info["type"], info["confidence"],
+                               info.get("power"), info.get("battery")):
+            identity_changed = True   # full scan — every node still mirrored
+    return identity_changed
+
+
+def _safe_int_key(key) -> "int | None":
+    """Parse a registry node-key (decimal string) to int; warn + skip if bad."""
+    try:
+        return int(key)
+    except ValueError:
+        log.warning("ignoring non-integer registry key %r", key)
+        return None
+
+
+def _merged_discovery(rt) -> dict:
+    """Merge the classifier's inference with the user registry. Canonical
+    decimal-string keys. Precedence per field:
+    - registry wins on a *user-confirmed* type / name / room;
+    - otherwise the classifier wins when it has a real (non-`unknown`) type;
+    - otherwise the registry's stored type (e.g. inferred in a previous session)
+      survives — so restarting before classification re-runs doesn't lose data."""
+    report = rt.classifier.report()                       # int-keyed
+    reg_nodes = rt.registry.nodes                          # str-keyed
+    reg_node_ids = {n for n in (_safe_int_key(k) for k in reg_nodes) if n is not None}
+    devices = {}
+    for node in sorted(set(report) | reg_node_ids):
+        cls = report.get(node, {})
+        reg = reg_nodes.get(str(node), {})
+        cls_type, reg_type = cls.get("type"), reg.get("type")
+        if reg.get("type_confirmed"):
+            dtype, conf = reg_type, reg.get("confidence", "confirmed")
+        elif cls_type and cls_type != "unknown":
+            dtype, conf = cls_type, cls.get("confidence")
+        elif reg_type and reg_type != "unknown":
+            dtype, conf = reg_type, reg.get("confidence")
+        else:                                                      # nothing useful → "unknown"
+            dtype = cls_type or reg_type or "unknown"              # never None — UI shouldn't
+            conf = cls.get("confidence") or reg.get("confidence") or "unknown"   # have to handle null
+        # Battery: live reading wins; else the last-known persisted value (so the
+        # column isn't blank right after a restart). 0 % is valid, so test `is not
+        # None`, never `or`. A node that ever reports a battery level IS battery-
+        # powered — that overrides the roster flag, which mislabels battery FLiRS
+        # devices (thermostats) as mains.
+        cls_batt = cls.get("battery")
+        battery = cls_batt if cls_batt is not None else reg.get("battery")
+        entry = {
+            "power": "battery" if battery is not None else (cls.get("power") or reg.get("power")),
+            "type": dtype,
+            "confidence": conf,
+            "battery": battery,
+        }
+        # Live device state (from rt.state, populated by the same `[1e 09]` events
+        # that trigger this re-fetch). Always present, null when unseen — so the
+        # client has one stable contract and `0`/`False` are never lost. The web
+        # UI renders a type-aware "stan" column from these.
+        st = rt.state
+        entry["level"] = st.levels.get(node)                  # blind/dimmer 0..99
+        entry["switch"] = st.switches.get(node)               # on/off relay
+        entry["door"] = st.doors.get(node)                    # "open"/"closed"
+        entry["setpoint"] = st.thermostat_setpoint.get(node)  # °C target
+        entry["thermostat_on"] = st.thermostat_on.get(node)   # bool
+        entry["temperature"] = st.temperature.get(node)       # °C measured
+        entry["power_w"] = st.plug_w.get(node)                # plug power, W
+        entry["energy_kwh"] = st.plug_kwh.get(node)           # plug cumulative energy, kWh
+        entry["voltage_v"] = st.plug_v.get(node)              # plug mains voltage, V
+        entry["endpoints"] = st.gang.get(node)                # {ep: on} for a multi-gang switch
+        if "name" in reg:
+            entry["name"] = reg["name"]
+        if "room" in reg:
+            entry["room"] = reg["room"]
+        if "endpoint_names" in reg:                           # per-endpoint labels for a 2-gang switch
+            entry["endpoint_names"] = dict(reg["endpoint_names"])   # copy — detach from registry state
+        devices[str(node)] = entry
+    return devices
+
+
+async def _write_and_settle(write_payload, payload) -> "asyncio.CancelledError | None":
+    """Run a blocking atomic write (``write_payload(payload)``) off the event loop and
+    WAIT for it to settle even across our own cancellation. The executor THREAD can't be
+    cancelled, so letting its ``os.replace`` land under the caller's lock is what stops a
+    later save from starting a second, racing ``os.replace`` that reorders behind this
+    one and clobbers newer state. We wait with ``asyncio.wait`` (NOT ``asyncio.shield``)
+    and retrieve the future ourselves — so a cancelled wait never logs a stray
+    'exception in shielded future', and the result is never an unretrieved exception.
+
+    On SUCCESS, RETURNS the pending ``CancelledError`` (or ``None``) so the caller can
+    bring live state in line with what just landed on disk BEFORE propagating the cancel
+    — otherwise disk sits ahead of memory and a *later* write clobbers the durable change.
+    On FAILURE, raises: the ``CancelledError`` if a cancel is also pending (so a caller's
+    ``except OSError`` can't swallow a shutdown cancel), else the ``OSError``. Shared by
+    ``_persist_obj`` and ``_commit_automation`` so both writes are detach-safe identically."""
+    loop = asyncio.get_running_loop()
+    fut = asyncio.ensure_future(loop.run_in_executor(None, write_payload, payload))
+    cancelled = None
+    while not fut.done():
+        try:
+            await asyncio.wait({fut})
+        except asyncio.CancelledError as exc:
+            cancelled = exc              # remember; keep waiting for the write to settle
+    err = fut.exception()                # always retrieve — never an unretrieved-exception leak
+    if err is not None:
+        raise cancelled or err           # write failed: a pending cancel wins over the OSError
+    return cancelled                     # write landed: hand the pending cancel back to the caller
+
+
+async def _persist_obj(lock, obj) -> None:
+    """Single-writer flush of one persistable (a `Registry` or an `AutomationStore` —
+    anything with `dirty`/`serialize()`/`write_payload()`). Under `lock` (so no two
+    writes can race-overwrite each other), we serialise in the event loop — atomic
+    under the GIL, no concurrent-mutation race — then clear `dirty` *before* the await
+    so a fresh mutation during the I/O re-arms the next tick rather than being silently
+    clobbered when the in-flight write finishes. A transient I/O failure restores
+    `dirty` and re-raises; the caller decides whether to log-and-retry (autosave) or
+    report failure (a user op).
+
+    The lock-wait re-check skips a redundant write if another caller (the autosave or a
+    control op) already flushed our state while we were queued on the lock."""
+    async with lock:
+        if not obj.dirty:
+            return
+        payload = obj.serialize()
+        obj.dirty = False
+        try:
+            cancelled = await _write_and_settle(obj.write_payload, payload)
+        except (OSError, asyncio.CancelledError):
+            obj.dirty = True             # write failed (± cancel) → re-arm for a retry
+            raise
+        if cancelled is not None:        # write LANDED but we were cancelled: state is saved
+            raise cancelled              #   (disk == what we serialised; a concurrent observe()
+            #                              during the write left dirty=True on its own) — propagate
+
+
+async def _persist(rt) -> None:
+    """Flush the device registry (see `_persist_obj`)."""
+    await _persist_obj(rt.save_lock, rt.registry)
+
+
+async def _persist_store(rt) -> None:
+    """Flush the automations store — shares `save_lock` with the registry so the two
+    `os.replace` operations can never interleave."""
+    await _persist_obj(rt.save_lock, rt.engine.store)
+
+
+def _install_term_handler(loop, task) -> bool:
+    """Route SIGTERM into the same graceful unwind as SIGINT: cancel the running
+    ``main`` task so the persist-on-exit ``finally`` runs and state is flushed.
+
+    ``docker stop`` and ``systemctl stop`` send SIGTERM, whose default disposition
+    terminates the process immediately — skipping the shutdown save (only the
+    ~30 s autosave caps the loss, so a just-graduated mode or fresh rule edit can be
+    lost). Cancelling the main task delivers one ``CancelledError`` at the
+    ``serve_forever`` await, exactly the shape the SIGINT path already relies on.
+    Best-effort and idempotent for a single TERM: returns ``False`` where a signal
+    handler can't be installed (non-main thread, or a platform such as Windows
+    without ``add_signal_handler``)."""
+    try:
+        loop.add_signal_handler(signal.SIGTERM, task.cancel)
+        return True
+    except (NotImplementedError, RuntimeError, ValueError):
+        return False
+
+
+async def _commit_automation(rt, change):
+    """Durably create/replace/delete a rule, transactionally. Holding `save_lock` for
+    the whole operation, we snapshot the *current* live rules (so concurrent commits can't
+    lose each other's writes), apply `change(candidate) -> touched_id` to a copy, persist
+    that copy, and only then swap it into the live engine and reset that rule's loop-guard
+    state. A failed write therefore raises with the engine completely untouched — a rule
+    the client is told failed never went live, and no other rule's edge/debounce is
+    disturbed. The new rule is invisible to `on_event` until after the bytes are on disk,
+    so it cannot actuate during the write window. `change` returning ``None`` means "no
+    change" (e.g. deleting an absent id) — decided inside the lock so a concurrent
+    double-delete is linearizable, not a KeyError; we then write nothing and return
+    ``None``. Returns the touched id, or ``None`` for a no-op."""
+    store = rt.engine.store
+    async with rt.save_lock:
+        candidate = dict(store.rules)
+        touched = change(candidate)
+        if touched is None:              # nothing to do (decided under the lock)
+            return None
+        payload = store.serialize_rules(candidate)
+        # Detach-safe write (see `_write_and_settle`): a cancel can't leave the executor
+        # thread racing a later os.replace, and a landed-but-cancelled write is reported
+        # back so we still swap live state below — keeping disk and memory in agreement so
+        # a *later* commit (which snapshots `store.rules`) can't clobber the durable change.
+        cancelled = await _write_and_settle(store.write_payload, payload)
+        store.rules = candidate          # swap live only after the durable write (even on cancel)
+        rt.engine.reset_runtime(touched)
+        store.dirty = False              # live now equals what we just wrote
+        if cancelled is not None:        # write landed + live state synced → now propagate the cancel
+            raise cancelled
+        return touched
+
+
+async def _autosave(rt, interval: float = AUTOSAVE_SECS) -> None:
+    """Periodic flush — saves the registry and the automations store *independently*
+    (a failed store flush that restores its `dirty` is retried next tick even when the
+    registry is clean, and vice versa), off the event loop, surviving a transient I/O
+    error so the loop keeps running."""
+    while True:
+        await asyncio.sleep(interval)
+        for persist, obj in ((_persist, rt.registry), (_persist_store, rt.engine.store)):
+            if not obj.dirty:
+                continue
+            try:
+                await persist(rt)
+            except OSError:
+                log.exception("autosave failed — will retry in %ss", interval)
+
+
+async def _inject(rt, frames, source: str = "scheduler") -> None:
+    """Inject automation frames to the current device session: no device connected → drop + warn (not
+    deferred); a per-frame OSError is logged and aborts the rest (the session is broken). Shared by the
+    scheduler and the niania poller — ``source`` tags the log lines so an incident is traced to the
+    right producer (the scheduler tests pin the default ``"scheduler"`` wording)."""
+    if not frames:
+        return
+    session = rt.sessions[-1] if rt.sessions else None
+    if session is None:
+        log.warning("%s: dropping %d automation frame(s) — no device connected", source, len(frames))
+        return
+    for i, raw in enumerate(frames):
+        try:
+            await session.inject_to_device(raw)
+        except OSError as exc:
+            log.warning("%s inject failed (%d of %d frame(s) not sent): %r",
+                        source, len(frames) - i, len(frames), exc)
+            break
+
+
+async def _scheduler(rt, now=datetime.datetime.now, interval: float = SCHEDULER_SECS) -> None:
+    """Wall-clock scheduler for time/sun/presence automations. Wakes every `interval` seconds
+    (< 60 so each minute is observed at least once; the engine's minute-slot dedup makes the
+    extra ticks idempotent), asks the engine which time/sun rules are due — and, when any
+    `presence` rule exists, reads the DHCP lease file and asks for presence (arrive/leave) edges —
+    then injects their actions to the current device session. `now` is injectable so the loop is
+    unit-testable. Survives an inject failure: it logs and waits for the next tick."""
+    while True:
+        await asyncio.sleep(interval)
+        moment = now()
+        frames = rt.engine.on_time(rt, moment)
+        if rt.engine.has_presence_rules():          # skip the lease read entirely when unused
+            frames += rt.engine.on_presence(rt, read_present_macs(LEASES_PATH, moment.timestamp()))
+        await _inject(rt, frames)
+
+
+async def _poll_global_field(rt, field, read, interval, source) -> None:
+    """Generic poller for a GLOBAL automation field. Every ``interval`` seconds, call the BLOCKING
+    ``read()`` OFF the event loop (a worker thread, so the loop stays free); a non-``None`` return sets
+    ``State.<field>``, fires ``on_global``, and injects the resulting frames (log-tagged ``source``). A
+    ``None`` read keeps the last value (retry next tick). The whole tick is wrapped so a daemon loop
+    never dies on an error — ``CancelledError`` is a ``BaseException``, so cancellation still propagates
+    and the task ends cleanly. Caller gates configuration (don't start the task when the feature is off)."""
+    loop = asyncio.get_running_loop()
+    while True:
+        await asyncio.sleep(interval)
+        try:
+            value = await loop.run_in_executor(None, read)
+            if value is None:                        # failed read -> keep the last value
+                continue
+            log.debug("%s: %s = %r", source, field, value)
+            setattr(rt.state, field, value)
+            rt.event_bus.publish({"type": "globals", "fields": {field: value}})   # live dashboard update
+            await _inject(rt, rt.engine.on_global(rt, field, value), source=source)
+        except Exception:                            # a daemon loop must never die on a tick error
+            log.exception("%s poller tick failed", source)
+
+
+def _niania_read(dev):
+    """Build a BLOCKING ``read()`` returning the crib temperature (°C, finite) or ``None``. The camera
+    allows one connection at a time and returns partial/varying dps, so retry a few times within the
+    call; accept only a real FINITE number (reject bool, and NaN/Infinity — json.loads accepts those —
+    so a garbage reading can never poison crib_temp / mis-fire a rule)."""
+    def read():
+        for _ in range(3):                           # flaky camera: retry within the tick
+            try:
+                dps = dev.status()
+            except TuyaError as exc:
+                log.debug("niania poll attempt failed: %s", exc)
+                continue
+            raw = dps.get(str(NIANIA_TEMP_DP))
+            if isinstance(raw, (int, float)) and not isinstance(raw, bool) and math.isfinite(raw):
+                return raw / NIANIA_SCALE
+            log.debug("niania poll: DP %s missing/non-finite in %r", NIANIA_TEMP_DP, dps)
+        return None
+    return read
+
+
+async def _niania_poller(rt, make_device=_niania_device, interval: float = NIANIA_SECS) -> None:
+    """Poll the Tuya baby monitor for the crib temperature into ``State.crib_temp`` (the `crib_temp`
+    global field). OFF when no device is configured. See ``_poll_global_field`` / ``_niania_read``."""
+    dev = make_device()
+    if dev is None:                                  # not configured -> nothing to poll
+        return
+    await _poll_global_field(rt, "crib_temp", _niania_read(dev), interval, "niania")
+
+
+async def _weather_poller(rt, fetch=weather.fetch_outdoor_temp, lat=HESTIA_LAT, lon=HESTIA_LON,
+                          interval: float = OUTDOOR_SECS, enabled: bool = OUTDOOR_TEMP_ENABLED,
+                          source: str = OUTDOOR_TEMP_SOURCE) -> None:
+    """Poll Open-Meteo for the outdoor temperature into ``State.outdoor_temp`` (the `outdoor_temp` global
+    field). OPT-IN: returns immediately (zero network egress) unless explicitly ``enabled``, the source
+    selector is ``"open-meteo"`` (mutually exclusive with the local 433 feeder), AND a location is
+    configured (``HESTIA_LAT``/``HESTIA_LON``). One fetch per tick (a slow, reliable signal); a failed
+    fetch keeps the last value. See ``_poll_global_field`` / ``_sensor433_poller``."""
+    if not (enabled and source == "open-meteo" and lat is not None and lon is not None):
+        return                                       # off / not selected / no location -> no poll, zero egress
+    await _poll_global_field(rt, "outdoor_temp", lambda: fetch(lat, lon), interval, "weather")
+
+
+async def _sensor433_poller(rt, read=sensor433.read_outdoor_temp, interval: float = OUTDOOR_SECS,
+                            enabled: bool = OUTDOOR_TEMP_ENABLED, source: str = OUTDOOR_TEMP_SOURCE,
+                            device: str = RTL433_DEVICE, window: float = RTL433_WINDOW,
+                            model=RTL433_MODEL, sensor_id=RTL433_ID, protocol=RTL433_PROTOCOL) -> None:
+    """Poll a local 433 MHz weather sensor (rtl_433) for the outdoor temperature into
+    ``State.outdoor_temp`` (the `outdoor_temp` global field). OPT-IN: returns immediately (zero work)
+    unless explicitly ``enabled`` AND ``source == "local"`` — mutually exclusive with the Open-Meteo
+    poller (the source selector picks exactly one). The BLOCKING rtl_433 read runs off the loop; a
+    failed/empty read keeps the last value. See ``_poll_global_field`` / ``sensor433``."""
+    if not (enabled and source == "local"):
+        return                                       # off / not selected -> no poll
+    await _poll_global_field(
+        rt, "outdoor_temp",
+        lambda: read(device=device, window=window, model=model, sensor_id=sensor_id, protocol=protocol),
+        interval, "sensor433")
+
+
+async def _ir_worker(rt) -> None:
+    """The SOLE owner of the Flipper serial port — serialises every IR transmit so two never overlap.
+    Drains ``rt.ir_queue`` of ``(ir_file, button, future)`` and transmits each via the BLOCKING
+    ``flipper.transmit_ir`` run OFF the loop. A ``future`` (a control-op request) is resolved with the
+    result or its ``FlipperError``; a ``None`` future (a fire-and-forget rule action) just logs on error.
+    Disabled (no queue) → returns at once, like the other opt-in tasks. A transmit error never kills the
+    loop (``CancelledError`` is a ``BaseException`` so cancellation still propagates and the task ends
+    cleanly). Because ONE worker owns the port, a cancelled control-op request can never leave a second
+    transmit running concurrently — the worker simply moves on once the current transmit returns."""
+    queue = rt.ir_queue
+    if queue is None:                                 # Flipper IR disabled -> nothing to drain
+        return
+    loop = asyncio.get_running_loop()
+    while True:
+        ir_file, button, future = await queue.get()
+        try:
+            await loop.run_in_executor(
+                None, lambda: flipper.transmit_ir(ir_file, button, device=FLIPPER_DEV))
+        except Exception as exc:
+            if future is not None and not future.done():
+                future.set_exception(exc)
+            else:
+                log.warning("ir transmit failed for %s/%s: %r", ir_file, button, exc)
+        else:
+            if future is not None and not future.done():
+                future.set_result(None)
+
+
+async def process_control_op(rt, op) -> dict:
+    """Execute one decoded control op; return a JSON-able response dict."""
+    if not isinstance(op, dict):
+        raise ValueError("expected a JSON object")
+    kind = op.get("op")
+    if kind == "state":
+        return {"ok": True, "state": state_snapshot(rt.state)}
+    if kind == "discovery":
+        return {"ok": True, "devices": _merged_discovery(rt)}
+    if kind == "scenes":                             # learned function-button batches (§5.7a)
+        return {"ok": True,                          # copy each sub-dict — detach from registry state
+                "scenes": {n: dict(e["scenes"]) for n, e in rt.registry.nodes.items() if e.get("scenes")}}
+    if kind == "automations":                        # list every authored rule
+        return {"ok": True, "automations": rt.engine.store.snapshot()}
+    if kind == "automation_set":                     # create/replace one rule
+        rule = Rule.from_dict(op.get("rule"))        # ValueError -> execute_control_line's catch
+
+        def _add(candidate):
+            candidate[rule.id] = rule
+            return rule.id
+
+        try:
+            await _commit_automation(rt, _add)       # persist-before-live; engine untouched on failure
+        except OSError as exc:
+            return {"ok": False, "error": f"automations save failed: {exc!r}"}
+        return {"ok": True, "id": rule.id}
+    if kind == "automation_delete":
+        rid = op.get("id")
+        if not isinstance(rid, str):                  # match Rule.from_dict's strictness
+            raise ValueError(f"automation_delete: id must be a string, got {rid!r}")
+
+        def _remove(candidate):                       # absence decided INSIDE the lock
+            if rid not in candidate:                  # → concurrent double-delete is linearizable
+                return None                           #   (no write), never a KeyError
+            del candidate[rid]
+            return rid
+
+        try:
+            touched = await _commit_automation(rt, _remove)
+        except OSError as exc:
+            return {"ok": False, "error": f"automations save failed: {exc!r}"}
+        return {"ok": True, "deleted": touched is not None}
+    if kind == "name":
+        if "node" not in op:
+            raise ValueError("'name' op requires 'node'")
+        dtype = op.get("type")
+        if dtype is not None and dtype not in {t.value for t in DeviceType}:
+            raise ValueError(f"invalid type {dtype!r}")
+        ep = op.get("ep")
+        if ep is not None and (not isinstance(ep, int) or isinstance(ep, bool) or ep < 0):
+            raise ValueError(f"invalid endpoint {ep!r}")
+        rt.registry.set_user(op["node"], name=op.get("name"), room=op.get("room"),
+                             dtype=dtype, ep=ep)
+        try:
+            await _persist(rt)                       # share the autosave lock — no
+        except OSError as exc:                       # racing os.replace with autosave
+            return {"ok": False, "error": f"registry save failed: {exc!r}"}
+        rt.event_bus.publish({"type": "discovery_changed"})  # UI re-fetches new state
+        return {"ok": True}
+    if kind == "ir":                                 # transmit an IR signal via the Flipper (no device frame)
+        ir_file, button = op.get("file"), op.get("button")
+        if not (isinstance(ir_file, str) and ir_file and isinstance(button, str) and button):
+            return {"ok": False, "error": "ir requires non-empty 'file' and 'button'"}
+        if rt.ir_queue is None:
+            return {"ok": False, "error": "flipper IR is disabled"}
+        future = asyncio.get_running_loop().create_future()
+        try:
+            rt.ir_queue.put_nowait((ir_file, button, future))    # the worker owns the serial port
+        except asyncio.QueueFull:
+            return {"ok": False, "error": "ir queue full"}
+        try:
+            await asyncio.wait_for(future, timeout=IR_OP_TIMEOUT)
+        except asyncio.TimeoutError:
+            return {"ok": False, "error": "ir transmit timed out"}
+        except flipper.FlipperError as exc:
+            return {"ok": False, "error": f"ir transmit failed: {exc}"}
+        return {"ok": True}
+    if kind == "graduate":                           # Phase-3: persist standalone mode (applied on next restart)
+        async with rt.save_lock:                     # serialise the whole flip → concurrent callers see the committed result
+            if rt.registry.mode == "standalone":     # already (durably) graduated → idempotent, no re-write
+                return {"ok": True, "mode": "standalone", "restart_required": rt.mode != "standalone"}
+            try:
+                # SYNCHRONOUS small write (a registry is ~KB; graduation is a one-time click) with the
+                # in-memory flip on the very next line and NO await between — so a cancelled control op
+                # can never leave disk and memory disagreeing: the persist→publish pair is atomic.
+                rt.registry.write_payload(rt.registry.payload_for_mode("standalone"))
+            except OSError as exc:                   # write failed → in-memory mode untouched, target_mode stays honest
+                return {"ok": False, "error": f"graduate persist failed: {exc!r}"}
+            rt.registry.mode = "standalone"          # durable → publish (persist-before-publish; no false success)
+            return {"ok": True, "mode": "standalone", "restart_required": rt.mode != "standalone"}
+    session = rt.sessions[-1] if rt.sessions else None
+    if session is None:
+        return {"ok": False, "error": "no device connected"}
+    raw = build_command(rt, op)
+    try:
+        await session.inject_to_device(raw)
+    except OSError as exc:
+        return {"ok": False, "error": f"device write failed: {exc!r}"}
+    return {"ok": True, "sent": raw.hex()}
+
+
+async def execute_control_line(rt, line: bytes) -> "dict | None":
+    """Decode + execute one control line; return a response dict, or None for blank."""
+    line = line.strip()
+    if not line:
+        return None
+    try:
+        op = json.loads(line)
+        return await process_control_op(rt, op)
+    except (ValueError, KeyError, TypeError, OverflowError) as exc:
+        return {"ok": False, "error": str(exc)}
+
+
+async def handle_control(rt, reader, writer) -> None:
+    peer = writer.get_extra_info("peername")
+    log.info("control + %s", peer)
+    try:
+        while True:
+            line = await reader.readline()
+            if not line:
+                break
+            resp = await execute_control_line(rt, line)
+            if resp is None:
+                continue
+            writer.write((json.dumps(resp) + "\n").encode())
+            await writer.drain()
+    except (ConnectionError, asyncio.IncompleteReadError):
+        pass
+    finally:
+        await _close(writer)
+        log.info("control - %s", peer)
+
+
+def _proxy_session(rt, reader, writer, config):
+    return ProxySession(rt, reader, writer, config.cloud_host, config.cloud_port)
+
+
+async def _start(rt, config, session_factory=_proxy_session):
+    """Create and start the device + control servers; return them (serve or test).
+
+    ``session_factory(rt, reader, writer, config)`` builds the per-connection session
+    — a `ProxySession` (proxy mode) or a standalone session — both exposing ``.run()``
+    and ``.inject_to_device()``. This is the single seam between the two modes.
+    """
+    _require_safe_control_bind(config.control_host)
+
+    async def on_device(reader, writer):
+        await session_factory(rt, reader, writer, config).run()
+
+    async def on_control(reader, writer):
+        await handle_control(rt, reader, writer)
+
+    proxy_srv = await asyncio.start_server(on_device, config.listen_host, config.listen_port)
+    control_srv = await asyncio.start_server(on_control, config.control_host, config.control_port)
+    return proxy_srv, control_srv
+
+
+def _resolve_cloud(config) -> str:
+    """Return the IP to dial: if ``HESTIA_CLOUD_HOSTNAME`` is set, DoH-resolve it
+    (seed = the configured ``cloud_host`` = ``HESTIA_CLOUD_HOST``); otherwise the host
+    verbatim (a literal pin). Pure (no mutation) and synchronous (blocking DoH/probe) —
+    the caller runs it in an executor with a timeout ceiling and assigns the result, so
+    an orphaned thread after a timeout can't race-mutate the config."""
+    if CLOUD_HOSTNAME:
+        return resolve.resolve_cloud_ip(
+            CLOUD_HOSTNAME, seed=config.cloud_host, port=config.cloud_port)
+    return config.cloud_host
+
+
+async def main() -> None:  # pragma: no cover
+    from .web import start_web, stop_web
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    config = ProxyConfig()
+    # Resolve the upstream once at startup (off-loop), with a hard ceiling so a slow or
+    # hostile DoH/probe can never stall startup — fall back to the seed on timeout.
+    try:
+        config.cloud_host = await asyncio.wait_for(
+            asyncio.get_running_loop().run_in_executor(None, _resolve_cloud, config),
+            timeout=15.0)
+    except asyncio.TimeoutError:
+        log.error("cloud resolution timed out; using seed %s", config.cloud_host)
+    rt = ProxyRuntime(
+        registry=Registry.load(config.registry_path),
+        engine=AutomationEngine(AutomationStore.load(config.automations_path)),
+        mode="proxy",
+    )
+    if FLIPPER_ENABLED:                                # create the IR backlog before anything can fire
+        rt.ir_queue = asyncio.Queue(maxsize=IR_QUEUE_MAX)
+    proxy_srv, control_srv = await _start(rt, config)
+    autosave = asyncio.create_task(_autosave(rt))
+    scheduler = asyncio.create_task(_scheduler(rt))
+    niania = asyncio.create_task(_niania_poller(rt))   # no-op unless HESTIA_NIANIA_* configured
+    weather_task = asyncio.create_task(_weather_poller(rt))  # no-op unless HESTIA_OUTDOOR_TEMP + source=open-meteo
+    sensor433_task = asyncio.create_task(_sensor433_poller(rt))  # no-op unless HESTIA_OUTDOOR_TEMP + source=local
+    ir_worker = asyncio.create_task(_ir_worker(rt))    # no-op unless HESTIA_FLIPPER enabled
+    loop = asyncio.get_running_loop()
+    _install_term_handler(loop, asyncio.current_task())   # SIGTERM -> graceful persist (docker/systemd stop)
+    log.info("hestia proxy: device :%d -> cloud %s:%d | control %s:%d | web %s:%d | registry %s",
+             config.listen_port, config.cloud_host, config.cloud_port,
+             config.control_host, config.control_port,
+             config.web_host, config.web_port, config.registry_path)
+    try:
+        web_server, web_thread = start_web(rt, loop, config.web_host, config.web_port)
+        try:
+            async with proxy_srv, control_srv:
+                await asyncio.gather(proxy_srv.serve_forever(), control_srv.serve_forever())
+        finally:
+            # Wake any SSE handler suspended on the bus BEFORE stopping the
+            # web server — they exit cleanly via `_CLOSED_SENTINEL` instead of
+            # hitting `_BridgeTimeout` against a closing loop.
+            rt.event_bus.close()
+            # Offload the blocking join — `server_close()` waits for handler
+            # threads, and any handler suspended in `_call_loop` is awaiting a
+            # future on *this* loop. Stopping inline would deadlock the loop
+            # for `BRIDGE_TIMEOUT` until the suspended handler times out.
+            await loop.run_in_executor(None, stop_web, web_server, web_thread)
+    finally:
+        autosave.cancel()
+        scheduler.cancel()
+        niania.cancel()
+        weather_task.cancel()
+        sensor433_task.cancel()
+        ir_worker.cancel()
+        await asyncio.gather(autosave, scheduler, niania, weather_task, sensor433_task, ir_worker,
+                             return_exceptions=True)
+        try:
+            await _persist(rt)                 # share save_lock — any in-flight
+        except OSError:                        # control-op write finishes first
+            log.exception("final save failed at shutdown")
+        try:
+            await _persist_store(rt)           # symmetric: don't lose last-interval rule edits
+        except OSError:
+            log.exception("final automations save failed at shutdown")
+
+
+if __name__ == "__main__":  # pragma: no cover
+    try:
+        asyncio.run(main())
+    except (KeyboardInterrupt, asyncio.CancelledError):   # SIGINT / SIGTERM-driven graceful exit
+        pass
