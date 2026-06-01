@@ -731,9 +731,9 @@ class AutomationEngine:
                 continue
             try:
                 frames.append(build_command(rt, action))
-            except (ValueError, KeyError, TypeError, OverflowError) as exc:
-                log.error("automation %r: action %r failed (%s) — skipping",
-                          rule.id, action, exc)
+            except (ValueError, KeyError, TypeError, OverflowError):
+                log.exception("automation %r: action %r failed — skipping",
+                              rule.id, action)
         return frames
 
     def _dispatch_ir(self, rt, rule, action) -> None:

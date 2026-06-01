@@ -88,7 +88,7 @@ def _require_safe_web_bind(host: str) -> None:
         )
 
 
-async def _in_loop_sync(fn, *args):
+async def _in_loop_sync(fn, *args):  # NOSONAR S7503: must stay async — _call_loop runs it via run_coroutine_threadsafe alongside true coroutines
     """Async shim that calls a synchronous function. Lets ``_call_loop`` route
     sync helpers through ``run_coroutine_threadsafe`` uniformly with async ones."""
     return fn(*args)
@@ -100,7 +100,8 @@ async def _wait_event(queue: asyncio.Queue, timeout: float):
     helper via ``_call_loop``. Returns the event on success or ``None`` on
     idle (so the handler writes a keepalive comment instead of dying)."""
     try:
-        return await asyncio.wait_for(queue.get(), timeout=timeout)
+        async with asyncio.timeout(timeout):
+            return await queue.get()
     except asyncio.TimeoutError:
         return None
 

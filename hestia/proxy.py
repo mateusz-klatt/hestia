@@ -49,7 +49,7 @@ from . import flipper, sensor433, weather
 
 log = logging.getLogger("hestia.proxy")
 
-CLOUD_HOST = os.environ.get("HESTIA_CLOUD_HOST", "1.2.3.4")   # seed / literal pin
+CLOUD_HOST = os.environ.get("HESTIA_CLOUD_HOST", "1.2.3.4")   # NOSONAR S1313: placeholder default; real cloud IP via $HESTIA_CLOUD_HOST
 CLOUD_HOSTNAME = os.environ.get("HESTIA_CLOUD_HOSTNAME")          # opt-in: DoH-resolve this instead
 CLOUD_PORT = int(os.environ.get("HESTIA_CLOUD_PORT", "8925"))
 LISTEN_HOST = os.environ.get("HESTIA_LISTEN_HOST", "0.0.0.0")
@@ -375,7 +375,7 @@ class EventBus:
         if self._closing or self._sem.locked():
             return None
         await self._sem.acquire()
-        if self._closing:
+        if self._closing:  # NOSONAR S2583: close() flips _closing on another task while we await the semaphore — concurrency re-check, not dead code
             self._sem.release()
             return None
         q: asyncio.Queue = asyncio.Queue(maxsize=maxsize)
@@ -388,7 +388,7 @@ class EventBus:
     def publish(self, event) -> None:
         if self._closing:
             return                                            # deterministic post-close no-op
-        for q in list(self._subs):                            # snapshot — handlers may unsubscribe mid-iteration
+        for q in self._subs:                                  # sync loop (no await) → no concurrent unsubscribe can mutate the set mid-iteration
             try:
                 q.put_nowait(event)
             except asyncio.QueueFull:
@@ -400,7 +400,7 @@ class EventBus:
         one event to make room — the operator's shutdown intent takes priority
         over a pending activity event."""
         self._closing = True
-        for q in list(self._subs):
+        for q in self._subs:                                  # sync loop (no await) → set can't change mid-iteration
             while True:
                 try:
                     q.put_nowait(_CLOSED_SENTINEL)
@@ -503,9 +503,9 @@ class ProxySession:
             cloud_reader, cloud_writer = await asyncio.open_connection(
                 self.cloud_host, self.cloud_port
             )
-        except OSError as exc:
-            log.error("upstream %s:%d unreachable for %s: %r",
-                      self.cloud_host, self.cloud_port, self.peer, exc)
+        except OSError:
+            log.exception("upstream %s:%d unreachable for %s",
+                          self.cloud_host, self.cloud_port, self.peer)
             await _close(self.dev_writer)
             return
 
@@ -776,7 +776,7 @@ async def _write_and_settle(write_payload, payload) -> "asyncio.CancelledError |
     while not fut.done():
         try:
             await asyncio.wait({fut})
-        except asyncio.CancelledError as exc:
+        except asyncio.CancelledError as exc:  # NOSONAR S7497: cancel is captured here and re-raised by the caller after the write settles (see docstring)
             cancelled = exc              # remember; keep waiting for the write to settle
     err = fut.exception()                # always retrieve — never an unretrieved-exception leak
     if err is not None:
@@ -837,7 +837,7 @@ def _install_term_handler(loop, task) -> bool:
     try:
         loop.add_signal_handler(signal.SIGTERM, task.cancel)
         return True
-    except (NotImplementedError, RuntimeError, ValueError):
+    except (RuntimeError, ValueError):           # NotImplementedError ⊂ RuntimeError
         return False
 
 
@@ -1023,7 +1023,7 @@ async def _ir_worker(rt) -> None:
         ir_file, button, future = await queue.get()
         try:
             await loop.run_in_executor(
-                None, lambda: flipper.transmit_ir(ir_file, button, device=FLIPPER_DEV))
+                None, lambda i=ir_file, b=button: flipper.transmit_ir(i, b, device=FLIPPER_DEV))
         except Exception as exc:
             if future is not None and not future.done():
                 future.set_exception(exc)

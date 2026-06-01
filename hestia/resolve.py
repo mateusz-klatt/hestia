@@ -35,7 +35,7 @@ import urllib.request
 log = logging.getLogger("hestia.resolve")
 
 # IP-literal DoH endpoints (no bootstrap name lookup → can't self-loop through Pi-hole).
-DOH_ENDPOINTS = ("https://8.8.8.8/resolve", "https://1.1.1.1/dns-query")
+DOH_ENDPOINTS = ("https://8.8.8.8/resolve", "https://1.1.1.1/dns-query")  # NOSONAR S1313: IP-literal DoH endpoints are deliberate — no bootstrap name lookup (can't self-loop through Pi-hole)
 MAX_CANDIDATES = 8   # cap probes per endpoint so many non-serving A records can't stretch startup
 
 

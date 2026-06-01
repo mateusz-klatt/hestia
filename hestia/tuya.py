@@ -32,6 +32,7 @@ _ACCEPT_CMDS = frozenset({_DP_QUERY, _CONTROL_NEW, _STATUS})
 _VER_HEADER = b"3.3" + b"\x00" * 12             # 15-byte cleartext prefix before the ciphertext
 _MAX_FRAME = 8192                               # cap one response frame (DoS guard)
 _MAX_FRAMES = 4                                 # skip at most this many empty ACKs
+_FRAME_HEAD = ">IIII"                           # big-endian header struct: prefix|seq|cmd|length
 
 
 class TuyaError(Exception):
@@ -176,7 +177,7 @@ def aes_ecb_decrypt(data: bytes, key: bytes) -> bytes:
 def _pack(seq: int, cmd: int, payload: bytes) -> bytes:
     """Build a frame. ``payload`` is the region between the length field and the crc (for a command:
     the encoded message; the 4-byte return code, if any, must already be inside it)."""
-    head = struct.pack(">IIII", _PREFIX, seq, cmd, len(payload) + 8)
+    head = struct.pack(_FRAME_HEAD, _PREFIX, seq, cmd, len(payload) + 8)
     body = head + payload
     return body + struct.pack(">II", binascii.crc32(body), _SUFFIX)
 
@@ -185,7 +186,7 @@ def _unpack(buf: bytes):
     """Parse a device→app frame -> ``(seq, cmd, retcode, payload)`` (4-byte retcode stripped)."""
     if len(buf) < 24:
         raise TuyaError("frame too short")
-    prefix, seq, cmd, length = struct.unpack(">IIII", buf[:16])
+    prefix, seq, cmd, length = struct.unpack(_FRAME_HEAD, buf[:16])
     if prefix != _PREFIX:
         raise TuyaError("bad prefix")
     total = 16 + length
@@ -218,7 +219,7 @@ def decode_message(key: bytes, payload: bytes) -> dict:
     plain = _pkcs7_unpad(aes_ecb_decrypt(payload, key))
     try:
         return json.loads(plain)
-    except (ValueError, UnicodeDecodeError) as exc:
+    except ValueError as exc:                        # UnicodeDecodeError ⊂ ValueError
         raise TuyaError(f"bad json ({exc})") from None
 
 
@@ -257,14 +258,14 @@ class TuyaDevice:
         return cmd, _pack(0, cmd, encode_message(cmd, self.key, payload))
 
     def status(self) -> dict:
-        cmd, frame = self._query()
+        _, frame = self._query()
         try:
             with socket.create_connection((self.ip, self.port), timeout=self.timeout) as sock:
                 sock.settimeout(self.timeout)
                 sock.sendall(frame)
                 for _ in range(_MAX_FRAMES):
                     head = _recv_exact(sock, 16)
-                    prefix, _seq, _cmd, length = struct.unpack(">IIII", head)
+                    prefix, _seq, _cmd, length = struct.unpack(_FRAME_HEAD, head)
                     if prefix != _PREFIX:
                         raise TuyaError("bad prefix")
                     if not 12 <= length <= _MAX_FRAME:
