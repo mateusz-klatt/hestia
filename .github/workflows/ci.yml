@@ -37,7 +37,7 @@ jobs:
       # Reads sonar-project.properties; uploads coverage.xml. SONAR_TOKEN is a repo secret.
       # Requires the SonarCloud project's Analysis Method = "CI-based" (Automatic Analysis OFF).
       - name: SonarCloud scan
-        uses: SonarSource/sonarqube-scan-action@v5
+        uses: SonarSource/sonarqube-scan-action@v6
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOST_URL: https://sonarcloud.io
