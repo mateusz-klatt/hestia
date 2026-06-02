@@ -42,6 +42,11 @@ class PasswordTests(unittest.TestCase):
         for bad in (None, 12345, ["scrypt"]):       # a non-str stored must return False, not raise
             self.assertFalse(auth.verify_password("x", bad))
 
+    def test_non_string_password_rejected(self):
+        valid = auth.hash_password("x")
+        for bad in (None, 12345, ["x"]):             # a non-str password must return False, not raise
+            self.assertFalse(auth.verify_password(bad, valid))
+
     def test_malformed_stored_rejected(self):
         for bad in ("", "scrypt$only", "scrypt$x$y$z$bad$base64!!", "scrypt$16384$8$1$@@@$@@@",
                     "scrypt$999999999999999999999$8$1$YQ==$Yg=="):   # absurd n → OverflowError, must be caught
@@ -139,6 +144,12 @@ class AuthenticateTests(unittest.TestCase):
 
     def test_non_string_stored_rejected(self):
         self.assertFalse(auth.authenticate("x", "y", {"x": 12345}))
+
+    def test_non_string_login_inputs_rejected(self):
+        # malformed login JSON must fail closed (return False), never raise (e.g. users.get([]) / None.encode)
+        self.assertFalse(auth.authenticate([], "pw", self.users))            # non-str username
+        self.assertFalse(auth.authenticate("tata", None, self.users))        # non-str password, valid user
+        self.assertFalse(auth.authenticate("tata", ["pw"], self.users))
 
 
 class _Prompt:

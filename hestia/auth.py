@@ -70,7 +70,7 @@ _DUMMY_STORED = hash_password(_DUMMY_PASSWORD)
 def verify_password(password: str, stored: str) -> bool:
     """``True`` iff ``password`` matches the ``scrypt$…`` ``stored`` value. Constant-time; never raises
     (a malformed/foreign/non-string ``stored`` returns ``False``)."""
-    if not isinstance(stored, str):
+    if not isinstance(password, str) or not isinstance(stored, str):
         return False
     try:
         algo, n_s, r_s, p_s, salt_b64, hash_b64 = stored.split("$")
@@ -131,6 +131,8 @@ def load_users(path: "Path | None" = None) -> dict:
 def authenticate(username: str, password: str, users: dict) -> bool:
     """``True`` iff ``username`` exists in ``users`` and ``password`` matches its hash. Runs a dummy hash
     for an unknown user so timing can't reveal which usernames exist."""
+    if not isinstance(username, str) or not isinstance(password, str):
+        return False                               # malformed login input (raw JSON) -> fail closed, never raise
     stored = users.get(username)
     if not isinstance(stored, str):
         verify_password(password, _DUMMY_STORED)   # one scrypt to equalise timing — NEVER a successful login
