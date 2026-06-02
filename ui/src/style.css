@@ -1,0 +1,91 @@
+:root {
+  color-scheme: light dark;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Consolas, "Liberation Mono", monospace;
+  background: Canvas;
+  color: CanvasText;
+}
+
+body {
+  margin: 1.5rem;
+}
+
+h1 {
+  font-size: 1.1rem;
+  margin: 0 0 1rem;
+}
+
+table {
+  border-collapse: collapse;
+}
+
+th,
+td {
+  padding: 0.3rem 0.7rem;
+  text-align: left;
+  vertical-align: middle;
+}
+
+thead {
+  border-bottom: 1px solid color-mix(in srgb, CanvasText 50%, Canvas);
+}
+
+tbody tr {
+  border-bottom: 1px solid color-mix(in srgb, CanvasText 12%, Canvas);
+}
+
+.confirmed {
+  color: #1a8a1a;
+  font-weight: bold;
+}
+
+td.seen {
+  color: color-mix(in srgb, CanvasText 55%, Canvas);
+  font-size: 0.85rem;
+  white-space: nowrap;
+}
+
+td.batt {
+  white-space: nowrap;
+}
+
+td.batt.low {
+  color: #c0341d;
+  font-weight: bold;
+}
+
+tr.subrow td {
+  border-top: none;
+  padding-top: 1px;
+  padding-bottom: 1px;
+}
+
+td.sub-label {
+  color: color-mix(in srgb, CanvasText 55%, Canvas);
+  padding-left: 1.5rem;
+  white-space: nowrap;
+}
+
+#conn {
+  float: right;
+  font-size: 0.85rem;
+  color: color-mix(in srgb, CanvasText 55%, Canvas);
+}
+
+#refresh {
+  float: right;
+  margin-left: 1rem;
+  font: inherit;
+  padding: 0.15rem 0.5rem;
+  cursor: pointer;
+}
+
+#globals {
+  margin: -0.4rem 0 0.9rem;
+  color: color-mix(in srgb, CanvasText 75%, Canvas);
+  font-size: 0.95rem;
+}
+
+#status {
+  color: #c0341d;
+  margin-top: 1rem;
+}
