@@ -1009,291 +1009,290 @@ loadAutomations();
 """
 
 
-def make_handler(rt, loop):
-    """Build a :class:`BaseHTTPRequestHandler` subclass with closures over the
-    runtime and the asyncio loop, so every dispatch is bound to *this* hestia
-    instance without module globals."""
+class _WebHandlerBase(BaseHTTPRequestHandler):
+    # Quiet the per-request access log; we use our own structured logger.
+    def log_message(self, fmt, *args):           # pragma: no cover
+        log.debug("%s %s", self.address_string(), fmt % args)
 
-    class _Handler(BaseHTTPRequestHandler):
-        # Quiet the per-request access log; we use our own structured logger.
-        def log_message(self, fmt, *args):           # pragma: no cover
-            log.debug("%s %s", self.address_string(), fmt % args)
+    # ---- shared helpers ----
+    def _send_json(self, status, payload):
+        body = json.dumps(payload).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
-        # ---- shared helpers ----
-        def _send_json(self, status, payload):
-            body = json.dumps(payload).encode("utf-8")
-            self.send_response(status)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
+    def _send_empty(self, status, extra_headers=()):
+        self.send_response(status)
+        self.send_header("Content-Length", "0")
+        for k, v in extra_headers:
+            self.send_header(k, v)
+        self.end_headers()
 
-        def _send_empty(self, status, extra_headers=()):
-            self.send_response(status)
-            self.send_header("Content-Length", "0")
-            for k, v in extra_headers:
+    def _send_html(self, status, html):
+        body = html.encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    # ---- GET ----
+    def do_GET(self):
+        if self.path == "/":
+            return self._send_html(HTTPStatus.OK, _INDEX_HTML)
+        if self.path == "/api/discovery":
+            return self._discovery()
+        if self.path == "/api/events":
+            return self._events()
+        if self.path == "/api/automations":
+            return self._automations_list()
+        if self.path in ("/api/name", "/api/ir", "/api/automations/delete", "/api/graduate"):   # right path, wrong method
+            return self._send_empty(HTTPStatus.METHOD_NOT_ALLOWED, [("Allow", "POST")])
+        return self._send_empty(HTTPStatus.NOT_FOUND)
+
+    def _discovery(self):
+        try:
+            devices, globs, mode, target = _call_loop(self._loop, lambda: _in_loop_sync(
+                lambda r: (_merged_discovery(r), globals_snapshot(r.state), r.mode, r.registry.mode), self._rt))
+        except _LoopClosed:
+            return self._send_empty(HTTPStatus.SERVICE_UNAVAILABLE)
+        except _BridgeTimeout:
+            return self._send_empty(HTTPStatus.GATEWAY_TIMEOUT)
+        # mode = the RUNNING server; target_mode = the PERSISTED registry mode (Phase-3 graduation,
+        # applied on next restart); env_override = HESTIA_MODE if it is pinning the mode (else null).
+        return self._send_json(HTTPStatus.OK,
+                               {"devices": devices, "summary": _summary(devices), "globals": globs,
+                                "ir_buttons": IR_BUTTONS, "klima": KLIMA, "rule_vocab": rule_vocab(),
+                                "mode": mode, "target_mode": target,
+                                "env_override": os.environ.get("HESTIA_MODE")})
+
+    def _events(self):
+        """Server-Sent Events stream — pushes `activity` (`[1e 09]` frame
+        → row flash) and `discovery_changed` (name op / classifier update
+        → UI re-fetch). Heatmap UX for onboarding: operator wiggles a
+        switch, the row lights up, they know which to name."""
+        try:
+            sub = _call_loop(self._loop, lambda: self._rt.event_bus.try_subscribe())
+        except _LoopClosed:
+            return self._send_empty(HTTPStatus.SERVICE_UNAVAILABLE)
+        except _BridgeTimeout:
+            return self._send_empty(HTTPStatus.GATEWAY_TIMEOUT)
+        if sub is None:                            # cap reached or bus closing
+            return self._send_empty(HTTPStatus.TOO_MANY_REQUESTS)
+        try:
+            self.send_response(HTTPStatus.OK)
+            for k, v in (("Content-Type", "text/event-stream"),
+                         ("Cache-Control", "no-cache"),
+                         ("Connection", "keep-alive"),
+                         ("X-Accel-Buffering", "no")):
                 self.send_header(k, v)
             self.end_headers()
-
-        def _send_html(self, status, html):
-            body = html.encode("utf-8")
-            self.send_response(status)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
-
-        # ---- GET ----
-        def do_GET(self):
-            if self.path == "/":
-                return self._send_html(HTTPStatus.OK, _INDEX_HTML)
-            if self.path == "/api/discovery":
-                return self._discovery()
-            if self.path == "/api/events":
-                return self._events()
-            if self.path == "/api/automations":
-                return self._automations_list()
-            if self.path in ("/api/name", "/api/ir", "/api/automations/delete", "/api/graduate"):   # right path, wrong method
-                return self._send_empty(HTTPStatus.METHOD_NOT_ALLOWED, [("Allow", "POST")])
-            return self._send_empty(HTTPStatus.NOT_FOUND)
-
-        def _discovery(self):
-            try:
-                devices, globs, mode, target = _call_loop(loop, lambda: _in_loop_sync(
-                    lambda r: (_merged_discovery(r), globals_snapshot(r.state), r.mode, r.registry.mode), rt))
-            except _LoopClosed:
-                return self._send_empty(HTTPStatus.SERVICE_UNAVAILABLE)
-            except _BridgeTimeout:
-                return self._send_empty(HTTPStatus.GATEWAY_TIMEOUT)
-            # mode = the RUNNING server; target_mode = the PERSISTED registry mode (Phase-3 graduation,
-            # applied on next restart); env_override = HESTIA_MODE if it is pinning the mode (else null).
-            return self._send_json(HTTPStatus.OK,
-                                   {"devices": devices, "summary": _summary(devices), "globals": globs,
-                                    "ir_buttons": IR_BUTTONS, "klima": KLIMA, "rule_vocab": rule_vocab(),
-                                    "mode": mode, "target_mode": target,
-                                    "env_override": os.environ.get("HESTIA_MODE")})
-
-        def _events(self):
-            """Server-Sent Events stream — pushes `activity` (`[1e 09]` frame
-            → row flash) and `discovery_changed` (name op / classifier update
-            → UI re-fetch). Heatmap UX for onboarding: operator wiggles a
-            switch, the row lights up, they know which to name."""
-            try:
-                sub = _call_loop(loop, lambda: rt.event_bus.try_subscribe())
-            except _LoopClosed:
-                return self._send_empty(HTTPStatus.SERVICE_UNAVAILABLE)
-            except _BridgeTimeout:
-                return self._send_empty(HTTPStatus.GATEWAY_TIMEOUT)
-            if sub is None:                            # cap reached or bus closing
-                return self._send_empty(HTTPStatus.TOO_MANY_REQUESTS)
-            try:
-                self.send_response(HTTPStatus.OK)
-                for k, v in (("Content-Type", "text/event-stream"),
-                             ("Cache-Control", "no-cache"),
-                             ("Connection", "keep-alive"),
-                             ("X-Accel-Buffering", "no")):
-                    self.send_header(k, v)
-                self.end_headers()
-                deadline = _clock() + SSE_MAX_LIFETIME
-                while _clock() < deadline:
-                    try:
-                        event = _call_loop(
-                            loop, lambda: _wait_event(sub.queue, SSE_IDLE_TIMEOUT),
-                            timeout=SSE_BRIDGE_TIMEOUT)
-                    except (_LoopClosed, _BridgeTimeout):
-                        break                          # browser EventSource auto-reconnects
-                    if event is _CLOSED_SENTINEL:
-                        break                          # graceful shutdown
-                    try:
-                        payload = (b":keepalive\n\n" if event is None
-                                   else f"data: {json.dumps(event)}\n\n".encode("utf-8"))
-                        self.wfile.write(payload)
-                        self.wfile.flush()             # MANDATORY — BufferedWriter holds 8 KiB otherwise
-                    except OSError:
-                        break                          # client disconnected
-            finally:
-                # Primary cleanup runs in the loop. On a torn-down loop, fall
-                # back to ``call_soon_threadsafe`` (which still schedules the
-                # close *into* the loop, so the bus invariants are preserved).
+            deadline = _clock() + SSE_MAX_LIFETIME
+            while _clock() < deadline:
                 try:
-                    _call_loop(loop, lambda: _in_loop_sync(sub.close), timeout=2.0)
+                    event = _call_loop(
+                        self._loop, lambda: _wait_event(sub.queue, SSE_IDLE_TIMEOUT),
+                        timeout=SSE_BRIDGE_TIMEOUT)
                 except (_LoopClosed, _BridgeTimeout):
-                    try:
-                        loop.call_soon_threadsafe(sub.close)
-                    except RuntimeError:
-                        pass                           # loop fully closed; bus shutdown already ran
-
-        # ---- POST ----
-        def do_POST(self):
-            if self.path == "/api/name":
-                return self._name()
-            if self.path == "/api/ir":
-                return self._ir()
-            if self.path == "/api/automations":
-                return self._automations_set()
-            if self.path == "/api/automations/delete":
-                return self._automations_delete()
-            if self.path == "/api/graduate":           # Phase-3: persist standalone mode
-                return self._graduate()
-            if self.path == "/":                       # right path, wrong method
-                return self._send_empty(HTTPStatus.METHOD_NOT_ALLOWED, [("Allow", "GET")])
-            return self._send_empty(HTTPStatus.NOT_FOUND)
-
-        def _read_json_body(self, max_body=MAX_BODY):
-            """Read and JSON-parse the request body, enforcing framing limits. On any
-            content-type/framing/size/parse error this SENDS the matching 4xx itself and
-            returns ``(None, True)``; on success returns ``(obj, False)``. A zero-length
-            body parses to ``{}`` (preserving the original ``/api/name`` contract);
-            ``max_body`` caps the byte size per endpoint (names are small, rules larger).
-
-            Requiring ``Content-Type: application/json`` is the CSRF guard for these
-            device-controlling mutations: it is NOT a CORS "simple" content type, so a
-            cross-origin browser request must clear a preflight first — which this server
-            never grants — blocking a malicious page from POSTing a forged body (e.g. a
-            time rule that actuates devices) to the loopback UI or the auth'd reverse proxy.
-            First-party fetches already send it; non-browser clients set it trivially."""
-            ctype = self.headers.get("Content-Type", "")
-            if ctype.split(";")[0].strip().lower() != "application/json":
-                self._send_json(HTTPStatus.UNSUPPORTED_MEDIA_TYPE,
-                                {"ok": False, "error": "Content-Type must be application/json"})
-                return None, True
-            cl_raw = self.headers.get("Content-Length")
-            if cl_raw is None:
-                self._send_json(HTTPStatus.LENGTH_REQUIRED,
-                                {"ok": False, "error": "Content-Length required"})
-                return None, True
+                    break                          # browser EventSource auto-reconnects
+                if event is _CLOSED_SENTINEL:
+                    break                          # graceful shutdown
+                try:
+                    payload = (b":keepalive\n\n" if event is None
+                               else f"data: {json.dumps(event)}\n\n".encode("utf-8"))
+                    self.wfile.write(payload)
+                    self.wfile.flush()             # MANDATORY — BufferedWriter holds 8 KiB otherwise
+                except OSError:
+                    break                          # client disconnected
+        finally:
+            # Primary cleanup runs in the loop. On a torn-down loop, fall
+            # back to ``call_soon_threadsafe`` (which still schedules the
+            # close *into* the loop, so the bus invariants are preserved).
             try:
-                cl = int(cl_raw)
-            except ValueError:
-                self._send_json(HTTPStatus.BAD_REQUEST,
-                                {"ok": False, "error": "malformed Content-Length"})
-                return None, True
-            if cl > max_body:
-                self._send_json(HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
-                                {"ok": False, "error": f"body must be ≤ {max_body} bytes"})
-                return None, True
-            body = self.rfile.read(cl) if cl > 0 else b""
-            try:
-                return (json.loads(body) if body else {}), False
-            except ValueError:
-                self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "invalid JSON"})
-                return None, True
+                _call_loop(self._loop, lambda: _in_loop_sync(sub.close), timeout=2.0)
+            except (_LoopClosed, _BridgeTimeout):
+                try:
+                    self._loop.call_soon_threadsafe(sub.close)
+                except RuntimeError:
+                    pass                           # loop fully closed; bus shutdown already ran
 
-        def _dispatch_op(self, op, *, timeout=None, fail_status=HTTPStatus.INTERNAL_SERVER_ERROR):
-            """Run a control op through the loop bridge and map the outcome to a
-            response: ValueError/KeyError/TypeError → 400 (caller/op rejected the input),
-            ``_LoopClosed`` → 503, ``_BridgeTimeout`` → 504, ``ok`` → 200, else → ``fail_status``.
-            ``timeout`` overrides the loop-bridge ceiling (``None`` = the default ``BRIDGE_TIMEOUT``);
-            ``/api/ir`` widens it because an IR transmit runs longer than a registry write. Shared by
-            ``/api/name``, the mutating ``/api/automations*`` endpoints, and ``/api/ir``."""
-            try:
-                resp = _call_loop(loop, lambda: process_control_op(rt, op), timeout=timeout)
-            except (ValueError, KeyError, TypeError) as exc:
-                return self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
-            except _LoopClosed:
-                return self._send_empty(HTTPStatus.SERVICE_UNAVAILABLE)
-            except _BridgeTimeout:
-                return self._send_empty(HTTPStatus.GATEWAY_TIMEOUT)
-            if resp.get("ok"):
-                return self._send_json(HTTPStatus.OK, resp)
-            return self._send_json(fail_status, resp)
+    # ---- POST ----
+    def do_POST(self):
+        if self.path == "/api/name":
+            return self._name()
+        if self.path == "/api/ir":
+            return self._ir()
+        if self.path == "/api/automations":
+            return self._automations_set()
+        if self.path == "/api/automations/delete":
+            return self._automations_delete()
+        if self.path == "/api/graduate":           # Phase-3: persist standalone mode
+            return self._graduate()
+        if self.path == "/":                       # right path, wrong method
+            return self._send_empty(HTTPStatus.METHOD_NOT_ALLOWED, [("Allow", "GET")])
+        return self._send_empty(HTTPStatus.NOT_FOUND)
 
-        def _name(self):
-            op, err = self._read_json_body()
-            if err:
-                return
-            error = self._validate_name_payload(op)
-            if error is not None:
-                return self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": error})
-            op["op"] = "name"                          # normalise after validation
-            return self._dispatch_op(op)
+    def _read_json_body(self, max_body=MAX_BODY):
+        """Read and JSON-parse the request body, enforcing framing limits. On any
+        content-type/framing/size/parse error this SENDS the matching 4xx itself and
+        returns ``(None, True)``; on success returns ``(obj, False)``. A zero-length
+        body parses to ``{}`` (preserving the original ``/api/name`` contract);
+        ``max_body`` caps the byte size per endpoint (names are small, rules larger).
 
-        def _graduate(self):
-            """POST /api/graduate — persist standalone mode (Phase-3; applied on the next restart). Takes
-            no body, but still requires ``Content-Type: application/json`` — the same CSRF guard the other
-            device-affecting mutations use, so a cross-origin form-POST can't trigger graduation."""
-            _, err = self._read_json_body()            # enforce the JSON content-type; the parsed body is unused
-            if err:
-                return
-            return self._dispatch_op({"op": "graduate"}, fail_status=HTTPStatus.SERVICE_UNAVAILABLE)
+        Requiring ``Content-Type: application/json`` is the CSRF guard for these
+        device-controlling mutations: it is NOT a CORS "simple" content type, so a
+        cross-origin browser request must clear a preflight first — which this server
+        never grants — blocking a malicious page from POSTing a forged body (e.g. a
+        time rule that actuates devices) to the loopback UI or the auth'd reverse proxy.
+        First-party fetches already send it; non-browser clients set it trivially."""
+        ctype = self.headers.get("Content-Type", "")
+        if ctype.split(";")[0].strip().lower() != "application/json":
+            self._send_json(HTTPStatus.UNSUPPORTED_MEDIA_TYPE,
+                            {"ok": False, "error": "Content-Type must be application/json"})
+            return None, True
+        cl_raw = self.headers.get("Content-Length")
+        if cl_raw is None:
+            self._send_json(HTTPStatus.LENGTH_REQUIRED,
+                            {"ok": False, "error": "Content-Length required"})
+            return None, True
+        try:
+            cl = int(cl_raw)
+        except ValueError:
+            self._send_json(HTTPStatus.BAD_REQUEST,
+                            {"ok": False, "error": "malformed Content-Length"})
+            return None, True
+        if cl > max_body:
+            self._send_json(HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
+                            {"ok": False, "error": f"body must be ≤ {max_body} bytes"})
+            return None, True
+        body = self.rfile.read(cl) if cl > 0 else b""
+        try:
+            return (json.loads(body) if body else {}), False
+        except ValueError:
+            self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "invalid JSON"})
+            return None, True
 
-        def _ir(self):
-            """Transmit a saved IR signal via the Flipper. Body: ``{"file","button"}``. The op blocks on
-            the transmit (bounded by ``IR_OP_TIMEOUT``), so the loop bridge gets a longer ceiling; the op's
-            own ``ok/error`` (disabled / queue full / timed out / failed) is surfaced, a non-ok mapping to
-            503 so the dashboard flags it."""
-            op, err = self._read_json_body()
-            if err:
-                return
-            if not isinstance(op, dict):                 # a list/scalar JSON body would crash op.get()
-                return self._send_json(HTTPStatus.BAD_REQUEST,
-                                       {"ok": False, "error": "body must be a JSON object"})
-            ir_file, button = op.get("file"), op.get("button")
-            if not (isinstance(ir_file, str) and ir_file and isinstance(button, str) and button):
-                return self._send_json(HTTPStatus.BAD_REQUEST,
-                                       {"ok": False, "error": "file and button required"})
-            return self._dispatch_op({"op": "ir", "file": ir_file, "button": button},
-                                     timeout=IR_OP_TIMEOUT + 5.0,
-                                     fail_status=HTTPStatus.SERVICE_UNAVAILABLE)
-
-        # ---- automations CRUD (over the automations/automation_set/automation_delete ops) ----
-        def _automations_list(self):
-            """List every authored rule. Mirrors ``_discovery`` — the ``automations`` op
-            cannot return ``ok: False``, so there is no 500 branch (only 200/503/504)."""
-            try:
-                resp = _call_loop(loop, lambda: process_control_op(rt, {"op": "automations"}))
-            except _LoopClosed:
-                return self._send_empty(HTTPStatus.SERVICE_UNAVAILABLE)
-            except _BridgeTimeout:
-                return self._send_empty(HTTPStatus.GATEWAY_TIMEOUT)
+    def _dispatch_op(self, op, *, timeout=None, fail_status=HTTPStatus.INTERNAL_SERVER_ERROR):
+        """Run a control op through the loop bridge and map the outcome to a
+        response: ValueError/KeyError/TypeError → 400 (caller/op rejected the input),
+        ``_LoopClosed`` → 503, ``_BridgeTimeout`` → 504, ``ok`` → 200, else → ``fail_status``.
+        ``timeout`` overrides the loop-bridge ceiling (``None`` = the default ``BRIDGE_TIMEOUT``);
+        ``/api/ir`` widens it because an IR transmit runs longer than a registry write. Shared by
+        ``/api/name``, the mutating ``/api/automations*`` endpoints, and ``/api/ir``."""
+        try:
+            resp = _call_loop(self._loop, lambda: process_control_op(self._rt, op), timeout=timeout)
+        except (ValueError, KeyError, TypeError) as exc:
+            return self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
+        except _LoopClosed:
+            return self._send_empty(HTTPStatus.SERVICE_UNAVAILABLE)
+        except _BridgeTimeout:
+            return self._send_empty(HTTPStatus.GATEWAY_TIMEOUT)
+        if resp.get("ok"):
             return self._send_json(HTTPStatus.OK, resp)
+        return self._send_json(fail_status, resp)
 
-        def _automations_set(self):
-            """Create/replace a rule. The body IS the rule spec; ``Rule.from_dict`` (inside
-            the op) is the authoritative validator — its ValueError maps to 400."""
-            body, err = self._read_json_body(MAX_RULE_BODY)
-            if err:
-                return
-            return self._dispatch_op({"op": "automation_set", "rule": body})
+    def _name(self):
+        op, err = self._read_json_body()
+        if err:
+            return
+        error = self._validate_name_payload(op)
+        if error is not None:
+            return self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": error})
+        op["op"] = "name"                          # normalise after validation
+        return self._dispatch_op(op)
 
-        def _automations_delete(self):
-            """Delete a rule by id. Pull ``id`` out only when the body is an object, so a
-            non-dict JSON body yields ``id=None`` → the op's ValueError → 400 (never an
-            uncaught AttributeError from ``body.get`` on a list/str/number)."""
-            body, err = self._read_json_body(MAX_RULE_BODY)   # same cap as set → any settable id is deletable
-            if err:
-                return
-            rid = body.get("id") if isinstance(body, dict) else None
-            return self._dispatch_op({"op": "automation_delete", "id": rid})
+    def _graduate(self):
+        """POST /api/graduate — persist standalone mode (Phase-3; applied on the next restart). Takes
+        no body, but still requires ``Content-Type: application/json`` — the same CSRF guard the other
+        device-affecting mutations use, so a cross-origin form-POST can't trigger graduation."""
+        _, err = self._read_json_body()            # enforce the JSON content-type; the parsed body is unused
+        if err:
+            return
+        return self._dispatch_op({"op": "graduate"}, fail_status=HTTPStatus.SERVICE_UNAVAILABLE)
 
-        @staticmethod
-        def _validate_name_payload(op) -> "str | None":
-            if not isinstance(op, dict):
-                return "body must be a JSON object"
-            unknown = set(op) - _NAME_FIELDS
-            if unknown:
-                return f"unknown field(s): {sorted(unknown)}"      # explicit allowlist
-            explicit_op = op.get("op")
-            if explicit_op is not None and explicit_op != "name":
-                return "/api/name only accepts op=name"
-            if "node" not in op:
-                return "'node' field is required"
-            fields_present = [k for k in ("name", "room", "type") if k in op]
-            if not fields_present:
-                return "at least one of name, room, type is required"
-            for key in ("name", "room"):
-                value = op.get(key)
-                if value is not None and (not isinstance(value, str) or len(value) > MAX_STRING):
-                    return f"{key} must be a string ≤ {MAX_STRING} chars"
-            dtype = op.get("type")
-            if dtype is not None and dtype not in _TYPES:
-                return f"invalid type {dtype!r}"
-            ep = op.get("ep")
-            if ep is not None and (not isinstance(ep, int) or isinstance(ep, bool) or ep < 0):
-                return "ep must be a non-negative integer"
-            return None
+    def _ir(self):
+        """Transmit a saved IR signal via the Flipper. Body: ``{"file","button"}``. The op blocks on
+        the transmit (bounded by ``IR_OP_TIMEOUT``), so the loop bridge gets a longer ceiling; the op's
+        own ``ok/error`` (disabled / queue full / timed out / failed) is surfaced, a non-ok mapping to
+        503 so the dashboard flags it."""
+        op, err = self._read_json_body()
+        if err:
+            return
+        if not isinstance(op, dict):                 # a list/scalar JSON body would crash op.get()
+            return self._send_json(HTTPStatus.BAD_REQUEST,
+                                   {"ok": False, "error": "body must be a JSON object"})
+        ir_file, button = op.get("file"), op.get("button")
+        if not (isinstance(ir_file, str) and ir_file and isinstance(button, str) and button):
+            return self._send_json(HTTPStatus.BAD_REQUEST,
+                                   {"ok": False, "error": "file and button required"})
+        return self._dispatch_op({"op": "ir", "file": ir_file, "button": button},
+                                 timeout=IR_OP_TIMEOUT + 5.0,
+                                 fail_status=HTTPStatus.SERVICE_UNAVAILABLE)
 
-    return _Handler
+    # ---- automations CRUD (over the automations/automation_set/automation_delete ops) ----
+    def _automations_list(self):
+        """List every authored rule. Mirrors ``_discovery`` — the ``automations`` op
+        cannot return ``ok: False``, so there is no 500 branch (only 200/503/504)."""
+        try:
+            resp = _call_loop(self._loop, lambda: process_control_op(self._rt, {"op": "automations"}))
+        except _LoopClosed:
+            return self._send_empty(HTTPStatus.SERVICE_UNAVAILABLE)
+        except _BridgeTimeout:
+            return self._send_empty(HTTPStatus.GATEWAY_TIMEOUT)
+        return self._send_json(HTTPStatus.OK, resp)
+
+    def _automations_set(self):
+        """Create/replace a rule. The body IS the rule spec; ``Rule.from_dict`` (inside
+        the op) is the authoritative validator — its ValueError maps to 400."""
+        body, err = self._read_json_body(MAX_RULE_BODY)
+        if err:
+            return
+        return self._dispatch_op({"op": "automation_set", "rule": body})
+
+    def _automations_delete(self):
+        """Delete a rule by id. Pull ``id`` out only when the body is an object, so a
+        non-dict JSON body yields ``id=None`` → the op's ValueError → 400 (never an
+        uncaught AttributeError from ``body.get`` on a list/str/number)."""
+        body, err = self._read_json_body(MAX_RULE_BODY)   # same cap as set → any settable id is deletable
+        if err:
+            return
+        rid = body.get("id") if isinstance(body, dict) else None
+        return self._dispatch_op({"op": "automation_delete", "id": rid})
+
+    @staticmethod
+    def _validate_name_payload(op) -> "str | None":
+        if not isinstance(op, dict):
+            return "body must be a JSON object"
+        unknown = set(op) - _NAME_FIELDS
+        if unknown:
+            return f"unknown field(s): {sorted(unknown)}"      # explicit allowlist
+        explicit_op = op.get("op")
+        if explicit_op is not None and explicit_op != "name":
+            return "/api/name only accepts op=name"
+        if "node" not in op:
+            return "'node' field is required"
+        fields_present = [k for k in ("name", "room", "type") if k in op]
+        if not fields_present:
+            return "at least one of name, room, type is required"
+        for key in ("name", "room"):
+            value = op.get(key)
+            if value is not None and (not isinstance(value, str) or len(value) > MAX_STRING):
+                return f"{key} must be a string ≤ {MAX_STRING} chars"
+        dtype = op.get("type")
+        if dtype is not None and dtype not in _TYPES:
+            return f"invalid type {dtype!r}"
+        ep = op.get("ep")
+        if ep is not None and (not isinstance(ep, int) or isinstance(ep, bool) or ep < 0):
+            return "ep must be a non-negative integer"
+        return None
+
+def make_handler(rt, loop):
+    """Build a :class:`BaseHTTPRequestHandler` subclass with bindings to the
+    runtime and the asyncio loop, so every dispatch is bound to *this* hestia
+    instance without module globals."""
+    return type("_Handler", (_WebHandlerBase,), {"_rt": rt, "_loop": loop})
 
 
 def start_web(rt, loop, host: str = None, port: int = None):

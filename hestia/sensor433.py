@@ -22,6 +22,44 @@ RTL_433_BIN = "rtl_433"
 DEFAULT_DEVICE = "rtl_tcp:127.0.0.1:1234"
 
 
+def _rtl433_command(binary: str, device: str, window: float, protocol: "str | None") -> list:
+    cmd = [binary, "-d", device, "-F", "json", "-T", str(int(window))]
+    if protocol:
+        cmd += ["-R", protocol]
+    return cmd
+
+
+def _run_rtl433(cmd: list, window: float, run):
+    try:
+        proc = run(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                   text=True, encoding="utf-8", errors="replace", timeout=window + 15.0)
+    except (OSError, subprocess.SubprocessError):
+        return None                                  # binary missing / spawn error / timeout
+    return None if proc.returncode else proc         # non-zero -> failed read, keep last
+
+
+def _json_line(line: str):
+    line = line.strip()
+    if not line:
+        return None
+    try:
+        obj = json.loads(line)
+    except ValueError:                               # a non-JSON / partial line — skip it
+        return None
+    return obj if isinstance(obj, dict) else None
+
+
+def _matching_temperature(obj: dict, model: "str | None", sensor_id: "str | None"):
+    if model and obj.get("model") != model:
+        return None
+    if sensor_id and str(obj.get("id")) != sensor_id:
+        return None
+    value = obj.get("temperature_C")
+    if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value):
+        return float(value)
+    return None
+
+
 def read_outdoor_temp(*, device: str = DEFAULT_DEVICE, window: float = 60.0,
                       model: "str | None" = None, sensor_id: "str | None" = None,
                       protocol: "str | None" = None, binary: str = RTL_433_BIN,
@@ -40,32 +78,14 @@ def read_outdoor_temp(*, device: str = DEFAULT_DEVICE, window: float = 60.0,
     that emitted partial JSON — is discarded so the poller keeps the last value), or no matching finite
     reading appears. ``errors="replace"`` keeps decoding from ever raising. BLOCKING; runs off the loop.
     ``run`` is injectable so tests never touch a real SDR."""
-    cmd = [binary, "-d", device, "-F", "json", "-T", str(int(window))]
-    if protocol:
-        cmd += ["-R", protocol]
-    try:
-        proc = run(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                   text=True, encoding="utf-8", errors="replace", timeout=window + 15.0)
-    except (OSError, subprocess.SubprocessError):
-        return None                                  # binary missing / spawn error / timeout
-    if proc.returncode:
+    proc = _run_rtl433(_rtl433_command(binary, device, window, protocol), window, run)
+    if proc is None:
         return None                                  # rtl_433 exited non-zero -> failed read, keep last
     temp = None
     for line in (proc.stdout or "").splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            obj = json.loads(line)
-        except ValueError:                           # a non-JSON / partial line — skip it
-            continue
-        if not isinstance(obj, dict):
-            continue
-        if model and obj.get("model") != model:
-            continue
-        if sensor_id and str(obj.get("id")) != sensor_id:
-            continue
-        value = obj.get("temperature_C")
-        if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value):
-            temp = float(value)                      # last matching finite reading wins
+        obj = _json_line(line)
+        if obj is not None:
+            candidate = _matching_temperature(obj, model, sensor_id)
+            if candidate is not None:
+                temp = candidate                       # last matching finite reading wins
     return temp

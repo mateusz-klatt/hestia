@@ -31,6 +31,54 @@ HEARTBEAT_SECS = 60  # the cloud sent a [64 03] timestamp ~1/min
 _NOISE = {(0x66, 0x01), (0x00, 0x00), (0x1E, 0x0A)}
 
 
+def _event_node(frame: Frame) -> "bytes | None":
+    return tlv_value(frame, 0x0047) if (frame.type, frame.cmd) == (0x1E, 0x09) else None
+
+
+def _log_state_changes(node_b: bytes, changed: dict) -> None:
+    for key, value in changed.items():
+        log.info("  ~ [%#04x] %s = %s", node_b[0], key, value)
+
+
+def _publish_observed_events(rt, frame: Frame, node_b: "bytes | None", changed: dict, scene) -> None:
+    if _feed_discovery(rt, frame):          # identity changed → full refetch
+        rt.event_bus.publish({"type": "discovery_changed"})
+    elif changed and node_b:                # live value(s) → cheap cell patch
+        rt.event_bus.publish({"type": "state", "node": node_b[0], "fields": changed})
+    if node_b:
+        event = {"type": "activity", "node": node_b[0], "ts": time.time()}
+        if scene:                           # function-button scene rides the flash
+            event["scene"] = scene
+        rt.event_bus.publish(event)         # heatmap: row flashes (every event)
+
+
+def _scene_replay(rt, node_b: "bytes | None", scene) -> "list[bytes]":
+    if not (scene and node_b):
+        return []
+    hexbatch = rt.registry.scene_batch(node_b[0], scene["id"])
+    if not hexbatch:
+        return []
+    try:
+        # A hand-edited/corrupted registry can hold a non-string (TypeError),
+        # non-hex (ValueError), or over-long batch whose 2-byte TLV length
+        # overflows (OverflowError); skip the replay rather than tear down
+        # the session.
+        return [commands.scene_batch(rt.next_seq(), bytes.fromhex(hexbatch))]
+    except (TypeError, ValueError, OverflowError):
+        log.error("corrupt learned scene batch for node %#04x scene %s — "
+                  "skipping replay", node_b[0], scene["id"])
+        return []
+
+
+def _append_automation_replay(rt, replay: "list[bytes]", node_b: "bytes | None",
+                              changed: dict, scene) -> "list[bytes]":
+    # Automations run in standalone too (rt.mode == "standalone"); append after
+    # any scene-replay so the order is ACK -> scene-replay -> automation actions.
+    if node_b and (changed or scene):
+        return replay + rt.engine.on_event(rt, node_b[0], changed, scene)
+    return replay
+
+
 def make_session_assign() -> bytes:
     """`[64 01]` session assignment: a fresh UUID, seq init = `01`, keepalive 60 s."""
     session = str(uuid.uuid4()).encode("ascii")
@@ -94,43 +142,38 @@ class StandaloneSession:
             return []
         if (frame.type, frame.cmd) not in _NOISE:
             log.info("%s %s", self.peer, summarize(frame))
-        replay: "list[bytes]" = []
-        if frame.checksum_ok:
-            changed = self.rt.state.apply(frame)
-            node_b = tlv_value(frame, 0x0047) if (frame.type, frame.cmd) == (0x1E, 0x09) else None
-            if node_b:                                   # changed is only ever non-empty here
-                for key, value in changed.items():
-                    log.info("  ~ [%#04x] %s = %s", node_b[0], key, value)
-            scene = changed.pop("scene", None)           # a button press: an event, not state
-            if _feed_discovery(self.rt, frame):          # identity changed → full refetch
-                self.rt.event_bus.publish({"type": "discovery_changed"})
-            elif changed and node_b:                     # live value(s) → cheap cell patch
-                self.rt.event_bus.publish(
-                    {"type": "state", "node": node_b[0], "fields": changed})
-            if node_b:
-                event = {"type": "activity", "node": node_b[0], "ts": time.time()}
-                if scene:                                # function-button scene rides the flash
-                    event["scene"] = scene
-                self.rt.event_bus.publish(event)         # heatmap: row flashes (every event)
-            if scene and node_b:                         # standalone: replay the cloud's old reaction
-                hexbatch = self.rt.registry.scene_batch(node_b[0], scene["id"])
-                if hexbatch:
-                    try:
-                        # A hand-edited/corrupted registry can hold a non-string (TypeError),
-                        # non-hex (ValueError), or over-long batch whose 2-byte TLV length
-                        # overflows (OverflowError); skip the replay rather than tear down
-                        # the session.
-                        raw = commands.scene_batch(self.rt.next_seq(), bytes.fromhex(hexbatch))
-                    except (TypeError, ValueError, OverflowError):
-                        log.error("corrupt learned scene batch for node %#04x scene %s — "
-                                  "skipping replay", node_b[0], scene["id"])
-                    else:
-                        replay = [raw]
-            # Automations run in standalone too (rt.mode == "standalone"); append after
-            # any scene-replay so the order is ACK -> scene-replay -> automation actions.
-            if node_b and (changed or scene):
-                replay = replay + self.rt.engine.on_event(self.rt, node_b[0], changed, scene)
-        return replay
+        if not frame.checksum_ok:
+            return []
+        changed = self.rt.state.apply(frame)
+        node_b = _event_node(frame)
+        if node_b:                                   # changed is only ever non-empty here
+            _log_state_changes(node_b, changed)
+        scene = changed.pop("scene", None)           # a button press: an event, not state
+        _publish_observed_events(self.rt, frame, node_b, changed, scene)
+        replay = _scene_replay(self.rt, node_b, scene)
+        return _append_automation_replay(self.rt, replay, node_b, changed, scene)
+
+    def _drop_duplicate_registration(self, frame: Frame) -> bool:
+        if (frame.type, frame.cmd) != (0x64, 0x02):   # registration
+            return False
+        self.serial = tlv_value(frame, 0x0002)
+        if self.serial and self._duplicate_serial():
+            log.warning("duplicate session for serial %r — dropping %s", self.serial, self.peer)
+            return True
+        return False
+
+    async def _write_replies(self, replies: "list[bytes]") -> None:
+        for reply in replies:
+            self.writer.write(reply)
+        if replies:
+            await self.writer.drain()
+
+    async def _finish_run(self, heartbeat) -> None:
+        heartbeat.cancel()
+        await asyncio.gather(heartbeat, return_exceptions=True)
+        await _close(self.writer)
+        self.rt.sessions.remove(self)   # always present once we reach here
+        log.info("- device %s", self.peer)
 
     async def run(self) -> None:
         log.info("+ device %s (standalone)", self.peer)
@@ -145,28 +188,16 @@ class StandaloneSession:
                 for body in deframer.feed(data):
                     frame = Frame(body)
                     replay = self._observe(frame)
-                    if frame.type == 0x64 and frame.cmd == 0x02:   # registration
-                        self.serial = tlv_value(frame, 0x0002)
-                        if self.serial and self._duplicate_serial():
-                            log.warning("duplicate session for serial %r — dropping %s",
-                                        self.serial, self.peer)
-                            return
+                    if self._drop_duplicate_registration(frame):
+                        return
                     # ACK the event first (the cloud's observed order), then the
                     # replayed scene batch — so the device never sees an unsolicited
                     # command ahead of its event's acknowledgement.
-                    replies = self.react(frame) + replay
-                    for reply in replies:
-                        self.writer.write(reply)
-                    if replies:
-                        await self.writer.drain()
+                    await self._write_replies(self.react(frame) + replay)
         except (ConnectionError, asyncio.IncompleteReadError):
             pass
         finally:
-            heartbeat.cancel()
-            await asyncio.gather(heartbeat, return_exceptions=True)
-            await _close(self.writer)
-            self.rt.sessions.remove(self)   # always present once we reach here
-            log.info("- device %s", self.peer)
+            await self._finish_run(heartbeat)
 
     async def _heartbeat(self) -> None:
         while True:

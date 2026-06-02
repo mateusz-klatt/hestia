@@ -112,6 +112,41 @@ def _read_varint(buf, pos: int):
             raise FlipperError("varint too long")
 
 
+def _target_scalar(frame: bytes, pos: int, target: int, wire: int):
+    if wire != 0:
+        raise FlipperError(f"field {target} has non-varint wire type {wire}")
+    value, _ = _read_varint(frame, pos)
+    if value is None:
+        raise FlipperError("truncated scalar in frame")
+    return value
+
+
+def _skip_varint_field(frame: bytes, pos: int) -> int:
+    value, pos = _read_varint(frame, pos)
+    if value is None:
+        raise FlipperError("truncated varint field")
+    return pos
+
+
+def _skip_bytes_field(frame: bytes, pos: int) -> int:
+    length, pos = _read_varint(frame, pos)
+    if length is None:
+        raise FlipperError("truncated length-delimited field")
+    return pos + length
+
+
+def _skip_field(frame: bytes, pos: int, wire: int) -> int:
+    if wire == 0:
+        return _skip_varint_field(frame, pos)
+    if wire == 2:
+        return _skip_bytes_field(frame, pos)
+    if wire == 5:
+        return pos + 4
+    if wire == 1:
+        return pos + 8
+    raise FlipperError(f"unsupported wire type {wire}")
+
+
 def _scalar(frame: bytes, target: int):
     """Return the varint value of scalar field ``target`` in a decoded ``PB.Main`` body, or ``None`` when
     the field is genuinely ABSENT — a well-formed proto3 default (e.g. an OK ``command_status`` is omitted
@@ -126,27 +161,8 @@ def _scalar(frame: bytes, target: int):
             raise FlipperError("truncated tag in frame")
         field, wire = tag >> 3, tag & 0x7
         if field == target:
-            if wire != 0:
-                raise FlipperError(f"field {target} has non-varint wire type {wire}")
-            value, _ = _read_varint(frame, pos)
-            if value is None:
-                raise FlipperError("truncated scalar in frame")
-            return value
-        if wire == 0:
-            value, pos = _read_varint(frame, pos)
-            if value is None:
-                raise FlipperError("truncated varint field")
-        elif wire == 2:
-            length, pos = _read_varint(frame, pos)
-            if length is None:
-                raise FlipperError("truncated length-delimited field")
-            pos += length
-        elif wire == 5:
-            pos += 4
-        elif wire == 1:
-            pos += 8
-        else:
-            raise FlipperError(f"unsupported wire type {wire}")
+            return _target_scalar(frame, pos, target, wire)
+        pos = _skip_field(frame, pos, wire)
         if pos > n:                                           # a skipped field's length ran past the frame
             raise FlipperError("field runs past end of frame")
     return None

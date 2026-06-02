@@ -482,6 +482,40 @@ async def _close(writer: "asyncio.StreamWriter | None") -> None:
         pass
 
 
+def _event_node(frame: Frame) -> "bytes | None":
+    return tlv_value(frame, 0x0047) if (frame.type, frame.cmd) == (0x1E, 0x09) else None
+
+
+def _log_state_changes(node_b: bytes, changed: dict) -> None:
+    for key, value in changed.items():
+        log.info("  ~ [%#04x] %s = %s", node_b[0], key, value)
+
+
+def _publish_proxy_events(rt, frame: Frame, node_b: "bytes | None", changed: dict, scene) -> None:
+    if _feed_discovery(rt, frame):          # identity changed → full refetch
+        rt.event_bus.publish({"type": "discovery_changed"})
+    elif changed and node_b:                # live value(s) → cheap cell patch
+        rt.event_bus.publish({"type": "state", "node": node_b[0], "fields": changed})
+    if node_b:
+        event = {"type": "activity", "node": node_b[0], "ts": time.time()}
+        if scene:                           # function-button scene rides the flash
+            event["scene"] = scene
+        rt.event_bus.publish(event)         # heatmap: row flashes (every event)
+
+
+def _arm_pending_scene(session, node_b: "bytes | None", scene, direction: str) -> None:
+    if scene and node_b and direction == "D->C":  # press → await its cloud reaction
+        session._pending_scene = (node_b[0], scene["id"], time.monotonic())
+
+
+def _proxy_engine_injects(rt, node_b: "bytes | None", changed: dict, scene, direction: str) -> list:
+    # Automations: only device->cloud reports yield changed/scene, so gate on D->C
+    # (belt-and-suspenders + skips per-heartbeat iteration).
+    if direction == "D->C" and node_b and (changed or scene):
+        return rt.engine.on_event(rt, node_b[0], changed, scene)
+    return []
+
+
 class ProxySession:
     """One device↔cloud pairing: raw relay both ways plus a decoding tap."""
 
@@ -548,32 +582,17 @@ class ProxySession:
             return []
         level = logging.DEBUG if (frame.type, frame.cmd) in _NOISE else logging.INFO
         log.log(level, "%s %s", direction, summarize(frame))
-        injects: "list[bytes]" = []
-        if frame.checksum_ok:             # don't act on a corrupt frame
-            changed = self.rt.state.apply(frame)
-            node_b = tlv_value(frame, 0x0047) if (frame.type, frame.cmd) == (0x1E, 0x09) else None
-            if node_b:                                   # changed is only ever non-empty here
-                for key, value in changed.items():
-                    log.info("  ~ [%#04x] %s = %s", node_b[0], key, value)
-            scene = changed.pop("scene", None)           # a button press: an event, not state
-            if scene and node_b and direction == "D->C":  # press → await its cloud reaction
-                self._pending_scene = (node_b[0], scene["id"], time.monotonic())
-            if _feed_discovery(self.rt, frame):          # identity changed → full refetch
-                self.rt.event_bus.publish({"type": "discovery_changed"})
-            elif changed and node_b:                     # live value(s) → cheap cell patch
-                self.rt.event_bus.publish(
-                    {"type": "state", "node": node_b[0], "fields": changed})
-            if node_b:
-                event = {"type": "activity", "node": node_b[0], "ts": time.time()}
-                if scene:                                # function-button scene rides the flash
-                    event["scene"] = scene
-                self.rt.event_bus.publish(event)         # heatmap: row flashes (every event)
-            self._capture_scene_batch(frame, direction)
-            # Automations: only device->cloud reports yield changed/scene, so gate on D->C
-            # (belt-and-suspenders + skips per-heartbeat iteration).
-            if direction == "D->C" and node_b and (changed or scene):
-                injects = self.rt.engine.on_event(self.rt, node_b[0], changed, scene)
-        return injects
+        if not frame.checksum_ok:         # don't act on a corrupt frame
+            return []
+        changed = self.rt.state.apply(frame)
+        node_b = _event_node(frame)
+        if node_b:                        # changed is only ever non-empty here
+            _log_state_changes(node_b, changed)
+        scene = changed.pop("scene", None)   # a button press: an event, not state
+        _arm_pending_scene(self, node_b, scene, direction)
+        _publish_proxy_events(self.rt, frame, node_b, changed, scene)
+        self._capture_scene_batch(frame, direction)
+        return _proxy_engine_injects(self.rt, node_b, changed, scene, direction)
 
     def _capture_scene_batch(self, frame: Frame, direction: str) -> None:
         """Learn the cloud's reaction to a function-button press so standalone mode
@@ -693,6 +712,71 @@ def _safe_int_key(key) -> "int | None":
         return None
 
 
+_UNKNOWN = "unknown"
+
+
+def _discovery_type(cls: dict, reg: dict) -> tuple:
+    cls_type, reg_type = cls.get("type"), reg.get("type")
+    if reg.get("type_confirmed"):
+        return reg_type, reg.get("confidence", "confirmed")
+    if cls_type and cls_type != _UNKNOWN:
+        return cls_type, cls.get("confidence")
+    if reg_type and reg_type != _UNKNOWN:
+        return reg_type, reg.get("confidence")
+    # Nothing useful → "unknown"; never None — UI shouldn't have to handle null.
+    return cls_type or reg_type or _UNKNOWN, cls.get("confidence") or reg.get("confidence") or _UNKNOWN
+
+
+def _discovery_battery(cls: dict, reg: dict):
+    cls_batt = cls.get("battery")
+    return cls_batt if cls_batt is not None else reg.get("battery")
+
+
+def _add_live_state(entry: dict, state: State, node: int) -> None:
+    # Live device state (from rt.state, populated by the same `[1e 09]` events
+    # that trigger this re-fetch). Always present, null when unseen — so the
+    # client has one stable contract and `0`/`False` are never lost. The web
+    # UI renders a type-aware "stan" column from these.
+    entry["level"] = state.levels.get(node)                  # blind/dimmer 0..99
+    entry["switch"] = state.switches.get(node)               # on/off relay
+    entry["door"] = state.doors.get(node)                    # "open"/"closed"
+    entry["setpoint"] = state.thermostat_setpoint.get(node)  # °C target
+    entry["thermostat_on"] = state.thermostat_on.get(node)   # bool
+    entry["temperature"] = state.temperature.get(node)       # °C measured
+    entry["power_w"] = state.plug_w.get(node)                # plug power, W
+    entry["energy_kwh"] = state.plug_kwh.get(node)           # plug cumulative energy, kWh
+    entry["voltage_v"] = state.plug_v.get(node)              # plug mains voltage, V
+    entry["endpoints"] = state.gang.get(node)                # {ep: on} for a multi-gang switch
+
+
+def _add_registry_labels(entry: dict, reg: dict) -> None:
+    if "name" in reg:
+        entry["name"] = reg["name"]
+    if "room" in reg:
+        entry["room"] = reg["room"]
+    if "endpoint_names" in reg:                           # per-endpoint labels for a 2-gang switch
+        entry["endpoint_names"] = dict(reg["endpoint_names"])   # copy — detach from registry state
+
+
+def _discovery_entry(rt, node: int, cls: dict, reg: dict) -> dict:
+    dtype, conf = _discovery_type(cls, reg)
+    # Battery: live reading wins; else the last-known persisted value (so the
+    # column isn't blank right after a restart). 0 % is valid, so test `is not
+    # None`, never `or`. A node that ever reports a battery level IS battery-
+    # powered — that overrides the roster flag, which mislabels battery FLiRS
+    # devices (thermostats) as mains.
+    battery = _discovery_battery(cls, reg)
+    entry = {
+        "power": "battery" if battery is not None else (cls.get("power") or reg.get("power")),
+        "type": dtype,
+        "confidence": conf,
+        "battery": battery,
+    }
+    _add_live_state(entry, rt.state, node)
+    _add_registry_labels(entry, reg)
+    return entry
+
+
 def _merged_discovery(rt) -> dict:
     """Merge the classifier's inference with the user registry. Canonical
     decimal-string keys. Precedence per field:
@@ -707,51 +791,7 @@ def _merged_discovery(rt) -> dict:
     for node in sorted(set(report) | reg_node_ids):
         cls = report.get(node, {})
         reg = reg_nodes.get(str(node), {})
-        cls_type, reg_type = cls.get("type"), reg.get("type")
-        if reg.get("type_confirmed"):
-            dtype, conf = reg_type, reg.get("confidence", "confirmed")
-        elif cls_type and cls_type != "unknown":
-            dtype, conf = cls_type, cls.get("confidence")
-        elif reg_type and reg_type != "unknown":
-            dtype, conf = reg_type, reg.get("confidence")
-        else:                                                      # nothing useful → "unknown"
-            dtype = cls_type or reg_type or "unknown"              # never None — UI shouldn't
-            conf = cls.get("confidence") or reg.get("confidence") or "unknown"   # have to handle null
-        # Battery: live reading wins; else the last-known persisted value (so the
-        # column isn't blank right after a restart). 0 % is valid, so test `is not
-        # None`, never `or`. A node that ever reports a battery level IS battery-
-        # powered — that overrides the roster flag, which mislabels battery FLiRS
-        # devices (thermostats) as mains.
-        cls_batt = cls.get("battery")
-        battery = cls_batt if cls_batt is not None else reg.get("battery")
-        entry = {
-            "power": "battery" if battery is not None else (cls.get("power") or reg.get("power")),
-            "type": dtype,
-            "confidence": conf,
-            "battery": battery,
-        }
-        # Live device state (from rt.state, populated by the same `[1e 09]` events
-        # that trigger this re-fetch). Always present, null when unseen — so the
-        # client has one stable contract and `0`/`False` are never lost. The web
-        # UI renders a type-aware "stan" column from these.
-        st = rt.state
-        entry["level"] = st.levels.get(node)                  # blind/dimmer 0..99
-        entry["switch"] = st.switches.get(node)               # on/off relay
-        entry["door"] = st.doors.get(node)                    # "open"/"closed"
-        entry["setpoint"] = st.thermostat_setpoint.get(node)  # °C target
-        entry["thermostat_on"] = st.thermostat_on.get(node)   # bool
-        entry["temperature"] = st.temperature.get(node)       # °C measured
-        entry["power_w"] = st.plug_w.get(node)                # plug power, W
-        entry["energy_kwh"] = st.plug_kwh.get(node)           # plug cumulative energy, kWh
-        entry["voltage_v"] = st.plug_v.get(node)              # plug mains voltage, V
-        entry["endpoints"] = st.gang.get(node)                # {ep: on} for a multi-gang switch
-        if "name" in reg:
-            entry["name"] = reg["name"]
-        if "room" in reg:
-            entry["room"] = reg["room"]
-        if "endpoint_names" in reg:                           # per-endpoint labels for a 2-gang switch
-            entry["endpoint_names"] = dict(reg["endpoint_names"])   # copy — detach from registry state
-        devices[str(node)] = entry
+        devices[str(node)] = _discovery_entry(rt, node, cls, reg)
     return devices
 
 
@@ -1034,96 +1074,123 @@ async def _ir_worker(rt) -> None:
                 future.set_result(None)
 
 
-async def process_control_op(rt, op) -> dict:
-    """Execute one decoded control op; return a JSON-able response dict."""
-    if not isinstance(op, dict):
-        raise ValueError("expected a JSON object")
-    kind = op.get("op")
-    if kind == "state":
-        return {"ok": True, "state": state_snapshot(rt.state)}
-    if kind == "discovery":
-        return {"ok": True, "devices": _merged_discovery(rt)}
-    if kind == "scenes":                             # learned function-button batches (§5.7a)
-        return {"ok": True,                          # copy each sub-dict — detach from registry state
-                "scenes": {n: dict(e["scenes"]) for n, e in rt.registry.nodes.items() if e.get("scenes")}}
-    if kind == "automations":                        # list every authored rule
-        return {"ok": True, "automations": rt.engine.store.snapshot()}
-    if kind == "automation_set":                     # create/replace one rule
-        rule = Rule.from_dict(op.get("rule"))        # ValueError -> execute_control_line's catch
+def _control_state(rt, _op):
+    return {"ok": True, "state": state_snapshot(rt.state)}
 
-        def _add(candidate):
-            candidate[rule.id] = rule
-            return rule.id
 
-        try:
-            await _commit_automation(rt, _add)       # persist-before-live; engine untouched on failure
-        except OSError as exc:
-            return {"ok": False, "error": f"automations save failed: {exc!r}"}
-        return {"ok": True, "id": rule.id}
-    if kind == "automation_delete":
-        rid = op.get("id")
-        if not isinstance(rid, str):                  # match Rule.from_dict's strictness
-            raise ValueError(f"automation_delete: id must be a string, got {rid!r}")
+def _control_discovery(rt, _op):
+    return {"ok": True, "devices": _merged_discovery(rt)}
 
-        def _remove(candidate):                       # absence decided INSIDE the lock
-            if rid not in candidate:                  # → concurrent double-delete is linearizable
-                return None                           #   (no write), never a KeyError
-            del candidate[rid]
-            return rid
 
-        try:
-            touched = await _commit_automation(rt, _remove)
-        except OSError as exc:
-            return {"ok": False, "error": f"automations save failed: {exc!r}"}
-        return {"ok": True, "deleted": touched is not None}
-    if kind == "name":
-        if "node" not in op:
-            raise ValueError("'name' op requires 'node'")
-        dtype = op.get("type")
-        if dtype is not None and dtype not in {t.value for t in DeviceType}:
-            raise ValueError(f"invalid type {dtype!r}")
-        ep = op.get("ep")
-        if ep is not None and (not isinstance(ep, int) or isinstance(ep, bool) or ep < 0):
-            raise ValueError(f"invalid endpoint {ep!r}")
-        rt.registry.set_user(op["node"], name=op.get("name"), room=op.get("room"),
-                             dtype=dtype, ep=ep)
-        try:
-            await _persist(rt)                       # share the autosave lock — no
-        except OSError as exc:                       # racing os.replace with autosave
-            return {"ok": False, "error": f"registry save failed: {exc!r}"}
-        rt.event_bus.publish({"type": "discovery_changed"})  # UI re-fetches new state
-        return {"ok": True}
-    if kind == "ir":                                 # transmit an IR signal via the Flipper (no device frame)
-        ir_file, button = op.get("file"), op.get("button")
-        if not (isinstance(ir_file, str) and ir_file and isinstance(button, str) and button):
-            return {"ok": False, "error": "ir requires non-empty 'file' and 'button'"}
-        if rt.ir_queue is None:
-            return {"ok": False, "error": "flipper IR is disabled"}
-        future = asyncio.get_running_loop().create_future()
-        try:
-            rt.ir_queue.put_nowait((ir_file, button, future))    # the worker owns the serial port
-        except asyncio.QueueFull:
-            return {"ok": False, "error": "ir queue full"}
-        try:
-            await asyncio.wait_for(future, timeout=IR_OP_TIMEOUT)
-        except asyncio.TimeoutError:
-            return {"ok": False, "error": "ir transmit timed out"}
-        except flipper.FlipperError as exc:
-            return {"ok": False, "error": f"ir transmit failed: {exc}"}
-        return {"ok": True}
-    if kind == "graduate":                           # Phase-3: persist standalone mode (applied on next restart)
-        async with rt.save_lock:                     # serialise the whole flip → concurrent callers see the committed result
-            if rt.registry.mode == "standalone":     # already (durably) graduated → idempotent, no re-write
-                return {"ok": True, "mode": "standalone", "restart_required": rt.mode != "standalone"}
-            try:
-                # SYNCHRONOUS small write (a registry is ~KB; graduation is a one-time click) with the
-                # in-memory flip on the very next line and NO await between — so a cancelled control op
-                # can never leave disk and memory disagreeing: the persist→publish pair is atomic.
-                rt.registry.write_payload(rt.registry.payload_for_mode("standalone"))
-            except OSError as exc:                   # write failed → in-memory mode untouched, target_mode stays honest
-                return {"ok": False, "error": f"graduate persist failed: {exc!r}"}
-            rt.registry.mode = "standalone"          # durable → publish (persist-before-publish; no false success)
+def _control_scenes(rt, _op):
+    return {"ok": True,                          # copy each sub-dict — detach from registry state
+            "scenes": {n: dict(e["scenes"]) for n, e in rt.registry.nodes.items() if e.get("scenes")}}
+
+
+def _control_automations(rt, _op):
+    return {"ok": True, "automations": rt.engine.store.snapshot()}
+
+
+async def _control_automation_set(rt, op):
+    rule = Rule.from_dict(op.get("rule"))        # ValueError -> execute_control_line's catch
+
+    def _add(candidate):
+        candidate[rule.id] = rule
+        return rule.id
+
+    try:
+        await _commit_automation(rt, _add)       # persist-before-live; engine untouched on failure
+    except OSError as exc:
+        return {"ok": False, "error": f"automations save failed: {exc!r}"}
+    return {"ok": True, "id": rule.id}
+
+
+async def _control_automation_delete(rt, op):
+    rid = op.get("id")
+    if not isinstance(rid, str):                  # match Rule.from_dict's strictness
+        raise ValueError(f"automation_delete: id must be a string, got {rid!r}")
+
+    def _remove(candidate):                       # absence decided INSIDE the lock
+        if rid not in candidate:                  # → concurrent double-delete is linearizable
+            return None                           #   (no write), never a KeyError
+        del candidate[rid]
+        return rid
+
+    try:
+        touched = await _commit_automation(rt, _remove)
+    except OSError as exc:
+        return {"ok": False, "error": f"automations save failed: {exc!r}"}
+    return {"ok": True, "deleted": touched is not None}
+
+
+async def _control_name(rt, op):
+    if "node" not in op:
+        raise ValueError("'name' op requires 'node'")
+    dtype = op.get("type")
+    if dtype is not None and dtype not in {t.value for t in DeviceType}:
+        raise ValueError(f"invalid type {dtype!r}")
+    ep = op.get("ep")
+    if ep is not None and (not isinstance(ep, int) or isinstance(ep, bool) or ep < 0):
+        raise ValueError(f"invalid endpoint {ep!r}")
+    rt.registry.set_user(op["node"], name=op.get("name"), room=op.get("room"),
+                         dtype=dtype, ep=ep)
+    try:
+        await _persist(rt)                       # share the autosave lock — no
+    except OSError as exc:                       # racing os.replace with autosave
+        return {"ok": False, "error": f"registry save failed: {exc!r}"}
+    rt.event_bus.publish({"type": "discovery_changed"})  # UI re-fetches new state
+    return {"ok": True}
+
+
+async def _control_ir(rt, op):
+    ir_file, button = op.get("file"), op.get("button")
+    if not (isinstance(ir_file, str) and ir_file and isinstance(button, str) and button):
+        return {"ok": False, "error": "ir requires non-empty 'file' and 'button'"}
+    if rt.ir_queue is None:
+        return {"ok": False, "error": "flipper IR is disabled"}
+    future = asyncio.get_running_loop().create_future()
+    try:
+        rt.ir_queue.put_nowait((ir_file, button, future))    # the worker owns the serial port
+    except asyncio.QueueFull:
+        return {"ok": False, "error": "ir queue full"}
+    try:
+        await asyncio.wait_for(future, timeout=IR_OP_TIMEOUT)
+    except asyncio.TimeoutError:
+        return {"ok": False, "error": "ir transmit timed out"}
+    except flipper.FlipperError as exc:
+        return {"ok": False, "error": f"ir transmit failed: {exc}"}
+    return {"ok": True}
+
+
+async def _control_graduate(rt, _op):
+    async with rt.save_lock:                     # serialise the whole flip → concurrent callers see the committed result
+        if rt.registry.mode == "standalone":     # already (durably) graduated → idempotent, no re-write
             return {"ok": True, "mode": "standalone", "restart_required": rt.mode != "standalone"}
+        try:
+            # SYNCHRONOUS small write (a registry is ~KB; graduation is a one-time click) with the
+            # in-memory flip on the very next line and NO await between — so a cancelled control op
+            # can never leave disk and memory disagreeing: the persist→publish pair is atomic.
+            rt.registry.write_payload(rt.registry.payload_for_mode("standalone"))
+        except OSError as exc:                   # write failed → in-memory mode untouched, target_mode stays honest
+            return {"ok": False, "error": f"graduate persist failed: {exc!r}"}
+        rt.registry.mode = "standalone"          # durable → publish (persist-before-publish; no false success)
+        return {"ok": True, "mode": "standalone", "restart_required": rt.mode != "standalone"}
+
+
+_CONTROL_OP_HANDLERS = {
+    "state": _control_state,
+    "discovery": _control_discovery,
+    "scenes": _control_scenes,
+    "automations": _control_automations,
+    "automation_set": _control_automation_set,
+    "automation_delete": _control_automation_delete,
+    "name": _control_name,
+    "ir": _control_ir,
+    "graduate": _control_graduate,
+}
+
+
+async def _control_device_command(rt, op):
     session = rt.sessions[-1] if rt.sessions else None
     if session is None:
         return {"ok": False, "error": "no device connected"}
@@ -1133,6 +1200,16 @@ async def process_control_op(rt, op) -> dict:
     except OSError as exc:
         return {"ok": False, "error": f"device write failed: {exc!r}"}
     return {"ok": True, "sent": raw.hex()}
+
+
+async def process_control_op(rt, op) -> dict:
+    """Execute one decoded control op; return a JSON-able response dict."""
+    if not isinstance(op, dict):
+        raise ValueError("expected a JSON object")
+    handler = _CONTROL_OP_HANDLERS.get(op.get("op"), _control_device_command)
+    if asyncio.iscoroutinefunction(handler):     # async handlers (mutations / device IO) vs sync read-only snapshots
+        return await handler(rt, op)
+    return handler(rt, op)
 
 
 async def execute_control_line(rt, line: bytes) -> "dict | None":

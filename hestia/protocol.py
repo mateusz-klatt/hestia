@@ -28,6 +28,8 @@ from dataclasses import dataclass
 FLAG = 0x7E  # frame delimiter
 
 FRAME_TYPES = {0x64: "d", 0x66: "f", 0x67: "g", 0x1E: "1e"}
+_WAIT = object()
+_RETRY = object()
 
 
 def xor_checksum(data: bytes) -> int:
@@ -63,36 +65,51 @@ class Deframer:
         self._buf = bytearray()
         self._synced = False
 
+    def _sync_to_flag(self) -> bool:
+        fi = self._buf.find(FLAG)
+        if fi < 0:
+            self._buf.clear()
+            return False
+        del self._buf[: fi + 1]
+        self._synced = True
+        return True
+
+    def _drop_idle_flags(self) -> None:
+        i = 0
+        while i < len(self._buf) and self._buf[i] == FLAG:  # skip idle / double flags
+            i += 1
+        if i:
+            del self._buf[:i]
+
+    def _next_body(self):
+        if not self._synced and not self._sync_to_flag():    # hunt for a start flag
+            return _WAIT
+        self._drop_idle_flags()
+        if len(self._buf) < 4:                               # need the 4-byte header
+            return _WAIT
+        length = int.from_bytes(self._buf[2:4], "big")       # header read by slicing
+        if length > self.MAX_PAYLOAD:                        # implausible -> re-hunt
+            self._synced = False
+            return _RETRY
+        total = 5 + length                                   # type+cmd+len(2)+payload+checksum
+        if len(self._buf) < total:                           # wait for the rest
+            return _WAIT
+        body = bytes(self._buf[:total])
+        if not Frame(body).checksum_ok:                      # length + checksum authoritative
+            self._synced = False                             # misaligned -> re-hunt the next flag
+            return _RETRY
+        del self._buf[:total]
+        self._synced = False                                 # accept; re-hunt the next start flag
+        return body
+
     def feed(self, data: bytes):
         self._buf += data
         while True:
-            if not self._synced:                               # hunt for a start flag
-                fi = self._buf.find(FLAG)
-                if fi < 0:
-                    self._buf.clear()
-                    return
-                del self._buf[: fi + 1]
-                self._synced = True
-            i = 0
-            while i < len(self._buf) and self._buf[i] == FLAG:  # skip idle / double flags
-                i += 1
-            if i:
-                del self._buf[:i]
-            if len(self._buf) < 4:                             # need the 4-byte header
+            body = self._next_body()
+            if body is _WAIT:
                 return
-            length = int.from_bytes(self._buf[2:4], "big")     # header read by slicing
-            if length > self.MAX_PAYLOAD:                      # implausible -> re-hunt
-                self._synced = False
+            if body is _RETRY:
                 continue
-            total = 5 + length                                 # type+cmd+len(2)+payload+checksum
-            if len(self._buf) < total:                         # wait for the rest
-                return
-            body = bytes(self._buf[:total])
-            if not Frame(body).checksum_ok:                    # length + checksum authoritative
-                self._synced = False                           # misaligned -> re-hunt the next flag
-                continue
-            del self._buf[:total]
-            self._synced = False                               # accept; re-hunt the next start flag
             yield body
 
 
