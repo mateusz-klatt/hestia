@@ -11,13 +11,17 @@ export function renderLogin(container: HTMLElement, onSuccess: () => void): void
 
   const user = document.createElement("input");
   user.id = "login-user";
+  user.name = "username"; // a real `name` lets password managers offer/save the credential
   user.placeholder = "użytkownik";
+  user.setAttribute("aria-label", "użytkownik");
   user.autocomplete = "username";
 
   const pass = document.createElement("input");
   pass.id = "login-pass";
+  pass.name = "password";
   pass.type = "password";
   pass.placeholder = "hasło";
+  pass.setAttribute("aria-label", "hasło");
   pass.autocomplete = "current-password";
 
   const submit = document.createElement("button");
@@ -26,6 +30,7 @@ export function renderLogin(container: HTMLElement, onSuccess: () => void): void
 
   const status = document.createElement("span");
   status.className = "status";
+  status.setAttribute("aria-live", "polite"); // screen readers announce a login error
 
   form.append(user, pass, submit, status);
   form.addEventListener("submit", (event) => {

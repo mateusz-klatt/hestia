@@ -67,10 +67,11 @@ _RT_KEY = web.AppKey("rt", object)
 _UI_DIST_ENV = "HESTIA_UI_DIST"
 _DEFAULT_UI_DIST = Path(__file__).resolve().parent.parent / "ui" / "dist"
 
-# App-level login (#43). OPT-IN: enforced only when HESTIA_SESSION_SECRET is set — so loopback/dev without
-# a secret stays open, and an empty secret can never sign a usable cookie (fail closed). When enabled the
-# auth middleware gates /api/* on a valid session cookie; the app shell + /api/login|logout stay public so
-# the login form can load and submit.
+# App-level login (#43). OPT-IN: gating is enforced ONLY when HESTIA_SESSION_SECRET is set. With no secret
+# auth is OFF and routes stay OPEN (loopback/dev and pre-config deployments are unaffected; the reverse
+# proxy's own auth, if any, still applies). When a secret IS set, the middleware gates /api/* on a valid
+# session cookie; the app shell + /api/login|logout stay public so the login form can load and submit.
+# (A secret is required to sign/verify cookies, so login can never half-work without one.)
 _SESSION_SECRET = os.environ.get("HESTIA_SESSION_SECRET", "").encode("utf-8")
 _AUTH_ENABLED = bool(_SESSION_SECRET)
 _COOKIE_SECURE = _truthy_env(os.environ.get("HESTIA_COOKIE_SECURE"))   # set on the HTTPS (Apache) deployment
