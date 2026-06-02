@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import json
 import unittest
+from unittest import mock
 
 from hestia import sensor433
 
@@ -32,22 +33,43 @@ class _FakeStdout:
 
 
 class _FakeProc:
-    """A ``create_subprocess_exec`` result: records terminate/wait so reaping can be asserted."""
+    """A ``create_subprocess_exec`` result: records terminate/kill/wait so reaping can be asserted."""
     def __init__(self, lines=(), stdout=True, returncode=None, exit_code=0):
         self.stdout = _FakeStdout(lines) if stdout else None
         self.returncode = returncode
         self._exit_code = exit_code
         self.terminated = False
+        self.killed = False
         self.waited = False
 
     def terminate(self) -> None:
         self.terminated = True                         # signal sent; the process reaps on wait()
+
+    def kill(self) -> None:
+        self.killed = True
 
     async def wait(self) -> int:
         self.waited = True
         if self.returncode is None:
             self.returncode = self._exit_code
         return self.returncode
+
+
+class _WedgedProc(_FakeProc):
+    """A child that IGNORES SIGTERM: ``wait()`` only resolves once ``kill()`` (SIGKILL) is delivered."""
+    def __init__(self, lines=()):
+        super().__init__(lines)
+        self._dead = asyncio.Event()
+
+    async def wait(self) -> int:
+        self.waited = True
+        await self._dead.wait()                        # SIGTERM did nothing — stays alive until killed
+        self.returncode = -9
+        return self.returncode
+
+    def kill(self) -> None:
+        self.killed = True
+        self._dead.set()
 
 
 def _make_create(proc=None, exc=None):
@@ -206,6 +228,26 @@ class StreamReadingsTests(unittest.IsolatedAsyncioTestCase):
         out = await _drain(_make_create(proc))              # must not raise
         self.assertEqual(out, [sensor433.Reading(1.0, None)])
         self.assertTrue(proc.waited)
+
+    async def test_wedged_child_is_sigkilled_after_grace(self):
+        proc = _WedgedProc([_line(temperature_C=1.0)])      # ignores SIGTERM -> wait() blocks until killed
+        with mock.patch.object(sensor433, "_TERMINATE_GRACE", 0.02):
+            out = await _drain(_make_create(proc))          # must NOT hang: TERM -> grace -> KILL -> reap
+        self.assertEqual(out, [sensor433.Reading(1.0, None)])
+        self.assertTrue(proc.terminated)                    # tried graceful first
+        self.assertTrue(proc.killed)                         # escalated to SIGKILL
+        self.assertEqual(proc.returncode, -9)                # reaped
+
+    async def test_cancel_during_reap_kills_then_propagates(self):
+        proc = _WedgedProc()                                 # wait() never resolves on its own
+        with mock.patch.object(sensor433, "_TERMINATE_GRACE", 100):   # don't time out — cancel instead
+            task = asyncio.create_task(sensor433._terminate(proc))
+            for _ in range(3):                               # let _terminate reach the await on proc.wait()
+                await asyncio.sleep(0)
+            task.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await task
+        self.assertTrue(proc.terminated and proc.killed)     # SIGKILL'd so it can't keep holding the SDR
 
 
 if __name__ == "__main__":  # pragma: no cover

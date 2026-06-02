@@ -78,13 +78,28 @@ def _matching_reading(obj: dict, model: "str | None", sensor_id: "str | None"):
     return Reading(temp, _finite_number(obj.get("humidity")))
 
 
+_TERMINATE_GRACE = 5.0   # seconds to let rtl_433 exit on SIGTERM before escalating to SIGKILL
+
+
 async def _terminate(proc) -> None:
     """Terminate + reap ``proc`` so a finished/cancelled stream never leaves an orphan ``rtl_433`` holding
-    the single-client SDR. Idempotent and tolerant of the child having already exited."""
+    the single-client SDR. BOUNDED — SIGTERM, a short grace period, then SIGKILL — so a child wedged in a
+    blocking USB/socket call (an SDR/rtl_tcp failure) can never hang the poller's relaunch loop or the
+    shutdown ``gather()``. Tolerant of an already-exited child; if cancellation arrives mid-reap it still
+    SIGKILLs the child (so it can't keep holding the SDR) before letting the cancellation propagate."""
     if proc.returncode is None:
         with contextlib.suppress(ProcessLookupError):    # raced us to exit between the check and the signal
             proc.terminate()
-    await proc.wait()                                    # reap; if we are being cancelled this re-raises CancelledError
+    try:
+        await asyncio.wait_for(proc.wait(), _TERMINATE_GRACE)
+    except TimeoutError:                                 # SIGTERM ignored/wedged -> force it, then reap
+        with contextlib.suppress(ProcessLookupError):
+            proc.kill()
+        await proc.wait()                                # SIGKILL is uncatchable -> returns promptly
+    except asyncio.CancelledError:                       # shutdown cancelling us mid-reap -> kill, don't hang
+        with contextlib.suppress(ProcessLookupError):
+            proc.kill()
+        raise
 
 
 async def stream_readings(
