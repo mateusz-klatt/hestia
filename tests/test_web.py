@@ -60,13 +60,32 @@ class _LoopThread:
             self.loop.close()
 
 
-def _client(server) -> http.client.HTTPConnection:
-    host, port = server.server_address[:2]
+class _StartedWeb:
+    def __init__(self, server, thread):
+        self._server = server
+        self._thread = thread
+        self.address = server.server_address[:2]
+
+    @property
+    def daemon_threads(self):
+        return self._server.daemon_threads
+
+    def stop(self):
+        web.stop_web(self._server, self._thread)
+
+
+def _start_web(rt, loop, host="127.0.0.1", port=0):
+    server, thread = web.start_web(rt, loop, host, port)
+    return _StartedWeb(server, thread)
+
+
+def _client(address) -> http.client.HTTPConnection:
+    host, port = address
     return http.client.HTTPConnection(host, port, timeout=5.0)
 
 
-def _get(server, path) -> "tuple[int, dict, bytes]":
-    conn = _client(server)
+def _get(address, path) -> "tuple[int, dict, bytes]":
+    conn = _client(address)
     try:
         conn.request("GET", path)
         resp = conn.getresponse()
@@ -75,8 +94,8 @@ def _get(server, path) -> "tuple[int, dict, bytes]":
         conn.close()
 
 
-def _post(server, path, body, headers=None) -> "tuple[int, dict, bytes]":
-    conn = _client(server)
+def _post(address, path, body, headers=None) -> "tuple[int, dict, bytes]":
+    conn = _client(address)
     try:
         if isinstance(body, (dict, list)):
             body = json.dumps(body).encode("utf-8")
@@ -260,10 +279,10 @@ class _WebTestBase(unittest.TestCase):
         self.path = self.tmp / "registry.json"
         self.loop_thread = _LoopThread()
         self.rt = proxy.ProxyRuntime(registry=proxy.Registry(self.path))
-        self.server, self.thread = web.start_web(self.rt, self.loop_thread.loop, "127.0.0.1", 0)
+        self.web = _start_web(self.rt, self.loop_thread.loop)
 
     def tearDown(self):
-        web.stop_web(self.server, self.thread)
+        self.web.stop()
         self.loop_thread.close()
         shutil.rmtree(self.tmp)
 
@@ -281,26 +300,26 @@ class IrEndpointTests(_WebTestBase):
     the /api/name tests."""
 
     def test_get_is_405(self):
-        status, headers, _ = _get(self.server, "/api/ir")
+        status, headers, _ = _get(self.web.address, "/api/ir")
         self.assertEqual(status, 405)
         self.assertEqual(headers.get("Allow"), "POST")
 
     def test_disabled_returns_503(self):
-        status, _, body = _post(self.server, "/api/ir", {"file": "/ext/infrared/Klima.ir", "button": "Power"})
+        status, _, body = _post(self.web.address, "/api/ir", {"file": "/ext/infrared/Klima.ir", "button": "Power"})
         self.assertEqual(status, 503)
         self.assertEqual(json.loads(body), {"ok": False, "error": "flipper IR is disabled"})
 
     def test_missing_button_is_400(self):
-        status, _, body = _post(self.server, "/api/ir", {"file": "/k.ir"})
+        status, _, body = _post(self.web.address, "/api/ir", {"file": "/k.ir"})
         self.assertEqual(status, 400)
         self.assertIn(b"file and button required", body)
 
     def test_bad_content_type_is_415(self):
-        status, _, _ = _post(self.server, "/api/ir", b"{}", headers={"Content-Type": "text/plain"})
+        status, _, _ = _post(self.web.address, "/api/ir", b"{}", headers={"Content-Type": "text/plain"})
         self.assertEqual(status, 415)
 
     def test_non_object_body_is_400(self):
-        status, _, body = _post(self.server, "/api/ir", [1, 2, 3])      # valid JSON, but not an object
+        status, _, body = _post(self.web.address, "/api/ir", [1, 2, 3])      # valid JSON, but not an object
         self.assertEqual(status, 400)
         self.assertIn(b"must be a JSON object", body)
 
@@ -315,7 +334,7 @@ class _FakeDeviceSession:
 
 class ControlEndpointTests(_WebTestBase):
     def test_get_is_405(self):
-        status, headers, _ = _get(self.server, "/api/control")
+        status, headers, _ = _get(self.web.address, "/api/control")
         self.assertEqual(status, 405)
         self.assertEqual(headers.get("Allow"), "POST")
 
@@ -326,7 +345,7 @@ class ControlEndpointTests(_WebTestBase):
             self.rt.sessions.append(fake)
 
         self.loop_thread.submit(add_session())
-        status, _, body = _post(self.server, "/api/control",
+        status, _, body = _post(self.web.address, "/api/control",
                                 {"op": "switch", "node": 14, "on": True})
         self.assertEqual(status, 200)
         payload = json.loads(body)
@@ -334,24 +353,24 @@ class ControlEndpointTests(_WebTestBase):
         self.assertEqual(fake.injected, [bytes.fromhex(payload["sent"])])
 
     def test_no_device_connected_returns_503(self):
-        status, _, body = _post(self.server, "/api/control",
+        status, _, body = _post(self.web.address, "/api/control",
                                 {"op": "switch", "node": 14, "on": True})
         self.assertEqual(status, 503)
         self.assertEqual(json.loads(body), {"ok": False, "error": "no device connected"})
 
     def test_bad_payload_returns_400(self):
-        status, _, body = _post(self.server, "/api/control", {"op": "switch", "node": 14})
+        status, _, body = _post(self.web.address, "/api/control", {"op": "switch", "node": 14})
         self.assertEqual(status, 400)
         self.assertEqual(json.loads(body)["error"], "on must be a boolean")
 
     def test_bad_content_type_is_415(self):
-        status, _, _ = _post(self.server, "/api/control", b"{}", headers={"Content-Type": "text/plain"})
+        status, _, _ = _post(self.web.address, "/api/control", b"{}", headers={"Content-Type": "text/plain"})
         self.assertEqual(status, 415)
 
 
 class IndexTests(_WebTestBase):
     def test_index_serves_html(self):
-        status, headers, body = _get(self.server, "/")
+        status, headers, body = _get(self.web.address, "/")
         self.assertEqual(status, 200)
         self.assertTrue(headers["Content-Type"].startswith("text/html"))
         self.assertIn(b"<table>", body)
@@ -408,7 +427,7 @@ class IndexTests(_WebTestBase):
 class DiscoveryTests(_WebTestBase):
     def test_discovery_serves_json_with_summary(self):
         self._feed(DOOR_EVENT_NODE12)
-        status, headers, body = _get(self.server, "/api/discovery")
+        status, headers, body = _get(self.web.address, "/api/discovery")
         self.assertEqual(status, 200)
         self.assertEqual(headers["Content-Type"], "application/json")
         data = json.loads(body)
@@ -420,27 +439,27 @@ class DiscoveryTests(_WebTestBase):
     def test_discovery_reflects_global_fields(self):
         self.rt.state.crib_temp = 22.5
         self.rt.state.outdoor_temp = -1.0
-        _, _, body = _get(self.server, "/api/discovery")
+        _, _, body = _get(self.web.address, "/api/discovery")
         self.assertEqual(json.loads(body)["globals"], {"crib_temp": 22.5, "outdoor_temp": -1.0})
 
     def test_discovery_includes_klima(self):
         sentinel = {"file": "/ext/infrared/klima.ir", "modes": {"cool": [22]},
                     "power_on": {"cool": [22]}, "presets": ["off"]}
         with mock.patch.object(web, "KLIMA", sentinel):
-            _, _, body = _get(self.server, "/api/discovery")
+            _, _, body = _get(self.web.address, "/api/discovery")
         self.assertEqual(json.loads(body)["klima"], sentinel)
 
     def test_discovery_klima_absent(self):
         with mock.patch.object(web, "KLIMA", {}):
-            _, _, body = _get(self.server, "/api/discovery")
+            _, _, body = _get(self.web.address, "/api/discovery")
         self.assertEqual(json.loads(body)["klima"], {})
 
     def test_discovery_includes_rule_vocab(self):
-        _, _, body = _get(self.server, "/api/discovery")
+        _, _, body = _get(self.web.address, "/api/discovery")
         self.assertEqual(json.loads(body)["rule_vocab"], rule_vocab())
 
     def test_discovery_includes_mode_fields(self):
-        _, _, body = _get(self.server, "/api/discovery")
+        _, _, body = _get(self.web.address, "/api/discovery")
         data = json.loads(body)
         self.assertEqual(data["mode"], "proxy")               # the test rt runs proxy
         self.assertEqual(data["target_mode"], "proxy")        # registry not graduated
@@ -448,47 +467,47 @@ class DiscoveryTests(_WebTestBase):
 
     def test_graduate_persists_and_reflects_target(self):
         with mock.patch.object(self.rt.registry, "write_payload"):
-            status, _, body = _post(self.server, "/api/graduate", {})
+            status, _, body = _post(self.web.address, "/api/graduate", {})
         self.assertEqual(status, 200)
         self.assertTrue(json.loads(body)["ok"])
-        _, _, disco = _get(self.server, "/api/discovery")
+        _, _, disco = _get(self.web.address, "/api/discovery")
         self.assertEqual(json.loads(disco)["target_mode"], "standalone")   # persisted; running stays proxy
 
     def test_graduate_get_is_405(self):
-        status, _, _ = _get(self.server, "/api/graduate")
+        status, _, _ = _get(self.web.address, "/api/graduate")
         self.assertEqual(status, 405)
 
     def test_graduate_bad_content_type_is_415(self):                       # CSRF guard (same as /api/ir)
-        status, _, _ = _post(self.server, "/api/graduate", b"{}", headers={"Content-Type": "text/plain"})
+        status, _, _ = _post(self.web.address, "/api/graduate", b"{}", headers={"Content-Type": "text/plain"})
         self.assertEqual(status, 415)
 
 
 class NamePersistTests(_WebTestBase):
     def test_name_persists(self):
-        status, _, body = _post(self.server, "/api/name",
+        status, _, body = _post(self.web.address, "/api/name",
                                 {"node": 5, "name": "Room A", "room": "LR"})
         self.assertEqual(status, 200)
         self.assertEqual(json.loads(body), {"ok": True})
         # round-trip
-        _, _, disco = _get(self.server, "/api/discovery")
+        _, _, disco = _get(self.web.address, "/api/discovery")
         entry = json.loads(disco)["devices"]["5"]
         self.assertEqual(entry["name"], "Room A")
         self.assertEqual(entry["room"], "LR")
 
     def test_endpoint_name_persists(self):
         # an ep-name POST is accepted (200) and round-trips into endpoint_names.
-        status, _, body = _post(self.server, "/api/name", {"node": 7, "ep": 2, "name": "channel 2"})
+        status, _, body = _post(self.web.address, "/api/name", {"node": 7, "ep": 2, "name": "channel 2"})
         self.assertEqual(status, 200)
         self.assertEqual(json.loads(body), {"ok": True})
-        _, _, disco = _get(self.server, "/api/discovery")
+        _, _, disco = _get(self.web.address, "/api/discovery")
         entry = json.loads(disco)["devices"]["7"]
         self.assertEqual(entry["endpoint_names"], {"2": "channel 2"})
 
     def test_name_round_trip_persists_across_reload(self):
-        _post(self.server, "/api/name",
+        _post(self.web.address, "/api/name",
               {"node": 5, "name": "Room A", "room": "LR", "type": "blind"})
         # spin everything down and re-open the registry file from scratch.
-        web.stop_web(self.server, self.thread)
+        self.web.stop()
         self.loop_thread.close()
         reg = proxy.Registry.load(self.path)
         self.assertEqual(reg.nodes["5"]["name"], "Room A")
@@ -497,23 +516,23 @@ class NamePersistTests(_WebTestBase):
         self.assertTrue(reg.nodes["5"]["type_confirmed"])
         # restart so tearDown's shutdown calls are no-ops on already-closed state
         self.loop_thread = _LoopThread()
-        self.server, self.thread = web.start_web(self.rt, self.loop_thread.loop, "127.0.0.1", 0)
+        self.web = _start_web(self.rt, self.loop_thread.loop)
 
     def test_classifier_does_not_override_confirmed_type(self):
         # confirm type=blind, then inject a door event for node 18 — registry
         # should still report "blind" with confidence "confirmed".
-        _post(self.server, "/api/name", {"node": 18, "type": "blind"})
+        _post(self.web.address, "/api/name", {"node": 18, "type": "blind"})
         self._feed(DOOR_EVENT_NODE12)
-        _, _, body = _get(self.server, "/api/discovery")
+        _, _, body = _get(self.web.address, "/api/discovery")
         entry = json.loads(body)["devices"]["18"]
         self.assertEqual(entry["type"], "blind")
         self.assertEqual(entry["confidence"], "confirmed")
 
     def test_name_only_does_not_freeze_type(self):
         # POST name only; classifier observes a door event after; type updates.
-        _post(self.server, "/api/name", {"node": 18, "name": "front"})
+        _post(self.web.address, "/api/name", {"node": 18, "name": "front"})
         self._feed(DOOR_EVENT_NODE12)
-        _, _, body = _get(self.server, "/api/discovery")
+        _, _, body = _get(self.web.address, "/api/discovery")
         entry = json.loads(body)["devices"]["18"]
         self.assertEqual(entry["type"], "door")
         self.assertEqual(entry["confidence"], "inferred")
@@ -522,26 +541,26 @@ class NamePersistTests(_WebTestBase):
     def test_ui_name_edit_payload_does_not_freeze_type(self):
         # Same as test_name_only_does_not_freeze_type but reading exact UI
         # behavior — POST {node, name} only, no type field, so type stays inferable.
-        _post(self.server, "/api/name", {"node": 18, "name": "x"})
+        _post(self.web.address, "/api/name", {"node": 18, "name": "x"})
         self._feed(DOOR_EVENT_NODE12)
-        _, _, body = _get(self.server, "/api/discovery")
+        _, _, body = _get(self.web.address, "/api/discovery")
         entry = json.loads(body)["devices"]["18"]
         self.assertNotEqual(entry["confidence"], "confirmed")
 
 
 class NameValidationTests(_WebTestBase):
     def test_name_empty_payload_returns_400(self):
-        status, _, body = _post(self.server, "/api/name", {"node": 5})
+        status, _, body = _post(self.web.address, "/api/name", {"node": 5})
         self.assertEqual(status, 400)
         self.assertIn("at least one", json.loads(body)["error"])
 
     def test_name_long_string_rejected(self):
-        status, _, body = _post(self.server, "/api/name", {"node": 5, "name": "x" * 300})
+        status, _, body = _post(self.web.address, "/api/name", {"node": 5, "name": "x" * 300})
         self.assertEqual(status, 400)
         self.assertIn("≤ 256", json.loads(body)["error"])
 
     def test_name_invalid_type_returns_400(self):
-        status, _, body = _post(self.server, "/api/name", {"node": 5, "type": "bogus"})
+        status, _, body = _post(self.web.address, "/api/name", {"node": 5, "type": "bogus"})
         self.assertEqual(status, 400)
         self.assertIn("invalid type", json.loads(body)["error"])
 
@@ -549,25 +568,25 @@ class NameValidationTests(_WebTestBase):
         # JSON validates, validator passes (no per-field error), but inside
         # `process_control_op` → `set_user` → `_key` → `int("not-a-number", 0)`
         # raises ValueError, which the bridge catches and the handler maps to 400.
-        status, _, body = _post(self.server, "/api/name",
+        status, _, body = _post(self.web.address, "/api/name",
                                 {"node": "not-a-number", "name": "x"})
         self.assertEqual(status, 400)
 
     def test_name_rejects_non_name_op(self):
-        status, _, body = _post(self.server, "/api/name",
+        status, _, body = _post(self.web.address, "/api/name",
                                 {"op": "switch", "node": 5, "name": "x"})
         self.assertEqual(status, 400)
         self.assertIn("only accepts op=name", json.loads(body)["error"])
 
     def test_name_rejects_oversized_body(self):
         big = {"node": 5, "name": "x" * 9000}            # well over MAX_BODY
-        status, _, body = _post(self.server, "/api/name", big)
+        status, _, body = _post(self.web.address, "/api/name", big)
         self.assertEqual(status, 413)
 
     def test_name_missing_content_length(self):
         # http.client always sets Content-Length when body is provided. To force
         # absence we use a chunked request via raw socket.
-        host, port = self.server.server_address[:2]
+        host, port = self.web.address
         import socket
         with socket.create_connection((host, port), timeout=5.0) as s:
             s.sendall(b"POST /api/name HTTP/1.0\r\nHost: localhost\r\n"
@@ -576,7 +595,7 @@ class NameValidationTests(_WebTestBase):
         self.assertIn(b"411", data.split(b"\r\n", 1)[0])
 
     def test_name_malformed_content_length(self):
-        host, port = self.server.server_address[:2]
+        host, port = self.web.address
         import socket
         with socket.create_connection((host, port), timeout=5.0) as s:
             s.sendall(b"POST /api/name HTTP/1.0\r\nHost: localhost\r\n"
@@ -586,19 +605,19 @@ class NameValidationTests(_WebTestBase):
         self.assertIn(b"400", data.split(b"\r\n", 1)[0])
 
     def test_name_invalid_json(self):
-        status, _, body = _post(self.server, "/api/name", b"not json",
+        status, _, body = _post(self.web.address, "/api/name", b"not json",
                                 headers={"Content-Length": "8"})
         self.assertEqual(status, 400)
         self.assertIn("invalid JSON", json.loads(body)["error"])
 
     def test_name_save_failure_returns_500(self):
         with mock.patch.object(self.rt.registry, "write_payload", side_effect=OSError("disk")):
-            status, _, body = _post(self.server, "/api/name", {"node": 5, "name": "x"})
+            status, _, body = _post(self.web.address, "/api/name", {"node": 5, "name": "x"})
         self.assertEqual(status, 500)
         self.assertIn("save failed", json.loads(body)["error"])
 
     def test_name_wrong_content_type_returns_415(self):     # CSRF guard: reject non-JSON content type
-        status, _, body = _post(self.server, "/api/name", {"node": 5, "name": "x"},
+        status, _, body = _post(self.web.address, "/api/name", {"node": 5, "name": "x"},
                                 headers={"Content-Type": "text/plain"})
         self.assertEqual(status, 415)
         self.assertIn("application/json", json.loads(body)["error"])
@@ -606,16 +625,16 @@ class NameValidationTests(_WebTestBase):
 
 class RoutingTests(_WebTestBase):
     def test_unknown_path_404(self):
-        status, _, _ = _get(self.server, "/nope")
+        status, _, _ = _get(self.web.address, "/nope")
         self.assertEqual(status, 404)
-        status, _, _ = _post(self.server, "/nope", b"{}", headers={"Content-Length": "2"})
+        status, _, _ = _post(self.web.address, "/nope", b"{}", headers={"Content-Length": "2"})
         self.assertEqual(status, 404)
 
     def test_method_not_allowed_405_with_allow_header(self):
-        status, headers, _ = _post(self.server, "/", b"{}", headers={"Content-Length": "2"})
+        status, headers, _ = _post(self.web.address, "/", b"{}", headers={"Content-Length": "2"})
         self.assertEqual(status, 405)
         self.assertEqual(headers["Allow"], "GET")
-        status, headers, _ = _get(self.server, "/api/name")
+        status, headers, _ = _get(self.web.address, "/api/name")
         self.assertEqual(status, 405)
         self.assertEqual(headers["Allow"], "POST")
 
@@ -641,20 +660,20 @@ class _AutomationsWebTestBase(_WebTestBase):
         self.rt = proxy.ProxyRuntime(
             registry=proxy.Registry(self.path),
             engine=AutomationEngine(AutomationStore(self.store_path)))
-        self.server, self.thread = web.start_web(self.rt, self.loop_thread.loop, "127.0.0.1", 0)
+        self.web = _start_web(self.rt, self.loop_thread.loop)
 
 
 class AutomationsListTests(_AutomationsWebTestBase):
     def test_list_empty(self):
-        status, headers, body = _get(self.server, "/api/automations")
+        status, headers, body = _get(self.web.address, "/api/automations")
         self.assertEqual(status, 200)
         self.assertEqual(headers["Content-Type"], "application/json")
         self.assertEqual(json.loads(body), {"ok": True, "automations": []})
 
     def test_list_returns_seeded_rule(self):
-        status, _, _ = _post(self.server, "/api/automations", VALID_RULE)
+        status, _, _ = _post(self.web.address, "/api/automations", VALID_RULE)
         self.assertEqual(status, 200)
-        _, _, body = _get(self.server, "/api/automations")
+        _, _, body = _get(self.web.address, "/api/automations")
         rules = json.loads(body)["automations"]
         self.assertEqual(len(rules), 1)
         self.assertEqual(rules[0]["id"], "lamp-on-scene")
@@ -663,58 +682,58 @@ class AutomationsListTests(_AutomationsWebTestBase):
 
 class AutomationsSetTests(_AutomationsWebTestBase):
     def test_set_valid_rule_returns_id(self):
-        status, _, body = _post(self.server, "/api/automations", VALID_RULE)
+        status, _, body = _post(self.web.address, "/api/automations", VALID_RULE)
         self.assertEqual(status, 200)
         self.assertEqual(json.loads(body), {"ok": True, "id": "lamp-on-scene"})
 
     def test_set_persists_across_reload(self):
-        _post(self.server, "/api/automations", VALID_RULE)
+        _post(self.web.address, "/api/automations", VALID_RULE)
         reloaded = AutomationStore.load(self.store_path)        # fresh read from disk
         self.assertIn("lamp-on-scene", reloaded.rules)
         self.assertEqual(reloaded.rules["lamp-on-scene"].trigger["scene_id"], 1)
 
     def test_set_replaces_same_id(self):
-        _post(self.server, "/api/automations", VALID_RULE)
+        _post(self.web.address, "/api/automations", VALID_RULE)
         updated = dict(VALID_RULE, actions=[{"op": "switch", "node": 7, "on": False}])
-        status, _, _ = _post(self.server, "/api/automations", updated)
+        status, _, _ = _post(self.web.address, "/api/automations", updated)
         self.assertEqual(status, 200)
-        _, _, body = _get(self.server, "/api/automations")
+        _, _, body = _get(self.web.address, "/api/automations")
         rules = json.loads(body)["automations"]
         self.assertEqual(len(rules), 1)                          # replaced, not appended
         self.assertIs(rules[0]["actions"][0]["on"], False)
 
     def test_set_invalid_trigger_returns_400(self):
-        status, _, body = _post(self.server, "/api/automations",
+        status, _, body = _post(self.web.address, "/api/automations",
                                 {"id": "bad", "trigger": {"type": "nope"},
                                  "actions": [{"op": "switch", "node": 1, "on": True}]})
         self.assertEqual(status, 400)
         self.assertIn("trigger.type", json.loads(body)["error"])
 
     def test_set_empty_actions_returns_400(self):
-        status, _, body = _post(self.server, "/api/automations",
+        status, _, body = _post(self.web.address, "/api/automations",
                                 {"id": "x", "trigger": {"type": "scene", "node": 1, "scene_id": 0},
                                  "actions": []})
         self.assertEqual(status, 400)
         self.assertIn("actions", json.loads(body)["error"])
 
     def test_set_non_dict_body_returns_400(self):
-        status, _, body = _post(self.server, "/api/automations", [1, 2, 3])
+        status, _, body = _post(self.web.address, "/api/automations", [1, 2, 3])
         self.assertEqual(status, 400)
         self.assertIn("must be an object", json.loads(body)["error"])
 
     def test_set_oversized_body_returns_413(self):           # err=True branch on the set handler
         big = dict(VALID_RULE, id="x" * 70000)               # body well over MAX_RULE_BODY
-        status, _, _ = _post(self.server, "/api/automations", big)
+        status, _, _ = _post(self.web.address, "/api/automations", big)
         self.assertEqual(status, 413)
 
     def test_set_save_failure_returns_500(self):
         with mock.patch.object(self.rt.engine.store, "write_payload", side_effect=OSError("disk")):
-            status, _, body = _post(self.server, "/api/automations", VALID_RULE)
+            status, _, body = _post(self.web.address, "/api/automations", VALID_RULE)
         self.assertEqual(status, 500)
         self.assertIn("save failed", json.loads(body)["error"])
 
     def test_set_wrong_content_type_returns_415(self):      # CSRF guard
-        status, _, body = _post(self.server, "/api/automations", VALID_RULE,
+        status, _, body = _post(self.web.address, "/api/automations", VALID_RULE,
                                 headers={"Content-Type": "text/plain"})
         self.assertEqual(status, 415)
         self.assertIn("application/json", json.loads(body)["error"])
@@ -722,45 +741,45 @@ class AutomationsSetTests(_AutomationsWebTestBase):
 
 class AutomationsDeleteTests(_AutomationsWebTestBase):
     def _seed(self):
-        status, _, _ = _post(self.server, "/api/automations", VALID_RULE)
+        status, _, _ = _post(self.web.address, "/api/automations", VALID_RULE)
         self.assertEqual(status, 200)
 
     def test_delete_existing_returns_deleted_true(self):
         self._seed()
-        status, _, body = _post(self.server, "/api/automations/delete", {"id": "lamp-on-scene"})
+        status, _, body = _post(self.web.address, "/api/automations/delete", {"id": "lamp-on-scene"})
         self.assertEqual(status, 200)
         self.assertEqual(json.loads(body), {"ok": True, "deleted": True})
-        _, _, listing = _get(self.server, "/api/automations")
+        _, _, listing = _get(self.web.address, "/api/automations")
         self.assertEqual(json.loads(listing)["automations"], [])
 
     def test_delete_absent_returns_deleted_false(self):
-        status, _, body = _post(self.server, "/api/automations/delete", {"id": "ghost"})
+        status, _, body = _post(self.web.address, "/api/automations/delete", {"id": "ghost"})
         self.assertEqual(status, 200)
         self.assertEqual(json.loads(body), {"ok": True, "deleted": False})
 
     def test_delete_non_string_id_returns_400(self):
-        status, _, body = _post(self.server, "/api/automations/delete", {"id": 5})
+        status, _, body = _post(self.web.address, "/api/automations/delete", {"id": 5})
         self.assertEqual(status, 400)
         self.assertIn("must be a string", json.loads(body)["error"])
 
     def test_delete_missing_id_returns_400(self):            # {} → rid=None → ValueError
-        status, _, body = _post(self.server, "/api/automations/delete", {})
+        status, _, body = _post(self.web.address, "/api/automations/delete", {})
         self.assertEqual(status, 400)
         self.assertIn("must be a string", json.loads(body)["error"])
 
     def test_delete_non_dict_body_returns_400(self):         # isinstance guard → rid=None → 400
-        status, _, body = _post(self.server, "/api/automations/delete", [1, 2, 3])
+        status, _, body = _post(self.web.address, "/api/automations/delete", [1, 2, 3])
         self.assertEqual(status, 400)
         self.assertIn("must be a string", json.loads(body)["error"])
 
     def test_delete_invalid_json_returns_400(self):          # err=True branch on the delete handler
-        status, _, body = _post(self.server, "/api/automations/delete", b"not json",
+        status, _, body = _post(self.web.address, "/api/automations/delete", b"not json",
                                 headers={"Content-Length": "8"})
         self.assertEqual(status, 400)
         self.assertIn("invalid JSON", json.loads(body)["error"])
 
     def test_delete_empty_body_cl0_returns_400(self):        # CL=0 → {} (err=False) → rid=None → 400
-        status, _, body = _post(self.server, "/api/automations/delete", b"",
+        status, _, body = _post(self.web.address, "/api/automations/delete", b"",
                                 headers={"Content-Length": "0"})
         self.assertEqual(status, 400)
         self.assertIn("must be a string", json.loads(body)["error"])
@@ -768,12 +787,12 @@ class AutomationsDeleteTests(_AutomationsWebTestBase):
     def test_delete_save_failure_returns_500(self):          # seeded → the write path is reached
         self._seed()
         with mock.patch.object(self.rt.engine.store, "write_payload", side_effect=OSError("disk")):
-            status, _, body = _post(self.server, "/api/automations/delete", {"id": "lamp-on-scene"})
+            status, _, body = _post(self.web.address, "/api/automations/delete", {"id": "lamp-on-scene"})
         self.assertEqual(status, 500)
         self.assertIn("save failed", json.loads(body)["error"])
 
     def test_delete_wrong_content_type_returns_415(self):   # CSRF guard
-        status, _, body = _post(self.server, "/api/automations/delete", {"id": "x"},
+        status, _, body = _post(self.web.address, "/api/automations/delete", {"id": "x"},
                                 headers={"Content-Type": "text/plain"})
         self.assertEqual(status, 415)
         self.assertIn("application/json", json.loads(body)["error"])
@@ -781,42 +800,43 @@ class AutomationsDeleteTests(_AutomationsWebTestBase):
 
 class AutomationsRoutingTests(_AutomationsWebTestBase):
     def test_get_on_delete_path_405(self):
-        status, headers, _ = _get(self.server, "/api/automations/delete")
+        status, headers, _ = _get(self.web.address, "/api/automations/delete")
         self.assertEqual(status, 405)
         self.assertEqual(headers["Allow"], "POST")
 
 
+# LEGACY: thread->loop bridge internals — REMOVED in the aiohttp swap (PR-B).
 class AutomationsBridgeMappingTests(_AutomationsWebTestBase):
     """Map the loop-bridge errors for each automations handler (no flaky timing)."""
 
     def test_list_loop_closed_503(self):
         with mock.patch("hestia.web._call_loop", side_effect=web._LoopClosed):
-            status, _, _ = _get(self.server, "/api/automations")
+            status, _, _ = _get(self.web.address, "/api/automations")
         self.assertEqual(status, 503)
 
     def test_list_bridge_timeout_504(self):
         with mock.patch("hestia.web._call_loop", side_effect=web._BridgeTimeout):
-            status, _, _ = _get(self.server, "/api/automations")
+            status, _, _ = _get(self.web.address, "/api/automations")
         self.assertEqual(status, 504)
 
     def test_set_loop_closed_503(self):
         with mock.patch("hestia.web._call_loop", side_effect=web._LoopClosed):
-            status, _, _ = _post(self.server, "/api/automations", VALID_RULE)
+            status, _, _ = _post(self.web.address, "/api/automations", VALID_RULE)
         self.assertEqual(status, 503)
 
     def test_set_bridge_timeout_504(self):
         with mock.patch("hestia.web._call_loop", side_effect=web._BridgeTimeout):
-            status, _, _ = _post(self.server, "/api/automations", VALID_RULE)
+            status, _, _ = _post(self.web.address, "/api/automations", VALID_RULE)
         self.assertEqual(status, 504)
 
     def test_delete_loop_closed_503(self):
         with mock.patch("hestia.web._call_loop", side_effect=web._LoopClosed):
-            status, _, _ = _post(self.server, "/api/automations/delete", {"id": "x"})
+            status, _, _ = _post(self.web.address, "/api/automations/delete", {"id": "x"})
         self.assertEqual(status, 503)
 
     def test_delete_bridge_timeout_504(self):
         with mock.patch("hestia.web._call_loop", side_effect=web._BridgeTimeout):
-            status, _, _ = _post(self.server, "/api/automations/delete", {"id": "x"})
+            status, _, _ = _post(self.web.address, "/api/automations/delete", {"id": "x"})
         self.assertEqual(status, 504)
 
 
@@ -834,16 +854,17 @@ class BindGuardTests(unittest.TestCase):
         import os
         os.environ.pop("HESTIA_WEB_ALLOW_REMOTE", None)
         with self.assertRaises(RuntimeError):
-            web.start_web(self.rt, self.loop_thread.loop, "8.8.8.8", 0)
+            _start_web(self.rt, self.loop_thread.loop, "8.8.8.8", 0)
 
     def test_remote_bind_allowed_with_optin(self):
         # Bind 0.0.0.0:0 (any free port) with the env opt-in; immediately stop.
         with mock.patch.dict("os.environ", {"HESTIA_WEB_ALLOW_REMOTE": "1"}):
-            server, thread = web.start_web(self.rt, self.loop_thread.loop, "0.0.0.0", 0)
+            started = _start_web(self.rt, self.loop_thread.loop, "0.0.0.0", 0)
         try:
-            self.assertTrue(thread.is_alive())
+            self.assertEqual(started.address[0], "0.0.0.0")
+            self.assertGreater(started.address[1], 0)
         finally:
-            web.stop_web(server, thread)
+            started.stop()
 
     def test_start_web_falls_back_to_env_defaults(self):
         """Caller omits host/port → start_web reads `HESTIA_WEB_HOST` and
@@ -851,13 +872,15 @@ class BindGuardTests(unittest.TestCase):
         come from the same env vars, so this path needs coverage too)."""
         with mock.patch.dict("os.environ", {"HESTIA_WEB_HOST": "127.0.0.1",
                                             "HESTIA_WEB_PORT": "0"}):
-            server, thread = web.start_web(self.rt, self.loop_thread.loop)
+            started = _start_web(self.rt, self.loop_thread.loop, None, None)
         try:
-            self.assertTrue(thread.is_alive())
+            self.assertEqual(started.address[0], "127.0.0.1")
+            self.assertGreater(started.address[1], 0)
         finally:
-            web.stop_web(server, thread)
+            started.stop()
 
 
+# LEGACY: thread->loop bridge internals — REMOVED in the aiohttp swap (PR-B).
 class CallLoopUnitTests(unittest.TestCase):
     """Direct unit tests of `_call_loop` — covers every raise branch without
     bringing up the HTTP server."""
@@ -931,37 +954,39 @@ class CallLoopUnitTests(unittest.TestCase):
                 c.close()                             # close the never-scheduled coro
 
 
+# LEGACY: thread->loop bridge internals — REMOVED in the aiohttp swap (PR-B).
 class HandlerBridgeMappingTests(_WebTestBase):
     """Exercise the handler's `_call_loop` exception mapping by patching the
     bridge to raise each error type directly — no flaky timing required."""
 
     def test_loop_closed_returns_503(self):
         with mock.patch("hestia.web._call_loop", side_effect=web._LoopClosed):
-            status, _, _ = _get(self.server, "/api/discovery")
+            status, _, _ = _get(self.web.address, "/api/discovery")
         self.assertEqual(status, 503)
         with mock.patch("hestia.web._call_loop", side_effect=web._LoopClosed):
-            status, _, _ = _post(self.server, "/api/name", {"node": 5, "name": "x"})
+            status, _, _ = _post(self.web.address, "/api/name", {"node": 5, "name": "x"})
         self.assertEqual(status, 503)
 
     def test_loop_not_running_returns_503(self):
         # Drive the genuine is_running() branch end-to-end: stop the loop, then
         # request. The web stays up (its socket lives in the main thread).
         self.loop_thread.close()
-        status, _, _ = _get(self.server, "/api/discovery")
+        status, _, _ = _get(self.web.address, "/api/discovery")
         self.assertEqual(status, 503)
         self.loop_thread = _LoopThread()             # restore for tearDown
 
     def test_bridge_timeout_returns_504(self):
         with mock.patch("hestia.web._call_loop", side_effect=web._BridgeTimeout):
-            status, _, _ = _get(self.server, "/api/discovery")
+            status, _, _ = _get(self.web.address, "/api/discovery")
         self.assertEqual(status, 504)
         with mock.patch("hestia.web._call_loop", side_effect=web._BridgeTimeout):
-            status, _, _ = _post(self.server, "/api/name", {"node": 5, "name": "x"})
+            status, _, _ = _post(self.web.address, "/api/name", {"node": 5, "name": "x"})
         self.assertEqual(status, 504)
 
 
 # --- _wait_event + SSE endpoint --------------------------------------------
 
+# LEGACY: thread->loop bridge internals — REMOVED in the aiohttp swap (PR-B).
 class WaitEventTests(unittest.IsolatedAsyncioTestCase):
     async def test_returns_event_on_success(self):
         q = asyncio.Queue()
@@ -972,15 +997,6 @@ class WaitEventTests(unittest.IsolatedAsyncioTestCase):
         q = asyncio.Queue()
         with mock.patch.object(web, "SSE_IDLE_TIMEOUT", 0.01):
             self.assertIsNone(await web._wait_event(q))
-
-
-def _stream(server, path="/api/events", timeout=2.0):
-    """Open an SSE stream; return (status, headers, file-like body)."""
-    host, port = server.server_address[:2]
-    conn = http.client.HTTPConnection(host, port, timeout=timeout)
-    conn.request("GET", path)
-    resp = conn.getresponse()
-    return resp.status, dict(resp.getheaders()), resp, conn
 
 
 class SSEHandlerTests(_WebTestBase):
@@ -1005,20 +1021,22 @@ class SSEHandlerTests(_WebTestBase):
         patcher.start()
         self.addCleanup(patcher.stop)
 
+    # LEGACY: thread->loop bridge internals — REMOVED in the aiohttp swap (PR-B).
     def test_subscribe_loop_closed_returns_503(self):
         with mock.patch("hestia.web._call_loop", side_effect=web._LoopClosed):
-            status, _, _ = _get(self.server, "/api/events")
+            status, _, _ = _get(self.web.address, "/api/events")
         self.assertEqual(status, 503)
 
+    # LEGACY: thread->loop bridge internals — REMOVED in the aiohttp swap (PR-B).
     def test_subscribe_bridge_timeout_returns_504(self):
         with mock.patch("hestia.web._call_loop", side_effect=web._BridgeTimeout):
-            status, _, _ = _get(self.server, "/api/events")
+            status, _, _ = _get(self.web.address, "/api/events")
         self.assertEqual(status, 504)
 
     def test_cap_reached_returns_429(self):
         with mock.patch.object(self.rt.event_bus, "try_subscribe",
                                new=mock.AsyncMock(return_value=None)):
-            status, _, _ = _get(self.server, "/api/events")
+            status, _, _ = _get(self.web.address, "/api/events")
         self.assertEqual(status, 429)
 
     def test_stream_pushes_event_and_keepalive(self):
@@ -1026,7 +1044,7 @@ class SSEHandlerTests(_WebTestBase):
         verify activity payload + that the connection stays open afterwards."""
         # publish *after* the SSE handler has started (otherwise the event is
         # dropped before anyone is listening).
-        host, port = self.server.server_address[:2]
+        host, port = self.web.address
         conn = http.client.HTTPConnection(host, port, timeout=3.0)
         conn.request("GET", "/api/events")
         resp = conn.getresponse()
@@ -1066,7 +1084,7 @@ class SSEHandlerTests(_WebTestBase):
 
     def test_stream_breaks_on_closed_sentinel(self):
         """`EventBus.close()` from the loop wakes the handler via sentinel."""
-        host, port = self.server.server_address[:2]
+        host, port = self.web.address
         conn = http.client.HTTPConnection(host, port, timeout=3.0)
         conn.request("GET", "/api/events")
         resp = conn.getresponse()
@@ -1082,7 +1100,7 @@ class SSEHandlerTests(_WebTestBase):
         """A negative `SSE_MAX_LIFETIME` makes the deadline past at handler
         entry — the while-loop never iterates, cleanup runs immediately."""
         with mock.patch("hestia.web.SSE_MAX_LIFETIME", -1.0):
-            host, port = self.server.server_address[:2]
+            host, port = self.web.address
             conn = http.client.HTTPConnection(host, port, timeout=2.0)
             conn.request("GET", "/api/events")
             resp = conn.getresponse()
@@ -1092,9 +1110,10 @@ class SSEHandlerTests(_WebTestBase):
             conn.close()
         self._wait_unsubscribed()
 
+    # LEGACY: thread->loop bridge internals — REMOVED in the aiohttp swap (PR-B).
     def test_bridge_timeout_in_stream_loop_exits_clean(self):
         """`_BridgeTimeout` after headers must just exit + cleanup, no crash."""
-        host, port = self.server.server_address[:2]
+        host, port = self.web.address
         conn = http.client.HTTPConnection(host, port, timeout=3.0)
         conn.request("GET", "/api/events")
         resp = conn.getresponse()
@@ -1127,7 +1146,7 @@ class SSEHandlerTests(_WebTestBase):
         """Plain socket SSE so we control the close ourselves (http.client
         hides the socket once getresponse() runs)."""
         import socket
-        host, port = self.server.server_address[:2]
+        host, port = self.web.address
         s = socket.create_connection((host, port), timeout=3.0)
         s.send(f"GET {path} HTTP/1.1\r\nHost: localhost\r\n\r\n".encode())
         return s
@@ -1140,6 +1159,7 @@ class SSEHandlerTests(_WebTestBase):
         self.loop_thread.submit(self._publish_async({"type": "activity", "node": 6}))
         self._wait_unsubscribed()
 
+    # LEGACY: thread->loop bridge internals — REMOVED in the aiohttp swap (PR-B).
     def test_fallback_close_via_call_soon_threadsafe(self):
         """If primary cleanup `_call_loop` raises, fall back to threadsafe close.
         Sequence: subscribe (unpatched), publish to wake in-flight bridge call,
@@ -1173,6 +1193,7 @@ class SSEHandlerTests(_WebTestBase):
         self.assertGreaterEqual(len(scheduled), 1)
         self._wait_unsubscribed()
 
+    # LEGACY: thread->loop bridge internals — REMOVED in the aiohttp swap (PR-B).
     def test_fallback_close_swallows_runtime_error(self):
         """If both primary and `call_soon_threadsafe` fail, the handler must NOT
         raise — process is dying, bus cleanup already ran.
@@ -1209,7 +1230,7 @@ class SSEHandlerTests(_WebTestBase):
              mock.patch("hestia.web._call_loop", side_effect=patched), \
              mock.patch.object(self.loop_thread.loop, "call_soon_threadsafe",
                                side_effect=conditional_raise):
-            host, port = self.server.server_address[:2]
+            host, port = self.web.address
             conn = http.client.HTTPConnection(host, port, timeout=2.0)
             conn.request("GET", "/api/events")
             resp = conn.getresponse()
@@ -1222,6 +1243,7 @@ class SSEHandlerTests(_WebTestBase):
         # no exception propagated out of the handler thread.
 
 
+# LEGACY: thread->loop bridge internals — REMOVED in the aiohttp swap (PR-B).
 class StartWebDaemonThreadsTests(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
@@ -1233,11 +1255,11 @@ class StartWebDaemonThreadsTests(unittest.TestCase):
         shutil.rmtree(self.tmp)
 
     def test_daemon_threads_enabled(self):
-        server, thread = web.start_web(self.rt, self.loop_thread.loop, "127.0.0.1", 0)
+        started = _start_web(self.rt, self.loop_thread.loop)
         try:
-            self.assertTrue(server.daemon_threads)
+            self.assertTrue(started.daemon_threads)
         finally:
-            web.stop_web(server, thread)
+            started.stop()
 
 
 if __name__ == "__main__":
