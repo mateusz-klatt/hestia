@@ -11,7 +11,22 @@ third-party CDN, no public IP. Run it as a transparent **proxy** (relay to the
 cloud while decoding everything) or as a **standalone** server that *replaces* the
 cloud entirely.
 
-Standard-library core; the sole runtime dependency is **`cryptography`** (the AES-128 primitive for the optional Tuya client). The Keemple protocol/command/state codec stays pure-stdlib, first-party code.
+![hestia dashboard — 22 devices with live state, power metering, battery, inline naming, and the local rules editor](docs/dashboard.png)
+
+hestia began as a **zero-dependency, pure-stdlib** server on bare metal. Now that it
+ships in a container, that rule is deliberately relaxed for **vetted,
+generic-infrastructure** libraries — currently
+[`cryptography`](https://pypi.org/project/cryptography/) (the AES-128 primitive for
+the optional Tuya client) and [`pyserial`](https://pypi.org/project/pyserial/)
+(USB-CDC transport for the optional Flipper Zero IR client). The Keemple
+protocol / command / state codec — the clean-room asset — stays **pure-stdlib,
+first-party** code; the libraries supply only generic primitives (a block cipher, a
+serial port), never protocol logic.
+
+> **Status — active refactor.** Moving off the bare-metal zero-deps rule now that
+> hestia is containerised, and migrating the stdlib `http.server` + inline-JS
+> dashboard to a **TypeScript** front-end. Expect churn on the surface; the protocol
+> core is stable.
 
 ## Clean-room methodology
 
