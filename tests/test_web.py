@@ -999,15 +999,6 @@ class WaitEventTests(unittest.IsolatedAsyncioTestCase):
             self.assertIsNone(await web._wait_event(q))
 
 
-def _stream(address, path="/api/events", timeout=2.0):
-    """Open an SSE stream; return (status, headers, file-like body)."""
-    host, port = address
-    conn = http.client.HTTPConnection(host, port, timeout=timeout)
-    conn.request("GET", path)
-    resp = conn.getresponse()
-    return resp.status, dict(resp.getheaders()), resp, conn
-
-
 class SSEHandlerTests(_WebTestBase):
     def setUp(self):
         super().setUp()
