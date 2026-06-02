@@ -11,11 +11,23 @@ import {
 } from "./client";
 
 describe("apiBase", () => {
-  it("resolves the API root one level above the /ui/ page", () => {
+  it("resolves the API root from a bare host root", () => {
+    expect(apiBase("http://host:8927/").href).toBe("http://host:8927/api/");
+  });
+  it("resolves the API root from a dedicated subdomain root", () => {
+    expect(apiBase("http://hestia.klatt.ie/").href).toBe("http://hestia.klatt.ie/api/");
+  });
+  it("preserves a reverse-proxy subpath at the root", () => {
+    expect(apiBase("https://host/hestia/").href).toBe("https://host/hestia/api/");
+  });
+  it("resolves one level above the legacy /ui/ mount", () => {
     expect(apiBase("http://host:8927/ui/").href).toBe("http://host:8927/api/");
   });
-  it("preserves a reverse-proxy subpath", () => {
+  it("preserves a reverse-proxy subpath at the legacy /ui/ mount", () => {
     expect(apiBase("https://host/hestia/ui/").href).toBe("https://host/hestia/api/");
+  });
+  it("ignores a trailing index.html filename", () => {
+    expect(apiBase("https://host/hestia/index.html").href).toBe("https://host/hestia/api/");
   });
 });
 

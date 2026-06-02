@@ -149,6 +149,27 @@ export function summaryText(s: Summary): string {
   return `hestia — devices (${String(s.confirmed)}/${String(s.total)} confirmed, ${String(s.unknown)} unknown)`;
 }
 
+/**
+ * The "tryb" status line: the RUNNING mode plus a note — `(cloud-free)` when standalone, an env-override
+ * note when `HESTIA_MODE` pins it, or a "graduation saved, restart to apply" note when standalone is the
+ * persisted target. Mirrors the legacy dashboard's text (the Phase-3 graduate *button* is intentionally
+ * dropped — the appliance is standalone; a rare proxy graduation goes through `POST /api/graduate`).
+ */
+export function modeText(d: Pick<Discovery, "mode" | "target_mode" | "env_override">): string {
+  const running = d.mode || "proxy";
+  const target = d.target_mode || "proxy";
+  if (d.env_override) {
+    return `tryb: ${running} (HESTIA_MODE=${d.env_override} wymusza tryb; zapisany: ${target})`;
+  }
+  if (running === "standalone") return `tryb: ${running} (cloud-free)`;
+  if (target === "standalone") return `tryb: ${running} → standalone zapisane — zrestartuj hestię`;
+  return `tryb: ${running}`;
+}
+
+export function renderMode(el: HTMLElement, d: Pick<Discovery, "mode" | "target_mode" | "env_override">): void {
+  el.textContent = modeText(d);
+}
+
 /** Render the whole read-only discovery view (summary header, globals, table). */
 export function renderDiscovery(view: DeviceView, data: Discovery): void {
   view.hdrText.textContent = summaryText(data.summary);

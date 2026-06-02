@@ -439,69 +439,17 @@ class ControlEndpointTests(_WebTestBase):
 
 
 class IndexTests(_WebTestBase):
-    def test_index_serves_html(self):
-        status, headers, body = _get(self.web.address, "/")
-        self.assertEqual(status, 200)
-        self.assertTrue(headers["Content-Type"].startswith("text/html"))
-        self.assertIn(b"<table>", body)
-        self.assertIn(b"hestia", body)
-        # heatmap: the "last seen" column + the 1 Hz relative-time ticker must ship
-        self.assertIn(b"last seen", body)
-        self.assertIn(b"tickActivity", body)
-        # battery column (replaces "power"): header + the level formatter
-        self.assertIn(b"<th>battery</th>", body)
-        self.assertIn(b"battFmt", body)
-        # live "stan" column: header + the type-aware formatter
-        self.assertIn(b"<th>stan</th>", body)
-        self.assertIn(b"stateStr", body)
-        # dashboard click-to-control: action column + safe DOM renderer + control POST helper
-        self.assertIn(b"<th>akcje</th>", body)
-        self.assertIn(b"function postControl", body)
-        self.assertIn(b"function renderActions", body)
-        self.assertIn(b"api/control", body)
-        self.assertIn(b"wys", body)   # "wysłano" is UTF-8; this keeps the smoke check ASCII-only
-        # SSE state-delta patching (no full refetch on a live value change)
-        self.assertIn(b"applyStatePatch", body)
-        # globals (crib_temp/outdoor_temp) UI: spans + formatter + applier + SSE branch
-        self.assertIn(b'id="g-crib"', body)
-        self.assertIn(b'id="g-outdoor"', body)
-        self.assertIn(b"function fmtTemp", body)
-        self.assertIn(b"function applyGlobals", body)
-        self.assertIn(b"function renderGlobals", body)
-        self.assertIn(b"pendingGlobals", body)             # globals deltas queue mid-refresh (no stale rollback)
-        self.assertIn(b"'globals'", body)
-        # 2-gang per-endpoint sub-rows (the JS isn't unit-tested → smoke-check it ships)
-        self.assertIn(b"function subRow", body)
-        self.assertIn(b"function bindSubRow", body)
-        self.assertIn(b"ep-stan", body)
-        self.assertIn(b"save-ep-name", body)
-        self.assertIn(b"function flashRow", body)   # channel sub-rows flash on state change
-        # M3 automations editor: header, list loader, JSON editor, save + delete bindings
-        self.assertIn(b">automations</h1>", body)
-        self.assertIn(b"loadAutomations", body)
-        self.assertIn(b'id="rule-json"', body)
-        self.assertIn(b'id="save-rule"', body)
-        self.assertIn(b"auto-del", body)
-        self.assertIn(b"trigSummary", body)
-        # klima panel: container + the data-driven mode+temp renderer + the power-on ("Włącz") wiring
-        self.assertIn(b'id="klima"', body)
-        self.assertIn(b"function renderKlima", body)
-        self.assertIn(b"power_on", body)
-        self.assertIn(b"Ustaw", body)        # the single program button
-        # guided rule form (M3.1): container + builder + the Build button
-        self.assertIn(b'id="rule-form"', body)
-        self.assertIn(b"function renderRuleForm", body)
-        self.assertIn(b"Zbuduj JSON", body)
+    """The root `/` now serves the built TS app (the legacy inline page is gone); `/ui/` redirects to it."""
 
-    def test_ui_returns_404_when_dist_absent(self):
+    def test_root_404_when_dist_absent(self):
         self.web.stop()
         with mock.patch.dict("os.environ", {"HESTIA_UI_DIST": str(self.tmp / "missing-dist")}):
             self.web = _start_web(self.rt, self.loop_thread)
-            status, _, body = _get(self.web.address, "/ui/")
-        self.assertEqual(status, 404)
+            status, _, body = _get(self.web.address, "/")
+        self.assertEqual(status, 404)                # no build present → 404 (never a 500)
         self.assertEqual(body, b"")
 
-    def test_ui_serves_built_index_and_assets(self):
+    def test_root_serves_built_index_and_assets(self):
         dist = self.tmp / "ui-dist"
         assets = dist / "assets"
         assets.mkdir(parents=True)
@@ -511,15 +459,21 @@ class IndexTests(_WebTestBase):
         self.web.stop()
         with mock.patch.dict("os.environ", {"HESTIA_UI_DIST": str(dist)}):
             self.web = _start_web(self.rt, self.loop_thread)
-            status, headers, body = _get(self.web.address, "/ui/")
-            asset_status, _, asset_body = _get(self.web.address, "/ui/assets/app.js")
-            missing_status, _, _ = _get(self.web.address, "/ui/assets/missing.js")
+            status, headers, body = _get(self.web.address, "/")
+            asset_status, _, asset_body = _get(self.web.address, "/assets/app.js")
+            missing_status, _, _ = _get(self.web.address, "/assets/missing.js")
         self.assertEqual(status, 200)
         self.assertTrue(headers["Content-Type"].startswith("text/html"))
         self.assertIn(b"<h1>hestia</h1>", body)
         self.assertEqual(asset_status, 200)
         self.assertEqual(asset_body, b"console.log('hestia shell');\n")
         self.assertEqual(missing_status, 404)        # built UI, asset not in the bundle → 404, not 500
+
+    def test_ui_path_redirects_to_root(self):
+        # The retired /ui/ alias 302-redirects to "../" (relative → correct at a bare root OR behind /hestia/).
+        status, headers, _ = _get(self.web.address, "/ui/")
+        self.assertEqual(status, 302)
+        self.assertEqual(headers["Location"], "../")
 
 
 class DiscoveryTests(_WebTestBase):
@@ -771,21 +725,28 @@ class HttpContractTests(_WebTestBase):
         self.assertJsonHeaders(headers)
         self.assertFalse(json.loads(body)["ok"])
 
-        status, headers, body = _get(self.web.address, "/")
-        self.assertEqual(status, 200)
-        self.assertEqual(headers["Content-Type"], "text/html; charset=utf-8")
-        self.assertIn("Content-Length", headers)
-        self.assertIn(b"<table>", body)
+        # The UI root serves the built index.html (a FileResponse) when a build is present.
+        dist = self.tmp / "hdr-dist"
+        dist.mkdir()
+        (dist / "index.html").write_text("<!doctype html><h1>hestia</h1>", encoding="utf-8")
+        self.web.stop()
+        with mock.patch.dict("os.environ", {"HESTIA_UI_DIST": str(dist)}):
+            self.web = _start_web(self.rt, self.loop_thread)
+            status, headers, body = _get(self.web.address, "/")
+            self.assertEqual(status, 200)
+            self.assertTrue(headers["Content-Type"].startswith("text/html"))
+            self.assertIn("Content-Length", headers)
+            self.assertIn(b"<h1>hestia</h1>", body)
 
-        status, headers, body = _get(self.web.address, "/nope")
-        self.assertEqual(status, 404)
-        self.assertEmptyHeaders(headers)
-        self.assertEqual(body, b"")
+            status, headers, body = _get(self.web.address, "/nope")
+            self.assertEqual(status, 404)
+            self.assertEmptyHeaders(headers)
+            self.assertEqual(body, b"")
 
-        status, headers, body = _post(self.web.address, "/", b"{}", headers={"Content-Length": "2"})
-        self.assertEqual(status, 405)
-        self.assertEmptyHeaders(headers)
-        self.assertEqual(body, b"")
+            status, headers, body = _post(self.web.address, "/", b"{}", headers={"Content-Length": "2"})
+            self.assertEqual(status, 405)
+            self.assertEmptyHeaders(headers)
+            self.assertEqual(body, b"")
 
     def test_405_allow_headers_are_exact(self):
         status, headers, _ = _post(self.web.address, "/", b"{}", headers={"Content-Length": "2"})

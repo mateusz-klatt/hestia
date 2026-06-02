@@ -3,11 +3,33 @@ import { describe, expect, it } from "vitest";
 import { device, discovery } from "../fixtures";
 import {
   deviceRow,
+  modeText,
   renderDeviceRows,
   renderDiscovery,
   renderGlobals,
   summaryText,
 } from "./devices";
+
+describe("modeText", () => {
+  it("notes cloud-free when running standalone", () => {
+    expect(modeText({ mode: "standalone", target_mode: "standalone", env_override: null })).toBe(
+      "tryb: standalone (cloud-free)",
+    );
+  });
+  it("is plain when running proxy with nothing pending", () => {
+    expect(modeText({ mode: "proxy", target_mode: "proxy", env_override: null })).toBe("tryb: proxy");
+  });
+  it("flags a saved-but-not-applied standalone graduation", () => {
+    expect(modeText({ mode: "proxy", target_mode: "standalone", env_override: null })).toBe(
+      "tryb: proxy → standalone zapisane — zrestartuj hestię",
+    );
+  });
+  it("flags an env-pinned mode", () => {
+    expect(modeText({ mode: "proxy", target_mode: "standalone", env_override: "proxy" })).toBe(
+      "tryb: proxy (HESTIA_MODE=proxy wymusza tryb; zapisany: standalone)",
+    );
+  });
+});
 
 describe("summaryText", () => {
   it("renders the confirmed/total/unknown counts", () => {
