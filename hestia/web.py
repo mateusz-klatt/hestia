@@ -34,6 +34,7 @@ import os
 import time
 from dataclasses import dataclass
 from http import HTTPStatus
+from pathlib import Path
 
 from aiohttp import ClientConnectionError, web
 
@@ -62,6 +63,8 @@ _CONTROL_FIELDS = {
     "thermostat_power": {"op", "node", "on"},
 }
 _RT_KEY = web.AppKey("rt", object)
+_UI_DIST_ENV = "HESTIA_UI_DIST"
+_DEFAULT_UI_DIST = Path(__file__).resolve().parent.parent / "ui" / "dist"
 
 
 def _require_safe_web_bind(host: str) -> None:
@@ -1085,6 +1088,24 @@ async def _index(_request):  # NOSONAR S7503: aiohttp route handlers must be cor
     return web.Response(text=_INDEX_HTML, content_type="text/html")
 
 
+def _ui_dist_dir() -> Path:
+    return Path(os.environ.get(_UI_DIST_ENV, str(_DEFAULT_UI_DIST)))
+
+
+def _ui_built_file_response(path: Path):
+    if not (_ui_dist_dir() / "index.html").is_file():
+        raise web.HTTPNotFound
+    return web.FileResponse(path)
+
+
+async def _ui_index(_request):  # NOSONAR S7503: aiohttp route handlers must be coroutines (the framework awaits them)
+    return _ui_built_file_response(_ui_dist_dir() / "index.html")
+
+
+async def _ui_asset(request):  # NOSONAR S7503: aiohttp route handlers must be coroutines (the framework awaits them)
+    return _ui_built_file_response(_ui_dist_dir() / "assets" / request.match_info["path"])
+
+
 async def _discovery(request):  # NOSONAR S7503: aiohttp route handlers must be coroutines (the framework awaits them)
     rt = _rt(request)
     devices = _merged_discovery(rt)
@@ -1348,6 +1369,8 @@ def make_app(rt):
     )
     app[_RT_KEY] = rt
     app.router.add_get("/", _index, allow_head=False)
+    app.router.add_get("/ui/", _ui_index, allow_head=False)
+    app.router.add_get("/ui/assets/{path:[A-Za-z0-9._-]+}", _ui_asset, allow_head=False)
     app.router.add_get("/api/discovery", _discovery, allow_head=False)
     app.router.add_get("/api/events", _events, allow_head=False)
     app.router.add_get("/api/automations", _automations_list, allow_head=False)

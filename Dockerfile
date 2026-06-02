@@ -1,3 +1,12 @@
+FROM node:22-bookworm-slim AS ui-build
+
+WORKDIR /app/ui
+COPY ui/package*.json ./
+RUN npm ci
+COPY ui/ ./
+RUN npm run build
+
+
 FROM python:3.14-slim
 
 WORKDIR /app
@@ -9,6 +18,7 @@ ENV PYTHONUNBUFFERED=1 \
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 COPY hestia/ ./hestia/
+COPY --from=ui-build /app/ui/dist ./ui/dist/
 # Ship the LG A/C IR signal DB so the dashboard AC panel appears. The default
 # HESTIA_KLIMA_IR resolves to dirname(dirname(__file__))/tools/klima.ir =
 # /app/tools/klima.ir, so no env override is needed. (klima.ir is a generated,
