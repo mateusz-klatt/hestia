@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { Discovery } from "./api/types";
 import { device, discovery } from "./fixtures";
@@ -288,5 +288,117 @@ describe("LiveController.handleMessage", () => {
     expect(view.conn.textContent).toBe("(reconnecting…)");
     live.setConnected(true);
     expect(view.conn.textContent).toBe("");
+  });
+});
+
+describe("LiveController heatmap (flash / scene / last-seen)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const onePlug = (): Discovery => discovery({ "7": device({ type: "plug" }) });
+
+  it("flashes a node row active on activity, then clears after the window", async () => {
+    const view = harness();
+    const live = new LiveController(view, () => Promise.resolve(onePlug()));
+    await live.refresh();
+    const row = (): HTMLElement | null => view.rows.querySelector('tr[data-node="7"]');
+    expect(row()?.classList.contains("active")).toBe(false);
+    live.flash(7);
+    expect(row()?.classList.contains("active")).toBe(true);
+    vi.advanceTimersByTime(2200); // HIGHLIGHT_MS
+    expect(row()?.classList.contains("active")).toBe(false);
+  });
+
+  it("handles an activity event with a scene badge that clears after SCENE_MS", async () => {
+    const view = harness();
+    const live = new LiveController(view, () => Promise.resolve(onePlug()));
+    await live.refresh();
+    live.handleMessage(JSON.stringify({ type: "activity", node: 7, ts: 1, scene: { id: 3 } }));
+    const row = view.rows.querySelector('tr[data-node="7"]');
+    expect(row?.classList.contains("active")).toBe(true);
+    const badge = row?.querySelector(".scene-badge");
+    expect(badge?.textContent).toBe("⏏ scena 3");
+    expect(badge?.classList.contains("on")).toBe(true);
+    vi.advanceTimersByTime(4000); // SCENE_MS
+    expect(badge?.textContent).toBe("");
+    expect(badge?.classList.contains("on")).toBe(false);
+  });
+
+  it("queues a flash for an unbuilt row and replays it after a refresh", async () => {
+    const view = harness();
+    const live = new LiveController(view, () => Promise.resolve(onePlug()));
+    live.flash(7); // no row yet → queued
+    expect(view.rows.querySelector('tr[data-node="7"]')).toBeNull();
+    await live.refresh();
+    expect(view.rows.querySelector('tr[data-node="7"]')?.classList.contains("active")).toBe(true);
+  });
+
+  it("flashes only the changed channel of a multi-gang switch", async () => {
+    const view = harness();
+    const live = new LiveController(view, () =>
+      Promise.resolve(discovery({ "2": device({ type: "light", endpoints: { "1": true, "2": false } }) })),
+    );
+    await live.refresh();
+    const sub = (ep: string): HTMLElement | null =>
+      view.rows.querySelector(`tr[data-node="2"][data-ep="${ep}"]`);
+    live.applyState(2, { endpoints: { "1": true, "2": true } }); // only ep 2 changed
+    expect(sub("2")?.classList.contains("active")).toBe(true);
+    expect(sub("1")?.classList.contains("active")).toBe(false);
+    vi.advanceTimersByTime(2200);
+    expect(sub("2")?.classList.contains("active")).toBe(false);
+  });
+
+  it("renders relative last-seen times and toggles the recent glow", async () => {
+    const view = harness();
+    const live = new LiveController(view, () => Promise.resolve(onePlug()));
+    await live.refresh();
+    const seen = (): string | null | undefined =>
+      view.rows.querySelector('tr[data-node="7"] .seen')?.textContent;
+    const row = view.rows.querySelector('tr[data-node="7"]');
+    expect(seen()).toBe("—"); // never seen
+    live.flash(7); // lastActive = 0
+    live.tick();
+    expect(seen()).toBe("now");
+    expect(row?.classList.contains("recent")).toBe(true);
+    vi.setSystemTime(5000);
+    live.tick();
+    expect(seen()).toBe("5s ago");
+    vi.setSystemTime(120_000);
+    live.tick();
+    expect(seen()).toBe("2m ago");
+    vi.setSystemTime(2 * 3_600_000);
+    live.tick();
+    expect(seen()).toBe("2h ago");
+    expect(row?.classList.contains("recent")).toBe(false); // older than RECENT_MS
+  });
+
+  it("does not re-highlight a row whose flash already expired before a rebuild", async () => {
+    const view = harness();
+    const live = new LiveController(view, () => Promise.resolve(onePlug()));
+    await live.refresh();
+    live.flash(7); // active at t=0
+    vi.advanceTimersByTime(3000); // > HIGHLIGHT_MS: the timer cleared 'active'; lastActive stays 0
+    expect(view.rows.querySelector('tr[data-node="7"]')?.classList.contains("active")).toBe(false);
+    await live.refresh(); // rebuild → reapply sees a stale timestamp → skips
+    expect(view.rows.querySelector('tr[data-node="7"]')?.classList.contains("active")).toBe(false);
+  });
+
+  it("prunes activity for a node that vanished and whose flash expired", async () => {
+    const view = harness();
+    let present = true;
+    const live = new LiveController(view, () => Promise.resolve(present ? onePlug() : discovery({})));
+    await live.refresh();
+    live.flash(7);
+    vi.advanceTimersByTime(3000); // flash expired
+    present = false;
+    await live.refresh(); // node 7 gone + expired → pruned
+    present = true;
+    await live.refresh(); // node 7 back; its last-seen must be "—", not a stale time
+    expect(view.rows.querySelector('tr[data-node="7"] .seen')?.textContent).toBe("—");
   });
 });

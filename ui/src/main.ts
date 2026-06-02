@@ -39,4 +39,9 @@ events.addEventListener("message", (event) => {
   live.handleMessage(String(event.data));
 });
 
+// Once a second, refresh the relative "last seen" times + the lingering glow.
+setInterval(() => {
+  live.tick();
+}, 1000);
+
 void live.refresh();
