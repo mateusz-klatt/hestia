@@ -93,6 +93,18 @@ export class LiveController {
 
   /** Fetch the full snapshot and rebuild the view; coalesces overlapping calls. */
   async refresh(): Promise<void> {
+    // Don't rebuild while the operator is interacting with a row — the rebuild
+    // replaces every <input>/<button> and would erase an edit-in-progress or wipe
+    // the "saved" status of a just-clicked Save/confirm (and a focused Save button
+    // protects an unsaved sibling field too). Scoped to the table, so the header
+    // Refresh button still works (unlike the legacy page-wide guard).
+    const active = document.activeElement;
+    if (
+      (active instanceof HTMLInputElement || active instanceof HTMLButtonElement) &&
+      this.view.rows.contains(active)
+    ) {
+      return;
+    }
     if (this.refreshing) {
       this.refreshAgain = true; // a refresh landed mid-rebuild → run once more after
       return;
@@ -122,15 +134,16 @@ export class LiveController {
     for (const [node, info] of Object.entries(data.devices)) {
       this.infoByNode.set(Number(node), info);
     }
-    // Per node row: wire interactive controls (the decorator) and reapply the
-    // highlight to rows that activated during the rebuild.
-    for (const tr of this.view.rows.querySelectorAll<HTMLTableRowElement>("tr[data-node]:not([data-ep])")) {
+    // Decorate every row (node rows AND multi-gang sub-rows) so the decorator
+    // can wire controls + name/room on node rows and the ep-label on sub-rows;
+    // reapply the activity highlight only to node rows.
+    for (const tr of this.view.rows.querySelectorAll<HTMLTableRowElement>("tr[data-node]")) {
       const raw = tr.dataset.node;
       if (raw === undefined) continue;
       const node = Number(raw);
       const info = this.infoByNode.get(node);
       if (this.decorate !== undefined && info !== undefined) this.decorate(tr, node, info);
-      if (this.lastActiveByNode.has(node)) this.applyHighlight(tr, node);
+      if (tr.dataset.ep === undefined && this.lastActiveByNode.has(node)) this.applyHighlight(tr, node);
     }
     const queued = [...this.pendingFlash];
     this.pendingFlash.clear();
