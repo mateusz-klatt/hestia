@@ -310,9 +310,14 @@ is **opt-in and OFF by default** — it makes **no** network call unless explici
 
 Set `HESTIA_OUTDOOR_TEMP_SOURCE=local` (with `HESTIA_OUTDOOR_TEMP=1`) to feed `outdoor_temp` from a
 local 433 MHz weather sensor decoded by the external **`rtl_433`** binary instead of the cloud —
-**on-LAN, zero egress**. The two sources are **mutually exclusive** (exactly one poller runs); an
+**on-LAN, zero egress**. The two sources are **mutually exclusive** (exactly one feeder runs); an
 unknown/typo source disables `outdoor_temp` entirely (fail-safe). `rtl_433` is invoked as a subprocess
 (no shell), so it is a runtime *system* dependency, not a Python package — the zero-deps rule holds.
+
+This is a **PUSH** feeder: hestia spawns **one long-lived** `rtl_433 -d <dev> -F json` and applies each
+matching reading the instant `rtl_433` streams it (no polling interval, no reception window). Alongside
+`outdoor_temp` it also fills a display-only **`outdoor_humidity`** (%RH) global when the packet carries it.
+If `rtl_433` exits (e.g. `rtl_tcp` restart), the stream is relaunched after `HESTIA_RTL433_RESTART_SECS`.
 
 | Env var | Meaning | Default |
 |---|---|---|
@@ -320,10 +325,11 @@ unknown/typo source disables `outdoor_temp` entirely (fail-safe). `rtl_433` is i
 | `HESTIA_RTL433_MODEL` | only accept readings whose `model` matches (recommended) | — (any) |
 | `HESTIA_RTL433_ID` | only accept readings whose sensor `id` matches | — (any) |
 | `HESTIA_RTL433_PROTOCOL` | restrict decoding to one rtl_433 protocol number (`-R`) | — (all) |
-| `HESTIA_RTL433_WINDOW` | per-poll reception seconds (`rtl_433 -T`), clamped to `[15, 600]` | `60` |
+| `HESTIA_RTL433_RESTART_SECS` | delay before relaunching `rtl_433` after it exits, clamped to `[1, 600]` | `30` |
 
 > **Hardware requirement:** `local` needs a **433-tuned antenna near the sensor** and a **dedicated**
 > SDR/`rtl_tcp` endpoint. Do **not** point `HESTIA_RTL433_DEVICE` at an `rtl_tcp` shared with another
-> consumer (e.g. an FM/RDS receiver): a reception window **retunes/monopolises** the dongle and breaks the other
-> use. Each poll runs `rtl_433 -d <dev> -F json -T <window>` once, takes the latest matching finite
-> `temperature_C`, and (like every poller) keeps the last value on any failure.
+> consumer — neither an FM/RDS receiver (a 433 retune **monopolises** the dongle) nor a second `rtl_433`
+> (`rtl_tcp` serves a **single client**, so the second reader silently gets nothing). hestia consumes the
+> long-lived stream, takes each matching finite `temperature_C` (+ `humidity` if present), and **terminates
+> and reaps** its `rtl_433` child on shutdown so a leaked process can never block the SDR.
