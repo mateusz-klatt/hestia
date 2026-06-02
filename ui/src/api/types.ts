@@ -84,8 +84,8 @@ export interface Klima {
 export type Trigger =
   | { type: "scene"; node: number; scene_id: number }
   | { type: "state"; node?: number; field: string; op: string; value: unknown }
-  | { type: "time"; at: string; days?: number[] }
-  | { type: "sun"; event: string; offset_min?: number; days?: number[] }
+  | { type: "time"; at: string; days?: number[] | null }
+  | { type: "sun"; event: string; offset_min?: number; days?: number[] | null }
   | { type: "presence"; mac: string; event: string }
   | { type: "cron"; expr: string };
 
