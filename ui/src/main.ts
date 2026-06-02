@@ -15,6 +15,7 @@ import { renderActions } from "./controls";
 import { renderIrButtons, renderKlima } from "./klima";
 import { LiveController } from "./live";
 import { bindRow, bindSubRow } from "./registry";
+import { renderRuleForm } from "./ruleform";
 
 function el(id: string): HTMLElement {
   const node = document.getElementById(id);
@@ -24,6 +25,8 @@ function el(id: string): HTMLElement {
 
 const irBox = el("ir-buttons");
 const klimaBox = el("klima");
+const ruleForm = el("rule-form");
+const ruleJson = el("rule-json") as HTMLTextAreaElement;
 
 const live = new LiveController(
   {
@@ -48,6 +51,7 @@ const live = new LiveController(
   (data) => {
     renderIrButtons(irBox, data.ir_buttons, postIr); // built once from the static config
     renderKlima(klimaBox, data.klima, postIr);
+    renderRuleForm(ruleForm, ruleJson, data.rule_vocab, data.klima); // guided form → fills #rule-json
   },
 );
 
@@ -57,7 +61,6 @@ el("refresh").addEventListener("click", () => {
 
 // ---- Automations editor ---------------------------------------------------
 const autoRows = el("auto-rows");
-const ruleJson = el("rule-json") as HTMLTextAreaElement;
 const ruleStatus = el("rule-status");
 
 const RULE_TEMPLATE = {
