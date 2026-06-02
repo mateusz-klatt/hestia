@@ -42,6 +42,24 @@ class AesTests(unittest.TestCase):
         self.assertEqual(tuya.aes_ecb_encrypt(pt, key), ct)
         self.assertEqual(tuya.aes_ecb_decrypt(ct, key), pt)
 
+    def test_frozen_golden_vectors(self):
+        # Frozen from the PRE-cryptography pure-Python impl (Phase-1 swap parity guard): the
+        # cryptography-backed AES must reproduce the exact ciphertext AND the full Tuya v3.3 frame
+        # byte-for-byte. AES-ECB is deterministic, so this pins the swap to the captured output.
+        key = _h("000102030405060708090a0b0c0d0e0f")
+        padded = _h("6865737469612d747579612d6165732d676f6c64656e2d766563746f72212101")
+        ct = _h("ed3a3d208ab3be13523a87f823a6b603a1bb617086e30510d96cd49c5bf7704d")
+        self.assertEqual(tuya.aes_ecb_encrypt(padded, key), ct)
+        self.assertEqual(tuya.aes_ecb_decrypt(ct, key), padded)
+        frame = tuya._pack(1, tuya._CONTROL_NEW,
+                           tuya.encode_message(tuya._CONTROL_NEW, key, {"dps": {"1": True}}))
+        self.assertEqual(frame, _h(
+            "000055aa00000001"                                                 # prefix + seq
+            "0000000d00000037"                                                 # cmd CONTROL_NEW + length
+            "332e33000000000000000000000000"                                   # 15-byte version header
+            "b54a5b52cb671ce0ef2ecb70a48979d461d2bc85618fb330888e51310b27a5b4"  # AES-ECB(pkcs7(json))
+            "0b2359ff0000aa55"))                                               # crc32 + suffix
+
     def test_ecb_multiblock_roundtrip(self):
         data = bytes(range(48))                       # 3 blocks
         self.assertEqual(tuya.aes_ecb_decrypt(tuya.aes_ecb_encrypt(data, KEY), KEY), data)

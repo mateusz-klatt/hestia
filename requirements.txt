@@ -1,0 +1,10 @@
+# hestia runtime dependencies.
+#
+# The Keemple protocol/command/state codec stays pure-stdlib first-party code (the
+# clean-room asset). These are vetted GENERIC-infrastructure libraries adopted now
+# that hestia ships in a container (the old bare-metal zero-deps rule is relaxed):
+#
+#   cryptography — AES-128-ECB primitive for the Tuya v3.3 client (hestia/tuya.py).
+#                  Tuya framing / PKCS7 / version header / device22 quirks remain
+#                  first-party; only the block cipher comes from the library.
+cryptography>=46.0.0,<47.0.0

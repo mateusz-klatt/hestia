@@ -24,9 +24,11 @@ jobs:
         with:
           python-version: "3.14"
 
-      # hestia itself is pure stdlib (zero runtime deps); `coverage` is the only dev tool.
-      - name: Install coverage
-        run: python -m pip install --upgrade coverage
+      # Runtime deps (cryptography) + the `coverage` dev tool.
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade coverage
+          python -m pip install -r requirements.txt
 
       - name: Unit tests + 100% line+branch gate + coverage.xml
         run: |

@@ -4,7 +4,10 @@ WORKDIR /app
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1
 
-# Pure stdlib — no dependencies to install.
+# Runtime deps (cryptography — the Tuya AES primitive). Copied + installed before the
+# source so an app-code change doesn't bust the cached dependency layer.
+COPY requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt
 COPY hestia/ ./hestia/
 # Ship the LG A/C IR signal DB so the dashboard AC panel appears. The default
 # HESTIA_KLIMA_IR resolves to dirname(dirname(__file__))/tools/klima.ir =
