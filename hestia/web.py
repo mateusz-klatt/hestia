@@ -1093,7 +1093,9 @@ def _ui_dist_dir() -> Path:
 
 
 def _ui_built_file_response(path: Path):
-    if not (_ui_dist_dir() / "index.html").is_file():
+    # 404 unless the UI is built (index.html present) AND the requested file exists — an asset not in
+    # the bundle (or any request before `npm run build`) must 404, never hand a missing path to FileResponse.
+    if not (_ui_dist_dir() / "index.html").is_file() or not path.is_file():
         raise web.HTTPNotFound
     return web.FileResponse(path)
 

@@ -513,11 +513,13 @@ class IndexTests(_WebTestBase):
             self.web = _start_web(self.rt, self.loop_thread)
             status, headers, body = _get(self.web.address, "/ui/")
             asset_status, _, asset_body = _get(self.web.address, "/ui/assets/app.js")
+            missing_status, _, _ = _get(self.web.address, "/ui/assets/missing.js")
         self.assertEqual(status, 200)
         self.assertTrue(headers["Content-Type"].startswith("text/html"))
         self.assertIn(b"<h1>hestia</h1>", body)
         self.assertEqual(asset_status, 200)
         self.assertEqual(asset_body, b"console.log('hestia shell');\n")
+        self.assertEqual(missing_status, 404)        # built UI, asset not in the bundle → 404, not 500
 
 
 class DiscoveryTests(_WebTestBase):
