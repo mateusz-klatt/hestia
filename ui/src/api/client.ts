@@ -149,3 +149,47 @@ export function postRule(payload: unknown): Promise<RuleResult> {
 export function deleteRule(id: string): Promise<RuleResult> {
   return postRuleJson("automations/delete", { id });
 }
+
+export interface WhoAmI {
+  user: string | null; // the logged-in username, or null when auth is disabled
+}
+
+/**
+ * GET `/api/whoami`: `{user}` on 200 (`user` is null when auth is off), or `null` on 401 / any failure.
+ * The app uses `null` as "not logged in → show the login form".
+ */
+export async function whoami(): Promise<WhoAmI | null> {
+  try {
+    const response = await fetch(apiUrl("whoami"));
+    return response.ok ? ((await response.json()) as WhoAmI) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** POST `/api/login`; `true` on success (the response sets the session cookie). Never rejects. */
+export async function login(user: string, password: string): Promise<boolean> {
+  try {
+    const response = await fetch(apiUrl("login"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ user, password }),
+    });
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
+/** POST `/api/logout` (clears the session cookie). Best-effort — the caller reloads regardless. */
+export async function logout(): Promise<void> {
+  try {
+    await fetch(apiUrl("logout"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    });
+  } catch {
+    return;
+  }
+}

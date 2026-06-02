@@ -5,9 +5,12 @@ import {
   deleteRule,
   fetchAutomations,
   fetchDiscovery,
+  login,
+  logout,
   postIr,
   postName,
   postRule,
+  whoami,
 } from "./client";
 
 describe("apiBase", () => {
@@ -184,5 +187,83 @@ describe("postRule / deleteRule", () => {
     const res = await deleteRule("r1");
     expect(res.ok).toBe(true);
     expect(seen[0]?.body).toBe(JSON.stringify({ id: "r1" }));
+  });
+});
+
+describe("whoami", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("returns the {user} payload on 200 (auth on)", async () => {
+    vi.stubGlobal("fetch", () =>
+      Promise.resolve({ ok: true, json: () => Promise.resolve({ user: "tata" }) }),
+    );
+    expect(await whoami()).toEqual({ user: "tata" });
+  });
+
+  it("returns {user:null} on 200 when auth is off", async () => {
+    vi.stubGlobal("fetch", () =>
+      Promise.resolve({ ok: true, json: () => Promise.resolve({ user: null }) }),
+    );
+    expect(await whoami()).toEqual({ user: null });
+  });
+
+  it("returns null on 401 (not logged in)", async () => {
+    vi.stubGlobal("fetch", () => Promise.resolve({ ok: false, json: () => Promise.resolve({}) }));
+    expect(await whoami()).toBeNull();
+  });
+
+  it("returns null when fetch rejects", async () => {
+    vi.stubGlobal("fetch", () => Promise.reject(new Error("offline")));
+    expect(await whoami()).toBeNull();
+  });
+});
+
+describe("login", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("returns true on a 2xx response and sends the credentials", async () => {
+    const seen: { url: string; body: unknown }[] = [];
+    vi.stubGlobal("fetch", (url: URL, init: RequestInit) => {
+      seen.push({ url: url.href, body: init.body });
+      return Promise.resolve({ ok: true });
+    });
+    expect(await login("tata", "s3cret")).toBe(true);
+    expect(seen[0]?.url).toContain("/api/login");
+    expect(seen[0]?.body).toBe(JSON.stringify({ user: "tata", password: "s3cret" }));
+  });
+
+  it("returns false on a non-2xx response", async () => {
+    vi.stubGlobal("fetch", () => Promise.resolve({ ok: false }));
+    expect(await login("tata", "nope")).toBe(false);
+  });
+
+  it("returns false when fetch rejects", async () => {
+    vi.stubGlobal("fetch", () => Promise.reject(new Error("offline")));
+    expect(await login("tata", "x")).toBe(false);
+  });
+});
+
+describe("logout", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("POSTs /api/logout", async () => {
+    const seen: string[] = [];
+    vi.stubGlobal("fetch", (url: URL) => {
+      seen.push(url.href);
+      return Promise.resolve({ ok: true });
+    });
+    await logout();
+    expect(seen[0]).toContain("/api/logout");
+  });
+
+  it("swallows a rejected fetch (best-effort)", async () => {
+    vi.stubGlobal("fetch", () => Promise.reject(new Error("offline")));
+    await expect(logout()).resolves.toBeUndefined();
   });
 });

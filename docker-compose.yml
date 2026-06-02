@@ -29,6 +29,15 @@ services:
       #   HESTIA_RTL433_DEVICE: rtl_tcp:127.0.0.1:1234
       #   HESTIA_RTL433_MODEL: <rtl_433 model name>
       #   HESTIA_RTL433_ID: <sensor id>
+      #
+      # Optional: app-level per-user login (gates /api/*). OFF unless HESTIA_SESSION_SECRET is set (an
+      # empty secret means auth off — fail closed). Create accounts with
+      # `docker compose exec hestia python -m hestia.auth add <user>` (writes /data/users.json). Set
+      # HESTIA_COOKIE_SECURE when the browser reaches hestia over HTTPS (e.g. behind a TLS reverse proxy)
+      # so the session cookie carries the Secure flag. Put the real secret in the gitignored .env:
+      #   HESTIA_SESSION_SECRET: <random; e.g. `openssl rand -hex 32`>
+      #   HESTIA_COOKIE_SECURE: "1"          # only when served over HTTPS
+      #   HESTIA_AUTH_USERS_FILE: /data/users.json   # default; override to relocate the store
     volumes:
       - ./data:/data          # rw runtime state (registry.json + automations.json); gitignored
       - /etc/localtime:/etc/localtime:ro   # inherit the HOST timezone — the slim base is UTC, which would
