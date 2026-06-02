@@ -130,13 +130,22 @@ export class LiveController {
     this.tick(); // populate the "last seen" cells right after a rebuild
   }
 
-  /** Drop activity for nodes that vanished from the DOM and whose flash expired. */
+  /**
+   * Drop all bookkeeping for nodes that vanished from the DOM and whose flash
+   * expired — activity, the node flash timer, and any queued flash/scene — so
+   * nothing leaks for a node that's gone. (Per-channel `node:ep` flash timers
+   * self-delete when their own callback fires, within HIGHLIGHT_MS.)
+   */
   private prune(): void {
     for (const [node, ts] of this.lastActiveByNode) {
       if (Date.now() - ts > HIGHLIGHT_MS && this.nodeRow(node) === null) {
         this.lastActiveByNode.delete(node);
+        clearTimeout(this.flashTimers.get(node));
+        this.flashTimers.delete(node);
+        this.pendingFlash.delete(node);
         clearTimeout(this.sceneTimers.get(node));
         this.sceneTimers.delete(node);
+        this.pendingScene.delete(node);
       }
     }
   }
@@ -239,6 +248,7 @@ export class LiveController {
     tr.classList.add("active");
     this.flashTimers.set(node, setTimeout(() => {
       tr.classList.remove("active");
+      this.flashTimers.delete(node); // keep the map bounded to live timers only
     }, HIGHLIGHT_MS - elapsed));
   }
 
@@ -249,6 +259,7 @@ export class LiveController {
     tr.classList.add("active");
     this.flashTimers.set(key, setTimeout(() => {
       tr.classList.remove("active");
+      this.flashTimers.delete(key); // keep the map bounded to live timers only
     }, HIGHLIGHT_MS));
   }
 
@@ -269,6 +280,7 @@ export class LiveController {
     this.sceneTimers.set(node, setTimeout(() => {
       badge.classList.remove("on");
       badge.textContent = "";
+      this.sceneTimers.delete(node); // keep the map bounded to live timers only
     }, SCENE_MS));
   }
 

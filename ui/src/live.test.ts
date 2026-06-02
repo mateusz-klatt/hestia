@@ -329,6 +329,49 @@ describe("LiveController heatmap (flash / scene / last-seen)", () => {
     expect(badge?.classList.contains("on")).toBe(false);
   });
 
+  it("queues a scene during an in-flight refresh and replays it after", async () => {
+    const view = harness();
+    const gate = deferred<Discovery | null>();
+    const live = new LiveController(view, () => gate.promise);
+    const refreshing = live.refresh(); // in flight
+    live.flashScene(7, { id: 9 }); // refreshing → queued (and the row isn't built yet)
+    expect(view.rows.querySelector('tr[data-node="7"] .scene-badge')).toBeNull();
+    gate.resolve(discovery({ "7": device({ type: "plug" }) }));
+    await refreshing;
+    const badge = view.rows.querySelector('tr[data-node="7"] .scene-badge');
+    expect(badge?.textContent).toBe("⏏ scena 9"); // drainPending replayed it
+    expect(badge?.classList.contains("on")).toBe(true);
+  });
+
+  it("re-flashing within the window extends the highlight (clears the prior timer)", async () => {
+    const view = harness();
+    const live = new LiveController(view, () => Promise.resolve(onePlug()));
+    await live.refresh();
+    const active = (): boolean =>
+      view.rows.querySelector('tr[data-node="7"]')?.classList.contains("active") ?? false;
+    live.flash(7); // t=0, window ends at 2200
+    vi.advanceTimersByTime(1500);
+    expect(active()).toBe(true);
+    live.flash(7); // t=1500, resets the window to end at 3700
+    vi.advanceTimersByTime(800); // t=2300 — past the ORIGINAL 2200 deadline
+    expect(active()).toBe(true); // stays active only because the first timer was cleared
+    vi.advanceTimersByTime(1400); // t=3700
+    expect(active()).toBe(false);
+  });
+
+  it("keeps a scene badge when a state patch updates the same row", async () => {
+    const view = harness();
+    const live = new LiveController(view, () => Promise.resolve(onePlug()));
+    await live.refresh();
+    live.flashScene(7, { id: 5 });
+    const badge = view.rows.querySelector('tr[data-node="7"] .scene-badge');
+    expect(badge?.textContent).toBe("⏏ scena 5");
+    live.applyState(7, { switch: true }); // patches .stanval only
+    expect(view.rows.querySelector('tr[data-node="7"] .stanval')?.textContent).toBe("on");
+    expect(badge?.textContent).toBe("⏏ scena 5"); // badge survives the state patch
+    expect(badge?.classList.contains("on")).toBe(true);
+  });
+
   it("queues a flash for an unbuilt row and replays it after a refresh", async () => {
     const view = harness();
     const live = new LiveController(view, () => Promise.resolve(onePlug()));
