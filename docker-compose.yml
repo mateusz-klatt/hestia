@@ -18,6 +18,17 @@ services:
       HESTIA_AUTOMATIONS: /data/automations.json
       # HESTIA_MODE is intentionally UNSET so the persisted registry.mode is the
       # single source of truth (env would override it, defeating graduation).
+      #
+      # Optional: fill outdoor_temp from a local 433 MHz weather sensor instead of
+      # Open-Meteo. rtl_433 is baked into the image; point it at a host-side rtl_tcp
+      # (host networking → 127.0.0.1) so no USB device is passed in. Set these in the
+      # gitignored .env / override, narrowing MODEL+ID to YOUR sensor (rtl_433 also
+      # hears the neighbours'):
+      #   HESTIA_OUTDOOR_TEMP: "1"
+      #   HESTIA_OUTDOOR_TEMP_SOURCE: local
+      #   HESTIA_RTL433_DEVICE: rtl_tcp:127.0.0.1:1234
+      #   HESTIA_RTL433_MODEL: <rtl_433 model name>
+      #   HESTIA_RTL433_ID: <sensor id>
     volumes:
       - ./data:/data          # rw runtime state (registry.json + automations.json); gitignored
       - /etc/localtime:/etc/localtime:ro   # inherit the HOST timezone — the slim base is UTC, which would

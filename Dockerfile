@@ -13,6 +13,17 @@ WORKDIR /app
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1
 
+# System binary for the OPTIONAL local 433 MHz outdoor-temp feeder
+# (HESTIA_OUTDOOR_TEMP_SOURCE=local). hestia.sensor433 SPAWNS `rtl_433` (it is an
+# external binary, not a Python import); it is pointed at a host-side rtl_tcp via
+# HESTIA_RTL433_DEVICE=rtl_tcp:HOST:PORT (host networking → 127.0.0.1:1234), so NO
+# USB device is passed into the container. Inert when the feeder is off — the
+# default source (open-meteo) never invokes it. Installed in its own early layer
+# so it isn't busted by app-code changes.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends rtl-433 \
+    && rm -rf /var/lib/apt/lists/*
+
 # Runtime deps (cryptography — the Tuya AES primitive). Copied + installed before the
 # source so an app-code change doesn't bust the cached dependency layer.
 COPY requirements.txt ./
