@@ -334,10 +334,8 @@ _CLOSED_SENTINEL = object()                                  # marker pushed on 
 
 class Subscription:
     """One SSE client's view onto the event bus. ``close()`` is **synchronous**
-    (def, not async def) — it is invoked both from inside the event loop via
-    ``_in_loop_sync(sub.close)`` AND from a worker thread via
-    ``loop.call_soon_threadsafe(sub.close)``. An ``async def`` would silently
-    leak the subscription on the fallback path."""
+    (def, not async def) because aiohttp SSE cleanup runs it in the event loop
+    without awaiting another task."""
 
     def __init__(self, bus: "EventBus", queue: asyncio.Queue, sem: asyncio.Semaphore):
         self.bus = bus
@@ -355,13 +353,11 @@ class Subscription:
 class EventBus:
     """Loop-owned fan-out for activity / discovery events.
 
-    All methods run in the asyncio loop thread (HTTP handlers reach the bus
-    only through ``_call_loop``). ``publish`` is non-blocking — a slow
+    All methods run in the asyncio loop thread. ``publish`` is non-blocking — a slow
     subscriber's full queue silently drops the event rather than back-pressuring
     the proxy/standalone session. ``close()`` forces a ``_CLOSED_SENTINEL`` into
     every subscriber queue, draining one stale event if needed so the sentinel
-    reaches even a full-queue subscriber — guarantees clean SSE handler exit on
-    shutdown without spurious bridge-timeout warnings."""
+    reaches even a full-queue subscriber — guarantees clean SSE handler exit on shutdown."""
 
     def __init__(self, max_subs: int = 8):
         self._subs: "set[asyncio.Queue]" = set()
@@ -1313,20 +1309,13 @@ async def main() -> None:  # pragma: no cover
              config.control_host, config.control_port,
              config.web_host, config.web_port, config.registry_path)
     try:
-        web_server, web_thread = start_web(rt, loop, config.web_host, config.web_port)
+        web_handle = await start_web(rt, config.web_host, config.web_port)
         try:
             async with proxy_srv, control_srv:
                 await asyncio.gather(proxy_srv.serve_forever(), control_srv.serve_forever())
         finally:
-            # Wake any SSE handler suspended on the bus BEFORE stopping the
-            # web server — they exit cleanly via `_CLOSED_SENTINEL` instead of
-            # hitting `_BridgeTimeout` against a closing loop.
             rt.event_bus.close()
-            # Offload the blocking join — `server_close()` waits for handler
-            # threads, and any handler suspended in `_call_loop` is awaiting a
-            # future on *this* loop. Stopping inline would deadlock the loop
-            # for `BRIDGE_TIMEOUT` until the suspended handler times out.
-            await loop.run_in_executor(None, stop_web, web_server, web_thread)
+            await stop_web(web_handle)
     finally:
         autosave.cancel()
         scheduler.cancel()

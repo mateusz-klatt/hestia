@@ -243,15 +243,13 @@ async def main() -> None:  # pragma: no cover
              config.listen_port, config.control_host, config.control_port,
              config.web_host, config.web_port, config.registry_path)
     try:
-        web_server, web_thread = start_web(rt, loop, config.web_host, config.web_port)
+        web_handle = await start_web(rt, config.web_host, config.web_port)
         try:
             async with device_srv, control_srv:
                 await asyncio.gather(device_srv.serve_forever(), control_srv.serve_forever())
         finally:
-            # Wake any SSE handler before tearing down the web server — see
-            # hestia.proxy.main for the offload rationale.
             rt.event_bus.close()
-            await loop.run_in_executor(None, stop_web, web_server, web_thread)
+            await stop_web(web_handle)
     finally:
         autosave.cancel()
         scheduler.cancel()
