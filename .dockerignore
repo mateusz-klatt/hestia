@@ -2,6 +2,14 @@
 # Everything else (secrets, runtime state, captures, tests, docs, git) is kept
 # out of the context entirely, so it can never leak into an image layer.
 *
-!hestia
-!tools
+!hestia/
+!hestia/**
+!tools/
+!tools/klima.ir
 !requirements.txt
+!ui/
+!ui/**
+ui/node_modules/
+ui/node_modules/**
+ui/dist/
+ui/dist/**

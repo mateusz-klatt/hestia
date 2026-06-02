@@ -8,6 +8,10 @@ flows/
 __pycache__/
 *.pyc
 
+# Frontend
+ui/node_modules/
+ui/dist/
+
 # test / coverage artifacts
 .coverage
 .coverage.*

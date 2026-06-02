@@ -493,6 +493,34 @@ class IndexTests(_WebTestBase):
         self.assertIn(b"function renderRuleForm", body)
         self.assertIn(b"Zbuduj JSON", body)
 
+    def test_ui_returns_404_when_dist_absent(self):
+        self.web.stop()
+        with mock.patch.dict("os.environ", {"HESTIA_UI_DIST": str(self.tmp / "missing-dist")}):
+            self.web = _start_web(self.rt, self.loop_thread)
+            status, _, body = _get(self.web.address, "/ui/")
+        self.assertEqual(status, 404)
+        self.assertEqual(body, b"")
+
+    def test_ui_serves_built_index_and_assets(self):
+        dist = self.tmp / "ui-dist"
+        assets = dist / "assets"
+        assets.mkdir(parents=True)
+        (dist / "index.html").write_text("<!doctype html><h1>hestia</h1>", encoding="utf-8")
+        (assets / "app.js").write_text("console.log('hestia shell');\n", encoding="utf-8")
+
+        self.web.stop()
+        with mock.patch.dict("os.environ", {"HESTIA_UI_DIST": str(dist)}):
+            self.web = _start_web(self.rt, self.loop_thread)
+            status, headers, body = _get(self.web.address, "/ui/")
+            asset_status, _, asset_body = _get(self.web.address, "/ui/assets/app.js")
+            missing_status, _, _ = _get(self.web.address, "/ui/assets/missing.js")
+        self.assertEqual(status, 200)
+        self.assertTrue(headers["Content-Type"].startswith("text/html"))
+        self.assertIn(b"<h1>hestia</h1>", body)
+        self.assertEqual(asset_status, 200)
+        self.assertEqual(asset_body, b"console.log('hestia shell');\n")
+        self.assertEqual(missing_status, 404)        # built UI, asset not in the bundle → 404, not 500
+
 
 class DiscoveryTests(_WebTestBase):
     def test_discovery_serves_json_with_summary(self):
