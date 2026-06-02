@@ -532,13 +532,16 @@ class DiscoveryTests(_WebTestBase):
         self.assertIn("18", data["devices"])
         self.assertEqual(data["devices"]["18"]["type"], "door")
         self.assertEqual(data["summary"], {"total": 1, "confirmed": 0, "unknown": 0})
-        self.assertEqual(data["globals"], {"crib_temp": None, "outdoor_temp": None})   # pollers off → null
+        self.assertEqual(data["globals"],
+                         {"crib_temp": None, "outdoor_temp": None, "outdoor_humidity": None})   # pollers off → null
 
     def test_discovery_reflects_global_fields(self):
         self.rt.state.crib_temp = 22.5
         self.rt.state.outdoor_temp = -1.0
+        self.rt.state.outdoor_humidity = 44.0
         _, _, body = _get(self.web.address, "/api/discovery")
-        self.assertEqual(json.loads(body)["globals"], {"crib_temp": 22.5, "outdoor_temp": -1.0})
+        self.assertEqual(json.loads(body)["globals"],
+                         {"crib_temp": 22.5, "outdoor_temp": -1.0, "outdoor_humidity": 44.0})
 
     def test_discovery_includes_klima(self):
         sentinel = {"file": "/ext/infrared/klima.ir", "modes": {"cool": [22]},

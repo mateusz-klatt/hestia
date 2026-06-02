@@ -148,7 +148,8 @@ class State:
     gang: dict = field(default_factory=dict)                 # node -> {endpoint: on} (multi-gang switch)
     scene_seq: dict = field(default_factory=dict)            # node -> last Central-Scene seq (dedup only; not state)
     crib_temp: "float | None" = None                         # GLOBAL (node-less) °C from the Tuya baby-monitor poller
-    outdoor_temp: "float | None" = None                      # GLOBAL (node-less) °C from the Open-Meteo poller
+    outdoor_temp: "float | None" = None                      # GLOBAL (node-less) °C from the Open-Meteo / local-433 feeder
+    outdoor_humidity: "float | None" = None                  # GLOBAL (node-less) %RH companion from the local-433 feeder (display-only)
 
     def apply(self, frame: Frame) -> dict:
         """Apply a state event; return ``{discovery_key: value}`` for every field

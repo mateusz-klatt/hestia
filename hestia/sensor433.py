@@ -1,41 +1,49 @@
-"""Outdoor temperature from a local 433 MHz weather sensor via the ``rtl_433`` binary — a stdlib-only,
-opt-in, on-LAN/zero-egress alternative feeder for the ``outdoor_temp`` GLOBAL automation field.
+"""Outdoor temperature + humidity from a local 433 MHz weather sensor via the ``rtl_433`` binary — a
+stdlib-only, opt-in, on-LAN/zero-egress PUSH feeder for the ``outdoor_temp`` GLOBAL automation field
+(plus a display-only ``outdoor_humidity`` global).
 
-Mirrors :mod:`hestia.weather`'s contract: a BLOCKING read the proxy poller runs OFF the event loop,
-returning ``None`` on ANY failure (never raising) so a bad read keeps the last value and the daemon
-loop survives. ``rtl_433`` is an external SYSTEM binary (same category as dnsmasq/Pi-hole the project
-already relies on), invoked via :mod:`subprocess` — NOT a Python import, so the zero-runtime-deps rule
-holds. OFF by default; selected by ``HESTIA_OUTDOOR_TEMP_SOURCE=local``. See ``docs/AUTOMATIONS.md``.
+``rtl_433 -F json`` emits one JSON object per decoded packet to stdout and flushes it the instant the
+packet is received (empirically verified over a pipe: a keyfob press and the sensor's reading both
+arrive in real time, not batched at exit). So hestia spawns ONE long-lived ``rtl_433`` and reacts to
+every matching line as it streams in — no polling interval, no reception window, no dead sleep. ``rtl_433``
+is an external SYSTEM binary (same category as the dnsmasq/Pi-hole the project already relies on), spawned
+via :func:`asyncio.create_subprocess_exec` — NOT a Python import, so the zero-runtime-deps rule holds.
+OFF by default; selected by ``HESTIA_OUTDOOR_TEMP_SOURCE=local``. See ``docs/AUTOMATIONS.md``.
+
+CRITICAL: an ``rtl_tcp`` endpoint serves a SINGLE client, so the long-lived child MUST be terminated
+*and reaped* when the stream ends or is cancelled — a leaked ``rtl_433`` would hold the SDR and silently
+block every future reader (this exact failure was observed in testing). :func:`stream_readings`' ``finally``
+clause guarantees the child is signalled and awaited on every exit path.
 """
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import json
 import logging
 import math
-import subprocess
+from typing import Awaitable, Callable, NamedTuple
 
 log = logging.getLogger("hestia.sensor433")
 
 RTL_433_BIN = "rtl_433"
 # A DEDICATED rtl_tcp endpoint. Do NOT point this at an rtl_tcp shared with another consumer (e.g. an
-# FM/RDS receiver): a reception window retunes/monopolises the SDR and breaks the other consumer. Use its own SDR.
+# FM/RDS receiver): rtl_433 retunes/monopolises the SDR for 433 MHz and breaks the other consumer. Use its own SDR.
 DEFAULT_DEVICE = "rtl_tcp:127.0.0.1:1234"
 
 
-def _rtl433_command(binary: str, device: str, window: float, protocol: "str | None") -> list:
-    cmd = [binary, "-d", device, "-F", "json", "-T", str(int(window))]
+class Reading(NamedTuple):
+    """One decoded 433 MHz weather reading. ``humidity`` is ``None`` when the packet omits it."""
+    temperature_C: float
+    humidity: "float | None"
+
+
+def _rtl433_command(binary: str, device: str, protocol: "str | None") -> list:
+    # No -T: rtl_433 runs until terminated, streaming every decoded packet as JSON (push, not poll).
+    cmd = [binary, "-d", device, "-F", "json"]
     if protocol:
-        cmd += ["-R", protocol]
+        cmd += ["-R", protocol]                       # restrict decoding to ONE protocol (rtl_433 -R)
     return cmd
-
-
-def _run_rtl433(cmd: list, window: float, run):
-    try:
-        proc = run(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                   text=True, encoding="utf-8", errors="replace", timeout=window + 15.0)
-    except (OSError, subprocess.SubprocessError):
-        return None                                  # binary missing / spawn error / timeout
-    return None if proc.returncode else proc         # non-zero -> failed read, keep last
 
 
 def _json_line(line: str):
@@ -49,43 +57,100 @@ def _json_line(line: str):
     return obj if isinstance(obj, dict) else None
 
 
-def _matching_temperature(obj: dict, model: "str | None", sensor_id: "str | None"):
+def _finite_number(value):
+    """``value`` as a finite ``float``, or ``None`` — rejecting bool (``json`` makes ``True`` an int) and
+    NaN/Infinity (which ``json.loads`` accepts) so a garbage reading can never poison a global / mis-fire a rule."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value) if math.isfinite(value) else None
+
+
+def _matching_reading(obj: dict, model: "str | None", sensor_id: "str | None"):
+    """A :class:`Reading` if ``obj`` matches the optional ``model`` / ``sensor_id`` filters AND carries a
+    finite ``temperature_C`` — else ``None`` (so a same-id non-TH packet, e.g. a keyfob, is ignored)."""
     if model and obj.get("model") != model:
         return None
     if sensor_id and str(obj.get("id")) != sensor_id:
         return None
-    value = obj.get("temperature_C")
-    if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value):
-        return float(value)
-    return None
+    temp = _finite_number(obj.get("temperature_C"))
+    if temp is None:
+        return None
+    return Reading(temp, _finite_number(obj.get("humidity")))
 
 
-def read_outdoor_temp(*, device: str = DEFAULT_DEVICE, window: float = 60.0,
-                      model: "str | None" = None, sensor_id: "str | None" = None,
-                      protocol: "str | None" = None, binary: str = RTL_433_BIN,
-                      run=subprocess.run) -> "float | None":
-    """The latest matching 433 MHz sensor's temperature (°C, finite), or ``None`` on ANY failure.
+_TERMINATE_GRACE = 5.0   # seconds to let rtl_433 exit on SIGTERM before escalating to SIGKILL
 
-    Runs ``rtl_433 -d <device> -F json -T <window> [-R <protocol>]`` ONCE — ``-T`` is a wall-clock run
-    duration (``rtl_433 -h``: "Specify number of seconds to run"), so the process self-exits after
-    ``window`` seconds; the ``subprocess`` ``timeout`` is only a safety net. Parses each JSON line and
-    returns the LAST reading whose ``temperature_C`` is a real finite number (rejecting bool and
-    NaN/Infinity, which ``json`` accepts) and matches the optional ``model`` / ``sensor_id`` filters —
-    rtl_433 emits chronologically, so the last match is the freshest. ``-R <protocol>`` restricts
-    decoding to that protocol only (``rtl_433 -h``: "Enable ONLY the specified device decoding
-    protocol"). Returns ``None`` when rtl_433 is missing (``FileNotFoundError``), the spawn fails or
-    times out (``OSError`` / ``subprocess.SubprocessError``), exits non-zero (a failed run — even one
-    that emitted partial JSON — is discarded so the poller keeps the last value), or no matching finite
-    reading appears. ``errors="replace"`` keeps decoding from ever raising. BLOCKING; runs off the loop.
-    ``run`` is injectable so tests never touch a real SDR."""
-    proc = _run_rtl433(_rtl433_command(binary, device, window, protocol), window, run)
-    if proc is None:
-        return None                                  # rtl_433 exited non-zero -> failed read, keep last
-    temp = None
-    for line in (proc.stdout or "").splitlines():
-        obj = _json_line(line)
-        if obj is not None:
-            candidate = _matching_temperature(obj, model, sensor_id)
-            if candidate is not None:
-                temp = candidate                       # last matching finite reading wins
-    return temp
+
+async def _reap(proc) -> None:
+    """Await the (already-signalled) child's exit to completion, DEFERRING a single cancellation until the
+    reap is done — then re-raising it. Safe because the caller has already signalled the child, so
+    ``proc.wait()`` returns promptly; this guarantees a shutdown cancel can never leave a SIGKILLed child
+    unreaped (a zombie) while still propagating the cancellation."""
+    pending = None
+    while proc.returncode is None:
+        try:
+            await proc.wait()
+        except asyncio.CancelledError as exc:            # don't abandon the reap mid-flight; finish, then propagate
+            pending = exc
+    if pending is not None:
+        raise pending
+
+
+async def _terminate(proc) -> None:
+    """Terminate + reap ``proc`` so a finished/cancelled stream never leaves an orphan ``rtl_433`` holding
+    the single-client SDR. BOUNDED — SIGTERM, a short grace period, then SIGKILL — so a child wedged in a
+    blocking USB/socket call (an SDR/rtl_tcp failure) can never hang the poller's relaunch loop or the
+    shutdown ``gather()``. On a timeout, OR a cancellation arriving mid-reap, it escalates to SIGKILL and
+    still reaps the child (:func:`_reap`); a cancellation is re-raised afterwards so shutdown propagates.
+    Tolerant of an already-exited child."""
+    if proc.returncode is None:
+        with contextlib.suppress(ProcessLookupError):    # raced us to exit between the check and the signal
+            proc.terminate()
+    try:
+        await asyncio.wait_for(proc.wait(), _TERMINATE_GRACE)
+    except TimeoutError:                                 # SIGTERM ignored/wedged -> force it, then reap
+        with contextlib.suppress(ProcessLookupError):
+            proc.kill()
+        await _reap(proc)
+    except asyncio.CancelledError:                       # shutdown cancelling us mid-reap -> force, reap, propagate
+        with contextlib.suppress(ProcessLookupError):
+            proc.kill()
+        await _reap(proc)
+        raise
+
+
+async def stream_readings(
+    on_reading: "Callable[[Reading], Awaitable[None]]",
+    *,
+    device: str = DEFAULT_DEVICE,
+    model: "str | None" = None,
+    sensor_id: "str | None" = None,
+    protocol: "str | None" = None,
+    binary: str = RTL_433_BIN,
+    create=asyncio.create_subprocess_exec,
+) -> None:
+    """Spawn a long-lived ``rtl_433 -F json`` and ``await on_reading(reading)`` for every matching finite
+    reading as it streams in (PUSH — no interval). Returns when the process exits or its stdout closes, so
+    the caller can restart it after a backoff. NEVER raises on a malformed line. The child is always
+    terminated AND reaped on return/cancel (see :func:`_terminate`) so no ``rtl_433`` is orphaned. ``create``
+    is injectable (defaults to :func:`asyncio.create_subprocess_exec`) so tests never spawn a real process."""
+    cmd = _rtl433_command(binary, device, protocol)
+    try:
+        proc = await create(*cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+    except (OSError, ValueError) as exc:                 # binary missing / bad argv -> caller backs off + retries
+        # A spawn failure is a CONFIG error (missing rtl_433, bad device/argv), not a transient rtl_tcp drop
+        # (which spawns fine then exits via EOF). Log it concisely — once per backoff — so it is not silent,
+        # without the traceback spam that re-raising would produce on every retry.
+        log.warning("rtl_433 spawn failed (%s): %s", binary, exc)
+        return
+    try:
+        stdout = proc.stdout
+        if stdout is not None:
+            async for raw in stdout:                     # yields one buffered line per decoded packet, in real time
+                obj = _json_line(raw.decode("utf-8", "replace"))   # never raises on undecodable bytes
+                if obj is not None:
+                    reading = _matching_reading(obj, model, sensor_id)
+                    if reading is not None:
+                        await on_reading(reading)
+    finally:
+        await _terminate(proc)

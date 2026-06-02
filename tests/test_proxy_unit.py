@@ -12,7 +12,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from hestia import commands, proxy
+from hestia import commands, proxy, sensor433
 from hestia.automations import AutomationEngine, AutomationStore, Rule
 from hestia.protocol import Frame, build_frame, tlv
 
@@ -270,19 +270,22 @@ class StateSnapshotTests(unittest.TestCase):
         self.assertEqual(snap["switches"], {"0x0e": True})
         self.assertIn("temperature", snap)
         self.assertEqual(snap["gang"], {"0x07": {"1": True, "2": False}})   # both key levels stringified
-        self.assertEqual(snap["globals"], {"crib_temp": None, "outdoor_temp": None})   # node-less globals
+        self.assertEqual(snap["globals"],
+                         {"crib_temp": None, "outdoor_temp": None, "outdoor_humidity": None})   # node-less globals
 
     def test_snapshot_reflects_global_temps(self):
         rt = proxy.ProxyRuntime()
         rt.state.crib_temp = 22.0
         snap = proxy.state_snapshot(rt.state)
-        self.assertEqual(snap["globals"], {"crib_temp": 22.0, "outdoor_temp": None})
+        self.assertEqual(snap["globals"], {"crib_temp": 22.0, "outdoor_temp": None, "outdoor_humidity": None})
 
     def test_globals_snapshot_set_and_none(self):
         st = proxy.State()
-        self.assertEqual(proxy.globals_snapshot(st), {"crib_temp": None, "outdoor_temp": None})
-        st.crib_temp, st.outdoor_temp = 21.5, -3.0
-        self.assertEqual(proxy.globals_snapshot(st), {"crib_temp": 21.5, "outdoor_temp": -3.0})
+        self.assertEqual(proxy.globals_snapshot(st),
+                         {"crib_temp": None, "outdoor_temp": None, "outdoor_humidity": None})
+        st.crib_temp, st.outdoor_temp, st.outdoor_humidity = 21.5, -3.0, 44.0
+        self.assertEqual(proxy.globals_snapshot(st),
+                         {"crib_temp": 21.5, "outdoor_temp": -3.0, "outdoor_humidity": 44.0})
 
 
 class ObserveTests(unittest.TestCase):
@@ -1086,49 +1089,132 @@ class WeatherPollerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sess.sent, [])
 
 
-class Sensor433PollerTests(unittest.IsolatedAsyncioTestCase):
-    """The opt-in local-433 (rtl_433) poller — ZERO work unless enabled AND source == 'local'
-    (mutually exclusive with the Open-Meteo poller via the source selector)."""
+class _FakeStream:
+    """Fake ``sensor433.stream_readings``: records each call's kwargs, pushes the given readings, then
+    either blocks (a live rtl_433 stream, until cancelled) or returns (rtl_433 exited → poller relaunches).
+    With ``exc`` set, the FIRST call raises it (then later calls behave per ``behavior``)."""
+    def __init__(self, readings=(), behavior="block", exc=None):
+        self._readings = list(readings)
+        self._behavior = behavior
+        self._exc = exc
+        self.calls = []
 
-    async def _run(self, *, enabled=True, source="local", read=None, settle=0.06):
+    async def __call__(self, on_reading, **kw):
+        self.calls.append(kw)
+        if self._exc is not None and len(self.calls) == 1:
+            raise self._exc
+        for r in self._readings:
+            await on_reading(r)
+        if self._behavior == "block":
+            await asyncio.Event().wait()                           # live stream → runs until cancelled
+
+
+class Sensor433PollerTests(unittest.IsolatedAsyncioTestCase):
+    """The opt-in local-433 (rtl_433) PUSH streamer — ZERO work (no rtl_433 spawned) unless enabled AND
+    source == 'local' (mutually exclusive with Open-Meteo). Consumes one long-lived stream, applies each
+    reading as it arrives, and relaunches after a backoff if the stream exits."""
+
+    async def _run(self, *, enabled=True, source="local", stream=None, settle=0.06, backoff=0.0,
+                   model=None, sensor_id=None, device="rtl_tcp:127.0.0.1:1234"):
         rt = proxy.ProxyRuntime()
         rt.engine.set_rule(Rule.from_dict(OUTDOOR_RULE))
         sess = FakeSession()
         rt.sessions.append(sess)
-        read = read or mock.Mock(return_value=-5.0)
+        stream = stream if stream is not None else _FakeStream([sensor433.Reading(-5.0, 44.0)])
         task = asyncio.create_task(proxy._sensor433_poller(
-            rt, read=read, interval=0.01, enabled=enabled, source=source,
-            device="rtl_tcp:127.0.0.1:1234", window=60.0, model=None, sensor_id=None, protocol=None))
+            rt, stream=stream, enabled=enabled, source=source, device=device,
+            model=model, sensor_id=sensor_id, protocol=None, backoff=backoff))
         await asyncio.sleep(settle)
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
-        return rt, sess, read, task
+        return rt, sess, stream, task
 
-    async def test_disabled_does_no_read(self):
-        rt, sess, read, task = await self._run(enabled=False)
-        read.assert_not_called()
+    async def test_disabled_does_no_stream(self):
+        rt, _, stream, task = await self._run(enabled=False)
+        self.assertEqual(stream.calls, [])                         # no rtl_433 spawned
         self.assertTrue(task.done())                               # returned immediately
         self.assertIsNone(rt.state.outdoor_temp)
+        self.assertIsNone(rt.state.outdoor_humidity)
 
-    async def test_source_open_meteo_does_no_read(self):
-        _, _, read, _ = await self._run(source="open-meteo")       # mutual exclusion: weather owns it
-        read.assert_not_called()
+    async def test_source_open_meteo_does_no_stream(self):
+        _, _, stream, _ = await self._run(source="open-meteo")     # mutual exclusion: weather owns it
+        self.assertEqual(stream.calls, [])
 
-    async def test_unknown_source_does_no_read(self):
-        _, _, read, _ = await self._run(source="bogus")            # fail-safe: unknown source -> off
-        read.assert_not_called()
+    async def test_unknown_source_does_no_stream(self):
+        _, _, stream, _ = await self._run(source="bogus")          # fail-safe: unknown source -> off
+        self.assertEqual(stream.calls, [])
 
-    async def test_local_reads_and_fires(self):
-        rt, sess, read, _ = await self._run()
-        read.assert_called_with(device="rtl_tcp:127.0.0.1:1234", window=60.0,
-                                model=None, sensor_id=None, protocol=None)
+    async def test_local_streams_sets_state_and_fires(self):
+        rt, sess, stream, _ = await self._run(model="Prologue-TH", sensor_id="204")
         self.assertEqual(rt.state.outdoor_temp, -5.0)
+        self.assertEqual(rt.state.outdoor_humidity, 44.0)
         self.assertGreaterEqual(len(sess.sent), 1)                 # -5 < 0 edge → fired
+        self.assertEqual(stream.calls[0], {"device": "rtl_tcp:127.0.0.1:1234",
+                                           "model": "Prologue-TH", "sensor_id": "204", "protocol": None})
 
-    async def test_read_none_keeps_last(self):
-        rt, sess, read, _ = await self._run(read=mock.Mock(return_value=None))
-        self.assertIsNone(rt.state.outdoor_temp)
-        self.assertEqual(sess.sent, [])
+    async def test_humidity_none_when_absent(self):
+        rt, _, _, _ = await self._run(stream=_FakeStream([sensor433.Reading(-5.0, None)]))
+        self.assertEqual(rt.state.outdoor_temp, -5.0)
+        self.assertIsNone(rt.state.outdoor_humidity)
+
+    async def test_publishes_globals_event_with_temp_and_humidity(self):
+        rt = proxy.ProxyRuntime()
+        rt.engine.set_rule(Rule.from_dict(OUTDOOR_RULE))
+        sub = await rt.event_bus.try_subscribe()
+        task = asyncio.create_task(proxy._sensor433_poller(
+            rt, stream=_FakeStream([sensor433.Reading(-5.0, 44.0)]), enabled=True, source="local",
+            device="d", model=None, sensor_id=None, protocol=None, backoff=0.0))
+        await asyncio.sleep(0.06)
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        events = []
+        while not sub.queue.empty():
+            events.append(sub.queue.get_nowait())
+        gl = [e for e in events if e.get("type") == "globals"]
+        self.assertTrue(gl)                                        # live dashboard delta published
+        self.assertEqual(gl[0], {"type": "globals",
+                                 "fields": {"outdoor_temp": -5.0, "outdoor_humidity": 44.0}})
+
+    async def test_reading_error_does_not_drop_stream(self):
+        rt = proxy.ProxyRuntime()
+        rt.engine.set_rule(Rule.from_dict(OUTDOOR_RULE))
+        rt.sessions.append(FakeSession())
+        stream = _FakeStream([sensor433.Reading(-5.0, 44.0)])      # blocks (stays live) after the reading
+        with mock.patch.object(rt.engine, "on_global", side_effect=ValueError("boom")):
+            with self.assertLogs("hestia.proxy", level="ERROR") as logs:
+                task = asyncio.create_task(proxy._sensor433_poller(
+                    rt, stream=stream, enabled=True, source="local",
+                    device="d", model=None, sensor_id=None, protocol=None, backoff=0.0))
+                await asyncio.sleep(0.06)
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+        self.assertTrue(any("sensor433 reading failed" in m for m in logs.output))
+        self.assertEqual(rt.state.outdoor_temp, -5.0)              # state set before the failing inject
+        self.assertEqual(len(stream.calls), 1)                     # stream NOT relaunched → still alive
+
+    async def test_stream_exit_relaunches(self):
+        stream = _FakeStream([sensor433.Reading(-5.0, 44.0)], behavior="return")
+        _, _, stream, _ = await self._run(stream=stream, backoff=0.01)
+        self.assertGreaterEqual(len(stream.calls), 2)              # exited → relaunched after backoff
+
+    async def test_stream_error_logged_and_relaunches(self):
+        rt = proxy.ProxyRuntime()
+        rt.engine.set_rule(Rule.from_dict(OUTDOOR_RULE))
+        rt.sessions.append(FakeSession())
+        stream = _FakeStream([], behavior="block", exc=RuntimeError("rtl boom"))   # 1st call raises, 2nd blocks
+        with self.assertLogs("hestia.proxy", level="ERROR") as logs:
+            task = asyncio.create_task(proxy._sensor433_poller(
+                rt, stream=stream, enabled=True, source="local",
+                device="d", model=None, sensor_id=None, protocol=None, backoff=0.01))
+            await asyncio.sleep(0.08)
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        self.assertTrue(any("sensor433 stream failed" in m for m in logs.output))
+        self.assertGreaterEqual(len(stream.calls), 2)              # relaunched after the error
+
+    async def test_cancellation_propagates(self):
+        _, _, _, task = await self._run()
+        self.assertTrue(task.cancelled())                          # CancelledError not swallowed
 
 
 class ProxyRuntimeDefaultsTests(unittest.TestCase):

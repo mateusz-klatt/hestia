@@ -164,13 +164,16 @@ OUTDOOR_SECS = _clamp_secs(os.environ.get("HESTIA_OUTDOOR_SECS"), 600.0, 60.0, 3
 OUTDOOR_TEMP_SOURCE = os.environ.get("HESTIA_OUTDOOR_TEMP_SOURCE", "open-meteo").strip().lower()
 
 # Local 433 MHz sensor (rtl_433) feeder — used only when OUTDOOR_TEMP_SOURCE == "local". rtl_433 is an
-# external system binary. RTL433_DEVICE must be a DEDICATED SDR/rtl_tcp endpoint (NOT one shared with an
-# FM/RDS receiver — a reception window retunes/monopolises the dongle). MODEL/ID/PROTOCOL narrow which sensor.
+# external system binary streamed long-lived (a PUSH source, not polled). RTL433_DEVICE must be a DEDICATED
+# SDR/rtl_tcp endpoint (NOT one shared with an FM/RDS receiver, and not two readers at once — rtl_tcp serves
+# a single client, so a second rtl_433 silently blocks). MODEL/ID/PROTOCOL narrow which sensor.
 RTL433_DEVICE = os.environ.get("HESTIA_RTL433_DEVICE", sensor433.DEFAULT_DEVICE)
 RTL433_MODEL = os.environ.get("HESTIA_RTL433_MODEL")        # None/"" -> no model filter
 RTL433_ID = os.environ.get("HESTIA_RTL433_ID")              # None/"" -> no id filter
 RTL433_PROTOCOL = os.environ.get("HESTIA_RTL433_PROTOCOL")  # None/"" -> all default decoders
-RTL433_WINDOW = _clamp_secs(os.environ.get("HESTIA_RTL433_WINDOW"), 60.0, 15.0, 600.0)
+# Delay before relaunching rtl_433 after it exits (rtl_tcp restart / SDR hiccup) — avoids a tight respawn
+# loop when the SDR is unreachable, while staying responsive once it returns.
+RTL433_RESTART_SECS = _clamp_secs(os.environ.get("HESTIA_RTL433_RESTART_SECS"), 30.0, 1.0, 600.0)
 
 # Flipper Zero IR transmit (HESTIA_FLIPPER truthy = enabled). Drives the Flipper over USB-serial via its
 # RPC protobuf protocol to transmit a saved `.ir` signal (see hestia.flipper). OFF by default → no serial
@@ -649,10 +652,12 @@ _OPS = {
 
 
 def globals_snapshot(state: State) -> dict:
-    """The node-less GLOBAL automation fields (°C, or ``None`` when their poller is off) — surfaced to the
-    dashboard (``/api/discovery``) and the ``state`` control op. ``None`` serialises to JSON ``null``; the
-    UI renders "—"."""
-    return {"crib_temp": state.crib_temp, "outdoor_temp": state.outdoor_temp}
+    """The node-less GLOBAL fields — surfaced to the dashboard (``/api/discovery``) and the ``state``
+    control op. ``crib_temp`` / ``outdoor_temp`` are °C automation fields; ``outdoor_humidity`` is a
+    display-only %RH companion from the local 433 feeder (no rule trigger). ``None`` when the relevant
+    poller is off → JSON ``null``; the UI renders "—"."""
+    return {"crib_temp": state.crib_temp, "outdoor_temp": state.outdoor_temp,
+            "outdoor_humidity": state.outdoor_humidity}
 
 
 def state_snapshot(state: State) -> dict:
@@ -1025,21 +1030,41 @@ async def _weather_poller(rt, fetch=weather.fetch_outdoor_temp, lat=HESTIA_LAT, 
     await _poll_global_field(rt, "outdoor_temp", lambda: fetch(lat, lon), interval, "weather")
 
 
-async def _sensor433_poller(rt, read=sensor433.read_outdoor_temp, interval: float = OUTDOOR_SECS,
-                            enabled: bool = OUTDOOR_TEMP_ENABLED, source: str = OUTDOOR_TEMP_SOURCE,
-                            device: str = RTL433_DEVICE, window: float = RTL433_WINDOW,
-                            model=RTL433_MODEL, sensor_id=RTL433_ID, protocol=RTL433_PROTOCOL) -> None:
-    """Poll a local 433 MHz weather sensor (rtl_433) for the outdoor temperature into
-    ``State.outdoor_temp`` (the `outdoor_temp` global field). OPT-IN: returns immediately (zero work)
-    unless explicitly ``enabled`` AND ``source == "local"`` — mutually exclusive with the Open-Meteo
-    poller (the source selector picks exactly one). The BLOCKING rtl_433 read runs off the loop; a
-    failed/empty read keeps the last value. See ``_poll_global_field`` / ``sensor433``."""
+async def _sensor433_poller(rt, stream=sensor433.stream_readings, enabled: bool = OUTDOOR_TEMP_ENABLED,
+                            source: str = OUTDOOR_TEMP_SOURCE, device: str = RTL433_DEVICE,
+                            model=RTL433_MODEL, sensor_id=RTL433_ID, protocol=RTL433_PROTOCOL,
+                            backoff: float = RTL433_RESTART_SECS) -> None:
+    """Stream a local 433 MHz weather sensor (rtl_433) into ``State.outdoor_temp`` (the `outdoor_temp`
+    global field) + ``State.outdoor_humidity`` (display-only). OPT-IN: returns immediately (zero work,
+    no rtl_433 spawned) unless explicitly ``enabled`` AND ``source == "local"`` — mutually exclusive with
+    the Open-Meteo poller. A PUSH source: one long-lived rtl_433 is consumed and each reading applied the
+    instant it arrives (no interval). If rtl_433 exits (rtl_tcp restart / SDR hiccup) the stream is
+    relaunched after ``backoff`` seconds. One bad reading never drops the stream; the daemon loop never
+    dies on an error (``CancelledError`` is a ``BaseException``, so shutdown still cancels cleanly and
+    ``stream`` reaps the child). See ``sensor433.stream_readings``."""
     if not (enabled and source == "local"):
-        return                                       # off / not selected -> no poll
-    await _poll_global_field(
-        rt, "outdoor_temp",
-        lambda: read(device=device, window=window, model=model, sensor_id=sensor_id, protocol=protocol),
-        interval, "sensor433")
+        return                                       # off / not selected -> no rtl_433
+
+    async def on_reading(reading) -> None:
+        try:
+            rt.state.outdoor_temp = reading.temperature_C
+            rt.state.outdoor_humidity = reading.humidity
+            log.debug("sensor433: outdoor_temp=%r humidity=%r", reading.temperature_C, reading.humidity)
+            rt.event_bus.publish({"type": "globals", "fields": {                  # live dashboard delta
+                "outdoor_temp": reading.temperature_C, "outdoor_humidity": reading.humidity}})
+            await _inject(rt, rt.engine.on_global(rt, "outdoor_temp", reading.temperature_C),
+                          source="sensor433")
+        except Exception:                            # one bad reading/rule-eval must NOT drop the SDR stream
+            log.exception("sensor433 reading failed")
+
+    while True:
+        try:
+            await stream(on_reading, device=device, model=model, sensor_id=sensor_id, protocol=protocol)
+        except asyncio.CancelledError:
+            raise                                    # shutdown -> stream already reaped rtl_433; propagate
+        except Exception:                            # spawn/stream blew up -> log, then back off and relaunch
+            log.exception("sensor433 stream failed")
+        await asyncio.sleep(backoff)                 # rtl_433 exited (rtl_tcp down / hiccup) -> back off + relaunch
 
 
 async def _ir_worker(rt) -> None:
