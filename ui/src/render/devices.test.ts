@@ -138,22 +138,27 @@ describe("renderDeviceRows", () => {
 });
 
 describe("renderGlobals", () => {
-  it("writes fmtTemp into each cell, including null → em dash", () => {
+  it("writes temp + humidity into each cell, including null → em dash", () => {
     const crib = document.createElement("span");
     const outdoor = document.createElement("span");
-    // Always writes both cells (the contract guarantees both keys, null when
-    // a poller is off) — unlike the legacy `if ('crib_temp' in g)` guard.
-    renderGlobals(crib, outdoor, { crib_temp: 25.2, outdoor_temp: null });
+    const humidity = document.createElement("span");
+    // Always writes every cell (the contract guarantees the keys, null when a
+    // poller is off) — unlike the legacy `if ('crib_temp' in g)` guard.
+    renderGlobals(crib, outdoor, humidity, { crib_temp: 25.2, outdoor_temp: 19.8, outdoor_humidity: 56 });
     expect(crib.textContent).toBe("25.2°");
-    expect(outdoor.textContent).toBe("—");
+    expect(outdoor.textContent).toBe("19.8°");
+    expect(humidity.textContent).toBe("56%");
   });
 
-  it("renders both em dashes when both pollers are off", () => {
+  it("renders em dashes when pollers are off / humidity absent", () => {
     const crib = document.createElement("span");
     const outdoor = document.createElement("span");
-    renderGlobals(crib, outdoor, { crib_temp: null, outdoor_temp: null });
+    const humidity = document.createElement("span");
+    // outdoor_temp present but humidity null (e.g. the open-meteo source) → temp shown, humidity em dash.
+    renderGlobals(crib, outdoor, humidity, { crib_temp: null, outdoor_temp: 12.3, outdoor_humidity: null });
     expect(crib.textContent).toBe("—");
-    expect(outdoor.textContent).toBe("—");
+    expect(outdoor.textContent).toBe("12.3°");
+    expect(humidity.textContent).toBe("—");
   });
 });
 
@@ -163,19 +168,21 @@ describe("renderDiscovery", () => {
       hdrText: document.createElement("span"),
       crib: document.createElement("span"),
       outdoor: document.createElement("span"),
+      outdoorHumidity: document.createElement("span"),
       rows: document.createElement("tbody"),
     };
     const data = discovery(
       { "7": device({ type: "plug", confidence: "confirmed", switch: true }) },
       {
         summary: { total: 1, confirmed: 1, unknown: 0 },
-        globals: { crib_temp: 22, outdoor_temp: 14.5 },
+        globals: { crib_temp: 22, outdoor_temp: 14.5, outdoor_humidity: 61 },
       },
     );
     renderDiscovery(view, data);
     expect(view.hdrText.textContent).toBe("hestia — devices (1/1 confirmed, 0 unknown)");
     expect(view.crib.textContent).toBe("22.0°");
     expect(view.outdoor.textContent).toBe("14.5°");
+    expect(view.outdoorHumidity.textContent).toBe("61%");
     expect(view.rows.querySelectorAll("tr")).toHaveLength(1);
     expect(view.rows.querySelector("tr")?.dataset.node).toBe("7");
   });

@@ -10,6 +10,7 @@ function harness(): LiveView {
     hdrText: mk("span"),
     crib: mk("span"),
     outdoor: mk("span"),
+    outdoorHumidity: mk("span"),
     rows: mk("tbody"),
     conn: mk("span"),
     status: mk("p"),
@@ -38,13 +39,14 @@ describe("LiveController.refresh", () => {
       { "7": device({ type: "plug", confidence: "confirmed", switch: true }) },
       {
         summary: { total: 1, confirmed: 1, unknown: 0 },
-        globals: { crib_temp: 22, outdoor_temp: null },
+        globals: { crib_temp: 22, outdoor_temp: 19.8, outdoor_humidity: 56 },
       },
     );
     await new LiveController(view, () => Promise.resolve(data)).refresh();
     expect(view.hdrText.textContent).toBe("hestia — devices (1/1 confirmed, 0 unknown)");
     expect(view.crib.textContent).toBe("22.0°");
-    expect(view.outdoor.textContent).toBe("—");
+    expect(view.outdoor.textContent).toBe("19.8°");
+    expect(view.outdoorHumidity.textContent).toBe("56%");
     expect(view.rows.querySelectorAll("tr[data-node]")).toHaveLength(1);
     expect(view.status.hidden).toBe(true);
   });
@@ -164,15 +166,23 @@ describe("LiveController.applyGlobals", () => {
   it("updates only the field present in the delta", async () => {
     const view = harness();
     const live = new LiveController(view, () =>
-      Promise.resolve(discovery({}, { globals: { crib_temp: 20, outdoor_temp: 10 } })),
+      Promise.resolve(
+        discovery({}, { globals: { crib_temp: 20, outdoor_temp: 10, outdoor_humidity: 50 } }),
+      ),
     );
     await live.refresh();
     expect(view.crib.textContent).toBe("20.0°");
+    expect(view.outdoorHumidity.textContent).toBe("50%");
     live.applyGlobals({ crib_temp: 25.2 });
     expect(view.crib.textContent).toBe("25.2°");
     expect(view.outdoor.textContent).toBe("10.0°"); // untouched by a crib-only delta
+    expect(view.outdoorHumidity.textContent).toBe("50%"); // untouched too
     live.applyGlobals({ outdoor_temp: null });
     expect(view.outdoor.textContent).toBe("—");
+    live.applyGlobals({ outdoor_humidity: 58 }); // 433 push carries humidity
+    expect(view.outdoorHumidity.textContent).toBe("58%");
+    live.applyGlobals({ outdoor_humidity: null });
+    expect(view.outdoorHumidity.textContent).toBe("—");
   });
 });
 

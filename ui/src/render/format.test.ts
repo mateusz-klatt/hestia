@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { device } from "../fixtures";
-import { battFmt, battLow, fmtTemp, stateStr } from "./format";
+import { battFmt, battLow, fmtHumidity, fmtTemp, stateStr } from "./format";
 
 describe("fmtTemp", () => {
   it("formats one decimal with a degree sign", () => {
@@ -10,6 +10,16 @@ describe("fmtTemp", () => {
   });
   it("renders an em dash for null", () => {
     expect(fmtTemp(null)).toBe("—");
+  });
+});
+
+describe("fmtHumidity", () => {
+  it("formats a whole percent, rounding", () => {
+    expect(fmtHumidity(56)).toBe("56%");
+    expect(fmtHumidity(44.6)).toBe("45%");
+  });
+  it("renders an em dash for null", () => {
+    expect(fmtHumidity(null)).toBe("—");
   });
 });
 

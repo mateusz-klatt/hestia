@@ -36,10 +36,12 @@ export interface DeviceInfo {
   endpoint_names?: Record<string, string>;
 }
 
-/** Node-less global automation fields (°C), `null` when their poller is off. */
+/** Node-less global fields, `null` when their poller is off. */
 export interface Globals {
   crib_temp: number | null;
   outdoor_temp: number | null;
+  /** %RH companion to outdoor_temp from the local-433 feeder; null when off or absent. Display-only. */
+  outdoor_humidity: number | null;
 }
 
 /** Aggregate counters for the header. */
