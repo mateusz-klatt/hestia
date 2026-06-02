@@ -147,13 +147,21 @@ export class LiveController {
     }
   }
 
-  /** Replay deltas that queued during a rebuild, against the fresh rows. */
+  /**
+   * Replay deltas that queued during a rebuild, against the fresh rows.
+   *
+   * Snapshot-and-clear BEFORE replaying: applyState's multi-gang "missing
+   * endpoint" branch can re-enter refresh() (setting `refreshing` true again),
+   * after which the remaining replays re-queue. Clearing first means those
+   * re-queues land in a fresh, empty queue and survive to the re-entrant
+   * refresh's own drain, instead of being wiped by a clear() run afterwards.
+   */
   private drainPending(): void {
-    for (const [node, fields] of this.pendingState) this.applyState(node, fields);
+    const states = [...this.pendingState];
     this.pendingState.clear();
-    if (this.pendingGlobals !== null) {
-      this.applyGlobals(this.pendingGlobals);
-      this.pendingGlobals = null;
-    }
+    const globals = this.pendingGlobals;
+    this.pendingGlobals = null;
+    for (const [node, fields] of states) this.applyState(node, fields);
+    if (globals !== null) this.applyGlobals(globals);
   }
 }

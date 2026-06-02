@@ -25,6 +25,9 @@ function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
   return { promise, resolve };
 }
 
+/** Flush the microtask queue (lets a re-entrant async refresh settle). */
+const flush = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
+
 const stanval = (view: LiveView, node: string): string | null | undefined =>
   view.rows.querySelector(`tr[data-node="${node}"] .stanval`)?.textContent;
 
@@ -87,6 +90,48 @@ describe("LiveController.applyState", () => {
     live.applyState(2, { endpoints: { "1": true, "2": true } });
     expect(ep2()).toBe("on");
   });
+
+  it("patches the node stanval (not a sub-row) for a single-endpoint light", async () => {
+    const view = harness();
+    const live = new LiveController(view, () =>
+      Promise.resolve(discovery({ "5": device({ type: "light", endpoints: { "1": false } }) })),
+    );
+    await live.refresh();
+    expect(stanval(view, "5")).toBe("off");
+    live.applyState(5, { endpoints: { "1": true } }); // length 1 → falls through to the node row
+    expect(stanval(view, "5")).toBe("on");
+    expect(view.rows.querySelector('tr[data-node="5"][data-ep]')).toBeNull();
+  });
+
+  it("refetches once when a delta brings a new endpoint with no sub-row", async () => {
+    const view = harness();
+    let calls = 0;
+    const live = new LiveController(view, () => {
+      calls += 1;
+      const eps = calls === 1 ? { "1": true, "2": false } : { "1": true, "2": false, "3": true };
+      return Promise.resolve(discovery({ "2": device({ type: "light", endpoints: eps }) }));
+    });
+    await live.refresh();
+    expect(calls).toBe(1);
+    expect(view.rows.querySelector('tr[data-node="2"][data-ep="3"]')).toBeNull();
+    live.applyState(2, { endpoints: { "1": true, "2": false, "3": true } }); // ep 3 has no row yet
+    await flush();
+    expect(calls).toBe(2); // single recovery refetch rebuilt the sub-rows
+    expect(view.rows.querySelector('tr[data-node="2"][data-ep="3"] .ep-stan')?.textContent).toBe("on");
+  });
+
+  it("does not refetch when a multi-gang delta touches only existing channels", async () => {
+    const view = harness();
+    let calls = 0;
+    const live = new LiveController(view, () => {
+      calls += 1;
+      return Promise.resolve(discovery({ "2": device({ type: "light", endpoints: { "1": true, "2": false } }) }));
+    });
+    await live.refresh();
+    live.applyState(2, { endpoints: { "1": false, "2": true } });
+    await flush();
+    expect(calls).toBe(1); // no missing endpoint → no over-eager refresh
+  });
 });
 
 describe("LiveController.applyGlobals", () => {
@@ -126,6 +171,68 @@ describe("LiveController coalescing (deltas during an in-flight refresh)", () =>
     gate.resolve(discovery({}, { globals: { crib_temp: 20, outdoor_temp: 10 } }));
     await refreshing;
     expect(view.crib.textContent).toBe("99.0°");
+  });
+
+  it("merges two state deltas for the same node queued during a refresh", async () => {
+    const view = harness();
+    const gate = deferred<Discovery | null>();
+    const live = new LiveController(view, () => gate.promise);
+    const refreshing = live.refresh();
+    live.applyState(7, { switch: true }); // queued
+    live.applyState(7, { power_w: 12 }); // queued — must merge with the first, not clobber
+    gate.resolve(discovery({ "7": device({ type: "plug", switch: false }) }));
+    await refreshing;
+    expect(stanval(view, "7")).toBe("on · 12 W"); // both fields survived
+  });
+
+  it("merges two globals deltas queued during a refresh", async () => {
+    const view = harness();
+    const gate = deferred<Discovery | null>();
+    const live = new LiveController(view, () => gate.promise);
+    const refreshing = live.refresh();
+    live.applyGlobals({ crib_temp: 99 }); // queued
+    live.applyGlobals({ outdoor_temp: 5 }); // queued — must accumulate with the first
+    gate.resolve(discovery({}, { globals: { crib_temp: 20, outdoor_temp: 10 } }));
+    await refreshing;
+    expect(view.crib.textContent).toBe("99.0°");
+    expect(view.outdoor.textContent).toBe("5.0°");
+  });
+
+  it("does not drop other queued deltas when a drain triggers a re-entrant refresh", async () => {
+    const view = harness();
+    let calls = 0;
+    const gate = deferred<Discovery | null>();
+    const live = new LiveController(view, () => {
+      calls += 1;
+      if (calls === 1) return gate.promise;
+      // Recovery snapshot: ep 3 now present, but node 7 / crib at their PRE-delta
+      // values — so only a surviving replay (not the snapshot) can show the deltas.
+      return Promise.resolve(
+        discovery(
+          {
+            "2": device({ type: "light", endpoints: { "1": true, "2": false, "3": false } }),
+            "7": device({ type: "plug", switch: false }),
+          },
+          { globals: { crib_temp: 20, outdoor_temp: 10 } },
+        ),
+      );
+    });
+    const refreshing = live.refresh();
+    live.applyState(2, { endpoints: { "1": true, "2": false, "3": true } }); // brings new ep 3 → drain re-enters refresh
+    live.applyState(7, { switch: true }); // must NOT be lost by the re-entrant refresh
+    live.applyGlobals({ crib_temp: 99 }); // must NOT be lost either
+    gate.resolve(
+      discovery(
+        { "2": device({ type: "light", endpoints: { "1": true, "2": false } }), "7": device({ type: "plug", switch: false }) },
+        { globals: { crib_temp: 20, outdoor_temp: 10 } },
+      ),
+    );
+    await refreshing;
+    await flush();
+    expect(calls).toBe(2);
+    expect(view.rows.querySelector('tr[data-node="2"][data-ep="3"]')).not.toBeNull(); // recovery rebuilt sub-rows
+    expect(stanval(view, "7")).toBe("on"); // queued node-7 delta survived the re-entrant drain
+    expect(view.crib.textContent).toBe("99.0°"); // queued globals survived too
   });
 
   it("coalesces overlapping refreshes into a single re-run", async () => {
