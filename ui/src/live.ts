@@ -93,10 +93,18 @@ export class LiveController {
 
   /** Fetch the full snapshot and rebuild the view; coalesces overlapping calls. */
   async refresh(): Promise<void> {
-    // Don't rebuild while the operator is editing a name/room field — the
-    // rebuild replaces every <input> and would erase what they're typing.
+    // Don't rebuild while the operator is interacting with a row — the rebuild
+    // replaces every <input>/<button> and would erase an edit-in-progress or wipe
+    // the "saved" status of a just-clicked Save/confirm (and a focused Save button
+    // protects an unsaved sibling field too). Scoped to the table, so the header
+    // Refresh button still works (unlike the legacy page-wide guard).
     const active = document.activeElement;
-    if (active instanceof HTMLInputElement && this.view.rows.contains(active)) return;
+    if (
+      (active instanceof HTMLInputElement || active instanceof HTMLButtonElement) &&
+      this.view.rows.contains(active)
+    ) {
+      return;
+    }
     if (this.refreshing) {
       this.refreshAgain = true; // a refresh landed mid-rebuild → run once more after
       return;

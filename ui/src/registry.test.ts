@@ -1,11 +1,18 @@
 import { describe, expect, it } from "vitest";
 
-import type { NamePayload } from "./api/types";
+import type { NamePayload, NameResult } from "./api/types";
 import { device } from "./fixtures";
 import { bindRow, bindSubRow, type PostName } from "./registry";
 import { deviceRow, renderDeviceRows } from "./render/devices";
 
 const flush = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
+function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+  let resolve: (value: T) => void = () => undefined;
+  const promise = new Promise<T>((r) => {
+    resolve = r;
+  });
+  return { promise, resolve };
+}
 const clickBtn = (root: ParentNode, sel: string): void => {
   root.querySelector<HTMLButtonElement>(sel)?.click();
 };
@@ -64,6 +71,28 @@ describe("bindRow", () => {
     const status = statusOf(tr, ".save-name");
     expect(status?.textContent).toBe("invalid name");
     expect(status?.classList.contains("err")).toBe(true);
+  });
+
+  it("locks a button while its save is in flight — no duplicate POST", async () => {
+    const gate = deferred<NameResult>();
+    let calls = 0;
+    const post: PostName = () => {
+      calls += 1;
+      return gate.promise;
+    };
+    const info = device({ type: "light", confidence: "inferred" });
+    const tr = deviceRow("7", info);
+    bindRow(tr, 7, info, post);
+    const save = tr.querySelector<HTMLButtonElement>(".save-name");
+    save?.click();
+    expect(calls).toBe(1);
+    expect(save?.disabled).toBe(true);
+    if (save !== null) save.disabled = false; // re-enable and re-click: the busy flag still drops it
+    save?.click();
+    expect(calls).toBe(1);
+    gate.resolve({ ok: true, status: 200, body: "" });
+    await flush();
+    expect(save?.disabled).toBe(false);
   });
 });
 

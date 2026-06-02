@@ -22,11 +22,20 @@ function wire(
   postName: PostName,
 ): void {
   if (button === null) return;
+  let busy = false;
   const run = async (): Promise<void> => {
-    const r = await postName(payload());
-    setStatus(tr, controlClass, r.ok ? successText : r.body, !r.ok);
-    // A successful save makes the server publish discovery_changed → the SSE
-    // stream re-syncs this row; no manual refresh needed.
+    if (busy) return; // one POST per button in flight — no duplicate mutations / status race
+    busy = true;
+    button.disabled = true;
+    try {
+      const r = await postName(payload());
+      setStatus(tr, controlClass, r.ok ? successText : r.body, !r.ok);
+      // A successful save makes the server publish discovery_changed → the SSE
+      // stream re-syncs this row; no manual refresh needed.
+    } finally {
+      busy = false;
+      button.disabled = false;
+    }
   };
   button.addEventListener("click", () => {
     void run();

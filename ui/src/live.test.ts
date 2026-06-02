@@ -291,6 +291,59 @@ describe("LiveController.handleMessage", () => {
   });
 });
 
+describe("LiveController edit-safety guard", () => {
+  afterEach(() => {
+    document.body.replaceChildren(); // focus tracking needs connected elements
+  });
+
+  it("skips a rebuild while a name input inside the table is focused", async () => {
+    const view = harness();
+    document.body.append(view.rows);
+    let calls = 0;
+    const live = new LiveController(view, () => {
+      calls += 1;
+      return Promise.resolve(discovery({ "7": device({ type: "light", name: "x" }) }));
+    });
+    await live.refresh();
+    expect(calls).toBe(1);
+    const input = view.rows.querySelector<HTMLInputElement>('tr[data-node="7"] input.name');
+    input?.focus();
+    expect(document.activeElement).toBe(input);
+    await live.refresh(); // guard: input focused inside rows → no refetch
+    expect(calls).toBe(1);
+  });
+
+  it("skips a rebuild while a Save button inside the table is focused", async () => {
+    const view = harness();
+    document.body.append(view.rows);
+    let calls = 0;
+    const live = new LiveController(view, () => {
+      calls += 1;
+      return Promise.resolve(discovery({ "7": device({ type: "light" }) }));
+    });
+    await live.refresh();
+    view.rows.querySelector<HTMLButtonElement>('tr[data-node="7"] .save-name')?.focus();
+    await live.refresh(); // guard: button focused inside rows → no refetch (keeps a just-shown status)
+    expect(calls).toBe(1);
+  });
+
+  it("rebuilds when focus is outside the table", async () => {
+    const view = harness();
+    document.body.append(view.rows);
+    const outside = document.createElement("input");
+    document.body.append(outside);
+    let calls = 0;
+    const live = new LiveController(view, () => {
+      calls += 1;
+      return Promise.resolve(discovery({}));
+    });
+    await live.refresh();
+    outside.focus();
+    await live.refresh(); // focus outside rows → proceeds
+    expect(calls).toBe(2);
+  });
+});
+
 describe("LiveController decorate hook", () => {
   it("runs the decorator against each node row's actions cell after a rebuild", async () => {
     const view = harness();

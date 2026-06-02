@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { apiBase, fetchDiscovery } from "./client";
+import { apiBase, fetchDiscovery, postName } from "./client";
 
 describe("apiBase", () => {
   it("resolves the API root one level above the /ui/ page", () => {
@@ -40,5 +40,30 @@ describe("fetchDiscovery", () => {
       Promise.resolve({ ok: true, json: () => Promise.reject(new Error("bad json")) }),
     );
     expect(await fetchDiscovery()).toBeNull();
+  });
+});
+
+describe("postName", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("returns ok + status + body on a 2xx response", async () => {
+    vi.stubGlobal("fetch", () =>
+      Promise.resolve({ ok: true, status: 200, text: () => Promise.resolve("") }),
+    );
+    expect(await postName({ node: 7, name: "x" })).toEqual({ ok: true, status: 200, body: "" });
+  });
+
+  it("returns the error body verbatim on a non-2xx response", async () => {
+    vi.stubGlobal("fetch", () =>
+      Promise.resolve({ ok: false, status: 400, text: () => Promise.resolve("invalid name") }),
+    );
+    expect(await postName({ node: 7 })).toEqual({ ok: false, status: 400, body: "invalid name" });
+  });
+
+  it("maps a rejected fetch to {ok:false, status:0} without throwing", async () => {
+    vi.stubGlobal("fetch", () => Promise.reject(new Error("offline")));
+    await expect(postName({ node: 7 })).resolves.toEqual({ ok: false, status: 0, body: "błąd" });
   });
 });
