@@ -1,4 +1,4 @@
-"""Unit tests for hestia.flipper — the stdlib-only Flipper Zero RPC IR-transmit client.
+"""Unit tests for hestia.flipper — the Flipper Zero RPC IR-transmit client (pyserial transport).
 
 The protobuf wire codec (varint/tag/field encoders + the decode helpers) is round-tripped; ``transmit_ir``
 is driven end-to-end against a ``FakeTransport`` (records writes, auto-replies with command-id-matched
@@ -253,8 +253,15 @@ class SerialTransportTests(unittest.TestCase):
         return flipper.SerialTransport("/dev/ttyACM9"), fake
 
     def test_open_ok(self):
-        t, fake = self._open()
+        fake = mock.MagicMock()
+        with mock.patch.object(flipper.serial, "Serial", return_value=fake) as m_serial:
+            t = flipper.SerialTransport("/dev/ttyACM9")
         self.assertIs(t._ser, fake)
+        # the 115200 8N1 port config is the functional contract with the Flipper
+        m_serial.assert_called_once_with(
+            "/dev/ttyACM9", baudrate=115200,
+            bytesize=serial.EIGHTBITS, parity=serial.PARITY_NONE, stopbits=serial.STOPBITS_ONE,
+            timeout=0, write_timeout=5.0)
 
     def test_open_failure(self):
         with mock.patch.object(flipper.serial, "Serial", side_effect=serial.SerialException("nope")):
