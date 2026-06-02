@@ -67,6 +67,7 @@ SSE_MAX_LIFETIME = float(os.environ.get("HESTIA_SSE_LIFETIME", "3600"))
 _TYPES = {t.value for t in DeviceType}
 _clock = time.monotonic                              # module-level rebindable for tests
 _NAME_FIELDS = {"op", "node", "name", "room", "type", "ep"}   # allowlist for /api/name (ep = endpoint label)
+_BODY_NOT_OBJECT = "body must be a JSON object"   # shared 4xx message (/api/ir, /api/name, /api/control)
 _CONTROL_OPS = {"switch", "level", "cover", "thermostat", "thermostat_power"}
 _CONTROL_FIELDS = {
     "switch": {"op", "node", "on"},
@@ -1347,7 +1348,7 @@ class _WebHandlerBase(BaseHTTPRequestHandler):
             return
         if not isinstance(op, dict):                 # a list/scalar JSON body would crash op.get()
             return self._send_json(HTTPStatus.BAD_REQUEST,
-                                   {"ok": False, "error": "body must be a JSON object"})
+                                   {"ok": False, "error": _BODY_NOT_OBJECT})
         ir_file, button = op.get("file"), op.get("button")
         if not (isinstance(ir_file, str) and ir_file and isinstance(button, str) and button):
             return self._send_json(HTTPStatus.BAD_REQUEST,
@@ -1389,7 +1390,7 @@ class _WebHandlerBase(BaseHTTPRequestHandler):
     @staticmethod
     def _validate_name_payload(op) -> "str | None":
         if not isinstance(op, dict):
-            return "body must be a JSON object"
+            return _BODY_NOT_OBJECT
         unknown = set(op) - _NAME_FIELDS
         if unknown:
             return f"unknown field(s): {sorted(unknown)}"      # explicit allowlist
@@ -1466,7 +1467,7 @@ def _validate_control_payload(op) -> "str | None":
     """Validate a /api/control body: a strict allowlist of device ops (never `raw`/`lights`),
     no unknown fields, and per-op operand bounds. Returns an error string or None when valid."""
     if not isinstance(op, dict):
-        return "body must be a JSON object"
+        return _BODY_NOT_OBJECT
     name = op.get("op")
     if name not in _CONTROL_OPS:
         return f"unsupported control op {name!r}"
