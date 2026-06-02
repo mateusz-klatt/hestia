@@ -16,7 +16,11 @@
 
 body {
   margin: 0;
-  padding: 1.5rem;
+  /* `viewport-fit=cover` lets content draw under the notch; keep the comfortable
+     1.5rem but never less than the safe-area inset — matters in iPhone LANDSCAPE,
+     whose width exceeds the 640px mobile breakpoint below. */
+  padding: max(1.5rem, env(safe-area-inset-top)) max(1.5rem, env(safe-area-inset-right))
+    max(1.5rem, env(safe-area-inset-bottom)) max(1.5rem, env(safe-area-inset-left));
 }
 
 /* Form controls: a ≥16px font stops iOS Safari from zooming the page when an

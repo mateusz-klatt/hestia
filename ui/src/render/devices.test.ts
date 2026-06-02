@@ -153,12 +153,12 @@ describe("renderDeviceRows", () => {
     renderDeviceRows(tbody, {
       "2": device({ type: "light", endpoints: { "1": true, "2": false }, endpoint_names: { "1": "lewy" } }),
     });
-    const tds = tbody.querySelector("tr.subrow")?.querySelectorAll("td");
-    expect(tds?.[0]?.dataset.label).toBeUndefined(); // node placeholder — empty + unlabeled
-    expect(tds?.[3]?.classList.contains("sub-label")).toBe(true);
-    expect(tds?.[3]?.dataset.label).toBeUndefined(); // "↳ kanał N" is self-describing
-    expect(tds?.[4]?.dataset.label).toBe("stan");
-    expect(tds?.[6]?.dataset.label).toBe("name"); // the editable per-channel label
+    const sub = tbody.querySelector("tr.subrow");
+    const labels = [...(sub?.querySelectorAll("td") ?? [])].map((td) => td.dataset.label);
+    // Lock the full placeholder contract: node / last-seen / battery / kanał / akcje / room cells stay
+    // unlabeled (and :empty-hidden on mobile); only the per-channel stan + editable name carry a heading.
+    expect(labels).toEqual([undefined, undefined, undefined, undefined, "stan", undefined, "name", undefined]);
+    expect(sub?.querySelector(".sub-label")?.textContent).toBe("↳ kanał 1"); // self-describing → no data-label
   });
 
   it("does not emit sub-rows for a single-endpoint switch", () => {
