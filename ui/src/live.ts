@@ -1,5 +1,5 @@
 import type { DeviceInfo, Discovery, Globals, LiveEvent, Scene } from "./api/types";
-import { renderDeviceRows, renderGlobals, summaryText } from "./render/devices";
+import { renderDeviceRows, renderGlobals, renderMode, summaryText } from "./render/devices";
 import { fmtHumidity, fmtTemp, stateStr } from "./render/format";
 
 /** How long a row stays brightly highlighted after activity. */
@@ -12,6 +12,7 @@ const SCENE_MS = 4000;
 /** The DOM the live controller writes into (queried once in `main.ts`). */
 export interface LiveView {
   hdrText: HTMLElement;
+  mode: HTMLElement;
   crib: HTMLElement;
   outdoor: HTMLElement;
   outdoorHumidity: HTMLElement;
@@ -141,6 +142,7 @@ export class LiveController {
 
   private render(data: Discovery): void {
     this.view.hdrText.textContent = summaryText(data.summary);
+    renderMode(this.view.mode, data);
     renderGlobals(this.view.crib, this.view.outdoor, this.view.outdoorHumidity, data.globals);
     renderDeviceRows(this.view.rows, data.devices);
     this.infoByNode.clear();

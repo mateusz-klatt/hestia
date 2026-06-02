@@ -8,6 +8,7 @@ function harness(): LiveView {
   const mk = (tag: string): HTMLElement => document.createElement(tag);
   return {
     hdrText: mk("span"),
+    mode: mk("span"),
     crib: mk("span"),
     outdoor: mk("span"),
     outdoorHumidity: mk("span"),
@@ -44,6 +45,7 @@ describe("LiveController.refresh", () => {
     );
     await new LiveController(view, () => Promise.resolve(data)).refresh();
     expect(view.hdrText.textContent).toBe("hestia — devices (1/1 confirmed, 0 unknown)");
+    expect(view.mode.textContent).toBe("tryb: standalone (cloud-free)"); // fixture: standalone
     expect(view.crib.textContent).toBe("22.0°");
     expect(view.outdoor.textContent).toBe("19.8°");
     expect(view.outdoorHumidity.textContent).toBe("56%");

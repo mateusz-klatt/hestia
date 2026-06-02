@@ -28,9 +28,9 @@ serial port), never protocol logic.
 > dashboard to a **TypeScript** front-end. Expect churn on the surface; the protocol
 > core is stable.
 
-The first TypeScript dashboard scaffold lives in [`ui/`](ui/). The legacy inline
-dashboard at `/` remains the active UI while the new shell is built and served
-separately at `/ui/` when `ui/dist` is present.
+The **TypeScript** dashboard lives in [`ui/`](ui/) (Vite build → `ui/dist`) and is
+served at the root `/`; the old `/ui/` path 302-redirects there. The legacy inline
+dashboard has been removed.
 
 ## Clean-room methodology
 

@@ -9,15 +9,19 @@ import type {
 } from "./types";
 
 /**
- * The API root for a UI served at `<prefix>/ui/`.
+ * The API root, derived from the page URL so it works at any mount point.
  *
- * The JSON API lives at `<prefix>/api/`, so resolving one level up from the
- * page makes every fetch work both when hestia serves the UI directly
- * (`http://host:8927/ui/`) and behind a reverse-proxy subpath
- * (`https://host/hestia/ui/`). Pure (takes the page href) so it is unit-testable.
+ * The JSON API lives at `<prefix>/api/`. The app may be served at the root
+ * (`hestia.klatt.ie/` or `host/hestia/`) or — as a retired alias — at `…/ui/`.
+ * So resolve relative to the page's directory, dropping a trailing `ui/`
+ * segment: correct for a bare host root (`/api/`), a reverse-proxy subpath
+ * (`/hestia/api/`), AND the legacy `…/ui/` mount (`…/api/`). A fixed `../api/`
+ * would break at the root — it drops the proxy prefix. Pure (takes the page
+ * href) so it is unit-testable.
  */
 export function apiBase(pageHref: string): URL {
-  return new URL("../api/", pageHref);
+  const dir = new URL(".", pageHref); // the page's directory (drops any filename)
+  return dir.pathname.endsWith("/ui/") ? new URL("../api/", dir) : new URL("api/", dir);
 }
 
 /** Resolve an API path (e.g. "discovery", "events") against the page-derived base. */
