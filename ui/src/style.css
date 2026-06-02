@@ -98,6 +98,11 @@ td.sub-label {
   margin-top: 1rem;
 }
 
+/* Inline status spans (control / rule / form): errors in the same red as #status. */
+.status.err {
+  color: #c0341d;
+}
+
 #auto-hdr {
   font-size: 1.05rem;
   margin: 1.8rem 0 0.6rem;

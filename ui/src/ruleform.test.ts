@@ -180,6 +180,32 @@ describe("renderRuleForm — structure", () => {
     expect(box.childNodes.length).toBe(n);
     expect(box.dataset.built).toBe("1");
   });
+
+  it("the vocab fixture mirrors the real backend grammar (word-token cmp_ops, not symbols)", () => {
+    // Guards against the form's whole premise drifting: the live server validates against
+    // these exact tokens, so the dropdowns (and the tests) must use them, not "!=" / ">".
+    const v = ruleVocab();
+    expect(v.cmp_ops).toEqual(["eq", "ge", "gt", "le", "lt", "ne"]);
+    expect(v.frame_action_ops).toContain("raw");
+    expect(v.frame_action_ops).toContain("lights");
+    expect(v.state_fields.crib_temp).toBe(true); // GLOBAL → node-less
+    expect(v.state_fields.temperature).toBe(false); // per-node
+  });
+
+  it("does not mark itself built if the build throws — a later good payload rebuilds cleanly", () => {
+    const box = document.createElement("div");
+    const out = document.createElement("textarea");
+    const bad = { ...ruleVocab(), modes: undefined as unknown as string[] };
+    expect(() => {
+      renderRuleForm(box, out, bad, {});
+    }).toThrow(); // for...of undefined
+    expect(box.dataset.built).toBeUndefined(); // NOT wedged: a malformed payload leaves it un-built
+    renderRuleForm(box, out, ruleVocab(), {}); // a later well-formed render
+    expect(box.dataset.built).toBe("1");
+    const buttons = [...box.querySelectorAll("button")].map((b) => b.textContent);
+    expect(buttons).toContain("Zbuduj JSON");
+    expect(buttons.filter((t) => t === "Zbuduj JSON")).toHaveLength(1); // no duplicate from the partial attempt
+  });
 });
 
 describe("renderRuleForm — triggers", () => {
@@ -204,7 +230,8 @@ describe("renderRuleForm — triggers", () => {
     setInput(f.triggerFields(), "value", "18");
     fillSwitchAction(f);
     f.build();
-    expect(f.rule().trigger).toEqual({ type: "state", field: "crib_temp", op: "!=", value: 18 });
+    // default op = first of the real backend cmp_ops (sorted) = "eq" (NOT a symbolic operator)
+    expect(f.rule().trigger).toEqual({ type: "state", field: "crib_temp", op: "eq", value: 18 });
   });
 
   it("state (non-global field) includes the node", () => {
@@ -222,7 +249,7 @@ describe("renderRuleForm — triggers", () => {
     expect(f.rule().trigger).toEqual({
       type: "state",
       field: "temperature",
-      op: "!=",
+      op: "eq",
       value: 22.5,
       node: 9,
     });
@@ -314,7 +341,7 @@ describe("renderRuleForm — conditions", () => {
       setInput(first, "value", "22");
       setInput(first, "node", "9");
       const opSel = first.querySelectorAll("select")[1];
-      if (opSel !== undefined) setSelect(opSel, ">");
+      if (opSel !== undefined) setSelect(opSel, "gt"); // real backend token, not ">"
     }
     // remove the second (empty) condition via its × button
     const second = editors[1];
@@ -324,7 +351,7 @@ describe("renderRuleForm — conditions", () => {
     expect(condBox.children).toHaveLength(1);
 
     f.build();
-    expect(f.rule().conditions).toEqual([{ field: "temperature", op: ">", value: 22, node: 9 }]);
+    expect(f.rule().conditions).toEqual([{ field: "temperature", op: "gt", value: 22, node: 9 }]);
   });
 });
 
@@ -468,6 +495,24 @@ describe("renderRuleForm — klima action", () => {
     const actBox = f.rows("akcje: ");
     expect([...firstSelect(actBox).options].map((o) => o.value)).not.toContain("klima");
   });
+
+  it("sorts the mode options regardless of power_on key order", () => {
+    // power_on keys come from JSON (insertion order not guaranteed) → the form must .sort() them
+    const f = mkForm({
+      klima: { file: "/ext/infrared/klima.ir", power_on: { heat: [20], cool: [22], auto: [21] }, presets: ["off"] },
+    });
+    fillBasics(f);
+    setInput(f.triggerFields(), "node", "5");
+    setInput(f.triggerFields(), "scene_id", "1");
+    const actBox = f.rows("akcje: ");
+    const mode = actBox.querySelectorAll("select")[1]; // [0]=op, [1]=mode (+off), [2]=temp
+    expect([...(mode?.options ?? [])].map((o) => o.value)).toEqual(["auto", "cool", "heat", "off"]);
+    // default selected mode = first sorted ("auto") → its temp 21
+    f.build();
+    expect(f.rule().actions).toEqual([
+      { op: "ir", file: "/ext/infrared/klima.ir", button: "on_auto_21" },
+    ]);
+  });
 });
 
 describe("renderRuleForm — id / enabled / debounce / modes", () => {
@@ -498,15 +543,33 @@ describe("renderRuleForm — id / enabled / debounce / modes", () => {
     f.build();
     expect(f.rule().debounce).toBe(0);
   });
+
+  it("pins the untouched defaults: enabled=true, debounce=0, all modes on", () => {
+    // Build a minimal rule WITHOUT touching enabled / debounce / mode boxes, so a
+    // regression that flips a prefilled default (e.g. ships rules disabled or with a
+    // non-zero debounce) is caught here rather than silently shipping.
+    const f = mkForm();
+    fillBasics(f);
+    setInput(f.triggerFields(), "node", "5");
+    setInput(f.triggerFields(), "scene_id", "1");
+    fillSwitchAction(f);
+    f.build();
+    const r = f.rule();
+    expect(r.enabled).toBe(true);
+    expect(r.debounce).toBe(0);
+    expect(r.modes).toEqual(["proxy", "standalone"]);
+  });
 });
 
 describe("renderRuleForm — validation errors", () => {
+  const statusClass = (f: Form): string => f.box.querySelector(".status")?.className ?? "";
   const expectErr = (drive: (f: Form) => void, fragment: string): void => {
     const f = mkForm();
     drive(f);
     f.build();
     expect(f.out.value).toBe(""); // nothing written on error
     expect(f.status()).toContain(fragment);
+    expect(statusClass(f).split(" ")).toContain("err"); // error → red `err` class
   };
 
   it("missing id", () => {
@@ -583,16 +646,18 @@ describe("renderRuleForm — validation errors", () => {
     }, "ir: file+button");
   });
 
-  it("a successful build after an error replaces the error status", () => {
+  it("a successful build after an error replaces the error status and clears the err class", () => {
     const f = mkForm();
     f.build();
     expect(f.status()).toContain("id wymagane");
+    expect(statusClass(f).split(" ")).toContain("err");
     fillBasics(f);
     setInput(f.triggerFields(), "node", "5");
     setInput(f.triggerFields(), "scene_id", "1");
     fillSwitchAction(f);
     f.build();
     expect(f.status()).toContain("zbudowano");
+    expect(statusClass(f).split(" ")).not.toContain("err"); // success clears the err class
     expect(f.rule().id).toBe("r1");
   });
 });

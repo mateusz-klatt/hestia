@@ -1,28 +1,20 @@
+import RULE_VOCAB from "./rule_vocab.snapshot.json";
 import type { DeviceInfo, Discovery, RuleVocab } from "./api/types";
 
 /**
- * A representative rule grammar mirroring the backend `rule_vocab()`. Includes
+ * The real rule grammar, a VERBATIM capture of the backend `rule_vocab()`
+ * (committed as `rule_vocab.snapshot.json`). Regenerate with:
+ *   python3 -c "import json,hestia.automations as a; print(json.dumps(a.rule_vocab(), indent=2))"
+ *
+ * Sourcing the fixture from a real capture (rather than hand-transcribing it)
+ * keeps the tests honest: `cmp_ops` are the backend's word-tokens
+ * (`eq/ge/gt/le/lt/ne`), NOT symbolic operators, and `state_fields` carries
  * both GLOBAL fields (`crib_temp` / `outdoor_temp` → node-less) and per-node
- * fields so the predicate editor's node-visibility logic can be exercised.
+ * fields so the predicate editor's node-visibility logic is exercised against
+ * the grammar the live server actually validates.
  */
 export function ruleVocab(overrides: Partial<RuleVocab> = {}): RuleVocab {
-  return {
-    trigger_types: ["scene", "state", "time", "sun", "presence", "cron"],
-    state_fields: {
-      crib_temp: true,
-      outdoor_temp: true,
-      door: false,
-      level: false,
-      switch: false,
-      temperature: false,
-    },
-    cmp_ops: ["!=", "<", "<=", "==", ">", ">="],
-    frame_action_ops: ["cover", "level", "switch", "thermostat", "thermostat_power"],
-    modes: ["proxy", "standalone"],
-    sun_events: ["sunrise", "sunset"],
-    presence_events: ["arrive", "leave"],
-    ...overrides,
-  };
+  return { ...(RULE_VOCAB as RuleVocab), ...overrides };
 }
 
 /** A fully-defaulted device (all live state null / unseen); override per test. */

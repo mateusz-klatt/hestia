@@ -1,0 +1,21 @@
+{
+  "trigger_types": ["scene", "state", "time", "sun", "presence", "cron"],
+  "state_fields": {
+    "crib_temp": true,
+    "door": false,
+    "energy_kwh": false,
+    "level": false,
+    "outdoor_temp": true,
+    "power_w": false,
+    "setpoint": false,
+    "switch": false,
+    "temperature": false,
+    "thermostat_on": false,
+    "voltage_v": false
+  },
+  "cmp_ops": ["eq", "ge", "gt", "le", "lt", "ne"],
+  "frame_action_ops": ["cover", "level", "lights", "raw", "switch", "thermostat", "thermostat_power"],
+  "modes": ["proxy", "standalone"],
+  "sun_events": ["sunrise", "sunset"],
+  "presence_events": ["arrive", "leave"]
+}

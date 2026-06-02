@@ -155,7 +155,10 @@ export function renderRuleForm(
   klima: Klima,
 ): void {
   if (box.dataset.built !== undefined) return;
-  box.dataset.built = "1";
+  // Clear any partial build left by a prior throw so a retry can't duplicate nodes. `dataset.built`
+  // is set only at the very end (on success) — if a malformed runtime payload makes the build throw,
+  // the form stays un-built and a later well-formed render rebuilds it cleanly.
+  box.replaceChildren();
 
   // label + control on one inline span; returns the control so callers keep its precise type.
   const mk = <T extends HTMLElement>(label: string, element: T): T => {
@@ -438,4 +441,5 @@ export function renderRuleForm(
     }
   });
   box.append(buildBtn, formStatus);
+  box.dataset.built = "1"; // built successfully → skip on subsequent renders
 }
