@@ -170,6 +170,85 @@ class ValidateNamePayloadTests(unittest.TestCase):
         self.assertIn("ep must be", self._validate({"node": 7, "ep": True, "name": "x"}))
 
 
+class ValidateControlPayloadTests(unittest.TestCase):
+    def _validate(self, op):
+        return web._validate_control_payload(op)
+
+    def test_non_dict(self):
+        self.assertEqual(self._validate(5), "body must be a JSON object")
+
+    def test_unsupported_op(self):
+        self.assertEqual(self._validate({"op": "raw", "node": 7}),
+                         "unsupported control op 'raw'")
+
+    def test_unknown_field_rejected(self):
+        self.assertEqual(self._validate({"op": "switch", "node": 7, "on": True, "value": 99}),
+                         "unknown field(s): ['value']")
+
+    def test_node_must_be_integer_0_255(self):
+        bad = [
+            {"op": "switch", "on": True},
+            {"op": "switch", "node": True, "on": True},
+            {"op": "switch", "node": "7", "on": True},
+            {"op": "switch", "node": -1, "on": True},
+            {"op": "switch", "node": 256, "on": True},
+        ]
+        for payload in bad:
+            with self.subTest(payload=payload):
+                self.assertEqual(self._validate(payload), "node must be an integer 0..255")
+
+    def test_on_must_be_boolean(self):
+        bad = [
+            {"op": "switch", "node": 7},
+            {"op": "switch", "node": 7, "on": 1},
+            {"op": "thermostat_power", "node": 13, "on": "yes"},
+        ]
+        for payload in bad:
+            with self.subTest(payload=payload):
+                self.assertEqual(self._validate(payload), "on must be a boolean")
+
+    def test_value_must_be_integer_0_99(self):
+        bad = [
+            {"op": "level", "node": 7},
+            {"op": "level", "node": 7, "value": True},
+            {"op": "level", "node": 7, "value": "50"},
+            {"op": "level", "node": 7, "value": -1},
+            {"op": "cover", "node": 8, "value": 100},
+        ]
+        for payload in bad:
+            with self.subTest(payload=payload):
+                self.assertEqual(self._validate(payload), "value must be an integer 0..99")
+
+    def test_celsius_must_be_number_between_5_and_30(self):
+        bad = [
+            {"op": "thermostat", "node": 13},
+            {"op": "thermostat", "node": 13, "celsius": True},
+            {"op": "thermostat", "node": 13, "celsius": "21"},
+            {"op": "thermostat", "node": 13, "celsius": float("nan")},
+            {"op": "thermostat", "node": 13, "celsius": float("inf")},
+            {"op": "thermostat", "node": 13, "celsius": 4.9},
+            {"op": "thermostat", "node": 13, "celsius": 30.1},
+            {"op": "thermostat", "node": 13, "celsius": 10**10000},
+        ]
+        for payload in bad:
+            with self.subTest(payload=payload):
+                self.assertEqual(self._validate(payload),
+                                 "celsius must be a number between 5 and 30")
+
+    def test_valid_cases(self):
+        good = [
+            {"op": "switch", "node": 0, "on": False},
+            {"op": "level", "node": 255, "value": 99},
+            {"op": "cover", "node": 8, "value": 0},
+            {"op": "thermostat", "node": 13, "celsius": 21},
+            {"op": "thermostat", "node": 13, "celsius": 21.5},
+            {"op": "thermostat_power", "node": 13, "on": True},
+        ]
+        for payload in good:
+            with self.subTest(payload=payload):
+                self.assertIsNone(self._validate(payload))
+
+
 # --- live server tests ------------------------------------------------------
 
 class _WebTestBase(unittest.TestCase):
@@ -226,6 +305,50 @@ class IrEndpointTests(_WebTestBase):
         self.assertIn(b"must be a JSON object", body)
 
 
+class _FakeDeviceSession:
+    def __init__(self):
+        self.injected = []
+
+    async def inject_to_device(self, raw):
+        self.injected.append(raw)
+
+
+class ControlEndpointTests(_WebTestBase):
+    def test_get_is_405(self):
+        status, headers, _ = _get(self.server, "/api/control")
+        self.assertEqual(status, 405)
+        self.assertEqual(headers.get("Allow"), "POST")
+
+    def test_successful_control_op_sends_command(self):
+        fake = _FakeDeviceSession()
+
+        async def add_session():
+            self.rt.sessions.append(fake)
+
+        self.loop_thread.submit(add_session())
+        status, _, body = _post(self.server, "/api/control",
+                                {"op": "switch", "node": 14, "on": True})
+        self.assertEqual(status, 200)
+        payload = json.loads(body)
+        self.assertTrue(payload["ok"])
+        self.assertEqual(fake.injected, [bytes.fromhex(payload["sent"])])
+
+    def test_no_device_connected_returns_503(self):
+        status, _, body = _post(self.server, "/api/control",
+                                {"op": "switch", "node": 14, "on": True})
+        self.assertEqual(status, 503)
+        self.assertEqual(json.loads(body), {"ok": False, "error": "no device connected"})
+
+    def test_bad_payload_returns_400(self):
+        status, _, body = _post(self.server, "/api/control", {"op": "switch", "node": 14})
+        self.assertEqual(status, 400)
+        self.assertEqual(json.loads(body)["error"], "on must be a boolean")
+
+    def test_bad_content_type_is_415(self):
+        status, _, _ = _post(self.server, "/api/control", b"{}", headers={"Content-Type": "text/plain"})
+        self.assertEqual(status, 415)
+
+
 class IndexTests(_WebTestBase):
     def test_index_serves_html(self):
         status, headers, body = _get(self.server, "/")
@@ -242,6 +365,12 @@ class IndexTests(_WebTestBase):
         # live "stan" column: header + the type-aware formatter
         self.assertIn(b"<th>stan</th>", body)
         self.assertIn(b"stateStr", body)
+        # dashboard click-to-control: action column + safe DOM renderer + control POST helper
+        self.assertIn(b"<th>akcje</th>", body)
+        self.assertIn(b"function postControl", body)
+        self.assertIn(b"function renderActions", body)
+        self.assertIn(b"api/control", body)
+        self.assertIn(b"wys", body)   # "wysłano" is UTF-8; this keeps the smoke check ASCII-only
         # SSE state-delta patching (no full refetch on a live value change)
         self.assertIn(b"applyStatePatch", body)
         # globals (crib_temp/outdoor_temp) UI: spans + formatter + applier + SSE branch

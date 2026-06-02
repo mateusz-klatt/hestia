@@ -43,6 +43,7 @@ import asyncio
 import concurrent.futures
 import json
 import logging
+import math
 import os
 import threading
 import time
@@ -66,6 +67,15 @@ SSE_MAX_LIFETIME = float(os.environ.get("HESTIA_SSE_LIFETIME", "3600"))
 _TYPES = {t.value for t in DeviceType}
 _clock = time.monotonic                              # module-level rebindable for tests
 _NAME_FIELDS = {"op", "node", "name", "room", "type", "ep"}   # allowlist for /api/name (ep = endpoint label)
+_BODY_NOT_OBJECT = "body must be a JSON object"   # shared 4xx message (/api/ir, /api/name, /api/control)
+_CONTROL_OPS = {"switch", "level", "cover", "thermostat", "thermostat_power"}
+_CONTROL_FIELDS = {
+    "switch": {"op", "node", "on"},
+    "level": {"op", "node", "value"},
+    "cover": {"op", "node", "value"},
+    "thermostat": {"op", "node", "celsius"},
+    "thermostat_power": {"op", "node", "on"},
+}
 
 
 class _LoopClosed(Exception):
@@ -189,7 +199,7 @@ _INDEX_HTML = """<!doctype html>
 <div id="mode" style="margin:0 0 0.9rem 0;font-size:0.92rem;"></div>
 <table>
   <thead><tr>
-    <th>node</th><th>last seen</th><th>battery</th><th>inferred type</th><th>stan</th><th>name</th><th>room</th>
+    <th>node</th><th>last seen</th><th>battery</th><th>inferred type</th><th>stan</th><th>akcje</th><th>name</th><th>room</th>
   </tr></thead>
   <tbody id="rows"></tbody>
 </table>
@@ -254,6 +264,18 @@ async function postIr(file, button) {
   let body = {};
   try { body = await r.json(); } catch (e) {}
   return { ok: r.ok && !!body.ok, error: body.error };
+}
+async function postControl(op) {
+  const r = await fetch('api/control', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(op),
+  });
+  let body = {};
+  try { body = await r.json(); } catch (e) {}
+  if (!r.ok && !body.error) body.error = 'error ' + r.status;
+  body.ok = r.ok && !!body.ok;
+  return body;
 }
 function renderIrButtons(buttons) {
   const box = document.getElementById('ir-buttons');
@@ -411,6 +433,7 @@ function row(node, info) {
         <button class="confirm" ${isUnknown || confirmed ? 'disabled' : ''}>✓ confirm</button>
         <span class="status"></span></td>
     <td class="stan"><span class="stanval">${stateStr(info)}</span><span class="scene-badge"></span></td>
+    <td class="actions"></td>
     <td><input class="name" value="${esc(info.name)}">
         <button class="save-name">Save</button>
         <span class="status"></span></td>
@@ -419,9 +442,95 @@ function row(node, info) {
         <span class="status"></span></td>`;
   return tr;
 }
+function renderActions(cell, node, info) {
+  if (!cell) return;
+  // Endpoint-addressed control is deferred; multi-gang rows stay read-only in v1.
+  if (info.endpoints != null) return;
+  const buttons = [];
+  const status = document.createElement('span');
+  status.className = 'status';
+  let busy = false;
+  const setButtons = (disabled) => {
+    buttons.forEach((b) => { b.disabled = disabled; });
+  };
+  const send = async (payload, pending) => {
+    if (busy) return;
+    busy = true;
+    setButtons(true);
+    status.textContent = pending ? '… ' + pending : '…';
+    status.className = 'status';
+    try {
+      const res = await postControl(payload);
+      status.textContent = res.ok ? '✓ wysłano' : '✗ ' + (res.error || 'failed');
+      status.className = 'status' + (res.ok ? '' : ' err');
+    } catch (e) {
+      status.textContent = '✗ ' + ((e && e.message) || 'błąd');
+      status.className = 'status err';
+    } finally {
+      busy = false;
+      setButtons(false);
+    }
+  };
+  const addButton = (label, payload, pending) => {
+    const btn = document.createElement('button');
+    btn.textContent = label;
+    btn.style.marginRight = '0.3rem';
+    btn.onclick = () => send(typeof payload === 'function' ? payload() : payload,
+                             typeof pending === 'function' ? pending() : pending);
+    buttons.push(btn);
+    cell.appendChild(btn);
+    return btn;
+  };
+  const addLevelSelect = () => {
+    const sel = document.createElement('select');
+    sel.style.marginRight = '0.3rem';
+    for (const value of [10, 25, 50, 75, 99]) {
+      const o = document.createElement('option');
+      o.value = value;
+      o.textContent = value + '%';
+      sel.appendChild(o);
+    }
+    cell.appendChild(sel);
+    addButton('Ustaw', () => ({op: 'level', node, value: parseInt(sel.value, 10)}));
+  };
+  const clampSetpoint = (delta) => {
+    const raw = info.setpoint == null ? 21 : Number(info.setpoint);
+    const current = Number.isFinite(raw) ? raw : 21;
+    return Math.min(30, Math.max(5, current + delta));
+  };
+  if (info.type === 'light') {
+    if (info.level != null) {
+      addButton('Wył', {op: 'level', node, value: 0});
+      addButton('Wł', {op: 'level', node, value: 99});
+      addLevelSelect();
+    } else {
+      addButton('Wł', {op: 'switch', node, on: true});
+      addButton('Wył', {op: 'switch', node, on: false});
+    }
+  } else if (info.type === 'plug') {
+    addButton('Wł', {op: 'switch', node, on: true});
+    addButton('Wył', {op: 'switch', node, on: false});
+  } else if (info.type === 'blind') {
+    addButton('Podnieś', {op: 'cover', node, value: 99});
+    addButton('Opuść', {op: 'cover', node, value: 0});
+  } else if (info.type === 'thermostat') {
+    addButton('Wył', {op: 'thermostat_power', node, on: false});
+    addButton('Wł', {op: 'thermostat_power', node, on: true});
+    addButton('−', () => {
+      const celsius = clampSetpoint(-0.5);
+      return {op: 'thermostat', node, celsius};
+    }, () => clampSetpoint(-0.5).toFixed(1) + '°');
+    addButton('+', () => {
+      const celsius = clampSetpoint(0.5);
+      return {op: 'thermostat', node, celsius};
+    }, () => clampSetpoint(0.5).toFixed(1) + '°');
+  }
+  if (buttons.length) cell.appendChild(status);
+}
 function bindRow(tr) {
   const node = parseInt(tr.dataset.node, 10);
   const inferred = tr.dataset.type;
+  renderActions(tr.querySelector('.actions'), node, infoByNode.get(node) || {});
   const setStatus = (which, text, isErr) => {
     const el = tr.querySelector(`.${which}`).parentElement.querySelector('.status');
     el.textContent = text;
@@ -453,6 +562,7 @@ function subRow(node, ep, on, name) {
     <td></td><td></td><td></td>
     <td class="sub-label">↳ kanał ${esc(ep)}</td>
     <td class="stan ep-stan">${on ? 'on' : 'off'}</td>
+    <td class="actions"></td>
     <td><input class="ep-name" value="${esc(name)}">
         <button class="save-ep-name">Save</button>
         <span class="status"></span></td>
@@ -1050,7 +1160,7 @@ class _WebHandlerBase(BaseHTTPRequestHandler):
             return self._events()
         if self.path == "/api/automations":
             return self._automations_list()
-        if self.path in ("/api/name", "/api/ir", "/api/automations/delete", "/api/graduate"):   # right path, wrong method
+        if self.path in ("/api/name", "/api/ir", "/api/control", "/api/automations/delete", "/api/graduate"):   # right path, wrong method
             return self._send_empty(HTTPStatus.METHOD_NOT_ALLOWED, [("Allow", "POST")])
         return self._send_empty(HTTPStatus.NOT_FOUND)
 
@@ -1129,6 +1239,8 @@ class _WebHandlerBase(BaseHTTPRequestHandler):
             return self._name()
         if self.path == "/api/ir":
             return self._ir()
+        if self.path == "/api/control":
+            return self._control()
         if self.path == "/api/automations":
             return self._automations_set()
         if self.path == "/api/automations/delete":
@@ -1208,6 +1320,15 @@ class _WebHandlerBase(BaseHTTPRequestHandler):
         op["op"] = "name"                          # normalise after validation
         return self._dispatch_op(op)
 
+    def _control(self):
+        op, err = self._read_json_body()
+        if err:
+            return
+        error = _validate_control_payload(op)
+        if error is not None:
+            return self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": error})
+        return self._dispatch_op(op, fail_status=HTTPStatus.SERVICE_UNAVAILABLE)
+
     def _graduate(self):
         """POST /api/graduate — persist standalone mode (Phase-3; applied on the next restart). Takes
         no body, but still requires ``Content-Type: application/json`` — the same CSRF guard the other
@@ -1227,7 +1348,7 @@ class _WebHandlerBase(BaseHTTPRequestHandler):
             return
         if not isinstance(op, dict):                 # a list/scalar JSON body would crash op.get()
             return self._send_json(HTTPStatus.BAD_REQUEST,
-                                   {"ok": False, "error": "body must be a JSON object"})
+                                   {"ok": False, "error": _BODY_NOT_OBJECT})
         ir_file, button = op.get("file"), op.get("button")
         if not (isinstance(ir_file, str) and ir_file and isinstance(button, str) and button):
             return self._send_json(HTTPStatus.BAD_REQUEST,
@@ -1269,7 +1390,7 @@ class _WebHandlerBase(BaseHTTPRequestHandler):
     @staticmethod
     def _validate_name_payload(op) -> "str | None":
         if not isinstance(op, dict):
-            return "body must be a JSON object"
+            return _BODY_NOT_OBJECT
         unknown = set(op) - _NAME_FIELDS
         if unknown:
             return f"unknown field(s): {sorted(unknown)}"      # explicit allowlist
@@ -1299,6 +1420,61 @@ def _validate_name_strings(op) -> "str | None":
         if value is not None and (not isinstance(value, str) or len(value) > MAX_STRING):
             return f"{key} must be a string ≤ {MAX_STRING} chars"
     return None
+
+
+def _control_node_error(op) -> "str | None":
+    node = op.get("node")
+    if not isinstance(node, int) or isinstance(node, bool) or not 0 <= node <= 255:
+        return "node must be an integer 0..255"
+    return None
+
+
+def _control_on_error(op) -> "str | None":
+    if not isinstance(op.get("on"), bool):
+        return "on must be a boolean"
+    return None
+
+
+def _control_value_error(op) -> "str | None":
+    value = op.get("value")
+    if not isinstance(value, int) or isinstance(value, bool) or not 0 <= value <= 99:
+        return "value must be an integer 0..99"
+    return None
+
+
+def _control_celsius_error(op) -> "str | None":
+    # Reject non-numbers, bool (True == 1), and json's NaN/Infinity (a float that isn't finite)
+    # before the range check; round(°C*10) is the wire encoding, so 5..30 °C is the safe band.
+    celsius = op.get("celsius")
+    if (not isinstance(celsius, (int, float)) or isinstance(celsius, bool)
+            or (isinstance(celsius, float) and not math.isfinite(celsius))
+            or not 5 <= celsius <= 30):
+        return "celsius must be a number between 5 and 30"
+    return None
+
+
+# Per-op field validator (node is checked separately, for every op).
+_CONTROL_FIELD_VALIDATORS = {
+    "switch": _control_on_error,
+    "thermostat_power": _control_on_error,
+    "level": _control_value_error,
+    "cover": _control_value_error,
+    "thermostat": _control_celsius_error,
+}
+
+
+def _validate_control_payload(op) -> "str | None":
+    """Validate a /api/control body: a strict allowlist of device ops (never `raw`/`lights`),
+    no unknown fields, and per-op operand bounds. Returns an error string or None when valid."""
+    if not isinstance(op, dict):
+        return _BODY_NOT_OBJECT
+    name = op.get("op")
+    if name not in _CONTROL_OPS:
+        return f"unsupported control op {name!r}"
+    unknown = set(op) - _CONTROL_FIELDS[name]
+    if unknown:
+        return f"unknown field(s): {sorted(unknown)}"
+    return _control_node_error(op) or _CONTROL_FIELD_VALIDATORS[name](op)
 
 
 def make_handler(rt, loop):
