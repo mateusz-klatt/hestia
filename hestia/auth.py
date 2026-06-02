@@ -69,7 +69,9 @@ _DUMMY_STORED = hash_password(_DUMMY_PASSWORD)
 
 def verify_password(password: str, stored: str) -> bool:
     """``True`` iff ``password`` matches the ``scrypt$…`` ``stored`` value. Constant-time; never raises
-    (a malformed/foreign ``stored`` returns ``False``)."""
+    (a malformed/foreign/non-string ``stored`` returns ``False``)."""
+    if not isinstance(stored, str):
+        return False
     try:
         algo, n_s, r_s, p_s, salt_b64, hash_b64 = stored.split("$")
         if algo != "scrypt":
@@ -156,8 +158,9 @@ def _cli(argv: list, *, prompt=getpass.getpass, path: "Path | None" = None) -> i
     users = load_users(target)
     users[username] = hash_password(first)
     target.parent.mkdir(parents=True, exist_ok=True)
-    # Atomic write: a crash or a concurrent `add` must not truncate or lose the store.
-    tmp = target.with_name(target.name + ".tmp")
+    # Atomic write: a crash or a concurrent `add` must not truncate or lose the store. A per-PID temp name
+    # keeps two concurrent `add` runs from clobbering the same temp file (each os.replace is atomic; last wins).
+    tmp = target.with_name(f"{target.name}.{os.getpid()}.tmp")
     with open(tmp, "w", encoding="utf-8") as f:
         f.write(json.dumps(users, indent=2, sort_keys=True) + "\n")
         f.flush()

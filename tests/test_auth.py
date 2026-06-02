@@ -9,6 +9,7 @@ import hashlib
 import hmac
 import json
 import os
+import shutil
 import tempfile
 import unittest
 from pathlib import Path
@@ -36,6 +37,10 @@ class PasswordTests(unittest.TestCase):
 
     def test_non_scrypt_algo_rejected(self):
         self.assertFalse(auth.verify_password("x", "bcrypt$2$8$1$YQ==$Yg=="))
+
+    def test_non_string_stored_rejected(self):
+        for bad in (None, 12345, ["scrypt"]):       # a non-str stored must return False, not raise
+            self.assertFalse(auth.verify_password("x", bad))
 
     def test_malformed_stored_rejected(self):
         for bad in ("", "scrypt$only", "scrypt$x$y$z$bad$base64!!", "scrypt$16384$8$1$@@@$@@@",
@@ -91,6 +96,7 @@ class SessionTests(unittest.TestCase):
 class UsersStoreTests(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
         self.path = self.tmp / "users.json"
 
     def test_missing_file_is_empty(self):
@@ -147,6 +153,7 @@ class _Prompt:
 class CliTests(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
         self.path = self.tmp / "sub" / "users.json"   # parent dir does not exist yet
 
     def test_usage_error(self):
