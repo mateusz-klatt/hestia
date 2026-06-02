@@ -65,3 +65,40 @@ export interface Discovery {
   target_mode: string;
   env_override: string | null;
 }
+
+// ---- Server-Sent Events (`GET /api/events`) -------------------------------
+// The backend pushes one of these on every decoded frame (see
+// `_publish_proxy_events` / the globals poller in hestia/proxy.py).
+
+/** A function-button scene press — transient, rendered as a brief badge. */
+export interface Scene {
+  id: number;
+}
+
+/** Every event flashes the row (heatmap); a button press rides a `scene`. */
+export interface ActivityEvent {
+  type: "activity";
+  node: number;
+  ts: number;
+  scene?: Scene;
+}
+
+/** Live value change(s) for one node — a cheap "stan" cell patch. */
+export interface StateEvent {
+  type: "state";
+  node: number;
+  fields: Partial<DeviceInfo>;
+}
+
+/** A node-less global field change (crib_temp / outdoor_temp). */
+export interface GlobalsEvent {
+  type: "globals";
+  fields: Partial<Globals>;
+}
+
+/** A node's discovery identity changed → the client refetches the snapshot. */
+export interface DiscoveryChangedEvent {
+  type: "discovery_changed";
+}
+
+export type LiveEvent = ActivityEvent | StateEvent | GlobalsEvent | DiscoveryChangedEvent;

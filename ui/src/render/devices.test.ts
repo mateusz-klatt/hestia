@@ -86,6 +86,7 @@ describe("renderDeviceRows", () => {
     expect(rows).toHaveLength(4); // node 2 + 2 sub-rows, then node 10
     expect(rows[0]?.dataset.node).toBe("2"); // numeric sort: 2 before 10
     expect(rows[1]?.classList.contains("subrow")).toBe(true);
+    expect(rows[1]?.dataset.node).toBe("2"); // shares the parent node id (addressable by SSE)
     expect(rows[1]?.dataset.ep).toBe("1");
     expect(rows[1]?.querySelector(".sub-label")?.textContent).toBe("↳ kanał 1");
     expect(rows[1]?.querySelectorAll("td")[4]?.textContent).toBe("on"); // stan
