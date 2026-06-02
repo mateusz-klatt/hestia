@@ -1,11 +1,12 @@
 import type { DeviceInfo, Discovery, Globals, Summary } from "../api/types";
-import { battFmt, battLow, fmtTemp, stateStr } from "./format";
+import { battFmt, battLow, fmtHumidity, fmtTemp, stateStr } from "./format";
 
 /** The DOM nodes the discovery view writes into (queried once in `main.ts`). */
 export interface DeviceView {
   hdrText: HTMLElement;
   crib: HTMLElement;
   outdoor: HTMLElement;
+  outdoorHumidity: HTMLElement;
   rows: HTMLElement;
 }
 
@@ -133,9 +134,15 @@ export function renderDeviceRows(tbody: HTMLElement, devices: Record<string, Dev
   }
 }
 
-export function renderGlobals(cribEl: HTMLElement, outdoorEl: HTMLElement, g: Globals): void {
+export function renderGlobals(
+  cribEl: HTMLElement,
+  outdoorEl: HTMLElement,
+  outdoorHumidityEl: HTMLElement,
+  g: Globals,
+): void {
   cribEl.textContent = fmtTemp(g.crib_temp);
   outdoorEl.textContent = fmtTemp(g.outdoor_temp);
+  outdoorHumidityEl.textContent = fmtHumidity(g.outdoor_humidity);
 }
 
 export function summaryText(s: Summary): string {
@@ -145,6 +152,6 @@ export function summaryText(s: Summary): string {
 /** Render the whole read-only discovery view (summary header, globals, table). */
 export function renderDiscovery(view: DeviceView, data: Discovery): void {
   view.hdrText.textContent = summaryText(data.summary);
-  renderGlobals(view.crib, view.outdoor, data.globals);
+  renderGlobals(view.crib, view.outdoor, view.outdoorHumidity, data.globals);
   renderDeviceRows(view.rows, data.devices);
 }

@@ -5,6 +5,11 @@ export function fmtTemp(value: number | null): string {
   return value === null ? "—" : `${value.toFixed(1)}°`;
 }
 
+/** Relative humidity (%RH) → whole percent; `—` when null. */
+export function fmtHumidity(value: number | null): string {
+  return value === null ? "—" : `${String(Math.round(value))}%`;
+}
+
 /**
  * Battery level (%) for nodes that report one; `—` for mains (no report).
  * A value above 100 is the Z-Wave low-battery sentinel (e.g. 0xff) — show

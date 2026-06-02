@@ -1,5 +1,5 @@
 import RULE_VOCAB from "./rule_vocab.snapshot.json";
-import type { DeviceInfo, Discovery, RuleVocab } from "./api/types";
+import type { DeviceInfo, Discovery, Globals, RuleVocab } from "./api/types";
 
 /**
  * The real rule grammar, a VERBATIM capture of the backend `rule_vocab()`
@@ -38,21 +38,26 @@ export function device(overrides: Partial<DeviceInfo> = {}): DeviceInfo {
   };
 }
 
-/** A discovery payload wrapping the given devices, with sane defaults. */
+/**
+ * A discovery payload wrapping the given devices, with sane defaults. The `globals` override is
+ * PARTIAL (merged onto the all-null default) so a test can set just the field(s) it cares about —
+ * e.g. `{ globals: { outdoor_humidity: 56 } }` leaves crib/outdoor at null.
+ */
 export function discovery(
   devices: Record<string, DeviceInfo>,
-  overrides: Partial<Discovery> = {},
+  overrides: Partial<Omit<Discovery, "globals">> & { globals?: Partial<Globals> } = {},
 ): Discovery {
+  const { globals, ...rest } = overrides;
   return {
     devices,
     summary: { total: Object.keys(devices).length, confirmed: 0, unknown: 0 },
-    globals: { crib_temp: null, outdoor_temp: null },
     ir_buttons: [],
     klima: {},
     rule_vocab: ruleVocab(),
     mode: "standalone",
     target_mode: "standalone",
     env_override: null,
-    ...overrides,
+    ...rest,
+    globals: { crib_temp: null, outdoor_temp: null, outdoor_humidity: null, ...globals },
   };
 }

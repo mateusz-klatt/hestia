@@ -1,6 +1,6 @@
 import type { DeviceInfo, Discovery, Globals, LiveEvent, Scene } from "./api/types";
 import { renderDeviceRows, renderGlobals, summaryText } from "./render/devices";
-import { fmtTemp, stateStr } from "./render/format";
+import { fmtHumidity, fmtTemp, stateStr } from "./render/format";
 
 /** How long a row stays brightly highlighted after activity. */
 const HIGHLIGHT_MS = 2200;
@@ -14,6 +14,7 @@ export interface LiveView {
   hdrText: HTMLElement;
   crib: HTMLElement;
   outdoor: HTMLElement;
+  outdoorHumidity: HTMLElement;
   rows: HTMLElement;
   conn: HTMLElement;
   status: HTMLElement;
@@ -140,7 +141,7 @@ export class LiveController {
 
   private render(data: Discovery): void {
     this.view.hdrText.textContent = summaryText(data.summary);
-    renderGlobals(this.view.crib, this.view.outdoor, data.globals);
+    renderGlobals(this.view.crib, this.view.outdoor, this.view.outdoorHumidity, data.globals);
     renderDeviceRows(this.view.rows, data.devices);
     this.infoByNode.clear();
     for (const [node, info] of Object.entries(data.devices)) {
@@ -231,6 +232,9 @@ export class LiveController {
     if ("crib_temp" in fields) this.view.crib.textContent = fmtTemp(fields.crib_temp ?? null);
     if ("outdoor_temp" in fields) {
       this.view.outdoor.textContent = fmtTemp(fields.outdoor_temp ?? null);
+    }
+    if ("outdoor_humidity" in fields) {
+      this.view.outdoorHumidity.textContent = fmtHumidity(fields.outdoor_humidity ?? null);
     }
   }
 
