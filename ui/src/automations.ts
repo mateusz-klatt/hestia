@@ -44,9 +44,11 @@ function ruleError(result: RuleResult): string {
   return result.body?.error ?? `error ${String(result.status)}`;
 }
 
-function cell(text: string): HTMLTableCellElement {
+/** `label` → `data-label`, the cell's heading in the mobile card layout (thead hidden — see style.css). */
+function cell(text: string, label?: string): HTMLTableCellElement {
   const td = document.createElement("td");
   td.textContent = text;
+  if (label !== undefined) td.dataset.label = label;
   return td;
 }
 
@@ -62,9 +64,10 @@ function rowButton(label: string, cls: string): HTMLButtonElement {
 function automationRow(rule: Rule, deps: AutomationsDeps): HTMLTableRowElement {
   const tr = document.createElement("tr");
   tr.dataset.id = rule.id;
-  tr.appendChild(cell(rule.id));
+  tr.appendChild(cell(rule.id, "id"));
 
   const enTd = document.createElement("td");
+  enTd.dataset.label = "on";
   const en = document.createElement("input");
   en.type = "checkbox";
   en.className = "auto-en";
@@ -72,9 +75,9 @@ function automationRow(rule: Rule, deps: AutomationsDeps): HTMLTableRowElement {
   enTd.appendChild(en);
   tr.appendChild(enTd);
 
-  tr.appendChild(cell(trigSummary(rule.trigger)));
-  tr.appendChild(cell(String(rule.conditions.length)));
-  tr.appendChild(cell(rule.actions.map((a) => a.op).join(", ")));
+  tr.appendChild(cell(trigSummary(rule.trigger), "trigger"));
+  tr.appendChild(cell(String(rule.conditions.length), "cond"));
+  tr.appendChild(cell(rule.actions.map((a) => a.op).join(", "), "actions"));
 
   const actTd = document.createElement("td");
   const edit = rowButton("Edit", "auto-edit");

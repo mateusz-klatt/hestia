@@ -69,6 +69,12 @@ describe("deviceRow", () => {
     expect(tr.dataset.type).toBe("plug");
   });
 
+  it("tags every cell with a data-label for the mobile card layout", () => {
+    const tr = deviceRow("7", device({ type: "plug", name: "fridge", room: "kitchen" }));
+    const labels = [...tr.querySelectorAll("td")].map((td) => td.dataset.label);
+    expect(labels).toEqual(["node", "last seen", "battery", "type", "stan", "akcje", "name", "room"]);
+  });
+
   it("marks a low-battery cell with the 'low' class", () => {
     const batt = deviceRow("3", device({ battery: 255 })).querySelectorAll("td")[2];
     expect(batt?.classList.contains("low")).toBe(true);
@@ -140,6 +146,19 @@ describe("renderDeviceRows", () => {
     expect(rows[2]?.querySelector(".sub-label")?.textContent).toBe("↳ kanał 2");
     expect(rows[2]?.querySelectorAll("td")[4]?.textContent).toBe("off");
     expect(rows[2]?.querySelectorAll("td")[6]?.querySelector<HTMLInputElement>("input.ep-name")?.value).toBe("");
+  });
+
+  it("labels only the meaningful sub-row cells (empty placeholders stay unlabeled → hidden on mobile)", () => {
+    const tbody = document.createElement("tbody");
+    renderDeviceRows(tbody, {
+      "2": device({ type: "light", endpoints: { "1": true, "2": false }, endpoint_names: { "1": "lewy" } }),
+    });
+    const tds = tbody.querySelector("tr.subrow")?.querySelectorAll("td");
+    expect(tds?.[0]?.dataset.label).toBeUndefined(); // node placeholder — empty + unlabeled
+    expect(tds?.[3]?.classList.contains("sub-label")).toBe(true);
+    expect(tds?.[3]?.dataset.label).toBeUndefined(); // "↳ kanał N" is self-describing
+    expect(tds?.[4]?.dataset.label).toBe("stan");
+    expect(tds?.[6]?.dataset.label).toBe("name"); // the editable per-channel label
   });
 
   it("does not emit sub-rows for a single-endpoint switch", () => {

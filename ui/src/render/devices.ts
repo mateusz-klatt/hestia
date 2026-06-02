@@ -10,11 +10,16 @@ export interface DeviceView {
   rows: HTMLElement;
 }
 
-/** A `<td>` whose text is set via `textContent` — XSS-safe by construction. */
-function cell(text: string, className?: string): HTMLTableCellElement {
+/**
+ * A `<td>` whose text is set via `textContent` — XSS-safe by construction.
+ * `label` becomes `data-label`, which the mobile card layout surfaces as the
+ * cell's heading (the `<thead>` is hidden at narrow widths — see style.css).
+ */
+function cell(text: string, className?: string, label?: string): HTMLTableCellElement {
   const td = document.createElement("td");
   td.textContent = text;
   if (className !== undefined) td.className = className;
+  if (label !== undefined) td.dataset.label = label;
   return td;
 }
 
@@ -28,6 +33,7 @@ function statusSpan(): HTMLSpanElement {
  *  type is unknown or already user-confirmed). Wired by the registry binder. */
 function typeCell(info: DeviceInfo): HTMLTableCellElement {
   const td = document.createElement("td");
+  td.dataset.label = "type";
   const span = document.createElement("span");
   span.textContent = `${info.type || "?"} (${info.confidence || "?"})`;
   if (info.confidence === "confirmed") span.className = "confirmed";
@@ -43,6 +49,7 @@ function typeCell(info: DeviceInfo): HTMLTableCellElement {
 /** An editable label cell: `<input class="name|room">` + Save + a status span. */
 function editCell(field: "name" | "room", value: string): HTMLTableCellElement {
   const td = document.createElement("td");
+  td.dataset.label = field;
   const input = document.createElement("input");
   input.className = field;
   input.value = value;
@@ -62,6 +69,7 @@ function editCell(field: "name" | "room", value: string): HTMLTableCellElement {
 function stanCell(info: DeviceInfo): HTMLTableCellElement {
   const td = document.createElement("td");
   td.className = "stan";
+  td.dataset.label = "stan";
   const val = document.createElement("span");
   val.className = "stanval";
   val.textContent = stateStr(info);
@@ -76,12 +84,12 @@ export function deviceRow(node: string, info: DeviceInfo): HTMLTableRowElement {
   const tr = document.createElement("tr");
   tr.dataset.node = node;
   tr.dataset.type = info.type;
-  tr.appendChild(cell(node));
-  tr.appendChild(cell("—", "seen")); // last seen — static until SSE (PR-3) drives it
-  tr.appendChild(cell(battFmt(info.battery), battLow(info.battery) ? "batt low" : "batt"));
+  tr.appendChild(cell(node, undefined, "node"));
+  tr.appendChild(cell("—", "seen", "last seen")); // last seen — static until SSE (PR-3) drives it
+  tr.appendChild(cell(battFmt(info.battery), battLow(info.battery) ? "batt low" : "batt", "battery"));
   tr.appendChild(typeCell(info));
   tr.appendChild(stanCell(info));
-  tr.appendChild(cell("", "actions")); // akcje — control buttons wired by the live decorator (PR-4a)
+  tr.appendChild(cell("", "actions", "akcje")); // akcje — control buttons wired by the live decorator (PR-4a)
   tr.appendChild(editCell("name", info.name ?? "")); // name + Save — wired by the registry binder (PR-4b)
   tr.appendChild(editCell("room", info.room ?? ""));
   return tr;
@@ -90,6 +98,7 @@ export function deviceRow(node: string, info: DeviceInfo): HTMLTableRowElement {
 /** An editable per-endpoint label cell: `<input class="ep-name">` + Save + status. */
 function epNameCell(name: string): HTMLTableCellElement {
   const td = document.createElement("td");
+  td.dataset.label = "name";
   const input = document.createElement("input");
   input.className = "ep-name";
   input.value = name;
@@ -111,7 +120,7 @@ function subRow(node: string, ep: string, on: boolean, name: string): HTMLTableR
   tr.appendChild(cell("")); // last seen
   tr.appendChild(cell("")); // battery
   tr.appendChild(cell(`↳ kanał ${ep}`, "sub-label"));
-  tr.appendChild(cell(on ? "on" : "off", "stan ep-stan"));
+  tr.appendChild(cell(on ? "on" : "off", "stan ep-stan", "stan"));
   tr.appendChild(cell("")); // akcje (multi-gang channels stay read-only)
   tr.appendChild(epNameCell(name)); // per-channel label — wired by the registry binder (PR-4b)
   tr.appendChild(cell("")); // room
