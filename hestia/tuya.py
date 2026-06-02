@@ -72,13 +72,13 @@ def _check_aes_args(data: bytes, key: bytes) -> None:
 
 def aes_ecb_encrypt(data: bytes, key: bytes) -> bytes:
     _check_aes_args(data, key)                       # guard before the cipher: clear TuyaError, not a raw ValueError
-    enc = Cipher(algorithms.AES(key), modes.ECB()).encryptor()
+    enc = Cipher(algorithms.AES(key), modes.ECB()).encryptor()  # NOSONAR S5542: Tuya v3.3 mandates AES-128-ECB on the wire (device-dictated, not a choice)
     return enc.update(data) + enc.finalize()
 
 
 def aes_ecb_decrypt(data: bytes, key: bytes) -> bytes:
     _check_aes_args(data, key)
-    dec = Cipher(algorithms.AES(key), modes.ECB()).decryptor()
+    dec = Cipher(algorithms.AES(key), modes.ECB()).decryptor()  # NOSONAR S5542: Tuya v3.3 mandates AES-128-ECB on the wire (device-dictated, not a choice)
     return dec.update(data) + dec.finalize()
 
 
