@@ -60,6 +60,30 @@ describe("renderIrButtons", () => {
     await flush();
     expect(el.querySelector(".status")?.textContent).toBe("✗ flipper IR is disabled");
   });
+
+  it("shares an in-flight lock across IR buttons (disable all, no overlap)", async () => {
+    let resolve: (v: ControlResult) => void = () => undefined;
+    let calls = 0;
+    const post: PostIr = () => {
+      calls += 1;
+      return new Promise<ControlResult>((r) => {
+        resolve = r;
+      });
+    };
+    const el = box();
+    renderIrButtons(el, BUTTONS, post);
+    const btns = [...el.querySelectorAll("button")];
+    click(el, "TV on");
+    expect(calls).toBe(1);
+    expect(btns.every((b) => b.disabled)).toBe(true);
+    click(el, "TV off"); // ignored while busy
+    expect(calls).toBe(1);
+    resolve({ ok: true });
+    await flush();
+    expect(btns.every((b) => b.disabled)).toBe(false);
+    click(el, "TV off"); // lock released
+    expect(calls).toBe(2);
+  });
 });
 
 describe("renderKlima", () => {
@@ -118,6 +142,50 @@ describe("renderKlima", () => {
     renderKlima(el, noOff, okIr);
     renderKlima(el, noOff, okIr); // idempotent
     expect(labels(el)).toEqual(["Ustaw"]);
+  });
+
+  it("does not transmit when the selected mode has no temps (empty-value guard)", async () => {
+    const sent: string[] = [];
+    const post: PostIr = (_file, button) => {
+      sent.push(button);
+      return Promise.resolve({ ok: true });
+    };
+    const el = box();
+    renderKlima(el, { file: "/ext/infrared/klima.ir", power_on: { cool: [] }, presets: ["off"] }, post);
+    click(el, "Ustaw"); // temp dropdown is empty → temp.value === "" → guard blocks
+    await flush();
+    expect(sent).toEqual([]);
+  });
+
+  it("builds an off-only panel (Wyłącz, no dropdowns) when there are no programs", async () => {
+    const sent: string[] = [];
+    const post: PostIr = (_file, button) => {
+      sent.push(button);
+      return Promise.resolve({ ok: true });
+    };
+    const el = box();
+    renderKlima(el, { file: "/ext/infrared/klima.ir", power_on: {}, presets: ["off"] }, post);
+    expect(el.querySelectorAll("select")).toHaveLength(0);
+    expect(labels(el)).toEqual(["Wyłącz"]);
+    click(el, "Wyłącz");
+    await flush();
+    expect(sent).toEqual(["off"]);
+  });
+
+  it("recovers from a rejected transmit (✗ błąd) and releases the lock", async () => {
+    let calls = 0;
+    const post: PostIr = () => {
+      calls += 1;
+      return calls === 1 ? Promise.reject(new Error("x")) : Promise.resolve({ ok: true });
+    };
+    const el = box();
+    renderKlima(el, KLIMA, post);
+    click(el, "Ustaw");
+    await flush();
+    expect(el.querySelector(".status")?.textContent).toBe("✗ błąd");
+    click(el, "Wyłącz"); // lock released by finally → fires again
+    await flush();
+    expect(calls).toBe(2);
   });
 
   it("shares an in-flight lock across klima buttons", async () => {

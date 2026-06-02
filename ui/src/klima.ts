@@ -14,24 +14,33 @@ export function renderIrButtons(box: HTMLElement, buttons: IrButton[], postIr: P
   const status = document.createElement("span");
   status.className = "status";
   status.style.marginLeft = "0.5rem";
+  // One transmit at a time: a shared lock disables ALL IR buttons for the
+  // round-trip (the Flipper transmit is single-owner anyway), so quick taps on
+  // different buttons can't overlap or race the shared status span.
+  const btns: HTMLButtonElement[] = [];
+  let busy = false;
+  const send = async (b: IrButton): Promise<void> => {
+    if (busy) return;
+    busy = true;
+    for (const x of btns) x.disabled = true;
+    status.textContent = "…";
+    try {
+      const res = await postIr(b.file, b.button);
+      status.textContent = res.ok ? `✓ ${b.label}` : `✗ ${res.error ?? "failed"}`;
+    } finally {
+      busy = false;
+      for (const x of btns) x.disabled = false;
+    }
+  };
   for (const b of buttons) {
     const btn = document.createElement("button");
     btn.type = "button";
     btn.textContent = b.label;
     btn.style.marginRight = "0.4rem";
-    const send = async (): Promise<void> => {
-      btn.disabled = true;
-      status.textContent = "…";
-      try {
-        const res = await postIr(b.file, b.button);
-        status.textContent = res.ok ? `✓ ${b.label}` : `✗ ${res.error ?? "failed"}`;
-      } finally {
-        btn.disabled = false;
-      }
-    };
     btn.addEventListener("click", () => {
-      void send();
+      void send(b);
     });
+    btns.push(btn);
     box.appendChild(btn);
   }
   box.appendChild(status);

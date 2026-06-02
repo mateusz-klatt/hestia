@@ -90,4 +90,16 @@ describe("postIr", () => {
     );
     expect(await postIr("/x.ir", "off")).toEqual({ ok: false, error: "flipper IR is disabled" });
   });
+
+  it("maps a rejected fetch to {ok:false} without throwing (never-rejects contract)", async () => {
+    vi.stubGlobal("fetch", () => Promise.reject(new Error("offline")));
+    await expect(postIr("/x.ir", "off")).resolves.toEqual({ ok: false, error: "błąd" });
+  });
+
+  it("maps a non-JSON body to an error-<status> result", async () => {
+    vi.stubGlobal("fetch", () =>
+      Promise.resolve({ ok: false, status: 503, json: () => Promise.reject(new Error("bad json")) }),
+    );
+    await expect(postIr("/x.ir", "off")).resolves.toEqual({ ok: false, error: "error 503" });
+  });
 });
