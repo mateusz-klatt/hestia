@@ -6,22 +6,9 @@ Z-Wave node is, then the confirmed metadata lets hestia (and downstream Home
 Assistant) talk about devices by their real names instead of node ids. Phase 3
 will graduate proxy mode to standalone once enough nodes are confirmed.
 
-Architecture — three deliberate choices:
-
-* **stdlib ``http.server.ThreadingHTTPServer``** in a daemon thread. No new
-  runtime dependency; one OS thread per request; daemon flag ensures the
-  process exits even if a handler is wedged. Adequate for a localhost
-  onboarding UI; not a long-running production service.
-* **Client polling, not SSE.** Onboarding velocity is ~0 events/min once the
-  classifier has run; the browser already round-trips on every Save. A 3-second
-  ``setInterval`` is invisible at human speed and avoids per-tab thread pinning,
-  SSE shutdown lifecycle, ``BrokenPipeError`` handling, and stream-cap tests.
-* **Single-loop access via a thread-to-loop bridge** (`_call_loop`). Every read
-  of ``rt.classifier.nodes`` / ``rt.registry.nodes`` and every write through
-  ``process_control_op`` runs *inside* the asyncio loop via
-  ``run_coroutine_threadsafe``. Worker threads never touch ``rt`` directly, so
-  there is no dict-iteration race with the loop's ``observe()``, and every
-  write goes through ``_persist``'s ``save_lock`` automatically.
+Architecture: aiohttp runs in the same asyncio loop as the proxy/server
+runtime, so handlers read ``rt`` directly and every write still goes through
+``process_control_op`` / ``_persist``'s ``save_lock``.
 
 Per-field UI saves — the row's name / room / type each have an independent
 ``[Save]`` (or ``[✓]`` for confirm-type) button. Each posts only its own field
@@ -40,19 +27,19 @@ Env: ``HESTIA_WEB_HOST`` (default ``127.0.0.1``), ``HESTIA_WEB_PORT``
 from __future__ import annotations
 
 import asyncio
-import concurrent.futures
 import json
 import logging
 import math
 import os
-import threading
 import time
+from dataclasses import dataclass
 from http import HTTPStatus
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+from aiohttp import ClientConnectionError, web
 
 from .classifier import DeviceType
 from .automations import rule_vocab
-from .proxy import (IR_BUTTONS, IR_OP_TIMEOUT, KLIMA, _CLOSED_SENTINEL, _LOOPBACK, _merged_discovery,
+from .proxy import (IR_BUTTONS, KLIMA, _CLOSED_SENTINEL, _LOOPBACK, _merged_discovery,
                     globals_snapshot, process_control_op)
 
 log = logging.getLogger("hestia.web")
@@ -60,8 +47,6 @@ log = logging.getLogger("hestia.web")
 MAX_BODY = 8192                                      # cap POST body size (bytes)
 MAX_RULE_BODY = 65536                                # larger cap for an automation rule
 MAX_STRING = 256                                     # cap name / room length (chars)
-BRIDGE_TIMEOUT = 5.0                                 # seconds; loop-call upper bound
-SSE_BRIDGE_TIMEOUT = 20.0                            # outer cap on stream-loop _call_loop
 SSE_IDLE_TIMEOUT = 15.0                              # inner: queue.get idle → keepalive
 SSE_MAX_LIFETIME = float(os.environ.get("HESTIA_SSE_LIFETIME", "3600"))
 _TYPES = {t.value for t in DeviceType}
@@ -76,16 +61,7 @@ _CONTROL_FIELDS = {
     "thermostat": {"op", "node", "celsius"},
     "thermostat_power": {"op", "node", "on"},
 }
-
-
-class _LoopClosed(Exception):
-    """The asyncio loop is closed (or stopped); the bridge can't dispatch.
-    The HTTP handler maps this to 503 Service Unavailable."""
-
-
-class _BridgeTimeout(Exception):
-    """The dispatched coroutine didn't finish within ``BRIDGE_TIMEOUT``.
-    The HTTP handler maps this to 504 Gateway Timeout."""
+_RT_KEY = web.AppKey("rt", object)
 
 
 def _require_safe_web_bind(host: str) -> None:
@@ -98,56 +74,26 @@ def _require_safe_web_bind(host: str) -> None:
         )
 
 
-async def _in_loop_sync(fn, *args):  # NOSONAR S7503: must stay async — _call_loop runs it via run_coroutine_threadsafe alongside true coroutines
-    """Async shim that calls a synchronous function. Lets ``_call_loop`` route
-    sync helpers through ``run_coroutine_threadsafe`` uniformly with async ones."""
-    return fn(*args)
+def _json(status, payload):
+    body = json.dumps(payload).encode("utf-8")
+    return web.Response(body=body, status=status, content_type="application/json")
+
+
+def _empty(status, extra_headers=()):
+    headers = {"Content-Length": "0"}
+    headers.update(dict(extra_headers))
+    return web.Response(status=status, body=b"", headers=headers)
 
 
 async def _wait_event(queue: asyncio.Queue):
     """Wait on a subscriber queue inside the event loop, capped at ``SSE_IDLE_TIMEOUT``
-    via an ``asyncio.timeout`` scope. The cap is owned here, not accepted as a parameter
-    (S7483: async functions should not take a timeout argument — the caller's only knob is
-    ``SSE_IDLE_TIMEOUT``). ``asyncio.Queue`` is not thread-safe, so the SSE handler thread
-    reaches it only through this helper via ``_call_loop``. Returns the event on success or
+    via an ``asyncio.timeout`` scope. Returns the event on success or
     ``None`` on idle (so the handler writes a keepalive comment instead of dying)."""
     try:
         async with asyncio.timeout(SSE_IDLE_TIMEOUT):
             return await queue.get()
     except asyncio.TimeoutError:
         return None
-
-
-def _call_loop(loop, coro_factory, timeout: "float | None" = None):
-    """Run a coroutine inside the asyncio loop from a worker thread.
-
-    ``coro_factory`` is a zero-arg callable that builds the coroutine fresh on
-    each invocation. Building it *after* the loop-availability checks means a
-    closed-loop dispatch never leaks an un-awaited coroutine. ``timeout`` is
-    resolved at call time (not bound to the default value) so tests can patch
-    ``BRIDGE_TIMEOUT`` to keep the bridge-timeout test from sleeping for seconds.
-
-    Raises ``_LoopClosed`` when the loop isn't accepting work (closed, stopped,
-    or shut down during dispatch) and ``_BridgeTimeout`` when the dispatched
-    coroutine didn't return in time. Any exception raised *inside* the
-    coroutine is re-raised here for the caller to map."""
-    if timeout is None:
-        timeout = BRIDGE_TIMEOUT
-    if loop.is_closed() or not loop.is_running():
-        raise _LoopClosed
-    coro = coro_factory()
-    try:
-        fut = asyncio.run_coroutine_threadsafe(coro, loop)
-    except RuntimeError:                              # loop closed between check and dispatch
-        coro.close()                                  # avoid an "un-awaited coroutine" warning
-        raise _LoopClosed
-    try:
-        return fut.result(timeout=timeout)
-    except concurrent.futures.TimeoutError:
-        fut.cancel()
-        raise _BridgeTimeout
-    except concurrent.futures.CancelledError:        # future cancelled (loop shutdown)
-        raise _LoopClosed
 
 
 def _summary(devices: dict) -> dict:
@@ -1121,297 +1067,215 @@ loadAutomations();
 """
 
 
-class _WebHandlerBase(BaseHTTPRequestHandler):
-    # Quiet the per-request access log; we use our own structured logger.
-    def log_message(self, fmt, *args):           # pragma: no cover
-        log.debug("%s %s", self.address_string(), fmt % args)
+@web.middleware
+async def _empty_404_405_middleware(request, handler):
+    try:
+        return await handler(request)
+    except web.HTTPMethodNotAllowed as exc:
+        return _empty(HTTPStatus.METHOD_NOT_ALLOWED, [("Allow", exc.headers.get("Allow", ""))])
+    except web.HTTPNotFound:
+        return _empty(HTTPStatus.NOT_FOUND)
 
-    # ---- shared helpers ----
-    def _send_json(self, status, payload):
-        body = json.dumps(payload).encode("utf-8")
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
 
-    def _send_empty(self, status, extra_headers=()):
-        self.send_response(status)
-        self.send_header("Content-Length", "0")
-        for k, v in extra_headers:
-            self.send_header(k, v)
-        self.end_headers()
+def _rt(request):
+    return request.app[_RT_KEY]
 
-    def _send_html(self, status, html):
-        body = html.encode("utf-8")
-        self.send_response(status)
-        self.send_header("Content-Type", "text/html; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
 
-    # ---- GET ----
-    def do_GET(self):
-        if self.path == "/":
-            return self._send_html(HTTPStatus.OK, _INDEX_HTML)
-        if self.path == "/api/discovery":
-            return self._discovery()
-        if self.path == "/api/events":
-            return self._events()
-        if self.path == "/api/automations":
-            return self._automations_list()
-        if self.path in ("/api/name", "/api/ir", "/api/control", "/api/automations/delete", "/api/graduate"):   # right path, wrong method
-            return self._send_empty(HTTPStatus.METHOD_NOT_ALLOWED, [("Allow", "POST")])
-        return self._send_empty(HTTPStatus.NOT_FOUND)
+async def _index(_request):  # NOSONAR S7503: aiohttp route handlers must be coroutines (the framework awaits them)
+    return web.Response(text=_INDEX_HTML, content_type="text/html")
 
-    def _discovery(self):
-        try:
-            devices, globs, mode, target = _call_loop(self._loop, lambda: _in_loop_sync(
-                lambda r: (_merged_discovery(r), globals_snapshot(r.state), r.mode, r.registry.mode), self._rt))
-        except _LoopClosed:
-            return self._send_empty(HTTPStatus.SERVICE_UNAVAILABLE)
-        except _BridgeTimeout:
-            return self._send_empty(HTTPStatus.GATEWAY_TIMEOUT)
-        # mode = the RUNNING server; target_mode = the PERSISTED registry mode (Phase-3 graduation,
-        # applied on next restart); env_override = HESTIA_MODE if it is pinning the mode (else null).
-        return self._send_json(HTTPStatus.OK,
-                               {"devices": devices, "summary": _summary(devices), "globals": globs,
-                                "ir_buttons": IR_BUTTONS, "klima": KLIMA, "rule_vocab": rule_vocab(),
-                                "mode": mode, "target_mode": target,
-                                "env_override": os.environ.get("HESTIA_MODE")})
 
-    def _events(self):
-        """Server-Sent Events stream — pushes `activity` (`[1e 09]` frame
-        → row flash) and `discovery_changed` (name op / classifier update
-        → UI re-fetch). Heatmap UX for onboarding: operator wiggles a
-        switch, the row lights up, they know which to name."""
-        try:
-            sub = _call_loop(self._loop, lambda: self._rt.event_bus.try_subscribe())
-        except _LoopClosed:
-            return self._send_empty(HTTPStatus.SERVICE_UNAVAILABLE)
-        except _BridgeTimeout:
-            return self._send_empty(HTTPStatus.GATEWAY_TIMEOUT)
-        if sub is None:                            # cap reached or bus closing
-            return self._send_empty(HTTPStatus.TOO_MANY_REQUESTS)
-        try:
-            self.send_response(HTTPStatus.OK)
-            for k, v in (("Content-Type", "text/event-stream"),
-                         ("Cache-Control", "no-cache"),
-                         ("Connection", "keep-alive"),
-                         ("X-Accel-Buffering", "no")):
-                self.send_header(k, v)
-            self.end_headers()
-            deadline = _clock() + SSE_MAX_LIFETIME
-            while _clock() < deadline:
-                try:
-                    event = _call_loop(
-                        self._loop, lambda: _wait_event(sub.queue),
-                        timeout=SSE_BRIDGE_TIMEOUT)
-                except (_LoopClosed, _BridgeTimeout):
-                    break                          # browser EventSource auto-reconnects
-                if event is _CLOSED_SENTINEL:
-                    break                          # graceful shutdown
-                try:
-                    payload = (b":keepalive\n\n" if event is None
-                               else f"data: {json.dumps(event)}\n\n".encode("utf-8"))
-                    self.wfile.write(payload)
-                    self.wfile.flush()             # MANDATORY — BufferedWriter holds 8 KiB otherwise
-                except OSError:
-                    break                          # client disconnected
-        finally:
-            self._close_subscription(sub)
+async def _discovery(request):  # NOSONAR S7503: aiohttp route handlers must be coroutines (the framework awaits them)
+    rt = _rt(request)
+    devices = _merged_discovery(rt)
+    globs = globals_snapshot(rt.state)
+    # mode = the RUNNING server; target_mode = the PERSISTED registry mode (Phase-3 graduation,
+    # applied on next restart); env_override = HESTIA_MODE if it is pinning the mode (else null).
+    return _json(HTTPStatus.OK,
+                 {"devices": devices, "summary": _summary(devices), "globals": globs,
+                  "ir_buttons": IR_BUTTONS, "klima": KLIMA, "rule_vocab": rule_vocab(),
+                  "mode": rt.mode, "target_mode": rt.registry.mode,
+                  "env_override": os.environ.get("HESTIA_MODE")})
 
-    def _close_subscription(self, sub):
-        # Primary cleanup runs in the loop. On a torn-down loop, fall
-        # back to ``call_soon_threadsafe`` (which still schedules the
-        # close *into* the loop, so the bus invariants are preserved).
-        try:
-            _call_loop(self._loop, lambda: _in_loop_sync(sub.close), timeout=2.0)
-        except (_LoopClosed, _BridgeTimeout):
+
+async def _events(request):
+    """Server-Sent Events stream — pushes `activity` (`[1e 09]` frame
+    → row flash) and `discovery_changed` (name op / classifier update
+    → UI re-fetch). Heatmap UX for onboarding: operator wiggles a
+    switch, the row lights up, they know which to name."""
+    sub = await _rt(request).event_bus.try_subscribe()
+    if sub is None:                            # cap reached or bus closing
+        return _empty(HTTPStatus.TOO_MANY_REQUESTS)
+
+    resp = web.StreamResponse(
+        status=HTTPStatus.OK,
+        headers={
+            "Content-Type": "text/event-stream",
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+    try:
+        await resp.prepare(request)
+        deadline = _clock() + SSE_MAX_LIFETIME
+        while _clock() < deadline:
+            event = await _wait_event(sub.queue)
+            if event is _CLOSED_SENTINEL:
+                break                          # graceful shutdown
+            payload = (b":keepalive\n\n" if event is None
+                       else f"data: {json.dumps(event)}\n\n".encode("utf-8"))
             try:
-                self._loop.call_soon_threadsafe(sub.close)
-            except RuntimeError:
-                pass                               # loop fully closed; bus shutdown already ran
+                await resp.write(payload)
+            except (ConnectionResetError, ClientConnectionError, asyncio.CancelledError):
+                break                          # browser EventSource auto-reconnects
+    finally:
+        sub.close()
+    return resp
 
-    # ---- POST ----
-    def do_POST(self):
-        if self.path == "/api/name":
-            return self._name()
-        if self.path == "/api/ir":
-            return self._ir()
-        if self.path == "/api/control":
-            return self._control()
-        if self.path == "/api/automations":
-            return self._automations_set()
-        if self.path == "/api/automations/delete":
-            return self._automations_delete()
-        if self.path == "/api/graduate":           # Phase-3: persist standalone mode
-            return self._graduate()
-        if self.path == "/":                       # right path, wrong method
-            return self._send_empty(HTTPStatus.METHOD_NOT_ALLOWED, [("Allow", "GET")])
-        return self._send_empty(HTTPStatus.NOT_FOUND)
 
-    def _read_json_body(self, max_body=MAX_BODY):
-        """Read and JSON-parse the request body, enforcing framing limits. On any
-        content-type/framing/size/parse error this SENDS the matching 4xx itself and
-        returns ``(None, True)``; on success returns ``(obj, False)``. A zero-length
-        body parses to ``{}`` (preserving the original ``/api/name`` contract);
-        ``max_body`` caps the byte size per endpoint (names are small, rules larger).
+async def _read_json_body(request, max_body=MAX_BODY):
+    """Read and JSON-parse the request body, enforcing framing limits. On any
+    content-type/framing/size/parse error this returns ``(response, True)``;
+    on success returns ``(obj, False)``. A zero-length body parses to ``{}``
+    (preserving the original ``/api/name`` contract); ``max_body`` caps the byte
+    size per endpoint (names are small, rules larger).
 
-        Requiring ``Content-Type: application/json`` is the CSRF guard for these
-        device-controlling mutations: it is NOT a CORS "simple" content type, so a
-        cross-origin browser request must clear a preflight first — which this server
-        never grants — blocking a malicious page from POSTing a forged body (e.g. a
-        time rule that actuates devices) to the loopback UI or the auth'd reverse proxy.
-        First-party fetches already send it; non-browser clients set it trivially."""
-        ctype = self.headers.get("Content-Type", "")
-        if ctype.split(";")[0].strip().lower() != "application/json":
-            self._send_json(HTTPStatus.UNSUPPORTED_MEDIA_TYPE,
-                            {"ok": False, "error": "Content-Type must be application/json"})
-            return None, True
-        cl_raw = self.headers.get("Content-Length")
-        if cl_raw is None:
-            self._send_json(HTTPStatus.LENGTH_REQUIRED,
-                            {"ok": False, "error": "Content-Length required"})
-            return None, True
-        try:
-            cl = int(cl_raw)
-        except ValueError:
-            self._send_json(HTTPStatus.BAD_REQUEST,
-                            {"ok": False, "error": "malformed Content-Length"})
-            return None, True
-        if cl > max_body:
-            self._send_json(HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
-                            {"ok": False, "error": f"body must be ≤ {max_body} bytes"})
-            return None, True
-        body = self.rfile.read(cl) if cl > 0 else b""
-        try:
-            return (json.loads(body) if body else {}), False
-        except ValueError:
-            self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "invalid JSON"})
-            return None, True
+    Requiring ``Content-Type: application/json`` is the CSRF guard for these
+    device-controlling mutations: it is NOT a CORS "simple" content type, so a
+    cross-origin browser request must clear a preflight first — which this server
+    never grants — blocking a malicious page from POSTing a forged body (e.g. a
+    time rule that actuates devices) to the loopback UI or the auth'd reverse proxy.
+    First-party fetches already send it; non-browser clients set it trivially."""
+    ctype = request.headers.get("Content-Type", "")
+    if ctype.split(";")[0].strip().lower() != "application/json":
+        return _json(HTTPStatus.UNSUPPORTED_MEDIA_TYPE,
+                     {"ok": False, "error": "Content-Type must be application/json"}), True
+    cl_raw = request.headers.get("Content-Length")
+    if cl_raw is None:
+        return _json(HTTPStatus.LENGTH_REQUIRED,
+                     {"ok": False, "error": "Content-Length required"}), True
+    cl = int(cl_raw)
+    if cl > max_body:
+        return _json(HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
+                     {"ok": False, "error": f"body must be ≤ {max_body} bytes"}), True
+    body = await request.content.read(cl) if cl > 0 else b""
+    try:
+        return (json.loads(body) if body else {}), False
+    except ValueError:
+        return _json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "invalid JSON"}), True
 
-    def _dispatch_op(self, op, *, timeout=None, fail_status=HTTPStatus.INTERNAL_SERVER_ERROR):
-        """Run a control op through the loop bridge and map the outcome to a
-        response: ValueError/KeyError/TypeError → 400 (caller/op rejected the input),
-        ``_LoopClosed`` → 503, ``_BridgeTimeout`` → 504, ``ok`` → 200, else → ``fail_status``.
-        ``timeout`` overrides the loop-bridge ceiling (``None`` = the default ``BRIDGE_TIMEOUT``);
-        ``/api/ir`` widens it because an IR transmit runs longer than a registry write. Shared by
-        ``/api/name``, the mutating ``/api/automations*`` endpoints, and ``/api/ir``."""
-        try:
-            resp = _call_loop(self._loop, lambda: process_control_op(self._rt, op), timeout=timeout)
-        except (ValueError, KeyError, TypeError) as exc:
-            return self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
-        except _LoopClosed:
-            return self._send_empty(HTTPStatus.SERVICE_UNAVAILABLE)
-        except _BridgeTimeout:
-            return self._send_empty(HTTPStatus.GATEWAY_TIMEOUT)
-        if resp.get("ok"):
-            return self._send_json(HTTPStatus.OK, resp)
-        return self._send_json(fail_status, resp)
 
-    def _name(self):
-        op, err = self._read_json_body()
-        if err:
-            return
-        error = self._validate_name_payload(op)
-        if error is not None:
-            return self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": error})
-        op["op"] = "name"                          # normalise after validation
-        return self._dispatch_op(op)
+async def _dispatch_op(rt, op, *, fail_status=HTTPStatus.INTERNAL_SERVER_ERROR):
+    """Run a control op and map the outcome: ValueError/KeyError/TypeError → 400,
+    ``ok`` → 200, else → ``fail_status``."""
+    try:
+        resp = await process_control_op(rt, op)
+    except (ValueError, KeyError, TypeError) as exc:
+        return _json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
+    if resp.get("ok"):
+        return _json(HTTPStatus.OK, resp)
+    return _json(fail_status, resp)
 
-    def _control(self):
-        op, err = self._read_json_body()
-        if err:
-            return
-        error = _validate_control_payload(op)
-        if error is not None:
-            return self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": error})
-        return self._dispatch_op(op, fail_status=HTTPStatus.SERVICE_UNAVAILABLE)
 
-    def _graduate(self):
-        """POST /api/graduate — persist standalone mode (Phase-3; applied on the next restart). Takes
-        no body, but still requires ``Content-Type: application/json`` — the same CSRF guard the other
-        device-affecting mutations use, so a cross-origin form-POST can't trigger graduation."""
-        _, err = self._read_json_body()            # enforce the JSON content-type; the parsed body is unused
-        if err:
-            return
-        return self._dispatch_op({"op": "graduate"}, fail_status=HTTPStatus.SERVICE_UNAVAILABLE)
+async def _name(request):
+    op, err = await _read_json_body(request)
+    if err:
+        return op
+    error = _validate_name_payload(op)
+    if error is not None:
+        return _json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": error})
+    op["op"] = "name"                          # normalise after validation
+    return await _dispatch_op(_rt(request), op)
 
-    def _ir(self):
-        """Transmit a saved IR signal via the Flipper. Body: ``{"file","button"}``. The op blocks on
-        the transmit (bounded by ``IR_OP_TIMEOUT``), so the loop bridge gets a longer ceiling; the op's
-        own ``ok/error`` (disabled / queue full / timed out / failed) is surfaced, a non-ok mapping to
-        503 so the dashboard flags it."""
-        op, err = self._read_json_body()
-        if err:
-            return
-        if not isinstance(op, dict):                 # a list/scalar JSON body would crash op.get()
-            return self._send_json(HTTPStatus.BAD_REQUEST,
-                                   {"ok": False, "error": _BODY_NOT_OBJECT})
-        ir_file, button = op.get("file"), op.get("button")
-        if not (isinstance(ir_file, str) and ir_file and isinstance(button, str) and button):
-            return self._send_json(HTTPStatus.BAD_REQUEST,
-                                   {"ok": False, "error": "file and button required"})
-        return self._dispatch_op({"op": "ir", "file": ir_file, "button": button},
-                                 timeout=IR_OP_TIMEOUT + 5.0,
-                                 fail_status=HTTPStatus.SERVICE_UNAVAILABLE)
 
-    # ---- automations CRUD (over the automations/automation_set/automation_delete ops) ----
-    def _automations_list(self):
-        """List every authored rule. Mirrors ``_discovery`` — the ``automations`` op
-        cannot return ``ok: False``, so there is no 500 branch (only 200/503/504)."""
-        try:
-            resp = _call_loop(self._loop, lambda: process_control_op(self._rt, {"op": "automations"}))
-        except _LoopClosed:
-            return self._send_empty(HTTPStatus.SERVICE_UNAVAILABLE)
-        except _BridgeTimeout:
-            return self._send_empty(HTTPStatus.GATEWAY_TIMEOUT)
-        return self._send_json(HTTPStatus.OK, resp)
+async def _control(request):
+    op, err = await _read_json_body(request)
+    if err:
+        return op
+    error = _validate_control_payload(op)
+    if error is not None:
+        return _json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": error})
+    return await _dispatch_op(_rt(request), op, fail_status=HTTPStatus.SERVICE_UNAVAILABLE)
 
-    def _automations_set(self):
-        """Create/replace a rule. The body IS the rule spec; ``Rule.from_dict`` (inside
-        the op) is the authoritative validator — its ValueError maps to 400."""
-        body, err = self._read_json_body(MAX_RULE_BODY)
-        if err:
-            return
-        return self._dispatch_op({"op": "automation_set", "rule": body})
 
-    def _automations_delete(self):
-        """Delete a rule by id. Pull ``id`` out only when the body is an object, so a
-        non-dict JSON body yields ``id=None`` → the op's ValueError → 400 (never an
-        uncaught AttributeError from ``body.get`` on a list/str/number)."""
-        body, err = self._read_json_body(MAX_RULE_BODY)   # same cap as set → any settable id is deletable
-        if err:
-            return
-        rid = body.get("id") if isinstance(body, dict) else None
-        return self._dispatch_op({"op": "automation_delete", "id": rid})
+async def _graduate(request):
+    """POST /api/graduate — persist standalone mode (Phase-3; applied on the next restart). Takes
+    no body, but still requires ``Content-Type: application/json`` — the same CSRF guard the other
+    device-affecting mutations use, so a cross-origin form-POST can't trigger graduation."""
+    body, err = await _read_json_body(request)         # enforce the JSON content-type; the parsed body is unused
+    if err:
+        return body
+    return await _dispatch_op(_rt(request), {"op": "graduate"},
+                              fail_status=HTTPStatus.SERVICE_UNAVAILABLE)
 
-    @staticmethod
-    def _validate_name_payload(op) -> "str | None":
-        if not isinstance(op, dict):
-            return _BODY_NOT_OBJECT
-        unknown = set(op) - _NAME_FIELDS
-        if unknown:
-            return f"unknown field(s): {sorted(unknown)}"      # explicit allowlist
-        explicit_op = op.get("op")
-        if explicit_op is not None and explicit_op != "name":
-            return "/api/name only accepts op=name"
-        if "node" not in op:
-            return "'node' field is required"
-        fields_present = [k for k in ("name", "room", "type") if k in op]
-        if not fields_present:
-            return "at least one of name, room, type is required"
-        error = _validate_name_strings(op)
-        if error is not None:
-            return error
-        dtype = op.get("type")
-        if dtype is not None and dtype not in _TYPES:
-            return f"invalid type {dtype!r}"
-        ep = op.get("ep")
-        if ep is not None and (not isinstance(ep, int) or isinstance(ep, bool) or ep < 0):
-            return "ep must be a non-negative integer"
-        return None
+
+async def _ir(request):
+    """Transmit a saved IR signal via the Flipper. Body: ``{"file","button"}``.
+    The op's own ``ok/error`` (disabled / queue full / timed out / failed) is surfaced,
+    a non-ok mapping to 503 so the dashboard flags it."""
+    op, err = await _read_json_body(request)
+    if err:
+        return op
+    if not isinstance(op, dict):                 # a list/scalar JSON body would crash op.get()
+        return _json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": _BODY_NOT_OBJECT})
+    ir_file, button = op.get("file"), op.get("button")
+    if not (isinstance(ir_file, str) and ir_file and isinstance(button, str) and button):
+        return _json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "file and button required"})
+    return await _dispatch_op(_rt(request), {"op": "ir", "file": ir_file, "button": button},
+                              fail_status=HTTPStatus.SERVICE_UNAVAILABLE)
+
+
+async def _automations_list(request):
+    """List every authored rule. The ``automations`` op is read-only and returns ``ok: True``."""
+    resp = await process_control_op(_rt(request), {"op": "automations"})
+    return _json(HTTPStatus.OK, resp)
+
+
+async def _automations_set(request):
+    """Create/replace a rule. The body IS the rule spec; ``Rule.from_dict`` (inside
+    the op) is the authoritative validator — its ValueError maps to 400."""
+    body, err = await _read_json_body(request, MAX_RULE_BODY)
+    if err:
+        return body
+    return await _dispatch_op(_rt(request), {"op": "automation_set", "rule": body})
+
+
+async def _automations_delete(request):
+    """Delete a rule by id. Pull ``id`` out only when the body is an object, so a
+    non-dict JSON body yields ``id=None`` → the op's ValueError → 400 (never an
+    uncaught AttributeError from ``body.get`` on a list/str/number)."""
+    body, err = await _read_json_body(request, MAX_RULE_BODY)   # same cap as set → any settable id is deletable
+    if err:
+        return body
+    rid = body.get("id") if isinstance(body, dict) else None
+    return await _dispatch_op(_rt(request), {"op": "automation_delete", "id": rid})
+
+
+def _validate_name_payload(op) -> "str | None":
+    if not isinstance(op, dict):
+        return _BODY_NOT_OBJECT
+    unknown = set(op) - _NAME_FIELDS
+    if unknown:
+        return f"unknown field(s): {sorted(unknown)}"      # explicit allowlist
+    explicit_op = op.get("op")
+    if explicit_op is not None and explicit_op != "name":
+        return "/api/name only accepts op=name"
+    if "node" not in op:
+        return "'node' field is required"
+    fields_present = [k for k in ("name", "room", "type") if k in op]
+    if not fields_present:
+        return "at least one of name, room, type is required"
+    error = _validate_name_strings(op)
+    if error is not None:
+        return error
+    dtype = op.get("type")
+    if dtype is not None and dtype not in _TYPES:
+        return f"invalid type {dtype!r}"
+    ep = op.get("ep")
+    if ep is not None and (not isinstance(ep, int) or isinstance(ep, bool) or ep < 0):
+        return "ep must be a non-negative integer"
+    return None
 
 
 def _validate_name_strings(op) -> "str | None":
@@ -1477,39 +1341,51 @@ def _validate_control_payload(op) -> "str | None":
     return _control_node_error(op) or _CONTROL_FIELD_VALIDATORS[name](op)
 
 
-def make_handler(rt, loop):
-    """Build a :class:`BaseHTTPRequestHandler` subclass with bindings to the
-    runtime and the asyncio loop, so every dispatch is bound to *this* hestia
-    instance without module globals."""
-    return type("_Handler", (_WebHandlerBase,), {"_rt": rt, "_loop": loop})
+def make_app(rt):
+    app = web.Application(
+        client_max_size=MAX_RULE_BODY + 4096,
+        middlewares=[_empty_404_405_middleware],
+    )
+    app[_RT_KEY] = rt
+    app.router.add_get("/", _index, allow_head=False)
+    app.router.add_get("/api/discovery", _discovery, allow_head=False)
+    app.router.add_get("/api/events", _events, allow_head=False)
+    app.router.add_get("/api/automations", _automations_list, allow_head=False)
+    app.router.add_post("/api/name", _name)
+    app.router.add_post("/api/ir", _ir)
+    app.router.add_post("/api/control", _control)
+    app.router.add_post("/api/automations", _automations_set)
+    app.router.add_post("/api/automations/delete", _automations_delete)
+    app.router.add_post("/api/graduate", _graduate)
+    return app
 
 
-def start_web(rt, loop, host: str = None, port: int = None):
-    """Bind, build the handler, start the request thread; return ``(server, thread)``.
+@dataclass(frozen=True)
+class _WebHandle:
+    runner: web.AppRunner
+    address: tuple[str, int]
 
-    The server is already listening when this returns. ``host`` defaults to
-    ``$HESTIA_WEB_HOST`` (``127.0.0.1``); ``port`` defaults to ``$HESTIA_WEB_PORT``
-    (``8927``). A non-loopback ``host`` requires ``HESTIA_WEB_ALLOW_REMOTE=1``."""
+
+async def start_web(rt, host: str = None, port: int = None):
+    """Bind and start aiohttp in the current asyncio loop; return a small handle.
+
+    ``host`` defaults to ``$HESTIA_WEB_HOST`` (``127.0.0.1``); ``port`` defaults
+    to ``$HESTIA_WEB_PORT`` (``8927``). A non-loopback ``host`` requires
+    ``HESTIA_WEB_ALLOW_REMOTE=1``."""
     if host is None:
         host = os.environ.get("HESTIA_WEB_HOST", "127.0.0.1")
     if port is None:
         port = int(os.environ.get("HESTIA_WEB_PORT", "8927"))
     _require_safe_web_bind(host)
-    server = ThreadingHTTPServer((host, port), make_handler(rt, loop))
-    # SSE handlers can block in the bridge; daemon request threads ensure the
-    # process always exits, and `server.shutdown()` cleanly drains the accept
-    # loop without waiting on in-flight handlers.
-    server.daemon_threads = True
-    thread = threading.Thread(target=server.serve_forever, name="hestia-web", daemon=True)
-    thread.start()
-    log.info("web UI listening on http://%s:%d", *server.server_address[:2])
-    return server, thread
+    runner = web.AppRunner(make_app(rt), shutdown_timeout=2.0, access_log=None)
+    await runner.setup()
+    site = web.TCPSite(runner, host, port)
+    await site.start()
+    bound = runner.addresses[0]
+    address = (bound[0], bound[1])
+    log.info("web UI listening on http://%s:%d", *address)
+    return _WebHandle(runner=runner, address=address)
 
 
-def stop_web(server, thread, join_timeout: float = 5.0) -> None:
-    """Stop accepting new connections, close the socket, wait for the request
-    thread to exit. In-flight handlers complete naturally (or hit ``_LoopClosed``
-    via the bridge if they touch the loop after shutdown)."""
-    server.shutdown()
-    server.server_close()
-    thread.join(timeout=join_timeout)
+async def stop_web(handle: _WebHandle) -> None:
+    await handle.runner.cleanup()

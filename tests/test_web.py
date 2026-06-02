@@ -2,15 +2,14 @@
 
 Each test spins a real asyncio loop in a daemon thread, runs the web server on
 an ephemeral port, and exercises endpoints via stdlib `http.client`. This
-mirrors the production wire-up (rt accessed only through the loop bridge) and
+mirrors the production wire-up (aiohttp handlers run in the asyncio loop) and
 catches the things mocks would miss: HTTP framing, header parsing, status
-codes, the loop-bridge transitions, and end-to-end persistence via the same
-`_persist` lock-protected path the autosave uses.
+codes, SSE lifecycle, and end-to-end persistence via the same `_persist`
+lock-protected path the autosave uses.
 """
 from __future__ import annotations
 
 import asyncio
-import concurrent.futures
 import http.client
 import json
 import socket
@@ -19,7 +18,6 @@ import tempfile
 import threading
 import time
 import unittest
-import warnings
 from pathlib import Path
 from unittest import mock
 
@@ -51,8 +49,8 @@ class _LoopThread:
         self.loop.call_soon(self._ready.set)
         self.loop.run_forever()
 
-    def submit(self, coro):
-        return asyncio.run_coroutine_threadsafe(coro, self.loop).result(timeout=2.0)
+    def submit(self, coro, timeout=2.0):
+        return asyncio.run_coroutine_threadsafe(coro, self.loop).result(timeout=timeout)
 
     def close(self):
         self.loop.call_soon_threadsafe(self.loop.stop)
@@ -62,22 +60,22 @@ class _LoopThread:
 
 
 class _StartedWeb:
-    def __init__(self, server, thread):
-        self._server = server
-        self._thread = thread
-        self.address = server.server_address[:2]
-
-    @property
-    def daemon_threads(self):
-        return self._server.daemon_threads
+    def __init__(self, handle, loop_thread):
+        self._handle = handle
+        self._loop_thread = loop_thread
+        self.address = handle.address
+        self._stopped = False
 
     def stop(self):
-        web.stop_web(self._server, self._thread)
+        if self._stopped:
+            return
+        self._stopped = True
+        self._loop_thread.submit(web.stop_web(self._handle), timeout=3.0)
 
 
-def _start_web(rt, loop, host="127.0.0.1", port=0):
-    server, thread = web.start_web(rt, loop, host, port)
-    return _StartedWeb(server, thread)
+def _start_web(rt, loop_thread, host="127.0.0.1", port=0):
+    handle = loop_thread.submit(web.start_web(rt, host, port))
+    return _StartedWeb(handle, loop_thread)
 
 
 def _client(address) -> http.client.HTTPConnection:
@@ -193,7 +191,7 @@ class SummaryTests(unittest.TestCase):
 
 class ValidateNamePayloadTests(unittest.TestCase):
     def _validate(self, op):
-        return web.make_handler(None, None)._validate_name_payload(op)
+        return web._validate_name_payload(op)
 
     def test_non_dict(self):
         self.assertEqual(self._validate(5), "body must be a JSON object")
@@ -328,16 +326,19 @@ class _WebTestBase(unittest.TestCase):
         self.path = self.tmp / "registry.json"
         self.loop_thread = _LoopThread()
         self.rt = proxy.ProxyRuntime(registry=proxy.Registry(self.path))
-        self.web = _start_web(self.rt, self.loop_thread.loop)
+        self.web = _start_web(self.rt, self.loop_thread)
 
     def tearDown(self):
+        async def close_bus():
+            self.rt.event_bus.close()
+
+        self.loop_thread.submit(close_bus())
         self.web.stop()
         self.loop_thread.close()
         shutil.rmtree(self.tmp)
 
     def _feed(self, frame_bytes):
-        """Inject a frame into the runtime *inside* the loop, so the bridge
-        sees the same world the production code does."""
+        """Inject a frame into the runtime *inside* the loop, matching production."""
         async def go():
             proxy._feed_discovery(self.rt, Frame(frame_bytes[1:-1]))
         self.loop_thread.submit(go())
@@ -592,7 +593,7 @@ class NamePersistTests(_WebTestBase):
         self.assertTrue(reg.nodes["5"]["type_confirmed"])
         # restart so tearDown's shutdown calls are no-ops on already-closed state
         self.loop_thread = _LoopThread()
-        self.web = _start_web(self.rt, self.loop_thread.loop)
+        self.web = _start_web(self.rt, self.loop_thread)
 
     def test_classifier_does_not_override_confirmed_type(self):
         # confirm type=blind, then inject a door event for node 18 — registry
@@ -643,7 +644,7 @@ class NameValidationTests(_WebTestBase):
     def test_name_invalid_node_returns_400(self):
         # JSON validates, validator passes (no per-field error), but inside
         # `process_control_op` → `set_user` → `_key` → `int("not-a-number", 0)`
-        # raises ValueError, which the bridge catches and the handler maps to 400.
+        # raises ValueError, which the handler maps to 400.
         status, _, body = _post(self.web.address, "/api/name",
                                 {"node": "not-a-number", "name": "x"})
         self.assertEqual(status, 400)
@@ -671,14 +672,14 @@ class NameValidationTests(_WebTestBase):
         self.assertIn(b"411", data.split(b"\r\n", 1)[0])
 
     def test_name_malformed_content_length(self):
-        host, port = self.web.address
-        import socket
-        with socket.create_connection((host, port), timeout=5.0) as s:
-            s.sendall(b"POST /api/name HTTP/1.0\r\nHost: localhost\r\n"
-                      b"Content-Type: application/json\r\n"
-                      b"Content-Length: abc\r\n\r\n")
-            data = s.recv(4096)
-        self.assertIn(b"400", data.split(b"\r\n", 1)[0])
+        # aiohttp's HTTP parser owns malformed Content-Length now.
+        response = _raw_http(
+            self.web.address,
+            b"POST /api/name HTTP/1.0\r\nHost: localhost\r\n"
+            b"Content-Type: application/json\r\n"
+            b"Content-Length: abc\r\n\r\n",
+        )
+        self.assertEqual(_raw_status(response), 400)
 
     def test_name_invalid_json(self):
         status, _, body = _post(self.web.address, "/api/name", b"not json",
@@ -800,18 +801,28 @@ class HttpContractTests(_WebTestBase):
                 self.assertEqual(json.loads(body),
                                  {"ok": False, "error": "Content-Type must be application/json"})
 
-    def test_post_to_get_only_routes_is_404_with_empty_body(self):
+    def test_post_to_get_only_routes_is_405_with_empty_body(self):
         for path in ("/api/discovery", "/api/events"):
             with self.subTest(path=path):
                 status, headers, body = _post(self.web.address, path, {})
-                self.assertEqual(status, 404)
+                # aiohttp routing: standard 405 for a known path + wrong method (was a stdlib quirk)
+                self.assertEqual(status, 405)
                 self.assertEmptyHeaders(headers)
+                self.assertEqual(headers["Allow"], "GET")
                 self.assertEqual(body, b"")
 
-    def test_head_root_is_not_implemented(self):
-        status, _, body = _head(self.web.address, "/")
-        self.assertEqual(status, 501)
+    def test_head_root_is_405(self):
+        status, headers, body = _head(self.web.address, "/")
+        # aiohttp routing: standard 405 for a known path + wrong method (was a stdlib quirk)
+        self.assertEqual(status, 405)
+        self.assertEmptyHeaders(headers)
+        self.assertEqual(headers["Allow"], "GET")
         self.assertEqual(body, b"")
+
+    def test_non_content_length_parser_errors_keep_aiohttp_default(self):
+        response = _raw_http(self.web.address, b"GET / HTTP/1.0\r\nBad Header\r\n\r\n")
+        self.assertEqual(_raw_status(response), 400)
+        self.assertIn(b"Content-Type: text/plain", response.split(b"\r\n\r\n", 1)[0])
 
 
 # --- M3: automations CRUD ----------------------------------------------------
@@ -835,7 +846,7 @@ class _AutomationsWebTestBase(_WebTestBase):
         self.rt = proxy.ProxyRuntime(
             registry=proxy.Registry(self.path),
             engine=AutomationEngine(AutomationStore(self.store_path)))
-        self.web = _start_web(self.rt, self.loop_thread.loop)
+        self.web = _start_web(self.rt, self.loop_thread)
 
 
 class AutomationsListTests(_AutomationsWebTestBase):
@@ -979,42 +990,6 @@ class AutomationsRoutingTests(_AutomationsWebTestBase):
         self.assertEqual(status, 405)
         self.assertEqual(headers["Allow"], "POST")
 
-
-# LEGACY: thread->loop bridge internals — REMOVED in the aiohttp swap (PR-B).
-class AutomationsBridgeMappingTests(_AutomationsWebTestBase):
-    """Map the loop-bridge errors for each automations handler (no flaky timing)."""
-
-    def test_list_loop_closed_503(self):
-        with mock.patch("hestia.web._call_loop", side_effect=web._LoopClosed):
-            status, _, _ = _get(self.web.address, "/api/automations")
-        self.assertEqual(status, 503)
-
-    def test_list_bridge_timeout_504(self):
-        with mock.patch("hestia.web._call_loop", side_effect=web._BridgeTimeout):
-            status, _, _ = _get(self.web.address, "/api/automations")
-        self.assertEqual(status, 504)
-
-    def test_set_loop_closed_503(self):
-        with mock.patch("hestia.web._call_loop", side_effect=web._LoopClosed):
-            status, _, _ = _post(self.web.address, "/api/automations", VALID_RULE)
-        self.assertEqual(status, 503)
-
-    def test_set_bridge_timeout_504(self):
-        with mock.patch("hestia.web._call_loop", side_effect=web._BridgeTimeout):
-            status, _, _ = _post(self.web.address, "/api/automations", VALID_RULE)
-        self.assertEqual(status, 504)
-
-    def test_delete_loop_closed_503(self):
-        with mock.patch("hestia.web._call_loop", side_effect=web._LoopClosed):
-            status, _, _ = _post(self.web.address, "/api/automations/delete", {"id": "x"})
-        self.assertEqual(status, 503)
-
-    def test_delete_bridge_timeout_504(self):
-        with mock.patch("hestia.web._call_loop", side_effect=web._BridgeTimeout):
-            status, _, _ = _post(self.web.address, "/api/automations/delete", {"id": "x"})
-        self.assertEqual(status, 504)
-
-
 class BindGuardTests(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
@@ -1029,12 +1004,12 @@ class BindGuardTests(unittest.TestCase):
         import os
         os.environ.pop("HESTIA_WEB_ALLOW_REMOTE", None)
         with self.assertRaises(RuntimeError):
-            _start_web(self.rt, self.loop_thread.loop, "8.8.8.8", 0)
+            _start_web(self.rt, self.loop_thread, "8.8.8.8", 0)
 
     def test_remote_bind_allowed_with_optin(self):
         # Bind 0.0.0.0:0 (any free port) with the env opt-in; immediately stop.
         with mock.patch.dict("os.environ", {"HESTIA_WEB_ALLOW_REMOTE": "1"}):
-            started = _start_web(self.rt, self.loop_thread.loop, "0.0.0.0", 0)
+            started = _start_web(self.rt, self.loop_thread, "0.0.0.0", 0)
         try:
             self.assertEqual(started.address[0], "0.0.0.0")
             self.assertGreater(started.address[1], 0)
@@ -1047,132 +1022,14 @@ class BindGuardTests(unittest.TestCase):
         come from the same env vars, so this path needs coverage too)."""
         with mock.patch.dict("os.environ", {"HESTIA_WEB_HOST": "127.0.0.1",
                                             "HESTIA_WEB_PORT": "0"}):
-            started = _start_web(self.rt, self.loop_thread.loop, None, None)
+            started = _start_web(self.rt, self.loop_thread, None, None)
         try:
             self.assertEqual(started.address[0], "127.0.0.1")
             self.assertGreater(started.address[1], 0)
         finally:
             started.stop()
 
-
-# LEGACY: thread->loop bridge internals — REMOVED in the aiohttp swap (PR-B).
-class CallLoopUnitTests(unittest.TestCase):
-    """Direct unit tests of `_call_loop` — covers every raise branch without
-    bringing up the HTTP server."""
-
-    def setUp(self):
-        self.loop_thread = _LoopThread()
-
-    def tearDown(self):
-        if not self.loop_thread.loop.is_closed():
-            self.loop_thread.close()
-
-    def test_closed_loop_raises(self):
-        self.loop_thread.close()
-        async def noop(): return None
-        with self.assertRaises(web._LoopClosed):
-            web._call_loop(self.loop_thread.loop, noop)
-
-    def test_not_running_loop_raises(self):
-        idle = asyncio.new_event_loop()
-        try:
-            async def noop(): return None
-            with self.assertRaises(web._LoopClosed):
-                web._call_loop(idle, noop)
-        finally:
-            idle.close()
-
-    def test_timeout_raises_bridge_timeout(self):
-        async def slow():
-            try:
-                await asyncio.sleep(10)               # cancellation propagates here
-            except asyncio.CancelledError:
-                return                                # so the task settles cleanly
-        with mock.patch("hestia.web.BRIDGE_TIMEOUT", 0.05):
-            with self.assertRaises(web._BridgeTimeout):
-                web._call_loop(self.loop_thread.loop, slow)
-        time.sleep(0.05)                              # let the cancellation propagate
-
-    def test_dispatch_runtime_error_closes_coro(self):
-        """If `run_coroutine_threadsafe` raises between our guards and dispatch,
-        the bridge must close the un-scheduled coroutine and signal `_LoopClosed`
-        — verify both the raise and the absence of an "un-awaited" warning."""
-        async def cf(): return None
-        with warnings.catch_warnings(record=True) as caught:
-            warnings.simplefilter("always")
-            with mock.patch("hestia.web.asyncio.run_coroutine_threadsafe",
-                            side_effect=RuntimeError("loop closing")):
-                with self.assertRaises(web._LoopClosed):
-                    web._call_loop(self.loop_thread.loop, cf)
-        self.assertFalse(any("never awaited" in str(w.message) for w in caught))
-
-    def test_explicit_timeout_honored(self):
-        """Pass `timeout=` directly so the `timeout is None → False` branch is hit."""
-        async def quick(): return 42
-        self.assertEqual(web._call_loop(self.loop_thread.loop, quick, timeout=1.0), 42)
-
-    def test_cancelled_future_raises_loop_closed(self):
-        fut = concurrent.futures.Future()
-        fut.cancel()
-        coro_box = []
-        async def cf(): return None                   # never dispatched (mock intercepts)
-        def factory():
-            c = cf()
-            coro_box.append(c)
-            return c
-        try:
-            with mock.patch("hestia.web.asyncio.run_coroutine_threadsafe", return_value=fut):
-                with self.assertRaises(web._LoopClosed):
-                    web._call_loop(self.loop_thread.loop, factory)
-        finally:
-            for c in coro_box:
-                c.close()                             # close the never-scheduled coro
-
-
-# LEGACY: thread->loop bridge internals — REMOVED in the aiohttp swap (PR-B).
-class HandlerBridgeMappingTests(_WebTestBase):
-    """Exercise the handler's `_call_loop` exception mapping by patching the
-    bridge to raise each error type directly — no flaky timing required."""
-
-    def test_loop_closed_returns_503(self):
-        with mock.patch("hestia.web._call_loop", side_effect=web._LoopClosed):
-            status, _, _ = _get(self.web.address, "/api/discovery")
-        self.assertEqual(status, 503)
-        with mock.patch("hestia.web._call_loop", side_effect=web._LoopClosed):
-            status, _, _ = _post(self.web.address, "/api/name", {"node": 5, "name": "x"})
-        self.assertEqual(status, 503)
-
-    def test_loop_not_running_returns_503(self):
-        # Drive the genuine is_running() branch end-to-end: stop the loop, then
-        # request. The web stays up (its socket lives in the main thread).
-        self.loop_thread.close()
-        status, _, _ = _get(self.web.address, "/api/discovery")
-        self.assertEqual(status, 503)
-        self.loop_thread = _LoopThread()             # restore for tearDown
-
-    def test_bridge_timeout_returns_504(self):
-        with mock.patch("hestia.web._call_loop", side_effect=web._BridgeTimeout):
-            status, _, _ = _get(self.web.address, "/api/discovery")
-        self.assertEqual(status, 504)
-        with mock.patch("hestia.web._call_loop", side_effect=web._BridgeTimeout):
-            status, _, _ = _post(self.web.address, "/api/name", {"node": 5, "name": "x"})
-        self.assertEqual(status, 504)
-
-
-# --- _wait_event + SSE endpoint --------------------------------------------
-
-# LEGACY: thread->loop bridge internals — REMOVED in the aiohttp swap (PR-B).
-class WaitEventTests(unittest.IsolatedAsyncioTestCase):
-    async def test_returns_event_on_success(self):
-        q = asyncio.Queue()
-        await q.put({"x": 1})
-        self.assertEqual(await web._wait_event(q), {"x": 1})
-
-    async def test_returns_none_on_inner_timeout(self):
-        q = asyncio.Queue()
-        with mock.patch.object(web, "SSE_IDLE_TIMEOUT", 0.01):
-            self.assertIsNone(await web._wait_event(q))
-
+# --- SSE endpoint -----------------------------------------------------------
 
 class SSEHandlerTests(_WebTestBase):
     def setUp(self):
@@ -1196,47 +1053,44 @@ class SSEHandlerTests(_WebTestBase):
         patcher.start()
         self.addCleanup(patcher.stop)
 
-    # LEGACY: thread->loop bridge internals — REMOVED in the aiohttp swap (PR-B).
-    def test_subscribe_loop_closed_returns_503(self):
-        with mock.patch("hestia.web._call_loop", side_effect=web._LoopClosed):
-            status, _, _ = _get(self.web.address, "/api/events")
-        self.assertEqual(status, 503)
-
-    # LEGACY: thread->loop bridge internals — REMOVED in the aiohttp swap (PR-B).
-    def test_subscribe_bridge_timeout_returns_504(self):
-        with mock.patch("hestia.web._call_loop", side_effect=web._BridgeTimeout):
-            status, _, _ = _get(self.web.address, "/api/events")
-        self.assertEqual(status, 504)
-
     def test_cap_reached_returns_429(self):
         with mock.patch.object(self.rt.event_bus, "try_subscribe",
                                new=mock.AsyncMock(return_value=None)):
             status, _, _ = _get(self.web.address, "/api/events")
         self.assertEqual(status, 429)
 
+    def test_head_events_is_405_and_does_not_subscribe(self):
+        status, headers, body = _head(self.web.address, "/api/events")
+        self.assertEqual(status, 405)
+        self.assertEqual(headers["Allow"], "GET")
+        self.assertEqual(body, b"")
+        self.assertFalse(self.rt.event_bus._subs)
+
     def test_stream_pushes_event_and_keepalive(self):
         """End-to-end SSE: subscribe, publish from the loop, read framed event,
         verify activity payload + that the connection stays open afterwards."""
-        # publish *after* the SSE handler has started (otherwise the event is
-        # dropped before anyone is listening).
-        host, port = self.web.address
-        conn = http.client.HTTPConnection(host, port, timeout=3.0)
-        conn.request("GET", "/api/events")
-        resp = conn.getresponse()
-        self.assertEqual(resp.status, 200)
-        self.assertEqual(resp.getheader("Content-Type"), "text/event-stream")
-        # give the handler a moment to subscribe
-        for _ in range(50):
-            if self.rt.event_bus._subs: break
-            time.sleep(0.01)
-        self.loop_thread.submit(self._publish_async({"type": "activity", "node": 5, "ts": 1.0}))
-        line = resp.fp.readline()
-        self.assertTrue(line.startswith(b"data: "))
-        payload = json.loads(line[len(b"data: "):].decode().strip())
-        self.assertEqual(payload["node"], 5)
-        # consume the trailing blank line
-        resp.fp.readline()
-        conn.close()
+        s = self._raw_sse()
+        try:
+            data = _recv_until(s, b"\r\n\r\n")
+            head, _, body = data.partition(b"\r\n\r\n")
+            self.assertIn(b"HTTP/1.0 200 OK", head.split(b"\r\n", 1)[0])
+            self.assertIn(b"Content-Type: text/event-stream", head)
+            self.assertIn(b"Cache-Control: no-cache", head)
+            self.assertIn(b"Connection: keep-alive", head)
+            self.assertIn(b"X-Accel-Buffering: no", head)
+            self.assertNotIn(b"Content-Length:", head)
+            self._wait_subscribed()
+            self.loop_thread.submit(self._publish_async({"type": "activity", "node": 5, "ts": 1.0}))
+            if b"\n\n" not in body:
+                body += _recv_until(s, b"\n\n")
+            event_block = body.split(b"\n\n", 1)[0]
+            self.assertTrue(event_block.startswith(b"data: "))
+            payload = json.loads(event_block[len(b"data: "):].decode())
+            self.assertEqual(payload["node"], 5)
+            self.loop_thread.submit(self._close_bus_async())
+            self._wait_unsubscribed()
+        finally:
+            s.close()
 
     def test_idle_stream_emits_keepalive(self):
         with mock.patch.object(web, "SSE_IDLE_TIMEOUT", 0.01):
@@ -1274,17 +1128,15 @@ class SSEHandlerTests(_WebTestBase):
 
     def test_stream_breaks_on_closed_sentinel(self):
         """`EventBus.close()` from the loop wakes the handler via sentinel."""
-        host, port = self.web.address
-        conn = http.client.HTTPConnection(host, port, timeout=3.0)
-        conn.request("GET", "/api/events")
-        resp = conn.getresponse()
-        self._wait_subscribed()
-        self.loop_thread.submit(self._close_bus_async())   # pushes sentinel
-        # readline returns b"" once the server closes its write end.
-        try: eof = resp.fp.readline()
-        except (TimeoutError, OSError): eof = b""
-        self.assertEqual(eof, b"")                          # clean EOF
-        conn.close()
+        s = self._raw_sse()
+        try:
+            _recv_until(s, b"\r\n\r\n")
+            self._wait_subscribed()
+            self.loop_thread.submit(self._close_bus_async())   # pushes sentinel
+            self._wait_unsubscribed()
+            self.assertEqual(s.recv(4096), b"")                # clean EOF
+        finally:
+            s.close()
 
     def test_lifetime_cap_exits_handler(self):
         """A negative `SSE_MAX_LIFETIME` makes the deadline past at handler
@@ -1300,45 +1152,13 @@ class SSEHandlerTests(_WebTestBase):
             conn.close()
         self._wait_unsubscribed()
 
-    # LEGACY: thread->loop bridge internals — REMOVED in the aiohttp swap (PR-B).
-    def test_bridge_timeout_in_stream_loop_exits_clean(self):
-        """`_BridgeTimeout` after headers must just exit + cleanup, no crash."""
-        host, port = self.web.address
-        conn = http.client.HTTPConnection(host, port, timeout=3.0)
-        conn.request("GET", "/api/events")
-        resp = conn.getresponse()
-        self.assertEqual(resp.status, 200)
-        self._wait_subscribed()
-        # First _call_loop in the stream loop raises; subsequent cleanup call
-        # works (primary path runs sub.close in the loop, success).
-        original_call = web._call_loop
-        calls = {"n": 0}
-        timeout_seen = threading.Event()
-
-        def patched(loop, factory, timeout=None):
-            calls["n"] += 1
-            if calls["n"] == 1:
-                timeout_seen.set()
-                raise web._BridgeTimeout
-            return original_call(loop, factory, timeout=timeout)
-        with mock.patch("hestia.web._call_loop", side_effect=patched):
-            # Wake the in-flight unpatched call so it returns; handler then
-            # hits the patched _call_loop on its next iteration → break + cleanup.
-            self.loop_thread.submit(self._publish_async({"type": "activity", "node": 5}))
-            try: eof = resp.fp.readline()
-            except (TimeoutError, OSError): eof = b""
-            self.assertTrue(timeout_seen.wait(timeout=2.0),
-                            "stream loop did not observe patched _BridgeTimeout within 2s")
-            self._wait_unsubscribed()
-        conn.close()
-
     def _raw_sse(self, path="/api/events"):
         """Plain socket SSE so we control the close ourselves (http.client
         hides the socket once getresponse() runs)."""
         import socket
         host, port = self.web.address
         s = socket.create_connection((host, port), timeout=3.0)
-        s.send(f"GET {path} HTTP/1.1\r\nHost: localhost\r\n\r\n".encode())
+        s.send(f"GET {path} HTTP/1.0\r\nHost: localhost\r\n\r\n".encode())
         return s
 
     def test_oserror_on_write_breaks_loop(self):
@@ -1349,107 +1169,19 @@ class SSEHandlerTests(_WebTestBase):
         self.loop_thread.submit(self._publish_async({"type": "activity", "node": 6}))
         self._wait_unsubscribed()
 
-    # LEGACY: thread->loop bridge internals — REMOVED in the aiohttp swap (PR-B).
-    def test_fallback_close_via_call_soon_threadsafe(self):
-        """If primary cleanup `_call_loop` raises, fall back to threadsafe close.
-        Sequence: subscribe (unpatched), publish to wake in-flight bridge call,
-        patch `_call_loop` to always raise so the NEXT stream iteration breaks,
-        and the cleanup `_call_loop` ALSO raises — triggering the fallback."""
+    def test_stop_with_open_sse_returns_promptly_after_bus_close(self):
         s = self._raw_sse()
-        self._wait_subscribed()
-        scheduled = []
-        fallback_called = threading.Event()
-        original_threadsafe = self.loop_thread.loop.call_soon_threadsafe
-
-        def record_then_schedule(cb, *args):
-            # `run_coroutine_threadsafe` (used by self.loop_thread.submit) ALSO
-            # calls `call_soon_threadsafe` internally — filter to only the
-            # subscription close path so we measure the actual fallback.
-            if hasattr(cb, "__self__") and isinstance(cb.__self__, proxy.Subscription):
-                scheduled.append(cb)
-                fallback_called.set()
-            return original_threadsafe(cb, *args)
-        with mock.patch.object(self.loop_thread.loop, "call_soon_threadsafe",
-                               side_effect=record_then_schedule), \
-             mock.patch("hestia.web._call_loop", side_effect=web._LoopClosed):
-            # Wake the in-flight bridge call (unpatched code, returns the event).
-            # Handler writes, then enters the next loop iteration; THIS lookup
-            # of _call_loop gets the patched raise → break → finally → patched
-            # cleanup _call_loop → fallback call_soon_threadsafe.
-            self.loop_thread.submit(self._publish_async({"type": "activity", "node": 9}))
-            self.assertTrue(fallback_called.wait(timeout=2.0),
-                            "fallback call_soon_threadsafe was not invoked within 2s")
-        s.close()
-        self.assertGreaterEqual(len(scheduled), 1)
-        self._wait_unsubscribed()
-
-    # LEGACY: thread->loop bridge internals — REMOVED in the aiohttp swap (PR-B).
-    def test_fallback_close_swallows_runtime_error(self):
-        """If both primary and `call_soon_threadsafe` fail, the handler must NOT
-        raise — process is dying, bus cleanup already ran.
-
-        Trick: short-circuit the stream loop with a negative `SSE_MAX_LIFETIME`
-        so the handler immediately drops to finally, then both patched calls
-        fail and the inner `except RuntimeError: pass` is exercised."""
-        # We must combine the patches in the right order: SSE_MAX_LIFETIME
-        # is read at handler entry (after subscribe), so set it before opening
-        # the SSE. _call_loop must NOT raise on subscribe — let it succeed,
-        # then start raising AFTER the lifetime check has fired.
-        original_call = web._call_loop
-        call_count = {"n": 0}
-
-        def patched(loop, factory, timeout=None):
-            call_count["n"] += 1
-            if call_count["n"] == 1:                # subscribe — let it succeed
-                return original_call(loop, factory, timeout=timeout)
-            raise web._LoopClosed                   # cleanup path
-
-        # Filter call_soon_threadsafe to only raise for sub.close (the fallback).
-        # `run_coroutine_threadsafe` (used by the subscribe path internally)
-        # ALSO routes through call_soon_threadsafe — blanket-patching it
-        # would break the subscribe call and return 503 before we even reach
-        # the fallback path.
-        real_threadsafe = self.loop_thread.loop.call_soon_threadsafe
-
-        def conditional_raise(cb, *args):
-            if hasattr(cb, "__self__") and isinstance(cb.__self__, proxy.Subscription):
-                raise RuntimeError("simulated closed loop on sub.close")
-            return real_threadsafe(cb, *args)
-
-        with mock.patch("hestia.web.SSE_MAX_LIFETIME", -1.0), \
-             mock.patch("hestia.web._call_loop", side_effect=patched), \
-             mock.patch.object(self.loop_thread.loop, "call_soon_threadsafe",
-                               side_effect=conditional_raise):
-            host, port = self.web.address
-            conn = http.client.HTTPConnection(host, port, timeout=2.0)
-            conn.request("GET", "/api/events")
-            resp = conn.getresponse()
-            self.assertEqual(resp.status, 200)
-            try: resp.fp.readline()
-            except (TimeoutError, OSError): pass
-            conn.close()
-        # The sub is orphaned (semaphore not released) — acceptable per spec
-        # when both cleanup paths fail (process is dying). Verifying only that
-        # no exception propagated out of the handler thread.
-
-
-# LEGACY: thread->loop bridge internals — REMOVED in the aiohttp swap (PR-B).
-class StartWebDaemonThreadsTests(unittest.TestCase):
-    def setUp(self):
-        self.tmp = Path(tempfile.mkdtemp())
-        self.loop_thread = _LoopThread()
-        self.rt = proxy.ProxyRuntime(registry=proxy.Registry(self.tmp / "r.json"))
-
-    def tearDown(self):
-        self.loop_thread.close()
-        shutil.rmtree(self.tmp)
-
-    def test_daemon_threads_enabled(self):
-        started = _start_web(self.rt, self.loop_thread.loop)
         try:
-            self.assertTrue(started.daemon_threads)
+            _recv_until(s, b"\r\n\r\n")
+            self._wait_subscribed()
+            started = time.monotonic()
+            self.loop_thread.submit(self._close_bus_async())
+            self.web.stop()
+            elapsed = time.monotonic() - started
+            self.assertLess(elapsed, 1.5)
+            self._wait_unsubscribed()
         finally:
-            started.stop()
+            s.close()
 
 
 if __name__ == "__main__":
