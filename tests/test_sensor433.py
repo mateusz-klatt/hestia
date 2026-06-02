@@ -188,9 +188,11 @@ class StreamReadingsTests(unittest.IsolatedAsyncioTestCase):
         proc = _FakeProc([b"\n", b"   \n", b"not json\n", b"123\n", _line(temperature_C=3.3)])
         self.assertEqual(await _drain(_make_create(proc)), [sensor433.Reading(3.3, None)])
 
-    async def test_spawn_failure_returns_no_readings(self):
+    async def test_spawn_failure_returns_no_readings_and_warns(self):
         for exc in (FileNotFoundError("rtl_433 not found"), OSError("spawn failed"), ValueError("bad argv")):
-            self.assertEqual(await _drain(_make_create(exc=exc)), [])
+            with self.assertLogs("hestia.sensor433", level="WARNING") as logs:
+                self.assertEqual(await _drain(_make_create(exc=exc)), [])   # config error -> no readings
+            self.assertTrue(any("rtl_433 spawn failed" in m for m in logs.output))   # but NOT silent
 
     async def test_stdout_none_returns_and_reaps(self):
         proc = _FakeProc(stdout=False)
@@ -238,8 +240,8 @@ class StreamReadingsTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(proc.killed)                         # escalated to SIGKILL
         self.assertEqual(proc.returncode, -9)                # reaped
 
-    async def test_cancel_during_reap_kills_then_propagates(self):
-        proc = _WedgedProc()                                 # wait() never resolves on its own
+    async def test_cancel_during_reap_kills_reaps_then_propagates(self):
+        proc = _WedgedProc()                                 # wait() never resolves until SIGKILL
         with mock.patch.object(sensor433, "_TERMINATE_GRACE", 100):   # don't time out — cancel instead
             task = asyncio.create_task(sensor433._terminate(proc))
             for _ in range(3):                               # let _terminate reach the await on proc.wait()
@@ -248,6 +250,26 @@ class StreamReadingsTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(asyncio.CancelledError):
                 await task
         self.assertTrue(proc.terminated and proc.killed)     # SIGKILL'd so it can't keep holding the SDR
+        self.assertEqual(proc.returncode, -9)                # AND reaped before the cancellation propagated
+
+    async def test_reap_defers_cancellation_until_child_reaped(self):
+        class _ReapProc(_FakeProc):
+            """wait() is cancelled on its 1st await, succeeds on the 2nd — a cancel landing during reap."""
+            def __init__(self):
+                super().__init__()
+                self.waits = 0
+
+            async def wait(self):
+                self.waits += 1
+                if self.waits == 1:
+                    raise asyncio.CancelledError
+                self.returncode = -9
+                return -9
+        proc = _ReapProc()
+        with self.assertRaises(asyncio.CancelledError):
+            await sensor433._reap(proc)
+        self.assertEqual(proc.returncode, -9)                # reaped despite the cancel
+        self.assertEqual(proc.waits, 2)                      # retried the wait after deferring the cancel
 
 
 if __name__ == "__main__":  # pragma: no cover

@@ -81,12 +81,28 @@ def _matching_reading(obj: dict, model: "str | None", sensor_id: "str | None"):
 _TERMINATE_GRACE = 5.0   # seconds to let rtl_433 exit on SIGTERM before escalating to SIGKILL
 
 
+async def _reap(proc) -> None:
+    """Await the (already-signalled) child's exit to completion, DEFERRING a single cancellation until the
+    reap is done — then re-raising it. Safe because the caller has already signalled the child, so
+    ``proc.wait()`` returns promptly; this guarantees a shutdown cancel can never leave a SIGKILLed child
+    unreaped (a zombie) while still propagating the cancellation."""
+    pending = None
+    while proc.returncode is None:
+        try:
+            await proc.wait()
+        except asyncio.CancelledError as exc:            # don't abandon the reap mid-flight; finish, then propagate
+            pending = exc
+    if pending is not None:
+        raise pending
+
+
 async def _terminate(proc) -> None:
     """Terminate + reap ``proc`` so a finished/cancelled stream never leaves an orphan ``rtl_433`` holding
     the single-client SDR. BOUNDED — SIGTERM, a short grace period, then SIGKILL — so a child wedged in a
     blocking USB/socket call (an SDR/rtl_tcp failure) can never hang the poller's relaunch loop or the
-    shutdown ``gather()``. Tolerant of an already-exited child; if cancellation arrives mid-reap it still
-    SIGKILLs the child (so it can't keep holding the SDR) before letting the cancellation propagate."""
+    shutdown ``gather()``. On a timeout, OR a cancellation arriving mid-reap, it escalates to SIGKILL and
+    still reaps the child (:func:`_reap`); a cancellation is re-raised afterwards so shutdown propagates.
+    Tolerant of an already-exited child."""
     if proc.returncode is None:
         with contextlib.suppress(ProcessLookupError):    # raced us to exit between the check and the signal
             proc.terminate()
@@ -95,10 +111,11 @@ async def _terminate(proc) -> None:
     except TimeoutError:                                 # SIGTERM ignored/wedged -> force it, then reap
         with contextlib.suppress(ProcessLookupError):
             proc.kill()
-        await proc.wait()                                # SIGKILL is uncatchable -> returns promptly
-    except asyncio.CancelledError:                       # shutdown cancelling us mid-reap -> kill, don't hang
+        await _reap(proc)
+    except asyncio.CancelledError:                       # shutdown cancelling us mid-reap -> force, reap, propagate
         with contextlib.suppress(ProcessLookupError):
             proc.kill()
+        await _reap(proc)
         raise
 
 
@@ -120,7 +137,11 @@ async def stream_readings(
     cmd = _rtl433_command(binary, device, protocol)
     try:
         proc = await create(*cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
-    except (OSError, ValueError):                        # binary missing / bad argv -> caller backs off + retries
+    except (OSError, ValueError) as exc:                 # binary missing / bad argv -> caller backs off + retries
+        # A spawn failure is a CONFIG error (missing rtl_433, bad device/argv), not a transient rtl_tcp drop
+        # (which spawns fine then exits via EOF). Log it concisely — once per backoff — so it is not silent,
+        # without the traceback spam that re-raising would produce on every retry.
+        log.warning("rtl_433 spawn failed (%s): %s", binary, exc)
         return
     try:
         stdout = proc.stdout
