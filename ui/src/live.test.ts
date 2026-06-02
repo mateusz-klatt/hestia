@@ -56,6 +56,32 @@ describe("LiveController.refresh", () => {
     expect(view.status.textContent).toBe("could not load /api/discovery");
     expect(view.rows.querySelectorAll("tr")).toHaveLength(0);
   });
+
+  it("a throwing onRender hook does not wedge the refresh loop", async () => {
+    const view = harness();
+    let calls = 0;
+    let boom = true;
+    const data = discovery({ "7": device({ type: "plug", switch: false }) });
+    const live = new LiveController(
+      view,
+      () => {
+        calls += 1;
+        return Promise.resolve(data);
+      },
+      undefined,
+      () => {
+        if (boom) throw new Error("hook boom"); // a panel hook choking on a bad payload
+      },
+    );
+    // The throw propagates, but `finally` must still release `refreshing`.
+    await expect(live.refresh()).rejects.toThrow("hook boom");
+    expect(calls).toBe(1);
+    // Loop not wedged: a later refresh runs and renders cleanly.
+    boom = false;
+    await live.refresh();
+    expect(calls).toBe(2);
+    expect(view.rows.querySelectorAll("tr[data-node]")).toHaveLength(1);
+  });
 });
 
 describe("LiveController.applyState", () => {

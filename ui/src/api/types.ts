@@ -92,6 +92,23 @@ export interface RuleAction {
   [field: string]: unknown;
 }
 
+/**
+ * The rule grammar the guided form builds its dropdowns from (the `rule_vocab`
+ * field of `GET /api/discovery`). The backend derives it from its own
+ * validation constants (see `rule_vocab()`), so the form cannot drift from
+ * `Rule.from_dict`. `state_fields` maps each comparable field → whether it is
+ * GLOBAL (node-less → the form omits the per-node input for it).
+ */
+export interface RuleVocab {
+  trigger_types: string[];
+  state_fields: Record<string, boolean>;
+  cmp_ops: string[];
+  frame_action_ops: string[];
+  modes: string[];
+  sun_events: string[];
+  presence_events: string[];
+}
+
 export interface Rule {
   id: string;
   enabled: boolean;
@@ -115,7 +132,7 @@ export interface Discovery {
   globals: Globals;
   ir_buttons: IrButton[];
   klima: Klima;
-  rule_vocab: unknown; // typed when PR-5 renders the automations UI
+  rule_vocab: RuleVocab; // dropdown grammar for the guided rule form
   mode: string;
   target_mode: string;
   env_override: string | null;

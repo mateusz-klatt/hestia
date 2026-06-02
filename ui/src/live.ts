@@ -116,19 +116,25 @@ export class LiveController {
       return;
     }
     this.refreshing = true;
-    const data = await this.refetch(); // deltas arriving now queue (refreshing === true)
-    if (data === null) {
-      this.view.status.textContent = "could not load /api/discovery";
-      this.view.status.hidden = false;
-    } else {
-      this.view.status.hidden = true;
-      this.render(data);
-    }
-    this.refreshing = false; // so the drained deltas below apply directly
-    this.drainPending();
-    if (this.refreshAgain) {
-      this.refreshAgain = false; // consume the coalesced request, then run once more
-      void this.refresh();
+    try {
+      const data = await this.refetch(); // deltas arriving now queue (refreshing === true)
+      if (data === null) {
+        this.view.status.textContent = "could not load /api/discovery";
+        this.view.status.hidden = false;
+      } else {
+        this.view.status.hidden = true;
+        this.render(data);
+      }
+    } finally {
+      // ALWAYS release the lock + drain — a throw in render()/onRender (e.g. a panel hook
+      // choking on a malformed payload) must never wedge `refreshing` true forever, which
+      // would freeze every later refresh and the SSE delta replay along with it.
+      this.refreshing = false; // so the drained deltas below apply directly
+      this.drainPending();
+      if (this.refreshAgain) {
+        this.refreshAgain = false; // consume the coalesced request, then run once more
+        void this.refresh();
+      }
     }
   }
 
