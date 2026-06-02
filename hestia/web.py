@@ -38,9 +38,10 @@ from pathlib import Path
 
 from aiohttp import ClientConnectionError, web
 
+from . import auth
 from .classifier import DeviceType
 from .automations import rule_vocab
-from .proxy import (IR_BUTTONS, KLIMA, _CLOSED_SENTINEL, _LOOPBACK, _merged_discovery,
+from .proxy import (IR_BUTTONS, KLIMA, _CLOSED_SENTINEL, _LOOPBACK, _merged_discovery, _truthy_env,
                     globals_snapshot, process_control_op)
 
 log = logging.getLogger("hestia.web")
@@ -65,6 +66,17 @@ _CONTROL_FIELDS = {
 _RT_KEY = web.AppKey("rt", object)
 _UI_DIST_ENV = "HESTIA_UI_DIST"
 _DEFAULT_UI_DIST = Path(__file__).resolve().parent.parent / "ui" / "dist"
+
+# App-level login (#43). OPT-IN: enforced only when HESTIA_SESSION_SECRET is set — so loopback/dev without
+# a secret stays open, and an empty secret can never sign a usable cookie (fail closed). When enabled the
+# auth middleware gates /api/* on a valid session cookie; the app shell + /api/login|logout stay public so
+# the login form can load and submit.
+_SESSION_SECRET = os.environ.get("HESTIA_SESSION_SECRET", "").encode("utf-8")
+_AUTH_ENABLED = bool(_SESSION_SECRET)
+_COOKIE_SECURE = _truthy_env(os.environ.get("HESTIA_COOKIE_SECURE"))   # set on the HTTPS (Apache) deployment
+_SESSION_COOKIE = "hestia_session"
+_USER_KEY = "hestia_user"
+_now = time.time          # WALL clock for session expiry (must survive restarts, unlike _clock); rebindable for tests
 
 
 def _require_safe_web_bind(host: str) -> None:
@@ -109,6 +121,30 @@ def _summary(devices: dict) -> dict:
     }
 
 
+def _is_public_route(method: str, path: str) -> bool:
+    """Routes reachable WITHOUT a session: the app shell (so the login form can load), its assets, the
+    /ui/ redirect, and login/logout themselves. Everything else (the /api data + mutations) is gated."""
+    if path in ("/api/login", "/api/logout"):
+        return True
+    if method == "GET":
+        return path == "/" or path == "/ui/" or path.startswith("/assets/")
+    return False
+
+
+@web.middleware
+async def _auth_middleware(request, handler):
+    """Gate every non-public route on a valid session cookie when auth is enabled (a HESTIA_SESSION_SECRET
+    is set). An absent / expired / forged cookie → 401 (the TS app then shows the login form). No-op when
+    auth is off. Runs OUTERMOST so an unauthenticated request is rejected before it reaches any handler."""
+    if not _AUTH_ENABLED or _is_public_route(request.method, request.path):
+        return await handler(request)
+    user = auth.verify_session(request.cookies.get(_SESSION_COOKIE, ""), now=_now(), secret=_SESSION_SECRET)
+    if user is None:
+        return _empty(HTTPStatus.UNAUTHORIZED)
+    request[_USER_KEY] = user                     # for /api/whoami (and future per-user UI)
+    return await handler(request)
+
+
 @web.middleware
 async def _empty_404_405_middleware(request, handler):
     try:
@@ -121,6 +157,31 @@ async def _empty_404_405_middleware(request, handler):
 
 def _rt(request):
     return request.app[_RT_KEY]
+
+
+async def _login(request):
+    op, err = await _read_json_body(request)      # CSRF guard: requires Content-Type: application/json
+    if err:
+        return op
+    user = op.get("user") if isinstance(op, dict) else None
+    password = op.get("password") if isinstance(op, dict) else None
+    if not (_AUTH_ENABLED and auth.authenticate(user, password, auth.load_users())):
+        return _json(HTTPStatus.UNAUTHORIZED, {"ok": False, "error": "invalid credentials"})
+    token = auth.make_session(user, now=_now(), secret=_SESSION_SECRET)
+    resp = _json(HTTPStatus.OK, {"ok": True, "user": user})
+    resp.set_cookie(_SESSION_COOKIE, token, max_age=int(auth.SESSION_TTL), httponly=True,
+                    samesite="Strict", secure=_COOKIE_SECURE, path="/")
+    return resp
+
+
+async def _logout(_request):  # NOSONAR S7503: aiohttp route handlers must be coroutines (the framework awaits them)
+    resp = _json(HTTPStatus.OK, {"ok": True})
+    resp.del_cookie(_SESSION_COOKIE, path="/")
+    return resp
+
+
+async def _whoami(request):  # NOSONAR S7503: aiohttp route handlers must be coroutines (the framework awaits them)
+    return _json(HTTPStatus.OK, {"user": request.get(_USER_KEY)})
 
 
 async def _ui_redirect(_request):  # NOSONAR S7503: aiohttp route handlers must be coroutines (the framework awaits them)
@@ -408,12 +469,15 @@ def _validate_control_payload(op) -> "str | None":
 def make_app(rt):
     app = web.Application(
         client_max_size=MAX_RULE_BODY + 4096,
-        middlewares=[_empty_404_405_middleware],
+        middlewares=[_auth_middleware, _empty_404_405_middleware],   # auth OUTERMOST: gate before routing
     )
     app[_RT_KEY] = rt
     app.router.add_get("/", _ui_index, allow_head=False)                          # the TS app (Vite build)
     app.router.add_get("/assets/{path:[A-Za-z0-9._-]+}", _ui_asset, allow_head=False)
     app.router.add_get("/ui/", _ui_redirect, allow_head=False)                    # retired alias -> /
+    app.router.add_post("/api/login", _login)
+    app.router.add_post("/api/logout", _logout)
+    app.router.add_get("/api/whoami", _whoami, allow_head=False)
     app.router.add_get("/api/discovery", _discovery, allow_head=False)
     app.router.add_get("/api/events", _events, allow_head=False)
     app.router.add_get("/api/automations", _automations_list, allow_head=False)

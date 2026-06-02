@@ -21,7 +21,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from hestia import proxy, web
+from hestia import auth, proxy, web
 from hestia.automations import AutomationEngine, AutomationStore, rule_vocab
 from hestia.protocol import Frame, build_frame, tlv
 
@@ -83,10 +83,10 @@ def _client(address) -> http.client.HTTPConnection:
     return http.client.HTTPConnection(host, port, timeout=5.0)
 
 
-def _get(address, path) -> "tuple[int, dict, bytes]":
+def _get(address, path, headers=None) -> "tuple[int, dict, bytes]":
     conn = _client(address)
     try:
-        conn.request("GET", path)
+        conn.request("GET", path, headers=headers or {})
         resp = conn.getresponse()
         return resp.status, dict(resp.getheaders()), resp.read()
     finally:
@@ -474,6 +474,108 @@ class IndexTests(_WebTestBase):
         status, headers, _ = _get(self.web.address, "/ui/")
         self.assertEqual(status, 302)
         self.assertEqual(headers["Location"], "../")
+
+
+class AuthTests(_WebTestBase):
+    """App-level login (#43). Auth is enabled per-request via the module globals, which the middleware
+    reads live — so patching them gates the already-running test server without a restart."""
+
+    def setUp(self):
+        super().setUp()
+        self.users = {"tata": auth.hash_password("s3cret")}
+        patches = [
+            mock.patch.object(web, "_AUTH_ENABLED", True),
+            mock.patch.object(web, "_SESSION_SECRET", b"test-secret-bytes"),
+            mock.patch.object(web, "_COOKIE_SECURE", False),
+            mock.patch.object(auth, "load_users", return_value=self.users),
+        ]
+        for p in patches:
+            p.start()
+            self.addCleanup(p.stop)
+
+    def _login(self, user="tata", password="s3cret"):
+        return _post(self.web.address, "/api/login", {"user": user, "password": password})
+
+    @staticmethod
+    def _cookie(set_cookie_header):
+        return set_cookie_header.split(";", 1)[0]      # "hestia_session=<token>"
+
+    # ---- gating ----
+    def test_gated_route_401_without_cookie(self):
+        status, _, body = _get(self.web.address, "/api/discovery")
+        self.assertEqual(status, 401)
+        self.assertEqual(body, b"")
+
+    def test_gated_post_401_without_cookie(self):
+        status, _, _ = _post(self.web.address, "/api/control", {"op": "switch", "node": 5, "on": True})
+        self.assertEqual(status, 401)                  # a non-GET, non-login route is gated
+
+    def test_forged_cookie_401(self):
+        status, _, _ = _get(self.web.address, "/api/discovery",
+                            headers={"Cookie": "hestia_session=forged.token"})
+        self.assertEqual(status, 401)
+
+    def test_public_ui_redirect_open(self):
+        status, headers, _ = _get(self.web.address, "/ui/")     # public GET → redirect, never gated
+        self.assertEqual(status, 302)
+        self.assertEqual(headers["Location"], "../")
+
+    def test_public_root_and_assets_not_gated(self):
+        # public GETs: not 401 (no build present in this test → 404, but crucially NOT gated to 401)
+        self.assertNotEqual(_get(self.web.address, "/")[0], 401)
+        self.assertNotEqual(_get(self.web.address, "/assets/app.js")[0], 401)
+
+    # ---- login ----
+    def test_login_success_sets_cookie(self):
+        status, headers, body = self._login()
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body), {"ok": True, "user": "tata"})
+        sc = headers["Set-Cookie"]
+        self.assertIn("hestia_session=", sc)
+        self.assertIn("HttpOnly", sc)
+        self.assertIn("SameSite=Strict", sc)
+
+    def test_login_wrong_password_401(self):
+        status, headers, body = self._login(password="nope")
+        self.assertEqual(status, 401)
+        self.assertFalse(json.loads(body)["ok"])
+        self.assertNotIn("Set-Cookie", headers)        # no session minted
+
+    def test_login_unknown_user_401(self):
+        self.assertEqual(self._login(user="ghost")[0], 401)
+
+    def test_login_malformed_body_401(self):
+        self.assertEqual(_post(self.web.address, "/api/login", [])[0], 401)          # non-dict
+        self.assertEqual(_post(self.web.address, "/api/login", {"user": "tata"})[0], 401)  # missing password
+
+    def test_login_when_auth_disabled_401(self):
+        with mock.patch.object(web, "_AUTH_ENABLED", False):
+            self.assertEqual(self._login()[0], 401)     # can't mint a session without a configured secret
+
+    def test_login_bad_content_type_415(self):
+        status, _, _ = _post(self.web.address, "/api/login", "x", headers={"Content-Type": "text/plain"})
+        self.assertEqual(status, 415)                   # login still enforces the JSON CSRF guard
+
+    # ---- authed round-trip ----
+    def test_authed_request_passes(self):
+        _, headers, _ = self._login()
+        cookie = self._cookie(headers["Set-Cookie"])
+        status, _, _ = _get(self.web.address, "/api/discovery", headers={"Cookie": cookie})
+        self.assertEqual(status, 200)
+
+    def test_whoami_returns_logged_in_user(self):
+        _, headers, _ = self._login()
+        cookie = self._cookie(headers["Set-Cookie"])
+        status, _, body = _get(self.web.address, "/api/whoami", headers={"Cookie": cookie})
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body), {"user": "tata"})
+
+    def test_logout_clears_cookie(self):
+        status, headers, body = _post(self.web.address, "/api/logout", {})
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body), {"ok": True})
+        self.assertIn("hestia_session=", headers["Set-Cookie"])
+        self.assertIn('Max-Age=0', headers["Set-Cookie"])      # del_cookie expires it immediately
 
 
 class DiscoveryTests(_WebTestBase):
