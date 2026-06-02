@@ -13,6 +13,7 @@ import asyncio
 import concurrent.futures
 import http.client
 import json
+import socket
 import shutil
 import tempfile
 import threading
@@ -108,6 +109,54 @@ def _post(address, path, body, headers=None) -> "tuple[int, dict, bytes]":
         return resp.status, dict(resp.getheaders()), resp.read()
     finally:
         conn.close()
+
+
+def _head(address, path) -> "tuple[int, dict, bytes]":
+    conn = _client(address)
+    try:
+        conn.request("HEAD", path)
+        resp = conn.getresponse()
+        return resp.status, dict(resp.getheaders()), resp.read()
+    finally:
+        conn.close()
+
+
+def _recv_until(sock, marker: bytes, limit=65536) -> bytes:
+    data = b""
+    while marker not in data and len(data) < limit:
+        chunk = sock.recv(4096)
+        if not chunk:
+            break
+        data += chunk
+    return data
+
+
+def _raw_http(address, request: bytes) -> bytes:
+    host, port = address
+    with socket.create_connection((host, port), timeout=5.0) as s:
+        s.sendall(request)
+        s.shutdown(socket.SHUT_WR)
+        chunks = []
+        while True:
+            chunk = s.recv(65536)
+            if not chunk:
+                break
+            chunks.append(chunk)
+        return b"".join(chunks)
+
+
+def _raw_status(response: bytes) -> int:
+    return int(response.split(b"\r\n", 1)[0].split()[1])
+
+
+def _raw_body(response: bytes) -> bytes:
+    return response.split(b"\r\n\r\n", 1)[1]
+
+
+def _raw_post(address, path, body=b"", headers=()) -> bytes:
+    header_lines = b"".join(f"{k}: {v}\r\n".encode("ascii") for k, v in headers)
+    return _raw_http(address, (f"POST {path} HTTP/1.0\r\nHost: localhost\r\n".encode("ascii")
+                              + header_lines + b"\r\n" + body))
 
 
 # --- pure helpers (no server) -----------------------------------------------
@@ -323,6 +372,26 @@ class IrEndpointTests(_WebTestBase):
         self.assertEqual(status, 400)
         self.assertIn(b"must be a JSON object", body)
 
+    def test_successful_ir_transmit_returns_ok(self):
+        async def start_worker():
+            self.rt.ir_queue = asyncio.Queue(maxsize=4)
+            return asyncio.create_task(proxy._ir_worker(self.rt))
+
+        async def stop_worker(task):
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+        worker = self.loop_thread.submit(start_worker())
+        try:
+            with mock.patch.object(proxy.flipper, "transmit_ir") as transmit:
+                status, _, body = _post(self.web.address, "/api/ir",
+                                        {"file": "/k.ir", "button": "Power"})
+        finally:
+            self.loop_thread.submit(stop_worker(worker))
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body), {"ok": True})
+        transmit.assert_called_once_with("/k.ir", "Power", device=proxy.FLIPPER_DEV)
+
 
 class _FakeDeviceSession:
     def __init__(self):
@@ -481,6 +550,13 @@ class DiscoveryTests(_WebTestBase):
         status, _, _ = _post(self.web.address, "/api/graduate", b"{}", headers={"Content-Type": "text/plain"})
         self.assertEqual(status, 415)
 
+    def test_graduate_persist_failure_returns_503(self):
+        with mock.patch.object(self.rt.registry, "write_payload", side_effect=OSError("disk")):
+            status, _, body = _post(self.web.address, "/api/graduate", {})
+        self.assertEqual(status, 503)
+        self.assertEqual(json.loads(body),
+                         {"ok": False, "error": "graduate persist failed: OSError('disk')"})
+
 
 class NamePersistTests(_WebTestBase):
     def test_name_persists(self):
@@ -637,6 +713,105 @@ class RoutingTests(_WebTestBase):
         status, headers, _ = _get(self.web.address, "/api/name")
         self.assertEqual(status, 405)
         self.assertEqual(headers["Allow"], "POST")
+
+
+class HttpContractTests(_WebTestBase):
+    def assertJsonHeaders(self, headers):
+        self.assertEqual(headers["Content-Type"], "application/json")
+        self.assertIn("Content-Length", headers)
+
+    def assertEmptyHeaders(self, headers):
+        self.assertEqual(headers["Content-Length"], "0")
+        self.assertNotIn("Content-Type", headers)
+
+    def test_response_headers_pin_json_html_and_empty_bodies(self):
+        status, headers, _ = _get(self.web.address, "/api/discovery")
+        self.assertEqual(status, 200)
+        self.assertJsonHeaders(headers)
+
+        status, headers, body = _post(self.web.address, "/api/name", {"node": 5, "name": "x"})
+        self.assertEqual(status, 200)
+        self.assertJsonHeaders(headers)
+        self.assertEqual(json.loads(body), {"ok": True})
+
+        status, headers, body = _post(self.web.address, "/api/name", {"node": 5})
+        self.assertEqual(status, 400)
+        self.assertJsonHeaders(headers)
+        self.assertFalse(json.loads(body)["ok"])
+
+        status, headers, body = _get(self.web.address, "/")
+        self.assertEqual(status, 200)
+        self.assertEqual(headers["Content-Type"], "text/html; charset=utf-8")
+        self.assertIn("Content-Length", headers)
+        self.assertIn(b"<table>", body)
+
+        status, headers, body = _get(self.web.address, "/nope")
+        self.assertEqual(status, 404)
+        self.assertEmptyHeaders(headers)
+        self.assertEqual(body, b"")
+
+        status, headers, body = _post(self.web.address, "/", b"{}", headers={"Content-Length": "2"})
+        self.assertEqual(status, 405)
+        self.assertEmptyHeaders(headers)
+        self.assertEqual(body, b"")
+
+    def test_405_allow_headers_are_exact(self):
+        status, headers, _ = _post(self.web.address, "/", b"{}", headers={"Content-Length": "2"})
+        self.assertEqual(status, 405)
+        self.assertEqual(headers["Allow"], "GET")
+
+        for path in ("/api/name", "/api/ir", "/api/control", "/api/automations/delete", "/api/graduate"):
+            with self.subTest(path=path):
+                status, headers, _ = _get(self.web.address, path)
+                self.assertEqual(status, 405)
+                self.assertEqual(headers["Allow"], "POST")
+
+    def test_missing_content_length_is_411_on_representative_posts(self):
+        for path in ("/api/control", "/api/automations"):
+            with self.subTest(path=path):
+                response = _raw_post(self.web.address, path, headers=(("Content-Type", "application/json"),))
+                self.assertEqual(_raw_status(response), 411)
+                self.assertEqual(json.loads(_raw_body(response)),
+                                 {"ok": False, "error": "Content-Length required"})
+
+    def test_oversized_bodies_are_413_for_endpoint_caps(self):
+        cases = (
+            ("/api/name", 8193, "body must be ≤ 8192 bytes"),
+            ("/api/automations", 65537, "body must be ≤ 65536 bytes"),
+            ("/api/automations/delete", 65537, "body must be ≤ 65536 bytes"),
+        )
+        for path, size, error in cases:
+            with self.subTest(path=path):
+                body = b"x" * size
+                response = _raw_post(
+                    self.web.address, path, body=body,
+                    headers=(("Content-Type", "application/json"),
+                             ("Content-Length", str(len(body)))))
+                self.assertEqual(_raw_status(response), 413)
+                self.assertEqual(json.loads(_raw_body(response)), {"ok": False, "error": error})
+
+    def test_wrong_content_type_is_415_on_all_post_routes(self):
+        for path in ("/api/name", "/api/ir", "/api/control", "/api/automations",
+                     "/api/automations/delete", "/api/graduate"):
+            with self.subTest(path=path):
+                status, headers, body = _post(self.web.address, path, b"{}", headers={"Content-Type": "text/plain"})
+                self.assertEqual(status, 415)
+                self.assertJsonHeaders(headers)
+                self.assertEqual(json.loads(body),
+                                 {"ok": False, "error": "Content-Type must be application/json"})
+
+    def test_post_to_get_only_routes_is_404_with_empty_body(self):
+        for path in ("/api/discovery", "/api/events"):
+            with self.subTest(path=path):
+                status, headers, body = _post(self.web.address, path, {})
+                self.assertEqual(status, 404)
+                self.assertEmptyHeaders(headers)
+                self.assertEqual(body, b"")
+
+    def test_head_root_is_not_implemented(self):
+        status, _, body = _head(self.web.address, "/")
+        self.assertEqual(status, 501)
+        self.assertEqual(body, b"")
 
 
 # --- M3: automations CRUD ----------------------------------------------------
@@ -1062,6 +1237,21 @@ class SSEHandlerTests(_WebTestBase):
         # consume the trailing blank line
         resp.fp.readline()
         conn.close()
+
+    def test_idle_stream_emits_keepalive(self):
+        with mock.patch.object(web, "SSE_IDLE_TIMEOUT", 0.01):
+            s = self._raw_sse()
+            try:
+                data = _recv_until(s, b"\r\n\r\n")
+                head, _, body = data.partition(b"\r\n\r\n")
+                self.assertIn(b"HTTP/1.0 200 OK", head.split(b"\r\n", 1)[0])
+                self._wait_subscribed()
+                if b":keepalive\n\n" not in body:
+                    body += _recv_until(s, b":keepalive\n\n")
+                self.assertIn(b":keepalive\n\n", body)
+            finally:
+                s.close()
+            self._wait_unsubscribed()
 
     async def _publish_async(self, event):
         self.rt.event_bus.publish(event)
