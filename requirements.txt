@@ -7,4 +7,7 @@
 #   cryptography — AES-128-ECB primitive for the Tuya v3.3 client (hestia/tuya.py).
 #                  Tuya framing / PKCS7 / version header / device22 quirks remain
 #                  first-party; only the block cipher comes from the library.
+#   pyserial     — USB-CDC serial transport for the Flipper Zero RPC client
+#                  (hestia/flipper.py). The RPC framing / protobuf codec stay first-party.
 cryptography>=46.0.0,<47.0.0
+pyserial>=3.5,<4.0

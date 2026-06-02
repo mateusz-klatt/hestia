@@ -1,5 +1,5 @@
-"""Minimal, stdlib-only **Flipper Zero RPC** client — transmit an infrared signal that is saved on
-the Flipper's SD card, over USB-serial, with **no cloud** and **no third-party dependency**.
+"""Minimal **Flipper Zero RPC** client — transmit an infrared signal saved on the Flipper's SD card,
+over USB-serial (a ``pyserial`` transport), with **no cloud**.
 
 The Flipper CLI ``ir tx RAW`` is unusable for a real signal: a hard ~256-byte CLI input-line buffer
 truncates anything past ~53 samples (our LG A/C frame is 57). So this drives the device through the
@@ -23,11 +23,9 @@ loop (``run_in_executor``), like the project's other blocking device reads.
 """
 from __future__ import annotations
 
-import os
-import select
-import termios
 import time
-import tty
+
+import serial
 
 DEFAULT_DEVICE = "/dev/ttyACM0"
 
@@ -185,71 +183,44 @@ def _take_frame(buf: bytearray):
 # --- serial transport (raw 8N1 over the USB-CDC CLI port) -------------------------------------
 
 class SerialTransport:
-    """Raw, non-blocking 8N1 access to the Flipper's USB-CDC serial port. ``write`` chunks and tolerates
-    partial / would-block writes; ``read`` returns whatever is available within ``timeout`` (possibly
-    empty). Injectable: ``transmit_ir`` takes a factory so tests pass a fake."""
+    """Raw 8N1 access to the Flipper's USB-CDC serial port via ``pyserial``. ``write`` is bounded by a
+    write timeout; ``read`` waits up to ``timeout`` for the first byte then drains what is buffered
+    (possibly empty). Injectable: ``transmit_ir`` takes a factory so tests pass a fake."""
 
     def __init__(self, device: str = DEFAULT_DEVICE):
+        # pyserial's defaults are raw 8N1 with no flow control — exactly the old termios setup.
         try:
-            self.fd = os.open(device, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
-        except OSError as exc:
+            self._ser = serial.Serial(device, baudrate=115200, timeout=0, write_timeout=5.0)
+        except (serial.SerialException, OSError) as exc:
             raise FlipperError(f"cannot open {device}: {exc}") from None
-        try:
-            tty.setraw(self.fd)
-            a = termios.tcgetattr(self.fd)
-            a[0] &= ~(termios.IXON | termios.IXOFF | termios.IXANY
-                      | termios.INLCR | termios.ICRNL | termios.IGNCR)
-            a[1] &= ~termios.OPOST
-            a[2] |= (termios.CLOCAL | termios.CREAD)
-            a[2] &= ~(termios.CRTSCTS | termios.PARENB | termios.CSTOPB)
-            a[2] = (a[2] & ~termios.CSIZE) | termios.CS8
-            a[3] &= ~(termios.ICANON | termios.ECHO | termios.ECHOE | termios.ISIG | termios.IEXTEN)
-            a[4] = a[5] = termios.B115200
-            termios.tcsetattr(self.fd, termios.TCSANOW, a)
-            termios.tcflush(self.fd, termios.TCIOFLUSH)
-        except (OSError, termios.error) as exc:
-            os.close(self.fd)
-            raise FlipperError(f"cannot configure {device}: {exc}") from None
 
     def write(self, data: bytes, timeout: float = 5.0) -> None:
-        """Write all of ``data``, chunked, tolerating partial / would-block writes — but BOUNDED by
-        ``timeout``: if the port stays non-writable that long, raise ``FlipperError`` rather than spin
-        forever (a wedged write would otherwise jam the sole IR worker and stall shutdown)."""
-        off = 0
-        deadline = time.monotonic() + timeout
-        while off < len(data):
-            try:
-                wrote = os.write(self.fd, data[off:off + 64])
-            except BlockingIOError:
-                wrote = 0
-            except OSError as exc:
-                raise FlipperError(f"serial write failed: {exc}") from None
-            if wrote > 0:
-                off += wrote
-                continue
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                raise FlipperError("serial write timed out")
-            try:
-                select.select([], [self.fd], [], min(0.1, remaining))   # wait for writability
-            except OSError as exc:
-                raise FlipperError(f"serial write failed: {exc}") from None
+        """Write all of ``data``, BOUNDED by ``timeout``: a wedged write raises ``FlipperError``
+        rather than spin forever (it would otherwise jam the sole IR worker and stall shutdown)."""
+        try:
+            self._ser.write_timeout = timeout
+            self._ser.write(data)
+            self._ser.flush()
+        except serial.SerialTimeoutException:
+            raise FlipperError("serial write timed out") from None
+        except (serial.SerialException, OSError) as exc:
+            raise FlipperError(f"serial write failed: {exc}") from None
 
     def read(self, timeout: float) -> bytes:
+        """Wait up to ``timeout`` for the first byte, then return it plus whatever else is buffered."""
         try:
-            ready, _, _ = select.select([self.fd], [], [], max(0.0, timeout))
-            if not ready:
+            self._ser.timeout = max(0.0, timeout)
+            first = self._ser.read(1)
+            if not first:
                 return b""
-            return os.read(self.fd, 4096)
-        except BlockingIOError:
-            return b""
-        except OSError as exc:
+            return first + self._ser.read(self._ser.in_waiting)
+        except (serial.SerialException, OSError) as exc:
             raise FlipperError(f"serial read failed: {exc}") from None
 
     def close(self) -> None:
         try:
-            os.close(self.fd)
-        except OSError:
+            self._ser.close()
+        except (serial.SerialException, OSError):
             pass
 
 
