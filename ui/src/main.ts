@@ -1,6 +1,16 @@
 import "./style.css";
 
-import { apiUrl, fetchDiscovery, postControl, postIr, postName } from "./api/client";
+import {
+  apiUrl,
+  deleteRule,
+  fetchAutomations,
+  fetchDiscovery,
+  postControl,
+  postIr,
+  postName,
+  postRule,
+} from "./api/client";
+import { renderAutomations } from "./automations";
 import { renderActions } from "./controls";
 import { renderIrButtons, renderKlima } from "./klima";
 import { LiveController } from "./live";
@@ -45,12 +55,79 @@ el("refresh").addEventListener("click", () => {
   void live.refresh();
 });
 
+// ---- Automations editor ---------------------------------------------------
+const autoRows = el("auto-rows");
+const ruleJson = el("rule-json") as HTMLTextAreaElement;
+const ruleStatus = el("rule-status");
+
+const RULE_TEMPLATE = {
+  id: "my-rule",
+  enabled: true,
+  modes: ["proxy", "standalone"],
+  debounce: 0,
+  trigger: { type: "scene", node: 0, scene_id: 1 },
+  conditions: [],
+  actions: [{ op: "switch", node: 0, on: true }],
+};
+
+function setRuleStatus(text: string, isErr: boolean): void {
+  ruleStatus.textContent = text;
+  ruleStatus.className = isErr ? "status err" : "status";
+}
+
+async function loadAutomations(): Promise<void> {
+  const rules = await fetchAutomations();
+  if (rules === null) {
+    autoRows.replaceChildren();
+    setRuleStatus("(automations unavailable)", true);
+    return;
+  }
+  renderAutomations(autoRows, rules, {
+    reload: () => {
+      void loadAutomations();
+    },
+    onEdit: (rule) => {
+      ruleJson.value = JSON.stringify(rule, null, 2);
+      setRuleStatus(`editing ${rule.id}`, false);
+    },
+    postRule,
+    deleteRule,
+    confirm: (message) => window.confirm(message),
+  });
+}
+
+el("rule-template").addEventListener("click", () => {
+  ruleJson.value = JSON.stringify(RULE_TEMPLATE, null, 2);
+  setRuleStatus("template loaded — edit then Save", false);
+});
+
+el("save-rule").addEventListener("click", () => {
+  void (async () => {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(ruleJson.value);
+    } catch (e) {
+      setRuleStatus(`invalid JSON: ${e instanceof Error ? e.message : "parse error"}`, true);
+      return;
+    }
+    const res = await postRule(parsed);
+    if (res.ok) {
+      setRuleStatus("saved", false);
+      ruleJson.value = "";
+      void loadAutomations();
+    } else {
+      setRuleStatus(res.body?.error ?? `error ${String(res.status)}`, true);
+    }
+  })();
+});
+
 // Server-Sent Events: live state / globals patches + discovery deltas. The
 // browser auto-reconnects on drop; `open` re-syncs the full snapshot.
 const events = new EventSource(apiUrl("events"));
 events.addEventListener("open", () => {
   live.setConnected(true);
   void live.refresh();
+  void loadAutomations(); // re-sync the rule list on (re)connect
 });
 events.addEventListener("error", () => {
   live.setConnected(false);
@@ -65,3 +142,4 @@ setInterval(() => {
 }, 1000);
 
 void live.refresh();
+void loadAutomations();

@@ -1,6 +1,14 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { apiBase, fetchDiscovery, postIr, postName } from "./client";
+import {
+  apiBase,
+  deleteRule,
+  fetchAutomations,
+  fetchDiscovery,
+  postIr,
+  postName,
+  postRule,
+} from "./client";
 
 describe("apiBase", () => {
   it("resolves the API root one level above the /ui/ page", () => {
@@ -101,5 +109,68 @@ describe("postIr", () => {
       Promise.resolve({ ok: false, status: 503, json: () => Promise.reject(new Error("bad json")) }),
     );
     await expect(postIr("/x.ir", "off")).resolves.toEqual({ ok: false, error: "error 503" });
+  });
+});
+
+describe("fetchAutomations", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("returns the rule list on 2xx", async () => {
+    vi.stubGlobal("fetch", () =>
+      Promise.resolve({ ok: true, json: () => Promise.resolve({ automations: [{ id: "r1" }] }) }),
+    );
+    expect(await fetchAutomations()).toEqual([{ id: "r1" }]);
+  });
+
+  it("returns [] when the list key is absent", async () => {
+    vi.stubGlobal("fetch", () => Promise.resolve({ ok: true, json: () => Promise.resolve({}) }));
+    expect(await fetchAutomations()).toEqual([]);
+  });
+
+  it("returns null on a non-2xx or a rejected fetch", async () => {
+    vi.stubGlobal("fetch", () => Promise.resolve({ ok: false, json: () => Promise.resolve({}) }));
+    expect(await fetchAutomations()).toBeNull();
+    vi.stubGlobal("fetch", () => Promise.reject(new Error("offline")));
+    expect(await fetchAutomations()).toBeNull();
+  });
+});
+
+describe("postRule / deleteRule", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("postRule returns ok + the parsed body on success", async () => {
+    vi.stubGlobal("fetch", () =>
+      Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ ok: true, id: "r1" }) }),
+    );
+    expect(await postRule({ id: "r1" })).toEqual({ ok: true, status: 200, body: { ok: true, id: "r1" } });
+  });
+
+  it("postRule surfaces the parsed error body on failure", async () => {
+    vi.stubGlobal("fetch", () =>
+      Promise.resolve({ ok: false, status: 400, json: () => Promise.resolve({ ok: false, error: "bad" }) }),
+    );
+    expect(await postRule({})).toEqual({ ok: false, status: 400, body: { ok: false, error: "bad" } });
+  });
+
+  it("postRule tolerates an empty / non-JSON body (body: null)", async () => {
+    vi.stubGlobal("fetch", () =>
+      Promise.resolve({ ok: false, status: 503, json: () => Promise.reject(new Error("empty")) }),
+    );
+    expect(await postRule({})).toEqual({ ok: false, status: 503, body: null });
+  });
+
+  it("deleteRule POSTs the id", async () => {
+    const seen: { body: unknown }[] = [];
+    vi.stubGlobal("fetch", (_url: unknown, init: { body?: unknown } = {}) => {
+      seen.push({ body: init.body });
+      return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ ok: true }) });
+    });
+    const res = await deleteRule("r1");
+    expect(res.ok).toBe(true);
+    expect(seen[0]?.body).toBe(JSON.stringify({ id: "r1" }));
   });
 });

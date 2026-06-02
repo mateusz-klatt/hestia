@@ -98,6 +98,26 @@ td.sub-label {
   margin-top: 1rem;
 }
 
+#auto-hdr {
+  font-size: 1.05rem;
+  margin: 1.8rem 0 0.6rem;
+}
+
+#auto-editor {
+  margin-top: 0.9rem;
+}
+
+#auto-editor > div {
+  margin-top: 0.4rem;
+}
+
+#rule-json {
+  font: inherit;
+  width: 44rem;
+  max-width: 96%;
+  display: block;
+}
+
 /* Live layer (SSE): a row glows briefly on activity, lingers "recent", and a
    function-button press flashes a transient scene badge next to the state. */
 tr.recent td {

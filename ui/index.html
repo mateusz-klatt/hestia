@@ -31,6 +31,35 @@
       <tbody id="rows"></tbody>
     </table>
     <p id="status" hidden></p>
+
+    <h1 id="auto-hdr">automations</h1>
+    <table>
+      <thead>
+        <tr>
+          <th>id</th>
+          <th>on</th>
+          <th>trigger</th>
+          <th>cond</th>
+          <th>actions</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="auto-rows"></tbody>
+    </table>
+    <div id="auto-editor">
+      <textarea
+        id="rule-json"
+        rows="11"
+        spellcheck="false"
+        placeholder="rule JSON — click &quot;New rule template&quot; for a skeleton"
+      ></textarea>
+      <div>
+        <button id="rule-template" type="button">New rule template</button>
+        <button id="save-rule" type="button">Save rule</button>
+        <span id="rule-status" class="status"></span>
+      </div>
+    </div>
+
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>
