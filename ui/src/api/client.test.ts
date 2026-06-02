@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { apiBase, fetchDiscovery, postName } from "./client";
+import { apiBase, fetchDiscovery, postIr, postName } from "./client";
 
 describe("apiBase", () => {
   it("resolves the API root one level above the /ui/ page", () => {
@@ -65,5 +65,41 @@ describe("postName", () => {
   it("maps a rejected fetch to {ok:false, status:0} without throwing", async () => {
     vi.stubGlobal("fetch", () => Promise.reject(new Error("offline")));
     await expect(postName({ node: 7 })).resolves.toEqual({ ok: false, status: 0, body: "błąd" });
+  });
+});
+
+describe("postIr", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("returns ok on a 2xx {ok:true}", async () => {
+    vi.stubGlobal("fetch", () =>
+      Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ ok: true }) }),
+    );
+    expect(await postIr("/ext/infrared/klima.ir", "off")).toEqual({ ok: true });
+  });
+
+  it("returns the error on a failed transmit", async () => {
+    vi.stubGlobal("fetch", () =>
+      Promise.resolve({
+        ok: false,
+        status: 503,
+        json: () => Promise.resolve({ ok: false, error: "flipper IR is disabled" }),
+      }),
+    );
+    expect(await postIr("/x.ir", "off")).toEqual({ ok: false, error: "flipper IR is disabled" });
+  });
+
+  it("maps a rejected fetch to {ok:false} without throwing (never-rejects contract)", async () => {
+    vi.stubGlobal("fetch", () => Promise.reject(new Error("offline")));
+    await expect(postIr("/x.ir", "off")).resolves.toEqual({ ok: false, error: "błąd" });
+  });
+
+  it("maps a non-JSON body to an error-<status> result", async () => {
+    vi.stubGlobal("fetch", () =>
+      Promise.resolve({ ok: false, status: 503, json: () => Promise.reject(new Error("bad json")) }),
+    );
+    await expect(postIr("/x.ir", "off")).resolves.toEqual({ ok: false, error: "error 503" });
   });
 });

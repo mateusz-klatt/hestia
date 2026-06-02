@@ -61,6 +61,22 @@ export async function postControl(op: ControlOp): Promise<ControlResult> {
   }
 }
 
+/** POST `/api/ir` to transmit a saved Flipper signal (`{file, button}`); normalised like postControl. */
+export async function postIr(file: string, button: string): Promise<ControlResult> {
+  try {
+    const response = await fetch(apiUrl("ir"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ file, button }),
+    });
+    const body = await readJsonBody(response);
+    if (response.ok && body.ok === true) return { ok: true };
+    return { ok: false, error: body.error ?? `error ${String(response.status)}` };
+  } catch {
+    return { ok: false, error: "błąd" };
+  }
+}
+
 /**
  * POST `/api/name` to set a node's label/room, confirm its type, or label a
  * multi-gang endpoint. Returns the raw response body so a failure can be shown

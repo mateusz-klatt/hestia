@@ -31,7 +31,7 @@ export function discovery(
     summary: { total: Object.keys(devices).length, confirmed: 0, unknown: 0 },
     globals: { crib_temp: null, outdoor_temp: null },
     ir_buttons: [],
-    klima: null,
+    klima: {},
     rule_vocab: {},
     mode: "standalone",
     target_mode: "standalone",

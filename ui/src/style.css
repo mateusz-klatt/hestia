@@ -85,6 +85,14 @@ td.sub-label {
   font-size: 0.95rem;
 }
 
+.panel {
+  margin: 0 0 0.9rem;
+}
+
+.panel:empty {
+  margin: 0;
+}
+
 #status {
   color: #c0341d;
   margin-top: 1rem;

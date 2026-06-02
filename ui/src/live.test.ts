@@ -344,6 +344,28 @@ describe("LiveController edit-safety guard", () => {
   });
 });
 
+describe("LiveController onRender hook", () => {
+  it("fires once with the snapshot on success, and not on a failed load", async () => {
+    const view = harness();
+    const seen: Discovery[] = [];
+    const data = discovery({ "7": device({ type: "plug" }) });
+    let ok = true;
+    const live = new LiveController(
+      view,
+      () => Promise.resolve(ok ? data : null),
+      undefined,
+      (d) => {
+        seen.push(d);
+      },
+    );
+    await live.refresh();
+    expect(seen).toEqual([data]); // fired with the exact snapshot
+    ok = false;
+    await live.refresh();
+    expect(seen).toHaveLength(1); // NOT fired on a null/failed load
+  });
+});
+
 describe("LiveController decorate hook", () => {
   it("runs the decorator against each node row's actions cell after a rebuild", async () => {
     const view = harness();
