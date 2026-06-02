@@ -515,6 +515,15 @@ class AuthTests(_WebTestBase):
                             headers={"Cookie": "hestia_session=forged.token"})
         self.assertEqual(status, 401)
 
+    def test_wrong_method_on_public_path_is_gated(self):
+        # only POST /api/login is public; a non-POST hit is gated (401), not a public 405 (exact allowlist)
+        conn = _client(self.web.address)
+        try:
+            conn.request("PUT", "/api/login")
+            self.assertEqual(conn.getresponse().status, 401)
+        finally:
+            conn.close()
+
     def test_public_ui_redirect_open(self):
         status, headers, _ = _get(self.web.address, "/ui/")     # public GET → redirect, never gated
         self.assertEqual(status, 302)

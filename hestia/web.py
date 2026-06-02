@@ -122,13 +122,12 @@ def _summary(devices: dict) -> dict:
 
 
 def _is_public_route(method: str, path: str) -> bool:
-    """Routes reachable WITHOUT a session: the app shell (so the login form can load), its assets, the
-    /ui/ redirect, and login/logout themselves. Everything else (the /api data + mutations) is gated."""
-    if path in ("/api/login", "/api/logout"):
-        return True
+    """Exact method+path allowlist reachable WITHOUT a session: the app shell + its assets + the /ui/
+    redirect (GET, so the login form can load), and login/logout (POST). Everything else is gated —
+    incl. a wrong-method hit on a public path (e.g. GET /api/login → gated, not a public 405)."""
     if method == "GET":
-        return path == "/" or path == "/ui/" or path.startswith("/assets/")
-    return False
+        return path in ("/", "/ui/") or path.startswith("/assets/")
+    return method == "POST" and path in ("/api/login", "/api/logout")
 
 
 @web.middleware
