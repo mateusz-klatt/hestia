@@ -3,14 +3,15 @@
 The protobuf wire codec (varint/tag/field encoders + the decode helpers) is round-tripped; ``transmit_ir``
 is driven end-to-end against a ``FakeTransport`` (records writes, auto-replies with command-id-matched
 RPC frames) so every step and error branch is covered with no real serial device; ``SerialTransport``'s
-termios open / read / write / close is covered by patching ``os`` / ``termios`` / ``tty`` / ``select``.
+pyserial open / read / write / close is covered by patching ``serial.Serial``.
 """
 from __future__ import annotations
 
 import itertools
-import termios
 import unittest
 from unittest import mock
+
+import serial
 
 from hestia import flipper
 from hestia.flipper import FlipperError, transmit_ir
@@ -240,99 +241,64 @@ class TransmitTests(_FastTimeMixin, unittest.TestCase):
         self.assertTrue(t.closed)
 
 
-# --- SerialTransport (termios mocked) ----------------------------------------
-
-def _attrs():
-    return [0, 0, 0, 0, 0, 0, [0] * 32]
-
+# --- SerialTransport (pyserial mocked) ---------------------------------------
 
 class SerialTransportTests(unittest.TestCase):
-    def _open(self, **kw):
-        """Construct a SerialTransport with os/termios/tty open+config mocked; return (transport, mocks)."""
-        patchers = {
-            "open": mock.patch.object(flipper.os, "open", return_value=7),
-            "setraw": mock.patch.object(flipper.tty, "setraw"),
-            "tcgetattr": mock.patch.object(flipper.termios, "tcgetattr", return_value=_attrs()),
-            "tcsetattr": mock.patch.object(flipper.termios, "tcsetattr"),
-            "tcflush": mock.patch.object(flipper.termios, "tcflush"),
-        }
-        started = {k: p.start() for k, p in patchers.items()}
-        for p in patchers.values():
-            self.addCleanup(p.stop)
-        return flipper.SerialTransport("/dev/ttyACM9"), started
+    def _open(self, fake=None):
+        """Construct a SerialTransport with serial.Serial mocked; return (transport, fake_serial)."""
+        fake = fake if fake is not None else mock.MagicMock()
+        p = mock.patch.object(flipper.serial, "Serial", return_value=fake)
+        p.start()
+        self.addCleanup(p.stop)
+        return flipper.SerialTransport("/dev/ttyACM9"), fake
 
     def test_open_ok(self):
-        t, m = self._open()
-        self.assertEqual(t.fd, 7)
-        m["open"].assert_called_once()
-        m["setraw"].assert_called_once_with(7)
+        t, fake = self._open()
+        self.assertIs(t._ser, fake)
 
     def test_open_failure(self):
-        with mock.patch.object(flipper.os, "open", side_effect=OSError("nope")):
+        with mock.patch.object(flipper.serial, "Serial", side_effect=serial.SerialException("nope")):
             self.assertRaises(FlipperError, flipper.SerialTransport, "/dev/ttyACM9")
 
-    def test_configure_failure_closes_fd(self):
-        with mock.patch.object(flipper.os, "open", return_value=7), \
-             mock.patch.object(flipper.tty, "setraw", side_effect=termios.error("bad")), \
-             mock.patch.object(flipper.os, "close") as m_close:
-            self.assertRaises(FlipperError, flipper.SerialTransport, "/dev/ttyACM9")
-            m_close.assert_called_once_with(7)
-
-    def test_write_partial_blocking_then_done(self):
-        t, _ = self._open()
-        # 1st call partial (3 bytes), 2nd raises EAGAIN → wait for writable, 3rd writes the rest.
-        with mock.patch.object(flipper.os, "write", side_effect=[3, BlockingIOError(), 100]), \
-             mock.patch.object(flipper.select, "select", return_value=([], [t.fd], [])):
-            t.write(b"x" * 10)
+    def test_write_ok(self):
+        t, fake = self._open()
+        t.write(b"hello", timeout=2.0)
+        fake.write.assert_called_once_with(b"hello")
+        fake.flush.assert_called_once()
+        self.assertEqual(fake.write_timeout, 2.0)            # the bound is propagated to the port
 
     def test_write_timeout(self):
-        t, _ = self._open()
-        clock = itertools.count(0.0, 3.0)                # advances past the 5 s deadline within 2 ticks
-        with mock.patch.object(flipper.os, "write", side_effect=BlockingIOError()), \
-             mock.patch.object(flipper.select, "select", return_value=([], [], [])), \
-             mock.patch.object(flipper.time, "monotonic", new=lambda: next(clock)):
-            self.assertRaises(FlipperError, t.write, b"hello")
+        t, fake = self._open()
+        fake.write.side_effect = serial.SerialTimeoutException()
+        self.assertRaises(FlipperError, t.write, b"hello")
 
-    def test_write_oserror(self):
-        t, _ = self._open()
-        with mock.patch.object(flipper.os, "write", side_effect=OSError("io")):
-            self.assertRaises(FlipperError, t.write, b"hello")
+    def test_write_failure(self):
+        t, fake = self._open()
+        fake.write.side_effect = serial.SerialException("io")
+        self.assertRaises(FlipperError, t.write, b"hello")
 
-    def test_write_select_oserror(self):
-        t, _ = self._open()
-        with mock.patch.object(flipper.os, "write", side_effect=BlockingIOError()), \
-             mock.patch.object(flipper.select, "select", side_effect=OSError("poll fail")):
-            self.assertRaises(FlipperError, t.write, b"hello")
+    def test_read_returns_first_plus_buffered(self):
+        t, fake = self._open()
+        fake.read.side_effect = [b"a", b"bc"]               # read(1) -> "a"; read(in_waiting) -> "bc"
+        fake.in_waiting = 2
+        self.assertEqual(t.read(0.1), b"abc")
 
-    def test_read_ready(self):
-        t, _ = self._open()
-        with mock.patch.object(flipper.select, "select", return_value=([7], [], [])), \
-             mock.patch.object(flipper.os, "read", return_value=b"abc"):
-            self.assertEqual(t.read(0.1), b"abc")
+    def test_read_empty_on_timeout(self):
+        t, fake = self._open()
+        fake.read.return_value = b""                         # read(1) -> "" (timed out, nothing buffered)
+        self.assertEqual(t.read(0.1), b"")
 
-    def test_read_not_ready(self):
-        t, _ = self._open()
-        with mock.patch.object(flipper.select, "select", return_value=([], [], [])):
-            self.assertEqual(t.read(0.1), b"")
-
-    def test_read_would_block(self):
-        t, _ = self._open()
-        with mock.patch.object(flipper.select, "select", return_value=([7], [], [])), \
-             mock.patch.object(flipper.os, "read", side_effect=BlockingIOError()):
-            self.assertEqual(t.read(0.1), b"")
-
-    def test_read_oserror(self):
-        t, _ = self._open()
-        with mock.patch.object(flipper.select, "select", side_effect=OSError("io")):
-            self.assertRaises(FlipperError, t.read, 0.1)
+    def test_read_failure(self):
+        t, fake = self._open()
+        fake.read.side_effect = serial.SerialException("io")
+        self.assertRaises(FlipperError, t.read, 0.1)
 
     def test_close_ok_and_swallows_error(self):
-        t, _ = self._open()
-        with mock.patch.object(flipper.os, "close") as m_close:
-            t.close()
-            m_close.assert_called_once_with(7)
-        with mock.patch.object(flipper.os, "close", side_effect=OSError("already")):
-            t.close()                                        # must not raise
+        t, fake = self._open()
+        t.close()
+        fake.close.assert_called_once_with()
+        fake.close.side_effect = serial.SerialException("already")
+        t.close()                                            # must not raise
 
 
 if __name__ == "__main__":          # pragma: no cover
