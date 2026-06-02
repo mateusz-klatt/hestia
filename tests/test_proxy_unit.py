@@ -665,7 +665,7 @@ class PumpTests(unittest.IsolatedAsyncioTestCase):
         dst = FakeWriter()                                            # the cloud-bound side
         await sess._pump(FakeReader([SCENE_PRESS]), dst, "D->C")
         self.assertEqual(bytes(dst.buf), SCENE_PRESS)                 # relayed verbatim to cloud
-        self.assertTrue(len(sess.dev_writer.buf) > 0)                 # automation injected to device
+        self.assertGreater(len(sess.dev_writer.buf), 0)               # automation injected to device
 
 
 class RunTests(unittest.IsolatedAsyncioTestCase):

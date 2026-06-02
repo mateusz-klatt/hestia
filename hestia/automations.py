@@ -307,6 +307,62 @@ def _validate_cron(expr):
     return " ".join(fields)
 
 
+def _validate_scene_trigger(spec):
+    node = _validate_node(spec.get("node"), "trigger.node")
+    sid = spec.get("scene_id")
+    if isinstance(sid, bool) or not isinstance(sid, int) or sid < 0:
+        raise ValueError(f"trigger.scene_id must be a non-negative integer, got {sid!r}")
+    return {"type": "scene", "node": node, "scene_id": sid}
+
+
+def _validate_time_trigger(spec):
+    at = spec.get("at")
+    if not isinstance(at, str):
+        raise ValueError(f"trigger.at must be an 'HH:MM' string, got {at!r}")
+    try:
+        parsed = datetime.datetime.strptime(at, "%H:%M")
+    except ValueError:
+        raise ValueError(f"trigger.at must be a valid 'HH:MM' time, got {at!r}") from None
+    # Store the PUBLIC schema (canonical, zero-padded `at`) — never hour/minute — so
+    # `Rule.to_dict` (= dict(self.trigger)) round-trips and the listing stays public.
+    return {"type": "time", "at": parsed.strftime("%H:%M"),
+            "days": _validate_days(spec.get("days"))}
+
+
+def _validate_sun_trigger(spec):
+    event = spec.get("event")
+    if event not in _SUN_EVENTS:
+        raise ValueError(f"trigger.event {event!r} must be one of {list(_SUN_EVENTS)}")
+    # `offset_min` shifts the fire time relative to the event (e.g. sunset +15, sunrise −30).
+    # Strict int (reject bool and float — JSON 15.0 is rejected, matching node/scene_id). The
+    # ±1440 cap keeps the scheduler's candidate-date window (±2 days) exhaustive.
+    offset = spec.get("offset_min", 0)
+    if isinstance(offset, bool) or not isinstance(offset, int) or not -1440 <= offset <= 1440:
+        raise ValueError(f"trigger.offset_min must be an int in [-1440, 1440], got {offset!r}")
+    return {"type": "sun", "event": event, "offset_min": offset,
+            "days": _validate_days(spec.get("days"))}
+
+
+def _validate_presence_trigger(spec):
+    mac = spec.get("mac")
+    if not isinstance(mac, str) or not _MAC_RE.match(mac):
+        raise ValueError(f"trigger.mac must be a MAC 'aa:bb:cc:dd:ee:ff', got {mac!r}")
+    event = spec.get("event")
+    if event not in _PRESENCE_EVENTS:
+        raise ValueError(f"trigger.event {event!r} must be one of {list(_PRESENCE_EVENTS)}")
+    return {"type": "presence", "mac": mac.lower(), "event": event}   # leases are lowercase
+
+
+_TRIGGER_VALIDATORS = {
+    "scene": _validate_scene_trigger,
+    "state": lambda spec: {"type": "state", **_validate_predicate(spec, "trigger")},
+    "time": _validate_time_trigger,
+    "sun": _validate_sun_trigger,
+    "presence": _validate_presence_trigger,
+    "cron": lambda spec: {"type": "cron", "expr": _validate_cron(spec.get("expr"))},
+}
+
+
 def _cron_match(expr, when):
     """True iff the naive-local ``datetime`` ``when`` matches the (validated) 5-field cron ``expr`` to
     the minute. dom/dow use Vixie semantics (OR only when neither is starred); dow 0/7 = Sunday."""
@@ -332,49 +388,71 @@ def _validate_trigger(spec):
     if not isinstance(spec, dict):
         raise ValueError(f"trigger must be an object, got {spec!r}")
     ttype = spec.get("type")
-    if ttype == "scene":
-        node = _validate_node(spec.get("node"), "trigger.node")
-        sid = spec.get("scene_id")
-        if isinstance(sid, bool) or not isinstance(sid, int) or sid < 0:
-            raise ValueError(f"trigger.scene_id must be a non-negative integer, got {sid!r}")
-        return {"type": "scene", "node": node, "scene_id": sid}
-    if ttype == "state":
-        return {"type": "state", **_validate_predicate(spec, "trigger")}
-    if ttype == "time":
-        at = spec.get("at")
-        if not isinstance(at, str):
-            raise ValueError(f"trigger.at must be an 'HH:MM' string, got {at!r}")
-        try:
-            parsed = datetime.datetime.strptime(at, "%H:%M")
-        except ValueError:
-            raise ValueError(f"trigger.at must be a valid 'HH:MM' time, got {at!r}") from None
-        # Store the PUBLIC schema (canonical, zero-padded `at`) — never hour/minute — so
-        # `Rule.to_dict` (= dict(self.trigger)) round-trips and the listing stays public.
-        return {"type": "time", "at": parsed.strftime("%H:%M"),
-                "days": _validate_days(spec.get("days"))}
-    if ttype == "sun":
-        event = spec.get("event")
-        if event not in _SUN_EVENTS:
-            raise ValueError(f"trigger.event {event!r} must be one of {list(_SUN_EVENTS)}")
-        # `offset_min` shifts the fire time relative to the event (e.g. sunset +15, sunrise −30).
-        # Strict int (reject bool and float — JSON 15.0 is rejected, matching node/scene_id). The
-        # ±1440 cap keeps the scheduler's candidate-date window (±2 days) exhaustive.
-        offset = spec.get("offset_min", 0)
-        if isinstance(offset, bool) or not isinstance(offset, int) or not -1440 <= offset <= 1440:
-            raise ValueError(f"trigger.offset_min must be an int in [-1440, 1440], got {offset!r}")
-        return {"type": "sun", "event": event, "offset_min": offset,
-                "days": _validate_days(spec.get("days"))}
-    if ttype == "presence":
-        mac = spec.get("mac")
-        if not isinstance(mac, str) or not _MAC_RE.match(mac):
-            raise ValueError(f"trigger.mac must be a MAC 'aa:bb:cc:dd:ee:ff', got {mac!r}")
-        event = spec.get("event")
-        if event not in _PRESENCE_EVENTS:
-            raise ValueError(f"trigger.event {event!r} must be one of {list(_PRESENCE_EVENTS)}")
-        return {"type": "presence", "mac": mac.lower(), "event": event}   # leases are lowercase
-    if ttype == "cron":
-        return {"type": "cron", "expr": _validate_cron(spec.get("expr"))}   # cron owns dow → no `days`
+    validator = _TRIGGER_VALIDATORS.get(ttype) if isinstance(ttype, str) else None
+    if validator is not None:
+        return validator(spec)
     raise ValueError(f"trigger.type {ttype!r} must be one of {list(_TRIGGER_TYPES)}")
+
+
+def _validate_rule_id(spec):
+    rule_id = spec.get("id")
+    if not isinstance(rule_id, str) or not rule_id:
+        raise ValueError(f"rule.id must be a non-empty string, got {rule_id!r}")
+    return rule_id
+
+
+def _validate_enabled(spec):
+    enabled = spec.get("enabled", True)
+    if not isinstance(enabled, bool):
+        raise ValueError(f"rule.enabled must be a boolean, got {enabled!r}")
+    return enabled
+
+
+def _validate_modes(spec):
+    modes = spec.get("modes", ["proxy", "standalone"])
+    if (not isinstance(modes, list) or not modes
+            or any(m not in _VALID_MODES for m in modes)):
+        raise ValueError(
+            f"rule.modes must be a non-empty subset of {sorted(_VALID_MODES)}, got {modes!r}")
+    return modes
+
+
+def _validate_debounce(spec):
+    debounce = spec.get("debounce", 0.0)
+    # math.isfinite rejects NaN/Infinity, which Python's json accepts and which would
+    # bypass the >= 0 check (NaN compares False to everything → silently no debounce).
+    if (isinstance(debounce, bool) or not isinstance(debounce, (int, float))
+            or debounce < 0 or not math.isfinite(debounce)):
+        raise ValueError(f"rule.debounce must be a finite number >= 0, got {debounce!r}")
+    return float(debounce)
+
+
+def _validate_conditions(spec):
+    conditions = spec.get("conditions", [])
+    if not isinstance(conditions, list):
+        raise ValueError(f"rule.conditions must be a list, got {conditions!r}")
+    return [_validate_predicate(c, f"conditions[{i}]") for i, c in enumerate(conditions)]
+
+
+def _validate_action(action, i: int) -> None:
+    if not isinstance(action, dict):
+        raise ValueError(f"actions[{i}] must be an object, got {action!r}")
+    if action.get("op") not in _VALID_ACTION_OPS:
+        raise ValueError(
+            f"actions[{i}].op {action.get('op')!r} not in {sorted(_VALID_ACTION_OPS)}")
+    if action.get("op") == "ir" and not (
+            isinstance(action.get("file"), str) and action.get("file")
+            and isinstance(action.get("button"), str) and action.get("button")):
+        raise ValueError(f"actions[{i}] ir requires non-empty string 'file' and 'button'")
+
+
+def _validate_actions(spec):
+    actions = spec.get("actions")
+    if not isinstance(actions, list) or not actions:
+        raise ValueError(f"rule.actions must be a non-empty list, got {actions!r}")
+    for i, action in enumerate(actions):
+        _validate_action(action, i)
+    return [dict(a) for a in actions]
 
 
 class Rule:
@@ -395,43 +473,15 @@ class Rule:
     def from_dict(cls, spec):
         if not isinstance(spec, dict):
             raise ValueError(f"rule must be an object, got {spec!r}")
-        rule_id = spec.get("id")
-        if not isinstance(rule_id, str) or not rule_id:
-            raise ValueError(f"rule.id must be a non-empty string, got {rule_id!r}")
-        enabled = spec.get("enabled", True)
-        if not isinstance(enabled, bool):
-            raise ValueError(f"rule.enabled must be a boolean, got {enabled!r}")
-        modes = spec.get("modes", ["proxy", "standalone"])
-        if (not isinstance(modes, list) or not modes
-                or any(m not in _VALID_MODES for m in modes)):
-            raise ValueError(
-                f"rule.modes must be a non-empty subset of {sorted(_VALID_MODES)}, got {modes!r}")
-        debounce = spec.get("debounce", 0.0)
-        # math.isfinite rejects NaN/Infinity, which Python's json accepts and which would
-        # bypass the >= 0 check (NaN compares False to everything → silently no debounce).
-        if (isinstance(debounce, bool) or not isinstance(debounce, (int, float))
-                or debounce < 0 or not math.isfinite(debounce)):
-            raise ValueError(f"rule.debounce must be a finite number >= 0, got {debounce!r}")
+        rule_id = _validate_rule_id(spec)
+        enabled = _validate_enabled(spec)
+        modes = _validate_modes(spec)
+        debounce = _validate_debounce(spec)
         trigger = _validate_trigger(spec.get("trigger"))
-        conditions = spec.get("conditions", [])
-        if not isinstance(conditions, list):
-            raise ValueError(f"rule.conditions must be a list, got {conditions!r}")
-        conditions = [_validate_predicate(c, f"conditions[{i}]") for i, c in enumerate(conditions)]
-        actions = spec.get("actions")
-        if not isinstance(actions, list) or not actions:
-            raise ValueError(f"rule.actions must be a non-empty list, got {actions!r}")
-        for i, action in enumerate(actions):
-            if not isinstance(action, dict):
-                raise ValueError(f"actions[{i}] must be an object, got {action!r}")
-            if action.get("op") not in _VALID_ACTION_OPS:
-                raise ValueError(
-                    f"actions[{i}].op {action.get('op')!r} not in {sorted(_VALID_ACTION_OPS)}")
-            if action.get("op") == "ir" and not (
-                    isinstance(action.get("file"), str) and action.get("file")
-                    and isinstance(action.get("button"), str) and action.get("button")):
-                raise ValueError(f"actions[{i}] ir requires non-empty string 'file' and 'button'")
-        return cls(rule_id, trigger, [dict(a) for a in actions], enabled=enabled,
-                   modes=list(modes), debounce=float(debounce), conditions=conditions)
+        conditions = _validate_conditions(spec)
+        actions = _validate_actions(spec)
+        return cls(rule_id, trigger, actions, enabled=enabled,
+                   modes=list(modes), debounce=debounce, conditions=conditions)
 
     def to_dict(self):
         """A JSON-able copy. Nested dicts/lists are copied one level so a caller editing
@@ -612,34 +662,8 @@ class AutomationEngine:
         now_utc = None                                  # lazily derived (only if a sun rule needs it)
         frames = []
         for rule in self.store.rules.values():
-            if not rule.enabled or rt.mode not in rule.modes:
-                continue
-            tg = rule.trigger
-            ttype = tg["type"]
-            if ttype == "time":
-                hour, minute = (int(p) for p in tg["at"].split(":"))   # tg["at"] is validated HH:MM
-                due = hour == now.hour and minute == now.minute
-            elif ttype == "sun":
-                if None in (rt.lat, rt.lon):            # location unconfigured → sun rules can't fire
-                    continue
-                if now_utc is None:                     # naive-local now → aware UTC (DST-correct)
-                    now_utc = now.astimezone(datetime.timezone.utc)
-                due = self._sun_due(rt, now_utc, tg)
-            elif ttype == "cron":
-                due = _cron_match(tg["expr"], now)      # cron does its own dom/month/dow internally
-            else:                                       # scene/state/presence aren't scheduler-driven
-                continue
-            if not due:
-                continue
-            # cron has no `days` key (it owns dow); time/sun always set it → `.get` is equivalent there.
-            if tg.get("days") is not None and now.weekday() not in tg["days"]:
-                continue
-            if self._last_time_fire.get(rule.id) == slot:
-                continue
-            # Check conditions BEFORE consuming the minute slot: if they're false now, the
-            # slot stays free so a later tick this minute can retry once they hold. (_fire
-            # re-checks — harmless — and applies debounce + builds the actions.)
-            if not all(self._condition_ok(rt.state, c) for c in rule.conditions):
+            ready, now_utc = self._scheduled_rule_ready(rt, rule, now, now_utc, slot)
+            if not ready:
                 continue
             self._last_time_fire[rule.id] = slot
             frames.extend(self._fire(rt, rule))
@@ -713,6 +737,45 @@ class AutomationEngine:
                 frames.extend(self._fire(rt, rule))
         return frames
 
+    def _scheduled_due(self, rt, now, now_utc, tg):
+        ttype = tg["type"]
+        if ttype == "time":
+            hour, minute = (int(p) for p in tg["at"].split(":"))   # tg["at"] is validated HH:MM
+            return hour == now.hour and minute == now.minute, now_utc
+        if ttype == "sun":
+            if None in (rt.lat, rt.lon):            # location unconfigured → sun rules can't fire
+                return False, now_utc
+            if now_utc is None:                     # naive-local now → aware UTC (DST-correct)
+                now_utc = now.astimezone(datetime.timezone.utc)
+            return self._sun_due(rt, now_utc, tg), now_utc
+        if ttype == "cron":
+            return _cron_match(tg["expr"], now), now_utc      # cron does its own dom/month/dow internally
+        return False, now_utc                                # scene/state/presence aren't scheduler-driven
+
+    @staticmethod
+    def _scheduled_day_allowed(tg, now) -> bool:
+        # cron has no `days` key (it owns dow); time/sun always set it → `.get` is equivalent there.
+        return tg.get("days") is None or now.weekday() in tg["days"]
+
+    def _scheduled_conditions_ok(self, rt, rule) -> bool:
+        return all(self._condition_ok(rt.state, c) for c in rule.conditions)
+
+    def _scheduled_rule_ready(self, rt, rule, now, now_utc, slot):
+        if not rule.enabled or rt.mode not in rule.modes:
+            return False, now_utc
+        tg = rule.trigger
+        due, now_utc = self._scheduled_due(rt, now, now_utc, tg)
+        if not due or not self._scheduled_day_allowed(tg, now):
+            return False, now_utc
+        if self._last_time_fire.get(rule.id) == slot:
+            return False, now_utc
+        # Check conditions BEFORE consuming the minute slot: if they're false now, the
+        # slot stays free so a later tick this minute can retry once they hold. (_fire
+        # re-checks — harmless — and applies debounce + builds the actions.)
+        if not self._scheduled_conditions_ok(rt, rule):
+            return False, now_utc
+        return True, now_utc
+
     def _fire(self, rt, rule) -> list:
         """Shared firing tail once a rule's trigger has matched: AND its conditions against
         live state, apply per-rule debounce, then build its action frames (one bad action
@@ -731,9 +794,9 @@ class AutomationEngine:
                 continue
             try:
                 frames.append(build_command(rt, action))
-            except (ValueError, KeyError, TypeError, OverflowError) as exc:
-                log.error("automation %r: action %r failed (%s) — skipping",
-                          rule.id, action, exc)
+            except (ValueError, KeyError, TypeError, OverflowError):
+                log.exception("automation %r: action %r failed — skipping",
+                              rule.id, action)
         return frames
 
     def _dispatch_ir(self, rt, rule, action) -> None:

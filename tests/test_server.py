@@ -72,13 +72,13 @@ class FrameBuilderTests(unittest.TestCase):
         self.assertEqual((frame.type, frame.cmd), (0x64, 0x01))
         self.assertTrue(frame.checksum_ok)
         tags = {t.tag for t in frame.tlvs()}
-        self.assertTrue({0x0064, 0x001F, 0x0069} <= tags)
+        self.assertLessEqual({0x0064, 0x001F, 0x0069}, tags)
 
     def test_timestamp(self):
         frame = Frame(server.make_timestamp()[1:-1])
         self.assertEqual((frame.type, frame.cmd), (0x64, 0x03))
         self.assertTrue(frame.checksum_ok)
-        self.assertTrue({0x0066, 0x0068, 0x00D3} <= {t.tag for t in frame.tlvs()})
+        self.assertLessEqual({0x0066, 0x0068, 0x00D3}, {t.tag for t in frame.tlvs()})
 
 
 class ReactTests(unittest.TestCase):
