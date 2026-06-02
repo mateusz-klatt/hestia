@@ -36,13 +36,13 @@ describe("deviceRow", () => {
     expect(tds[0]?.textContent).toBe("7");
     expect(tds[1]?.textContent).toBe("—"); // last seen — static until SSE drives it
     expect(tds[2]?.textContent).toBe("80%");
-    expect(tds[3]?.textContent).toBe("plug (confirmed)");
+    expect(tds[3]?.querySelector("span")?.textContent).toBe("plug (confirmed)");
     expect(tds[3]?.querySelector(".confirmed")).not.toBeNull();
+    expect(tds[3]?.querySelector<HTMLButtonElement>(".confirm")?.disabled).toBe(true); // already confirmed
     expect(tds[4]?.textContent).toBe("on · 12 W");
     expect(tds[5]?.classList.contains("actions")).toBe(true); // akcje — empty until decorated
-    expect(tds[5]?.textContent).toBe("");
-    expect(tds[6]?.textContent).toBe("fridge");
-    expect(tds[7]?.textContent).toBe("kitchen");
+    expect(tds[6]?.querySelector<HTMLInputElement>("input.name")?.value).toBe("fridge");
+    expect(tds[7]?.querySelector<HTMLInputElement>("input.room")?.value).toBe("kitchen");
     expect(tr.dataset.node).toBe("7");
     expect(tr.dataset.type).toBe("plug");
   });
@@ -58,17 +58,21 @@ describe("deviceRow", () => {
     expect(tr.querySelector(".confirmed")).toBeNull();
   });
 
-  it("renders a hostile name as inert text (no escaping needed — textContent)", () => {
+  it("keeps a hostile name inert — set via input.value, never parsed as HTML", () => {
     const nameCell = deviceRow(
       "9",
       device({ name: "<img src=x onerror=alert(1)>" }),
     ).querySelectorAll("td")[6];
     expect(nameCell?.querySelector("img")).toBeNull();
-    expect(nameCell?.textContent).toBe("<img src=x onerror=alert(1)>");
+    expect(nameCell?.querySelector<HTMLInputElement>("input.name")?.value).toBe(
+      "<img src=x onerror=alert(1)>",
+    );
   });
 
   it("falls back to '?' for an empty inferred type/confidence", () => {
-    const span = deviceRow("1", device({ type: "", confidence: "" })).querySelectorAll("td")[3];
+    const span = deviceRow("1", device({ type: "", confidence: "" }))
+      .querySelectorAll("td")[3]
+      ?.querySelector("span");
     expect(span?.textContent).toBe("? (?)");
   });
 });
@@ -92,10 +96,10 @@ describe("renderDeviceRows", () => {
     expect(rows[1]?.dataset.ep).toBe("1");
     expect(rows[1]?.querySelector(".sub-label")?.textContent).toBe("↳ kanał 1");
     expect(rows[1]?.querySelectorAll("td")[4]?.textContent).toBe("on"); // stan
-    expect(rows[1]?.querySelectorAll("td")[6]?.textContent).toBe("lewy"); // labelled channel
+    expect(rows[1]?.querySelectorAll("td")[6]?.querySelector<HTMLInputElement>("input.ep-name")?.value).toBe("lewy"); // labelled channel
     expect(rows[2]?.dataset.ep).toBe("2");
     expect(rows[2]?.querySelectorAll("td")[4]?.textContent).toBe("off");
-    expect(rows[2]?.querySelectorAll("td")[6]?.textContent).toBe(""); // ep 2 unlabelled → per-key `?? ""`
+    expect(rows[2]?.querySelectorAll("td")[6]?.querySelector<HTMLInputElement>("input.ep-name")?.value).toBe(""); // ep 2 unlabelled → per-key `?? ""`
     expect(rows[3]?.dataset.node).toBe("10");
   });
 
@@ -109,11 +113,11 @@ describe("renderDeviceRows", () => {
     expect(rows[1]?.dataset.ep).toBe("1");
     expect(rows[1]?.querySelector(".sub-label")?.textContent).toBe("↳ kanał 1");
     expect(rows[1]?.querySelectorAll("td")[4]?.textContent).toBe("on");
-    expect(rows[1]?.querySelectorAll("td")[6]?.textContent).toBe("");
+    expect(rows[1]?.querySelectorAll("td")[6]?.querySelector<HTMLInputElement>("input.ep-name")?.value).toBe("");
     expect(rows[2]?.dataset.ep).toBe("2");
     expect(rows[2]?.querySelector(".sub-label")?.textContent).toBe("↳ kanał 2");
     expect(rows[2]?.querySelectorAll("td")[4]?.textContent).toBe("off");
-    expect(rows[2]?.querySelectorAll("td")[6]?.textContent).toBe("");
+    expect(rows[2]?.querySelectorAll("td")[6]?.querySelector<HTMLInputElement>("input.ep-name")?.value).toBe("");
   });
 
   it("does not emit sub-rows for a single-endpoint switch", () => {

@@ -1,4 +1,4 @@
-import type { ControlOp, ControlResult, Discovery } from "./types";
+import type { ControlOp, ControlResult, Discovery, NamePayload, NameResult } from "./types";
 
 /**
  * The API root for a UI served at `<prefix>/ui/`.
@@ -58,5 +58,25 @@ export async function postControl(op: ControlOp): Promise<ControlResult> {
     return { ok: false, error: body.error ?? `error ${String(response.status)}` };
   } catch {
     return { ok: false, error: "błąd" };
+  }
+}
+
+/**
+ * POST `/api/name` to set a node's label/room, confirm its type, or label a
+ * multi-gang endpoint. Returns the raw response body so a failure can be shown
+ * verbatim; never rejects (network error → `{ok:false, status:0}`). A success
+ * makes the server publish `discovery_changed`, so the SSE stream re-syncs the
+ * row — no manual refresh needed here.
+ */
+export async function postName(payload: NamePayload): Promise<NameResult> {
+  try {
+    const response = await fetch(apiUrl("name"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    return { ok: response.ok, status: response.status, body: await response.text() };
+  } catch {
+    return { ok: false, status: 0, body: "błąd" };
   }
 }

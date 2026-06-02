@@ -17,12 +17,39 @@ function cell(text: string, className?: string): HTMLTableCellElement {
   return td;
 }
 
+function statusSpan(): HTMLSpanElement {
+  const s = document.createElement("span");
+  s.className = "status";
+  return s;
+}
+
+/** Inferred type + confidence, plus a "✓ confirm" button (disabled when the
+ *  type is unknown or already user-confirmed). Wired by the registry binder. */
 function typeCell(info: DeviceInfo): HTMLTableCellElement {
   const td = document.createElement("td");
   const span = document.createElement("span");
   span.textContent = `${info.type || "?"} (${info.confidence || "?"})`;
   if (info.confidence === "confirmed") span.className = "confirmed";
-  td.appendChild(span);
+  const confirm = document.createElement("button");
+  confirm.type = "button";
+  confirm.className = "confirm";
+  confirm.textContent = "✓ confirm";
+  confirm.disabled = info.type === "" || info.type === "unknown" || info.confidence === "confirmed";
+  td.append(span, " ", confirm, statusSpan());
+  return td;
+}
+
+/** An editable label cell: `<input class="name|room">` + Save + a status span. */
+function editCell(field: "name" | "room", value: string): HTMLTableCellElement {
+  const td = document.createElement("td");
+  const input = document.createElement("input");
+  input.className = field;
+  input.value = value;
+  const save = document.createElement("button");
+  save.type = "button";
+  save.className = `save-${field}`;
+  save.textContent = "Save";
+  td.append(input, save, statusSpan());
   return td;
 }
 
@@ -53,13 +80,27 @@ export function deviceRow(node: string, info: DeviceInfo): HTMLTableRowElement {
   tr.appendChild(cell(battFmt(info.battery), battLow(info.battery) ? "batt low" : "batt"));
   tr.appendChild(typeCell(info));
   tr.appendChild(stanCell(info));
-  tr.appendChild(cell("", "actions")); // akcje — control buttons wired by the live decorator (PR-4)
-  tr.appendChild(cell(info.name ?? ""));
-  tr.appendChild(cell(info.room ?? ""));
+  tr.appendChild(cell("", "actions")); // akcje — control buttons wired by the live decorator (PR-4a)
+  tr.appendChild(editCell("name", info.name ?? "")); // name + Save — wired by the registry binder (PR-4b)
+  tr.appendChild(editCell("room", info.room ?? ""));
   return tr;
 }
 
-/** A per-endpoint read-only sub-row of a multi-gang switch (label + on/off). */
+/** An editable per-endpoint label cell: `<input class="ep-name">` + Save + status. */
+function epNameCell(name: string): HTMLTableCellElement {
+  const td = document.createElement("td");
+  const input = document.createElement("input");
+  input.className = "ep-name";
+  input.value = name;
+  const save = document.createElement("button");
+  save.type = "button";
+  save.className = "save-ep-name";
+  save.textContent = "Save";
+  td.append(input, save, statusSpan());
+  return td;
+}
+
+/** A per-endpoint sub-row of a multi-gang switch (label + on/off + editable name). */
 function subRow(node: string, ep: string, on: boolean, name: string): HTMLTableRowElement {
   const tr = document.createElement("tr");
   tr.className = "subrow";
@@ -71,7 +112,7 @@ function subRow(node: string, ep: string, on: boolean, name: string): HTMLTableR
   tr.appendChild(cell(`↳ kanał ${ep}`, "sub-label"));
   tr.appendChild(cell(on ? "on" : "off", "stan ep-stan"));
   tr.appendChild(cell("")); // akcje (multi-gang channels stay read-only)
-  tr.appendChild(cell(name)); // name
+  tr.appendChild(epNameCell(name)); // per-channel label — wired by the registry binder (PR-4b)
   tr.appendChild(cell("")); // room
   return tr;
 }

@@ -1,8 +1,9 @@
 import "./style.css";
 
-import { apiUrl, fetchDiscovery, postControl } from "./api/client";
+import { apiUrl, fetchDiscovery, postControl, postName } from "./api/client";
 import { renderActions } from "./controls";
 import { LiveController } from "./live";
+import { bindRow, bindSubRow } from "./registry";
 
 function el(id: string): HTMLElement {
   const node = document.getElementById(id);
@@ -21,8 +22,14 @@ const live = new LiveController(
   },
   fetchDiscovery,
   (tr, node, info) => {
+    const ep = tr.dataset.ep;
+    if (ep !== undefined) {
+      bindSubRow(tr, node, Number(ep), postName); // multi-gang channel label
+      return;
+    }
     const cell = tr.querySelector<HTMLElement>(".actions");
     if (cell !== null) renderActions(cell, node, info, postControl);
+    bindRow(tr, node, info, postName); // confirm + name/room save
   },
 );
 

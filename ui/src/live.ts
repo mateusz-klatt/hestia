@@ -93,6 +93,10 @@ export class LiveController {
 
   /** Fetch the full snapshot and rebuild the view; coalesces overlapping calls. */
   async refresh(): Promise<void> {
+    // Don't rebuild while the operator is editing a name/room field — the
+    // rebuild replaces every <input> and would erase what they're typing.
+    const active = document.activeElement;
+    if (active instanceof HTMLInputElement && this.view.rows.contains(active)) return;
     if (this.refreshing) {
       this.refreshAgain = true; // a refresh landed mid-rebuild → run once more after
       return;
@@ -122,15 +126,16 @@ export class LiveController {
     for (const [node, info] of Object.entries(data.devices)) {
       this.infoByNode.set(Number(node), info);
     }
-    // Per node row: wire interactive controls (the decorator) and reapply the
-    // highlight to rows that activated during the rebuild.
-    for (const tr of this.view.rows.querySelectorAll<HTMLTableRowElement>("tr[data-node]:not([data-ep])")) {
+    // Decorate every row (node rows AND multi-gang sub-rows) so the decorator
+    // can wire controls + name/room on node rows and the ep-label on sub-rows;
+    // reapply the activity highlight only to node rows.
+    for (const tr of this.view.rows.querySelectorAll<HTMLTableRowElement>("tr[data-node]")) {
       const raw = tr.dataset.node;
       if (raw === undefined) continue;
       const node = Number(raw);
       const info = this.infoByNode.get(node);
       if (this.decorate !== undefined && info !== undefined) this.decorate(tr, node, info);
-      if (this.lastActiveByNode.has(node)) this.applyHighlight(tr, node);
+      if (tr.dataset.ep === undefined && this.lastActiveByNode.has(node)) this.applyHighlight(tr, node);
     }
     const queued = [...this.pendingFlash];
     this.pendingFlash.clear();

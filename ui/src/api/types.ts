@@ -119,3 +119,22 @@ export interface ControlResult {
   ok: boolean;
   error?: string;
 }
+
+// ---- Registry mutations (`POST /api/name`) --------------------------------
+// Set a node's user label / room, confirm its inferred type, or label one
+// endpoint of a multi-gang switch (see `_control_name` in hestia/proxy.py).
+
+export interface NamePayload {
+  node: number;
+  type?: string; // confirm the inferred type
+  name?: string;
+  room?: string;
+  ep?: number; // endpoint label for a multi-gang channel
+}
+
+/** Result of a name POST: `ok` + the HTTP status + the response body (shown verbatim on failure). */
+export interface NameResult {
+  ok: boolean;
+  status: number;
+  body: string;
+}
