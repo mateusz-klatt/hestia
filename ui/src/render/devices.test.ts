@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
 
-import { device } from "../fixtures";
-import { deviceRow, renderDeviceRows, summaryText } from "./devices";
+import { device, discovery } from "../fixtures";
+import {
+  deviceRow,
+  renderDeviceRows,
+  renderDiscovery,
+  renderGlobals,
+  summaryText,
+} from "./devices";
 
 describe("summaryText", () => {
   it("renders the confirmed/total/unknown counts", () => {
@@ -81,11 +87,30 @@ describe("renderDeviceRows", () => {
     expect(rows[0]?.dataset.node).toBe("2"); // numeric sort: 2 before 10
     expect(rows[1]?.classList.contains("subrow")).toBe(true);
     expect(rows[1]?.dataset.ep).toBe("1");
-    expect(rows[1]?.textContent).toContain("lewy");
-    expect(rows[1]?.textContent).toContain("on");
+    expect(rows[1]?.querySelector(".sub-label")?.textContent).toBe("↳ kanał 1");
+    expect(rows[1]?.querySelectorAll("td")[4]?.textContent).toBe("on"); // stan
+    expect(rows[1]?.querySelectorAll("td")[5]?.textContent).toBe("lewy"); // labelled channel
     expect(rows[2]?.dataset.ep).toBe("2");
-    expect(rows[2]?.textContent).toContain("off");
+    expect(rows[2]?.querySelectorAll("td")[4]?.textContent).toBe("off");
+    expect(rows[2]?.querySelectorAll("td")[5]?.textContent).toBe(""); // ep 2 unlabelled → per-key `?? ""`
     expect(rows[3]?.dataset.node).toBe("10");
+  });
+
+  it("renders multi-gang sub-rows with no endpoint_names (empty name cells)", () => {
+    const tbody = document.createElement("tbody");
+    renderDeviceRows(tbody, {
+      "4": device({ type: "light", endpoints: { "1": true, "2": false } }),
+    });
+    const rows = tbody.querySelectorAll("tr"); // exercises the whole-object `endpoint_names ?? {}` fallback
+    expect(rows).toHaveLength(3); // node + 2 sub-rows
+    expect(rows[1]?.dataset.ep).toBe("1");
+    expect(rows[1]?.querySelector(".sub-label")?.textContent).toBe("↳ kanał 1");
+    expect(rows[1]?.querySelectorAll("td")[4]?.textContent).toBe("on");
+    expect(rows[1]?.querySelectorAll("td")[5]?.textContent).toBe("");
+    expect(rows[2]?.dataset.ep).toBe("2");
+    expect(rows[2]?.querySelector(".sub-label")?.textContent).toBe("↳ kanał 2");
+    expect(rows[2]?.querySelectorAll("td")[4]?.textContent).toBe("off");
+    expect(rows[2]?.querySelectorAll("td")[5]?.textContent).toBe("");
   });
 
   it("does not emit sub-rows for a single-endpoint switch", () => {
@@ -102,5 +127,49 @@ describe("renderDeviceRows", () => {
     const rows = tbody.querySelectorAll("tr");
     expect(rows).toHaveLength(2);
     expect(rows[0]?.dataset.node).toBe("2");
+  });
+});
+
+describe("renderGlobals", () => {
+  it("writes fmtTemp into each cell, including null → em dash", () => {
+    const crib = document.createElement("span");
+    const outdoor = document.createElement("span");
+    // Always writes both cells (the contract guarantees both keys, null when
+    // a poller is off) — unlike the legacy `if ('crib_temp' in g)` guard.
+    renderGlobals(crib, outdoor, { crib_temp: 25.2, outdoor_temp: null });
+    expect(crib.textContent).toBe("25.2°");
+    expect(outdoor.textContent).toBe("—");
+  });
+
+  it("renders both em dashes when both pollers are off", () => {
+    const crib = document.createElement("span");
+    const outdoor = document.createElement("span");
+    renderGlobals(crib, outdoor, { crib_temp: null, outdoor_temp: null });
+    expect(crib.textContent).toBe("—");
+    expect(outdoor.textContent).toBe("—");
+  });
+});
+
+describe("renderDiscovery", () => {
+  it("populates the header, globals and table from a discovery payload", () => {
+    const view = {
+      hdrText: document.createElement("span"),
+      crib: document.createElement("span"),
+      outdoor: document.createElement("span"),
+      rows: document.createElement("tbody"),
+    };
+    const data = discovery(
+      { "7": device({ type: "plug", confidence: "confirmed", switch: true }) },
+      {
+        summary: { total: 1, confirmed: 1, unknown: 0 },
+        globals: { crib_temp: 22, outdoor_temp: 14.5 },
+      },
+    );
+    renderDiscovery(view, data);
+    expect(view.hdrText.textContent).toBe("hestia — devices (1/1 confirmed, 0 unknown)");
+    expect(view.crib.textContent).toBe("22.0°");
+    expect(view.outdoor.textContent).toBe("14.5°");
+    expect(view.rows.querySelectorAll("tr")).toHaveLength(1);
+    expect(view.rows.querySelector("tr")?.dataset.node).toBe("7");
   });
 });
