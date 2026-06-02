@@ -102,3 +102,20 @@ export interface DiscoveryChangedEvent {
 }
 
 export type LiveEvent = ActivityEvent | StateEvent | GlobalsEvent | DiscoveryChangedEvent;
+
+// ---- Control ops (`POST /api/control`) ------------------------------------
+// The allowlisted device commands the dashboard can send (see the Keemple
+// command builders behind `_control_device_command` in hestia/proxy.py).
+
+export type ControlOp =
+  | { op: "switch"; node: number; on: boolean }
+  | { op: "level"; node: number; value: number }
+  | { op: "cover"; node: number; value: number }
+  | { op: "thermostat"; node: number; celsius: number }
+  | { op: "thermostat_power"; node: number; on: boolean };
+
+/** Normalised result of a control POST: `ok`, plus an `error` to surface on failure. */
+export interface ControlResult {
+  ok: boolean;
+  error?: string;
+}

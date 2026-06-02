@@ -53,6 +53,7 @@ export function deviceRow(node: string, info: DeviceInfo): HTMLTableRowElement {
   tr.appendChild(cell(battFmt(info.battery), battLow(info.battery) ? "batt low" : "batt"));
   tr.appendChild(typeCell(info));
   tr.appendChild(stanCell(info));
+  tr.appendChild(cell("", "actions")); // akcje — control buttons wired by the live decorator (PR-4)
   tr.appendChild(cell(info.name ?? ""));
   tr.appendChild(cell(info.room ?? ""));
   return tr;
@@ -69,6 +70,7 @@ function subRow(node: string, ep: string, on: boolean, name: string): HTMLTableR
   tr.appendChild(cell("")); // battery
   tr.appendChild(cell(`↳ kanał ${ep}`, "sub-label"));
   tr.appendChild(cell(on ? "on" : "off", "stan ep-stan"));
+  tr.appendChild(cell("")); // akcje (multi-gang channels stay read-only)
   tr.appendChild(cell(name)); // name
   tr.appendChild(cell("")); // room
   return tr;

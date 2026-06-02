@@ -21,6 +21,9 @@ export interface LiveView {
 
 type Refetch = () => Promise<Discovery | null>;
 
+/** Per-row hook run after each rebuild — wires interactive controls onto a row. */
+export type RowDecorator = (tr: HTMLTableRowElement, node: number, info: DeviceInfo) => void;
+
 function attr(value: string): string {
   // node ids / endpoint ids are numeric strings from the contract; quote for
   // the attribute selector regardless so a stray value can't break the query.
@@ -51,10 +54,12 @@ export class LiveController {
   private readonly sceneTimers = new Map<number, ReturnType<typeof setTimeout>>();
   private readonly pendingFlash = new Set<number>();
   private readonly pendingScene = new Map<number, Scene>();
+  private readonly decorate: RowDecorator | undefined;
 
-  constructor(view: LiveView, refetch: Refetch) {
+  constructor(view: LiveView, refetch: Refetch, decorate?: RowDecorator) {
     this.view = view;
     this.refetch = refetch;
+    this.decorate = decorate;
   }
 
   /** Parse + dispatch one raw SSE message; malformed JSON is silently ignored. */
@@ -117,11 +122,15 @@ export class LiveController {
     for (const [node, info] of Object.entries(data.devices)) {
       this.infoByNode.set(Number(node), info);
     }
-    // Reapply the highlight to rows that activated during the rebuild, then replay
-    // flashes that queued for rows which did not exist yet.
+    // Per node row: wire interactive controls (the decorator) and reapply the
+    // highlight to rows that activated during the rebuild.
     for (const tr of this.view.rows.querySelectorAll<HTMLTableRowElement>("tr[data-node]:not([data-ep])")) {
       const raw = tr.dataset.node;
-      if (raw !== undefined && this.lastActiveByNode.has(Number(raw))) this.applyHighlight(tr, Number(raw));
+      if (raw === undefined) continue;
+      const node = Number(raw);
+      const info = this.infoByNode.get(node);
+      if (this.decorate !== undefined && info !== undefined) this.decorate(tr, node, info);
+      if (this.lastActiveByNode.has(node)) this.applyHighlight(tr, node);
     }
     const queued = [...this.pendingFlash];
     this.pendingFlash.clear();

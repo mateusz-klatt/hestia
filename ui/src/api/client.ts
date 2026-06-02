@@ -1,4 +1,4 @@
-import type { Discovery } from "./types";
+import type { ControlOp, ControlResult, Discovery } from "./types";
 
 /**
  * The API root for a UI served at `<prefix>/ui/`.
@@ -30,5 +30,33 @@ export async function fetchDiscovery(): Promise<Discovery | null> {
     return response.ok ? ((await response.json()) as Discovery) : null;
   } catch {
     return null;
+  }
+}
+
+async function readJsonBody(response: Response): Promise<{ ok?: boolean; error?: string }> {
+  try {
+    return (await response.json()) as { ok?: boolean; error?: string };
+  } catch {
+    return {}; // non-JSON / empty body
+  }
+}
+
+/**
+ * POST `/api/control` with one allowlisted device op. Never rejects: a
+ * non-2xx, a `{ok:false}` body, a malformed body or a network error all map to
+ * `{ ok:false, error }` so the caller can surface a status without try/catch.
+ */
+export async function postControl(op: ControlOp): Promise<ControlResult> {
+  try {
+    const response = await fetch(apiUrl("control"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(op),
+    });
+    const body = await readJsonBody(response);
+    if (response.ok && body.ok === true) return { ok: true };
+    return { ok: false, error: body.error ?? `error ${String(response.status)}` };
+  } catch {
+    return { ok: false, error: "błąd" };
   }
 }

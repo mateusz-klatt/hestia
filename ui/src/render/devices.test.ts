@@ -18,7 +18,7 @@ describe("summaryText", () => {
 });
 
 describe("deviceRow", () => {
-  it("lays out node / seen / battery / type / stan / name / room", () => {
+  it("lays out node / seen / battery / type / stan / akcje / name / room", () => {
     const tr = deviceRow(
       "7",
       device({
@@ -32,15 +32,17 @@ describe("deviceRow", () => {
       }),
     );
     const tds = tr.querySelectorAll("td");
-    expect(tds).toHaveLength(7);
+    expect(tds).toHaveLength(8);
     expect(tds[0]?.textContent).toBe("7");
-    expect(tds[1]?.textContent).toBe("—"); // last seen — static until SSE (PR-3)
+    expect(tds[1]?.textContent).toBe("—"); // last seen — static until SSE drives it
     expect(tds[2]?.textContent).toBe("80%");
     expect(tds[3]?.textContent).toBe("plug (confirmed)");
     expect(tds[3]?.querySelector(".confirmed")).not.toBeNull();
     expect(tds[4]?.textContent).toBe("on · 12 W");
-    expect(tds[5]?.textContent).toBe("fridge");
-    expect(tds[6]?.textContent).toBe("kitchen");
+    expect(tds[5]?.classList.contains("actions")).toBe(true); // akcje — empty until decorated
+    expect(tds[5]?.textContent).toBe("");
+    expect(tds[6]?.textContent).toBe("fridge");
+    expect(tds[7]?.textContent).toBe("kitchen");
     expect(tr.dataset.node).toBe("7");
     expect(tr.dataset.type).toBe("plug");
   });
@@ -60,7 +62,7 @@ describe("deviceRow", () => {
     const nameCell = deviceRow(
       "9",
       device({ name: "<img src=x onerror=alert(1)>" }),
-    ).querySelectorAll("td")[5];
+    ).querySelectorAll("td")[6];
     expect(nameCell?.querySelector("img")).toBeNull();
     expect(nameCell?.textContent).toBe("<img src=x onerror=alert(1)>");
   });
@@ -90,10 +92,10 @@ describe("renderDeviceRows", () => {
     expect(rows[1]?.dataset.ep).toBe("1");
     expect(rows[1]?.querySelector(".sub-label")?.textContent).toBe("↳ kanał 1");
     expect(rows[1]?.querySelectorAll("td")[4]?.textContent).toBe("on"); // stan
-    expect(rows[1]?.querySelectorAll("td")[5]?.textContent).toBe("lewy"); // labelled channel
+    expect(rows[1]?.querySelectorAll("td")[6]?.textContent).toBe("lewy"); // labelled channel
     expect(rows[2]?.dataset.ep).toBe("2");
     expect(rows[2]?.querySelectorAll("td")[4]?.textContent).toBe("off");
-    expect(rows[2]?.querySelectorAll("td")[5]?.textContent).toBe(""); // ep 2 unlabelled → per-key `?? ""`
+    expect(rows[2]?.querySelectorAll("td")[6]?.textContent).toBe(""); // ep 2 unlabelled → per-key `?? ""`
     expect(rows[3]?.dataset.node).toBe("10");
   });
 
@@ -107,11 +109,11 @@ describe("renderDeviceRows", () => {
     expect(rows[1]?.dataset.ep).toBe("1");
     expect(rows[1]?.querySelector(".sub-label")?.textContent).toBe("↳ kanał 1");
     expect(rows[1]?.querySelectorAll("td")[4]?.textContent).toBe("on");
-    expect(rows[1]?.querySelectorAll("td")[5]?.textContent).toBe("");
+    expect(rows[1]?.querySelectorAll("td")[6]?.textContent).toBe("");
     expect(rows[2]?.dataset.ep).toBe("2");
     expect(rows[2]?.querySelector(".sub-label")?.textContent).toBe("↳ kanał 2");
     expect(rows[2]?.querySelectorAll("td")[4]?.textContent).toBe("off");
-    expect(rows[2]?.querySelectorAll("td")[5]?.textContent).toBe("");
+    expect(rows[2]?.querySelectorAll("td")[6]?.textContent).toBe("");
   });
 
   it("does not emit sub-rows for a single-endpoint switch", () => {
