@@ -1,4 +1,12 @@
-import type { ControlOp, ControlResult, Discovery, NamePayload, NameResult } from "./types";
+import type {
+  ControlOp,
+  ControlResult,
+  Discovery,
+  NamePayload,
+  NameResult,
+  Rule,
+  RuleResult,
+} from "./types";
 
 /**
  * The API root for a UI served at `<prefix>/ui/`.
@@ -95,4 +103,45 @@ export async function postName(payload: NamePayload): Promise<NameResult> {
   } catch {
     return { ok: false, status: 0, body: "błąd" };
   }
+}
+
+/** GET `/api/automations`; the rule list, or `null` on any load failure. */
+export async function fetchAutomations(): Promise<Rule[] | null> {
+  try {
+    const response = await fetch(apiUrl("automations"));
+    if (!response.ok) return null;
+    const data = (await response.json()) as { automations?: Rule[] };
+    return data.automations ?? [];
+  } catch {
+    return null;
+  }
+}
+
+async function postRuleJson(path: string, payload: unknown): Promise<RuleResult> {
+  try {
+    const response = await fetch(apiUrl(path), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    let body: RuleResult["body"] = null;
+    try {
+      body = (await response.json()) as RuleResult["body"];
+    } catch {
+      /* empty / non-JSON body (e.g. 503/504) */
+    }
+    return { ok: response.ok, status: response.status, body };
+  } catch {
+    return { ok: false, status: 0, body: null };
+  }
+}
+
+/** POST `/api/automations` to save a rule (server-side `Rule.from_dict` validates). */
+export function postRule(payload: unknown): Promise<RuleResult> {
+  return postRuleJson("automations", payload);
+}
+
+/** POST `/api/automations/delete` to remove a rule by id. */
+export function deleteRule(id: string): Promise<RuleResult> {
+  return postRuleJson("automations/delete", { id });
 }

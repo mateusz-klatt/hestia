@@ -74,6 +74,41 @@ export interface Klima {
   presets?: string[];
 }
 
+// ---- Automations (`GET/POST /api/automations`, `POST /api/automations/delete`) ----
+// Rules are authored as JSON and validated server-side by Rule.from_dict; the
+// UI lists them, toggles `enabled`, deletes, and edits raw JSON. The trigger
+// union is just enough to summarise a rule in the list.
+
+export type Trigger =
+  | { type: "scene"; node: number; scene_id: number }
+  | { type: "state"; node?: number; field: string; op: string; value: unknown }
+  | { type: "time"; at: string; days?: number[] }
+  | { type: "sun"; event: string; offset_min?: number; days?: number[] }
+  | { type: "presence"; mac: string; event: string }
+  | { type: "cron"; expr: string };
+
+export interface RuleAction {
+  op: string;
+  [field: string]: unknown;
+}
+
+export interface Rule {
+  id: string;
+  enabled: boolean;
+  modes?: string[];
+  debounce?: number;
+  trigger: Trigger;
+  conditions: unknown[];
+  actions: RuleAction[];
+}
+
+/** Result of a rule POST/DELETE: `ok` + status + the parsed body (`{ok,error,id}` or null). */
+export interface RuleResult {
+  ok: boolean;
+  status: number;
+  body: { ok?: boolean; error?: string; id?: string } | null;
+}
+
 export interface Discovery {
   devices: Record<string, DeviceInfo>;
   summary: Summary;
