@@ -122,32 +122,64 @@ describe("renderActions dispatch", () => {
     ]);
   });
 
-  it("clamps the thermostat setpoint to 5–30 °C (default 21 when unseen)", async () => {
+  it("uses the first level preset (10%) when the select is untouched", async () => {
     const sent: ControlOp[] = [];
     const post: PostControl = (op) => {
       sent.push(op);
       return Promise.resolve({ ok: true });
     };
     const cell = td();
-    renderActions(cell, 9, device({ type: "thermostat", setpoint: 30 }), post); // at the ceiling
-    click(cell, "+");
+    renderActions(cell, 6, device({ type: "light", level: 0 }), post);
+    click(cell, "Ustaw"); // select left at its default first option
     await flush();
-    expect(sent).toEqual([{ op: "thermostat", node: 9, celsius: 30 }]); // clamped, not 30.5
+    expect(sent).toEqual([{ op: "level", node: 6, value: 10 }]);
+  });
+
+  it("clamps the thermostat setpoint to 5–30 °C (21 fallback when unseen/non-finite)", async () => {
+    const sent: ControlOp[] = [];
+    const post: PostControl = (op) => {
+      sent.push(op);
+      return Promise.resolve({ ok: true });
+    };
+    const cell = td();
+    renderActions(cell, 9, device({ type: "thermostat", setpoint: 30 }), post);
+    click(cell, "+"); // at the ceiling
+    await flush();
+    renderActions(cell, 9, device({ type: "thermostat", setpoint: 5 }), post);
+    click(cell, "−"); // at the floor
+    await flush();
+    renderActions(cell, 9, device({ type: "thermostat", setpoint: Number.NaN }), post);
+    click(cell, "+"); // non-finite → 21 fallback, then +0.5
+    await flush();
+    expect(sent).toEqual([
+      { op: "thermostat", node: 9, celsius: 30 }, // clamped, not 30.5
+      { op: "thermostat", node: 9, celsius: 5 }, // floored, not 4.5
+      { op: "thermostat", node: 9, celsius: 21.5 }, // Number.isFinite → 21 fallback
+    ]);
   });
 });
 
 describe("renderActions in-flight lock + status", () => {
-  it("disables every button during a send, ignores re-clicks, then shows the outcome", async () => {
+  it("disables every button during a send, drops a real re-click via the busy lock, then shows the outcome", async () => {
     const gate = deferred<ControlResult>();
-    const post: PostControl = () => gate.promise;
+    let calls = 0;
+    const post: PostControl = () => {
+      calls += 1;
+      return gate.promise;
+    };
     const cell = td();
     renderActions(cell, 7, device({ type: "plug" }), post);
     const btns = [...cell.querySelectorAll("button")];
     const status = cell.querySelector(".status");
     btns[0]?.click(); // Wł → in flight
+    expect(calls).toBe(1);
     expect(btns.every((b) => b.disabled)).toBe(true);
     expect(status?.textContent).toBe("…");
-    btns[1]?.click(); // ignored while busy
+    // Re-enable a button and click it for real: a disabled button never dispatches,
+    // so this is what actually exercises the `if (busy) return` guard.
+    if (btns[1] !== undefined) btns[1].disabled = false;
+    btns[1]?.click();
+    expect(calls).toBe(1); // the busy lock dropped the second send
     gate.resolve({ ok: true });
     await flush();
     expect(btns.every((b) => b.disabled)).toBe(false);
