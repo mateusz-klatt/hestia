@@ -248,8 +248,13 @@ td.seen.fresh {
     content: none;
   }
 
-  /* hide structurally-empty cells: subrow placeholders, no-action device rows */
-  tbody td:empty {
+  /* Hide structurally-empty PLACEHOLDER cells only: the unlabeled subrow
+     placeholders, plus the device `.actions` cell before the live decorator
+     injects buttons (`:empty` is live, so it reappears once a button is added).
+     A LABELED data cell that happens to be empty — e.g. a 0-action automation
+     row's "actions" field — keeps its heading instead of vanishing. */
+  tbody td:not([data-label]):empty,
+  tbody td.actions:empty {
     display: none;
   }
 
