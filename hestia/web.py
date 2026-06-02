@@ -94,13 +94,15 @@ async def _in_loop_sync(fn, *args):  # NOSONAR S7503: must stay async — _call_
     return fn(*args)
 
 
-async def _wait_event(queue: asyncio.Queue, timeout: float):
-    """Wait on a subscriber queue inside the event loop. ``asyncio.Queue`` is
-    not thread-safe, so the SSE handler thread reaches it only through this
-    helper via ``_call_loop``. Returns the event on success or ``None`` on
-    idle (so the handler writes a keepalive comment instead of dying)."""
+async def _wait_event(queue: asyncio.Queue):
+    """Wait on a subscriber queue inside the event loop, capped at ``SSE_IDLE_TIMEOUT``
+    via an ``asyncio.timeout`` scope. The cap is owned here, not accepted as a parameter
+    (S7483: async functions should not take a timeout argument — the caller's only knob is
+    ``SSE_IDLE_TIMEOUT``). ``asyncio.Queue`` is not thread-safe, so the SSE handler thread
+    reaches it only through this helper via ``_call_loop``. Returns the event on success or
+    ``None`` on idle (so the handler writes a keepalive comment instead of dying)."""
     try:
-        async with asyncio.timeout(timeout):
+        async with asyncio.timeout(SSE_IDLE_TIMEOUT):
             return await queue.get()
     except asyncio.TimeoutError:
         return None
@@ -1093,7 +1095,7 @@ class _WebHandlerBase(BaseHTTPRequestHandler):
             while _clock() < deadline:
                 try:
                     event = _call_loop(
-                        self._loop, lambda: _wait_event(sub.queue, SSE_IDLE_TIMEOUT),
+                        self._loop, lambda: _wait_event(sub.queue),
                         timeout=SSE_BRIDGE_TIMEOUT)
                 except (_LoopClosed, _BridgeTimeout):
                     break                          # browser EventSource auto-reconnects

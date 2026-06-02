@@ -837,11 +837,12 @@ class WaitEventTests(unittest.IsolatedAsyncioTestCase):
     async def test_returns_event_on_success(self):
         q = asyncio.Queue()
         await q.put({"x": 1})
-        self.assertEqual(await web._wait_event(q, timeout=1.0), {"x": 1})
+        self.assertEqual(await web._wait_event(q), {"x": 1})
 
     async def test_returns_none_on_inner_timeout(self):
         q = asyncio.Queue()
-        self.assertIsNone(await web._wait_event(q, timeout=0.01))
+        with mock.patch.object(web, "SSE_IDLE_TIMEOUT", 0.01):
+            self.assertIsNone(await web._wait_event(q))
 
 
 def _stream(server, path="/api/events", timeout=2.0):
