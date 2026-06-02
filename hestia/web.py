@@ -1107,16 +1107,19 @@ class _WebHandlerBase(BaseHTTPRequestHandler):
                 except OSError:
                     break                          # client disconnected
         finally:
-            # Primary cleanup runs in the loop. On a torn-down loop, fall
-            # back to ``call_soon_threadsafe`` (which still schedules the
-            # close *into* the loop, so the bus invariants are preserved).
+            self._close_subscription(sub)
+
+    def _close_subscription(self, sub):
+        # Primary cleanup runs in the loop. On a torn-down loop, fall
+        # back to ``call_soon_threadsafe`` (which still schedules the
+        # close *into* the loop, so the bus invariants are preserved).
+        try:
+            _call_loop(self._loop, lambda: _in_loop_sync(sub.close), timeout=2.0)
+        except (_LoopClosed, _BridgeTimeout):
             try:
-                _call_loop(self._loop, lambda: _in_loop_sync(sub.close), timeout=2.0)
-            except (_LoopClosed, _BridgeTimeout):
-                try:
-                    self._loop.call_soon_threadsafe(sub.close)
-                except RuntimeError:
-                    pass                           # loop fully closed; bus shutdown already ran
+                self._loop.call_soon_threadsafe(sub.close)
+            except RuntimeError:
+                pass                               # loop fully closed; bus shutdown already ran
 
     # ---- POST ----
     def do_POST(self):
@@ -1276,10 +1279,9 @@ class _WebHandlerBase(BaseHTTPRequestHandler):
         fields_present = [k for k in ("name", "room", "type") if k in op]
         if not fields_present:
             return "at least one of name, room, type is required"
-        for key in ("name", "room"):
-            value = op.get(key)
-            if value is not None and (not isinstance(value, str) or len(value) > MAX_STRING):
-                return f"{key} must be a string ≤ {MAX_STRING} chars"
+        error = _validate_name_strings(op)
+        if error is not None:
+            return error
         dtype = op.get("type")
         if dtype is not None and dtype not in _TYPES:
             return f"invalid type {dtype!r}"
@@ -1287,6 +1289,15 @@ class _WebHandlerBase(BaseHTTPRequestHandler):
         if ep is not None and (not isinstance(ep, int) or isinstance(ep, bool) or ep < 0):
             return "ep must be a non-negative integer"
         return None
+
+
+def _validate_name_strings(op) -> "str | None":
+    for key in ("name", "room"):
+        value = op.get(key)
+        if value is not None and (not isinstance(value, str) or len(value) > MAX_STRING):
+            return f"{key} must be a string ≤ {MAX_STRING} chars"
+    return None
+
 
 def make_handler(rt, loop):
     """Build a :class:`BaseHTTPRequestHandler` subclass with bindings to the
