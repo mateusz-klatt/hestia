@@ -26,6 +26,23 @@ function typeCell(info: DeviceInfo): HTMLTableCellElement {
   return td;
 }
 
+/**
+ * The "stan" cell: a `.stanval` span carrying live-state text (patched in place
+ * by SSE) plus a `.scene-badge` span for transient scene-press badges. Keeping
+ * them separate lets a state patch update the value without wiping the badge.
+ */
+function stanCell(info: DeviceInfo): HTMLTableCellElement {
+  const td = document.createElement("td");
+  td.className = "stan";
+  const val = document.createElement("span");
+  val.className = "stanval";
+  val.textContent = stateStr(info);
+  const badge = document.createElement("span");
+  badge.className = "scene-badge";
+  td.append(val, badge);
+  return td;
+}
+
 /** One device row: node / last seen / battery / inferred type / stan / name / room. */
 export function deviceRow(node: string, info: DeviceInfo): HTMLTableRowElement {
   const tr = document.createElement("tr");
@@ -35,22 +52,23 @@ export function deviceRow(node: string, info: DeviceInfo): HTMLTableRowElement {
   tr.appendChild(cell("—", "seen")); // last seen — static until SSE (PR-3) drives it
   tr.appendChild(cell(battFmt(info.battery), battLow(info.battery) ? "batt low" : "batt"));
   tr.appendChild(typeCell(info));
-  tr.appendChild(cell(stateStr(info), "stan"));
+  tr.appendChild(stanCell(info));
   tr.appendChild(cell(info.name ?? ""));
   tr.appendChild(cell(info.room ?? ""));
   return tr;
 }
 
 /** A per-endpoint read-only sub-row of a multi-gang switch (label + on/off). */
-function subRow(ep: string, on: boolean, name: string): HTMLTableRowElement {
+function subRow(node: string, ep: string, on: boolean, name: string): HTMLTableRowElement {
   const tr = document.createElement("tr");
   tr.className = "subrow";
-  tr.dataset.ep = ep;
+  tr.dataset.node = node; // shares its parent's node id so SSE can address it…
+  tr.dataset.ep = ep; // …and data-ep makes the individual channel addressable
   tr.appendChild(cell("")); // node
   tr.appendChild(cell("")); // last seen
   tr.appendChild(cell("")); // battery
   tr.appendChild(cell(`↳ kanał ${ep}`, "sub-label"));
-  tr.appendChild(cell(on ? "on" : "off", "stan"));
+  tr.appendChild(cell(on ? "on" : "off", "stan ep-stan"));
   tr.appendChild(cell(name)); // name
   tr.appendChild(cell("")); // room
   return tr;
@@ -66,7 +84,7 @@ export function renderDeviceRows(tbody: HTMLElement, devices: Record<string, Dev
     if (eps !== null && Object.keys(eps).length > 1) {
       const names = info.endpoint_names ?? {};
       for (const ep of Object.keys(eps).sort((a, b) => Number(a) - Number(b))) {
-        tbody.appendChild(subRow(ep, eps[ep] === true, names[ep] ?? ""));
+        tbody.appendChild(subRow(node, ep, eps[ep] === true, names[ep] ?? ""));
       }
     }
   }

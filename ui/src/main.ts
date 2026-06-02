@@ -1,7 +1,7 @@
 import "./style.css";
 
-import { fetchDiscovery } from "./api/client";
-import { renderDiscovery } from "./render/devices";
+import { apiUrl, fetchDiscovery } from "./api/client";
+import { LiveController } from "./live";
 
 function el(id: string): HTMLElement {
   const node = document.getElementById(id);
@@ -9,31 +9,34 @@ function el(id: string): HTMLElement {
   return node;
 }
 
-const dom = {
-  hdrText: el("hdr-text"),
-  crib: el("g-crib"),
-  outdoor: el("g-outdoor"),
-  rows: el("rows"),
-  status: el("status"),
-  refresh: el("refresh"),
-};
+const live = new LiveController(
+  {
+    hdrText: el("hdr-text"),
+    crib: el("g-crib"),
+    outdoor: el("g-outdoor"),
+    rows: el("rows"),
+    conn: el("conn"),
+    status: el("status"),
+  },
+  fetchDiscovery,
+);
 
-async function load(): Promise<void> {
-  const data = await fetchDiscovery();
-  if (data === null) {
-    dom.status.textContent = "could not load /api/discovery";
-    dom.status.hidden = false;
-    return;
-  }
-  dom.status.hidden = true;
-  renderDiscovery(
-    { hdrText: dom.hdrText, crib: dom.crib, outdoor: dom.outdoor, rows: dom.rows },
-    data,
-  );
-}
-
-dom.refresh.addEventListener("click", () => {
-  void load();
+el("refresh").addEventListener("click", () => {
+  void live.refresh();
 });
 
-void load();
+// Server-Sent Events: live state / globals patches + discovery deltas. The
+// browser auto-reconnects on drop; `open` re-syncs the full snapshot.
+const events = new EventSource(apiUrl("events"));
+events.addEventListener("open", () => {
+  live.setConnected(true);
+  void live.refresh();
+});
+events.addEventListener("error", () => {
+  live.setConnected(false);
+});
+events.addEventListener("message", (event) => {
+  live.handleMessage(String(event.data));
+});
+
+void live.refresh();
