@@ -4,6 +4,13 @@ import type { Rule, RuleResult, Trigger } from "./api/types";
 import { renderAutomations, trigSummary, type AutomationsDeps } from "./automations";
 
 const flush = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
+function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+  let resolve: (value: T) => void = () => undefined;
+  const promise = new Promise<T>((r) => {
+    resolve = r;
+  });
+  return { promise, resolve };
+}
 const okRule: RuleResult = { ok: true, status: 200, body: { ok: true } };
 
 function rule(overrides: Partial<Rule> = {}): Rule {
@@ -36,8 +43,10 @@ describe("trigSummary", () => {
     [{ type: "time", at: "07:30" }, "at 07:30"],
     [{ type: "time", at: "07:30", days: [0, 4] }, "at 07:30 [0,4]"],
     [{ type: "sun", event: "sunset" }, "sunset"],
+    [{ type: "sun", event: "sunset", offset_min: 0 }, "sunset"], // 0 → no suffix
     [{ type: "sun", event: "sunset", offset_min: -15 }, "sunset-15m"],
     [{ type: "sun", event: "sunrise", offset_min: 30, days: [5, 6] }, "sunrise+30m [5,6]"],
+    [{ type: "time", at: "07:30", days: [] }, "at 07:30 []"], // empty days ≠ undefined
     [{ type: "presence", mac: "aa:bb", event: "leave" }, "aa:bb leave"],
     [{ type: "cron", expr: "*/5 * * * *" }, "cron */5 * * * *"],
   ];
@@ -94,6 +103,72 @@ describe("renderAutomations", () => {
     await flush();
     expect(deleted).toEqual(["r1"]);
     expect(reloaded).toBe(1);
+  });
+
+  it("shows the error and re-enables Delete on failure (no reload)", async () => {
+    const tbody = document.createElement("tbody");
+    let reloaded = 0;
+    renderAutomations(
+      tbody,
+      [rule()],
+      deps({
+        reload: () => {
+          reloaded += 1;
+        },
+        deleteRule: () => Promise.resolve({ ok: false, status: 500, body: { ok: false, error: "busy" } }),
+      }),
+    );
+    const del = tbody.querySelector<HTMLButtonElement>(".auto-del");
+    del?.click();
+    await flush();
+    const status = tbody.querySelector(".status");
+    expect(status?.textContent).toBe("busy");
+    expect(status?.classList.contains("err")).toBe(true);
+    expect(del?.disabled).toBe(false); // re-enabled by finally
+    expect(reloaded).toBe(0);
+  });
+
+  it("drops a second toggle while the first save is in flight", async () => {
+    const tbody = document.createElement("tbody");
+    const gate = deferred<RuleResult>();
+    let calls = 0;
+    renderAutomations(
+      tbody,
+      [rule({ enabled: true })],
+      deps({
+        postRule: () => {
+          calls += 1;
+          return gate.promise;
+        },
+      }),
+    );
+    const box = tbody.querySelector<HTMLInputElement>(".auto-en");
+    if (box !== null) {
+      box.checked = false;
+      box.dispatchEvent(new Event("change")); // first toggle → in flight
+      box.checked = true;
+      box.dispatchEvent(new Event("change")); // dropped by the `toggling` guard
+    }
+    expect(calls).toBe(1);
+    gate.resolve(okRule);
+    await flush();
+  });
+
+  it("renders an empty action cell for 0 actions and falls back to 'error N' when body is null", async () => {
+    const tbody = document.createElement("tbody");
+    renderAutomations(
+      tbody,
+      [rule({ actions: [] })],
+      deps({ postRule: () => Promise.resolve({ ok: false, status: 503, body: null }) }),
+    );
+    expect(tbody.querySelectorAll("td")[4]?.textContent).toBe(""); // 0 actions → empty
+    const box = tbody.querySelector<HTMLInputElement>(".auto-en");
+    if (box !== null) {
+      box.checked = !box.checked;
+      box.dispatchEvent(new Event("change"));
+    }
+    await flush();
+    expect(tbody.querySelector(".status")?.textContent).toBe("error 503"); // null body → status fallback
   });
 
   it("Delete is a no-op when not confirmed", async () => {

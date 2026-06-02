@@ -22,6 +22,10 @@ export function trigSummary(t: Trigger): string {
       return `${t.mac} ${t.event}`;
     case "cron":
       return `cron ${t.expr}`;
+    default:
+      // The rule is cast from JSON (server-validated, but defensively): an
+      // unknown future trigger type shows its raw `type` rather than "undefined".
+      return (t as { type: string }).type;
   }
 }
 
@@ -93,11 +97,15 @@ function automationRow(rule: Rule, deps: AutomationsDeps): HTMLTableRowElement {
     deleting = true;
     del.disabled = true;
     void (async () => {
-      const res = await deps.deleteRule(rule.id);
-      if (res.ok) {
-        deps.reload(); // success rebuilds the list
-      } else {
-        showError(ruleError(res));
+      try {
+        const res = await deps.deleteRule(rule.id);
+        if (res.ok) deps.reload(); // success rebuilds the list
+        else showError(ruleError(res));
+      } catch {
+        showError("błąd");
+      } finally {
+        // Always release — a no-op reload, an unexpected reject, etc. must never
+        // leave the row permanently dead. (On success the row is replaced anyway.)
         deleting = false;
         del.disabled = false;
       }
@@ -109,15 +117,22 @@ function automationRow(rule: Rule, deps: AutomationsDeps): HTMLTableRowElement {
   en.addEventListener("change", () => {
     if (toggling) return;
     toggling = true;
+    en.disabled = true;
     const want = en.checked;
     void (async () => {
-      const res = await deps.postRule({ ...rule, enabled: want });
-      if (res.ok) {
-        deps.reload();
-      } else {
-        en.checked = rule.enabled; // revert the box, surface the error
-        showError(ruleError(res));
+      try {
+        const res = await deps.postRule({ ...rule, enabled: want });
+        if (res.ok) deps.reload();
+        else {
+          en.checked = rule.enabled; // revert the box, surface the error
+          showError(ruleError(res));
+        }
+      } catch {
+        en.checked = rule.enabled;
+        showError("błąd");
+      } finally {
         toggling = false;
+        en.disabled = false;
       }
     })();
   });
