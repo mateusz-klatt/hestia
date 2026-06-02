@@ -36,7 +36,8 @@ _SCRYPT_MAXMEM = 64 * 1024 * 1024
 _SALT_BYTES = 16
 _DKLEN = 32
 
-# A fixed dummy hash so authenticate() spends ~the same time whether or not the username exists.
+# A fixed dummy password whose hash is precomputed (below) so authenticate() does EXACTLY ONE scrypt
+# whether or not the username exists — equalising login timing so a missing account can't be enumerated.
 _DUMMY_PASSWORD = "hestia-dummy-password"
 
 SESSION_TTL = 30 * 24 * 3600.0   # 30-day "remember me" cookie
@@ -61,6 +62,11 @@ def hash_password(password: str) -> str:
     return f"scrypt${_SCRYPT_N}${_SCRYPT_R}${_SCRYPT_P}${_b64e(salt)}${_b64e(dk)}"
 
 
+# Precomputed ONCE at import: authenticate() verifies an unknown user's password against this so it always
+# runs a single scrypt (matching the real path's timing) — never as a successful login (see authenticate).
+_DUMMY_STORED = hash_password(_DUMMY_PASSWORD)
+
+
 def verify_password(password: str, stored: str) -> bool:
     """``True`` iff ``password`` matches the ``scrypt$…`` ``stored`` value. Constant-time; never raises
     (a malformed/foreign ``stored`` returns ``False``)."""
@@ -72,7 +78,7 @@ def verify_password(password: str, stored: str) -> bool:
         expected = _b64d(hash_b64)
         dk = hashlib.scrypt(password.encode("utf-8"), salt=salt, n=int(n_s), r=int(r_s),
                             p=int(p_s), maxmem=_SCRYPT_MAXMEM, dklen=len(expected))
-    except (ValueError, TypeError):              # wrong field count / bad base64 / bad ints / bad params
+    except (ValueError, TypeError, OverflowError):   # wrong field count / bad base64 / bad ints / out-of-range params
         return False
     return hmac.compare_digest(dk, expected)
 
@@ -125,7 +131,7 @@ def authenticate(username: str, password: str, users: dict) -> bool:
     for an unknown user so timing can't reveal which usernames exist."""
     stored = users.get(username)
     if not isinstance(stored, str):
-        verify_password(password, hash_password(_DUMMY_PASSWORD))   # equalise timing, ignore result
+        verify_password(password, _DUMMY_STORED)   # one scrypt to equalise timing — NEVER a successful login
         return False
     return verify_password(password, stored)
 
@@ -150,7 +156,13 @@ def _cli(argv: list, *, prompt=getpass.getpass, path: "Path | None" = None) -> i
     users = load_users(target)
     users[username] = hash_password(first)
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(json.dumps(users, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    # Atomic write: a crash or a concurrent `add` must not truncate or lose the store.
+    tmp = target.with_name(target.name + ".tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(json.dumps(users, indent=2, sort_keys=True) + "\n")
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, target)
     print(f"saved user {username!r} to {target}")
     return 0
 

@@ -38,8 +38,14 @@ class PasswordTests(unittest.TestCase):
         self.assertFalse(auth.verify_password("x", "bcrypt$2$8$1$YQ==$Yg=="))
 
     def test_malformed_stored_rejected(self):
-        for bad in ("", "scrypt$only", "scrypt$x$y$z$bad$base64!!", "scrypt$16384$8$1$@@@$@@@"):
+        for bad in ("", "scrypt$only", "scrypt$x$y$z$bad$base64!!", "scrypt$16384$8$1$@@@$@@@",
+                    "scrypt$999999999999999999999$8$1$YQ==$Yg=="):   # absurd n → OverflowError, must be caught
             self.assertFalse(auth.verify_password("x", bad))
+
+    def test_unknown_user_never_logs_in_with_dummy_password(self):
+        # The timing-equaliser verifies against a hash of a FIXED string; submitting that exact string for
+        # an unknown user must NOT authenticate (regression guard against a dummy-hash auth bypass).
+        self.assertFalse(auth.authenticate("ghost", auth._DUMMY_PASSWORD, {}))
 
 
 class SessionTests(unittest.TestCase):
