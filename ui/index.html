@@ -3,38 +3,31 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>hestia</title>
-    <style>
-      :root {
-        color-scheme: light dark;
-        font-family: ui-monospace, SFMono-Regular, "SF Mono", Consolas, "Liberation Mono", monospace;
-        background: Canvas;
-        color: CanvasText;
-      }
-
-      body {
-        margin: 0;
-      }
-
-      #app {
-        box-sizing: border-box;
-        min-height: 100vh;
-        padding: 1.5rem;
-      }
-
-      h1 {
-        font-size: 1.1rem;
-        margin: 0 0 1rem;
-      }
-
-      p {
-        color: color-mix(in srgb, CanvasText 70%, Canvas 30%);
-        margin: 0;
-      }
-    </style>
+    <title>hestia — devices</title>
   </head>
   <body>
-    <div id="app"></div>
+    <h1 id="hdr">
+      <span id="hdr-text">hestia — devices</span><span id="conn"></span
+      ><button id="refresh" type="button">Refresh</button>
+    </h1>
+    <div id="globals">
+      🍼 crib: <span id="g-crib">—</span> &nbsp;·&nbsp; 🌡 outdoor: <span id="g-outdoor">—</span>
+    </div>
+    <table>
+      <thead>
+        <tr>
+          <th>node</th>
+          <th>last seen</th>
+          <th>battery</th>
+          <th>inferred type</th>
+          <th>stan</th>
+          <th>name</th>
+          <th>room</th>
+        </tr>
+      </thead>
+      <tbody id="rows"></tbody>
+    </table>
+    <p id="status" hidden></p>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>
