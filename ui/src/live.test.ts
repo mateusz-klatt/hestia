@@ -291,6 +291,25 @@ describe("LiveController.handleMessage", () => {
   });
 });
 
+describe("LiveController decorate hook", () => {
+  it("runs the decorator against each node row's actions cell after a rebuild", async () => {
+    const view = harness();
+    const seen: number[] = [];
+    const live = new LiveController(
+      view,
+      () => Promise.resolve(discovery({ "2": device({ type: "plug" }), "5": device({ type: "light" }) })),
+      (tr, node) => {
+        seen.push(node);
+        tr.querySelector(".actions")?.append("●");
+      },
+    );
+    await live.refresh();
+    expect([...seen].sort((a, b) => a - b)).toEqual([2, 5]);
+    expect(view.rows.querySelector('tr[data-node="2"] .actions')?.textContent).toBe("●");
+    expect(view.rows.querySelector('tr[data-node="5"] .actions')?.textContent).toBe("●");
+  });
+});
+
 describe("LiveController heatmap (flash / scene / last-seen)", () => {
   beforeEach(() => {
     vi.useFakeTimers();

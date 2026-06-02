@@ -1,6 +1,7 @@
 import "./style.css";
 
-import { apiUrl, fetchDiscovery } from "./api/client";
+import { apiUrl, fetchDiscovery, postControl } from "./api/client";
+import { renderActions } from "./controls";
 import { LiveController } from "./live";
 
 function el(id: string): HTMLElement {
@@ -19,6 +20,10 @@ const live = new LiveController(
     status: el("status"),
   },
   fetchDiscovery,
+  (tr, node, info) => {
+    const cell = tr.querySelector<HTMLElement>(".actions");
+    if (cell !== null) renderActions(cell, node, info, postControl);
+  },
 );
 
 el("refresh").addEventListener("click", () => {
