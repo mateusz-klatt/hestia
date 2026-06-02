@@ -47,6 +47,8 @@ describe("trigSummary", () => {
     [{ type: "sun", event: "sunset", offset_min: -15 }, "sunset-15m"],
     [{ type: "sun", event: "sunrise", offset_min: 30, days: [5, 6] }, "sunrise+30m [5,6]"],
     [{ type: "time", at: "07:30", days: [] }, "at 07:30 []"], // empty days ≠ undefined
+    [{ type: "time", at: "01:00", days: null }, "at 01:00"], // server sends days:null (NOT undefined) — must not throw
+    [{ type: "sun", event: "sunrise", days: null }, "sunrise"], // same null shape for sun
     [{ type: "presence", mac: "aa:bb", event: "leave" }, "aa:bb leave"],
     [{ type: "cron", expr: "*/5 * * * *" }, "cron */5 * * * *"],
   ];
@@ -71,6 +73,23 @@ describe("renderAutomations", () => {
     expect(tds[2]?.textContent).toBe("scene 2 @node 5");
     expect(tds[3]?.textContent).toBe("2");
     expect(tds[4]?.textContent).toBe("ir, switch");
+  });
+
+  it("renders ALL rules even when a later one has a time trigger with days:null", () => {
+    // Regression: a `days:null` time trigger made trigSummary throw mid-loop, so only the first row
+    // appeared (the live symptom: TS showed 1 automation, legacy showed 2).
+    const tbody = document.createElement("tbody");
+    renderAutomations(
+      tbody,
+      [
+        rule({ id: "klima-off", trigger: { type: "presence", mac: "aa:bb", event: "leave" } }),
+        rule({ id: "blinds-down", trigger: { type: "time", at: "01:00", days: null } }),
+      ],
+      deps(),
+    );
+    const ids = [...tbody.querySelectorAll("tr")].map((tr) => tr.dataset.id);
+    expect(ids).toEqual(["klima-off", "blinds-down"]); // BOTH rows, in order
+    expect(tbody.querySelectorAll("tr")).toHaveLength(2);
   });
 
   it("Edit hands the rule to onEdit", () => {

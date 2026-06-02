@@ -10,13 +10,15 @@ export function trigSummary(t: Trigger): string {
         ? `${t.field} ${t.op} ${String(t.value)}` // global (node-less) field
         : `node ${String(t.node)} ${t.field} ${t.op} ${String(t.value)}`;
     case "time":
-      return `at ${t.at}${t.days === undefined ? "" : ` [${t.days.join(",")}]`}`;
+      // The server serialises an unscheduled-days trigger as `days: null` (not omitted), so guard with
+      // Array.isArray — a bare `=== undefined` check let `null.join()` throw and killed the row loop.
+      return `at ${t.at}${Array.isArray(t.days) ? ` [${t.days.join(",")}]` : ""}`;
     case "sun": {
       const off =
         t.offset_min !== undefined && t.offset_min !== 0
           ? `${t.offset_min > 0 ? "+" : ""}${String(t.offset_min)}m`
           : "";
-      return `${t.event}${off}${t.days === undefined ? "" : ` [${t.days.join(",")}]`}`;
+      return `${t.event}${off}${Array.isArray(t.days) ? ` [${t.days.join(",")}]` : ""}`;
     }
     case "presence":
       return `${t.mac} ${t.event}`;
