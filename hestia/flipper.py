@@ -188,9 +188,12 @@ class SerialTransport:
     (possibly empty). Injectable: ``transmit_ir`` takes a factory so tests pass a fake."""
 
     def __init__(self, device: str = DEFAULT_DEVICE):
-        # pyserial's defaults are raw 8N1 with no flow control — exactly the old termios setup.
+        # Explicit raw 8N1, no flow control (pyserial's defaults, pinned) — matches the old termios setup.
         try:
-            self._ser = serial.Serial(device, baudrate=115200, timeout=0, write_timeout=5.0)
+            self._ser = serial.Serial(
+                device, baudrate=115200,
+                bytesize=serial.EIGHTBITS, parity=serial.PARITY_NONE, stopbits=serial.STOPBITS_ONE,
+                timeout=0, write_timeout=5.0)
         except OSError as exc:
             raise FlipperError(f"cannot open {device}: {exc}") from None
 
