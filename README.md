@@ -11,7 +11,7 @@ third-party CDN, no public IP. Run it as a transparent **proxy** (relay to the
 cloud while decoding everything) or as a **standalone** server that *replaces* the
 cloud entirely.
 
-Pure Python standard library — **no runtime dependencies**.
+Standard-library core; the sole runtime dependency is **`cryptography`** (the AES-128 primitive for the optional Tuya client). The Keemple protocol/command/state codec stays pure-stdlib, first-party code.
 
 ## Clean-room methodology
 
@@ -58,7 +58,7 @@ sequence.
 - **Automations engine** — a local, cloud-free rules engine: event / time / cron /
   sun / presence / global-field triggers → conditioned, debounced actions. See
   [`docs/AUTOMATIONS.md`](docs/AUTOMATIONS.md).
-- **Optional integrations** (all opt-in, off by default): a stdlib Tuya v3.3 LAN
+- **Optional integrations** (all opt-in, off by default): a Tuya v3.3 LAN
   client for a temperature device ([`docs/TUYA.md`](docs/TUYA.md)), an
   outdoor-temperature poller (Open-Meteo), and IR control via a serial-attached
   transmitter.

@@ -1,8 +1,9 @@
-"""Minimal, stdlib-only Tuya **protocol v3.3** local client.
+"""Minimal Tuya **protocol v3.3** local client (stdlib + the ``cryptography`` library for AES).
 
-Reads a Tuya v3.3 device's data points (DPS) over the LAN (TCP 6668) with **no cloud** and **no
-third-party dependency** — the AES-128-ECB primitive the protocol needs is implemented here in pure
-Python (validated against FIPS-197 test vectors). Built for the Neno baby monitor, which is a Tuya
+Reads a Tuya v3.3 device's data points (DPS) over the LAN (TCP 6668) with **no cloud**. The
+AES-128-ECB primitive comes from ``cryptography``; the Tuya framing, PKCS7 padding, version header,
+and device22 quirks are implemented here (validated against FIPS-197 known-answer vectors). Built
+for the Neno baby monitor, which is a Tuya
 v3.3 **"device22"**: its 22-character id makes the plain ``DP_QUERY`` return ``"data unvalid"``, so the
 data must be requested via ``CONTROL_NEW`` (cmd ``0x0d``) with an explicit null-valued ``dps`` map.
 
@@ -22,6 +23,8 @@ import socket
 import struct
 import time
 
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+
 _PREFIX = 0x000055AA
 _SUFFIX = 0x0000AA55
 _DP_QUERY = 0x0A
@@ -39,102 +42,9 @@ class TuyaError(Exception):
     """Any Tuya protocol / framing / crypto / I-O failure (the caller never sees a raw exception)."""
 
 
-# --- AES-128 (pure Python; S-box computed at import, pinned by FIPS-197 tests) ----------------
-
-def _gmul(a: int, b: int) -> int:
-    """Multiply in GF(2^8) with the AES reduction polynomial 0x11B."""
-    p = 0
-    for _ in range(8):
-        if b & 1:
-            p ^= a
-        hi = a & 0x80
-        a = (a << 1) & 0xFF
-        if hi:
-            a ^= 0x1B
-        b >>= 1
-    return p
-
-
-def _rotl8(x: int, n: int) -> int:
-    return ((x << n) | (x >> (8 - n))) & 0xFF
-
-
-def _build_sbox() -> list:
-    inv = [0] * 256
-    for i in range(1, 256):
-        for j in range(i, 256):
-            if _gmul(i, j) == 1:
-                inv[i] = j
-                inv[j] = i
-                break
-    return [x ^ _rotl8(x, 1) ^ _rotl8(x, 2) ^ _rotl8(x, 3) ^ _rotl8(x, 4) ^ 0x63
-            for x in inv]
-
-
-_SBOX = _build_sbox()
-_INV_SBOX = [0] * 256
-for _i, _v in enumerate(_SBOX):
-    _INV_SBOX[_v] = _i
-_RCON = (0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80, 0x1B, 0x36)
-
-
-def _key_expansion(key: bytes) -> list:
-    """16-byte key -> 11 round keys (each a 16-byte list)."""
-    w = list(key)
-    for i in range(16, 176, 4):
-        t = w[i - 4:i]
-        if i % 16 == 0:
-            t = [_SBOX[b] for b in (t[1], t[2], t[3], t[0])]   # RotWord + SubWord
-            t[0] ^= _RCON[i // 16 - 1]
-        w.extend(w[i - 16 + j] ^ t[j] for j in range(4))
-    return [w[r * 16:(r + 1) * 16] for r in range(11)]
-
-
-def _shift_rows(s, inv=False):
-    out = [0] * 16
-    for r in range(4):
-        for c in range(4):
-            src = (c - r) % 4 if inv else (c + r) % 4
-            out[r + 4 * c] = s[r + 4 * src]
-    return out
-
-
-_MIX = (2, 3, 1, 1)
-_INV_MIX = (14, 11, 13, 9)
-
-
-def _mix_columns(s, coeffs):
-    out = [0] * 16
-    for c in range(4):
-        col = s[4 * c:4 * c + 4]
-        for r in range(4):
-            out[4 * c + r] = (_gmul(col[0], coeffs[(0 - r) % 4]) ^ _gmul(col[1], coeffs[(1 - r) % 4])
-                              ^ _gmul(col[2], coeffs[(2 - r) % 4]) ^ _gmul(col[3], coeffs[(3 - r) % 4]))
-    return out
-
-
-def _encrypt_block(s, rk):
-    s = [s[i] ^ rk[0][i] for i in range(16)]
-    for r in range(1, 10):
-        s = [_SBOX[b] for b in s]
-        s = _shift_rows(s)
-        s = _mix_columns(s, _MIX)
-        s = [s[i] ^ rk[r][i] for i in range(16)]
-    s = [_SBOX[b] for b in s]
-    s = _shift_rows(s)
-    return bytes(s[i] ^ rk[10][i] for i in range(16))
-
-
-def _decrypt_block(s, rk):
-    s = [s[i] ^ rk[10][i] for i in range(16)]
-    for r in range(9, 0, -1):
-        s = _shift_rows(s, inv=True)
-        s = [_INV_SBOX[b] for b in s]
-        s = [s[i] ^ rk[r][i] for i in range(16)]
-        s = _mix_columns(s, _INV_MIX)
-    s = _shift_rows(s, inv=True)
-    s = [_INV_SBOX[b] for b in s]
-    return bytes(s[i] ^ rk[0][i] for i in range(16))
+# --- AES-128-ECB via the `cryptography` library ------------------------------------------------
+# Tuya v3.3 mandates raw ECB; `cryptography` supplies the block cipher. PKCS7 padding, the version
+# header, and the device22 framing below all stay first-party (the clean-room protocol asset).
 
 
 def _pkcs7_pad(data: bytes) -> bytes:
@@ -161,15 +71,15 @@ def _check_aes_args(data: bytes, key: bytes) -> None:
 
 
 def aes_ecb_encrypt(data: bytes, key: bytes) -> bytes:
-    _check_aes_args(data, key)
-    rk = _key_expansion(key)
-    return b"".join(_encrypt_block(list(data[i:i + 16]), rk) for i in range(0, len(data), 16))
+    _check_aes_args(data, key)                       # guard before the cipher: clear TuyaError, not a raw ValueError
+    enc = Cipher(algorithms.AES(key), modes.ECB()).encryptor()  # NOSONAR S5542: Tuya v3.3 mandates AES-128-ECB on the wire (device-dictated, not a choice)
+    return enc.update(data) + enc.finalize()
 
 
 def aes_ecb_decrypt(data: bytes, key: bytes) -> bytes:
     _check_aes_args(data, key)
-    rk = _key_expansion(key)
-    return b"".join(_decrypt_block(list(data[i:i + 16]), rk) for i in range(0, len(data), 16))
+    dec = Cipher(algorithms.AES(key), modes.ECB()).decryptor()  # NOSONAR S5542: Tuya v3.3 mandates AES-128-ECB on the wire (device-dictated, not a choice)
+    return dec.update(data) + dec.finalize()
 
 
 # --- Tuya v3.3 framing + message crypto -------------------------------------------------------
