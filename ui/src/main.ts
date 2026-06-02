@@ -1,7 +1,8 @@
 import "./style.css";
 
-import { apiUrl, fetchDiscovery, postControl, postName } from "./api/client";
+import { apiUrl, fetchDiscovery, postControl, postIr, postName } from "./api/client";
 import { renderActions } from "./controls";
+import { renderIrButtons, renderKlima } from "./klima";
 import { LiveController } from "./live";
 import { bindRow, bindSubRow } from "./registry";
 
@@ -10,6 +11,9 @@ function el(id: string): HTMLElement {
   if (node === null) throw new Error(`Missing #${id}`);
   return node;
 }
+
+const irBox = el("ir-buttons");
+const klimaBox = el("klima");
 
 const live = new LiveController(
   {
@@ -30,6 +34,10 @@ const live = new LiveController(
     const cell = tr.querySelector<HTMLElement>(".actions");
     if (cell !== null) renderActions(cell, node, info, postControl);
     bindRow(tr, node, info, postName); // confirm + name/room save
+  },
+  (data) => {
+    renderIrButtons(irBox, data.ir_buttons, postIr); // built once from the static config
+    renderKlima(klimaBox, data.klima, postIr);
   },
 );
 

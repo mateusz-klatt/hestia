@@ -54,13 +54,33 @@ export interface Summary {
  * `globals`; the remaining fields are part of the contract but typed loosely
  * (`unknown`) until the PRs that render them tighten the shape.
  */
+/** A configured one-tap IR button (HESTIA_IR_BUTTONS) → transmits a saved Flipper signal. */
+export interface IrButton {
+  label: string;
+  file: string;
+  button: string;
+}
+
+/**
+ * The LG A/C control map parsed from the Flipper klima.ir signal names. Empty
+ * (`{}`) when no klima.ir is present, so every field is optional. `power_on`
+ * maps each mode to its sorted temps; the idempotent power-on signal is
+ * `on_<mode>_<temp>`. `presets` carries `off` (and any non-temp signal).
+ */
+export interface Klima {
+  file?: string;
+  modes?: Record<string, number[]>;
+  power_on?: Record<string, number[]>;
+  presets?: string[];
+}
+
 export interface Discovery {
   devices: Record<string, DeviceInfo>;
   summary: Summary;
   globals: Globals;
-  ir_buttons: unknown;
-  klima: unknown;
-  rule_vocab: unknown;
+  ir_buttons: IrButton[];
+  klima: Klima;
+  rule_vocab: unknown; // typed when PR-5 renders the automations UI
   mode: string;
   target_mode: string;
   env_override: string | null;

@@ -24,6 +24,10 @@ type Refetch = () => Promise<Discovery | null>;
 /** Per-row hook run after each rebuild — wires interactive controls onto a row. */
 export type RowDecorator = (tr: HTMLTableRowElement, node: number, info: DeviceInfo) => void;
 
+/** Hook run with the full snapshot after each successful render — for panels
+ *  built from the whole payload (IR buttons, klima) that live outside the table. */
+export type RenderHook = (data: Discovery) => void;
+
 function attr(value: string): string {
   // node ids / endpoint ids are numeric strings from the contract; quote for
   // the attribute selector regardless so a stray value can't break the query.
@@ -55,11 +59,13 @@ export class LiveController {
   private readonly pendingFlash = new Set<number>();
   private readonly pendingScene = new Map<number, Scene>();
   private readonly decorate: RowDecorator | undefined;
+  private readonly onRender: RenderHook | undefined;
 
-  constructor(view: LiveView, refetch: Refetch, decorate?: RowDecorator) {
+  constructor(view: LiveView, refetch: Refetch, decorate?: RowDecorator, onRender?: RenderHook) {
     this.view = view;
     this.refetch = refetch;
     this.decorate = decorate;
+    this.onRender = onRender;
   }
 
   /** Parse + dispatch one raw SSE message; malformed JSON is silently ignored. */
@@ -150,6 +156,7 @@ export class LiveController {
     for (const node of queued) this.flash(node);
     this.prune();
     this.tick(); // populate the "last seen" cells right after a rebuild
+    if (this.onRender !== undefined) this.onRender(data); // IR / klima panels (built once)
   }
 
   /**
