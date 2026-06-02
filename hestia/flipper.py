@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import time
 
-import serial
+import serial   # pyserial; SerialException / SerialTimeoutException both derive from OSError
 
 DEFAULT_DEVICE = "/dev/ttyACM0"
 
@@ -191,7 +191,7 @@ class SerialTransport:
         # pyserial's defaults are raw 8N1 with no flow control — exactly the old termios setup.
         try:
             self._ser = serial.Serial(device, baudrate=115200, timeout=0, write_timeout=5.0)
-        except (serial.SerialException, OSError) as exc:
+        except OSError as exc:
             raise FlipperError(f"cannot open {device}: {exc}") from None
 
     def write(self, data: bytes, timeout: float = 5.0) -> None:
@@ -203,7 +203,7 @@ class SerialTransport:
             self._ser.flush()
         except serial.SerialTimeoutException:
             raise FlipperError("serial write timed out") from None
-        except (serial.SerialException, OSError) as exc:
+        except OSError as exc:
             raise FlipperError(f"serial write failed: {exc}") from None
 
     def read(self, timeout: float) -> bytes:
@@ -214,13 +214,13 @@ class SerialTransport:
             if not first:
                 return b""
             return first + self._ser.read(self._ser.in_waiting)
-        except (serial.SerialException, OSError) as exc:
+        except OSError as exc:
             raise FlipperError(f"serial read failed: {exc}") from None
 
     def close(self) -> None:
         try:
             self._ser.close()
-        except (serial.SerialException, OSError):
+        except OSError:
             pass
 
 
