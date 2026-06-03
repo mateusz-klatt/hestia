@@ -38,7 +38,7 @@ from pathlib import Path
 
 from aiohttp import ClientConnectionError, web
 
-from . import auth
+from . import auth, store_sql
 from .classifier import DeviceType
 from .automations import rule_vocab
 from .proxy import (IR_BUTTONS, KLIMA, _CLOSED_SENTINEL, _LOOPBACK, _merged_discovery, _truthy_env,
@@ -165,7 +165,7 @@ async def _login(request):
         return op
     user = op.get("user") if isinstance(op, dict) else None
     password = op.get("password") if isinstance(op, dict) else None
-    if not (_AUTH_ENABLED and auth.authenticate(user, password, auth.load_users())):
+    if not (_AUTH_ENABLED and auth.authenticate(user, password, store_sql.current_users())):
         return _json(HTTPStatus.UNAUTHORIZED, {"ok": False, "error": "invalid credentials"})
     token = auth.make_session(user, now=_now(), secret=_SESSION_SECRET)
     resp = _json(HTTPStatus.OK, {"ok": True, "user": user})

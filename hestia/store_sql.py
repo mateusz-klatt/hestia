@@ -32,9 +32,10 @@ from .registry import Registry
 
 log = logging.getLogger("hestia.store_sql")
 
-# app_meta marker: set once at cutover so subsequent boots load from the DB instead of re-importing
-# the (now-frozen) JSON. registry + automations cut over together in #57 Phase 3 (users → Phase 4).
+# app_meta markers: set once at cutover so subsequent boots load from the DB instead of re-importing
+# the (now-frozen) JSON. registry + automations cut over together (Phase 3); users separately (Phase 4).
 _AUTHORITATIVE = "registry_authoritative"
+_USERS_AUTHORITATIVE = "users_authoritative"
 
 
 def _dump(obj) -> str:
@@ -203,6 +204,8 @@ def open_stores(*, registry_path, automations_path, users_path, persist=None):
     if not is_db_authoritative(engine):
         cutover_import(engine, Registry.load(registry_path), AutomationStore.load(automations_path),
                        auth.load_users(Path(users_path)))
+    if not is_users_db_authoritative(engine):   # Phase 4: flip users (independent of the registry cutover)
+        cutover_users(engine, auth.load_users(Path(users_path)))
     return (load_registry(engine, registry_path, writer=registry_db_writer(engine)),
             load_automations(engine, automations_path, writer=automations_db_writer(engine)))
 
@@ -225,6 +228,69 @@ def export_to_json(*, registry_path, automations_path, path=None) -> bool:
         return True
     finally:
         engine.dispose()
+
+
+# --- Phase 4: auth users → DB --------------------------------------------------------------------
+# Users cut over separately from registry+automations (own marker), since the live box was already
+# cut over for registry in Phase 3 with users still JSON-authoritative. Reads happen only at LOGIN
+# (rare — the auth middleware gates per-request on the signed cookie, not a user lookup), so a short
+# per-login engine is fine; the stdlib auth primitives (hash/verify/session) stay backend-agnostic.
+
+
+def is_users_db_authoritative(engine) -> bool:
+    with Session(engine) as session:
+        return session.get(AppMeta, _USERS_AUTHORITATIVE) is not None
+
+
+def users_db_authoritative() -> bool:
+    """Whether the DB is the authoritative users store right now (own short engine). Uses init_db so
+    a fresh DB (e.g. the auth CLI running before the daemon ever booted) has its schema — then the
+    marker is simply absent and this returns False, so the caller falls back to JSON."""
+    engine, _ = init_db()
+    try:
+        return is_users_db_authoritative(engine)
+    finally:
+        engine.dispose()
+
+
+def load_users_db(engine) -> dict:
+    with Session(engine) as session:
+        return {u.username: u.password_hash for u in session.execute(select(User)).scalars()}
+
+
+def cutover_users(engine, users: dict) -> None:
+    """One-time: replace-mirror users.json into the DB and set the users authority marker (one txn).
+    Runs at boot in sqlite mode until set — independent of the registry cutover, so a box already on
+    sqlite for registry+automations (Phase 3) flips users on the next boot."""
+    with Session(engine) as session, session.begin():
+        for username, password_hash in users.items():
+            _upsert(session, User, "username", username, {"password_hash": password_hash})
+        session.execute(delete(User).where(User.username.not_in(set(users))))
+        _upsert(session, AppMeta, "key", _USERS_AUTHORITATIVE, {"value": "1"})
+
+
+def set_user_db(username: str, password_hash: str, *, path=None) -> None:
+    """Upsert one user into the DB (auth CLI / change-password). Own short session; WAL lets this run
+    concurrently with the daemon."""
+    engine, _ = init_db(path)
+    try:
+        with Session(engine) as session, session.begin():
+            _upsert(session, User, "username", username, {"password_hash": password_hash})
+    finally:
+        engine.dispose()
+
+
+def current_users(*, users_path=None) -> dict:
+    """The users map from the active backend: the DB when sqlite + users-authoritative, else the JSON
+    file. Used by the login handler (the only place that reads the users store)."""
+    if os.environ.get("HESTIA_PERSIST", "json").lower() == "sqlite":
+        engine, _ = init_db()               # idempotent; ensures the schema even on an odd-state boot
+        try:
+            if is_users_db_authoritative(engine):
+                return load_users_db(engine)
+        finally:
+            engine.dispose()
+    return auth.load_users(Path(users_path) if users_path is not None else None)
 
 
 def _cli(argv) -> int:  # pragma: no cover - thin env-driven wrapper around export_to_json

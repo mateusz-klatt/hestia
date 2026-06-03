@@ -314,6 +314,74 @@ class Phase3CutoverTests(unittest.TestCase):
         self.assertEqual(json.loads(self.users_path.read_text()), {"mama": "scrypt$new"})
 
 
+class Phase4UsersTests(unittest.TestCase):
+    """Auth users → DB: cutover, load, upsert, the login backend selector, and the CLI routing."""
+
+    def setUp(self):
+        self.dir = Path(tempfile.mkdtemp())
+        self.db = self.dir / "hestia.db"
+        self.users_json = self.dir / "users.json"
+
+    def tearDown(self):
+        shutil.rmtree(self.dir)
+
+    def test_cutover_users_marks_and_mirrors(self):
+        engine, _ = db.init_db(self.db)
+        store_sql.cutover_users(engine, {"tata": "h1", "mama": "h2"})
+        self.assertTrue(store_sql.is_users_db_authoritative(engine))
+        self.assertEqual(store_sql.load_users_db(engine), {"tata": "h1", "mama": "h2"})
+        store_sql.cutover_users(engine, {"tata": "h1"})   # replace-mirror: mama dropped
+        self.assertEqual(store_sql.load_users_db(engine), {"tata": "h1"})
+
+    def test_set_user_db_upserts(self):
+        with mock.patch.dict(os.environ, {"HESTIA_DB": str(self.db)}):
+            store_sql.set_user_db("tata", "h1")
+            store_sql.set_user_db("tata", "h2")   # update existing
+            store_sql.set_user_db("mama", "h3")
+            engine, _ = db.init_db(self.db)
+            self.assertEqual(store_sql.load_users_db(engine), {"tata": "h2", "mama": "h3"})
+
+    def test_users_db_authoritative_noarg(self):
+        with mock.patch.dict(os.environ, {"HESTIA_DB": str(self.db)}):
+            self.assertFalse(store_sql.users_db_authoritative())   # no marker yet
+            engine, _ = db.init_db(self.db)
+            store_sql.cutover_users(engine, {})
+            engine.dispose()
+            self.assertTrue(store_sql.users_db_authoritative())
+
+    def test_current_users_reads_db_when_authoritative(self):
+        with mock.patch.dict(os.environ, {"HESTIA_PERSIST": "sqlite", "HESTIA_DB": str(self.db)}):
+            engine, _ = db.init_db(self.db)
+            store_sql.cutover_users(engine, {"tata": "h"})
+            engine.dispose()
+            self.assertEqual(store_sql.current_users(), {"tata": "h"})
+
+    def test_current_users_falls_back_to_json(self):
+        self.users_json.write_text('{"mama": "hj"}', encoding="utf-8")
+        self.assertEqual(store_sql.current_users(users_path=self.users_json), {"mama": "hj"})  # json mode
+        with mock.patch.dict(os.environ, {"HESTIA_PERSIST": "sqlite", "HESTIA_DB": str(self.db)}):
+            db.init_db(self.db)   # DB exists but users NOT authoritative → still JSON
+            self.assertEqual(store_sql.current_users(users_path=self.users_json), {"mama": "hj"})
+
+    def test_auth_cli_writes_db_when_authoritative(self):
+        from hestia import auth
+        with mock.patch.dict(os.environ, {"HESTIA_PERSIST": "sqlite", "HESTIA_DB": str(self.db)}):
+            engine, _ = db.init_db(self.db)
+            store_sql.cutover_users(engine, {})
+            engine.dispose()
+            self.assertEqual(auth._cli(["add", "newuser"], prompt=lambda _p: "secret"), 0)
+            engine, _ = db.init_db(self.db)
+            self.assertIn("newuser", store_sql.load_users_db(engine))
+
+    def test_auth_cli_writes_json_when_sqlite_not_authoritative(self):
+        from hestia import auth
+        env = {"HESTIA_PERSIST": "sqlite", "HESTIA_DB": str(self.db), "HESTIA_AUTH_USERS_FILE": str(self.users_json)}
+        with mock.patch.dict(os.environ, env):
+            db.init_db(self.db)   # not authoritative → CLI writes JSON
+            self.assertEqual(auth._cli(["add", "ju"], prompt=lambda _p: "secret"), 0)
+            self.assertIn("ju", auth.load_users(self.users_json))
+
+
 class DbPersistIntegrationTests(unittest.IsolatedAsyncioTestCase):
     """The cancel-safe write path (_persist_obj / _write_and_settle) is backend-agnostic — prove it
     drives a DB-backed Registry exactly like the JSON one (success, and the OSError re-arm path)."""
