@@ -19,6 +19,8 @@ const pl: Partial<Messages> = {
 
   "user.loggedInAs": "zalogowany: {user}",
   "user.logout": "Wyloguj",
+  "user.language": "Język",
+  "user.temperature": "Temperatura",
 
   "common.loading": "Ładowanie…",
   "rooms.empty": "Brak urządzeń",

@@ -1,15 +1,45 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { device } from "../fixtures";
 import { battFmt, battLow, fmtHumidity, fmtTemp, stateStr } from "./format";
 
 describe("fmtTemp", () => {
-  it("formats one decimal with a degree sign", () => {
+  it("formats one decimal with a degree sign (Celsius default)", () => {
     expect(fmtTemp(21)).toBe("21.0°");
     expect(fmtTemp(25.2)).toBe("25.2°");
   });
   it("renders an em dash for null", () => {
     expect(fmtTemp(null)).toBe("—");
+  });
+});
+
+describe("fmtTemp — temperature scale", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+  function withScale(scale: string): void {
+    const m = new Map<string, string>([["hestia.tempScale", scale]]);
+    vi.stubGlobal("localStorage", {
+      getItem: (k: string) => m.get(k) ?? null,
+      setItem: () => undefined,
+      removeItem: () => undefined,
+      clear: () => undefined,
+      key: () => null,
+      length: m.size,
+    });
+  }
+  it("converts to Fahrenheit with an explicit unit", () => {
+    withScale("F");
+    expect(fmtTemp(0)).toBe("32.0°F");
+    expect(fmtTemp(21)).toBe("69.8°F");
+  });
+  it("converts to Kelvin with an explicit unit", () => {
+    withScale("K");
+    expect(fmtTemp(26.85)).toBe("300.0 K"); // 26.85 + 273.15
+  });
+  it("falls back to Celsius for an unknown stored scale", () => {
+    withScale("X");
+    expect(fmtTemp(21)).toBe("21.0°");
   });
 });
 

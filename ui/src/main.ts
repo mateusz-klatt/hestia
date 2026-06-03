@@ -211,10 +211,12 @@ void (async () => {
     });
     return;
   }
-  if (me.user !== null) {
-    renderUser(el("auth"), me.user, () => {
+  // Always render the user/settings chip; auth-off (me.user === null) shows a settings-only menu
+  // (language + temperature scale, no logout — see renderUser).
+  renderUser(el("auth"), me.user, {
+    onLogout: () => {
       location.reload();
-    });
-  }
+    },
+  });
   startApp();
 })();

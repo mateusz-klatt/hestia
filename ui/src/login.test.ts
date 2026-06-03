@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Mock the API client so the form/chrome are tested without real fetches (hoisted: usable in vi.mock).
 const { loginMock, logoutMock } = vi.hoisted(() => ({ loginMock: vi.fn(), logoutMock: vi.fn() }));
@@ -59,22 +59,112 @@ describe("renderLogin", () => {
   });
 });
 
+// jsdom here has no working localStorage, so stub a Map-backed one for the prefs (locale / scale).
+function fakeStorage(): Storage {
+  const m = new Map<string, string>();
+  return {
+    get length() {
+      return m.size;
+    },
+    clear: () => {
+      m.clear();
+    },
+    getItem: (k: string) => m.get(k) ?? null,
+    key: (i: number) => [...m.keys()][i] ?? null,
+    removeItem: (k: string) => m.delete(k),
+    setItem: (k: string, v: string) => m.set(k, v),
+  };
+}
+
 describe("renderUser", () => {
+  beforeEach(() => {
+    vi.stubGlobal("localStorage", fakeStorage());
+  });
   afterEach(() => {
     logoutMock.mockReset();
+    vi.unstubAllGlobals();
   });
 
-  it("shows the logged-in user", () => {
+  it("shows just the username with a dropdown (no 'signed in' label)", () => {
     const box = document.createElement("div");
-    renderUser(box, "tata", vi.fn());
-    expect(box.textContent).toContain("signed in: tata");
+    renderUser(box, "tata", { onLogout: vi.fn() });
+    expect(box.querySelector("#user-menu-btn")?.textContent).toContain("tata");
+    expect(box.textContent).not.toContain("signed in");
+    expect(box.querySelector("#locale-select")).not.toBeNull();
+    expect(box.querySelector("#scale-select")).not.toBeNull();
   });
 
-  it("logs out then calls onLogout when the button is clicked", async () => {
+  it("auth-off (null user) shows a settings menu with no logout", () => {
+    const box = document.createElement("div");
+    renderUser(box, null, { onLogout: vi.fn() });
+    expect(box.querySelector("#user-menu-btn")?.textContent).toContain("⚙");
+    expect(box.querySelector("#locale-select")).not.toBeNull(); // prefs still available
+    expect(box.querySelector("#scale-select")).not.toBeNull();
+    expect(box.querySelector("#logout")).toBeNull(); // nothing to log out of
+  });
+
+  it("does not reload when a preference write fails (storage unavailable)", () => {
+    const reload = vi.fn();
+    vi.stubGlobal("localStorage", {
+      getItem: () => null,
+      setItem: () => {
+        throw new Error("denied");
+      },
+      removeItem: () => undefined,
+      clear: () => undefined,
+      key: () => null,
+      length: 0,
+    });
+    const box = document.createElement("div");
+    renderUser(box, "tata", { onLogout: vi.fn(), reload });
+    const sel = box.querySelector<HTMLSelectElement>("#scale-select");
+    if (sel !== null) {
+      sel.value = "F";
+      sel.dispatchEvent(new Event("change"));
+    }
+    expect(reload).not.toHaveBeenCalled(); // write failed → no pointless reload-to-default
+  });
+
+  it("toggles the dropdown on the user button", () => {
+    const box = document.createElement("div");
+    renderUser(box, "tata", { onLogout: vi.fn() });
+    const menu = box.querySelector<HTMLElement>("#user-menu");
+    expect(menu?.hidden).toBe(true);
+    box.querySelector<HTMLButtonElement>("#user-menu-btn")?.click();
+    expect(menu?.hidden).toBe(false);
+  });
+
+  it("changing the language persists the override and reloads", () => {
+    const reload = vi.fn();
+    const box = document.createElement("div");
+    renderUser(box, "tata", { onLogout: vi.fn(), reload });
+    const sel = box.querySelector<HTMLSelectElement>("#locale-select");
+    if (sel !== null) {
+      sel.value = "pl";
+      sel.dispatchEvent(new Event("change"));
+    }
+    expect(localStorage.getItem("hestia.locale")).toBe("pl");
+    expect(reload).toHaveBeenCalledOnce();
+  });
+
+  it("changing the temperature scale persists it and reloads", () => {
+    const reload = vi.fn();
+    const box = document.createElement("div");
+    renderUser(box, "tata", { onLogout: vi.fn(), reload });
+    const sel = box.querySelector<HTMLSelectElement>("#scale-select");
+    if (sel !== null) {
+      sel.value = "F";
+      sel.dispatchEvent(new Event("change"));
+    }
+    expect(localStorage.getItem("hestia.tempScale")).toBe("F");
+    expect(reload).toHaveBeenCalledOnce();
+  });
+
+  it("logs out then calls onLogout when the logout item is clicked", async () => {
     logoutMock.mockResolvedValue(undefined);
     const box = document.createElement("div");
     const onLogout = vi.fn();
-    renderUser(box, "tata", onLogout);
+    renderUser(box, "tata", { onLogout, reload: vi.fn() });
     box.querySelector<HTMLButtonElement>("#logout")?.click();
     await flush();
     expect(logoutMock).toHaveBeenCalledOnce();

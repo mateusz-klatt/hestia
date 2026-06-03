@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { currentLocale, initLocale, LOCALES, loadLocale, pickLocale, RTL, t, tPlural } from "./index";
 
@@ -71,8 +71,20 @@ describe("t / tPlural", () => {
 
 describe("loadLocale / initLocale", () => {
   afterEach(async () => {
+    vi.unstubAllGlobals();
     await loadLocale("en");
   });
+
+  function stubStoredLocale(value: string): void {
+    vi.stubGlobal("localStorage", {
+      getItem: (k: string) => (k === "hestia.locale" ? value : null),
+      setItem: () => undefined,
+      removeItem: () => undefined,
+      clear: () => undefined,
+      key: () => null,
+      length: 1,
+    });
+  }
 
   it("sets <html lang> + dir=ltr for a shipped LTR locale", async () => {
     await loadLocale("pl");
@@ -91,5 +103,17 @@ describe("loadLocale / initLocale", () => {
     expect(code).toBe("pl");
     expect(currentLocale()).toBe("pl");
     expect(document.documentElement.lang).toBe("pl");
+  });
+
+  it("initLocale honors a stored override over the browser preferences", async () => {
+    stubStoredLocale("pl");
+    const code = await initLocale(["de", "en"]); // browser says de, override says pl
+    expect(code).toBe("pl");
+  });
+
+  it("initLocale ignores an invalid stored override and falls back to the browser", async () => {
+    stubStoredLocale("zz");
+    const code = await initLocale(["fr", "en"]);
+    expect(code).toBe("fr");
   });
 });

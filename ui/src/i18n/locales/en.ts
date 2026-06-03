@@ -20,6 +20,8 @@ const en = {
 
   "user.loggedInAs": "signed in: {user}",
   "user.logout": "Log out",
+  "user.language": "Language",
+  "user.temperature": "Temperature",
 
   "common.loading": "Loading…",
   "rooms.empty": "No devices",
