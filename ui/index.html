@@ -9,8 +9,7 @@
     <div id="login" hidden></div>
     <div id="app">
     <h1 id="hdr">
-      <span id="hdr-text">hestia — devices</span><span id="conn"></span><span id="auth"></span
-      ><button id="refresh" type="button">Refresh</button>
+      <span id="hdr-text">hestia — devices</span><span id="conn"></span><span id="auth"></span>
     </h1>
     <div id="view-switch" class="view-switch"></div>
     <!-- Shared, so a failed /api/discovery is visible in BOTH views (not buried in the admin view). -->
@@ -26,6 +25,7 @@
 
     <!-- Full engineer view: the device table, globals, mode line, automations editor. -->
     <section id="admin-view" hidden>
+    <div id="admin-tools"><button id="refresh" type="button">Refresh</button></div>
     <div id="globals">
       🍼 crib: <span id="g-crib">—</span> &nbsp;·&nbsp; 🌡 outdoor: <span id="g-outdoor">—</span> / <span id="g-outdoor-humidity">—</span>
     </div>

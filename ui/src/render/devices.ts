@@ -154,8 +154,17 @@ export function renderGlobals(
   outdoorHumidityEl.textContent = fmtHumidity(g.outdoor_humidity);
 }
 
+/**
+ * The header title. Only the noteworthy bits are shown: the `X/Y confirmed`
+ * count is omitted once everything is confirmed, and `N unknown` only appears
+ * when there are unknowns — so a fully-classified system simply reads
+ * "hestia — devices".
+ */
 export function summaryText(s: Summary): string {
-  return `hestia — devices (${String(s.confirmed)}/${String(s.total)} confirmed, ${String(s.unknown)} unknown)`;
+  const parts: string[] = [];
+  if (s.confirmed < s.total) parts.push(`${String(s.confirmed)}/${String(s.total)} confirmed`);
+  if (s.unknown > 0) parts.push(`${String(s.unknown)} unknown`);
+  return parts.length > 0 ? `hestia — devices (${parts.join(", ")})` : "hestia — devices";
 }
 
 /**

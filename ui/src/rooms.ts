@@ -11,6 +11,8 @@ export interface RoomsDeps {
 export interface RoomsView {
   update: (data: Discovery | null) => void;
   patchState: (node: number, info: DeviceInfo) => void;
+  /** Return to the room list (the top 🏠 Pokoje tab calls this — there's no in-detail back button). */
+  goToLanding: () => void;
 }
 
 const NO_ROOM = "Inne";
@@ -167,18 +169,10 @@ export function createRoomsView(container: HTMLElement, deps: RoomsDeps): RoomsV
       renderLanding();
       return;
     }
-    const back = document.createElement("button");
-    back.type = "button";
-    back.className = "room-back";
-    back.textContent = "← Pokoje";
-    back.addEventListener("click", () => {
-      selectedRoom = null;
-      renderLanding();
-    });
     const title = document.createElement("h2");
     title.className = "room-title";
     title.textContent = room;
-    container.append(back, title);
+    container.append(title); // no back button — the top 🏠 Pokoje tab returns to the list (goToLanding)
     for (const [node, info] of list) {
       const { card, stan } = deviceCard(node, info, deps);
       stateSpans.set(Number(node), stan);
@@ -210,6 +204,10 @@ export function createRoomsView(container: HTMLElement, deps: RoomsDeps): RoomsV
     patchState(node: number, info: DeviceInfo): void {
       const span = stateSpans.get(node);
       if (span !== undefined) span.textContent = roomStateText(info);
+    },
+    goToLanding(): void {
+      selectedRoom = null;
+      render();
     },
   };
 }

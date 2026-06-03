@@ -79,11 +79,12 @@ describe("createRoomsView — room detail", () => {
     expect(sent).toEqual([{ op: "switch", node: 5, on: true }]);
   });
 
-  it("returns to the landing via the back button", () => {
+  it("goToLanding returns to the room list (the 🏠 Pokoje tab calls it — no in-detail back button)", () => {
     const { container, view } = mk();
     view.update(discovery({ "5": device({ type: "light", room: "Salon" }) }));
     openFirstRoom(container);
-    container.querySelector<HTMLButtonElement>(".room-back")?.click();
+    expect(container.querySelector(".room-back")).toBeNull(); // back button removed
+    view.goToLanding();
     expect(container.querySelector(".room-card")).not.toBeNull();
     expect(container.querySelector(".room-device")).toBeNull();
   });
