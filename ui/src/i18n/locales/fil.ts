@@ -35,6 +35,9 @@ const messages: Partial<Messages> = {
   "ctl.sent": "✓ naipadala",
   "ctl.failed": "nabigo",
   "ctl.error": "✗ error",
+
+  "state.open": "bukas",
+  "state.closed": "sarado",
 };
 
 export default messages;

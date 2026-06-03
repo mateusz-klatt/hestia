@@ -34,6 +34,9 @@ const messages: Partial<Messages> = {
   "ctl.sent": "✓ ပို့ပြီး",
   "ctl.failed": "မအောင်မြင်ပါ",
   "ctl.error": "✗ အမှား",
+
+  "state.open": "ဖွင့်ထားသည်",
+  "state.closed": "ပိတ်ထားသည်",
 };
 
 export default messages;

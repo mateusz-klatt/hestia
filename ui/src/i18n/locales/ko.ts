@@ -34,6 +34,9 @@ const messages: Partial<Messages> = {
   "ctl.sent": "✓ 전송됨",
   "ctl.failed": "실패",
   "ctl.error": "✗ 오류",
+
+  "state.open": "열림",
+  "state.closed": "닫힘",
 };
 
 export default messages;

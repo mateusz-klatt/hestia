@@ -34,6 +34,9 @@ const messages: Partial<Messages> = {
   "ctl.sent": "✓ 已傳送",
   "ctl.failed": "失敗",
   "ctl.error": "✗ 錯誤",
+
+  "state.open": "開",
+  "state.closed": "關",
 };
 
 export default messages;

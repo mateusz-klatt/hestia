@@ -37,6 +37,9 @@ const messages: Partial<Messages> = {
   "ctl.sent": "✓ отправлено",
   "ctl.failed": "не удалось",
   "ctl.error": "✗ ошибка",
+
+  "state.open": "открыто",
+  "state.closed": "закрыто",
 };
 
 export default messages;

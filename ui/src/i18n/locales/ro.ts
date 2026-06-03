@@ -36,6 +36,9 @@ const messages: Partial<Messages> = {
   "ctl.sent": "✓ trimis",
   "ctl.failed": "eșuat",
   "ctl.error": "✗ eroare",
+
+  "state.open": "deschis",
+  "state.closed": "închis",
 };
 
 export default messages;

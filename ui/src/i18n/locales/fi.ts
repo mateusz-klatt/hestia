@@ -35,6 +35,9 @@ const messages: Partial<Messages> = {
   "ctl.sent": "✓ lähetetty",
   "ctl.failed": "epäonnistui",
   "ctl.error": "✗ virhe",
+
+  "state.open": "auki",
+  "state.closed": "kiinni",
 };
 
 export default messages;

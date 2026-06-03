@@ -35,6 +35,9 @@ const messages: Partial<Messages> = {
   "ctl.sent": "✓ imetumwa",
   "ctl.failed": "imeshindwa",
   "ctl.error": "✗ hitilafu",
+
+  "state.open": "wazi",
+  "state.closed": "imefungwa",
 };
 
 export default messages;

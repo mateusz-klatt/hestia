@@ -1,6 +1,6 @@
 import type { DeviceInfo, Discovery, Globals, Summary } from "../api/types";
 import { t } from "../i18n";
-import { battFmt, battLow, fmtHumidity, fmtTemp, stateStr } from "./format";
+import { battFmt, battLow, fmtHumidity, fmtTemp, onOff, stateStr } from "./format";
 
 /** The DOM nodes the discovery view writes into (queried once in `main.ts`). */
 export interface DeviceView {
@@ -121,7 +121,7 @@ function subRow(node: string, ep: string, on: boolean, name: string): HTMLTableR
   tr.appendChild(cell("")); // last seen
   tr.appendChild(cell("")); // battery
   tr.appendChild(cell(`↳ kanał ${ep}`, "sub-label"));
-  tr.appendChild(cell(on ? "on" : "off", "stan ep-stan", "stan"));
+  tr.appendChild(cell(onOff(on), "stan ep-stan", "stan"));
   tr.appendChild(cell("")); // akcje (multi-gang channels stay read-only)
   tr.appendChild(epNameCell(name)); // per-channel label — wired by the registry binder (PR-4b)
   tr.appendChild(cell("")); // room

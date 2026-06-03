@@ -39,6 +39,9 @@ const messages: Partial<Messages> = {
   "ctl.sent": "✓ تم الإرسال",
   "ctl.failed": "فشل",
   "ctl.error": "✗ خطأ",
+
+  "state.open": "مفتوح",
+  "state.closed": "مغلق",
 };
 
 export default messages;

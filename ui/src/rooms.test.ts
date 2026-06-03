@@ -72,7 +72,7 @@ describe("createRoomsView — room detail", () => {
     expect(container.querySelector(".room-title")?.textContent).toBe("Salon");
     const card = container.querySelector(".room-device");
     expect(card?.querySelector(".room-device-name")?.textContent).toBe("Lampa");
-    expect(card?.querySelector(".room-device-stan")?.textContent).toBe("off");
+    expect(card?.querySelector(".room-device-stan")?.textContent).toBe("⚪ Off");
     [...container.querySelectorAll<HTMLButtonElement>(".room-device-actions button")]
       .find((b) => b.textContent === "On")
       ?.click();
@@ -113,7 +113,7 @@ describe("createRoomsView — room detail", () => {
       discovery({ "2": device({ type: "light", room: "Salon", endpoints: { "1": true, "2": false } }) }),
     );
     openFirstRoom(container);
-    expect(container.querySelector(".room-device-stan")?.textContent).toBe("1: On · 2: Off");
+    expect(container.querySelector(".room-device-stan")?.textContent).toBe("1: 🟢 On · 2: ⚪ Off");
     expect(container.querySelectorAll(".room-device-actions button")).toHaveLength(0);
   });
 });
@@ -123,9 +123,9 @@ describe("createRoomsView — live updates", () => {
     const { container, view } = mk();
     view.update(discovery({ "9": device({ type: "light", switch: false, room: "Salon" }) }));
     openFirstRoom(container);
-    expect(container.querySelector(".room-device-stan")?.textContent).toBe("off");
+    expect(container.querySelector(".room-device-stan")?.textContent).toBe("⚪ Off");
     view.patchState(9, device({ type: "light", switch: true }));
-    expect(container.querySelector(".room-device-stan")?.textContent).toBe("on");
+    expect(container.querySelector(".room-device-stan")?.textContent).toBe("🟢 On");
   });
 
   it("patchState is a no-op when the node's card is not currently shown (landing)", () => {
@@ -143,7 +143,7 @@ describe("createRoomsView — live updates", () => {
     openFirstRoom(container);
     view.update(discovery({ "1": device({ type: "light", switch: true, room: "Salon" }) }));
     expect(container.querySelector(".room-title")?.textContent).toBe("Salon");
-    expect(container.querySelector(".room-device-stan")?.textContent).toBe("on");
+    expect(container.querySelector(".room-device-stan")?.textContent).toBe("🟢 On");
   });
 
   it("falls back to the landing when the open room loses all its devices", () => {
@@ -163,7 +163,7 @@ describe("createRoomsView — live updates", () => {
     const btn = container.querySelector<HTMLButtonElement>(".room-device-actions button");
     view.patchState(5, device({ type: "light", switch: true })); // a live delta patches text only
     expect(container.querySelector<HTMLButtonElement>(".room-device-actions button")).toBe(btn); // same node
-    expect(container.querySelector(".room-device-stan")?.textContent).toBe("on");
+    expect(container.querySelector(".room-device-stan")?.textContent).toBe("🟢 On");
   });
 });
 
@@ -225,6 +225,6 @@ describe("createRoomsView — rebuild safety vs a focused control", () => {
     view.update(discovery({ "5": device({ type: "light", switch: true, room: "Salon" }) }));
     const after = container.querySelector(".room-device");
     expect(after).not.toBe(before); // rebuilt
-    expect(after?.querySelector(".room-device-stan")?.textContent).toBe("on");
+    expect(after?.querySelector(".room-device-stan")?.textContent).toBe("🟢 On");
   });
 });

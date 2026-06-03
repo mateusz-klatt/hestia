@@ -35,6 +35,9 @@ const messages: Partial<Messages> = {
   "ctl.sent": "✓ elküldve",
   "ctl.failed": "sikertelen",
   "ctl.error": "✗ hiba",
+
+  "state.open": "nyitva",
+  "state.closed": "zárva",
 };
 
 export default messages;
