@@ -101,13 +101,18 @@ def shadow_import(registry: Registry, store: AutomationStore, users: dict, *, pa
 
 
 def _payload_to_db(engine, payload: bytes, mirror) -> None:
-    """Apply a serialized store payload to the DB in one transaction. DB/parse errors become
-    OSError so the cancel-safe write path handles them identically to a failed file write."""
+    """Apply a serialized store payload to the DB in one SYNCHRONOUS, blocking transaction —
+    returns only after the commit lands, so the executor-thread completion semantics match
+    ``os.replace``. This is the hard persistence boundary: ANY failure (DB error, bad JSON, or a
+    malformed payload shape) is re-raised as
+    ``OSError`` — chained, so the real cause is still logged — so the cancel-safe write path
+    (``_persist_obj`` re-arms ``dirty``; autosave logs+retries) handles it exactly like a failed
+    file write and a leaked non-OSError can never kill the autosave loop."""
     try:
         data = json.loads(payload)
         with Session(engine) as session, session.begin():
             mirror(session, data)
-    except (SQLAlchemyError, ValueError) as exc:
+    except Exception as exc:   # hard boundary: never leak a non-OSError into the OSError-only handlers
         raise OSError(f"SQLite persist failed: {exc!r}") from exc
 
 
@@ -177,7 +182,10 @@ def load_automations(engine, path, *, writer) -> AutomationStore:
 
 def cutover_import(engine, registry: Registry, store: AutomationStore, users: dict) -> None:
     """One-time: replace-mirror the current JSON-loaded state into the DB and set the authority
-    marker, in ONE transaction — after this the DB is the source of truth for registry+automations."""
+    marker, in ONE transaction — after this the DB is the source of truth for registry+automations.
+    The mode mirrored here is the JSON registry's persisted mode; the shipped docker-compose leaves
+    HESTIA_MODE unset so the DB mode stays the single source of truth (an env override that is later
+    removed would surface the DB mode on the next boot — don't mix HESTIA_MODE with the sqlite backend)."""
     with Session(engine) as session, session.begin():
         mirror_json_to_db(session, registry=registry, store=store, users=users)
         _upsert(session, AppMeta, "key", _AUTHORITATIVE, {"value": "1"})
@@ -199,22 +207,21 @@ def open_stores(*, registry_path, automations_path, users_path, persist=None):
             load_automations(engine, automations_path, writer=automations_db_writer(engine)))
 
 
-def export_to_json(*, registry_path, automations_path, users_path, path=None) -> bool:
-    """Rebuild the JSON files from the DB (rollback escape hatch: switch back to HESTIA_PERSIST=json
-    with current data). Returns True on success."""
+def export_to_json(*, registry_path, automations_path, path=None) -> bool:
+    """Rebuild the registry + automations JSON files from the DB (rollback escape hatch: switch back
+    to HESTIA_PERSIST=json with current data). Returns True on success. NOTE: ``users.json`` is NOT
+    rewritten — in Phase 3 the auth users stay JSON-authoritative (the DB user rows are only the
+    frozen cutover snapshot, so writing them back would clobber any post-cutover account change)."""
     engine, _ = init_db(path)
     try:
         with Session(engine) as session:
             nodes = {n.key: json.loads(n.entry_json) for n in session.execute(select(Node)).scalars()}
             rules = [json.loads(r.rule_json)
                      for r in session.execute(select(Automation).order_by(Automation.position)).scalars()]
-            users = {u.username: u.password_hash for u in session.execute(select(User)).scalars()}
         Registry(registry_path, nodes=nodes, mode=read_mode(engine)).save()
         out = AutomationStore(automations_path)
         out.rules = {r["id"]: Rule.from_dict(r) for r in rules}
         out.save()
-        Path(users_path).parent.mkdir(parents=True, exist_ok=True)
-        Path(users_path).write_text(json.dumps(users, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         return True
     finally:
         engine.dispose()
@@ -225,9 +232,8 @@ def _cli(argv) -> int:  # pragma: no cover - thin env-driven wrapper around expo
         print("usage: python -m hestia.store_sql export", flush=True)
         return 2
     export_to_json(registry_path=os.environ.get("HESTIA_REGISTRY", "registry.json"),
-                   automations_path=os.environ.get("HESTIA_AUTOMATIONS", "automations.json"),
-                   users_path=os.environ.get("HESTIA_AUTH_USERS_FILE", auth.DEFAULT_USERS_FILE))
-    print("exported DB -> JSON", flush=True)
+                   automations_path=os.environ.get("HESTIA_AUTOMATIONS", "automations.json"))
+    print("exported DB -> JSON (registry + automations; users.json left as-is)", flush=True)
     return 0
 
 

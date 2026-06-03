@@ -248,10 +248,17 @@ class Phase3CutoverTests(unittest.TestCase):
         store.save()
         self.assertEqual(list(store_sql.load_automations(engine, self.auto_path, writer=None).rules), ["r1"])
 
-    def test_db_writer_raises_oserror_on_bad_payload(self):
+    def test_db_writer_wraps_every_bad_payload_as_oserror(self):
+        # The writer is the hard persistence boundary — a malformed payload must surface as OSError
+        # (not KeyError/TypeError/AttributeError) so it can never kill the OSError-only autosave loop.
         engine, _ = db.init_db(self.db)
-        with self.assertRaises(OSError):
-            store_sql.registry_db_writer(engine)(b"not json")
+        rw, aw = store_sql.registry_db_writer(engine), store_sql.automations_db_writer(engine)
+        for bad in (b"not json", b"[]", b'{"nodes": []}'):       # bad JSON / wrong top type / nodes not a dict
+            with self.assertRaises(OSError):
+                rw(bad)
+        for bad in (b'{"rules": [{}]}', b'{"rules": [1]}'):       # rule missing "id" / rule not a dict
+            with self.assertRaises(OSError):
+                aw(bad)
 
     def test_load_automations_skips_invalid_row(self):
         engine, Session = db.init_db(self.db)
@@ -290,21 +297,21 @@ class Phase3CutoverTests(unittest.TestCase):
             self.assertEqual(reg2.nodes["7"]["name"], "NewFromDB")  # from DB, not the rewritten JSON
             self.assertEqual(reg2.mode, "standalone")
 
-    def test_export_to_json_rebuilds_files_from_db(self):
+    def test_export_rebuilds_registry_automations_but_leaves_users(self):
         self._seed_json()
         with mock.patch.dict(os.environ, {"HESTIA_DB": str(self.db)}):
             store_sql.open_stores(registry_path=self.reg_path, automations_path=self.auto_path,
                                   users_path=self.users_path, persist="sqlite")
-            # wipe the JSON files, then rebuild them from the DB
+            # users stay JSON-authoritative in Phase 3: a post-cutover account change lands in users.json
+            self.users_path.write_text('{"mama": "scrypt$new"}', encoding="utf-8")
             self.reg_path.unlink()
             self.auto_path.unlink()
-            self.users_path.unlink()
             self.assertTrue(store_sql.export_to_json(registry_path=self.reg_path,
-                                                     automations_path=self.auto_path,
-                                                     users_path=self.users_path, path=self.db))
+                                                     automations_path=self.auto_path, path=self.db))
         self.assertEqual(Registry.load(self.reg_path).nodes["5"]["type"], "blind")
         self.assertEqual(list(AutomationStore.load(self.auto_path).rules), ["r1"])
-        self.assertIn("tata", json.loads(self.users_path.read_text()))
+        # export must NOT clobber the current users.json with the stale DB cutover snapshot
+        self.assertEqual(json.loads(self.users_path.read_text()), {"mama": "scrypt$new"})
 
 
 class DbPersistIntegrationTests(unittest.IsolatedAsyncioTestCase):
