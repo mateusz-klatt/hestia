@@ -1307,6 +1307,8 @@ def _shadow_sync_db(rt) -> None:
     logs any failure, so a DB problem can never stop the house from booting on JSON."""
     if os.environ.get("HESTIA_DB_SHADOW", "1") == "0":
         return
+    if os.environ.get("HESTIA_PERSIST", "json").lower() == "sqlite":
+        return                                  # DB is already the authoritative store — no shadow needed
     try:
         from .auth import load_users
         from .store_sql import shadow_import
@@ -1327,12 +1329,13 @@ async def main() -> None:  # pragma: no cover
             timeout=15.0)
     except asyncio.TimeoutError:
         log.error("cloud resolution timed out; using seed %s", config.cloud_host)
-    rt = ProxyRuntime(
-        registry=Registry.load(config.registry_path),
-        engine=AutomationEngine(AutomationStore.load(config.automations_path)),
-        mode="proxy",
-    )
-    _shadow_sync_db(rt)                                # Phase-2 #57: mirror JSON -> SQLite (best-effort, JSON stays authoritative)
+    from .auth import users_path
+    from .store_sql import open_stores
+    registry, store = open_stores(registry_path=config.registry_path,      # HESTIA_PERSIST=sqlite → DB authoritative
+                                  automations_path=config.automations_path,
+                                  users_path=str(users_path()))
+    rt = ProxyRuntime(registry=registry, engine=AutomationEngine(store), mode="proxy")
+    _shadow_sync_db(rt)                                # Phase-2 #57: mirror JSON -> SQLite (no-op in sqlite mode)
     if FLIPPER_ENABLED:                                # create the IR backlog before anything can fire
         rt.ir_queue = asyncio.Queue(maxsize=IR_QUEUE_MAX)
     proxy_srv, control_srv = await _start(rt, config)

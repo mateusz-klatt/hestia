@@ -18,15 +18,23 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+from pathlib import Path
 
-from sqlalchemy import delete
+from sqlalchemy import delete, select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from .automations import AutomationStore
+from . import auth
+from .automations import AutomationStore, Rule
 from .db import AppMeta, Automation, Node, User, init_db, session_scope
 from .registry import Registry
 
 log = logging.getLogger("hestia.store_sql")
+
+# app_meta marker: set once at cutover so subsequent boots load from the DB instead of re-importing
+# the (now-frozen) JSON. registry + automations cut over together in #57 Phase 3 (users → Phase 4).
+_AUTHORITATIVE = "registry_authoritative"
 
 
 def _dump(obj) -> str:
@@ -82,3 +90,147 @@ def shadow_import(registry: Registry, store: AutomationStore, users: dict, *, pa
     finally:
         if engine is not None:   # always release the pool/WAL handle, even on the failure path
             engine.dispose()
+
+
+# --- Phase 3: DB as the authoritative backend -------------------------------------------------
+# The cutover reuses ALL of hestia's cancel-safe persistence machinery (_write_and_settle /
+# _persist_obj / _commit_automation / _control_graduate) unchanged: those call obj.write_payload
+# with the SAME serialized JSON payload they'd write to disk. We just give the store a backend
+# `writer` that lands that payload in the DB instead. A DB error is raised as OSError so every
+# existing `except OSError` handler (autosave, graduate) treats it exactly like a failed file write.
+
+
+def _payload_to_db(engine, payload: bytes, mirror) -> None:
+    """Apply a serialized store payload to the DB in one transaction. DB/parse errors become
+    OSError so the cancel-safe write path handles them identically to a failed file write."""
+    try:
+        data = json.loads(payload)
+        with Session(engine) as session, session.begin():
+            mirror(session, data)
+    except (SQLAlchemyError, ValueError) as exc:
+        raise OSError(f"SQLite persist failed: {exc!r}") from exc
+
+
+def _mirror_registry_payload(session: Session, data: dict) -> None:
+    _upsert(session, AppMeta, "key", "mode", {"value": data.get("mode", "proxy")})
+    nodes = data.get("nodes", {})
+    for key, entry in nodes.items():
+        _upsert(session, Node, "key", key, {"entry_json": _dump(entry)})
+    session.execute(delete(Node).where(Node.key.not_in(set(nodes))))
+
+
+def _mirror_automations_payload(session: Session, data: dict) -> None:
+    rules = data.get("rules", [])
+    ids = set()
+    for position, rule in enumerate(rules):
+        ids.add(rule["id"])
+        _upsert(session, Automation, "id", rule["id"], {"position": position, "rule_json": _dump(rule)})
+    session.execute(delete(Automation).where(Automation.id.not_in(ids)))
+
+
+def registry_db_writer(engine):
+    """A ``write_payload`` backend for a Registry that lands the payload in the DB."""
+    return lambda payload: _payload_to_db(engine, payload, _mirror_registry_payload)
+
+
+def automations_db_writer(engine):
+    """A ``write_payload`` backend for an AutomationStore that lands the payload in the DB."""
+    return lambda payload: _payload_to_db(engine, payload, _mirror_automations_payload)
+
+
+def read_mode(engine) -> str:
+    """The persisted runtime mode from the DB (``app_meta.mode``), defaulting to ``proxy``."""
+    with Session(engine) as session:
+        row = session.get(AppMeta, "mode")
+    return row.value if row is not None else "proxy"
+
+
+def is_db_authoritative(engine) -> bool:
+    """True once the one-time cutover import has run (DB is the source of truth, not the JSON)."""
+    with Session(engine) as session:
+        return session.get(AppMeta, _AUTHORITATIVE) is not None
+
+
+def load_registry(engine, path, *, writer) -> Registry:
+    """Build a Registry from the DB rows, wired to persist back to the DB via ``writer``."""
+    with Session(engine) as session:
+        nodes = {n.key: json.loads(n.entry_json) for n in session.execute(select(Node)).scalars()}
+    return Registry(path, nodes=nodes, mode=read_mode(engine), writer=writer)
+
+
+def load_automations(engine, path, *, writer) -> AutomationStore:
+    """Build an AutomationStore from the DB rows (eval order = ``position``), persisting via ``writer``.
+    A row that fails validation is skipped+logged — one bad rule can't lock out the rest (mirrors
+    ``AutomationStore.load``)."""
+    store = AutomationStore(path, writer=writer)
+    with Session(engine) as session:
+        rows = session.execute(select(Automation).order_by(Automation.position)).scalars().all()
+    for row in rows:
+        try:
+            rule = Rule.from_dict(json.loads(row.rule_json))
+        except (ValueError, json.JSONDecodeError) as exc:
+            log.warning("automations DB: skipping invalid rule %r (%s)", row.id, exc)
+            continue
+        store.rules[rule.id] = rule
+    return store
+
+
+def cutover_import(engine, registry: Registry, store: AutomationStore, users: dict) -> None:
+    """One-time: replace-mirror the current JSON-loaded state into the DB and set the authority
+    marker, in ONE transaction — after this the DB is the source of truth for registry+automations."""
+    with Session(engine) as session, session.begin():
+        mirror_json_to_db(session, registry=registry, store=store, users=users)
+        _upsert(session, AppMeta, "key", _AUTHORITATIVE, {"value": "1"})
+
+
+def open_stores(*, registry_path, automations_path, users_path, persist=None):
+    """Return ``(registry, store)`` for the selected backend. ``HESTIA_PERSIST`` (default ``json``)
+    keeps the JSON files authoritative; ``sqlite`` makes the DB authoritative — importing the
+    current JSON once (then marking it) and loading from the DB thereafter, with DB-backed writers
+    so every save lands in the DB. Reuses the cancel-safe write path unchanged."""
+    persist = (persist if persist is not None else os.environ.get("HESTIA_PERSIST", "json")).lower()
+    if persist != "sqlite":
+        return Registry.load(registry_path), AutomationStore.load(automations_path)
+    engine, _ = init_db()
+    if not is_db_authoritative(engine):
+        cutover_import(engine, Registry.load(registry_path), AutomationStore.load(automations_path),
+                       auth.load_users(Path(users_path)))
+    return (load_registry(engine, registry_path, writer=registry_db_writer(engine)),
+            load_automations(engine, automations_path, writer=automations_db_writer(engine)))
+
+
+def export_to_json(*, registry_path, automations_path, users_path, path=None) -> bool:
+    """Rebuild the JSON files from the DB (rollback escape hatch: switch back to HESTIA_PERSIST=json
+    with current data). Returns True on success."""
+    engine, _ = init_db(path)
+    try:
+        with Session(engine) as session:
+            nodes = {n.key: json.loads(n.entry_json) for n in session.execute(select(Node)).scalars()}
+            rules = [json.loads(r.rule_json)
+                     for r in session.execute(select(Automation).order_by(Automation.position)).scalars()]
+            users = {u.username: u.password_hash for u in session.execute(select(User)).scalars()}
+        Registry(registry_path, nodes=nodes, mode=read_mode(engine)).save()
+        out = AutomationStore(automations_path)
+        out.rules = {r["id"]: Rule.from_dict(r) for r in rules}
+        out.save()
+        Path(users_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(users_path).write_text(json.dumps(users, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        return True
+    finally:
+        engine.dispose()
+
+
+def _cli(argv) -> int:  # pragma: no cover - thin env-driven wrapper around export_to_json
+    if argv[:1] != ["export"]:
+        print("usage: python -m hestia.store_sql export", flush=True)
+        return 2
+    export_to_json(registry_path=os.environ.get("HESTIA_REGISTRY", "registry.json"),
+                   automations_path=os.environ.get("HESTIA_AUTOMATIONS", "automations.json"),
+                   users_path=os.environ.get("HESTIA_AUTH_USERS_FILE", auth.DEFAULT_USERS_FILE))
+    print("exported DB -> JSON", flush=True)
+    return 0
+
+
+if __name__ == "__main__":  # pragma: no cover
+    import sys
+    raise SystemExit(_cli(sys.argv[1:]))

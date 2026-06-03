@@ -5,6 +5,7 @@ shadow_import is best-effort (never raises), and that the boot helper honours th
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import shutil
@@ -163,6 +164,174 @@ class ShadowSyncBootTests(unittest.TestCase):
             with mock.patch.dict(os.environ, {"HESTIA_DB": str(self.path)}):
                 os.environ.pop("HESTIA_DB_SHADOW", None)
                 proxy._shadow_sync_db(self.rt)  # must NOT raise
+
+    def test_skips_shadow_when_sqlite_authoritative(self):
+        # In sqlite mode the DB is already the live store — no shadow needed (and not touched here).
+        with mock.patch.dict(os.environ, {"HESTIA_PERSIST": "sqlite", "HESTIA_DB": str(self.path)}):
+            os.environ.pop("HESTIA_DB_SHADOW", None)
+            proxy._shadow_sync_db(self.rt)
+        self.assertFalse(self.path.exists())
+
+
+class ResolveModeSqliteTests(unittest.TestCase):
+    def setUp(self):
+        self.dir = Path(tempfile.mkdtemp())
+        self.db = self.dir / "hestia.db"
+        self.reg = self.dir / "registry.json"
+
+    def tearDown(self):
+        shutil.rmtree(self.dir)
+
+    def test_reads_mode_from_db_when_authoritative(self):
+        from hestia.__main__ import resolve_mode
+        with mock.patch.dict(os.environ, {"HESTIA_PERSIST": "sqlite", "HESTIA_DB": str(self.db)}):
+            engine, _ = db.init_db(self.db)
+            store_sql.cutover_import(engine, Registry(self.reg, mode="standalone"),
+                                     AutomationStore(self.dir / "a.json"), {})
+            engine.dispose()
+            self.assertEqual(resolve_mode(None, self.reg), "standalone")  # mode comes from the DB
+
+    def test_falls_back_to_json_when_not_authoritative(self):
+        from hestia.__main__ import resolve_mode
+        Registry(self.reg, mode="standalone").save()   # JSON still owns the mode pre-cutover
+        with mock.patch.dict(os.environ, {"HESTIA_PERSIST": "sqlite", "HESTIA_DB": str(self.db)}):
+            self.assertEqual(resolve_mode(None, self.reg), "standalone")
+
+
+class Phase3CutoverTests(unittest.TestCase):
+    """DB-as-authoritative backend: writers, loaders, open_stores selection, export, mode."""
+
+    def setUp(self):
+        self.dir = Path(tempfile.mkdtemp())
+        self.db = self.dir / "hestia.db"
+        self.reg_path = self.dir / "registry.json"
+        self.auto_path = self.dir / "automations.json"
+        self.users_path = self.dir / "users.json"
+
+    def tearDown(self):
+        shutil.rmtree(self.dir)
+
+    def _seed_json(self):
+        reg = Registry(self.reg_path, mode="standalone")
+        reg.nodes = {"5": dict(RICH_NODE)}
+        reg.save()
+        store = AutomationStore(self.auto_path)
+        store.rules = {"r1": Rule.from_dict(SCENE_RULE)}
+        store.save()
+        self.users_path.write_text('{"tata": "scrypt$abc"}', encoding="utf-8")
+
+    def test_registry_db_writer_roundtrips_and_replace_mirrors(self):
+        engine, _ = db.init_db(self.db)
+        reg = Registry(self.reg_path, mode="standalone", writer=store_sql.registry_db_writer(engine))
+        reg.set_user(5, name="Lampa", room="Salon")
+        reg.observe(5, "blind", "inferred", power="mains")
+        reg.set_user(9, name="Drzwi")
+        reg.save()                                    # write_payload -> DB
+        loaded = store_sql.load_registry(engine, self.reg_path, writer=None)
+        self.assertEqual(loaded.mode, "standalone")
+        self.assertEqual(loaded.nodes["5"]["name"], "Lampa")
+        self.assertEqual(loaded.nodes["9"]["name"], "Drzwi")
+        # replace-mirror: drop node 9, persist again -> gone from the DB
+        del reg.nodes["9"]
+        reg.save()
+        self.assertNotIn("9", store_sql.load_registry(engine, self.reg_path, writer=None).nodes)
+
+    def test_automations_db_writer_roundtrips(self):
+        engine, _ = db.init_db(self.db)
+        store = AutomationStore(self.auto_path, writer=store_sql.automations_db_writer(engine))
+        store.set_rule(Rule.from_dict(SCENE_RULE))
+        store.set_rule(Rule.from_dict(STATE_RULE))
+        store.save()
+        loaded = store_sql.load_automations(engine, self.auto_path, writer=None)
+        self.assertEqual(list(loaded.rules), ["r1", "cold"])
+        store.delete_rule("cold")
+        store.save()
+        self.assertEqual(list(store_sql.load_automations(engine, self.auto_path, writer=None).rules), ["r1"])
+
+    def test_db_writer_raises_oserror_on_bad_payload(self):
+        engine, _ = db.init_db(self.db)
+        with self.assertRaises(OSError):
+            store_sql.registry_db_writer(engine)(b"not json")
+
+    def test_load_automations_skips_invalid_row(self):
+        engine, Session = db.init_db(self.db)
+        with db.session_scope(Session) as s:
+            s.add(db.Automation(id="bad", position=0, rule_json='{"id": "bad"}'))  # missing trigger/actions
+            s.add(db.Automation(id="r1", position=1, rule_json=json.dumps(Rule.from_dict(SCENE_RULE).to_dict())))
+        loaded = store_sql.load_automations(engine, self.auto_path, writer=None)
+        self.assertEqual(list(loaded.rules), ["r1"])   # the invalid row is skipped + logged
+
+    def test_open_stores_json_is_default(self):
+        self._seed_json()
+        reg, store = store_sql.open_stores(registry_path=self.reg_path, automations_path=self.auto_path,
+                                           users_path=self.users_path, persist="json")
+        self.assertIsNone(reg._writer)                 # JSON-backed, no DB writer
+        self.assertEqual(reg.nodes["5"]["type"], "blind")
+        self.assertEqual(list(store.rules), ["r1"])
+
+    def test_open_stores_sqlite_cutover_then_loads_from_db(self):
+        self._seed_json()
+        with mock.patch.dict(os.environ, {"HESTIA_DB": str(self.db)}):
+            reg, store = store_sql.open_stores(registry_path=self.reg_path, automations_path=self.auto_path,
+                                               users_path=self.users_path, persist="sqlite")
+            self.assertIsNotNone(reg._writer)          # DB-backed
+            self.assertEqual(reg.mode, "standalone")
+            self.assertEqual(reg.nodes["5"]["name"], RICH_NODE["name"])
+            self.assertEqual(list(store.rules), ["r1"])
+            engine, _ = db.init_db(self.db)
+            self.assertTrue(store_sql.is_db_authoritative(engine))
+            self.assertEqual(store_sql.read_mode(engine), "standalone")
+            # a save now lands in the DB; mutate JSON files afterwards → ignored (DB is authoritative)
+            reg.set_user(7, name="NewFromDB")
+            reg.save()
+            self.reg_path.write_text('{"schema": 2, "mode": "proxy", "nodes": {}}', encoding="utf-8")
+            reg2, _ = store_sql.open_stores(registry_path=self.reg_path, automations_path=self.auto_path,
+                                            users_path=self.users_path, persist="sqlite")
+            self.assertEqual(reg2.nodes["7"]["name"], "NewFromDB")  # from DB, not the rewritten JSON
+            self.assertEqual(reg2.mode, "standalone")
+
+    def test_export_to_json_rebuilds_files_from_db(self):
+        self._seed_json()
+        with mock.patch.dict(os.environ, {"HESTIA_DB": str(self.db)}):
+            store_sql.open_stores(registry_path=self.reg_path, automations_path=self.auto_path,
+                                  users_path=self.users_path, persist="sqlite")
+            # wipe the JSON files, then rebuild them from the DB
+            self.reg_path.unlink()
+            self.auto_path.unlink()
+            self.users_path.unlink()
+            self.assertTrue(store_sql.export_to_json(registry_path=self.reg_path,
+                                                     automations_path=self.auto_path,
+                                                     users_path=self.users_path, path=self.db))
+        self.assertEqual(Registry.load(self.reg_path).nodes["5"]["type"], "blind")
+        self.assertEqual(list(AutomationStore.load(self.auto_path).rules), ["r1"])
+        self.assertIn("tata", json.loads(self.users_path.read_text()))
+
+
+class DbPersistIntegrationTests(unittest.IsolatedAsyncioTestCase):
+    """The cancel-safe write path (_persist_obj / _write_and_settle) is backend-agnostic — prove it
+    drives a DB-backed Registry exactly like the JSON one (success, and the OSError re-arm path)."""
+
+    def setUp(self):
+        self.dir = Path(tempfile.mkdtemp())
+        self.db = self.dir / "hestia.db"
+
+    def tearDown(self):
+        shutil.rmtree(self.dir)
+
+    async def test_persist_obj_lands_in_the_db(self):
+        engine, _ = db.init_db(self.db)
+        reg = Registry(self.dir / "r.json", mode="standalone", writer=store_sql.registry_db_writer(engine))
+        reg.set_user(5, name="Lampa", room="Salon")   # sets dirty
+        await proxy._persist_obj(asyncio.Lock(), reg)  # serialize() in-loop, write_payload off-loop
+        self.assertFalse(reg.dirty)                    # cleared after the durable write
+        self.assertEqual(store_sql.load_registry(engine, self.dir / "r.json", writer=None).nodes["5"]["name"], "Lampa")
+
+    async def test_persist_obj_rearms_dirty_on_db_failure(self):
+        reg = Registry(self.dir / "r.json", writer=mock.Mock(side_effect=OSError("disk full")))
+        reg.set_user(5, name="x")
+        with self.assertRaises(OSError):
+            await proxy._persist_obj(asyncio.Lock(), reg)
+        self.assertTrue(reg.dirty)                     # failed write re-armed dirty for the next retry
 
 
 if __name__ == "__main__":  # pragma: no cover
