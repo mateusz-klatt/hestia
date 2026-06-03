@@ -218,8 +218,9 @@ def _standalone_session(rt, reader, writer, _config):
 async def main() -> None:  # pragma: no cover
     from .automations import AutomationEngine
     from .proxy import (FLIPPER_ENABLED, IR_QUEUE_MAX, _autosave, _install_term_handler,
-                        _ir_worker, _niania_poller, _persist, _persist_store, _scheduler,
-                        _sensor433_poller, _shadow_sync_db, _weather_poller)
+                        _ir_worker, _niania_poller, _persist, _persist_state, _persist_store,
+                        _scheduler, _sensor433_poller, _shadow_sync_db, _weather_poller,
+                        seed_device_state)
     from .web import start_web, stop_web
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     config = ProxyConfig()
@@ -229,6 +230,7 @@ async def main() -> None:  # pragma: no cover
                                   automations_path=config.automations_path,
                                   users_path=str(users_path()))
     rt = ProxyRuntime(registry=registry, engine=AutomationEngine(store), mode="standalone")
+    seed_device_state(rt)
     _shadow_sync_db(rt)                                # Phase-2 #57: mirror JSON -> SQLite (no-op in sqlite mode)
     rt.audit_engine = open_audit_engine()              # Phase-5 #56: who-did-what audit log
     if FLIPPER_ENABLED:                                # create the IR backlog before anything can fire
@@ -270,6 +272,10 @@ async def main() -> None:  # pragma: no cover
             await _persist_store(rt)           # symmetric: don't lose last-interval rule edits
         except OSError:
             log.exception("final automations save failed at shutdown")
+        try:
+            await _persist_state(rt)           # best-effort last telemetry cache
+        except Exception:
+            log.exception("final device-state cache save failed at shutdown")
 
 
 if __name__ == "__main__":  # pragma: no cover

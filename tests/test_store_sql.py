@@ -391,6 +391,40 @@ class Phase4UsersTests(unittest.TestCase):
             self.assertEqual(store_sql.get_user_settings("tata"),
                              {"locale": "de", "temp_scale": "K", "theme": None})
 
+    def test_device_state_cache_is_unavailable_in_json_mode(self):
+        with mock.patch.dict(os.environ, {"HESTIA_PERSIST": "json", "HESTIA_DB": str(self.db)}):
+            self.assertIsNone(store_sql.load_device_state())
+            self.assertFalse(store_sql.save_device_state({"switches": {"14": True}}))
+        self.assertFalse(self.db.exists())
+
+    def test_device_state_cache_sqlite_save_load_absent_and_parse_errors(self):
+        snapshot = {"switches": {"14": True}, "gang": {"7": {"1": True}}}
+        with mock.patch.dict(os.environ, {"HESTIA_PERSIST": "sqlite", "HESTIA_DB": str(self.db)}):
+            self.assertIsNone(store_sql.load_device_state())
+            self.assertTrue(store_sql.save_device_state(snapshot))
+            self.assertEqual(store_sql.load_device_state(), snapshot)
+
+            engine, Session = db.init_db(self.db)
+            with db.session_scope(Session) as s:
+                s.get(db.AppMeta, "device_state").value = "not json"
+            engine.dispose()
+            with self.assertLogs("hestia.store_sql", level="ERROR"):
+                self.assertIsNone(store_sql.load_device_state())
+
+            engine, Session = db.init_db(self.db)
+            with db.session_scope(Session) as s:
+                s.get(db.AppMeta, "device_state").value = json.dumps([1, 2])
+            engine.dispose()
+            self.assertIsNone(store_sql.load_device_state())
+
+    def test_device_state_cache_best_effort_failures(self):
+        with mock.patch.dict(os.environ, {"HESTIA_PERSIST": "sqlite", "HESTIA_DB": str(self.db)}):
+            with mock.patch("hestia.store_sql.init_db", side_effect=OSError("boom")):
+                with self.assertLogs("hestia.store_sql", level="ERROR"):
+                    self.assertFalse(store_sql.save_device_state({"switches": {"14": True}}))
+                with self.assertLogs("hestia.store_sql", level="ERROR"):
+                    self.assertIsNone(store_sql.load_device_state())
+
     def test_open_stores_cuts_users_when_registry_already_authoritative(self):
         # the live Phase-3 box: registry authoritative, users NOT → next boot cuts over ONLY users
         self.users_json.write_text('{"tata": "h"}', encoding="utf-8")

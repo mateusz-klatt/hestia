@@ -36,6 +36,7 @@ log = logging.getLogger("hestia.store_sql")
 # the (now-frozen) JSON. registry + automations cut over together (Phase 3); users separately (Phase 4).
 _AUTHORITATIVE = "registry_authoritative"
 _USERS_AUTHORITATIVE = "users_authoritative"
+_DEVICE_STATE_KEY = "device_state"
 _STATS_TABLES = (
     ("app_meta", AppMeta),
     ("nodes", Node),
@@ -346,6 +347,47 @@ def set_user_settings(username, **fields) -> bool:
         return True
     finally:
         engine.dispose()
+
+
+# --- Best-effort live device-state cache (#48a) -----------------------------------------------
+
+def save_device_state(snapshot: dict) -> bool:
+    """Persist the live telemetry snapshot in SQLite AppMeta. Best-effort and SQLite-only."""
+    if not _settings_enabled():
+        return False
+    engine = None
+    try:
+        engine, session_factory = init_db()
+        with session_scope(session_factory) as session:
+            _upsert(session, AppMeta, "key", _DEVICE_STATE_KEY, {"value": _dump(snapshot)})
+        return True
+    except Exception:
+        log.exception("device-state cache save failed")
+        return False
+    finally:
+        if engine is not None:
+            engine.dispose()
+
+
+def load_device_state() -> "dict | None":
+    """Load the cached live telemetry snapshot, or None when unavailable/invalid."""
+    if not _settings_enabled():
+        return None
+    engine = None
+    try:
+        engine, _ = init_db()
+        with Session(engine) as session:
+            row = session.get(AppMeta, _DEVICE_STATE_KEY)
+        if row is None:
+            return None
+        data = json.loads(row.value)
+        return data if isinstance(data, dict) else None
+    except Exception:
+        log.exception("device-state cache load failed")
+        return None
+    finally:
+        if engine is not None:
+            engine.dispose()
 
 
 # --- Operator DB observability (#55/#57 P6a) ----------------------------------------------------

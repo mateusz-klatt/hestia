@@ -10,6 +10,18 @@ from dataclasses import dataclass, field
 
 from .protocol import Frame
 
+_SNAPSHOT_MAPS = (
+    "doors",
+    "levels",
+    "switches",
+    "thermostat_setpoint",
+    "thermostat_on",
+    "temperature",
+    "plug_w",
+    "plug_kwh",
+    "plug_v",
+)
+
 
 def tlv_value(frame: Frame, tag: int) -> "bytes | None":
     for t in frame.tlvs():
@@ -150,6 +162,7 @@ class State:
     crib_temp: "float | None" = None                         # GLOBAL (node-less) °C from the Tuya baby-monitor poller
     outdoor_temp: "float | None" = None                      # GLOBAL (node-less) °C from the Open-Meteo / local-433 feeder
     outdoor_humidity: "float | None" = None                  # GLOBAL (node-less) %RH companion from the local-433 feeder (display-only)
+    dirty: bool = field(default=False)                       # best-effort SQLite telemetry-cache needs flushing
 
     def apply(self, frame: Frame) -> dict:
         """Apply a state event; return ``{discovery_key: value}`` for every field
@@ -167,4 +180,57 @@ class State:
         applier = _state_applier(data)
         if applier is not None:
             applier(self, node, data, changed)
+        if changed:
+            self.dirty = True
         return changed
+
+    def to_snapshot(self) -> dict:
+        """JSON-safe telemetry cache: node-keyed live maps only.
+
+        This is deliberately narrower than the API state snapshot: scene dedup
+        bookkeeping and node-less globals are runtime-only and are not persisted.
+        """
+        snap = {name: {str(node): value for node, value in getattr(self, name).items()}
+                for name in _SNAPSHOT_MAPS}
+        snap["gang"] = {
+            str(node): {str(endpoint): value for endpoint, value in endpoints.items()}
+            for node, endpoints in self.gang.items()
+        }
+        return snap
+
+    def load_snapshot(self, snap) -> None:
+        """Restore a best-effort telemetry cache, ignoring any malformed part.
+
+        A corrupt AppMeta blob must never crash boot. Only dict-shaped sections
+        with int-parseable node/endpoint keys are loaded.
+        """
+        if not isinstance(snap, dict):
+            return
+        for name in _SNAPSHOT_MAPS:
+            data = snap.get(name)
+            if not isinstance(data, dict):
+                continue
+            target = getattr(self, name)
+            for node, value in data.items():
+                try:
+                    target[int(node)] = value
+                except (TypeError, ValueError):
+                    continue
+        gang = snap.get("gang")
+        if not isinstance(gang, dict):
+            return
+        for node, endpoints in gang.items():
+            if not isinstance(endpoints, dict):
+                continue
+            try:
+                node_id = int(node)
+            except (TypeError, ValueError):
+                continue
+            parsed = {}
+            for endpoint, value in endpoints.items():
+                try:
+                    parsed[int(endpoint)] = value
+                except (TypeError, ValueError):
+                    continue
+            if parsed:
+                self.gang[node_id] = parsed
