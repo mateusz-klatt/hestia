@@ -133,9 +133,10 @@ def init_db(path=None) -> tuple[Engine, sessionmaker[Session]]:
     Alembic, returning the engine + a session factory. Idempotent: an already-current DB
     upgrades to a no-op. Migrations run programmatically — never runtime autogenerate."""
     engine = make_engine(db_path() if path is None else path)
-    # The outer engine.begin() opens the transaction; Alembic's env.py then calls
-    # context.begin_transaction() on this same connection, which SQLAlchemy 2.0 runs as a
-    # SAVEPOINT (not a second BEGIN), so the migration commits atomically with the outer tx.
+    # The outer engine.begin() owns this connection and its commit. Alembic's env.py calls
+    # context.begin_transaction() on the same connection, but for SQLite (non-transactional
+    # DDL) that's a no-op context — there is no nested/second BEGIN, and the migration's DDL
+    # commits with the outer transaction.
     with engine.begin() as connection:
         command.upgrade(_alembic_config(connection), "head")
     return engine, sessionmaker(bind=engine)

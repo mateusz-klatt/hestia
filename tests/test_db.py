@@ -13,6 +13,8 @@ from pathlib import Path
 from unittest import mock
 
 from alembic import command
+from alembic.autogenerate import compare_metadata
+from alembic.runtime.migration import MigrationContext
 from sqlalchemy import inspect
 
 from hestia import db
@@ -69,6 +71,14 @@ class DbSchemaTests(unittest.TestCase):
         nested = self.dir / "a" / "b" / "hestia.db"
         db.make_engine(nested)
         self.assertTrue(nested.parent.is_dir())
+
+    def test_models_match_migration_no_drift(self):
+        # Lock model↔migration parity into CI: a model change without a matching migration
+        # (or a migration that drifts from the models) makes this fail, not just manual review.
+        engine, _ = db.init_db(self.path)
+        with engine.connect() as conn:
+            diff = compare_metadata(MigrationContext.configure(conn), db.metadata)
+        self.assertEqual(diff, [], f"model/migration drift: {diff}")
 
     def test_downgrade_roundtrip_drops_every_table(self):
         engine, _ = db.init_db(self.path)
