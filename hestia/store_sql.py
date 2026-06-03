@@ -46,7 +46,9 @@ def _upsert(session: Session, model, pk_name: str, pk_value, values: dict) -> No
 
 def mirror_json_to_db(session: Session, *, registry: Registry, store: AutomationStore, users: dict) -> None:
     """Replace-mirror the three JSON stores into the DB within ``session`` (caller commits):
-    upsert every present row, delete DB rows absent from the JSON. The DB ends up an exact copy."""
+    upsert every present row, delete DB rows absent from the JSON. The DB ends up an exact copy.
+    A ``not_in`` over an EMPTY set deletes ALL rows (SQLAlchemy renders delete-all) — intended:
+    an emptied JSON store empties its mirror too."""
     _upsert(session, AppMeta, "key", "mode", {"value": registry.mode})
 
     node_keys = set(registry.nodes)
@@ -68,12 +70,15 @@ def mirror_json_to_db(session: Session, *, registry: Registry, store: Automation
 def shadow_import(registry: Registry, store: AutomationStore, users: dict, *, path=None) -> bool:
     """Open/upgrade the DB and replace-mirror the JSON stores into it. Returns True on success.
     Best-effort: ANY failure is logged and returns False — the shadow must never break boot."""
+    engine = None
     try:
         engine, session_factory = init_db(path)
         with session_scope(session_factory) as session:
             mirror_json_to_db(session, registry=registry, store=store, users=users)
-        engine.dispose()
         return True
-    except Exception:  # noqa: BLE001 - shadow is best-effort; a DB issue must not stop a JSON-backed boot
+    except Exception:   # shadow is best-effort; a DB issue must NOT stop a JSON-backed boot
         log.exception("SQLite shadow import failed — continuing on JSON")
         return False
+    finally:
+        if engine is not None:   # always release the pool/WAL handle, even on the failure path
+            engine.dispose()

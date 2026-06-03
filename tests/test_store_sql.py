@@ -156,6 +156,14 @@ class ShadowSyncBootTests(unittest.TestCase):
             proxy._shadow_sync_db(self.rt)
         self.assertFalse(self.path.exists())
 
+    def test_setup_failure_never_breaks_boot(self):
+        # A failure BEFORE shadow_import's own guard (here load_users raising) must be swallowed
+        # by _shadow_sync_db itself — boot must never crash because of the shadow DB.
+        with mock.patch("hestia.auth.load_users", side_effect=OSError("boom")):
+            with mock.patch.dict(os.environ, {"HESTIA_DB": str(self.path)}):
+                os.environ.pop("HESTIA_DB_SHADOW", None)
+                proxy._shadow_sync_db(self.rt)  # must NOT raise
+
 
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()

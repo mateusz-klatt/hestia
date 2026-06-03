@@ -1307,9 +1307,12 @@ def _shadow_sync_db(rt) -> None:
     logs any failure, so a DB problem can never stop the house from booting on JSON."""
     if os.environ.get("HESTIA_DB_SHADOW", "1") == "0":
         return
-    from .auth import load_users
-    from .store_sql import shadow_import
-    shadow_import(rt.registry, rt.engine.store, load_users())
+    try:
+        from .auth import load_users
+        from .store_sql import shadow_import
+        shadow_import(rt.registry, rt.engine.store, load_users())
+    except Exception:   # the import / load_users (outside shadow_import's own guard) must never break boot
+        log.exception("SQLite shadow setup failed — continuing on JSON")
 
 
 async def main() -> None:  # pragma: no cover
