@@ -1,0 +1,40 @@
+import type { Messages } from "./en";
+
+const messages: Partial<Messages> = {
+  "header.confirmed": "{confirmed}/{total} staðfest",
+  "header.unknown": "{unknown} óþekkt",
+
+  "conn.reconnecting": "(tengist aftur…)",
+
+  "view.rooms": "🏠 Herbergi",
+  "view.back": "← Herbergi",
+  "view.advanced": "🔧 Ítarlegt",
+
+  "login.username": "Notandanafn",
+  "login.password": "Lykilorð",
+  "login.submit": "Skrá inn",
+  "login.error": "✗ Rangt notandanafn eða lykilorð",
+
+  "user.loggedInAs": "skráð inn: {user}",
+  "user.logout": "Skrá út",
+  "user.language": "Tungumál",
+  "user.temperature": "Hitastig",
+
+  "common.loading": "Hleður…",
+  "rooms.empty": "Engin tæki",
+  "rooms.other": "Annað",
+  "rooms.deviceCount.one": "{n} tæki",
+  "rooms.deviceCount.other": "{n} tæki",
+
+  "ctl.on": "Kveikt",
+  "ctl.off": "Slökkt",
+  "ctl.raise": "Hækka",
+  "ctl.lower": "Lækka",
+  "ctl.set": "Stilla",
+  "ctl.turnOff": "Slökkva",
+  "ctl.sent": "✓ sent",
+  "ctl.failed": "mistókst",
+  "ctl.error": "✗ villa",
+};
+
+export default messages;

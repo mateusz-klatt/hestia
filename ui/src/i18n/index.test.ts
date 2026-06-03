@@ -99,10 +99,10 @@ describe("loadLocale / initLocale", () => {
     expect(document.documentElement.dir).toBe("ltr");
   });
 
-  it("falls back to English when a catalog is not shipped yet", async () => {
-    await loadLocale("de"); // no de catalog in PR-A
-    expect(currentLocale()).toBe("en");
-    expect(document.documentElement.dir).toBe("ltr");
+  it("sets dir=rtl for a right-to-left locale (Arabic)", async () => {
+    await loadLocale("ar");
+    expect(currentLocale()).toBe("ar");
+    expect(document.documentElement.dir).toBe("rtl");
   });
 
   it("initLocale picks the best browser locale, loads + applies it", async () => {
@@ -122,5 +122,12 @@ describe("loadLocale / initLocale", () => {
     stubStoredLocale("zz");
     const code = await initLocale(["fr", "en"]);
     expect(code).toBe("fr");
+  });
+
+  it("loads every supported locale (loaders cover all 45; catalogs import cleanly)", async () => {
+    for (const code of LOCALES) {
+      await loadLocale(code);
+      expect(currentLocale()).toBe(code); // a missing loader / broken catalog would fall back to "en"
+    }
   });
 });
