@@ -7,10 +7,12 @@ import {
   fetchAutomations,
   fetchDbStats,
   fetchDiscovery,
+  fetchSettings,
   postControl,
   postIr,
   postName,
   postRule,
+  saveSettings as saveUserSettings,
   whoami,
 } from "./api/client";
 import { renderAuditFeed } from "./audit";
@@ -24,6 +26,7 @@ import { renderLogin, renderUser } from "./login";
 import { bindRow, bindSubRow } from "./registry";
 import { createRoomsView } from "./rooms";
 import { renderRuleForm } from "./ruleform";
+import { reconcileServerSettings } from "./settings";
 import { renderViewSwitch, type ViewName } from "./view";
 
 function el(id: string): HTMLElement {
@@ -223,12 +226,23 @@ void (async () => {
     });
     return;
   }
+  if (me.user !== null && reconcileServerSettings(await fetchSettings())) {
+    location.reload();
+    return;
+  }
   // Always render the user/settings chip; auth-off (me.user === null) shows a settings-only menu
   // (language + temperature scale, no logout — see renderUser).
-  renderUser(el("auth"), me.user, {
+  const userOpts = {
     onLogout: () => {
       location.reload();
     },
-  });
+  };
+  const authedUserOpts = {
+    ...userOpts,
+    saveSettings: async (settings: Parameters<typeof saveUserSettings>[0]): Promise<void> => {
+      await saveUserSettings(settings);
+    },
+  };
+  renderUser(el("auth"), me.user, me.user !== null ? authedUserOpts : userOpts);
   startApp();
 })();

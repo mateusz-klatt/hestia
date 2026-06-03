@@ -363,6 +363,34 @@ class Phase4UsersTests(unittest.TestCase):
             db.init_db(self.db)   # DB exists but users NOT authoritative → still JSON
             self.assertEqual(store_sql.current_users(users_path=self.users_json), {"mama": "hj"})
 
+    def test_user_settings_unavailable_in_json_mode(self):
+        with mock.patch.dict(os.environ, {"HESTIA_PERSIST": "json", "HESTIA_DB": str(self.db)}):
+            self.assertIsNone(store_sql.get_user_settings("tata"))
+            self.assertFalse(store_sql.set_user_settings("tata", locale="pl", temp_scale="C", theme=None))
+        self.assertFalse(self.db.exists())
+
+    def test_user_settings_sqlite_no_row_then_upsert_and_update(self):
+        with mock.patch.dict(os.environ, {"HESTIA_PERSIST": "sqlite", "HESTIA_DB": str(self.db)}):
+            engine, Session = db.init_db(self.db)
+            with db.session_scope(Session) as s:
+                s.add(db.User(username="tata", password_hash="h"))
+            engine.dispose()
+
+            self.assertIsNone(store_sql.get_user_settings("tata"))
+            self.assertTrue(store_sql.set_user_settings("tata", locale="x" * 80, temp_scale=None, theme="dark" * 30))
+            self.assertEqual(store_sql.get_user_settings("tata"),
+                             {"locale": "x" * 64, "temp_scale": None, "theme": ("dark" * 30)[:64]})
+
+            self.assertTrue(store_sql.set_user_settings("tata", locale="pl", temp_scale="K", theme=None))
+            self.assertEqual(store_sql.get_user_settings("tata"),
+                             {"locale": "pl", "temp_scale": "K", "theme": None})
+
+            # A partial update touches ONLY the named column; the others are preserved (the merge is
+            # in one transaction, so concurrent partial writes can't clobber each other's field).
+            self.assertTrue(store_sql.set_user_settings("tata", locale="de"))
+            self.assertEqual(store_sql.get_user_settings("tata"),
+                             {"locale": "de", "temp_scale": "K", "theme": None})
+
     def test_open_stores_cuts_users_when_registry_already_authoritative(self):
         # the live Phase-3 box: registry authoritative, users NOT → next boot cuts over ONLY users
         self.users_json.write_text('{"tata": "h"}', encoding="utf-8")
