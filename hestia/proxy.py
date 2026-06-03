@@ -1301,6 +1301,20 @@ def _resolve_cloud(config) -> str:
     return config.cloud_host
 
 
+def _shadow_sync_db(rt) -> None:
+    """Phase-2 (#57): best-effort mirror of the JSON stores into the SQLite shadow DB at boot.
+    Opt out with ``HESTIA_DB_SHADOW=0``. JSON stays authoritative; ``shadow_import`` swallows +
+    logs any failure, so a DB problem can never stop the house from booting on JSON."""
+    if os.environ.get("HESTIA_DB_SHADOW", "1") == "0":
+        return
+    try:
+        from .auth import load_users
+        from .store_sql import shadow_import
+        shadow_import(rt.registry, rt.engine.store, load_users())
+    except Exception:   # the import / load_users (outside shadow_import's own guard) must never break boot
+        log.exception("SQLite shadow setup failed — continuing on JSON")
+
+
 async def main() -> None:  # pragma: no cover
     from .web import start_web, stop_web
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -1318,6 +1332,7 @@ async def main() -> None:  # pragma: no cover
         engine=AutomationEngine(AutomationStore.load(config.automations_path)),
         mode="proxy",
     )
+    _shadow_sync_db(rt)                                # Phase-2 #57: mirror JSON -> SQLite (best-effort, JSON stays authoritative)
     if FLIPPER_ENABLED:                                # create the IR backlog before anything can fire
         rt.ir_queue = asyncio.Queue(maxsize=IR_QUEUE_MAX)
     proxy_srv, control_srv = await _start(rt, config)
