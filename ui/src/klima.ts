@@ -64,7 +64,7 @@ export function renderKlima(box: HTMLElement, klima: Klima, postIr: PostIr): voi
   box.dataset.built = "1";
 
   const label = document.createElement("span");
-  label.textContent = "❄️ LG: ";
+  label.textContent = "❄️"; // just the snowflake — drop "LG:" so the row stays compact on the landing
   box.appendChild(label);
   const status = document.createElement("span");
   status.className = "status";
