@@ -35,11 +35,15 @@ class Registry:
     SCHEMA = 2
     MODES = ("proxy", "standalone")          # persisted runtime mode (Phase-3 graduation target)
 
-    def __init__(self, path, nodes=None, mode="proxy"):
+    def __init__(self, path, nodes=None, mode="proxy", *, writer=None):
         self.path = Path(path)
         self.nodes = nodes if nodes is not None else {}
         self.mode = mode if mode in self.MODES else "proxy"   # coerce anything unknown → proxy
         self.dirty = False                          # set on any write, cleared on save
+        # Optional persistence backend: callable(payload_bytes) -> None. Default (None) writes the
+        # atomic JSON file below; the SQLite cutover (#57 P3) injects a DB writer that consumes the
+        # SAME serialized payload, so all the cancel-safe machinery (_write_and_settle) is reused.
+        self._writer = writer
 
     @classmethod
     def load(cls, path) -> "Registry":
@@ -69,7 +73,13 @@ class Registry:
         return self.payload_for_mode(self.mode)
 
     def write_payload(self, payload: bytes) -> None:
-        """Atomic file write — pure blocking I/O, safe to run off the event loop."""
+        """Persist the serialized payload off the event loop. A backend ``writer`` (the SQLite
+        cutover) takes precedence; otherwise an atomic JSON file write (temp + fsync + os.replace).
+        Both are pure blocking I/O and raise ``OSError`` on failure (the DB writer wraps DB errors
+        as ``OSError``), so the cancel-safe ``_write_and_settle`` handling is identical either way."""
+        if self._writer is not None:
+            self._writer(payload)
+            return
         self.path.parent.mkdir(parents=True, exist_ok=True)
         fd, tmp = tempfile.mkstemp(dir=str(self.path.parent), suffix=".tmp")
         try:

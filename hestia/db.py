@@ -115,7 +115,10 @@ def make_engine(path) -> Engine:
     The parent dir is created so a first run on an empty volume succeeds."""
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
-    engine = create_engine(f"sqlite:///{p}")
+    # check_same_thread=False: writes run in run_in_executor worker threads (the cancel-safe write
+    # path), so the connection must be usable off the creating thread. Explicit, not relying on the
+    # dialect default. Single-writer serialisation is handled by the caller's save_lock + WAL.
+    engine = create_engine(f"sqlite:///{p}", connect_args={"check_same_thread": False})
     event.listen(engine, "connect", lambda dbapi_conn, _record: _apply_pragmas(dbapi_conn))
     return engine
 

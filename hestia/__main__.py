@@ -27,6 +27,16 @@ def resolve_mode(env_mode, registry_path) -> str:
     Reading the registry here is what makes a graduate-then-restart come up standalone."""
     if env_mode:
         return env_mode.lower()
+    if os.environ.get("HESTIA_PERSIST", "json").lower() == "sqlite":
+        from .db import init_db
+        from .store_sql import is_db_authoritative, read_mode
+        engine, _ = init_db()
+        try:
+            if is_db_authoritative(engine):      # cut over → the DB holds the persisted mode
+                return read_mode(engine)
+            # not yet cut over: the JSON registry still owns the mode for this boot
+        finally:
+            engine.dispose()
     from .registry import Registry
     return Registry.load(registry_path).mode
 

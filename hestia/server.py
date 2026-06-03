@@ -216,19 +216,20 @@ def _standalone_session(rt, reader, writer, _config):
 
 
 async def main() -> None:  # pragma: no cover
-    from .automations import AutomationEngine, AutomationStore
-    from .proxy import (FLIPPER_ENABLED, IR_QUEUE_MAX, Registry, _autosave, _install_term_handler,
+    from .automations import AutomationEngine
+    from .proxy import (FLIPPER_ENABLED, IR_QUEUE_MAX, _autosave, _install_term_handler,
                         _ir_worker, _niania_poller, _persist, _persist_store, _scheduler,
                         _sensor433_poller, _shadow_sync_db, _weather_poller)
     from .web import start_web, stop_web
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     config = ProxyConfig()
-    rt = ProxyRuntime(
-        registry=Registry.load(config.registry_path),
-        engine=AutomationEngine(AutomationStore.load(config.automations_path)),
-        mode="standalone",
-    )
-    _shadow_sync_db(rt)                                # Phase-2 #57: mirror JSON -> SQLite (best-effort, JSON stays authoritative)
+    from .auth import users_path
+    from .store_sql import open_stores
+    registry, store = open_stores(registry_path=config.registry_path,      # HESTIA_PERSIST=sqlite → DB authoritative
+                                  automations_path=config.automations_path,
+                                  users_path=str(users_path()))
+    rt = ProxyRuntime(registry=registry, engine=AutomationEngine(store), mode="standalone")
+    _shadow_sync_db(rt)                                # Phase-2 #57: mirror JSON -> SQLite (no-op in sqlite mode)
     if FLIPPER_ENABLED:                                # create the IR backlog before anything can fire
         rt.ir_queue = asyncio.Queue(maxsize=IR_QUEUE_MAX)
     device_srv, control_srv = await _start(rt, config, _standalone_session)

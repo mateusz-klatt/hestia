@@ -508,10 +508,13 @@ class AutomationStore:
 
     SCHEMA = 1
 
-    def __init__(self, path, rules=None):
+    def __init__(self, path, rules=None, *, writer=None):
         self.path = Path(path)
         self.rules = rules if rules is not None else {}
         self.dirty = False
+        # Optional persistence backend (see Registry): callable(payload_bytes) -> None; default
+        # None writes the atomic JSON file. The SQLite cutover (#57 P3) injects a DB writer.
+        self._writer = writer
 
     @classmethod
     def load(cls, path):
@@ -561,8 +564,12 @@ class AutomationStore:
         return self.serialize_rules(self.rules)
 
     def write_payload(self, payload: bytes) -> None:
-        """Atomic file write — pure blocking I/O, safe to run off the event loop
-        (same idiom as ``Registry.write_payload``)."""
+        """Persist the payload off the event loop: a backend ``writer`` (SQLite cutover) if set,
+        else an atomic JSON file write (same idiom as ``Registry.write_payload``). Both raise
+        ``OSError`` on failure, so ``_write_and_settle``'s cancel handling is identical either way."""
+        if self._writer is not None:
+            self._writer(payload)
+            return
         self.path.parent.mkdir(parents=True, exist_ok=True)
         fd, tmp = tempfile.mkstemp(dir=str(self.path.parent), suffix=".tmp")
         try:
