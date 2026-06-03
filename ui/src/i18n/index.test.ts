@@ -24,6 +24,15 @@ describe("pickLocale", () => {
     expect(pickLocale(["zh-CN"])).toBe("zh");
     expect(pickLocale(["pt-BR"])).toBe("pt");
   });
+  it("maps Chinese script/region tags (zh-CN→zh; zh-TW/zh-HK/zh-Hant→zh-Hant)", () => {
+    expect(pickLocale(["zh-CN"])).toBe("zh");
+    expect(pickLocale(["zh-SG"])).toBe("zh");
+    expect(pickLocale(["zh-TW"])).toBe("zh-Hant");
+    expect(pickLocale(["zh-HK"])).toBe("zh-Hant");
+    expect(pickLocale(["zh-Hant"])).toBe("zh-Hant");
+    expect(pickLocale(["zh-Hant-TW"])).toBe("zh-Hant");
+  });
+
   it("skips unsupported preferences to the next match", () => {
     expect(pickLocale(["xx", "fr-FR"])).toBe("fr");
   });

@@ -27,7 +27,7 @@ export function renderIrButtons(box: HTMLElement, buttons: IrButton[], postIr: P
     status.textContent = "…";
     try {
       const res = await postIr(b.file, b.button);
-      status.textContent = res.ok ? `✓ ${b.label}` : `✗ ${res.error ?? "failed"}`;
+      status.textContent = res.ok ? `✓ ${b.label}` : `✗ ${res.error ?? t("ctl.failed")}`;
     } finally {
       busy = false;
       for (const x of btns) x.disabled = false;
@@ -128,7 +128,7 @@ export function renderKlima(box: HTMLElement, klima: Klima, postIr: PostIr): voi
     off.textContent = t("ctl.turnOff");
     off.style.marginRight = "0.4rem";
     off.addEventListener("click", () => {
-      void send("off", "Wyłącz");
+      void send("off", t("ctl.turnOff"));
     });
     buttons.push(off);
     box.appendChild(off);

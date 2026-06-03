@@ -128,6 +128,7 @@ describe("renderKlima", () => {
     click(el, "Turn off");
     await flush();
     expect(sent).toEqual(["off"]);
+    expect(el.querySelector(".status")?.textContent).toBe("✓ Turn off"); // localised success tag, not "✓ Wyłącz"
   });
 
   it("builds nothing for an empty klima map", () => {
