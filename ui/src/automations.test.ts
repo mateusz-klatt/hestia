@@ -92,6 +92,14 @@ describe("renderAutomations", () => {
     expect(tbody.querySelectorAll("tr")).toHaveLength(2);
   });
 
+  it("tags each cell with a data-label for the mobile card layout", () => {
+    const tbody = document.createElement("tbody");
+    renderAutomations(tbody, [rule({ id: "eco" })], deps());
+    const labels = [...tbody.querySelectorAll("td")].map((td) => td.dataset.label);
+    // the trailing edit/delete cell mirrors its blank <th> → no label
+    expect(labels).toEqual(["id", "on", "trigger", "cond", "actions", undefined]);
+  });
+
   it("Edit hands the rule to onEdit", () => {
     const tbody = document.createElement("tbody");
     const edited: Rule[] = [];
