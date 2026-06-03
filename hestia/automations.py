@@ -641,6 +641,8 @@ class AutomationEngine:
         post-``scene``-pop change dict, ``scene`` the popped scene event (or None), ``node``
         the reporting node id. Returns the command frames every matching scene/state rule
         produced, in rule order. Time-triggered rules are handled by ``on_time``."""
+        from .proxy import _audit_observed       # lazy: avoid a proxy<->automations cycle
+        _audit_observed(rt, node, changed, scene)  # #56: log the physical/external state change (actor=device)
         frames = []
         for rule in self.store.rules.values():
             if not rule.enabled or rt.mode not in rule.modes:

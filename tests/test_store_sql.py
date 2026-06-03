@@ -499,6 +499,38 @@ class AutomationActorAuditTests(unittest.TestCase):
                             for c in audit.call_args_list), audit.call_args_list)
 
 
+class DeviceStateAuditTests(unittest.TestCase):
+    """P5b+ (#56): physical/external device state CHANGES are audited as actor=device; telemetry isn't."""
+
+    def setUp(self):
+        self.dir = Path(tempfile.mkdtemp())
+
+    def tearDown(self):
+        shutil.rmtree(self.dir)
+
+    def _engine(self):
+        from hestia.automations import AutomationEngine, AutomationStore
+        return AutomationEngine(AutomationStore(self.dir / "a.json"))
+
+    def test_logs_transitions_and_scene_but_not_telemetry(self):
+        rt = proxy.ProxyRuntime()
+        rt.audit_engine = object()                                 # truthy → _audit_observed proceeds
+        with mock.patch("hestia.proxy._audit") as audit:
+            self._engine().on_event(rt, 5, {"door": "open"}, None)
+            self._engine().on_event(rt, 5, {"power_w": 120, "voltage_v": 230}, None)  # telemetry → no audit
+            self._engine().on_event(rt, 5, {}, {"id": 3, "kind": "scene"})            # scene → audit
+        pairs = [(c.args[1], c.args[2]) for c in audit.call_args_list]
+        self.assertIn(("device", "door"), pairs)
+        self.assertIn(("device", "scene"), pairs)
+        self.assertFalse(any(act in ("power_w", "voltage_v") for _, act in pairs))
+
+    def test_noop_without_audit_engine(self):
+        rt = proxy.ProxyRuntime()                                  # audit_engine None
+        with mock.patch("hestia.proxy._audit") as audit:
+            self._engine().on_event(rt, 5, {"door": "open"}, None)
+        self.assertFalse(any(c.args[1] == "device" for c in audit.call_args_list))
+
+
 class AuditHelperTests(unittest.IsolatedAsyncioTestCase):
     """proxy._audit: best-effort, off-loop — no-op without an engine, writes with one, swallows errors."""
 

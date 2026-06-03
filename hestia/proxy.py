@@ -917,6 +917,25 @@ def _audit_done(fut) -> None:
         log.debug("audit write failed", exc_info=exc)
 
 
+# Meaningful device state TRANSITIONS to audit as a physical/external change (actor="device"). Telemetry
+# (power_w/voltage_v/energy_kwh/temperature) is excluded so a chatty power meter can't flood the log.
+_OBSERVED_AUDIT_FIELDS = ("door", "switch", "level", "endpoints", "thermostat_on", "setpoint")
+
+
+def _audit_observed(rt, node, changed, scene) -> None:
+    """Log a physical/external device state change (#56): someone flipped a switch / opened a door, or
+    — in proxy mode — the cloud commanded it (hestia relays the cloud frame verbatim and only sees the
+    device's resulting report, so the cause shows as ``device``). A change hestia itself caused is also
+    recorded by its own user/automation row, so the log shows intent + the observed confirmation."""
+    if rt.audit_engine is None:
+        return
+    for field in _OBSERVED_AUDIT_FIELDS:
+        if field in changed:
+            _audit(rt, "device", field, target=str(node), detail=str(changed[field])[:64], result="reported")
+    if scene:
+        _audit(rt, "device", "scene", target=str(node), result="reported")
+
+
 def _install_term_handler(loop, task) -> bool:
     """Route SIGTERM into the same graceful unwind as SIGINT: cancel the running
     ``main`` task so the persist-on-exit ``finally`` runs and state is flushed.
