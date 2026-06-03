@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import datetime
 import logging
+import os
 import time
 import uuid
 
@@ -219,7 +220,7 @@ async def main() -> None:  # pragma: no cover
     from .automations import AutomationEngine, AutomationStore
     from .proxy import (FLIPPER_ENABLED, IR_QUEUE_MAX, Registry, _autosave, _install_term_handler,
                         _ir_worker, _niania_poller, _persist, _persist_store, _scheduler,
-                        _sensor433_poller, _weather_poller)
+                        _sensor433_poller, _shadow_sync_db, _weather_poller)
     from .web import start_web, stop_web
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     config = ProxyConfig()
@@ -228,6 +229,7 @@ async def main() -> None:  # pragma: no cover
         engine=AutomationEngine(AutomationStore.load(config.automations_path)),
         mode="standalone",
     )
+    _shadow_sync_db(rt)                                # Phase-2 #57: mirror JSON -> SQLite (best-effort, JSON stays authoritative)
     if FLIPPER_ENABLED:                                # create the IR backlog before anything can fire
         rt.ir_queue = asyncio.Queue(maxsize=IR_QUEUE_MAX)
     device_srv, control_srv = await _start(rt, config, _standalone_session)
