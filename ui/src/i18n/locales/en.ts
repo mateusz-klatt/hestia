@@ -10,6 +10,7 @@ const en = {
   "conn.reconnecting": "(reconnecting…)",
 
   "view.rooms": "🏠 Rooms",
+  "view.back": "← Rooms",
   "view.advanced": "🔧 Advanced",
 
   "login.username": "Username",

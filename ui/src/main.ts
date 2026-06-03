@@ -20,7 +20,7 @@ import { renderLogin, renderUser } from "./login";
 import { bindRow, bindSubRow } from "./registry";
 import { createRoomsView } from "./rooms";
 import { renderRuleForm } from "./ruleform";
-import { renderViewSwitch } from "./view";
+import { renderViewSwitch, type ViewName } from "./view";
 
 function el(id: string): HTMLElement {
   const node = document.getElementById(id);
@@ -38,7 +38,15 @@ const ruleJson = el("rule-json") as HTMLTextAreaElement;
 // (set via update() in onRender), so the switcher just asks it to show the landing.
 const roomsIrBox = el("rooms-ir");
 const roomsKlimaBox = el("rooms-klima");
-const roomsView = createRoomsView(el("room-list"), { postControl });
+// Notify the view-switch when the rooms view enters/leaves a room, so its tab can flip to "← Rooms"
+// (a discoverable back). Assigned in startApp once the switch exists; nav events only fire after that.
+let onRoomsNav: (inRoom: boolean) => void = () => undefined;
+const roomsView = createRoomsView(el("room-list"), {
+  postControl,
+  onNav: (inRoom) => {
+    onRoomsNav(inRoom);
+  },
+});
 
 const live = new LiveController(
   {
@@ -83,14 +91,21 @@ function startApp(): void {
     void live.refresh();
   });
 
-  // View switcher: 🏠 Pokoje (default) ↔ 🔧 Zaawansowane. Applies the persisted choice immediately;
-  // switching into the rooms view re-renders its cards from the latest snapshot.
-  renderViewSwitch(
+  // View switcher: 🏠 Rooms (default) ↔ 🔧 Advanced. Applies the persisted choice immediately;
+  // switching into the rooms view returns to the room list.
+  let currentView: ViewName = "rooms";
+  const switcher = renderViewSwitch(
     { switchBox: el("view-switch"), roomsEl: el("rooms-view"), adminEl: el("admin-view") },
     (view) => {
-      if (view === "rooms") roomsView.goToLanding(); // tapping 🏠 Pokoje always returns to the room list
+      currentView = view;
+      if (view === "rooms") roomsView.goToLanding(); // tapping the rooms tab always returns to the list
     },
   );
+  // The "← Rooms" back label only reflects nav while the rooms view is the active one — a background
+  // refresh re-rendering the hidden room detail must not flip the tab while Advanced is showing.
+  onRoomsNav = (inRoom) => {
+    if (currentView === "rooms") switcher.setRoomsInRoom(inRoom);
+  };
 
   // ---- Automations editor -------------------------------------------------
   const autoRows = el("auto-rows");

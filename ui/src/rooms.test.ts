@@ -167,6 +167,36 @@ describe("createRoomsView — live updates", () => {
   });
 });
 
+describe("createRoomsView — onNav callback", () => {
+  it("fires onNav(true) entering a room, onNav(false) returning to the landing", () => {
+    const container = document.createElement("div");
+    const nav: boolean[] = [];
+    const view = createRoomsView(container, {
+      postControl: () => Promise.resolve({ ok: true }),
+      onNav: (inRoom) => nav.push(inRoom),
+    });
+    view.update(discovery({ "5": device({ type: "light", room: "Salon" }) }));
+    expect(nav).toEqual([false]); // initial landing render
+    container.querySelector<HTMLButtonElement>(".room-card")?.click();
+    expect(nav).toEqual([false, true]); // entered the room
+    view.goToLanding();
+    expect(nav).toEqual([false, true, false]); // back to the landing
+  });
+
+  it("fires onNav(false) when the open room vanishes on a refresh", () => {
+    const container = document.createElement("div");
+    const nav: boolean[] = [];
+    const view = createRoomsView(container, {
+      postControl: () => Promise.resolve({ ok: true }),
+      onNav: (inRoom) => nav.push(inRoom),
+    });
+    view.update(discovery({ "1": device({ type: "light", room: "Salon" }) }));
+    container.querySelector<HTMLButtonElement>(".room-card")?.click(); // → Salon (true)
+    view.update(discovery({ "1": device({ type: "light", room: "Kuchnia" }) })); // Salon gone → landing
+    expect(nav.at(-1)).toBe(false);
+  });
+});
+
 describe("createRoomsView — rebuild safety vs a focused control", () => {
   afterEach(() => {
     document.body.replaceChildren(); // focus tracking needs connected elements

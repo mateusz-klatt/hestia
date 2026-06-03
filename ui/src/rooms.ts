@@ -6,6 +6,8 @@ import { stateStr } from "./render/format";
 /** Devices the rooms view controls; only postControl is needed (IR/klima have their own panels). */
 export interface RoomsDeps {
   postControl: PostControl;
+  /** Notified when the view enters (true) / leaves (false) a room detail — drives the back-tab label. */
+  onNav?: (inRoom: boolean) => void;
 }
 
 /** The rooms view's public surface: a full re-render from a snapshot + a per-node live state patch. */
@@ -145,8 +147,7 @@ export function createRoomsView(container: HTMLElement, deps: RoomsDeps): RoomsV
       count.textContent = tPlural("rooms.deviceCount", list.length);
       btn.append(title, count);
       btn.addEventListener("click", () => {
-        selectedRoom = room;
-        renderDetail();
+        navigate(room);
       });
       grid.appendChild(btn);
     }
@@ -161,12 +162,11 @@ export function createRoomsView(container: HTMLElement, deps: RoomsDeps): RoomsV
       return;
     }
     const room = selectedRoom;
-    const list = room !== null ? groupByRoom(latest.devices).get(room) : undefined;
-    if (room === null || list === undefined) {
-      selectedRoom = null; // the selected room lost all its devices → back to the landing
+    if (room === null) {
       renderLanding();
       return;
     }
+    const list = groupByRoom(latest.devices).get(room) ?? []; // render() already resolved a vanished room
     const title = document.createElement("h2");
     title.className = "room-title";
     title.textContent = roomDisplay(room);
@@ -179,8 +179,19 @@ export function createRoomsView(container: HTMLElement, deps: RoomsDeps): RoomsV
   }
 
   function render(): void {
+    // resolve a selected room that vanished from the latest snapshot before painting
+    if (selectedRoom !== null && latest !== null && !groupByRoom(latest.devices).has(selectedRoom)) {
+      selectedRoom = null;
+    }
     if (selectedRoom === null) renderLanding();
     else renderDetail();
+    deps.onNav?.(selectedRoom !== null);
+  }
+
+  /** Set the selected room (or null for the landing) and re-render — the single nav choke point. */
+  function navigate(room: string | null): void {
+    selectedRoom = room;
+    render();
   }
 
   return {
@@ -204,8 +215,7 @@ export function createRoomsView(container: HTMLElement, deps: RoomsDeps): RoomsV
       if (span !== undefined) span.textContent = roomStateText(info);
     },
     goToLanding(): void {
-      selectedRoom = null;
-      render();
+      navigate(null);
     },
   };
 }
