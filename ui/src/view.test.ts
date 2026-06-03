@@ -87,12 +87,23 @@ describe("renderViewSwitch", () => {
 
   it("the returned apply switches the view programmatically", () => {
     const e = els();
-    const apply = renderViewSwitch(e, () => undefined);
+    const { apply } = renderViewSwitch(e, () => undefined);
     apply("admin");
     expect(e.adminEl.hidden).toBe(false);
     apply("rooms");
     expect(e.roomsEl.hidden).toBe(false);
     expect(e.adminEl.hidden).toBe(true);
+  });
+
+  it("setRoomsInRoom flips the rooms tab to the back affordance, and apply resets it", () => {
+    const e = els();
+    const { apply, setRoomsInRoom } = renderViewSwitch(e, () => undefined);
+    const roomsTab = e.switchBox.querySelectorAll("button")[0];
+    expect(roomsTab?.textContent).toBe("🏠 Rooms");
+    setRoomsInRoom(true);
+    expect(roomsTab?.textContent).toBe("← Rooms");
+    apply("admin"); // switching views resets the rooms tab label (no stale "← Rooms")
+    expect(roomsTab?.textContent).toBe("🏠 Rooms");
   });
 
   it("survives a throwing localStorage (Safari private mode) — defaults to rooms, no throw", () => {

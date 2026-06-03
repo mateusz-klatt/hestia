@@ -9,6 +9,7 @@ const pl: Partial<Messages> = {
   "conn.reconnecting": "(ponowne łączenie…)",
 
   "view.rooms": "🏠 Pokoje",
+  "view.back": "← Pokoje",
   "view.advanced": "🔧 Zaawansowane",
 
   "login.username": "Użytkownik",
