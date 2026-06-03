@@ -38,6 +38,9 @@ const messages: Partial<Messages> = {
   "ctl.sent": "✓ seolta",
   "ctl.failed": "theip",
   "ctl.error": "✗ earráid",
+
+  "state.open": "oscailte",
+  "state.closed": "dúnta",
 };
 
 export default messages;

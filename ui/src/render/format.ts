@@ -1,5 +1,12 @@
 import type { DeviceInfo } from "../api/types";
+import { t } from "../i18n";
 import { tempScale } from "../prefs";
+
+/** A binary on/off live state as an icon + the localised word (🟢 On / ⚪ Off) — language-neutral
+ *  glyph for the wife-friendly view, plus the translated word so it reads in the chosen language. */
+export function onOff(on: boolean): string {
+  return on ? `🟢 ${t("ctl.on")}` : `⚪ ${t("ctl.off")}`;
+}
 
 /**
  * A temperature (sensors report °C) in the user's chosen scale; `—` when null. Celsius keeps the
@@ -51,7 +58,7 @@ export function stateStr(info: DeviceInfo): string {
       let s = "";
       if (info.temperature !== null) s += `${String(info.temperature)}°`;
       if (info.setpoint !== null) s += `${s.length > 0 ? " → " : "→ "}${String(info.setpoint)}°`;
-      if (info.thermostat_on !== null) s += `${s.length > 0 ? " " : ""}${info.thermostat_on ? "⏻on" : "off"}`;
+      if (info.thermostat_on !== null) s += `${s.length > 0 ? " " : ""}${onOff(info.thermostat_on)}`;
       return s.length > 0 ? s : "—";
     }
     case "light": {
@@ -60,21 +67,24 @@ export function stateStr(info: DeviceInfo): string {
         if (eps.length > 1) return ""; // multi-gang: each channel renders as its own sub-row
         const first = eps[0];
         if (first === undefined) return "—";
-        return info.endpoints[first] === true ? "on" : "off";
+        return onOff(info.endpoints[first] === true);
       }
-      return info.switch === null ? "—" : info.switch ? "on" : "off";
+      return info.switch === null ? "—" : onOff(info.switch);
     }
     case "plug": {
       const parts: string[] = [];
-      if (info.switch !== null) parts.push(info.switch ? "on" : "off"); // most important first
+      if (info.switch !== null) parts.push(onOff(info.switch)); // most important first
       if (info.power_w !== null) parts.push(`${String(info.power_w)} W`);
       if (info.energy_kwh !== null) parts.push(`${String(info.energy_kwh)} kWh`);
       if (info.voltage_v !== null) parts.push(`${String(info.voltage_v)} V`);
       return parts.length > 0 ? parts.join(" · ") : "—";
     }
     case "door":
-      // string-origin, but rendered via textContent → no escaping needed
-      return info.door === null ? "—" : info.door;
+      // icon + localised word; an unexpected value falls back to the raw string (textContent-safe).
+      if (info.door === null) return "—";
+      if (info.door === "open") return `🔓 ${t("state.open")}`;
+      if (info.door === "closed") return `🔒 ${t("state.closed")}`;
+      return info.door;
     default:
       // motion / smoke / water / unknown — no numeric state yet
       return "—";

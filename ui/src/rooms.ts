@@ -1,7 +1,7 @@
 import type { DeviceInfo, Discovery } from "./api/types";
 import { type PostControl, renderActions } from "./controls";
 import { currentLocale, t, tPlural } from "./i18n";
-import { stateStr } from "./render/format";
+import { onOff, stateStr } from "./render/format";
 
 /** Devices the rooms view controls; only postControl is needed (IR/klima have their own panels). */
 export interface RoomsDeps {
@@ -59,7 +59,7 @@ function roomStateText(info: DeviceInfo): string {
   if (eps !== null && Object.keys(eps).length > 1) {
     return Object.keys(eps)
       .sort((a, b) => Number(a) - Number(b))
-      .map((ep) => `${ep}: ${eps[ep] === true ? t("ctl.on") : t("ctl.off")}`)
+      .map((ep) => `${ep}: ${onOff(eps[ep] === true)}`)
       .join(" · ");
   }
   return stateStr(info);

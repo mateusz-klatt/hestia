@@ -67,7 +67,7 @@ describe("deviceRow", () => {
     expect(tds[3]?.querySelector("span")?.textContent).toBe("plug (confirmed)");
     expect(tds[3]?.querySelector(".confirmed")).not.toBeNull();
     expect(tds[3]?.querySelector<HTMLButtonElement>(".confirm")?.disabled).toBe(true); // already confirmed
-    expect(tds[4]?.textContent).toBe("on · 12 W");
+    expect(tds[4]?.textContent).toBe("🟢 On · 12 W");
     expect(tds[5]?.classList.contains("actions")).toBe(true); // akcje — empty until decorated
     expect(tds[6]?.querySelector<HTMLInputElement>("input.name")?.value).toBe("fridge");
     expect(tds[7]?.querySelector<HTMLInputElement>("input.room")?.value).toBe("kitchen");
@@ -129,10 +129,10 @@ describe("renderDeviceRows", () => {
     expect(rows[1]?.dataset.node).toBe("2"); // shares the parent node id (addressable by SSE)
     expect(rows[1]?.dataset.ep).toBe("1");
     expect(rows[1]?.querySelector(".sub-label")?.textContent).toBe("↳ kanał 1");
-    expect(rows[1]?.querySelectorAll("td")[4]?.textContent).toBe("on"); // stan
+    expect(rows[1]?.querySelectorAll("td")[4]?.textContent).toBe("🟢 On"); // stan
     expect(rows[1]?.querySelectorAll("td")[6]?.querySelector<HTMLInputElement>("input.ep-name")?.value).toBe("lewy"); // labelled channel
     expect(rows[2]?.dataset.ep).toBe("2");
-    expect(rows[2]?.querySelectorAll("td")[4]?.textContent).toBe("off");
+    expect(rows[2]?.querySelectorAll("td")[4]?.textContent).toBe("⚪ Off");
     expect(rows[2]?.querySelectorAll("td")[6]?.querySelector<HTMLInputElement>("input.ep-name")?.value).toBe(""); // ep 2 unlabelled → per-key `?? ""`
     expect(rows[3]?.dataset.node).toBe("10");
   });
@@ -146,11 +146,11 @@ describe("renderDeviceRows", () => {
     expect(rows).toHaveLength(3); // node + 2 sub-rows
     expect(rows[1]?.dataset.ep).toBe("1");
     expect(rows[1]?.querySelector(".sub-label")?.textContent).toBe("↳ kanał 1");
-    expect(rows[1]?.querySelectorAll("td")[4]?.textContent).toBe("on");
+    expect(rows[1]?.querySelectorAll("td")[4]?.textContent).toBe("🟢 On");
     expect(rows[1]?.querySelectorAll("td")[6]?.querySelector<HTMLInputElement>("input.ep-name")?.value).toBe("");
     expect(rows[2]?.dataset.ep).toBe("2");
     expect(rows[2]?.querySelector(".sub-label")?.textContent).toBe("↳ kanał 2");
-    expect(rows[2]?.querySelectorAll("td")[4]?.textContent).toBe("off");
+    expect(rows[2]?.querySelectorAll("td")[4]?.textContent).toBe("⚪ Off");
     expect(rows[2]?.querySelectorAll("td")[6]?.querySelector<HTMLInputElement>("input.ep-name")?.value).toBe("");
   });
 

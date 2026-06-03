@@ -95,9 +95,9 @@ describe("LiveController.applyState", () => {
       Promise.resolve(discovery({ "7": device({ type: "plug", switch: false }) })),
     );
     await live.refresh();
-    expect(stanval(view, "7")).toBe("off");
+    expect(stanval(view, "7")).toBe("⚪ Off");
     live.applyState(7, { switch: true, power_w: 12 });
-    expect(stanval(view, "7")).toBe("on · 12 W");
+    expect(stanval(view, "7")).toBe("🟢 On · 12 W");
   });
 
   it("is a no-op for a node that has no row yet", () => {
@@ -116,9 +116,9 @@ describe("LiveController.applyState", () => {
     await live.refresh();
     const ep2 = (): string | null | undefined =>
       view.rows.querySelector('tr[data-node="2"][data-ep="2"] .ep-stan')?.textContent;
-    expect(ep2()).toBe("off");
+    expect(ep2()).toBe("⚪ Off");
     live.applyState(2, { endpoints: { "1": true, "2": true } });
-    expect(ep2()).toBe("on");
+    expect(ep2()).toBe("🟢 On");
   });
 
   it("patches the node stanval (not a sub-row) for a single-endpoint light", async () => {
@@ -127,9 +127,9 @@ describe("LiveController.applyState", () => {
       Promise.resolve(discovery({ "5": device({ type: "light", endpoints: { "1": false } }) })),
     );
     await live.refresh();
-    expect(stanval(view, "5")).toBe("off");
+    expect(stanval(view, "5")).toBe("⚪ Off");
     live.applyState(5, { endpoints: { "1": true } }); // length 1 → falls through to the node row
-    expect(stanval(view, "5")).toBe("on");
+    expect(stanval(view, "5")).toBe("🟢 On");
     expect(view.rows.querySelector('tr[data-node="5"][data-ep]')).toBeNull();
   });
 
@@ -147,7 +147,7 @@ describe("LiveController.applyState", () => {
     live.applyState(2, { endpoints: { "1": true, "2": false, "3": true } }); // ep 3 has no row yet
     await flush();
     expect(calls).toBe(2); // single recovery refetch rebuilt the sub-rows
-    expect(view.rows.querySelector('tr[data-node="2"][data-ep="3"] .ep-stan')?.textContent).toBe("on");
+    expect(view.rows.querySelector('tr[data-node="2"][data-ep="3"] .ep-stan')?.textContent).toBe("🟢 On");
   });
 
   it("does not refetch when a multi-gang delta touches only existing channels", async () => {
@@ -197,7 +197,7 @@ describe("LiveController coalescing (deltas during an in-flight refresh)", () =>
     live.applyState(7, { switch: true }); // arrives mid-refresh → queued
     gate.resolve(discovery({ "7": device({ type: "plug", switch: false }) }));
     await refreshing;
-    expect(stanval(view, "7")).toBe("on"); // pending replayed, not rolled back to "off"
+    expect(stanval(view, "7")).toBe("🟢 On"); // pending replayed, not rolled back to "off"
   });
 
   it("queues a globals delta and does not let the snapshot roll it back", async () => {
@@ -220,7 +220,7 @@ describe("LiveController coalescing (deltas during an in-flight refresh)", () =>
     live.applyState(7, { power_w: 12 }); // queued — must merge with the first, not clobber
     gate.resolve(discovery({ "7": device({ type: "plug", switch: false }) }));
     await refreshing;
-    expect(stanval(view, "7")).toBe("on · 12 W"); // both fields survived
+    expect(stanval(view, "7")).toBe("🟢 On · 12 W"); // both fields survived
   });
 
   it("merges two globals deltas queued during a refresh", async () => {
@@ -269,7 +269,7 @@ describe("LiveController coalescing (deltas during an in-flight refresh)", () =>
     await flush();
     expect(calls).toBe(2);
     expect(view.rows.querySelector('tr[data-node="2"][data-ep="3"]')).not.toBeNull(); // recovery rebuilt sub-rows
-    expect(stanval(view, "7")).toBe("on"); // queued node-7 delta survived the re-entrant drain
+    expect(stanval(view, "7")).toBe("🟢 On"); // queued node-7 delta survived the re-entrant drain
     expect(view.crib.textContent).toBe("99.0°"); // queued globals survived too
   });
 
@@ -306,7 +306,7 @@ describe("LiveController.handleMessage", () => {
     expect(fetches).toBe(1);
 
     live.handleMessage(JSON.stringify({ type: "state", node: 7, fields: { switch: true } }));
-    expect(stanval(view, "7")).toBe("on");
+    expect(stanval(view, "7")).toBe("🟢 On");
 
     live.handleMessage(JSON.stringify({ type: "globals", fields: { crib_temp: 9 } }));
     expect(view.crib.textContent).toBe("9.0°");
@@ -478,10 +478,10 @@ describe("LiveController onState hook", () => {
       live.applyState(7, { switch: true });
     }).not.toThrow();
     expect(calls).toBe(1);
-    expect(stanval(view, "7")).toBe("on"); // row still patched despite the observer throwing
+    expect(stanval(view, "7")).toBe("🟢 On"); // row still patched despite the observer throwing
     live.applyState(7, { switch: false }); // a later delta still flows
     expect(calls).toBe(2);
-    expect(stanval(view, "7")).toBe("off");
+    expect(stanval(view, "7")).toBe("⚪ Off");
   });
 
   it("does not fire for a node with no cached info (unknown row)", async () => {
@@ -597,7 +597,7 @@ describe("LiveController heatmap (flash / scene / last-seen)", () => {
     const badge = view.rows.querySelector('tr[data-node="7"] .scene-badge');
     expect(badge?.textContent).toBe("⏏ scena 5");
     live.applyState(7, { switch: true }); // patches .stanval only
-    expect(view.rows.querySelector('tr[data-node="7"] .stanval')?.textContent).toBe("on");
+    expect(view.rows.querySelector('tr[data-node="7"] .stanval')?.textContent).toBe("🟢 On");
     expect(badge?.textContent).toBe("⏏ scena 5"); // badge survives the state patch
     expect(badge?.classList.contains("on")).toBe(true);
   });

@@ -42,6 +42,9 @@ const en = {
   "ctl.sent": "✓ sent",
   "ctl.failed": "failed",
   "ctl.error": "✗ error",
+
+  "state.open": "open",
+  "state.closed": "closed",
 };
 
 export default en;

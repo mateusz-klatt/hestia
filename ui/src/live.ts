@@ -1,7 +1,7 @@
 import type { DeviceInfo, Discovery, Globals, LiveEvent, Scene } from "./api/types";
 import { t } from "./i18n";
 import { renderDeviceRows, renderGlobals, renderMode, summaryText } from "./render/devices";
-import { fmtHumidity, fmtTemp, stateStr } from "./render/format";
+import { fmtHumidity, fmtTemp, onOff, stateStr } from "./render/format";
 
 /** How long a row stays brightly highlighted after activity. */
 const HIGHLIGHT_MS = 2200;
@@ -229,7 +229,7 @@ export class LiveController {
           missing = true;
           continue;
         }
-        stan.textContent = eps[ep] === true ? "on" : "off";
+        stan.textContent = onOff(eps[ep] === true);
         if (prevEndpoints === null || prevEndpoints[ep] !== eps[ep]) {
           this.flashRow(sub, `${String(node)}:${ep}`); // this channel changed → highlight its sub-row
         }

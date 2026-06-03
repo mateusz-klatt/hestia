@@ -35,6 +35,9 @@ const messages: Partial<Messages> = {
   "ctl.sent": "✓ পাঠানো হয়েছে",
   "ctl.failed": "ব্যর্থ",
   "ctl.error": "✗ ত্রুটি",
+
+  "state.open": "খোলা",
+  "state.closed": "বন্ধ",
 };
 
 export default messages;

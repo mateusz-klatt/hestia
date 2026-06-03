@@ -35,6 +35,9 @@ const messages: Partial<Messages> = {
   "ctl.sent": "✓ gönderildi",
   "ctl.failed": "başarısız",
   "ctl.error": "✗ hata",
+
+  "state.open": "açık",
+  "state.closed": "kapalı",
 };
 
 export default messages;
