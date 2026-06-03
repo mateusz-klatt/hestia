@@ -128,8 +128,8 @@ td.sub-label {
   margin: 0;
 }
 
-/* Keep the IR / klima control rows on one line (label + selects + buttons + status),
-   vertically centred — they'd otherwise misalign against the taller mobile controls. */
+/* Lay the IR / klima controls out as one centred row (label + selects + buttons + status) — they'd
+   otherwise misalign against the taller mobile controls; wraps only when too narrow to fit. */
 #ir-buttons,
 #rooms-ir,
 #klima,
