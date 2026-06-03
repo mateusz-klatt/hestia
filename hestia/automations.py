@@ -793,17 +793,23 @@ class AutomationEngine:
         if rule.debounce > 0 and now - self._last_fired.get(rule.id, -math.inf) < rule.debounce:
             return []
         self._last_fired[rule.id] = now
-        from .proxy import build_command       # lazy: avoid a proxy<->automations cycle
+        from .proxy import _audit, build_command   # lazy: avoid a proxy<->automations cycle
+        actor = f"automation:{rule.id}"            # #56: distinguishes a rule firing from a user action
         frames = []
         for action in rule.actions:
-            if action.get("op") == "ir":             # effect op: no frame — hand to the Flipper worker
+            op = action.get("op")
+            target = action.get("node", action.get("file"))
+            target = str(target) if target is not None else None
+            if op == "ir":                           # effect op: no frame — hand to the Flipper worker
                 self._dispatch_ir(rt, rule, action)
+                _audit(rt, actor, op, target=target, result="fired")
                 continue
             try:
                 frames.append(build_command(rt, action))
+                _audit(rt, actor, op, target=target, result="fired")
             except (ValueError, KeyError, TypeError, OverflowError):
-                log.exception("automation %r: action %r failed — skipping",
-                              rule.id, action)
+                log.exception("automation %r: action %r failed — skipping", rule.id, action)
+                _audit(rt, actor, op, target=target, result="error")
         return frames
 
     def _dispatch_ir(self, rt, rule, action) -> None:
