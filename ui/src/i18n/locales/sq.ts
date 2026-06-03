@@ -32,6 +32,8 @@ const messages: Partial<Messages> = {
   "scene.blindsDown": "Uli të gjitha grilat",
   "rooms.empty": "Nuk ka pajisje",
   "rooms.other": "Të tjera",
+  "rooms.editIcons": "Redakto ikonat",
+  "rooms.iconNone": "—",
   "rooms.deviceCount.one": "{n} pajisje",
   "rooms.deviceCount.other": "{n} pajisje",
 

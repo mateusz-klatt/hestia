@@ -7,6 +7,7 @@ import {
   fetchAutomations,
   fetchDbStats,
   fetchDiscovery,
+  fetchRoomIcons,
   fetchSettings,
   login,
   logout,
@@ -14,6 +15,7 @@ import {
   postName,
   postRule,
   postScene,
+  saveRoomIcon,
   saveSettings,
   whoami,
 } from "./client";
@@ -265,6 +267,53 @@ describe("fetchSettings / saveSettings", () => {
 
     vi.stubGlobal("fetch", () => Promise.reject(new Error("offline")));
     expect(await saveSettings({ temp_scale: "K" })).toBe(false);
+  });
+});
+
+describe("fetchRoomIcons / saveRoomIcon", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("fetchRoomIcons returns the parsed map on 2xx", async () => {
+    const icons = { Salon: "🛋️", "": "🚪" };
+    vi.stubGlobal("fetch", () => Promise.resolve({ ok: true, json: () => Promise.resolve(icons) }));
+    expect(await fetchRoomIcons()).toEqual(icons);
+  });
+
+  it("fetchRoomIcons returns null on non-2xx, rejected fetch, or bad JSON", async () => {
+    vi.stubGlobal("fetch", () => Promise.resolve({ ok: false, json: () => Promise.resolve({}) }));
+    expect(await fetchRoomIcons()).toBeNull();
+
+    vi.stubGlobal("fetch", () => Promise.reject(new Error("offline")));
+    expect(await fetchRoomIcons()).toBeNull();
+
+    vi.stubGlobal("fetch", () =>
+      Promise.resolve({ ok: true, json: () => Promise.reject(new Error("bad json")) }),
+    );
+    expect(await fetchRoomIcons()).toBeNull();
+  });
+
+  it("saveRoomIcon POSTs JSON and returns response.ok", async () => {
+    const seen: { url: string; init: RequestInit }[] = [];
+    vi.stubGlobal("fetch", (url: URL, init: RequestInit) => {
+      seen.push({ url: url.href, init });
+      return Promise.resolve({ ok: true });
+    });
+
+    expect(await saveRoomIcon("Salon", "🛋️")).toBe(true);
+    expect(seen[0]?.url).toContain("/api/rooms/icons");
+    expect(seen[0]?.init.method).toBe("POST");
+    expect(seen[0]?.init.headers).toEqual({ "Content-Type": "application/json" });
+    expect(seen[0]?.init.body).toBe(JSON.stringify({ room: "Salon", icon: "🛋️" }));
+  });
+
+  it("saveRoomIcon returns false on non-2xx or rejected fetch", async () => {
+    vi.stubGlobal("fetch", () => Promise.resolve({ ok: false }));
+    expect(await saveRoomIcon("", "")).toBe(false);
+
+    vi.stubGlobal("fetch", () => Promise.reject(new Error("offline")));
+    expect(await saveRoomIcon("", "")).toBe(false);
   });
 });
 

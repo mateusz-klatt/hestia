@@ -32,6 +32,8 @@ const messages: Partial<Messages> = {
   "scene.blindsDown": "Κατέβασμα όλων των περσίδων",
   "rooms.empty": "Δεν υπάρχουν συσκευές",
   "rooms.other": "Άλλα",
+  "rooms.editIcons": "Επεξεργασία εικονιδίων",
+  "rooms.iconNone": "—",
   "rooms.deviceCount.one": "{n} συσκευή",
   "rooms.deviceCount.other": "{n} συσκευές",
 

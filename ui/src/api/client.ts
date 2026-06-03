@@ -172,6 +172,30 @@ export async function saveSettings(settings: Partial<UserSettings>): Promise<boo
   }
 }
 
+/** GET `/api/rooms/icons`; the shared room→emoji map, or `null` on any load failure. */
+export async function fetchRoomIcons(): Promise<Record<string, string> | null> {
+  try {
+    const response = await fetch(apiUrl("rooms/icons"));
+    return response.ok ? ((await response.json()) as Record<string, string>) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** POST `/api/rooms/icons` to set or clear one shared room emoji. */
+export async function saveRoomIcon(room: string, icon: string): Promise<boolean> {
+  try {
+    const response = await fetch(apiUrl("rooms/icons"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ room, icon }),
+    });
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
 /** POST `/api/scene` to run a house-wide scene; `null` on any load/send failure. */
 export async function postScene(op: SceneOp): Promise<SceneResult | null> {
   try {

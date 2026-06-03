@@ -32,6 +32,8 @@ const messages: Partial<Messages> = {
   "scene.blindsDown": "Опустити всі жалюзі",
   "rooms.empty": "Немає пристроїв",
   "rooms.other": "Інше",
+  "rooms.editIcons": "Редагувати піктограми",
+  "rooms.iconNone": "—",
   "rooms.deviceCount.one": "{n} пристрій",
   "rooms.deviceCount.few": "{n} пристрої",
   "rooms.deviceCount.many": "{n} пристроїв",

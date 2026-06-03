@@ -37,6 +37,7 @@ log = logging.getLogger("hestia.store_sql")
 _AUTHORITATIVE = "registry_authoritative"
 _USERS_AUTHORITATIVE = "users_authoritative"
 _DEVICE_STATE_KEY = "device_state"
+_ROOM_ICONS_KEY = "room_icons"
 _STATS_TABLES = (
     ("app_meta", AppMeta),
     ("nodes", Node),
@@ -344,6 +345,52 @@ def set_user_settings(username, **fields) -> bool:
         with session_scope(session_factory) as session:
             _upsert(session, UserSetting, "username", username,
                     {key: _cap_setting(value) for key, value in fields.items()})
+        return True
+    finally:
+        engine.dispose()
+
+
+# --- Shared room icon preferences (#54) --------------------------------------------------------
+
+def _room_icon_map(value: str) -> dict:
+    try:
+        data = json.loads(value)
+    except ValueError:
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {str(room): icon for room, icon in data.items() if isinstance(icon, str)}
+
+
+def get_room_icons() -> dict:
+    """Shared per-room emoji choices from SQLite AppMeta, or {} when unavailable."""
+    if not _settings_enabled():
+        return {}
+    engine, _ = init_db()
+    try:
+        with Session(engine) as session:
+            row = session.get(AppMeta, _ROOM_ICONS_KEY)
+        return {} if row is None else _room_icon_map(row.value)
+    finally:
+        engine.dispose()
+
+
+def set_room_icon(room, icon) -> bool:
+    """Set or clear one shared room emoji in a single read-merge-write transaction."""
+    if not _settings_enabled():
+        return False
+    room_key = room[:64] if isinstance(room, str) else ""
+    icon_value = icon[:16] if isinstance(icon, str) else ""
+    engine, session_factory = init_db()
+    try:
+        with session_scope(session_factory) as session:
+            row = session.get(AppMeta, _ROOM_ICONS_KEY)
+            icons = {} if row is None else _room_icon_map(row.value)
+            if icon_value:
+                icons[room_key] = icon_value
+            else:
+                icons.pop(room_key, None)
+            _upsert(session, AppMeta, "key", _ROOM_ICONS_KEY, {"value": _dump(icons)})
         return True
     finally:
         engine.dispose()

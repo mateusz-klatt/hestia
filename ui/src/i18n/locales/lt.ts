@@ -32,6 +32,8 @@ const messages: Partial<Messages> = {
   "scene.blindsDown": "Nuleisti visas žaliuzes",
   "rooms.empty": "Nėra įrenginių",
   "rooms.other": "Kita",
+  "rooms.editIcons": "Redaguoti piktogramas",
+  "rooms.iconNone": "—",
   "rooms.deviceCount.one": "{n} įrenginys",
   "rooms.deviceCount.few": "{n} įrenginiai",
   "rooms.deviceCount.many": "{n} įrenginių",

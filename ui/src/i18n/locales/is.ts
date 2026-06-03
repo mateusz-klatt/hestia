@@ -32,6 +32,8 @@ const messages: Partial<Messages> = {
   "scene.blindsDown": "Lækka allar gardínur",
   "rooms.empty": "Engin tæki",
   "rooms.other": "Annað",
+  "rooms.editIcons": "Breyta táknum",
+  "rooms.iconNone": "—",
   "rooms.deviceCount.one": "{n} tæki",
   "rooms.deviceCount.other": "{n} tæki",
 

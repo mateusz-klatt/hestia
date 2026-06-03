@@ -440,6 +440,29 @@ td.seen.fresh {
   gap: 0.7rem;
 }
 
+.room-icon-edit-toggle {
+  margin: 0 0 0.7rem;
+}
+
+.room-icon-list {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.room-icon-row {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+}
+
+.room-icon-select {
+  min-width: 4.2rem;
+}
+
+.room-icon-name {
+  font-weight: bold;
+}
+
 .room-card {
   display: flex;
   flex-direction: column;
@@ -451,6 +474,11 @@ td.seen.fresh {
   background: var(--surface);
   color: var(--fg);
   text-align: left;
+}
+
+.room-card-icon {
+  font-size: 1.55rem;
+  line-height: 1;
 }
 
 .room-card:hover {

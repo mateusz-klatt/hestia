@@ -35,6 +35,8 @@ const en = {
   "scene.blindsDown": "Lower all blinds",
   "rooms.empty": "No devices",
   "rooms.other": "Other",
+  "rooms.editIcons": "Edit icons",
+  "rooms.iconNone": "—",
   "rooms.deviceCount.zero": "{n} devices",
   "rooms.deviceCount.one": "{n} device",
   "rooms.deviceCount.two": "{n} devices",

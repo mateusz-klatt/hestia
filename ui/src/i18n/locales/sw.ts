@@ -32,6 +32,8 @@ const messages: Partial<Messages> = {
   "scene.blindsDown": "Shusha pazia zote",
   "rooms.empty": "Hakuna vifaa",
   "rooms.other": "Nyingine",
+  "rooms.editIcons": "Hariri aikoni",
+  "rooms.iconNone": "—",
   "rooms.deviceCount.one": "{n} kifaa",
   "rooms.deviceCount.other": "{n} vifaa",
 

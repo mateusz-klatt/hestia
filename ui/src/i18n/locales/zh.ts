@@ -32,6 +32,8 @@ const messages: Partial<Messages> = {
   "scene.blindsDown": "降下所有百叶窗",
   "rooms.empty": "没有设备",
   "rooms.other": "其他",
+  "rooms.editIcons": "编辑图标",
+  "rooms.iconNone": "—",
   "rooms.deviceCount.other": "{n} 个设备",
 
   "ctl.on": "开启",

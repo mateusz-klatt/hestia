@@ -32,6 +32,8 @@ const messages: Partial<Messages> = {
   "scene.blindsDown": "সব ব্লাইন্ড নামান",
   "rooms.empty": "কোনো ডিভাইস নেই",
   "rooms.other": "অন্যান্য",
+  "rooms.editIcons": "আইকন সম্পাদনা",
+  "rooms.iconNone": "—",
   "rooms.deviceCount.one": "{n}টি ডিভাইস",
   "rooms.deviceCount.other": "{n}টি ডিভাইস",
 
