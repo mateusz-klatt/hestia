@@ -307,10 +307,15 @@ AUDIT_MAX_AGE_S = float(os.environ.get("HESTIA_AUDIT_MAX_AGE_DAYS", "365")) * 86
 
 
 def open_audit_engine():
-    """An engine for the audit log (the DB always exists post-boot — Phase-1 migrations run via the
-    shadow in json mode or open_stores in sqlite mode). The runtime holds it for the process."""
-    engine, _ = init_db()
-    return engine
+    """An engine for the audit log, BEST-EFFORT: returns the engine, or ``None`` (logged) on any
+    init failure so a DB problem disables auditing this run rather than preventing boot — the audit
+    log is observability, never a reason the house can't start."""
+    try:
+        engine, _ = init_db()
+        return engine
+    except Exception:
+        log.exception("audit DB init failed — audit log disabled this run")
+        return None
 
 
 def append_audit(engine, *, actor, action, target=None, detail=None, result=None, ts,

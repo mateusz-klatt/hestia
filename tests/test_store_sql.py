@@ -454,6 +454,10 @@ class AuditLogTests(unittest.TestCase):
             self.assertEqual(store_sql.recent_audit(engine), [])   # table exists + empty
             engine.dispose()
 
+    def test_open_audit_engine_returns_none_on_failure(self):
+        with mock.patch("hestia.store_sql.init_db", side_effect=OSError("boom")):
+            self.assertIsNone(store_sql.open_audit_engine())   # best-effort: never breaks boot
+
 
 class AuditHelperTests(unittest.IsolatedAsyncioTestCase):
     """proxy._audit: best-effort, off-loop — no-op without an engine, writes with one, swallows errors."""
@@ -466,7 +470,7 @@ class AuditHelperTests(unittest.IsolatedAsyncioTestCase):
         shutil.rmtree(self.dir)
 
     async def test_noop_without_engine(self):
-        await proxy._audit(SimpleNamespace(audit_engine=None), "tata", "ir")   # must not raise
+        self.assertIsNone(proxy._audit(SimpleNamespace(audit_engine=None), "tata", "ir"))
 
     async def test_writes_with_engine(self):
         engine, _ = db.init_db(self.db)
@@ -474,8 +478,11 @@ class AuditHelperTests(unittest.IsolatedAsyncioTestCase):
         rows = store_sql.recent_audit(engine)
         self.assertEqual((rows[0]["actor"], rows[0]["action"], rows[0]["target"]), ("tata", "ir", "/k.ir"))
 
-    async def test_swallows_failure(self):
-        await proxy._audit(SimpleNamespace(audit_engine=object()), "tata", "ir")   # bad engine → swallowed
+    async def test_failure_is_logged_not_raised_to_caller(self):
+        # fire-and-forget: the caller never awaits, so a failed write is swallowed by the done-callback.
+        fut = proxy._audit(SimpleNamespace(audit_engine=object()), "tata", "ir")   # bad engine → write fails
+        with self.assertRaises(Exception):
+            await fut                              # awaiting here only to deterministically complete it
 
 
 class DbPersistIntegrationTests(unittest.IsolatedAsyncioTestCase):

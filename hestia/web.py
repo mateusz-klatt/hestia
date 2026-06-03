@@ -166,9 +166,9 @@ async def _login(request):
     user = op.get("user") if isinstance(op, dict) else None
     password = op.get("password") if isinstance(op, dict) else None
     if not (_AUTH_ENABLED and auth.authenticate(user, password, store_sql.current_users())):
-        await _audit(_rt(request), user if isinstance(user, str) else "?", "login", result="invalid")
+        _audit(_rt(request), user if isinstance(user, str) else "?", "login", result="invalid")
         return _json(HTTPStatus.UNAUTHORIZED, {"ok": False, "error": "invalid credentials"})
-    await _audit(_rt(request), user, "login", result="ok")
+    _audit(_rt(request), user, "login", result="ok")
     token = auth.make_session(user, now=_now(), secret=_SESSION_SECRET)
     resp = _json(HTTPStatus.OK, {"ok": True, "user": user})
     resp.set_cookie(_SESSION_COOKIE, token, max_age=int(auth.SESSION_TTL), httponly=True,
@@ -176,8 +176,9 @@ async def _login(request):
     return resp
 
 
-async def _logout(request):
-    await _audit(_rt(request), _actor(request), "logout", result="ok")
+async def _logout(_request):  # NOSONAR S7503: aiohttp route handlers must be coroutines (the framework awaits them)
+    # Not audited: /api/logout is public (no session lookup in the middleware), so the actor would
+    # always be "anonymous" — logout is low-value to attribute. Login (success/failure) is audited.
     resp = _json(HTTPStatus.OK, {"ok": True})
     resp.del_cookie(_SESSION_COOKIE, path="/")
     return resp
@@ -309,26 +310,30 @@ def _actor(request) -> str:
     return request.get(_USER_KEY) or "anonymous"
 
 
+_AUDIT_DETAIL_MAX = 256                       # cap the recorded params so a 64 KiB rule body can't bloat a row
+
+
 def _audit_fields(op):
     """(target, detail) for an audit row from a control op: target = the node / IR file / rule id,
-    detail = the op's parameters (everything but ``op``) as compact JSON."""
+    detail = the op's parameters (everything but ``op``) as compact JSON, length-capped."""
     target = op.get("node", op.get("file", op.get("id")))
     detail = json.dumps({k: v for k, v in op.items() if k != "op"}, sort_keys=True)
-    return (str(target) if target is not None else None), detail
+    return (str(target) if target is not None else None), detail[:_AUDIT_DETAIL_MAX]
 
 
 async def _dispatch_op(rt, op, *, actor="system", fail_status=HTTPStatus.INTERNAL_SERVER_ERROR):
     """Run a control op and map the outcome: ValueError/KeyError/TypeError → 400, ``ok`` → 200, else
-    → ``fail_status``. Records the action to the audit log (#56) with ``actor`` and the outcome."""
+    → ``fail_status``. Records the action to the audit log (#56) with ``actor`` + outcome (fire-and-
+    forget — ``_audit`` never blocks the response)."""
     target, detail = _audit_fields(op)
     action = op.get("op", "?")
     try:
         resp = await process_control_op(rt, op)
     except (ValueError, KeyError, TypeError) as exc:
-        await _audit(rt, actor, action, target=target, detail=detail, result=f"error: {exc}")
+        _audit(rt, actor, action, target=target, detail=detail, result=f"error: {exc}")
         return _json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
-    await _audit(rt, actor, action, target=target, detail=detail,
-                 result="ok" if resp.get("ok") else f"error: {resp.get('error')}")
+    _audit(rt, actor, action, target=target, detail=detail,
+           result="ok" if resp.get("ok") else f"error: {resp.get('error')}")
     if resp.get("ok"):
         return _json(HTTPStatus.OK, resp)
     return _json(fail_status, resp)
@@ -394,7 +399,7 @@ async def _automations_set(request):
     body, err = await _read_json_body(request, MAX_RULE_BODY)
     if err:
         return body
-    return await _dispatch_op(_rt(request), {"op": "automation_set", "rule": body})
+    return await _dispatch_op(_rt(request), {"op": "automation_set", "rule": body}, actor=_actor(request))
 
 
 async def _automations_delete(request):
@@ -405,7 +410,7 @@ async def _automations_delete(request):
     if err:
         return body
     rid = body.get("id") if isinstance(body, dict) else None
-    return await _dispatch_op(_rt(request), {"op": "automation_delete", "id": rid})
+    return await _dispatch_op(_rt(request), {"op": "automation_delete", "id": rid}, actor=_actor(request))
 
 
 def _validate_name_payload(op) -> "str | None":

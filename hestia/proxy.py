@@ -866,19 +866,30 @@ async def _persist_store(rt) -> None:
     await _persist_obj(rt.save_lock, rt.engine.store)
 
 
-async def _audit(rt, actor, action, *, target=None, detail=None, result=None) -> None:
-    """Append one row to the audit log (#56) off the event loop, BEST-EFFORT: a failed or absent
-    audit backend must never disturb the action it records. ``actor`` is a username, ``automation:
-    <rule_id>``, or ``system``. No-op when ``rt.audit_engine`` is unset (tests / bare runtimes)."""
+def _audit(rt, actor, action, *, target=None, detail=None, result=None):
+    """Schedule a best-effort audit-log append (#56) OFF the event loop, FIRE-AND-FORGET: never
+    awaited, so a slow or locked audit DB can't add latency to the action being recorded (a failed
+    write is logged in the done-callback). ``actor`` is a username, ``automation:<rule_id>``, or
+    ``system``/``anonymous``. No-op (returns None) when ``rt.audit_engine`` is unset. Returns the
+    scheduled future (tests await it; callers ignore it)."""
     if rt.audit_engine is None:
-        return
+        return None
     from . import store_sql
+    fut = asyncio.get_running_loop().run_in_executor(
+        None, lambda: store_sql.append_audit(rt.audit_engine, actor=actor, action=action,
+                                              target=target, detail=detail, result=result, ts=time.time()))
+    fut.add_done_callback(_audit_done)
+    return fut
+
+
+def _audit_done(fut) -> None:
+    """Done-callback for a fire-and-forget audit write — retrieve + log any failure (best-effort)."""
     try:
-        await asyncio.get_running_loop().run_in_executor(
-            None, lambda: store_sql.append_audit(rt.audit_engine, actor=actor, action=action,
-                                                  target=target, detail=detail, result=result, ts=time.time()))
-    except Exception:                       # best-effort: swallow so the recorded op is never disturbed
-        log.debug("audit write failed (%s/%s)", actor, action, exc_info=True)
+        exc = fut.exception()
+    except asyncio.CancelledError:          # pragma: no cover - a pending audit write cancelled at shutdown
+        return
+    if exc is not None:
+        log.debug("audit write failed", exc_info=exc)
 
 
 def _install_term_handler(loop, task) -> bool:
