@@ -12,6 +12,17 @@ export type Locale = (typeof LOCALES)[number];
 /** Right-to-left scripts: Arabic, Persian, Hebrew. */
 export const RTL: ReadonlySet<string> = new Set(["ar", "fa", "he"]);
 
+/** A representative flag per locale for the language picker (best-effort — a language ≠ a country).
+ *  Typed Record<Locale,…> so adding a locale forces a flag. (Windows renders the 2-letter code.) */
+export const FLAGS: Record<Locale, string> = {
+  ar: "🇸🇦", bn: "🇧🇩", bs: "🇧🇦", cs: "🇨🇿", da: "🇩🇰", de: "🇩🇪", el: "🇬🇷", en: "🇬🇧",
+  es: "🇪🇸", fa: "🇮🇷", fi: "🇫🇮", fil: "🇵🇭", fr: "🇫🇷", ga: "🇮🇪", he: "🇮🇱", hi: "🇮🇳",
+  hr: "🇭🇷", hu: "🇭🇺", hy: "🇦🇲", id: "🇮🇩", is: "🇮🇸", it: "🇮🇹", ja: "🇯🇵", ko: "🇰🇷",
+  lt: "🇱🇹", lv: "🇱🇻", ms: "🇲🇾", "my-MM": "🇲🇲", nl: "🇳🇱", no: "🇳🇴", pl: "🇵🇱", pt: "🇵🇹",
+  ro: "🇷🇴", ru: "🇷🇺", sk: "🇸🇰", sq: "🇦🇱", sr: "🇷🇸", sv: "🇸🇪", sw: "🇰🇪", th: "🇹🇭",
+  tr: "🇹🇷", uk: "🇺🇦", vi: "🇻🇳", "zh-Hant": "🇹🇼", zh: "🇨🇳",
+};
+
 // One lazily-loaded chunk per non-default locale (Vite code-splits each dynamic import). English
 // is bundled (the synchronous fallback), so only the visitor's actual locale is fetched on top.
 // Ship another language by adding a line here + the matching ./locales/<code>.ts file.

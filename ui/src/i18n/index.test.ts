@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { currentLocale, initLocale, LOCALES, loadLocale, pickLocale, RTL, t, tPlural } from "./index";
+import { currentLocale, FLAGS, initLocale, LOCALES, loadLocale, pickLocale, RTL, t, tPlural } from "./index";
 
 describe("locale set", () => {
   it("is the snapper 45-locale palette with ar/fa/he marked RTL", () => {
@@ -11,6 +11,13 @@ describe("locale set", () => {
     expect(RTL.has("fa")).toBe(true);
     expect(RTL.has("he")).toBe(true);
     expect(RTL.has("en")).toBe(false);
+  });
+
+  it("has a non-empty flag for every locale", () => {
+    expect(Object.keys(FLAGS)).toHaveLength(LOCALES.length);
+    for (const code of LOCALES) {
+      expect(FLAGS[code].length).toBeGreaterThan(0);
+    }
   });
 });
 
