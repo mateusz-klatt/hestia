@@ -13,6 +13,8 @@
       ><button id="refresh" type="button">Refresh</button>
     </h1>
     <div id="view-switch" class="view-switch"></div>
+    <!-- Shared, so a failed /api/discovery is visible in BOTH views (not buried in the admin view). -->
+    <p id="status" hidden></p>
 
     <!-- Wife-friendly room view (default). House-wide IR/klima panels live here in their own
          persistent containers; #room-list is the only part rooms.ts rebuilds. -->
@@ -45,7 +47,6 @@
       </thead>
       <tbody id="rows"></tbody>
     </table>
-    <p id="status" hidden></p>
 
     <h2 id="auto-hdr">automations</h2>
     <table>

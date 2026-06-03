@@ -194,6 +194,17 @@ export function createRoomsView(container: HTMLElement, deps: RoomsDeps): RoomsV
   return {
     update(data: Discovery | null): void {
       latest = data;
+      // Don't rebuild the cards out from under an in-flight control press: a rebuild replaces the
+      // buttons and would drop renderActions' busy lock (the table has the same guard, scoped to its
+      // own rows). patchState keeps the visible state live meanwhile; the next refresh rebuilds once
+      // focus leaves the control.
+      const active = document.activeElement;
+      if (
+        (active instanceof HTMLButtonElement || active instanceof HTMLSelectElement) &&
+        container.contains(active)
+      ) {
+        return;
+      }
       render();
     },
     patchState(node: number, info: DeviceInfo): void {

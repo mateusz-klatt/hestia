@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import type { ControlOp } from "./api/types";
 import { device, discovery } from "./fixtures";
@@ -153,5 +153,47 @@ describe("createRoomsView — live updates", () => {
     view.update(discovery({ "1": device({ type: "light", room: "Kuchnia" }) })); // Salon gone
     expect(container.querySelector(".room-title")).toBeNull(); // back on the landing
     expect(container.querySelector(".room-card-title")?.textContent).toBe("Kuchnia");
+  });
+
+  it("patchState leaves the action buttons intact (no rebuild → in-flight lock preserved)", () => {
+    const { container, view } = mk();
+    view.update(discovery({ "5": device({ type: "light", switch: false, room: "Salon" }) }));
+    openFirstRoom(container);
+    const btn = container.querySelector<HTMLButtonElement>(".room-device-actions button");
+    view.patchState(5, device({ type: "light", switch: true })); // a live delta patches text only
+    expect(container.querySelector<HTMLButtonElement>(".room-device-actions button")).toBe(btn); // same node
+    expect(container.querySelector(".room-device-stan")?.textContent).toBe("on");
+  });
+});
+
+describe("createRoomsView — rebuild safety vs a focused control", () => {
+  afterEach(() => {
+    document.body.replaceChildren(); // focus tracking needs connected elements
+  });
+
+  it("does not rebuild the cards while a room control is focused (keeps the in-flight lock)", () => {
+    const { container, view } = mk();
+    document.body.append(container);
+    view.update(discovery({ "5": device({ type: "light", switch: false, room: "Salon" }) }));
+    openFirstRoom(container);
+    const before = container.querySelector(".room-device");
+    container.querySelector<HTMLButtonElement>(".room-device-actions button")?.focus();
+    view.update(discovery({ "5": device({ type: "light", switch: true, room: "Salon" }) }));
+    expect(container.querySelector(".room-device")).toBe(before); // same card — not rebuilt
+  });
+
+  it("rebuilds when focus is outside the room view", () => {
+    const { container, view } = mk();
+    document.body.append(container);
+    const outside = document.createElement("input");
+    document.body.append(outside);
+    view.update(discovery({ "5": device({ type: "light", switch: false, room: "Salon" }) }));
+    openFirstRoom(container);
+    const before = container.querySelector(".room-device");
+    outside.focus();
+    view.update(discovery({ "5": device({ type: "light", switch: true, room: "Salon" }) }));
+    const after = container.querySelector(".room-device");
+    expect(after).not.toBe(before); // rebuilt
+    expect(after?.querySelector(".room-device-stan")?.textContent).toBe("on");
   });
 });
