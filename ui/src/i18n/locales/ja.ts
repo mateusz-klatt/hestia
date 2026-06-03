@@ -24,6 +24,7 @@ const messages: Partial<Messages> = {
   "audit.title": "アクティビティログ",
   "audit.empty": "まだアクティビティはありません",
   "audit.refresh": "更新",
+  "dbstats.title": "データベース",
   "rooms.empty": "デバイスがありません",
   "rooms.other": "その他",
   "rooms.deviceCount.other": "{n} 台のデバイス",

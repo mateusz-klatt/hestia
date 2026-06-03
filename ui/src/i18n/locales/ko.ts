@@ -24,6 +24,7 @@ const messages: Partial<Messages> = {
   "audit.title": "활동 기록",
   "audit.empty": "아직 활동이 없습니다",
   "audit.refresh": "새로고침",
+  "dbstats.title": "데이터베이스",
   "rooms.empty": "기기가 없습니다",
   "rooms.other": "기타",
   "rooms.deviceCount.other": "{n}개 기기",

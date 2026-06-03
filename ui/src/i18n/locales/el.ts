@@ -24,6 +24,7 @@ const messages: Partial<Messages> = {
   "audit.title": "Αρχείο δραστηριότητας",
   "audit.empty": "Δεν υπάρχει ακόμη δραστηριότητα",
   "audit.refresh": "Ανανέωση",
+  "dbstats.title": "Βάση δεδομένων",
   "rooms.empty": "Δεν υπάρχουν συσκευές",
   "rooms.other": "Άλλα",
   "rooms.deviceCount.one": "{n} συσκευή",

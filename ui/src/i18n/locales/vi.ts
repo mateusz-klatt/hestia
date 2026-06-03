@@ -24,6 +24,7 @@ const messages: Partial<Messages> = {
   "audit.title": "Nhật ký hoạt động",
   "audit.empty": "Chưa có hoạt động",
   "audit.refresh": "Làm mới",
+  "dbstats.title": "Cơ sở dữ liệu",
   "rooms.empty": "Không có thiết bị",
   "rooms.other": "Khác",
   "rooms.deviceCount.other": "{n} thiết bị",

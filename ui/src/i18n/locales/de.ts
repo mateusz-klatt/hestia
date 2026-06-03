@@ -24,6 +24,7 @@ const messages: Partial<Messages> = {
   "audit.title": "Aktivitätsprotokoll",
   "audit.empty": "Noch keine Aktivität",
   "audit.refresh": "Aktualisieren",
+  "dbstats.title": "Datenbank",
   "rooms.empty": "Keine Geräte",
   "rooms.other": "Sonstige",
   "rooms.deviceCount.one": "{n} Gerät",

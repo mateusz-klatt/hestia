@@ -24,6 +24,7 @@ const messages: Partial<Messages> = {
   "audit.title": "কার্যকলাপ লগ",
   "audit.empty": "এখনও কোনো কার্যকলাপ নেই",
   "audit.refresh": "রিফ্রেশ করুন",
+  "dbstats.title": "ডাটাবেস",
   "rooms.empty": "কোনো ডিভাইস নেই",
   "rooms.other": "অন্যান্য",
   "rooms.deviceCount.one": "{n}টি ডিভাইস",

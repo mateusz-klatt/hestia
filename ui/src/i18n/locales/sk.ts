@@ -24,6 +24,7 @@ const messages: Partial<Messages> = {
   "audit.title": "Denník aktivity",
   "audit.empty": "Zatiaľ žiadna aktivita",
   "audit.refresh": "Obnoviť",
+  "dbstats.title": "Databáza",
   "rooms.empty": "Žiadne zariadenia",
   "rooms.other": "Ostatné",
   "rooms.deviceCount.one": "{n} zariadenie",

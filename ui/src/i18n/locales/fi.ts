@@ -24,6 +24,7 @@ const messages: Partial<Messages> = {
   "audit.title": "Toimintaloki",
   "audit.empty": "Ei vielä toimintaa",
   "audit.refresh": "Päivitä",
+  "dbstats.title": "Tietokanta",
   "rooms.empty": "Ei laitteita",
   "rooms.other": "Muut",
   "rooms.deviceCount.one": "{n} laite",

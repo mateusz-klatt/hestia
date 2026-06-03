@@ -24,6 +24,7 @@ const messages: Partial<Messages> = {
   "audit.title": "Log aktivitas",
   "audit.empty": "Belum ada aktivitas",
   "audit.refresh": "Segarkan",
+  "dbstats.title": "Basis data",
   "rooms.empty": "Tidak ada perangkat",
   "rooms.other": "Lainnya",
   "rooms.deviceCount.other": "{n} perangkat",

@@ -24,6 +24,7 @@ const messages: Partial<Messages> = {
   "audit.title": "บันทึกกิจกรรม",
   "audit.empty": "ยังไม่มีกิจกรรม",
   "audit.refresh": "รีเฟรช",
+  "dbstats.title": "ฐานข้อมูล",
   "rooms.empty": "ไม่มีอุปกรณ์",
   "rooms.other": "อื่นๆ",
   "rooms.deviceCount.other": "{n} อุปกรณ์",

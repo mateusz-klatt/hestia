@@ -24,6 +24,7 @@ const messages: Partial<Messages> = {
   "audit.title": "活動記錄",
   "audit.empty": "尚無活動",
   "audit.refresh": "重新整理",
+  "dbstats.title": "資料庫",
   "rooms.empty": "沒有裝置",
   "rooms.other": "其他",
   "rooms.deviceCount.other": "{n} 個裝置",
