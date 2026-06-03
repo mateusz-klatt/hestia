@@ -363,6 +363,36 @@ class Phase4UsersTests(unittest.TestCase):
             db.init_db(self.db)   # DB exists but users NOT authoritative → still JSON
             self.assertEqual(store_sql.current_users(users_path=self.users_json), {"mama": "hj"})
 
+    def test_open_stores_cuts_users_when_registry_already_authoritative(self):
+        # the live Phase-3 box: registry authoritative, users NOT → next boot cuts over ONLY users
+        self.users_json.write_text('{"tata": "h"}', encoding="utf-8")
+        reg_json, auto_json = self.dir / "registry.json", self.dir / "automations.json"
+        Registry(reg_json, mode="standalone").save()
+        AutomationStore(auto_json).save()
+        with mock.patch.dict(os.environ, {"HESTIA_DB": str(self.db)}):
+            engine, _ = db.init_db(self.db)
+            store_sql.cutover_import(engine, Registry.load(reg_json), AutomationStore.load(auto_json), {})
+            self.assertTrue(store_sql.is_db_authoritative(engine))
+            self.assertFalse(store_sql.is_users_db_authoritative(engine))
+            engine.dispose()
+            store_sql.open_stores(registry_path=reg_json, automations_path=auto_json,
+                                  users_path=self.users_json, persist="sqlite")
+            engine, _ = db.init_db(self.db)
+            self.assertTrue(store_sql.is_users_db_authoritative(engine))
+            self.assertEqual(store_sql.load_users_db(engine), {"tata": "h"})
+
+    def test_open_stores_skips_users_cutover_when_users_json_missing(self):
+        # a missing/bad users.json must NOT permanently promote an empty users table (lockout guard)
+        reg_json, auto_json = self.dir / "registry.json", self.dir / "automations.json"
+        Registry(reg_json, mode="proxy").save()
+        AutomationStore(auto_json).save()
+        with mock.patch.dict(os.environ, {"HESTIA_DB": str(self.db)}):  # self.users_json does not exist
+            store_sql.open_stores(registry_path=reg_json, automations_path=auto_json,
+                                  users_path=self.users_json, persist="sqlite")
+            engine, _ = db.init_db(self.db)
+            self.assertFalse(store_sql.is_users_db_authoritative(engine))  # not promoted → login falls back to JSON
+            engine.dispose()
+
     def test_auth_cli_writes_db_when_authoritative(self):
         from hestia import auth
         with mock.patch.dict(os.environ, {"HESTIA_PERSIST": "sqlite", "HESTIA_DB": str(self.db)}):

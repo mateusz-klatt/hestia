@@ -205,7 +205,11 @@ def open_stores(*, registry_path, automations_path, users_path, persist=None):
         cutover_import(engine, Registry.load(registry_path), AutomationStore.load(automations_path),
                        auth.load_users(Path(users_path)))
     if not is_users_db_authoritative(engine):   # Phase 4: flip users (independent of the registry cutover)
-        cutover_users(engine, auth.load_users(Path(users_path)))
+        users = auth.load_users(Path(users_path))
+        if users:                                # only promote a REAL, non-empty users.json: load_users returns
+            cutover_users(engine, users)         # {} for a missing/unreadable/malformed file, and promoting that
+            #                                      would wipe the DB users + set the marker → permanent lockout.
+            #                                      Empty/bad → skip (stay on JSON, retry next boot).
     return (load_registry(engine, registry_path, writer=registry_db_writer(engine)),
             load_automations(engine, automations_path, writer=automations_db_writer(engine)))
 
