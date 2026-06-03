@@ -39,8 +39,10 @@ body {
     max(1.5rem, env(safe-area-inset-bottom)) max(1.5rem, env(safe-area-inset-left));
 }
 
-/* A centred reading column so the UI isn't stretched edge-to-edge on a wide desktop. Full width
-   below the cap; the admin table's 8 narrow columns still fit comfortably within it. */
+/* A centred reading column so the UI isn't stretched edge-to-edge on a wide desktop — the rooms
+   landing, header and globals all line up in one tidy column. Full width below the cap. The wide
+   engineer tables would otherwise spill past 60rem, so each lives in a `.table-wrap` that scrolls
+   horizontally WITHIN the column (see below) rather than forcing a page-level horizontal scroll. */
 #app {
   max-width: 60rem;
   margin-inline: auto;
@@ -107,6 +109,13 @@ h1 {
 
 #hdr-text {
   flex: 1 1 auto; /* take the row → push conn/auth/refresh right (and below when cramped) */
+}
+
+/* The engineer tables (device list, automations) can be wider than the 60rem #app column. Wrap each
+   so the overflow scrolls inside the section instead of spilling the whole page sideways. On mobile
+   the tables collapse to stacked cards (media query below), so the wrapper just never scrolls there. */
+.table-wrap {
+  overflow-x: auto;
 }
 
 table {

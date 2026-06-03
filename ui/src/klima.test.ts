@@ -99,6 +99,16 @@ describe("renderKlima", () => {
     expect(labels(el)).toEqual(["✓", "⏻"]);
   });
 
+  it("gives the icon-only buttons a localised accessible name (title + aria-label)", () => {
+    const el = box();
+    renderKlima(el, KLIMA, okIr);
+    const [set, off] = [...el.querySelectorAll("button")];
+    expect(set?.title).toBe("Set");
+    expect(set?.getAttribute("aria-label")).toBe("Set");
+    expect(off?.title).toBe("Turn off");
+    expect(off?.getAttribute("aria-label")).toBe("Turn off");
+  });
+
   it("Ustaw sends the idempotent power-on signal on_<mode>_<temp>", async () => {
     const sent: { file: string; button: string }[] = [];
     const post: PostIr = (file, button) => {
