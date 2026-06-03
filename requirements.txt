@@ -11,6 +11,12 @@
 #                  (hestia/flipper.py). The RPC framing / protobuf codec stay first-party.
 #   aiohttp      — in-loop HTTP/SSE web UI transport. The Keemple codec stays
 #                  pure-stdlib first-party code.
+#   SQLAlchemy   — typed ORM + engine for the SQLite persistence layer (#57). Sync
+#                  engine driven off the event loop via run_in_executor; the schema
+#                  is Alembic-managed. The Keemple codec / state model stay first-party.
+#   alembic      — schema migrations for the SQLite DB (run programmatically at startup).
 cryptography>=46.0.0,<47.0.0
 pyserial>=3.5,<4.0
 aiohttp>=3.13,<4
+SQLAlchemy>=2.0,<2.1
+alembic>=1.18,<2
