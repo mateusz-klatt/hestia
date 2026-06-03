@@ -3,7 +3,20 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-    <title>hestia — devices</title>
+    <title>hestia</title>
+    <script>
+      // Set <html lang> ASAP — before Chrome's translate heuristic runs — from the saved or browser
+      // locale, so Chrome sees the page's real content language (and stops offering EN→… translation).
+      // The app module refines it to the exact resolved code later via initLocale().
+      (function () {
+        try {
+          var c = localStorage.getItem("hestia.locale") || navigator.language || "en";
+          document.documentElement.lang = c.split("-")[0];
+        } catch (e) {
+          /* storage/parse unavailable — keep the default lang */
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="login" hidden></div>
