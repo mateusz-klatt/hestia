@@ -1,5 +1,5 @@
 import { login, logout } from "./api/client";
-import { currentLocale, LOCALES, t } from "./i18n";
+import { currentLocale, FLAGS, LOCALES, t } from "./i18n";
 import { setLocaleOverride, setTempScale, tempScale, type TempScale } from "./prefs";
 
 /**
@@ -57,10 +57,16 @@ export function renderLogin(container: HTMLElement, onSuccess: () => void): void
   user.focus();
 }
 
+/** Drop a trailing region subtag (my-MM → my) so DisplayNames doesn't append "(Region)"; keep a
+ *  script subtag (zh-Hant) which it uses to name the variant. */
+function displayCode(code: string): string {
+  return code.replace(/-[A-Za-z]{2}$|-\d{3}$/, "");
+}
+
 /** A locale's name in its own language (autonym) via Intl.DisplayNames; falls back to the code. */
 function localeName(code: string): string {
   try {
-    return new Intl.DisplayNames([code], { type: "language" }).of(code) ?? code;
+    return new Intl.DisplayNames([code], { type: "language" }).of(displayCode(code)) ?? code;
   } catch {
     return code;
   }
@@ -106,7 +112,7 @@ export function renderUser(
   for (const code of LOCALES) {
     const o = document.createElement("option");
     o.value = code;
-    o.textContent = localeName(code);
+    o.textContent = `${FLAGS[code]} ${localeName(code)}`;
     if (code === currentLocale()) o.selected = true;
     langSel.appendChild(o);
   }
