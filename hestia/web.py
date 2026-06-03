@@ -318,10 +318,13 @@ def _audit_fields(op):
     body (Rule.from_dict ignores unknown top-level fields), so it is NEVER dumped raw — record just
     the rule id + a fixed summary. Other ops carry only known, bounded device params, dumped as
     compact JSON (length-capped as a backstop)."""
-    if op.get("op") == "automation_set":
+    name = op.get("op")
+    if name in ("automation_set", "automation_delete"):
+        # the id is unvalidated user input here (validated inside the op, after this runs) — record it
+        # only when it's a string, never serialize an arbitrary object, and use a fixed detail string.
         rule = op.get("rule")
-        rid = rule.get("id") if isinstance(rule, dict) else None
-        return (str(rid) if rid is not None else None), "rule update"
+        rid = rule.get("id") if isinstance(rule, dict) else op.get("id")
+        return (rid if isinstance(rid, str) else None), ("rule update" if name == "automation_set" else "rule delete")
     target = op.get("node", op.get("file", op.get("id")))
     detail = json.dumps({k: v for k, v in op.items() if k != "op"}, sort_keys=True)
     return (str(target) if target is not None else None), detail[:_AUDIT_DETAIL_MAX]

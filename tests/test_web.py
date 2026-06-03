@@ -989,9 +989,19 @@ class AuditFieldsTests(unittest.TestCase):
         op = {"op": "automation_set", "rule": {"id": "r1", "password": "hunter2",
                                                "trigger": {}, "actions": []}}
         target, detail = web._audit_fields(op)
-        self.assertEqual(target, "r1")
-        self.assertEqual(detail, "rule update")
+        self.assertEqual((target, detail), ("r1", "rule update"))
         self.assertNotIn("hunter2", detail)   # an arbitrary field in the body never reaches the audit
+
+    def test_automation_non_string_id_is_not_serialized(self):
+        # a non-string id (object) must never be str()'d into target or dumped into detail
+        s_target, s_detail = web._audit_fields({"op": "automation_set", "rule": {"id": {"password": "x"}}})
+        d_target, d_detail = web._audit_fields({"op": "automation_delete", "id": {"password": "x"}})
+        self.assertEqual((s_target, s_detail), (None, "rule update"))
+        self.assertEqual((d_target, d_detail), (None, "rule delete"))
+        self.assertNotIn("password", s_detail + d_detail)
+
+    def test_automation_delete_records_string_id(self):
+        self.assertEqual(web._audit_fields({"op": "automation_delete", "id": "r1"}), ("r1", "rule delete"))
 
     def test_control_op_records_known_params(self):
         target, detail = web._audit_fields({"op": "switch", "node": 14, "on": True})
