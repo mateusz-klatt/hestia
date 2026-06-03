@@ -27,7 +27,7 @@ from sqlalchemy.orm import Session
 
 from . import auth
 from .automations import AutomationStore, Rule
-from .db import AppMeta, Automation, Node, User, init_db, session_scope
+from .db import AppMeta, Audit, Automation, Node, User, init_db, session_scope
 from .registry import Registry
 
 log = logging.getLogger("hestia.store_sql")
@@ -295,6 +295,45 @@ def current_users(*, users_path=None) -> dict:
         finally:
             engine.dispose()
     return auth.load_users(Path(users_path) if users_path is not None else None)
+
+
+# --- Phase 5: audit log (#56) --------------------------------------------------------------------
+# Append-only "who did what" log in the `audit` table (actor = a username | "automation:<rule>" |
+# "system"). Written off the event loop, best-effort (a failed audit write must never disturb the
+# action it records). Capped by row count + age so it can't grow unbounded on the home box.
+
+AUDIT_MAX_ROWS = int(os.environ.get("HESTIA_AUDIT_MAX_ROWS", "50000"))
+AUDIT_MAX_AGE_S = float(os.environ.get("HESTIA_AUDIT_MAX_AGE_DAYS", "365")) * 86400.0
+
+
+def open_audit_engine():
+    """An engine for the audit log (the DB always exists post-boot — Phase-1 migrations run via the
+    shadow in json mode or open_stores in sqlite mode). The runtime holds it for the process."""
+    engine, _ = init_db()
+    return engine
+
+
+def append_audit(engine, *, actor, action, target=None, detail=None, result=None, ts,
+                 max_rows=AUDIT_MAX_ROWS, max_age_s=AUDIT_MAX_AGE_S) -> None:
+    """Append one audit row, then prune to the newest ``max_rows`` and drop anything older than
+    ``max_age_s`` (so the table stays bounded). One transaction."""
+    with Session(engine) as session, session.begin():
+        session.add(Audit(ts=ts, actor=actor, action=action, target=target, detail=detail, result=result))
+        session.flush()
+        session.execute(delete(Audit).where(Audit.ts < ts - max_age_s))
+        # row cap: the id at offset max_rows (newest-first) is the first to drop — delete it + older.
+        oldest_kept = session.execute(
+            select(Audit.id).order_by(Audit.id.desc()).limit(1).offset(max_rows)).scalar()
+        if oldest_kept is not None:
+            session.execute(delete(Audit).where(Audit.id <= oldest_kept))
+
+
+def recent_audit(engine, limit=200) -> list:
+    """The most recent audit rows (newest first) as plain dicts for the feed endpoint."""
+    with Session(engine) as session:
+        rows = session.execute(select(Audit).order_by(Audit.id.desc()).limit(limit)).scalars().all()
+    return [{"id": r.id, "ts": r.ts, "actor": r.actor, "action": r.action,
+             "target": r.target, "detail": r.detail, "result": r.result} for r in rows]
 
 
 def _cli(argv) -> int:  # pragma: no cover - thin env-driven wrapper around export_to_json

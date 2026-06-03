@@ -981,6 +981,26 @@ class AutomationsSetTests(_AutomationsWebTestBase):
         self.assertIn("lamp-on-scene", reloaded.rules)
         self.assertEqual(reloaded.rules["lamp-on-scene"].trigger["scene_id"], 1)
 
+
+class AuditFeedTests(_WebTestBase):
+    """GET /api/audit — the audit-log feed (#56)."""
+
+    def test_empty_without_audit_engine(self):
+        status, _, body = _get(self.web.address, "/api/audit")     # base rt has audit_engine=None
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body), {"events": []})
+
+    def test_returns_recent_events(self):
+        from hestia import db, store_sql
+        engine, _ = db.init_db(self.tmp / "hestia.db")
+        store_sql.append_audit(engine, actor="tata", action="ir", target="/k.ir", result="ok", ts=100.0)
+        self.rt.audit_engine = engine          # rt is shared with the running web; read at request time
+        status, _, body = _get(self.web.address, "/api/audit")
+        self.assertEqual(status, 200)
+        events = json.loads(body)["events"]
+        self.assertEqual((events[0]["actor"], events[0]["action"], events[0]["target"]), ("tata", "ir", "/k.ir"))
+        engine.dispose()
+
     def test_set_replaces_same_id(self):
         _post(self.web.address, "/api/automations", VALID_RULE)
         updated = dict(VALID_RULE, actions=[{"op": "switch", "node": 7, "on": False}])
