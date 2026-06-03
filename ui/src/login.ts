@@ -74,7 +74,7 @@ function localeName(code: string): string {
  */
 export function renderUser(
   container: HTMLElement,
-  user: string,
+  user: string | null,
   opts: { onLogout: () => void; reload?: () => void },
 ): void {
   const reload = opts.reload ?? ((): void => {
@@ -88,7 +88,9 @@ export function renderUser(
   const btn = document.createElement("button");
   btn.id = "user-menu-btn";
   btn.type = "button";
-  btn.textContent = `${user} ▾`;
+  // Auth-on: show the username. Auth-off (no session user): a settings gear — the language/scale
+  // prefs still apply, there's just no one to log out.
+  btn.textContent = user !== null ? `${user} ▾` : "⚙ ▾";
   btn.setAttribute("aria-haspopup", "true");
   btn.setAttribute("aria-expanded", "false");
 
@@ -109,8 +111,7 @@ export function renderUser(
     langSel.appendChild(o);
   }
   langSel.addEventListener("change", () => {
-    setLocaleOverride(langSel.value);
-    reload();
+    if (setLocaleOverride(langSel.value)) reload(); // only reload if the choice actually persisted
   });
   langRow.appendChild(langSel);
 
@@ -131,22 +132,25 @@ export function renderUser(
     scaleSel.appendChild(o);
   }
   scaleSel.addEventListener("change", () => {
-    setTempScale(scaleSel.value as TempScale);
-    reload();
+    if (setTempScale(scaleSel.value as TempScale)) reload();
   });
   scaleRow.appendChild(scaleSel);
 
-  const logoutBtn = document.createElement("button");
-  logoutBtn.id = "logout";
-  logoutBtn.type = "button";
-  logoutBtn.className = "menu-logout";
-  logoutBtn.textContent = t("user.logout");
-  logoutBtn.addEventListener("click", () => {
-    logoutBtn.disabled = true;
-    void logout().then(opts.onLogout);
-  });
+  menu.append(langRow, scaleRow);
 
-  menu.append(langRow, scaleRow, logoutBtn);
+  // Logout only when there's a session user (auth-off has no one to log out).
+  if (user !== null) {
+    const logoutBtn = document.createElement("button");
+    logoutBtn.id = "logout";
+    logoutBtn.type = "button";
+    logoutBtn.className = "menu-logout";
+    logoutBtn.textContent = t("user.logout");
+    logoutBtn.addEventListener("click", () => {
+      logoutBtn.disabled = true;
+      void logout().then(opts.onLogout);
+    });
+    menu.append(logoutBtn);
+  }
 
   let open = false;
   const setOpen = (next: boolean): void => {

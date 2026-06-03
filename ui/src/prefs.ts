@@ -15,11 +15,13 @@ function read(key: string): string | null {
   }
 }
 
-function write(key: string, value: string): void {
+/** Returns whether the write actually persisted (false when storage is unavailable). */
+function write(key: string, value: string): boolean {
   try {
     localStorage.setItem(key, value);
+    return true;
   } catch {
-    /* storage unavailable — the choice just won't persist */
+    return false; // storage unavailable (Safari private mode etc.) — the caller decides what to do
   }
 }
 
@@ -28,8 +30,8 @@ export function localeOverride(): string | null {
   return read(LOCALE_KEY);
 }
 
-export function setLocaleOverride(code: string): void {
-  write(LOCALE_KEY, code);
+export function setLocaleOverride(code: string): boolean {
+  return write(LOCALE_KEY, code);
 }
 
 /** The user's temperature scale; Celsius by default (the sensors' native scale). */
@@ -38,6 +40,6 @@ export function tempScale(): TempScale {
   return v === "F" || v === "K" ? v : "C";
 }
 
-export function setTempScale(scale: TempScale): void {
-  write(SCALE_KEY, scale);
+export function setTempScale(scale: TempScale): boolean {
+  return write(SCALE_KEY, scale);
 }

@@ -94,6 +94,37 @@ describe("renderUser", () => {
     expect(box.querySelector("#scale-select")).not.toBeNull();
   });
 
+  it("auth-off (null user) shows a settings menu with no logout", () => {
+    const box = document.createElement("div");
+    renderUser(box, null, { onLogout: vi.fn() });
+    expect(box.querySelector("#user-menu-btn")?.textContent).toContain("⚙");
+    expect(box.querySelector("#locale-select")).not.toBeNull(); // prefs still available
+    expect(box.querySelector("#scale-select")).not.toBeNull();
+    expect(box.querySelector("#logout")).toBeNull(); // nothing to log out of
+  });
+
+  it("does not reload when a preference write fails (storage unavailable)", () => {
+    const reload = vi.fn();
+    vi.stubGlobal("localStorage", {
+      getItem: () => null,
+      setItem: () => {
+        throw new Error("denied");
+      },
+      removeItem: () => undefined,
+      clear: () => undefined,
+      key: () => null,
+      length: 0,
+    });
+    const box = document.createElement("div");
+    renderUser(box, "tata", { onLogout: vi.fn(), reload });
+    const sel = box.querySelector<HTMLSelectElement>("#scale-select");
+    if (sel !== null) {
+      sel.value = "F";
+      sel.dispatchEvent(new Event("change"));
+    }
+    expect(reload).not.toHaveBeenCalled(); // write failed → no pointless reload-to-default
+  });
+
   it("toggles the dropdown on the user button", () => {
     const box = document.createElement("div");
     renderUser(box, "tata", { onLogout: vi.fn() });
