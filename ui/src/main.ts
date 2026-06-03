@@ -20,7 +20,7 @@ import { renderLogin, renderUser } from "./login";
 import { bindRow, bindSubRow } from "./registry";
 import { createRoomsView } from "./rooms";
 import { renderRuleForm } from "./ruleform";
-import { renderViewSwitch } from "./view";
+import { renderViewSwitch, type ViewName } from "./view";
 
 function el(id: string): HTMLElement {
   const node = document.getElementById(id);
@@ -93,13 +93,19 @@ function startApp(): void {
 
   // View switcher: 🏠 Rooms (default) ↔ 🔧 Advanced. Applies the persisted choice immediately;
   // switching into the rooms view returns to the room list.
+  let currentView: ViewName = "rooms";
   const switcher = renderViewSwitch(
     { switchBox: el("view-switch"), roomsEl: el("rooms-view"), adminEl: el("admin-view") },
     (view) => {
+      currentView = view;
       if (view === "rooms") roomsView.goToLanding(); // tapping the rooms tab always returns to the list
     },
   );
-  onRoomsNav = switcher.setRoomsInRoom; // the rooms view's nav state drives the back-tab label
+  // The "← Rooms" back label only reflects nav while the rooms view is the active one — a background
+  // refresh re-rendering the hidden room detail must not flip the tab while Advanced is showing.
+  onRoomsNav = (inRoom) => {
+    if (currentView === "rooms") switcher.setRoomsInRoom(inRoom);
+  };
 
   // ---- Automations editor -------------------------------------------------
   const autoRows = el("auto-rows");
