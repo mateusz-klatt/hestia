@@ -8,6 +8,8 @@ import type {
   NameResult,
   Rule,
   RuleResult,
+  SceneOp,
+  SceneResult,
   UserSettings,
 } from "./types";
 
@@ -167,6 +169,20 @@ export async function saveSettings(settings: Partial<UserSettings>): Promise<boo
     return response.ok;
   } catch {
     return false;
+  }
+}
+
+/** POST `/api/scene` to run a house-wide scene; `null` on any load/send failure. */
+export async function postScene(op: SceneOp): Promise<SceneResult | null> {
+  try {
+    const response = await fetch(apiUrl("scene"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ op }),
+    });
+    return response.ok ? ((await response.json()) as SceneResult) : null;
+  } catch {
+    return null;
   }
 }
 

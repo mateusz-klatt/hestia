@@ -179,10 +179,11 @@ td.sub-label {
   min-height: 1.2em;
 }
 
-/* The klima / IR action status (✓ / ✗) lives on its OWN reserved line within the panel, so showing
+/* The scene / IR / klima action status (✓ / ✗) lives on its OWN reserved line within the panel, so showing
    or clearing it never reflows the room cards below it. flex-basis:100% drops it under the controls;
    min-height keeps the line even when empty (one fixed status line, no layout jump). */
 #ir-buttons .status,
+#rooms-scene .status,
 #rooms-ir .status,
 #klima .status,
 #rooms-klima .status {
@@ -212,9 +213,10 @@ td.sub-label {
   margin: 0;
 }
 
-/* Lay the IR / klima controls out as one centred row (label + selects + buttons + status) — they'd
+/* Lay the scene / IR / klima controls out as one centred row (label + selects + buttons + status) — they'd
    otherwise misalign against the taller mobile controls; wraps only when too narrow to fit. */
 #ir-buttons,
+#rooms-scene,
 #rooms-ir,
 #klima,
 #rooms-klima {
@@ -222,6 +224,11 @@ td.sub-label {
   flex-wrap: wrap;
   align-items: center;
   gap: 0.4rem 0.5rem;
+}
+
+#rooms-scene h3 {
+  flex-basis: 100%;
+  margin: 0;
 }
 
 #admin-tools {

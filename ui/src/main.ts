@@ -12,6 +12,7 @@ import {
   postIr,
   postName,
   postRule,
+  postScene,
   saveSettings as saveUserSettings,
   whoami,
 } from "./api/client";
@@ -26,6 +27,7 @@ import { renderLogin, renderUser } from "./login";
 import { bindRow, bindSubRow } from "./registry";
 import { createRoomsView } from "./rooms";
 import { renderRuleForm } from "./ruleform";
+import { renderSceneControls } from "./scenes";
 import { reconcileServerSettings } from "./settings";
 import { renderViewSwitch, type ViewName } from "./view";
 
@@ -43,6 +45,7 @@ const ruleJson = el("rule-json") as HTMLTextAreaElement;
 // Rooms view (wife-friendly): house-wide IR/klima panels live in their own persistent containers;
 // the room list/detail rebuilds inside #room-list. The rooms view keeps its own latest snapshot
 // (set via update() in onRender), so the switcher just asks it to show the landing.
+const roomsSceneBox = el("rooms-scene");
 const roomsIrBox = el("rooms-ir");
 const roomsKlimaBox = el("rooms-klima");
 // Notify the view-switch when the rooms view enters/leaves a room, so its tab can flip to "← Rooms"
@@ -96,6 +99,7 @@ const live = new LiveController(
 function startApp(): void {
   const audit = renderAuditFeed(el("audit-feed"), fetchAudit);
   const dbStats = renderDbStats(el("dbstats"), fetchDbStats);
+  renderSceneControls(roomsSceneBox, postScene);
 
   el("refresh").addEventListener("click", () => {
     void live.refresh();
