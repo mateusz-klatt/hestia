@@ -20,6 +20,7 @@ function mk(): { container: HTMLElement; sent: ControlOp[]; view: ReturnType<typ
 const openFirstRoom = (container: HTMLElement): void => {
   container.querySelector<HTMLButtonElement>(".room-card")?.click();
 };
+const flush = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
 
 describe("createRoomsView — landing", () => {
   it("shows a loading placeholder before any snapshot", () => {
@@ -107,14 +108,30 @@ describe("createRoomsView — room detail", () => {
     expect(name?.textContent).toBe("<img src=x onerror=alert(1)>");
   });
 
-  it("summarises a multi-gang switch's channels and shows no controls (read-only)", () => {
-    const { container, view } = mk();
+  it("summarises a multi-gang switch's channels and dispatches per-channel controls", async () => {
+    const { container, sent, view } = mk();
     view.update(
-      discovery({ "2": device({ type: "light", room: "Salon", endpoints: { "1": true, "2": false } }) }),
+      discovery({
+        "2": device({
+          type: "light",
+          room: "Salon",
+          endpoints: { "1": true, "2": false },
+          endpoint_names: { "2": "Right" },
+        }),
+      }),
     );
     openFirstRoom(container);
     expect(container.querySelector(".room-device-stan")?.textContent).toBe("1: 🟢 On · 2: ⚪ Off");
-    expect(container.querySelectorAll(".room-device-actions button")).toHaveLength(0);
+    const buttons = [...container.querySelectorAll<HTMLButtonElement>(".room-device-actions button")];
+    expect(buttons.map((button) => button.textContent)).toEqual(["#1 On", "#1 Off", "Right On", "Right Off"]);
+    buttons[0]?.click();
+    await flush();
+    buttons[3]?.click();
+    await flush();
+    expect(sent).toEqual([
+      { op: "switch", node: 2, endpoint: 1, on: true },
+      { op: "switch", node: 2, endpoint: 2, on: false },
+    ]);
   });
 });
 

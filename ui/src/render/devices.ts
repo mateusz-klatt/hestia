@@ -122,7 +122,7 @@ function subRow(node: string, ep: string, on: boolean, name: string): HTMLTableR
   tr.appendChild(cell("")); // battery
   tr.appendChild(cell(`↳ kanał ${ep}`, "sub-label"));
   tr.appendChild(cell(onOff(on), "stan ep-stan", "stan"));
-  tr.appendChild(cell("")); // akcje (multi-gang channels stay read-only)
+  tr.appendChild(cell("", "actions", "akcje")); // akcje — endpoint buttons wired by the live decorator
   tr.appendChild(epNameCell(name)); // per-channel label — wired by the registry binder (PR-4b)
   tr.appendChild(cell("")); // room
   return tr;

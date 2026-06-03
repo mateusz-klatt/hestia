@@ -112,7 +112,7 @@ describe("deviceRow", () => {
 });
 
 describe("renderDeviceRows", () => {
-  it("sorts by numeric node id and emits read-only multi-gang sub-rows", () => {
+  it("sorts by numeric node id and emits multi-gang sub-rows", () => {
     const tbody = document.createElement("tbody");
     renderDeviceRows(tbody, {
       "10": device({ type: "light", switch: true }),
@@ -130,6 +130,7 @@ describe("renderDeviceRows", () => {
     expect(rows[1]?.dataset.ep).toBe("1");
     expect(rows[1]?.querySelector(".sub-label")?.textContent).toBe("↳ kanał 1");
     expect(rows[1]?.querySelectorAll("td")[4]?.textContent).toBe("🟢 On"); // stan
+    expect(rows[1]?.querySelectorAll("td")[5]?.classList.contains("actions")).toBe(true);
     expect(rows[1]?.querySelectorAll("td")[6]?.querySelector<HTMLInputElement>("input.ep-name")?.value).toBe("lewy"); // labelled channel
     expect(rows[2]?.dataset.ep).toBe("2");
     expect(rows[2]?.querySelectorAll("td")[4]?.textContent).toBe("⚪ Off");
@@ -161,9 +162,9 @@ describe("renderDeviceRows", () => {
     });
     const sub = tbody.querySelector("tr.subrow");
     const labels = [...(sub?.querySelectorAll("td") ?? [])].map((td) => td.dataset.label);
-    // Lock the full placeholder contract: node / last-seen / battery / kanał / akcje / room cells stay
-    // unlabeled (and :empty-hidden on mobile); only the per-channel stan + editable name carry a heading.
-    expect(labels).toEqual([undefined, undefined, undefined, undefined, "stan", undefined, "name", undefined]);
+    // Lock the full placeholder contract: node / last-seen / battery / kanał / room cells stay unlabeled;
+    // per-channel stan, endpoint actions, and editable name carry headings.
+    expect(labels).toEqual([undefined, undefined, undefined, undefined, "stan", "akcje", "name", undefined]);
     expect(sub?.querySelector(".sub-label")?.textContent).toBe("↳ kanał 1"); // self-describing → no data-label
   });
 

@@ -53,10 +53,15 @@ describe("renderActions button layout", () => {
     expect(labels(cell)).toEqual(["Off", "On", "−", "+"]);
   });
 
-  it("multi-gang and stateless types get no buttons", () => {
+  it("multi-gang switches get per-channel buttons and stateless types get no buttons", () => {
     const gang = td();
-    renderActions(gang, 7, device({ type: "light", endpoints: { "1": true, "2": false } }), okPost);
-    expect(labels(gang)).toEqual([]);
+    renderActions(
+      gang,
+      7,
+      device({ type: "light", endpoints: { "1": true, "2": false }, endpoint_names: { "2": "Right" } }),
+      okPost,
+    );
+    expect(labels(gang)).toEqual(["#1 On", "#1 Off", "Right On", "Right Off"]);
     const motion = td();
     renderActions(motion, 7, device({ type: "motion" }), okPost);
     expect(labels(motion)).toEqual([]);
@@ -107,6 +112,18 @@ describe("renderActions dispatch", () => {
     await fire(thermostat, "On");
     await fire(thermostat, "Off");
 
+    const gang = td();
+    renderActions(
+      gang,
+      7,
+      device({ type: "light", endpoints: { "1": true, "2": false }, endpoint_names: { "1": "Left" } }),
+      post,
+    );
+    await fire(gang, "Left On");
+    await fire(gang, "Left Off");
+    await fire(gang, "#2 On");
+    await fire(gang, "#2 Off");
+
     expect(sent).toEqual([
       { op: "switch", node: 5, on: true },
       { op: "switch", node: 5, on: false },
@@ -119,6 +136,10 @@ describe("renderActions dispatch", () => {
       { op: "thermostat", node: 9, celsius: 21.5 },
       { op: "thermostat_power", node: 9, on: true },
       { op: "thermostat_power", node: 9, on: false },
+      { op: "switch", node: 7, endpoint: 1, on: true },
+      { op: "switch", node: 7, endpoint: 1, on: false },
+      { op: "switch", node: 7, endpoint: 2, on: true },
+      { op: "switch", node: 7, endpoint: 2, on: false },
     ]);
   });
 

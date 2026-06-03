@@ -246,6 +246,10 @@ class BuildCommandTests(unittest.TestCase):
         off = proxy.build_command(self.rt, {"op": "switch", "node": 14, "on": False})
         self.assertEqual(off, commands.set_switch(self.seq + 1, 14, False))
 
+    def test_switch_endpoint(self):
+        out = proxy.build_command(self.rt, {"op": "switch", "node": 7, "endpoint": 2, "on": True})
+        self.assertEqual(out, commands.set_endpoint_switch(self.seq, 7, 2, True))
+
     def test_lights(self):
         out = proxy.build_command(self.rt, {"op": "lights", "channels": [[4, 0], [8, 0x63]]})
         self.assertEqual(out, commands.set_lights(self.seq, [(4, 0), (8, 0x63)]))

@@ -209,7 +209,7 @@ export type LiveEvent = ActivityEvent | StateEvent | GlobalsEvent | DiscoveryCha
 // command builders behind `_control_device_command` in hestia/proxy.py).
 
 export type ControlOp =
-  | { op: "switch"; node: number; on: boolean }
+  | { op: "switch"; node: number; on: boolean; endpoint?: number }
   | { op: "level"; node: number; value: number }
   | { op: "cover"; node: number; value: number }
   | { op: "thermostat"; node: number; celsius: number }
