@@ -1,4 +1,5 @@
 import type { ControlResult, IrButton, Klima } from "./api/types";
+import { t } from "./i18n";
 
 /** Transmits a saved Flipper signal (`{file, button}`); normalised result (never rejects). */
 export type PostIr = (file: string, button: string) => Promise<ControlResult>;
@@ -78,9 +79,9 @@ export function renderKlima(box: HTMLElement, klima: Klima, postIr: PostIr): voi
     status.textContent = "…";
     try {
       const res = await postIr(file, button);
-      status.textContent = res.ok ? `✓ ${tag}` : `✗ ${res.error ?? "failed"}`;
+      status.textContent = res.ok ? `✓ ${tag}` : `✗ ${res.error ?? t("ctl.failed")}`;
     } catch {
-      status.textContent = "✗ błąd";
+      status.textContent = t("ctl.error");
     } finally {
       busy = false;
       for (const b of buttons) b.disabled = false;
@@ -111,7 +112,7 @@ export function renderKlima(box: HTMLElement, klima: Klima, postIr: PostIr): voi
     fillTemps();
     const set = document.createElement("button");
     set.type = "button";
-    set.textContent = "Ustaw";
+    set.textContent = t("ctl.set");
     set.style.marginRight = "0.4rem";
     set.addEventListener("click", () => {
       if (mode.value === "" || temp.value === "") return;
@@ -124,7 +125,7 @@ export function renderKlima(box: HTMLElement, klima: Klima, postIr: PostIr): voi
   if (canOff) {
     const off = document.createElement("button");
     off.type = "button";
-    off.textContent = "Wyłącz";
+    off.textContent = t("ctl.turnOff");
     off.style.marginRight = "0.4rem";
     off.addEventListener("click", () => {
       void send("off", "Wyłącz");

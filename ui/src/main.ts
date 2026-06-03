@@ -13,6 +13,7 @@ import {
 } from "./api/client";
 import { renderAutomations } from "./automations";
 import { renderActions } from "./controls";
+import { initLocale } from "./i18n";
 import { renderIrButtons, renderKlima } from "./klima";
 import { LiveController } from "./live";
 import { renderLogin, renderUser } from "./login";
@@ -184,6 +185,7 @@ function startApp(): void {
 // boot the app; when a username is present (auth on), show the logged-in indicator + a logout button.
 // `whoami` returns {user: null} when auth is OFF, so loopback/dev boots straight through with no login UI.
 void (async () => {
+  await initLocale(navigator.languages); // pick + apply the browser locale (sets <html lang>/dir) before any render
   const me = await whoami();
   if (me === null) {
     el("app").hidden = true;

@@ -1,4 +1,5 @@
 import type { DeviceInfo, Discovery, Globals, LiveEvent, Scene } from "./api/types";
+import { t } from "./i18n";
 import { renderDeviceRows, renderGlobals, renderMode, summaryText } from "./render/devices";
 import { fmtHumidity, fmtTemp, stateStr } from "./render/format";
 
@@ -113,7 +114,7 @@ export class LiveController {
   }
 
   setConnected(connected: boolean): void {
-    this.view.conn.textContent = connected ? "" : "(reconnecting…)";
+    this.view.conn.textContent = connected ? "" : t("conn.reconnecting");
   }
 
   /** Fetch the full snapshot and rebuild the view; coalesces overlapping calls. */

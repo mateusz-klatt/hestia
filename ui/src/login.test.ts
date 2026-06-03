@@ -54,7 +54,7 @@ describe("renderLogin", () => {
     submit(box);
     await flush();
     expect(onSuccess).not.toHaveBeenCalled();
-    expect(box.querySelector(".status.err")?.textContent).toContain("błędny");
+    expect(box.querySelector(".status.err")?.textContent).toContain("Wrong");
     expect(input(box, "login-pass").value).toBe(""); // cleared for a retry
   });
 });
@@ -67,7 +67,7 @@ describe("renderUser", () => {
   it("shows the logged-in user", () => {
     const box = document.createElement("div");
     renderUser(box, "tata", vi.fn());
-    expect(box.textContent).toContain("zalogowany: tata");
+    expect(box.textContent).toContain("signed in: tata");
   });
 
   it("logs out then calls onLogout when the button is clicked", async () => {

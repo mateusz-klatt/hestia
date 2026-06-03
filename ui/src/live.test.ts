@@ -44,7 +44,7 @@ describe("LiveController.refresh", () => {
       },
     );
     await new LiveController(view, () => Promise.resolve(data)).refresh();
-    expect(view.hdrText.textContent).toBe("hestia — devices"); // all confirmed, 0 unknown → no parenthetical
+    expect(view.hdrText.textContent).toBe("hestia"); // all confirmed, 0 unknown → no parenthetical (title only)
     expect(view.mode.textContent).toBe("tryb: standalone (cloud-free)"); // fixture: standalone
     expect(view.crib.textContent).toBe("22.0°");
     expect(view.outdoor.textContent).toBe("19.8°");

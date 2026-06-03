@@ -1,4 +1,5 @@
 import type { DeviceInfo, Discovery, Globals, Summary } from "../api/types";
+import { t } from "../i18n";
 import { battFmt, battLow, fmtHumidity, fmtTemp, stateStr } from "./format";
 
 /** The DOM nodes the discovery view writes into (queried once in `main.ts`). */
@@ -162,9 +163,10 @@ export function renderGlobals(
  */
 export function summaryText(s: Summary): string {
   const parts: string[] = [];
-  if (s.confirmed < s.total) parts.push(`${String(s.confirmed)}/${String(s.total)} confirmed`);
-  if (s.unknown > 0) parts.push(`${String(s.unknown)} unknown`);
-  return parts.length > 0 ? `hestia — devices (${parts.join(", ")})` : "hestia — devices";
+  if (s.confirmed < s.total) parts.push(t("header.confirmed", { confirmed: s.confirmed, total: s.total }));
+  if (s.unknown > 0) parts.push(t("header.unknown", { unknown: s.unknown }));
+  const title = t("header.title");
+  return parts.length > 0 ? `${title} (${parts.join(", ")})` : title;
 }
 
 /**

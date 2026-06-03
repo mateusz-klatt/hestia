@@ -1,5 +1,6 @@
 import type { DeviceInfo, Discovery } from "./api/types";
 import { type PostControl, renderActions } from "./controls";
+import { currentLocale, t, tPlural } from "./i18n";
 import { stateStr } from "./render/format";
 
 /** Devices the rooms view controls; only postControl is needed (IR/klima have their own panels). */
@@ -15,19 +16,24 @@ export interface RoomsView {
   goToLanding: () => void;
 }
 
-const NO_ROOM = "Inne";
+const NO_ROOM = ""; // empty bucket key for devices with no room set (displayed via roomDisplay)
 
-/** A device's room label, trimmed; blank / unset devices fall into "Inne". */
-function roomOf(info: DeviceInfo): string {
+/** A device's room bucket key, trimmed; blank / unset devices fall into the catch-all bucket. */
+function roomKey(info: DeviceInfo): string {
   const r = info.room?.trim();
   return r !== undefined && r !== "" ? r : NO_ROOM;
+}
+
+/** Human label for a room bucket: the empty catch-all shows the localised "Other". */
+function roomDisplay(room: string): string {
+  return room === NO_ROOM ? t("rooms.other") : room;
 }
 
 /** Group devices by room, each room's devices sorted by numeric node id. */
 function groupByRoom(devices: Record<string, DeviceInfo>): Map<string, [string, DeviceInfo][]> {
   const groups = new Map<string, [string, DeviceInfo][]>();
   for (const [node, info] of Object.entries(devices)) {
-    const room = roomOf(info);
+    const room = roomKey(info);
     const list = groups.get(room) ?? [];
     list.push([node, info]);
     groups.set(room, list);
@@ -36,21 +42,13 @@ function groupByRoom(devices: Record<string, DeviceInfo>): Map<string, [string, 
   return groups;
 }
 
-/** Room names sorted alphabetically (pl collation), with the catch-all "Inne" always last. */
+/** Room names sorted by the active-locale collation, with the catch-all bucket always last. */
 function sortedRooms(rooms: Iterable<string>): string[] {
   return [...rooms].sort((a, b) => {
     if (a === NO_ROOM) return 1;
     if (b === NO_ROOM) return -1;
-    return a.localeCompare(b, "pl");
+    return a.localeCompare(b, currentLocale());
   });
-}
-
-/** Polish plural of "urządzenie" for a device count (1 → urządzenie, 2–4 → urządzenia, else urządzeń). */
-function deviceWord(n: number): string {
-  if (n === 1) return "urządzenie";
-  const d = n % 10;
-  const dd = n % 100;
-  return d >= 2 && d <= 4 && (dd < 12 || dd > 14) ? "urządzenia" : "urządzeń";
 }
 
 /** Live-state text for a card: a multi-gang switch lists its channels; otherwise reuse stateStr. */
@@ -59,7 +57,7 @@ function roomStateText(info: DeviceInfo): string {
   if (eps !== null && Object.keys(eps).length > 1) {
     return Object.keys(eps)
       .sort((a, b) => Number(a) - Number(b))
-      .map((ep) => `${ep}: ${eps[ep] === true ? "wł" : "wył"}`)
+      .map((ep) => `${ep}: ${eps[ep] === true ? t("ctl.on") : t("ctl.off")}`)
       .join(" · ");
   }
   return stateStr(info);
@@ -124,12 +122,12 @@ export function createRoomsView(container: HTMLElement, deps: RoomsDeps): RoomsV
     stateSpans = new Map();
     container.replaceChildren();
     if (latest === null) {
-      container.appendChild(placeholder("ładowanie…"));
+      container.appendChild(placeholder(t("common.loading")));
       return;
     }
     const groups = groupByRoom(latest.devices);
     if (groups.size === 0) {
-      container.appendChild(placeholder("Brak urządzeń"));
+      container.appendChild(placeholder(t("rooms.empty")));
       return;
     }
     const grid = document.createElement("div");
@@ -141,10 +139,10 @@ export function createRoomsView(container: HTMLElement, deps: RoomsDeps): RoomsV
       btn.className = "room-card";
       const title = document.createElement("span");
       title.className = "room-card-title";
-      title.textContent = room;
+      title.textContent = roomDisplay(room);
       const count = document.createElement("span");
       count.className = "room-card-count";
-      count.textContent = `${String(list.length)} ${deviceWord(list.length)}`;
+      count.textContent = tPlural("rooms.deviceCount", list.length);
       btn.append(title, count);
       btn.addEventListener("click", () => {
         selectedRoom = room;
@@ -159,7 +157,7 @@ export function createRoomsView(container: HTMLElement, deps: RoomsDeps): RoomsV
     stateSpans = new Map();
     container.replaceChildren();
     if (latest === null) {
-      container.appendChild(placeholder("ładowanie…"));
+      container.appendChild(placeholder(t("common.loading")));
       return;
     }
     const room = selectedRoom;
@@ -171,7 +169,7 @@ export function createRoomsView(container: HTMLElement, deps: RoomsDeps): RoomsV
     }
     const title = document.createElement("h2");
     title.className = "room-title";
-    title.textContent = room;
+    title.textContent = roomDisplay(room);
     container.append(title); // no back button — the top 🏠 Pokoje tab returns to the list (goToLanding)
     for (const [node, info] of list) {
       const { card, stan } = deviceCard(node, info, deps);
