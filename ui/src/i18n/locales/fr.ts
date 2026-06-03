@@ -24,6 +24,7 @@ const messages: Partial<Messages> = {
   "audit.title": "Journal d’activité",
   "audit.empty": "Aucune activité pour l’instant",
   "audit.refresh": "Actualiser",
+  "dbstats.title": "Base de données",
   "rooms.empty": "Aucun appareil",
   "rooms.other": "Autres",
   "rooms.deviceCount.one": "{n} appareil",

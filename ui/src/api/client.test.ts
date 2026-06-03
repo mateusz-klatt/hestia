@@ -5,6 +5,7 @@ import {
   deleteRule,
   fetchAudit,
   fetchAutomations,
+  fetchDbStats,
   fetchDiscovery,
   login,
   logout,
@@ -187,6 +188,33 @@ describe("fetchAudit", () => {
   it("returns null when fetch rejects", async () => {
     vi.stubGlobal("fetch", () => Promise.reject(new Error("offline")));
     expect(await fetchAudit()).toBeNull();
+  });
+});
+
+describe("fetchDbStats", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("returns the parsed stats on 2xx", async () => {
+    const stats = { file_bytes: 1536, tables: { nodes: 22, automations: 2 } };
+    vi.stubGlobal("fetch", () => Promise.resolve({ ok: true, json: () => Promise.resolve(stats) }));
+    expect(await fetchDbStats()).toEqual(stats);
+  });
+
+  it("returns null on a non-2xx response", async () => {
+    vi.stubGlobal("fetch", () => Promise.resolve({ ok: false, json: () => Promise.resolve({}) }));
+    expect(await fetchDbStats()).toBeNull();
+  });
+
+  it("returns null when fetch rejects or JSON parsing fails", async () => {
+    vi.stubGlobal("fetch", () => Promise.reject(new Error("offline")));
+    expect(await fetchDbStats()).toBeNull();
+
+    vi.stubGlobal("fetch", () =>
+      Promise.resolve({ ok: true, json: () => Promise.reject(new Error("bad json")) }),
+    );
+    expect(await fetchDbStats()).toBeNull();
   });
 });
 

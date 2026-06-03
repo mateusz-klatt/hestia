@@ -1075,6 +1075,33 @@ class AuditFeedTests(_WebTestBase):
         self.assertIn("application/json", json.loads(body)["error"])
 
 
+class DbStatsTests(_WebTestBase):
+    """GET /api/db/stats — operator SQLite growth stats."""
+
+    def test_returns_file_size_and_table_counts(self):
+        from hestia import db
+        db_file = self.tmp / "hestia.db"
+        engine, Session = db.init_db(db_file)
+        try:
+            with db.session_scope(Session) as s:
+                s.add(db.Node(key="7", entry_json="{}"))
+                s.add(db.User(username="tata", password_hash="scrypt$abc"))
+                s.add(db.UserSetting(username="tata", locale="pl", temp_scale="c", theme=None))
+
+            with mock.patch.dict("os.environ", {"HESTIA_DB": str(db_file)}):
+                status, _, body = _get(self.web.address, "/api/db/stats")
+
+            stats = json.loads(body)
+            self.assertEqual(status, 200)
+            self.assertGreater(stats["file_bytes"], 0)
+            self.assertEqual(stats["tables"]["nodes"], 1)
+            self.assertEqual(stats["tables"]["users"], 1)
+            self.assertEqual(stats["tables"]["user_settings"], 1)
+            self.assertEqual(stats["tables"]["audit"], 0)
+        finally:
+            engine.dispose()
+
+
 class AutomationsDeleteTests(_AutomationsWebTestBase):
     def _seed(self):
         status, _, _ = _post(self.web.address, "/api/automations", VALID_RULE)

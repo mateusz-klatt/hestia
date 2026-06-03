@@ -21,13 +21,13 @@ import logging
 import os
 from pathlib import Path
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from . import auth
 from .automations import AutomationStore, Rule
-from .db import AppMeta, Audit, Automation, Node, User, init_db, session_scope
+from .db import AppMeta, Audit, Automation, Node, User, UserSetting, db_path, init_db, session_scope
 from .registry import Registry
 
 log = logging.getLogger("hestia.store_sql")
@@ -36,6 +36,14 @@ log = logging.getLogger("hestia.store_sql")
 # the (now-frozen) JSON. registry + automations cut over together (Phase 3); users separately (Phase 4).
 _AUTHORITATIVE = "registry_authoritative"
 _USERS_AUTHORITATIVE = "users_authoritative"
+_STATS_TABLES = (
+    ("app_meta", AppMeta),
+    ("nodes", Node),
+    ("automations", Automation),
+    ("users", User),
+    ("user_settings", UserSetting),
+    ("audit", Audit),
+)
 
 
 def _dump(obj) -> str:
@@ -295,6 +303,32 @@ def current_users(*, users_path=None) -> dict:
         finally:
             engine.dispose()
     return auth.load_users(Path(users_path) if users_path is not None else None)
+
+
+# --- Operator DB observability (#55/#57 P6a) ----------------------------------------------------
+
+def _sqlite_files(path: Path) -> tuple[Path, Path, Path]:
+    return path, Path(f"{path}-wal"), Path(f"{path}-shm")
+
+
+def _db_file_bytes(path: Path) -> int:
+    """On-disk size of the SQLite DB plus its WAL/SHM sidecars (only those that exist)."""
+    return sum(os.path.getsize(f) for f in _sqlite_files(path) if f.exists())
+
+
+def db_stats(path=None) -> dict:
+    """SQLite file growth stats for the operator: DB/WAL/SHM bytes + per-table row counts."""
+    resolved = db_path() if path is None else Path(path)
+    engine, _ = init_db(path)
+    try:
+        with Session(engine) as session:
+            tables = {
+                name: int(session.execute(select(func.count()).select_from(model)).scalar_one())
+                for name, model in _STATS_TABLES
+            }
+        return {"file_bytes": _db_file_bytes(resolved), "tables": tables}
+    finally:
+        engine.dispose()
 
 
 # --- Phase 5: audit log (#56) --------------------------------------------------------------------

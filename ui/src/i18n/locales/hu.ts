@@ -24,6 +24,7 @@ const messages: Partial<Messages> = {
   "audit.title": "Tevékenységnapló",
   "audit.empty": "Még nincs tevékenység",
   "audit.refresh": "Frissítés",
+  "dbstats.title": "Adatbázis",
   "rooms.empty": "Nincsenek eszközök",
   "rooms.other": "Egyéb",
   "rooms.deviceCount.one": "{n} eszköz",

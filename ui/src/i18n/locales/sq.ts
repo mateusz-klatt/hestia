@@ -24,6 +24,7 @@ const messages: Partial<Messages> = {
   "audit.title": "Ditari i aktivitetit",
   "audit.empty": "Ende nuk ka aktivitet",
   "audit.refresh": "Rifresko",
+  "dbstats.title": "Baza e të dhënave",
   "rooms.empty": "Nuk ka pajisje",
   "rooms.other": "Të tjera",
   "rooms.deviceCount.one": "{n} pajisje",

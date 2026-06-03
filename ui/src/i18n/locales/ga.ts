@@ -24,6 +24,7 @@ const messages: Partial<Messages> = {
   "audit.title": "Log gníomhaíochta",
   "audit.empty": "Níl aon ghníomhaíocht fós",
   "audit.refresh": "Athnuaigh",
+  "dbstats.title": "Bunachar sonraí",
   "rooms.empty": "Gan ghléasanna",
   "rooms.other": "Eile",
   "rooms.deviceCount.one": "{n} ghléas",

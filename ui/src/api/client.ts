@@ -2,6 +2,7 @@ import type {
   AuditEvent,
   ControlOp,
   ControlResult,
+  DbStats,
   Discovery,
   NamePayload,
   NameResult,
@@ -129,6 +130,16 @@ export async function fetchAudit(): Promise<AuditEvent[] | null> {
     if (!response.ok) return null;
     const data = (await response.json()) as { events?: AuditEvent[] };
     return data.events ?? [];
+  } catch {
+    return null;
+  }
+}
+
+/** GET `/api/db/stats`; SQLite file size + table counts, or `null` on any load failure. */
+export async function fetchDbStats(): Promise<DbStats | null> {
+  try {
+    const response = await fetch(apiUrl("db/stats"));
+    return response.ok ? ((await response.json()) as DbStats) : null;
   } catch {
     return null;
   }

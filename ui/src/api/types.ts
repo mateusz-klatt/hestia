@@ -140,6 +140,13 @@ export interface AuditEvent {
   result: string | null;
 }
 
+// ---- Database stats (`GET /api/db/stats`) --------------------------------
+
+export interface DbStats {
+  file_bytes: number;
+  tables: Record<string, number>;
+}
+
 export interface Discovery {
   devices: Record<string, DeviceInfo>;
   summary: Summary;

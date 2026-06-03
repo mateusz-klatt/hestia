@@ -5,6 +5,7 @@ import {
   deleteRule,
   fetchAudit,
   fetchAutomations,
+  fetchDbStats,
   fetchDiscovery,
   postControl,
   postIr,
@@ -15,6 +16,7 @@ import {
 import { renderAuditFeed } from "./audit";
 import { renderAutomations } from "./automations";
 import { renderActions } from "./controls";
+import { renderDbStats } from "./dbstats";
 import { initLocale } from "./i18n";
 import { renderIrButtons, renderKlima } from "./klima";
 import { LiveController } from "./live";
@@ -90,6 +92,7 @@ const live = new LiveController(
 /** Wire up the live app (events, intervals, initial fetch). Called only once authenticated. */
 function startApp(): void {
   const audit = renderAuditFeed(el("audit-feed"), fetchAudit);
+  const dbStats = renderDbStats(el("dbstats"), fetchDbStats);
 
   el("refresh").addEventListener("click", () => {
     void live.refresh();
@@ -106,6 +109,7 @@ function startApp(): void {
         roomsView.goToLanding(); // tapping the rooms tab always returns to the list
       } else {
         void audit.refresh();
+        void dbStats.refresh();
       }
     },
   );

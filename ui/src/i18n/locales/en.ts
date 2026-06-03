@@ -27,6 +27,7 @@ const en = {
   "audit.title": "Activity log",
   "audit.empty": "No activity yet",
   "audit.refresh": "Refresh",
+  "dbstats.title": "Database",
   "rooms.empty": "No devices",
   "rooms.other": "Other",
   "rooms.deviceCount.zero": "{n} devices",

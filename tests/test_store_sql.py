@@ -478,6 +478,56 @@ class AuditLogTests(unittest.TestCase):
         self.assertIsNone(proxy._audit(SimpleNamespace(audit_engine=self.engine), "actor", "act"))
 
 
+class DatabaseStatsTests(unittest.TestCase):
+    """Operator DB-growth stats: SQLite bytes plus row counts for every app table."""
+
+    def setUp(self):
+        self.dir = Path(tempfile.mkdtemp())
+        self.db = self.dir / "hestia.db"
+
+    def tearDown(self):
+        shutil.rmtree(self.dir)
+
+    def _sqlite_file_bytes(self) -> int:
+        total = 0
+        for file_path in (self.db, Path(f"{self.db}-wal"), Path(f"{self.db}-shm")):
+            if file_path.exists():
+                total += os.path.getsize(file_path)
+        return total
+
+    def test_counts_rows_and_sums_sqlite_files(self):
+        engine, Session = db.init_db(self.db)
+        try:
+            with db.session_scope(Session) as s:
+                s.add(db.AppMeta(key="mode", value="proxy"))
+                s.add(db.Node(key="5", entry_json="{}"))
+                s.add(db.Automation(id="r1", position=0, rule_json=json.dumps(Rule.from_dict(SCENE_RULE).to_dict())))
+                s.add(db.User(username="tata", password_hash="scrypt$abc"))
+                s.add(db.UserSetting(username="tata", locale="pl", temp_scale="c", theme=None))
+                s.add(db.Audit(ts=1.0, actor="system", action="boot", target=None, detail=None, result="ok"))
+
+            stats = store_sql.db_stats(self.db)
+            self.assertEqual(stats["tables"], {
+                "app_meta": 1,
+                "nodes": 1,
+                "automations": 1,
+                "users": 1,
+                "user_settings": 1,
+                "audit": 1,
+            })
+            self.assertEqual(stats["file_bytes"], self._sqlite_file_bytes())
+            self.assertGreater(stats["file_bytes"], 0)
+        finally:
+            engine.dispose()
+
+    def test_file_bytes_skips_absent_sidecars(self):
+        # Only the main DB file exists (no -wal/-shm): the absent sidecars are skipped, so the
+        # total is exactly the main file's size.
+        self.db.write_bytes(b"x" * 17)
+        self.assertFalse(Path(f"{self.db}-wal").exists())
+        self.assertEqual(store_sql._db_file_bytes(self.db), 17)
+
+
 class AutomationActorAuditTests(unittest.TestCase):
     """P5b: a rule firing its actions records actor=automation:<rule_id> in the audit log."""
 

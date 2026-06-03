@@ -24,6 +24,7 @@ const messages: Partial<Messages> = {
   "audit.title": "Kumbukumbu ya shughuli",
   "audit.empty": "Hakuna shughuli bado",
   "audit.refresh": "Onyesha upya",
+  "dbstats.title": "Hifadhidata",
   "rooms.empty": "Hakuna vifaa",
   "rooms.other": "Nyingine",
   "rooms.deviceCount.one": "{n} kifaa",

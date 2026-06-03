@@ -24,6 +24,7 @@ const messages: Partial<Messages> = {
   "audit.title": "Darbību žurnāls",
   "audit.empty": "Pagaidām nav darbību",
   "audit.refresh": "Atsvaidzināt",
+  "dbstats.title": "Datubāze",
   "rooms.empty": "Nav ierīču",
   "rooms.other": "Citi",
   "rooms.deviceCount.zero": "{n} ierīču",

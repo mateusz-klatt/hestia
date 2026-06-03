@@ -199,6 +199,12 @@ async def _audit_feed(request):
     return _json(HTTPStatus.OK, {"events": events})
 
 
+async def _db_stats(_request):
+    """GET /api/db/stats — SQLite file size + row counts, auth-gated like every /api/* route."""
+    stats = await asyncio.get_running_loop().run_in_executor(None, store_sql.db_stats)
+    return _json(HTTPStatus.OK, stats)
+
+
 async def _ui_redirect(_request):  # NOSONAR S7503: aiohttp route handlers must be coroutines (the framework awaits them)
     # The app moved from /ui/ to the root; keep the old bookmark working. A RELATIVE target ("../") so the
     # redirect is correct whether hestia is served at a bare root or behind a reverse-proxy subpath (/hestia/).
@@ -528,6 +534,7 @@ def make_app(rt):
     app.router.add_get("/api/events", _events, allow_head=False)
     app.router.add_get("/api/automations", _automations_list, allow_head=False)
     app.router.add_get("/api/audit", _audit_feed, allow_head=False)
+    app.router.add_get("/api/db/stats", _db_stats, allow_head=False)
     app.router.add_post("/api/name", _name)
     app.router.add_post("/api/ir", _ir)
     app.router.add_post("/api/control", _control)

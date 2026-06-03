@@ -248,6 +248,11 @@ td.sub-label {
   margin-bottom: 1.2rem;
 }
 
+#dbstats {
+  margin: 1.8rem 0 1.2rem;
+}
+
+.dbstats-head,
 .audit-head {
   display: flex;
   flex-wrap: wrap;
@@ -256,10 +261,16 @@ td.sub-label {
   margin: 0 0 0.5rem;
 }
 
+.dbstats-head h3,
 .audit-head h3 {
   flex: 1 1 auto;
   font-size: 1rem;
   margin: 0;
+}
+
+.dbstats-line {
+  color: var(--muted);
+  margin: 0 0 1.2rem;
 }
 
 .audit-list {

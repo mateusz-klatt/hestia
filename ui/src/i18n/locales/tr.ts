@@ -24,6 +24,7 @@ const messages: Partial<Messages> = {
   "audit.title": "Etkinlik günlüğü",
   "audit.empty": "Henüz etkinlik yok",
   "audit.refresh": "Yenile",
+  "dbstats.title": "Veritabanı",
   "rooms.empty": "Cihaz yok",
   "rooms.other": "Diğer",
   "rooms.deviceCount.one": "{n} cihaz",

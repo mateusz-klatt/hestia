@@ -24,6 +24,7 @@ const messages: Partial<Messages> = {
   "audit.title": "Protokol aktivity",
   "audit.empty": "Zatím žádná aktivita",
   "audit.refresh": "Obnovit",
+  "dbstats.title": "Databáze",
   "rooms.empty": "Žádná zařízení",
   "rooms.other": "Ostatní",
   "rooms.deviceCount.one": "{n} zařízení",

@@ -24,6 +24,7 @@ const messages: Partial<Messages> = {
   "audit.title": "Virkniskrá",
   "audit.empty": "Engin virkni enn",
   "audit.refresh": "Endurhlaða",
+  "dbstats.title": "Gagnagrunnur",
   "rooms.empty": "Engin tæki",
   "rooms.other": "Annað",
   "rooms.deviceCount.one": "{n} tæki",

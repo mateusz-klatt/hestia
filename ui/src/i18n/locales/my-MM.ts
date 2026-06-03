@@ -24,6 +24,7 @@ const messages: Partial<Messages> = {
   "audit.title": "လုပ်ဆောင်ချက်မှတ်တမ်း",
   "audit.empty": "လုပ်ဆောင်ချက် မရှိသေးပါ",
   "audit.refresh": "အသစ်တင်",
+  "dbstats.title": "ဒေတာဘေ့စ်",
   "rooms.empty": "စက်ပစ္စည်းမရှိပါ",
   "rooms.other": "အခြား",
   "rooms.deviceCount.other": "{n} စက်ပစ္စည်း",

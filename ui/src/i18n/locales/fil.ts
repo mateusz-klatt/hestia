@@ -24,6 +24,7 @@ const messages: Partial<Messages> = {
   "audit.title": "Log ng aktibidad",
   "audit.empty": "Wala pang aktibidad",
   "audit.refresh": "I-refresh",
+  "dbstats.title": "Database",
   "rooms.empty": "Walang device",
   "rooms.other": "Iba pa",
   "rooms.deviceCount.one": "{n} device",

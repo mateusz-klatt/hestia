@@ -24,6 +24,7 @@ const messages: Partial<Messages> = {
   "audit.title": "Գործունեության մատյան",
   "audit.empty": "Դեռ գործունեություն չկա",
   "audit.refresh": "Թարմացնել",
+  "dbstats.title": "Տվյալների բազա",
   "rooms.empty": "Սարքեր չկան",
   "rooms.other": "Այլ",
   "rooms.deviceCount.one": "{n} սարք",
