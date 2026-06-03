@@ -140,8 +140,28 @@ def authenticate(username: str, password: str, users: dict) -> bool:
     return verify_password(password, stored)
 
 
+def save_user_json(username: str, password_hash: str, path: "Path | None" = None) -> Path:
+    """Atomically upsert one user into the JSON store (per-PID temp + fsync + os.replace). The
+    per-PID temp name keeps two concurrent ``add`` runs from clobbering the same temp file (each
+    os.replace is atomic; last wins). Returns the file written."""
+    target = users_path() if path is None else path
+    users = load_users(target)
+    users[username] = password_hash
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp = target.with_name(f"{target.name}.{os.getpid()}.tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(json.dumps(users, indent=2, sort_keys=True) + "\n")
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, target)
+    return target
+
+
 def _cli(argv: list, *, prompt=getpass.getpass, path: "Path | None" = None) -> int:
-    """``add <username>`` — prompt a password (twice), hash it, and upsert it into the users store."""
+    """``add <username>`` — prompt a password (twice), hash it, and upsert it into the AUTHORITATIVE
+    users store: the SQLite DB when it is in charge (HESTIA_PERSIST=sqlite and the users table is cut
+    over), else the JSON file. Writing where the daemon reads avoids a silent no-op after cutover. A
+    test ``path`` forces the JSON file (and keeps this module import-clean of the DB layer)."""
     if len(argv) != 2 or argv[0] != "add":
         print("usage: python -m hestia.auth add <username>", file=sys.stderr)
         return 2
@@ -156,18 +176,14 @@ def _cli(argv: list, *, prompt=getpass.getpass, path: "Path | None" = None) -> i
     if first != prompt("repeat:   "):
         print("passwords differ", file=sys.stderr)
         return 1
-    target = users_path() if path is None else path
-    users = load_users(target)
-    users[username] = hash_password(first)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    # Atomic write: a crash or a concurrent `add` must not truncate or lose the store. A per-PID temp name
-    # keeps two concurrent `add` runs from clobbering the same temp file (each os.replace is atomic; last wins).
-    tmp = target.with_name(f"{target.name}.{os.getpid()}.tmp")
-    with open(tmp, "w", encoding="utf-8") as f:
-        f.write(json.dumps(users, indent=2, sort_keys=True) + "\n")
-        f.flush()
-        os.fsync(f.fileno())
-    os.replace(tmp, target)
+    password_hash = hash_password(first)
+    if path is None and os.environ.get("HESTIA_PERSIST", "json").lower() == "sqlite":
+        from . import store_sql
+        if store_sql.users_db_authoritative():
+            store_sql.set_user_db(username, password_hash)
+            print(f"saved user {username!r} to the SQLite DB")
+            return 0
+    target = save_user_json(username, password_hash, path)
     print(f"saved user {username!r} to {target}")
     return 0
 
