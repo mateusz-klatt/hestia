@@ -1,0 +1,40 @@
+import type { Messages } from "./en";
+
+const messages: Partial<Messages> = {
+  "header.confirmed": "{confirmed}/{total} nakumpirma",
+  "header.unknown": "{unknown} hindi kilala",
+
+  "conn.reconnecting": "(muling kumokonekta…)",
+
+  "view.rooms": "🏠 Mga kuwarto",
+  "view.back": "← Mga kuwarto",
+  "view.advanced": "🔧 Advanced",
+
+  "login.username": "Username",
+  "login.password": "Password",
+  "login.submit": "Mag-sign in",
+  "login.error": "✗ Mali ang username o password",
+
+  "user.loggedInAs": "naka-sign in: {user}",
+  "user.logout": "Mag-log out",
+  "user.language": "Wika",
+  "user.temperature": "Temperatura",
+
+  "common.loading": "Naglo-load…",
+  "rooms.empty": "Walang device",
+  "rooms.other": "Iba pa",
+  "rooms.deviceCount.one": "{n} device",
+  "rooms.deviceCount.other": "{n} device",
+
+  "ctl.on": "Naka-on",
+  "ctl.off": "Naka-off",
+  "ctl.raise": "Itaas",
+  "ctl.lower": "Ibaba",
+  "ctl.set": "Itakda",
+  "ctl.turnOff": "I-off",
+  "ctl.sent": "✓ naipadala",
+  "ctl.failed": "nabigo",
+  "ctl.error": "✗ error",
+};
+
+export default messages;

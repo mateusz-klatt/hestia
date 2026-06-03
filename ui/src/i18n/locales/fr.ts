@@ -1,0 +1,41 @@
+import type { Messages } from "./en";
+
+const messages: Partial<Messages> = {
+  "header.confirmed": "{confirmed}/{total} confirmés",
+  "header.unknown": "{unknown} inconnus",
+
+  "conn.reconnecting": "(reconnexion…)",
+
+  "view.rooms": "🏠 Pièces",
+  "view.back": "← Pièces",
+  "view.advanced": "🔧 Avancé",
+
+  "login.username": "Nom d'utilisateur",
+  "login.password": "Mot de passe",
+  "login.submit": "Se connecter",
+  "login.error": "✗ Nom d'utilisateur ou mot de passe incorrect",
+
+  "user.loggedInAs": "connecté : {user}",
+  "user.logout": "Se déconnecter",
+  "user.language": "Langue",
+  "user.temperature": "Température",
+
+  "common.loading": "Chargement…",
+  "rooms.empty": "Aucun appareil",
+  "rooms.other": "Autres",
+  "rooms.deviceCount.one": "{n} appareil",
+  "rooms.deviceCount.many": "{n} appareils",
+  "rooms.deviceCount.other": "{n} appareils",
+
+  "ctl.on": "Activé",
+  "ctl.off": "Désactivé",
+  "ctl.raise": "Augmenter",
+  "ctl.lower": "Réduire",
+  "ctl.set": "Régler",
+  "ctl.turnOff": "Éteindre",
+  "ctl.sent": "✓ envoyé",
+  "ctl.failed": "échec",
+  "ctl.error": "✗ erreur",
+};
+
+export default messages;
