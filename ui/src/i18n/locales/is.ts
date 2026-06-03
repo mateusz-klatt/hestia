@@ -21,6 +21,9 @@ const messages: Partial<Messages> = {
   "user.temperature": "Hitastig",
 
   "common.loading": "Hleður…",
+  "audit.title": "Virkniskrá",
+  "audit.empty": "Engin virkni enn",
+  "audit.refresh": "Endurhlaða",
   "rooms.empty": "Engin tæki",
   "rooms.other": "Annað",
   "rooms.deviceCount.one": "{n} tæki",

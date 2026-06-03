@@ -128,6 +128,18 @@ export interface RuleResult {
   body: { ok?: boolean; error?: string; id?: string } | null;
 }
 
+// ---- Audit log (`GET /api/audit`) ----------------------------------------
+
+export interface AuditEvent {
+  id: number;
+  ts: number;
+  actor: string;
+  action: string;
+  target: string | null;
+  detail: string | null;
+  result: string | null;
+}
+
 export interface Discovery {
   devices: Record<string, DeviceInfo>;
   summary: Summary;

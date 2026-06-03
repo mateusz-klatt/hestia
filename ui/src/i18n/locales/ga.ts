@@ -21,6 +21,9 @@ const messages: Partial<Messages> = {
   "user.temperature": "Teocht",
 
   "common.loading": "Á lódáil…",
+  "audit.title": "Log gníomhaíochta",
+  "audit.empty": "Níl aon ghníomhaíocht fós",
+  "audit.refresh": "Athnuaigh",
   "rooms.empty": "Gan ghléasanna",
   "rooms.other": "Eile",
   "rooms.deviceCount.one": "{n} ghléas",

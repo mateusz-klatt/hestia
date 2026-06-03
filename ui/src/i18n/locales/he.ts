@@ -21,6 +21,9 @@ const messages: Partial<Messages> = {
   "user.temperature": "טמפרטורה",
 
   "common.loading": "טוען…",
+  "audit.title": "יומן פעילות",
+  "audit.empty": "אין פעילות עדיין",
+  "audit.refresh": "רענן",
   "rooms.empty": "אין מכשירים",
   "rooms.other": "אחרים",
   "rooms.deviceCount.one": "{n} מכשיר",

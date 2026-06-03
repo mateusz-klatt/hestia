@@ -21,6 +21,9 @@ const messages: Partial<Messages> = {
   "user.temperature": "درجة الحرارة",
 
   "common.loading": "جارٍ التحميل…",
+  "audit.title": "سجل النشاط",
+  "audit.empty": "لا يوجد نشاط بعد",
+  "audit.refresh": "تحديث",
   "rooms.empty": "لا توجد أجهزة",
   "rooms.other": "أخرى",
   "rooms.deviceCount.zero": "{n} جهاز",

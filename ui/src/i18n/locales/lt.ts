@@ -21,6 +21,9 @@ const messages: Partial<Messages> = {
   "user.temperature": "Temperatūra",
 
   "common.loading": "Įkeliama…",
+  "audit.title": "Veiklos žurnalas",
+  "audit.empty": "Veiklos dar nėra",
+  "audit.refresh": "Atnaujinti",
   "rooms.empty": "Nėra įrenginių",
   "rooms.other": "Kita",
   "rooms.deviceCount.one": "{n} įrenginys",

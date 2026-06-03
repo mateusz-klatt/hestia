@@ -3,6 +3,7 @@ import "./style.css";
 import {
   apiUrl,
   deleteRule,
+  fetchAudit,
   fetchAutomations,
   fetchDiscovery,
   postControl,
@@ -11,6 +12,7 @@ import {
   postRule,
   whoami,
 } from "./api/client";
+import { renderAuditFeed } from "./audit";
 import { renderAutomations } from "./automations";
 import { renderActions } from "./controls";
 import { initLocale } from "./i18n";
@@ -87,6 +89,8 @@ const live = new LiveController(
 
 /** Wire up the live app (events, intervals, initial fetch). Called only once authenticated. */
 function startApp(): void {
+  const audit = renderAuditFeed(el("audit-feed"), fetchAudit);
+
   el("refresh").addEventListener("click", () => {
     void live.refresh();
   });
@@ -98,7 +102,11 @@ function startApp(): void {
     { switchBox: el("view-switch"), roomsEl: el("rooms-view"), adminEl: el("admin-view") },
     (view) => {
       currentView = view;
-      if (view === "rooms") roomsView.goToLanding(); // tapping the rooms tab always returns to the list
+      if (view === "rooms") {
+        roomsView.goToLanding(); // tapping the rooms tab always returns to the list
+      } else {
+        void audit.refresh();
+      }
     },
   );
   // The "← Rooms" back label only reflects nav while the rooms view is the active one — a background

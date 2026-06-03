@@ -24,6 +24,9 @@ const en = {
   "user.temperature": "Temperature",
 
   "common.loading": "Loading…",
+  "audit.title": "Activity log",
+  "audit.empty": "No activity yet",
+  "audit.refresh": "Refresh",
   "rooms.empty": "No devices",
   "rooms.other": "Other",
   "rooms.deviceCount.zero": "{n} devices",

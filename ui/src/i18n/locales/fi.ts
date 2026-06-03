@@ -21,6 +21,9 @@ const messages: Partial<Messages> = {
   "user.temperature": "Lämpötila",
 
   "common.loading": "Ladataan…",
+  "audit.title": "Toimintaloki",
+  "audit.empty": "Ei vielä toimintaa",
+  "audit.refresh": "Päivitä",
   "rooms.empty": "Ei laitteita",
   "rooms.other": "Muut",
   "rooms.deviceCount.one": "{n} laite",

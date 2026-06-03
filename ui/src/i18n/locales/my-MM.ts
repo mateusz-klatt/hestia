@@ -21,6 +21,9 @@ const messages: Partial<Messages> = {
   "user.temperature": "အပူချိန်",
 
   "common.loading": "တင်နေသည်…",
+  "audit.title": "လုပ်ဆောင်ချက်မှတ်တမ်း",
+  "audit.empty": "လုပ်ဆောင်ချက် မရှိသေးပါ",
+  "audit.refresh": "အသစ်တင်",
   "rooms.empty": "စက်ပစ္စည်းမရှိပါ",
   "rooms.other": "အခြား",
   "rooms.deviceCount.other": "{n} စက်ပစ္စည်း",

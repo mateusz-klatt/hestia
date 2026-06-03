@@ -21,6 +21,9 @@ const messages: Partial<Messages> = {
   "user.temperature": "دما",
 
   "common.loading": "در حال بارگذاری…",
+  "audit.title": "گزارش فعالیت",
+  "audit.empty": "هنوز فعالیتی نیست",
+  "audit.refresh": "بازخوانی",
   "rooms.empty": "هیچ دستگاهی نیست",
   "rooms.other": "سایر",
   "rooms.deviceCount.one": "{n} دستگاه",

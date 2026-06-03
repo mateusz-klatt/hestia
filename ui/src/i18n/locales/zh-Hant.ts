@@ -21,6 +21,9 @@ const messages: Partial<Messages> = {
   "user.temperature": "溫度",
 
   "common.loading": "載入中…",
+  "audit.title": "活動記錄",
+  "audit.empty": "尚無活動",
+  "audit.refresh": "重新整理",
   "rooms.empty": "沒有裝置",
   "rooms.other": "其他",
   "rooms.deviceCount.other": "{n} 個裝置",

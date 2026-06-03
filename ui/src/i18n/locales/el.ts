@@ -21,6 +21,9 @@ const messages: Partial<Messages> = {
   "user.temperature": "Θερμοκρασία",
 
   "common.loading": "Φόρτωση…",
+  "audit.title": "Αρχείο δραστηριότητας",
+  "audit.empty": "Δεν υπάρχει ακόμη δραστηριότητα",
+  "audit.refresh": "Ανανέωση",
   "rooms.empty": "Δεν υπάρχουν συσκευές",
   "rooms.other": "Άλλα",
   "rooms.deviceCount.one": "{n} συσκευή",

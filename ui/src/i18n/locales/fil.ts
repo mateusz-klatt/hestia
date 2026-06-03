@@ -21,6 +21,9 @@ const messages: Partial<Messages> = {
   "user.temperature": "Temperatura",
 
   "common.loading": "Naglo-load…",
+  "audit.title": "Log ng aktibidad",
+  "audit.empty": "Wala pang aktibidad",
+  "audit.refresh": "I-refresh",
   "rooms.empty": "Walang device",
   "rooms.other": "Iba pa",
   "rooms.deviceCount.one": "{n} device",

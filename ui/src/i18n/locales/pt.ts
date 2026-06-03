@@ -21,6 +21,9 @@ const messages: Partial<Messages> = {
   "user.temperature": "Temperatura",
 
   "common.loading": "Carregando…",
+  "audit.title": "Registro de atividade",
+  "audit.empty": "Ainda sem atividade",
+  "audit.refresh": "Atualizar",
   "rooms.empty": "Sem dispositivos",
   "rooms.other": "Outros",
   "rooms.deviceCount.one": "{n} dispositivo",

@@ -1,4 +1,5 @@
 import type {
+  AuditEvent,
   ControlOp,
   ControlResult,
   Discovery,
@@ -116,6 +117,18 @@ export async function fetchAutomations(): Promise<Rule[] | null> {
     if (!response.ok) return null;
     const data = (await response.json()) as { automations?: Rule[] };
     return data.automations ?? [];
+  } catch {
+    return null;
+  }
+}
+
+/** GET `/api/audit`; the audit event list, or `null` on any load failure. */
+export async function fetchAudit(): Promise<AuditEvent[] | null> {
+  try {
+    const response = await fetch(apiUrl("audit"));
+    if (!response.ok) return null;
+    const data = (await response.json()) as { events?: AuditEvent[] };
+    return data.events ?? [];
   } catch {
     return null;
   }

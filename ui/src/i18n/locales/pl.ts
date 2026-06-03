@@ -23,6 +23,9 @@ const pl: Partial<Messages> = {
   "user.temperature": "Temperatura",
 
   "common.loading": "Ładowanie…",
+  "audit.title": "Dziennik zdarzeń",
+  "audit.empty": "Brak aktywności",
+  "audit.refresh": "Odśwież",
   "rooms.empty": "Brak urządzeń",
   "rooms.other": "Inne",
   "rooms.deviceCount.one": "{n} urządzenie",
