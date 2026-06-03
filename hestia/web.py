@@ -42,15 +42,15 @@ from . import auth, store_sql
 from .classifier import DeviceType
 from .automations import rule_vocab
 from .proxy import (IR_BUTTONS, KLIMA, _CLOSED_SENTINEL, _LOOPBACK, _audit, _merged_discovery,
-                    _truthy_env, globals_snapshot, process_control_op)
+                    _num_env, _truthy_env, globals_snapshot, process_control_op)
 
 log = logging.getLogger("hestia.web")
 
 MAX_BODY = 8192                                      # cap POST body size (bytes)
 MAX_RULE_BODY = 65536                                # larger cap for an automation rule
 MAX_STRING = 256                                     # cap name / room length (chars)
-SSE_IDLE_TIMEOUT = float(os.environ.get("HESTIA_SSE_KEEPALIVE", "5"))  # idle→keepalive; also how fast a
-#                                                     reloaded-away client's slot is reclaimed (write fails)
+SSE_IDLE_TIMEOUT = _num_env("HESTIA_SSE_KEEPALIVE", 5.0, 1.0, 3600.0)  # idle→keepalive; also how fast a
+#       reloaded-away client's slot is reclaimed (write fails). Clamped ≥1s so a typo can't tight-loop.
 SSE_MAX_LIFETIME = float(os.environ.get("HESTIA_SSE_LIFETIME", "3600"))
 _TYPES = {t.value for t in DeviceType}
 _clock = time.monotonic                              # module-level rebindable for tests

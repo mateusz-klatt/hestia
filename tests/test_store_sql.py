@@ -412,6 +412,20 @@ class Phase4UsersTests(unittest.TestCase):
             self.assertIn("ju", auth.load_users(self.users_json))
 
 
+class NumEnvTests(unittest.TestCase):
+    """proxy._num_env clamps the SSE knobs: bad / out-of-range / non-finite values fall back."""
+
+    def test_clamps_and_falls_back(self):
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("X_KNOB", None)
+            self.assertEqual(proxy._num_env("X_KNOB", 5.0, 1.0, 10.0), 5.0)        # unset → default
+        for bad in ("abc", "0", "99", "nan", "inf"):
+            with mock.patch.dict(os.environ, {"X_KNOB": bad}):
+                self.assertEqual(proxy._num_env("X_KNOB", 5.0, 1.0, 10.0), 5.0)    # bad/out-of-range → default
+        with mock.patch.dict(os.environ, {"X_KNOB": "7"}):
+            self.assertEqual(proxy._num_env("X_KNOB", 5.0, 1.0, 10.0), 7.0)        # in range → the value
+
+
 class AuditLogTests(unittest.TestCase):
     """The append-only audit log: insert, recent (order/limit), and the row/age prune caps."""
 

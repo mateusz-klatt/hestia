@@ -148,6 +148,20 @@ def _truthy_env(raw: "str | None") -> bool:
     return raw is not None and raw.strip().lower() in ("1", "true", "yes", "on")
 
 
+def _num_env(name: str, default: float, lo: float, hi: float) -> float:
+    """A numeric env knob clamped to ``[lo, hi]``: an unset / non-numeric / non-finite / out-of-range
+    value falls back to ``default`` (so a typo like ``HESTIA_SSE_KEEPALIVE=0`` can't tight-loop, and a
+    negative cap can't crash the Semaphore). The range check rejects NaN/inf (any comparison is False)."""
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        return default
+    return value if lo <= value <= hi else default
+
+
 NIANIA_TEMP_DP = _int_env(os.environ.get("HESTIA_NIANIA_TEMP_DP"), 238)
 NIANIA_SCALE = _pos_float_env(os.environ.get("HESTIA_NIANIA_SCALE"), 10.0)
 NIANIA_SECS = _niania_interval(os.environ.get("HESTIA_NIANIA_SECS", "90"))
@@ -357,7 +371,7 @@ class Subscription:
 # slot until the server's next keepalive write detects the disconnect (~HESTIA_SSE_KEEPALIVE s), so a
 # burst of reloads (rapid F5) could exhaust a small cap → 429. 32 (was 8) absorbs that for a home box;
 # env-tunable. NOTE: a WebSocket would NOT change this — it's connection churn, not the SSE transport.
-_SSE_MAX_SUBS = int(os.environ.get("HESTIA_SSE_MAX_SUBS", "32"))
+_SSE_MAX_SUBS = int(_num_env("HESTIA_SSE_MAX_SUBS", 32, 1, 4096))   # ≥1 so the Semaphore is always valid
 
 
 class EventBus:
