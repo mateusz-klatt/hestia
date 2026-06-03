@@ -1,4 +1,5 @@
 import type { ControlOp, ControlResult, DeviceInfo } from "./api/types";
+import { t } from "./i18n";
 
 /** Sends one control op; returns a normalised result (never rejects). */
 export type PostControl = (op: ControlOp) => Promise<ControlResult>;
@@ -39,10 +40,10 @@ export function renderActions(
     status.className = "status";
     try {
       const res = await postControl(op);
-      status.textContent = res.ok ? "✓ wysłano" : `✗ ${res.error ?? "failed"}`;
+      status.textContent = res.ok ? t("ctl.sent") : `✗ ${res.error ?? t("ctl.failed")}`;
       status.className = res.ok ? "status" : "status err";
     } catch {
-      status.textContent = "✗ błąd";
+      status.textContent = t("ctl.error");
       status.className = "status err";
     } finally {
       busy = false;
@@ -72,7 +73,7 @@ export function renderActions(
       sel.appendChild(o);
     }
     cell.appendChild(sel);
-    addButton("Ustaw", () => ({ op: "level", node, value: Number(sel.value) }));
+    addButton(t("ctl.set"), () => ({ op: "level", node, value: Number(sel.value) }));
   };
 
   // Clamp a setpoint nudge to the thermostat's 5–30 °C range (default 21).
@@ -84,22 +85,22 @@ export function renderActions(
 
   if (info.type === "light") {
     if (info.level !== null) {
-      addButton("Wył", () => ({ op: "level", node, value: 0 }));
-      addButton("Wł", () => ({ op: "level", node, value: 99 }));
+      addButton(t("ctl.off"), () => ({ op: "level", node, value: 0 }));
+      addButton(t("ctl.on"), () => ({ op: "level", node, value: 99 }));
       addLevelSelect();
     } else {
-      addButton("Wł", () => ({ op: "switch", node, on: true }));
-      addButton("Wył", () => ({ op: "switch", node, on: false }));
+      addButton(t("ctl.on"), () => ({ op: "switch", node, on: true }));
+      addButton(t("ctl.off"), () => ({ op: "switch", node, on: false }));
     }
   } else if (info.type === "plug") {
-    addButton("Wł", () => ({ op: "switch", node, on: true }));
-    addButton("Wył", () => ({ op: "switch", node, on: false }));
+    addButton(t("ctl.on"), () => ({ op: "switch", node, on: true }));
+    addButton(t("ctl.off"), () => ({ op: "switch", node, on: false }));
   } else if (info.type === "blind") {
-    addButton("Podnieś", () => ({ op: "cover", node, value: 99 }));
-    addButton("Opuść", () => ({ op: "cover", node, value: 0 }));
+    addButton(t("ctl.raise"), () => ({ op: "cover", node, value: 99 }));
+    addButton(t("ctl.lower"), () => ({ op: "cover", node, value: 0 }));
   } else if (info.type === "thermostat") {
-    addButton("Wył", () => ({ op: "thermostat_power", node, on: false }));
-    addButton("Wł", () => ({ op: "thermostat_power", node, on: true }));
+    addButton(t("ctl.off"), () => ({ op: "thermostat_power", node, on: false }));
+    addButton(t("ctl.on"), () => ({ op: "thermostat_power", node, on: true }));
     addButton(
       "−",
       () => ({ op: "thermostat", node, celsius: clampSetpoint(-0.5) }),

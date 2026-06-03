@@ -1,3 +1,5 @@
+import { t } from "./i18n";
+
 export type ViewName = "rooms" | "admin";
 
 const STORAGE_KEY = "hestia.view";
@@ -39,8 +41,8 @@ export function renderViewSwitch(
   onChange: (view: ViewName) => void,
 ): (view: ViewName) => void {
   const tabs: { name: ViewName; label: string; btn: HTMLButtonElement }[] = [
-    { name: "rooms", label: "🏠 Pokoje", btn: document.createElement("button") },
-    { name: "admin", label: "🔧 Zaawansowane", btn: document.createElement("button") },
+    { name: "rooms", label: t("view.rooms"), btn: document.createElement("button") },
+    { name: "admin", label: t("view.advanced"), btn: document.createElement("button") },
   ];
 
   const apply = (view: ViewName): void => {

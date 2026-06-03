@@ -25,13 +25,13 @@ describe("createRoomsView — landing", () => {
   it("shows a loading placeholder before any snapshot", () => {
     const { container, view } = mk();
     view.update(null);
-    expect(container.querySelector(".room-placeholder")?.textContent).toBe("ładowanie…");
+    expect(container.querySelector(".room-placeholder")?.textContent).toBe("Loading…");
   });
 
   it("shows 'Brak urządzeń' when there are no devices", () => {
     const { container, view } = mk();
     view.update(discovery({}));
-    expect(container.querySelector(".room-placeholder")?.textContent).toBe("Brak urządzeń");
+    expect(container.querySelector(".room-placeholder")?.textContent).toBe("No devices");
   });
 
   it("renders a card per room (alphabetical, Inne last) with a pluralised count", () => {
@@ -48,19 +48,19 @@ describe("createRoomsView — landing", () => {
     expect([...cards].map((c) => c.querySelector(".room-card-title")?.textContent)).toEqual([
       "Kuchnia",
       "Salon",
-      "Inne",
+      "Other",
     ]);
     expect([...cards].map((c) => c.querySelector(".room-card-count")?.textContent)).toEqual([
-      "1 urządzenie",
-      "2 urządzenia",
-      "1 urządzenie",
+      "1 device",
+      "2 devices",
+      "1 device",
     ]);
   });
 
   it("treats a blank/whitespace room as Inne", () => {
     const { container, view } = mk();
     view.update(discovery({ "1": device({ type: "light", room: "   " }) }));
-    expect(container.querySelector(".room-card-title")?.textContent).toBe("Inne");
+    expect(container.querySelector(".room-card-title")?.textContent).toBe("Other");
   });
 });
 
@@ -74,7 +74,7 @@ describe("createRoomsView — room detail", () => {
     expect(card?.querySelector(".room-device-name")?.textContent).toBe("Lampa");
     expect(card?.querySelector(".room-device-stan")?.textContent).toBe("off");
     [...container.querySelectorAll<HTMLButtonElement>(".room-device-actions button")]
-      .find((b) => b.textContent === "Wł")
+      .find((b) => b.textContent === "On")
       ?.click();
     expect(sent).toEqual([{ op: "switch", node: 5, on: true }]);
   });
@@ -113,7 +113,7 @@ describe("createRoomsView — room detail", () => {
       discovery({ "2": device({ type: "light", room: "Salon", endpoints: { "1": true, "2": false } }) }),
     );
     openFirstRoom(container);
-    expect(container.querySelector(".room-device-stan")?.textContent).toBe("1: wł · 2: wył");
+    expect(container.querySelector(".room-device-stan")?.textContent).toBe("1: On · 2: Off");
     expect(container.querySelectorAll(".room-device-actions button")).toHaveLength(0);
   });
 });

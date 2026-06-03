@@ -96,7 +96,7 @@ describe("renderKlima", () => {
     expect(modeValues).toEqual(["cool", "heat"]); // sorted modes
     const tempValues = [...(selects[1]?.querySelectorAll("option") ?? [])].map((o) => o.value);
     expect(tempValues).toEqual(["22", "24"]); // cool's temps
-    expect(labels(el)).toEqual(["Ustaw", "Wyłącz"]);
+    expect(labels(el)).toEqual(["Set", "Turn off"]);
   });
 
   it("Ustaw sends the idempotent power-on signal on_<mode>_<temp>", async () => {
@@ -111,7 +111,7 @@ describe("renderKlima", () => {
     if (mode !== undefined) mode.value = "heat";
     if (mode !== undefined) mode.dispatchEvent(new Event("change")); // refill temps for the new mode
     if (temp !== undefined) temp.value = "20";
-    click(el, "Ustaw");
+    click(el, "Set");
     await flush();
     expect(sent).toEqual([{ file: "/ext/infrared/klima.ir", button: "on_heat_20" }]);
     expect(el.querySelector(".status")?.textContent).toBe("✓ heat 20°");
@@ -125,9 +125,10 @@ describe("renderKlima", () => {
     };
     const el = box();
     renderKlima(el, KLIMA, post);
-    click(el, "Wyłącz");
+    click(el, "Turn off");
     await flush();
     expect(sent).toEqual(["off"]);
+    expect(el.querySelector(".status")?.textContent).toBe("✓ Turn off"); // localised success tag, not "✓ Wyłącz"
   });
 
   it("builds nothing for an empty klima map", () => {
@@ -141,7 +142,7 @@ describe("renderKlima", () => {
     const noOff: Klima = { file: "/ext/infrared/klima.ir", power_on: { cool: [22] }, presets: [] };
     renderKlima(el, noOff, okIr);
     renderKlima(el, noOff, okIr); // idempotent
-    expect(labels(el)).toEqual(["Ustaw"]);
+    expect(labels(el)).toEqual(["Set"]);
   });
 
   it("does not transmit when the selected mode has no temps (empty-value guard)", async () => {
@@ -152,7 +153,7 @@ describe("renderKlima", () => {
     };
     const el = box();
     renderKlima(el, { file: "/ext/infrared/klima.ir", power_on: { cool: [] }, presets: ["off"] }, post);
-    click(el, "Ustaw"); // temp dropdown is empty → temp.value === "" → guard blocks
+    click(el, "Set"); // temp dropdown is empty → temp.value === "" → guard blocks
     await flush();
     expect(sent).toEqual([]);
   });
@@ -166,8 +167,8 @@ describe("renderKlima", () => {
     const el = box();
     renderKlima(el, { file: "/ext/infrared/klima.ir", power_on: {}, presets: ["off"] }, post);
     expect(el.querySelectorAll("select")).toHaveLength(0);
-    expect(labels(el)).toEqual(["Wyłącz"]);
-    click(el, "Wyłącz");
+    expect(labels(el)).toEqual(["Turn off"]);
+    click(el, "Turn off");
     await flush();
     expect(sent).toEqual(["off"]);
   });
@@ -180,10 +181,10 @@ describe("renderKlima", () => {
     };
     const el = box();
     renderKlima(el, KLIMA, post);
-    click(el, "Ustaw");
+    click(el, "Set");
     await flush();
-    expect(el.querySelector(".status")?.textContent).toBe("✗ błąd");
-    click(el, "Wyłącz"); // lock released by finally → fires again
+    expect(el.querySelector(".status")?.textContent).toBe("✗ error");
+    click(el, "Turn off"); // lock released by finally → fires again
     await flush();
     expect(calls).toBe(2);
   });
@@ -199,13 +200,13 @@ describe("renderKlima", () => {
     };
     const el = box();
     renderKlima(el, KLIMA, post);
-    click(el, "Ustaw");
+    click(el, "Set");
     expect(calls).toBe(1);
-    click(el, "Wyłącz"); // ignored while busy
+    click(el, "Turn off"); // ignored while busy
     expect(calls).toBe(1);
     resolve({ ok: true });
     await flush();
-    click(el, "Wyłącz"); // lock released
+    click(el, "Turn off"); // lock released
     expect(calls).toBe(2);
   });
 });

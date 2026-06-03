@@ -25,32 +25,32 @@ describe("renderActions button layout", () => {
   it("a switch-only light gets Wł / Wył", () => {
     const cell = td();
     renderActions(cell, 7, device({ type: "light" }), okPost);
-    expect(labels(cell)).toEqual(["Wł", "Wył"]);
+    expect(labels(cell)).toEqual(["On", "Off"]);
   });
 
   it("a dimmable light gets Wył / Wł + a level select + Ustaw", () => {
     const cell = td();
     renderActions(cell, 7, device({ type: "light", level: 40 }), okPost);
-    expect(labels(cell)).toEqual(["Wył", "Wł", "Ustaw"]);
+    expect(labels(cell)).toEqual(["Off", "On", "Set"]);
     expect(cell.querySelector("select")).not.toBeNull();
   });
 
   it("a plug gets Wł / Wył", () => {
     const cell = td();
     renderActions(cell, 7, device({ type: "plug" }), okPost);
-    expect(labels(cell)).toEqual(["Wł", "Wył"]);
+    expect(labels(cell)).toEqual(["On", "Off"]);
   });
 
   it("a blind gets Podnieś / Opuść", () => {
     const cell = td();
     renderActions(cell, 7, device({ type: "blind" }), okPost);
-    expect(labels(cell)).toEqual(["Podnieś", "Opuść"]);
+    expect(labels(cell)).toEqual(["Raise", "Lower"]);
   });
 
   it("a thermostat gets Wył / Wł / − / +", () => {
     const cell = td();
     renderActions(cell, 7, device({ type: "thermostat" }), okPost);
-    expect(labels(cell)).toEqual(["Wył", "Wł", "−", "+"]);
+    expect(labels(cell)).toEqual(["Off", "On", "−", "+"]);
   });
 
   it("multi-gang and stateless types get no buttons", () => {
@@ -66,7 +66,7 @@ describe("renderActions button layout", () => {
     const cell = td();
     renderActions(cell, 7, device({ type: "plug" }), okPost);
     renderActions(cell, 7, device({ type: "blind" }), okPost);
-    expect(labels(cell)).toEqual(["Podnieś", "Opuść"]);
+    expect(labels(cell)).toEqual(["Raise", "Lower"]);
   });
 });
 
@@ -84,28 +84,28 @@ describe("renderActions dispatch", () => {
 
     const light = td();
     renderActions(light, 5, device({ type: "light" }), post);
-    await fire(light, "Wł");
-    await fire(light, "Wył");
+    await fire(light, "On");
+    await fire(light, "Off");
 
     const dimmer = td();
     renderActions(dimmer, 6, device({ type: "light", level: 0 }), post);
     const sel = dimmer.querySelector("select");
     if (sel !== null) sel.value = "50";
-    await fire(dimmer, "Wył");
-    await fire(dimmer, "Wł");
-    await fire(dimmer, "Ustaw");
+    await fire(dimmer, "Off");
+    await fire(dimmer, "On");
+    await fire(dimmer, "Set");
 
     const blind = td();
     renderActions(blind, 8, device({ type: "blind" }), post);
-    await fire(blind, "Podnieś");
-    await fire(blind, "Opuść");
+    await fire(blind, "Raise");
+    await fire(blind, "Lower");
 
     const thermostat = td();
     renderActions(thermostat, 9, device({ type: "thermostat", setpoint: 21 }), post);
     await fire(thermostat, "−");
     await fire(thermostat, "+");
-    await fire(thermostat, "Wł");
-    await fire(thermostat, "Wył");
+    await fire(thermostat, "On");
+    await fire(thermostat, "Off");
 
     expect(sent).toEqual([
       { op: "switch", node: 5, on: true },
@@ -130,7 +130,7 @@ describe("renderActions dispatch", () => {
     };
     const cell = td();
     renderActions(cell, 6, device({ type: "light", level: 0 }), post);
-    click(cell, "Ustaw"); // select left at its default first option
+    click(cell, "Set"); // select left at its default first option
     await flush();
     expect(sent).toEqual([{ op: "level", node: 6, value: 10 }]);
   });
@@ -183,7 +183,7 @@ describe("renderActions in-flight lock + status", () => {
     gate.resolve({ ok: true });
     await flush();
     expect(btns.every((b) => b.disabled)).toBe(false);
-    expect(status?.textContent).toBe("✓ wysłano");
+    expect(status?.textContent).toBe("✓ sent");
   });
 
   it("surfaces the error text on a failed send", async () => {
