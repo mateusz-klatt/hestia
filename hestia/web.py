@@ -58,7 +58,7 @@ _NAME_FIELDS = {"op", "node", "name", "room", "type", "ep"}   # allowlist for /a
 _BODY_NOT_OBJECT = "body must be a JSON object"   # shared 4xx message (/api/ir, /api/name, /api/control)
 _CONTROL_OPS = {"switch", "level", "cover", "thermostat", "thermostat_power"}
 _CONTROL_FIELDS = {
-    "switch": {"op", "node", "on"},
+    "switch": {"op", "node", "on", "endpoint"},
     "level": {"op", "node", "value"},
     "cover": {"op", "node", "value"},
     "thermostat": {"op", "node", "celsius"},
@@ -572,6 +572,18 @@ def _control_on_error(op) -> "str | None":
     return None
 
 
+def _control_switch_error(op) -> "str | None":
+    error = _control_on_error(op)
+    if error is not None:
+        return error
+    if "endpoint" not in op:
+        return None
+    endpoint = op.get("endpoint")
+    if not isinstance(endpoint, int) or isinstance(endpoint, bool) or endpoint not in {1, 2}:
+        return "endpoint must be an integer 1 or 2"
+    return None
+
+
 def _control_value_error(op) -> "str | None":
     value = op.get("value")
     if not isinstance(value, int) or isinstance(value, bool) or not 0 <= value <= 99:
@@ -592,7 +604,7 @@ def _control_celsius_error(op) -> "str | None":
 
 # Per-op field validator (node is checked separately, for every op).
 _CONTROL_FIELD_VALIDATORS = {
-    "switch": _control_on_error,
+    "switch": _control_switch_error,
     "thermostat_power": _control_on_error,
     "level": _control_value_error,
     "cover": _control_value_error,

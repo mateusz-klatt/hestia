@@ -11,8 +11,6 @@ const LEVEL_PRESETS = [10, 25, 50, 75, 99];
  * `postControl`. A shared in-flight lock disables every button for the
  * round-trip (no concurrent sends) and is released in `finally`, so a failed
  * send can't wedge them; the outcome is shown in a status span.
- *
- * Endpoint-addressed control is deferred — multi-gang rows stay read-only.
  */
 export function renderActions(
   cell: HTMLElement,
@@ -21,7 +19,6 @@ export function renderActions(
   postControl: PostControl,
 ): void {
   cell.replaceChildren();
-  if (info.endpoints !== null) return;
 
   const buttons: HTMLButtonElement[] = [];
   const status = document.createElement("span");
@@ -75,6 +72,23 @@ export function renderActions(
     cell.appendChild(sel);
     addButton(t("ctl.set"), () => ({ op: "level", node, value: Number(sel.value) }));
   };
+
+  const endpointLabel = (ep: string): string => {
+    const name = info.endpoint_names?.[ep]?.trim();
+    return name !== undefined && name !== "" ? name : `#${ep}`;
+  };
+
+  if (info.endpoints !== null) {
+    const endpoints = Object.keys(info.endpoints).sort((a, b) => Number(a) - Number(b));
+    for (const ep of endpoints) {
+      const label = endpointLabel(ep);
+      const endpoint = Number(ep);
+      addButton(`${label} ${t("ctl.on")}`, () => ({ op: "switch", node, endpoint, on: true }));
+      addButton(`${label} ${t("ctl.off")}`, () => ({ op: "switch", node, endpoint, on: false }));
+    }
+    if (buttons.length > 0) cell.appendChild(status);
+    return;
+  }
 
   // Clamp a setpoint nudge to the thermostat's 5–30 °C range (default 21).
   const clampSetpoint = (delta: number): number => {

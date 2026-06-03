@@ -86,6 +86,20 @@ def set_switch(seq: int, node: int, on: bool) -> bytes:
     return _node_command(seq, node, bytes([0x25, 0x01, 0xFF if on else 0x00]))
 
 
+def set_endpoint_switch(seq: int, node: int, endpoint: int, on: bool) -> bytes:
+    """Toggle one channel of a 2-gang switch.
+
+    Per docs/PROTOCOL.md §5.1, endpoint-addressed SET uses
+    ``60 0d 00 <ep> 25 01 <ff/00>``. The SET form carries ``00 <ep>``,
+    while reports decoded by ``State._apply_gang`` carry ``<ep> 00``.
+    """
+    return _node_command(
+        seq,
+        node,
+        bytes([0x60, 0x0D, 0x00, endpoint, 0x25, 0x01, 0xFF if on else 0x00]),
+    )
+
+
 def set_thermostat(seq: int, node: int, celsius: float) -> bytes:
     """Set a thermostat setpoint in °C (encoded as round(°C*10), 2 bytes BE)."""
     temp10 = round(celsius * 10)

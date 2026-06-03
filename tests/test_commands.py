@@ -78,6 +78,20 @@ class NodeCommandTests(unittest.TestCase):
         attr, _, _ = self._node(commands.set_switch(1, 0x0E, False))
         self.assertEqual(attr, b"\x25\x01\x00")
 
+    def test_set_endpoint_switch_exact_frames(self):
+        self.assertEqual(
+            commands.set_endpoint_switch(1, 0x07, 1, True),
+            bytes.fromhex("7e1e07001d00460007600d00012501ff00480001000047000107001f000400000001e07e"),
+        )
+        self.assertEqual(
+            commands.set_endpoint_switch(1, 0x07, 1, False),
+            bytes.fromhex("7e1e07001d00460007600d000125010000480001000047000107001f0004000000011f7e"),
+        )
+        self.assertEqual(
+            commands.set_endpoint_switch(1, 0x07, 2, True),
+            bytes.fromhex("7e1e07001d00460007600d00022501ff00480001000047000107001f000400000001e37e"),
+        )
+
     def test_set_thermostat_setpoint_encoding(self):
         attr, node, _ = self._node(commands.set_thermostat(1, 0x0D, 21.0))
         self.assertEqual(attr, b"\x43\x01\x01\x22" + (210).to_bytes(2, "big"))

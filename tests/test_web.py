@@ -275,6 +275,17 @@ class ValidateControlPayloadTests(unittest.TestCase):
             with self.subTest(payload=payload):
                 self.assertEqual(self._validate(payload), "on must be a boolean")
 
+    def test_switch_endpoint_must_be_integer_1_or_2(self):
+        bad = [
+            {"op": "switch", "node": 7, "endpoint": 3, "on": True},
+            {"op": "switch", "node": 7, "endpoint": "1", "on": True},
+            {"op": "switch", "node": 7, "endpoint": True, "on": True},
+            {"op": "switch", "node": 7, "endpoint": None, "on": True},
+        ]
+        for payload in bad:
+            with self.subTest(payload=payload):
+                self.assertEqual(self._validate(payload), "endpoint must be an integer 1 or 2")
+
     def test_value_must_be_integer_0_99(self):
         bad = [
             {"op": "level", "node": 7},
@@ -306,6 +317,8 @@ class ValidateControlPayloadTests(unittest.TestCase):
     def test_valid_cases(self):
         good = [
             {"op": "switch", "node": 0, "on": False},
+            {"op": "switch", "node": 7, "endpoint": 1, "on": True},
+            {"op": "switch", "node": 7, "endpoint": 2, "on": False},
             {"op": "level", "node": 255, "value": 99},
             {"op": "cover", "node": 8, "value": 0},
             {"op": "thermostat", "node": 13, "celsius": 21},

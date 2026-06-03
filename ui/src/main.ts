@@ -73,6 +73,11 @@ const live = new LiveController(
   (tr, node, info) => {
     const ep = tr.dataset.ep;
     if (ep !== undefined) {
+      const endpointState = info.endpoints?.[ep];
+      const cell = tr.querySelector<HTMLElement>(".actions");
+      if (cell !== null && endpointState !== undefined) {
+        renderActions(cell, node, { ...info, endpoints: { [ep]: endpointState } }, postControl);
+      }
       bindSubRow(tr, node, Number(ep), postName); // multi-gang channel label
       return;
     }

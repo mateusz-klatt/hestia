@@ -101,7 +101,7 @@ function deviceCard(
 
   const actions = document.createElement("div");
   actions.className = "room-device-actions";
-  // Reuse the table's control renderer verbatim. Multi-gang returns no buttons (read-only until #48).
+  // Reuse the table's control renderer verbatim, including per-channel controls for multi-gang switches.
   renderActions(actions, Number(node), info, deps.postControl);
 
   card.append(head, actions);

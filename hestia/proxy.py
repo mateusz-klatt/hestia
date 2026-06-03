@@ -664,11 +664,19 @@ def build_command(rt, op) -> bytes:
     return handler(rt, op)
 
 
+def _switch_command(rt, op) -> bytes:
+    endpoint = op.get("endpoint")
+    if endpoint is not None:
+        return commands.set_endpoint_switch(
+            rt.next_seq(), _int(op["node"]), _int(endpoint), _bool(op["on"]))
+    return commands.set_switch(rt.next_seq(), _int(op["node"]), _bool(op["on"]))
+
+
 _OPS = {
     "raw": lambda rt, op: bytes.fromhex(op["hex"]),
     "cover": lambda rt, op: commands.set_cover(rt.next_seq(), _int(op["node"]), _int(op["value"])),
     "level": lambda rt, op: commands.set_level(rt.next_seq(), _int(op["node"]), _int(op["value"])),
-    "switch": lambda rt, op: commands.set_switch(rt.next_seq(), _int(op["node"]), _bool(op["on"])),
+    "switch": _switch_command,
     "lights": lambda rt, op: commands.set_lights(rt.next_seq(), [(_int(c), _int(v)) for c, v in op["channels"]]),
     "thermostat": lambda rt, op: commands.set_thermostat(rt.next_seq(), _int(op["node"]), float(op["celsius"])),
     "thermostat_power": lambda rt, op: commands.set_thermostat_power(rt.next_seq(), _int(op["node"]), _bool(op["on"])),
