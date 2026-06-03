@@ -32,6 +32,8 @@ const messages: Partial<Messages> = {
   "scene.blindsDown": "Իջեցնել բոլոր շերտավարագույրները",
   "rooms.empty": "Սարքեր չկան",
   "rooms.other": "Այլ",
+  "rooms.editIcons": "Խմբագրել պատկերակները",
+  "rooms.iconNone": "—",
   "rooms.deviceCount.one": "{n} սարք",
   "rooms.deviceCount.other": "{n} սարքեր",
 

@@ -391,6 +391,47 @@ class Phase4UsersTests(unittest.TestCase):
             self.assertEqual(store_sql.get_user_settings("tata"),
                              {"locale": "de", "temp_scale": "K", "theme": None})
 
+    def test_room_icons_unavailable_in_json_mode(self):
+        with mock.patch.dict(os.environ, {"HESTIA_PERSIST": "json", "HESTIA_DB": str(self.db)}):
+            self.assertEqual(store_sql.get_room_icons(), {})
+            self.assertFalse(store_sql.set_room_icon("Salon", "🛋️"))
+        self.assertFalse(self.db.exists())
+
+    def test_room_icons_sqlite_merge_remove_caps_and_bad_rows(self):
+        with mock.patch.dict(os.environ, {"HESTIA_PERSIST": "sqlite", "HESTIA_DB": str(self.db)}):
+            self.assertEqual(store_sql.get_room_icons(), {})
+            self.assertTrue(store_sql.set_room_icon("Salon", "🛋️"))
+            self.assertTrue(store_sql.set_room_icon("Kuchnia", "🍳"))
+            self.assertEqual(store_sql.get_room_icons(), {"Salon": "🛋️", "Kuchnia": "🍳"})
+
+            self.assertTrue(store_sql.set_room_icon("Salon", ""))
+            self.assertEqual(store_sql.get_room_icons(), {"Kuchnia": "🍳"})
+            self.assertTrue(store_sql.set_room_icon(5, 9))
+            self.assertEqual(store_sql.get_room_icons(), {"Kuchnia": "🍳"})
+
+            long_room = "x" * 80
+            long_icon = "abcdef" * 4
+            self.assertTrue(store_sql.set_room_icon(long_room, long_icon))
+            self.assertEqual(store_sql.get_room_icons()["x" * 64], long_icon[:16])
+
+            engine, Session = db.init_db(self.db)
+            with db.session_scope(Session) as s:
+                s.get(db.AppMeta, "room_icons").value = "not json"
+            engine.dispose()
+            self.assertEqual(store_sql.get_room_icons(), {})
+
+            engine, Session = db.init_db(self.db)
+            with db.session_scope(Session) as s:
+                s.get(db.AppMeta, "room_icons").value = json.dumps([1, 2])
+            engine.dispose()
+            self.assertEqual(store_sql.get_room_icons(), {})
+
+            engine, Session = db.init_db(self.db)
+            with db.session_scope(Session) as s:
+                s.get(db.AppMeta, "room_icons").value = json.dumps({"Salon": "🛋️", "bad": 5})
+            engine.dispose()
+            self.assertEqual(store_sql.get_room_icons(), {"Salon": "🛋️"})
+
     def test_device_state_cache_is_unavailable_in_json_mode(self):
         with mock.patch.dict(os.environ, {"HESTIA_PERSIST": "json", "HESTIA_DB": str(self.db)}):
             self.assertIsNone(store_sql.load_device_state())

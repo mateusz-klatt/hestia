@@ -32,6 +32,8 @@ const messages: Partial<Messages> = {
   "scene.blindsDown": "ဘလိုင်းအားလုံးချ",
   "rooms.empty": "စက်ပစ္စည်းမရှိပါ",
   "rooms.other": "အခြား",
+  "rooms.editIcons": "အိုင်ကွန်များ ပြင်ဆင်ရန်",
+  "rooms.iconNone": "—",
   "rooms.deviceCount.other": "{n} စက်ပစ္စည်း",
 
   "ctl.on": "ဖွင့်",

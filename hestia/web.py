@@ -261,6 +261,44 @@ async def _settings_set(request):
     return _json(HTTPStatus.OK, {"ok": True})
 
 
+async def _room_icons(_request):
+    """GET /api/rooms/icons — shared per-room emoji map from SQLite AppMeta."""
+    icons = await asyncio.get_running_loop().run_in_executor(None, store_sql.get_room_icons)
+    return _json(HTTPStatus.OK, icons)
+
+
+def _room_icon_error(body) -> "str | None":
+    if not isinstance(body, dict):
+        return _BODY_NOT_OBJECT
+    room = body.get("room")
+    if not isinstance(room, str) or len(room) > 64:
+        return "room must be a string ≤ 64 chars"
+    icon = body.get("icon")
+    if not isinstance(icon, str) or len(icon) > 16:
+        return "icon must be a string ≤ 16 chars"
+    return None
+
+
+async def _room_icon_set(request):
+    """POST /api/rooms/icons — set/clear one shared room emoji, best-effort."""
+    body, err = await _read_json_body(request)
+    if err:
+        return body
+    error = _room_icon_error(body)
+    if error is not None:
+        return _json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": error})
+
+    user = request.get(_USER_KEY)
+    if user is None:
+        return _json(HTTPStatus.OK, {"ok": True})
+
+    wrote = await asyncio.get_running_loop().run_in_executor(
+        None, lambda: store_sql.set_room_icon(body["room"], body["icon"]))
+    if wrote:
+        _audit(_rt(request), user, "room_icon", target=body["room"])
+    return _json(HTTPStatus.OK, {"ok": True})
+
+
 def _scene_ops(rt, scene: str) -> list[dict]:
     """Expand a house-wide scene into ordinary per-device control ops."""
     target_type, active = _SCENE_TARGETS[scene]
@@ -645,6 +683,8 @@ def make_app(rt):
     app.router.add_get("/api/db/stats", _db_stats, allow_head=False)
     app.router.add_get("/api/settings", _settings, allow_head=False)
     app.router.add_post("/api/settings", _settings_set)
+    app.router.add_get("/api/rooms/icons", _room_icons, allow_head=False)
+    app.router.add_post("/api/rooms/icons", _room_icon_set)
     app.router.add_post("/api/name", _name)
     app.router.add_post("/api/ir", _ir)
     app.router.add_post("/api/control", _control)

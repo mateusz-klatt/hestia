@@ -32,6 +32,8 @@ const messages: Partial<Messages> = {
   "scene.blindsDown": "پایین آوردن همه پرده‌ها",
   "rooms.empty": "هیچ دستگاهی نیست",
   "rooms.other": "سایر",
+  "rooms.editIcons": "ویرایش نمادها",
+  "rooms.iconNone": "—",
   "rooms.deviceCount.one": "{n} دستگاه",
   "rooms.deviceCount.other": "{n} دستگاه",
 

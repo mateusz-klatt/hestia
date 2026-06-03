@@ -32,6 +32,8 @@ const messages: Partial<Messages> = {
   "scene.blindsDown": "Hạ tất cả rèm",
   "rooms.empty": "Không có thiết bị",
   "rooms.other": "Khác",
+  "rooms.editIcons": "Chỉnh sửa biểu tượng",
+  "rooms.iconNone": "—",
   "rooms.deviceCount.other": "{n} thiết bị",
 
   "ctl.on": "Bật",

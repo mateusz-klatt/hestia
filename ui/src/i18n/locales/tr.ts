@@ -32,6 +32,8 @@ const messages: Partial<Messages> = {
   "scene.blindsDown": "Tüm panjurları indir",
   "rooms.empty": "Cihaz yok",
   "rooms.other": "Diğer",
+  "rooms.editIcons": "Simgeleri düzenle",
+  "rooms.iconNone": "—",
   "rooms.deviceCount.one": "{n} cihaz",
   "rooms.deviceCount.other": "{n} cihaz",
 

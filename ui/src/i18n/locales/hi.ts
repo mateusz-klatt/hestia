@@ -32,6 +32,8 @@ const messages: Partial<Messages> = {
   "scene.blindsDown": "सभी ब्लाइंड नीचे करें",
   "rooms.empty": "कोई डिवाइस नहीं",
   "rooms.other": "अन्य",
+  "rooms.editIcons": "आइकन संपादित करें",
+  "rooms.iconNone": "—",
   "rooms.deviceCount.one": "{n} डिवाइस",
   "rooms.deviceCount.other": "{n} डिवाइस",
 

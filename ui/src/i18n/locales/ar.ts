@@ -32,6 +32,8 @@ const messages: Partial<Messages> = {
   "scene.blindsDown": "إنزال كل الستائر",
   "rooms.empty": "لا توجد أجهزة",
   "rooms.other": "أخرى",
+  "rooms.editIcons": "تعديل الأيقونات",
+  "rooms.iconNone": "—",
   "rooms.deviceCount.zero": "{n} جهاز",
   "rooms.deviceCount.one": "{n} جهاز",
   "rooms.deviceCount.two": "{n} جهازان",

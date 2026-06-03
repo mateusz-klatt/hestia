@@ -32,6 +32,8 @@ const messages: Partial<Messages> = {
   "scene.blindsDown": "הורד את כל התריסים",
   "rooms.empty": "אין מכשירים",
   "rooms.other": "אחרים",
+  "rooms.editIcons": "עריכת סמלים",
+  "rooms.iconNone": "—",
   "rooms.deviceCount.one": "{n} מכשיר",
   "rooms.deviceCount.two": "{n} מכשירים",
   "rooms.deviceCount.other": "{n} מכשירים",

@@ -32,6 +32,8 @@ const messages: Partial<Messages> = {
   "scene.blindsDown": "Laske kaikki kaihtimet",
   "rooms.empty": "Ei laitteita",
   "rooms.other": "Muut",
+  "rooms.editIcons": "Muokkaa kuvakkeita",
+  "rooms.iconNone": "—",
   "rooms.deviceCount.one": "{n} laite",
   "rooms.deviceCount.other": "{n} laitetta",
 

@@ -32,6 +32,8 @@ const messages: Partial<Messages> = {
   "scene.blindsDown": "Baisser tous les stores",
   "rooms.empty": "Aucun appareil",
   "rooms.other": "Autres",
+  "rooms.editIcons": "Modifier les icônes",
+  "rooms.iconNone": "—",
   "rooms.deviceCount.one": "{n} appareil",
   "rooms.deviceCount.many": "{n} appareils",
   "rooms.deviceCount.other": "{n} appareils",

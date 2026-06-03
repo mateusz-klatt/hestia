@@ -32,6 +32,8 @@ const messages: Partial<Messages> = {
   "scene.blindsDown": "Ibaba ang lahat ng blinds",
   "rooms.empty": "Walang device",
   "rooms.other": "Iba pa",
+  "rooms.editIcons": "I-edit ang mga icon",
+  "rooms.iconNone": "—",
   "rooms.deviceCount.one": "{n} device",
   "rooms.deviceCount.other": "{n} device",
 

@@ -32,6 +32,8 @@ const messages: Partial<Messages> = {
   "scene.blindsDown": "Coboară toate jaluzelele",
   "rooms.empty": "Niciun dispozitiv",
   "rooms.other": "Altele",
+  "rooms.editIcons": "Editați pictogramele",
+  "rooms.iconNone": "—",
   "rooms.deviceCount.one": "{n} dispozitiv",
   "rooms.deviceCount.few": "{n} dispozitive",
   "rooms.deviceCount.other": "{n} dispozitive",

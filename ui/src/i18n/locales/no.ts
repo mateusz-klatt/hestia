@@ -32,6 +32,8 @@ const messages: Partial<Messages> = {
   "scene.blindsDown": "Senk alle persienner",
   "rooms.empty": "Ingen enheter",
   "rooms.other": "Annet",
+  "rooms.editIcons": "Rediger ikoner",
+  "rooms.iconNone": "—",
   "rooms.deviceCount.one": "{n} enhet",
   "rooms.deviceCount.other": "{n} enheter",
 

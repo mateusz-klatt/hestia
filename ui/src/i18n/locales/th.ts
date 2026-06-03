@@ -32,6 +32,8 @@ const messages: Partial<Messages> = {
   "scene.blindsDown": "ลดมู่ลี่ทั้งหมด",
   "rooms.empty": "ไม่มีอุปกรณ์",
   "rooms.other": "อื่นๆ",
+  "rooms.editIcons": "แก้ไขไอคอน",
+  "rooms.iconNone": "—",
   "rooms.deviceCount.other": "{n} อุปกรณ์",
 
   "ctl.on": "เปิด",

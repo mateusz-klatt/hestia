@@ -32,6 +32,8 @@ const messages: Partial<Messages> = {
   "scene.blindsDown": "Nolaist visas žalūzijas",
   "rooms.empty": "Nav ierīču",
   "rooms.other": "Citi",
+  "rooms.editIcons": "Rediģēt ikonas",
+  "rooms.iconNone": "—",
   "rooms.deviceCount.zero": "{n} ierīču",
   "rooms.deviceCount.one": "{n} ierīce",
   "rooms.deviceCount.other": "{n} ierīces",

@@ -32,6 +32,8 @@ const messages: Partial<Messages> = {
   "scene.blindsDown": "Minden redőny le",
   "rooms.empty": "Nincsenek eszközök",
   "rooms.other": "Egyéb",
+  "rooms.editIcons": "Ikonok szerkesztése",
+  "rooms.iconNone": "—",
   "rooms.deviceCount.one": "{n} eszköz",
   "rooms.deviceCount.other": "{n} eszköz",
 

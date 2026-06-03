@@ -6,6 +6,8 @@ import { onOff, stateStr } from "./render/format";
 /** Devices the rooms view controls; only postControl is needed (IR/klima have their own panels). */
 export interface RoomsDeps {
   postControl: PostControl;
+  roomIcons: () => Record<string, string>;
+  saveRoomIcon: (room: string, icon: string) => Promise<void>;
   /** Notified when the view enters (true) / leaves (false) a room detail — drives the back-tab label. */
   onNav?: (inRoom: boolean) => void;
 }
@@ -19,6 +21,8 @@ export interface RoomsView {
 }
 
 const NO_ROOM = ""; // empty bucket key for devices with no room set (displayed via roomDisplay)
+const DEFAULT_ROOM_ICON = "🚪";
+const ROOM_ICON_PRESETS = ["🚪", "🛋️", "🛏️", "🍳", "🚿", "🧸", "💡", "📺", "🧺", "🌿", "🚗", "🪟"];
 
 /** A device's room bucket key, trimmed; blank / unset devices fall into the catch-all bucket. */
 function roomKey(info: DeviceInfo): string {
@@ -78,6 +82,11 @@ function placeholder(text: string): HTMLElement {
   return p;
 }
 
+function roomIcon(room: string, deps: RoomsDeps): string {
+  const icon = deps.roomIcons()[room];
+  return icon !== undefined && icon !== "" ? icon : DEFAULT_ROOM_ICON;
+}
+
 /** One controllable device card: name + live state + the (reused) control buttons. Returns the state
  *  span so the live layer can patch it WITHOUT rebuilding the buttons (which would reset their lock). */
 function deviceCard(
@@ -119,6 +128,71 @@ export function createRoomsView(container: HTMLElement, deps: RoomsDeps): RoomsV
   let selectedRoom: string | null = null;
   let latest: Discovery | null = null;
   let stateSpans = new Map<number, HTMLElement>();
+  let editIcons = false;
+
+  function editToggle(): HTMLButtonElement {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "room-icon-edit-toggle";
+    btn.setAttribute("aria-pressed", String(editIcons));
+    btn.textContent = `✏️ ${t("rooms.editIcons")}`;
+    btn.addEventListener("click", () => {
+      editIcons = !editIcons;
+      renderLanding();
+    });
+    return btn;
+  }
+
+  function roomIconEditor(room: string): HTMLElement {
+    const row = document.createElement("div");
+    row.className = "room-icon-row";
+
+    const select = document.createElement("select");
+    select.className = "room-icon-select";
+    select.setAttribute("aria-label", `${t("rooms.editIcons")} ${roomDisplay(room)}`);
+
+    const none = document.createElement("option");
+    none.value = "";
+    none.textContent = t("rooms.iconNone");
+    select.appendChild(none);
+
+    const current = deps.roomIcons()[room] ?? "";
+    const presets = current !== "" && !ROOM_ICON_PRESETS.includes(current)
+      ? [current, ...ROOM_ICON_PRESETS]
+      : ROOM_ICON_PRESETS;
+    for (const icon of presets) {
+      const option = document.createElement("option");
+      option.value = icon;
+      option.textContent = icon;
+      select.appendChild(option);
+    }
+    select.value = current;
+    select.addEventListener("change", () => {
+      const icon = select.value;
+      select.disabled = true;
+      void (async () => {
+        try {
+          await deps.saveRoomIcon(room, icon);
+        } catch {
+          // Best-effort server save; re-render from the getter either way.
+        }
+        renderLanding();
+      })();
+    });
+
+    const name = document.createElement("span");
+    name.className = "room-icon-name";
+    name.textContent = roomDisplay(room);
+    row.append(select, name);
+    return row;
+  }
+
+  function renderIconEditor(rooms: string[]): void {
+    const list = document.createElement("div");
+    list.className = "room-icon-list";
+    for (const room of rooms) list.appendChild(roomIconEditor(room));
+    container.appendChild(list);
+  }
 
   function renderLanding(): void {
     stateSpans = new Map();
@@ -132,20 +206,29 @@ export function createRoomsView(container: HTMLElement, deps: RoomsDeps): RoomsV
       container.appendChild(placeholder(t("rooms.empty")));
       return;
     }
+    const rooms = sortedRooms(groups.keys());
+    container.appendChild(editToggle());
+    if (editIcons) {
+      renderIconEditor(rooms);
+      return;
+    }
     const grid = document.createElement("div");
     grid.className = "room-grid";
-    for (const room of sortedRooms(groups.keys())) {
+    for (const room of rooms) {
       const list = groups.get(room) ?? [];
       const btn = document.createElement("button");
       btn.type = "button";
       btn.className = "room-card";
+      const icon = document.createElement("span");
+      icon.className = "room-card-icon";
+      icon.textContent = roomIcon(room, deps);
       const title = document.createElement("span");
       title.className = "room-card-title";
       title.textContent = roomDisplay(room);
       const count = document.createElement("span");
       count.className = "room-card-count";
       count.textContent = tPlural("rooms.deviceCount", list.length);
-      btn.append(title, count);
+      btn.append(icon, title, count);
       btn.addEventListener("click", () => {
         navigate(room);
       });

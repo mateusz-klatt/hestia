@@ -7,12 +7,14 @@ import {
   fetchAutomations,
   fetchDbStats,
   fetchDiscovery,
+  fetchRoomIcons,
   fetchSettings,
   postControl,
   postIr,
   postName,
   postRule,
   postScene,
+  saveRoomIcon as saveRoomIconOnServer,
   saveSettings as saveUserSettings,
   whoami,
 } from "./api/client";
@@ -51,8 +53,19 @@ const roomsKlimaBox = el("rooms-klima");
 // Notify the view-switch when the rooms view enters/leaves a room, so its tab can flip to "← Rooms"
 // (a discoverable back). Assigned in startApp once the switch exists; nav events only fire after that.
 let onRoomsNav: (inRoom: boolean) => void = () => undefined;
+let roomIcons: Record<string, string> = {};
 const roomsView = createRoomsView(el("room-list"), {
   postControl,
+  roomIcons: () => roomIcons,
+  saveRoomIcon: async (room, icon) => {
+    if (await saveRoomIconOnServer(room, icon)) {
+      if (icon === "") {
+        roomIcons = Object.fromEntries(Object.entries(roomIcons).filter(([key]) => key !== room));
+      } else {
+        roomIcons = { ...roomIcons, [room]: icon };
+      }
+    }
+  },
   onNav: (inRoom) => {
     onRoomsNav(inRoom);
   },
@@ -239,6 +252,7 @@ void (async () => {
     location.reload();
     return;
   }
+  roomIcons = (await fetchRoomIcons()) ?? {};
   // Always render the user/settings chip; auth-off (me.user === null) shows a settings-only menu
   // (language + temperature scale, no logout — see renderUser).
   const userOpts = {

@@ -34,6 +34,8 @@ const pl: Partial<Messages> = {
   "scene.blindsDown": "Opuść wszystkie żaluzje",
   "rooms.empty": "Brak urządzeń",
   "rooms.other": "Inne",
+  "rooms.editIcons": "Edytuj ikony",
+  "rooms.iconNone": "—",
   "rooms.deviceCount.one": "{n} urządzenie",
   "rooms.deviceCount.few": "{n} urządzenia",
   "rooms.deviceCount.many": "{n} urządzeń",

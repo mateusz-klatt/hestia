@@ -32,6 +32,8 @@ const messages: Partial<Messages> = {
   "scene.blindsDown": "Turunkan semua tirai",
   "rooms.empty": "Tidak ada perangkat",
   "rooms.other": "Lainnya",
+  "rooms.editIcons": "Edit ikon",
+  "rooms.iconNone": "—",
   "rooms.deviceCount.other": "{n} perangkat",
 
   "ctl.on": "Nyala",

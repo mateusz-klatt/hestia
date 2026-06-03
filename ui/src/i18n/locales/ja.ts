@@ -32,6 +32,8 @@ const messages: Partial<Messages> = {
   "scene.blindsDown": "すべてのブラインドを下げる",
   "rooms.empty": "デバイスがありません",
   "rooms.other": "その他",
+  "rooms.editIcons": "アイコンを編集",
+  "rooms.iconNone": "—",
   "rooms.deviceCount.other": "{n} 台のデバイス",
 
   "ctl.on": "オン",

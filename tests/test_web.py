@@ -802,6 +802,116 @@ class SettingsEndpointTests(_WebTestBase):
         self.assertIn("locale=pl,scale=None", audit.call_args.kwargs["detail"])
 
 
+class RoomIconsEndpointTests(_WebTestBase):
+    """GET/POST /api/rooms/icons — shared durable emoji choices for room cards."""
+
+    def setUp(self):
+        super().setUp()
+        self.db_file = self.tmp / "room-icons.db"
+        self.users = {"tata": auth.hash_password("s3cret")}
+        patches = [
+            mock.patch.object(web, "_AUTH_ENABLED", True),
+            mock.patch.object(web, "_SESSION_SECRET", b"test-secret-bytes"),
+            mock.patch.object(web, "_COOKIE_SECURE", False),
+            mock.patch.object(auth, "load_users", return_value=self.users),
+            mock.patch.dict(os.environ, {"HESTIA_PERSIST": "sqlite", "HESTIA_DB": str(self.db_file)}),
+        ]
+        for p in patches:
+            p.start()
+            self.addCleanup(p.stop)
+
+        from hestia import db
+        engine, Session = db.init_db(self.db_file)
+        with db.session_scope(Session) as s:
+            s.add(db.User(username="tata", password_hash=self.users["tata"]))
+        engine.dispose()
+
+    def _login_cookie(self):
+        status, headers, _ = _post(self.web.address, "/api/login", {"user": "tata", "password": "s3cret"})
+        self.assertEqual(status, 200)
+        return AuthTests._cookie(headers["Set-Cookie"])
+
+    def _headers(self):
+        return {"Cookie": self._login_cookie()}
+
+    def test_room_icon_routes_are_auth_gated(self):
+        self.assertEqual(_get(self.web.address, "/api/rooms/icons")[0], 401)
+        self.assertEqual(_post(self.web.address, "/api/rooms/icons", {"room": "Salon", "icon": "🛋️"})[0], 401)
+
+    def test_get_returns_empty_or_existing_map(self):
+        from hestia import store_sql
+        headers = self._headers()
+        status, _, body = _get(self.web.address, "/api/rooms/icons", headers=headers)
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body), {})
+
+        store_sql.set_room_icon("Salon", "🛋️")
+        status, _, body = _get(self.web.address, "/api/rooms/icons", headers=headers)
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body), {"Salon": "🛋️"})
+
+    def test_post_requires_json_content_type(self):
+        status, _, body = _post(self.web.address, "/api/rooms/icons", "x",
+                                headers={"Cookie": self._login_cookie(), "Content-Type": "text/plain"})
+        self.assertEqual(status, 415)
+        self.assertIn("application/json", json.loads(body)["error"])
+
+    def test_post_rejects_invalid_payloads(self):
+        headers = self._headers()
+        bad_payloads = [
+            ([1, 2], "object"),
+            ({"room": 5, "icon": "🚪"}, "room"),
+            ({"room": "x" * 65, "icon": "🚪"}, "room"),
+            ({"room": "Salon"}, "icon"),
+            ({"room": "Salon", "icon": 5}, "icon"),
+            ({"room": "Salon", "icon": "x" * 17}, "icon"),
+        ]
+        for payload, fragment in bad_payloads:
+            with self.subTest(payload=payload):
+                status, _, body = _post(self.web.address, "/api/rooms/icons", payload, headers=headers)
+                self.assertEqual(status, 400)
+                self.assertIn(fragment, json.loads(body)["error"])
+
+    def test_post_json_mode_is_ok_noop_without_audit(self):
+        from hestia import store_sql
+        headers = self._headers()
+        with mock.patch.dict(os.environ, {"HESTIA_PERSIST": "json"}):
+            with mock.patch("hestia.web._audit") as audit:
+                status, _, body = _post(self.web.address, "/api/rooms/icons",
+                                        {"room": "Salon", "icon": "🛋️"}, headers=headers)
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body), {"ok": True})
+        self.assertEqual(store_sql.get_room_icons(), {})
+        self.assertFalse(audit.called)
+
+    def test_post_auth_off_is_ok_noop(self):
+        with mock.patch.object(web, "_AUTH_ENABLED", False):
+            with mock.patch("hestia.store_sql.set_room_icon") as set_icon:
+                status, _, body = _post(self.web.address, "/api/rooms/icons", {"room": "Salon", "icon": "🛋️"})
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body), {"ok": True})
+        self.assertFalse(set_icon.called)
+
+    def test_post_persists_empty_room_clears_and_audits(self):
+        from hestia import store_sql
+        headers = self._headers()
+        with mock.patch("hestia.web._audit") as audit:
+            status, _, body = _post(self.web.address, "/api/rooms/icons", {"room": "", "icon": "🚪"},
+                                    headers=headers)
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body), {"ok": True})
+        self.assertEqual(store_sql.get_room_icons(), {"": "🚪"})
+        audit.assert_called_once()
+        self.assertEqual(audit.call_args.args[:3], (self.rt, "tata", "room_icon"))
+        self.assertEqual(audit.call_args.kwargs["target"], "")
+
+        status, _, body = _post(self.web.address, "/api/rooms/icons", {"room": "", "icon": ""},
+                                headers=headers)
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body), {"ok": True})
+        self.assertEqual(store_sql.get_room_icons(), {})
+
+
 class DiscoveryTests(_WebTestBase):
     def test_discovery_serves_json_with_summary(self):
         self._feed(DOOR_EVENT_NODE12)

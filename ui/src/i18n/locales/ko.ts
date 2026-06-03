@@ -32,6 +32,8 @@ const messages: Partial<Messages> = {
   "scene.blindsDown": "모든 블라인드 내리기",
   "rooms.empty": "기기가 없습니다",
   "rooms.other": "기타",
+  "rooms.editIcons": "아이콘 편집",
+  "rooms.iconNone": "—",
   "rooms.deviceCount.other": "{n}개 기기",
 
   "ctl.on": "켜짐",

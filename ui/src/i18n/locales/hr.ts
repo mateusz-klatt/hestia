@@ -32,6 +32,8 @@ const messages: Partial<Messages> = {
   "scene.blindsDown": "Spusti sve rolete",
   "rooms.empty": "Nema uređaja",
   "rooms.other": "Ostalo",
+  "rooms.editIcons": "Uredi ikone",
+  "rooms.iconNone": "—",
   "rooms.deviceCount.one": "{n} uređaj",
   "rooms.deviceCount.few": "{n} uređaja",
   "rooms.deviceCount.other": "{n} uređaja",

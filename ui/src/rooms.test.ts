@@ -4,17 +4,40 @@ import type { ControlOp } from "./api/types";
 import { device, discovery } from "./fixtures";
 import { createRoomsView } from "./rooms";
 
+interface SavedRoomIcon {
+  room: string;
+  icon: string;
+}
+
 /** A rooms view backed by a recording postControl, so control dispatch is observable. */
-function mk(): { container: HTMLElement; sent: ControlOp[]; view: ReturnType<typeof createRoomsView> } {
+function mk(initialIcons: Record<string, string> = {}): {
+  container: HTMLElement;
+  roomIcons: () => Record<string, string>;
+  savedIcons: SavedRoomIcon[];
+  sent: ControlOp[];
+  view: ReturnType<typeof createRoomsView>;
+} {
   const container = document.createElement("div");
   const sent: ControlOp[] = [];
+  let icons = { ...initialIcons };
+  const savedIcons: SavedRoomIcon[] = [];
   const view = createRoomsView(container, {
     postControl: (op) => {
       sent.push(op);
       return Promise.resolve({ ok: true });
     },
+    roomIcons: () => icons,
+    saveRoomIcon: (room, icon) => {
+      savedIcons.push({ room, icon });
+      if (icon === "") {
+        icons = Object.fromEntries(Object.entries(icons).filter(([key]) => key !== room));
+      } else {
+        icons = { ...icons, [room]: icon };
+      }
+      return Promise.resolve();
+    },
   });
-  return { container, sent, view };
+  return { container, roomIcons: () => icons, savedIcons, sent, view };
 }
 
 const openFirstRoom = (container: HTMLElement): void => {
@@ -36,7 +59,7 @@ describe("createRoomsView — landing", () => {
   });
 
   it("renders a card per room (alphabetical, Inne last) with a pluralised count", () => {
-    const { container, view } = mk();
+    const { container, view } = mk({ Kuchnia: "🍳", Salon: "🛋️" });
     view.update(
       discovery({
         "1": device({ type: "light", room: "Salon" }),
@@ -51,6 +74,7 @@ describe("createRoomsView — landing", () => {
       "Salon",
       "Other",
     ]);
+    expect([...cards].map((c) => c.querySelector(".room-card-icon")?.textContent)).toEqual(["🍳", "🛋️", "🚪"]);
     expect([...cards].map((c) => c.querySelector(".room-card-count")?.textContent)).toEqual([
       "1 device",
       "2 devices",
@@ -62,6 +86,39 @@ describe("createRoomsView — landing", () => {
     const { container, view } = mk();
     view.update(discovery({ "1": device({ type: "light", room: "   " }) }));
     expect(container.querySelector(".room-card-title")?.textContent).toBe("Other");
+  });
+
+  it("toggles icon edit mode and saves preset or clear selections", async () => {
+    const { container, roomIcons, savedIcons, view } = mk({ Salon: "🛋️" });
+    view.update(discovery({ "1": device({ type: "light", room: "Salon" }) }));
+
+    container.querySelector<HTMLButtonElement>(".room-icon-edit-toggle")?.click();
+    expect(container.querySelector(".room-card")).toBeNull();
+    expect(container.querySelector(".room-icon-name")?.textContent).toBe("Salon");
+    const select = container.querySelector<HTMLSelectElement>(".room-icon-select");
+    expect(select?.value).toBe("🛋️");
+
+    if (select !== null) {
+      select.value = "🍳";
+      select.dispatchEvent(new Event("change"));
+    }
+    await flush();
+    expect(savedIcons).toEqual([{ room: "Salon", icon: "🍳" }]);
+    expect(roomIcons()).toEqual({ Salon: "🍳" });
+    expect(container.querySelector<HTMLSelectElement>(".room-icon-select")?.value).toBe("🍳");
+
+    const updatedSelect = container.querySelector<HTMLSelectElement>(".room-icon-select");
+    if (updatedSelect !== null) {
+      updatedSelect.value = "";
+      updatedSelect.dispatchEvent(new Event("change"));
+    }
+    await flush();
+    expect(savedIcons).toEqual([
+      { room: "Salon", icon: "🍳" },
+      { room: "Salon", icon: "" },
+    ]);
+    expect(roomIcons()).toEqual({});
+    expect(container.querySelector<HTMLSelectElement>(".room-icon-select")?.value).toBe("");
   });
 });
 
@@ -190,6 +247,8 @@ describe("createRoomsView — onNav callback", () => {
     const nav: boolean[] = [];
     const view = createRoomsView(container, {
       postControl: () => Promise.resolve({ ok: true }),
+      roomIcons: () => ({}),
+      saveRoomIcon: () => Promise.resolve(),
       onNav: (inRoom) => nav.push(inRoom),
     });
     view.update(discovery({ "5": device({ type: "light", room: "Salon" }) }));
@@ -205,6 +264,8 @@ describe("createRoomsView — onNav callback", () => {
     const nav: boolean[] = [];
     const view = createRoomsView(container, {
       postControl: () => Promise.resolve({ ok: true }),
+      roomIcons: () => ({}),
+      saveRoomIcon: () => Promise.resolve(),
       onNav: (inRoom) => nav.push(inRoom),
     });
     view.update(discovery({ "1": device({ type: "light", room: "Salon" }) }));

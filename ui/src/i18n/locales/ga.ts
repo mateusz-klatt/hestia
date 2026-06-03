@@ -32,6 +32,8 @@ const messages: Partial<Messages> = {
   "scene.blindsDown": "Ísligh gach dallóg",
   "rooms.empty": "Gan ghléasanna",
   "rooms.other": "Eile",
+  "rooms.editIcons": "Cuir deilbhíní in eagar",
+  "rooms.iconNone": "—",
   "rooms.deviceCount.one": "{n} ghléas",
   "rooms.deviceCount.two": "{n} ghléas",
   "rooms.deviceCount.few": "{n} ghléas",
