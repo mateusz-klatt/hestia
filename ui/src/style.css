@@ -1,8 +1,24 @@
 :root {
-  color-scheme: light dark;
+  /* Warm "home hearth" palette — explicitly LIGHT so it overrides an OS dark mode
+     (this is a cosy home-control surface, not a dark dashboard). All colours flow
+     from these tokens. */
+  color-scheme: light;
+  --bg: #fbf4ea; /* warm cream page */
+  --surface: #fffaf2; /* slightly lighter cards / controls */
+  --fg: #2f241b; /* warm dark-brown text */
+  --fg-soft: #5b4a3a; /* gently muted text (globals line) */
+  --muted: #8c7a66; /* warm muted (last-seen, labels, counts, conn) */
+  --border: #e7d8c4; /* warm light border */
+  --border-strong: #d8c3a8; /* stronger border (thead, buttons) */
+  --accent: #d2691e; /* hearth amber / terracotta */
+  --accent-soft: #f3e1cb; /* warm highlight fill (active tab) */
+  --ok: #2e7d32; /* confirmed / fresh */
+  --err: #c0341d; /* errors / low battery */
+  --glow: rgba(216, 122, 32, 0.18); /* warm "recent" glow */
+  --glow-strong: rgba(216, 122, 32, 0.5); /* warm activity flash */
   font-family: ui-monospace, SFMono-Regular, "SF Mono", Consolas, "Liberation Mono", monospace;
-  background: Canvas;
-  color: CanvasText;
+  background: var(--bg);
+  color: var(--fg);
   /* iOS Safari: don't auto-inflate body text on rotation. */
   -webkit-text-size-adjust: 100%;
   text-size-adjust: 100%;
@@ -34,9 +50,40 @@ button {
   font-size: max(16px, 1rem);
 }
 
+input,
+select,
+textarea {
+  background: var(--surface);
+  color: var(--fg);
+  border: 1px solid var(--border-strong);
+  border-radius: 0.4rem;
+}
+
+/* Buttons get a warm, tactile default; .view-tab / .room-card override below. */
 button {
   touch-action: manipulation;
   cursor: pointer;
+  background: var(--surface);
+  color: var(--fg);
+  border: 1px solid var(--border-strong);
+  border-radius: 0.4rem;
+  padding: 0.3rem 0.7rem;
+}
+
+button:hover {
+  border-color: var(--accent);
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* The hearth mark in the header (inline SVG; warm flame). */
+#logo {
+  flex: 0 0 auto;
+  display: inline-flex;
+  line-height: 0;
 }
 
 /* Header: flexbox (not floats) so the conn / auth / refresh chips wrap cleanly
@@ -66,20 +113,20 @@ td {
 }
 
 thead {
-  border-bottom: 1px solid color-mix(in srgb, CanvasText 50%, Canvas);
+  border-bottom: 1px solid var(--border-strong);
 }
 
 tbody tr {
-  border-bottom: 1px solid color-mix(in srgb, CanvasText 12%, Canvas);
+  border-bottom: 1px solid var(--border);
 }
 
 .confirmed {
-  color: #1a8a1a;
+  color: var(--ok);
   font-weight: bold;
 }
 
 td.seen {
-  color: color-mix(in srgb, CanvasText 55%, Canvas);
+  color: var(--muted);
   font-size: 0.85rem;
   white-space: nowrap;
 }
@@ -89,7 +136,7 @@ td.batt {
 }
 
 td.batt.low {
-  color: #c0341d;
+  color: var(--err);
   font-weight: bold;
 }
 
@@ -100,14 +147,14 @@ tr.subrow td {
 }
 
 td.sub-label {
-  color: color-mix(in srgb, CanvasText 55%, Canvas);
+  color: var(--muted);
   padding-left: 1.5rem;
   white-space: nowrap;
 }
 
 #conn {
   font-size: 0.85rem;
-  color: color-mix(in srgb, CanvasText 55%, Canvas);
+  color: var(--muted);
 }
 
 #refresh {
@@ -116,7 +163,7 @@ td.sub-label {
 
 #globals {
   margin: 0 0 0.9rem;
-  color: color-mix(in srgb, CanvasText 75%, Canvas);
+  color: var(--fg-soft);
   font-size: 0.95rem;
 }
 
@@ -145,13 +192,13 @@ td.sub-label {
 }
 
 #status {
-  color: #c0341d;
+  color: var(--err);
   margin-top: 1rem;
 }
 
 /* Inline status spans (control / rule / form): errors in the same red as #status. */
 .status.err {
-  color: #c0341d;
+  color: var(--err);
 }
 
 #auto-hdr {
@@ -177,22 +224,22 @@ td.sub-label {
 /* Live layer (SSE): a row glows briefly on activity, lingers "recent", and a
    function-button press flashes a transient scene badge next to the state. */
 tr.recent td {
-  background: rgba(255, 220, 0, 0.16);
+  background: var(--glow);
   transition: background 1.5s ease-out;
 }
 
 tr.active td {
-  background: rgba(255, 220, 0, 0.7);
+  background: var(--glow-strong);
   transition: background 2s ease-out;
 }
 
 td.seen.fresh {
-  color: #1a8a1a;
+  color: var(--ok);
 }
 
 .scene-badge {
   margin-left: 0.5rem;
-  color: #0066cc;
+  color: var(--accent);
   font-weight: bold;
   opacity: 0;
   transition: opacity 0.6s ease-out;
@@ -213,14 +260,15 @@ td.seen.fresh {
 
 .view-tab {
   padding: 0.4rem 0.9rem;
-  border: 1px solid color-mix(in srgb, CanvasText 30%, Canvas);
+  border: 1px solid var(--border-strong);
   border-radius: 0.5rem;
-  background: Canvas;
-  color: CanvasText;
+  background: var(--surface);
+  color: var(--fg);
 }
 
 .view-tab.active {
-  background: color-mix(in srgb, CanvasText 12%, Canvas);
+  background: var(--accent-soft);
+  border-color: var(--accent);
   font-weight: bold;
 }
 
@@ -236,11 +284,15 @@ td.seen.fresh {
   align-items: flex-start;
   gap: 0.25rem;
   padding: 1rem;
-  border: 1px solid color-mix(in srgb, CanvasText 22%, Canvas);
+  border: 1px solid var(--border);
   border-radius: 0.7rem;
-  background: Canvas;
-  color: CanvasText;
+  background: var(--surface);
+  color: var(--fg);
   text-align: left;
+}
+
+.room-card:hover {
+  border-color: var(--accent);
 }
 
 .room-card-title {
@@ -250,7 +302,7 @@ td.seen.fresh {
 
 .room-card-count {
   font-size: 0.85rem;
-  color: color-mix(in srgb, CanvasText 55%, Canvas);
+  color: var(--muted);
 }
 
 .room-title {
@@ -259,10 +311,11 @@ td.seen.fresh {
 }
 
 .room-device {
-  border: 1px solid color-mix(in srgb, CanvasText 18%, Canvas);
+  border: 1px solid var(--border);
   border-radius: 0.6rem;
   padding: 0.7rem 0.9rem;
   margin: 0 0 0.7rem;
+  background: var(--surface);
 }
 
 .room-device-head {
@@ -278,7 +331,7 @@ td.seen.fresh {
 }
 
 .room-device-stan {
-  color: color-mix(in srgb, CanvasText 65%, Canvas);
+  color: var(--muted);
 }
 
 .room-device-actions {
@@ -288,7 +341,7 @@ td.seen.fresh {
 }
 
 .room-placeholder {
-  color: color-mix(in srgb, CanvasText 55%, Canvas);
+  color: var(--muted);
   padding: 1rem 0;
 }
 
@@ -325,10 +378,11 @@ td.seen.fresh {
   }
 
   tbody tr {
-    border: 1px solid color-mix(in srgb, CanvasText 22%, Canvas);
+    border: 1px solid var(--border);
     border-radius: 0.6rem;
     padding: 0.5rem 0.8rem;
     margin: 0 0 0.7rem;
+    background: var(--surface);
   }
 
   tbody td {
@@ -344,7 +398,7 @@ td.seen.fresh {
   tbody td::before {
     content: attr(data-label);
     flex: 0 0 5.5rem;
-    color: color-mix(in srgb, CanvasText 55%, Canvas);
+    color: var(--muted);
     font-size: 0.8rem;
   }
 
@@ -374,7 +428,7 @@ td.seen.fresh {
   /* multi-gang sub-rows: a thin attached strip rather than a full second card */
   tbody tr.subrow {
     border: none;
-    border-left: 2px solid color-mix(in srgb, CanvasText 22%, Canvas);
+    border-left: 2px solid var(--border-strong);
     border-radius: 0;
     margin: -0.4rem 0 0.7rem;
     padding: 0.1rem 0.8rem 0.3rem 1rem;
