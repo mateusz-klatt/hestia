@@ -1,3 +1,4 @@
+import { localeOverride } from "../prefs";
 import en, { type Messages, type MessageKey } from "./locales/en";
 
 /** The 45 supported locales (BCP-47), mirroring the snapper language set. */
@@ -95,9 +96,14 @@ export async function loadLocale(code: Locale): Promise<void> {
   document.documentElement.dir = RTL.has(resolved) ? "rtl" : "ltr";
 }
 
-/** Detect the best locale from the browser's preferences, load + apply it; returns the choice. */
-export async function initLocale(prefs: readonly string[]): Promise<Locale> {
-  const code = pickLocale(prefs);
+/**
+ * Apply the active locale: a user override (chosen in the menu) wins, else the best match for the
+ * browser preferences. Loads + applies it (sets `<html lang>`/dir); returns the chosen code.
+ */
+export async function initLocale(browserPrefs: readonly string[]): Promise<Locale> {
+  const override = localeOverride();
+  const supported = override !== null && (LOCALES as readonly string[]).includes(override);
+  const code = supported ? (override as Locale) : pickLocale(browserPrefs);
   await loadLocale(code);
   return code;
 }

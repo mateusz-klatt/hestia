@@ -1,8 +1,21 @@
 import type { DeviceInfo } from "../api/types";
+import { tempScale } from "../prefs";
 
-/** Global temperature (°C) → one decimal + degree sign; `—` when null. */
+/**
+ * A temperature (sensors report °C) in the user's chosen scale; `—` when null. Celsius keeps the
+ * bare "°" (the default convention, so existing displays are unchanged); Fahrenheit / Kelvin show
+ * an explicit unit since they're an opt-in.
+ */
 export function fmtTemp(value: number | null): string {
-  return value === null ? "—" : `${value.toFixed(1)}°`;
+  if (value === null) return "—";
+  switch (tempScale()) {
+    case "F":
+      return `${((value * 9) / 5 + 32).toFixed(1)}°F`;
+    case "K":
+      return `${(value + 273.15).toFixed(1)} K`;
+    default:
+      return `${value.toFixed(1)}°`;
+  }
 }
 
 /** Relative humidity (%RH) → whole percent; `—` when null. */

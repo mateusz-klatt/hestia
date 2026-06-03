@@ -251,6 +251,53 @@ td.seen.fresh {
   transition: none;
 }
 
+/* ---- User menu (header dropdown) -------------------------------------- */
+#user-menu-wrap {
+  position: relative;
+  display: inline-flex;
+}
+
+#user-menu-btn {
+  font-size: 0.9rem;
+}
+
+#user-menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 0.3rem);
+  z-index: 10;
+  min-width: 12rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.7rem;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 0.6rem;
+  box-shadow: 0 6px 20px rgba(60, 40, 20, 0.18);
+}
+
+/* `display:flex` above would otherwise defeat the [hidden] attribute — restore hiding explicitly. */
+#user-menu[hidden] {
+  display: none;
+}
+
+#user-menu .menu-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+#user-menu .menu-row select {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+#user-menu .menu-logout {
+  margin-top: 0.2rem;
+}
+
 /* ---- View switcher + room-grouped view -------------------------------- */
 .view-switch {
   display: flex;

@@ -212,8 +212,10 @@ void (async () => {
     return;
   }
   if (me.user !== null) {
-    renderUser(el("auth"), me.user, () => {
-      location.reload();
+    renderUser(el("auth"), me.user, {
+      onLogout: () => {
+        location.reload();
+      },
     });
   }
   startApp();
