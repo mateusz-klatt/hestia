@@ -453,6 +453,9 @@ class ProxyRuntime:
     # degrades to a clean no-op in BOTH proxy and standalone modes when the feature is off. FIFO of
     # ``(ir_file, button, future|None)`` drained by ``_ir_worker``.
     ir_queue: "asyncio.Queue | None" = None
+    # SQLite audit-log engine (#56). Set in ``main()`` (the DB always exists post-boot); ``None`` in
+    # tests / bare runtimes, where ``_audit`` degrades to a clean no-op. Used off the event loop.
+    audit_engine: "object | None" = None
 
     def __post_init__(self) -> None:
         self._seq = _safe_seq_counter()
@@ -861,6 +864,32 @@ async def _persist_store(rt) -> None:
     """Flush the automations store — shares `save_lock` with the registry so the two
     `os.replace` operations can never interleave."""
     await _persist_obj(rt.save_lock, rt.engine.store)
+
+
+def _audit(rt, actor, action, *, target=None, detail=None, result=None):
+    """Schedule a best-effort audit-log append (#56) OFF the event loop, FIRE-AND-FORGET: never
+    awaited, so a slow or locked audit DB can't add latency to the action being recorded (a failed
+    write is logged in the done-callback). ``actor`` is a username, ``automation:<rule_id>``, or
+    ``system``/``anonymous``. No-op (returns None) when ``rt.audit_engine`` is unset. Returns the
+    scheduled future (tests await it; callers ignore it)."""
+    if rt.audit_engine is None:
+        return None
+    from . import store_sql
+    fut = asyncio.get_running_loop().run_in_executor(
+        None, lambda: store_sql.append_audit(rt.audit_engine, actor=actor, action=action,
+                                              target=target, detail=detail, result=result, ts=time.time()))
+    fut.add_done_callback(_audit_done)
+    return fut
+
+
+def _audit_done(fut) -> None:
+    """Done-callback for a fire-and-forget audit write — retrieve + log any failure (best-effort)."""
+    try:
+        exc = fut.exception()
+    except asyncio.CancelledError:          # pragma: no cover - a pending audit write cancelled at shutdown
+        return
+    if exc is not None:
+        log.debug("audit write failed", exc_info=exc)
 
 
 def _install_term_handler(loop, task) -> bool:
@@ -1330,12 +1359,13 @@ async def main() -> None:  # pragma: no cover
     except asyncio.TimeoutError:
         log.error("cloud resolution timed out; using seed %s", config.cloud_host)
     from .auth import users_path
-    from .store_sql import open_stores
+    from .store_sql import open_audit_engine, open_stores
     registry, store = open_stores(registry_path=config.registry_path,      # HESTIA_PERSIST=sqlite → DB authoritative
                                   automations_path=config.automations_path,
                                   users_path=str(users_path()))
     rt = ProxyRuntime(registry=registry, engine=AutomationEngine(store), mode="proxy")
     _shadow_sync_db(rt)                                # Phase-2 #57: mirror JSON -> SQLite (no-op in sqlite mode)
+    rt.audit_engine = open_audit_engine()              # Phase-5 #56: who-did-what audit log
     if FLIPPER_ENABLED:                                # create the IR backlog before anything can fire
         rt.ir_queue = asyncio.Queue(maxsize=IR_QUEUE_MAX)
     proxy_srv, control_srv = await _start(rt, config)

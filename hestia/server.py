@@ -224,12 +224,13 @@ async def main() -> None:  # pragma: no cover
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     config = ProxyConfig()
     from .auth import users_path
-    from .store_sql import open_stores
+    from .store_sql import open_audit_engine, open_stores
     registry, store = open_stores(registry_path=config.registry_path,      # HESTIA_PERSIST=sqlite → DB authoritative
                                   automations_path=config.automations_path,
                                   users_path=str(users_path()))
     rt = ProxyRuntime(registry=registry, engine=AutomationEngine(store), mode="standalone")
     _shadow_sync_db(rt)                                # Phase-2 #57: mirror JSON -> SQLite (no-op in sqlite mode)
+    rt.audit_engine = open_audit_engine()              # Phase-5 #56: who-did-what audit log
     if FLIPPER_ENABLED:                                # create the IR backlog before anything can fire
         rt.ir_queue = asyncio.Queue(maxsize=IR_QUEUE_MAX)
     device_srv, control_srv = await _start(rt, config, _standalone_session)

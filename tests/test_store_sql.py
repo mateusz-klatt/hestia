@@ -412,6 +412,79 @@ class Phase4UsersTests(unittest.TestCase):
             self.assertIn("ju", auth.load_users(self.users_json))
 
 
+class AuditLogTests(unittest.TestCase):
+    """The append-only audit log: insert, recent (order/limit), and the row/age prune caps."""
+
+    def setUp(self):
+        self.dir = Path(tempfile.mkdtemp())
+        self.db = self.dir / "hestia.db"
+        self.engine, _ = db.init_db(self.db)
+
+    def tearDown(self):
+        shutil.rmtree(self.dir)
+
+    def test_append_and_recent_newest_first(self):
+        store_sql.append_audit(self.engine, actor="tata", action="ir", target="/k.ir",
+                               detail='{"button": "off"}', result="ok", ts=100.0)
+        store_sql.append_audit(self.engine, actor="automation:r1", action="switch", target="14",
+                               result="ok", ts=200.0)
+        rows = store_sql.recent_audit(self.engine)
+        self.assertEqual([r["actor"] for r in rows], ["automation:r1", "tata"])  # newest first
+        self.assertEqual((rows[1]["action"], rows[1]["target"], rows[1]["detail"]),
+                         ("ir", "/k.ir", '{"button": "off"}'))
+
+    def test_recent_respects_limit(self):
+        for i in range(5):
+            store_sql.append_audit(self.engine, actor="u", action="a", ts=float(i))
+        self.assertEqual(len(store_sql.recent_audit(self.engine, limit=2)), 2)
+
+    def test_prune_by_row_cap(self):
+        for i in range(5):
+            store_sql.append_audit(self.engine, actor="u", action="a", ts=float(i), max_rows=3)
+        self.assertEqual(len(store_sql.recent_audit(self.engine)), 3)   # capped to the newest 3
+
+    def test_prune_by_age(self):
+        store_sql.append_audit(self.engine, actor="old", action="a", ts=100.0, max_age_s=10)
+        store_sql.append_audit(self.engine, actor="new", action="a", ts=200.0, max_age_s=10)  # cutoff 190 → old gone
+        self.assertEqual([r["actor"] for r in store_sql.recent_audit(self.engine)], ["new"])
+
+    def test_open_audit_engine_has_table(self):
+        with mock.patch.dict(os.environ, {"HESTIA_DB": str(self.dir / "fresh.db")}):
+            engine = store_sql.open_audit_engine()
+            self.assertEqual(store_sql.recent_audit(engine), [])   # table exists + empty
+            engine.dispose()
+
+    def test_open_audit_engine_returns_none_on_failure(self):
+        with mock.patch("hestia.store_sql.init_db", side_effect=OSError("boom")):
+            self.assertIsNone(store_sql.open_audit_engine())   # best-effort: never breaks boot
+
+
+class AuditHelperTests(unittest.IsolatedAsyncioTestCase):
+    """proxy._audit: best-effort, off-loop — no-op without an engine, writes with one, swallows errors."""
+
+    def setUp(self):
+        self.dir = Path(tempfile.mkdtemp())
+        self.db = self.dir / "hestia.db"
+
+    def tearDown(self):
+        shutil.rmtree(self.dir)
+
+    async def test_noop_without_engine(self):
+        self.assertIsNone(proxy._audit(SimpleNamespace(audit_engine=None), "tata", "ir"))
+
+    async def test_writes_with_engine(self):
+        engine, _ = db.init_db(self.db)
+        await proxy._audit(SimpleNamespace(audit_engine=engine), "tata", "ir", target="/k.ir", result="ok")
+        rows = store_sql.recent_audit(engine)
+        self.assertEqual((rows[0]["actor"], rows[0]["action"], rows[0]["target"]), ("tata", "ir", "/k.ir"))
+
+    async def test_failure_is_logged_not_raised_to_caller(self):
+        # fire-and-forget: the caller never awaits, so a failed write is swallowed by the done-callback.
+        fut = proxy._audit(SimpleNamespace(audit_engine=object()), "tata", "ir")   # bad engine → write fails
+        with self.assertRaises(Exception):
+            await fut                              # awaiting here only to deterministically complete it
+
+
 class DbPersistIntegrationTests(unittest.IsolatedAsyncioTestCase):
     """The cancel-safe write path (_persist_obj / _write_and_settle) is backend-agnostic — prove it
     drives a DB-backed Registry exactly like the JSON one (success, and the OSError re-arm path)."""

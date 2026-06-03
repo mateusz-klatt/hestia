@@ -41,8 +41,8 @@ from aiohttp import ClientConnectionError, web
 from . import auth, store_sql
 from .classifier import DeviceType
 from .automations import rule_vocab
-from .proxy import (IR_BUTTONS, KLIMA, _CLOSED_SENTINEL, _LOOPBACK, _merged_discovery, _truthy_env,
-                    globals_snapshot, process_control_op)
+from .proxy import (IR_BUTTONS, KLIMA, _CLOSED_SENTINEL, _LOOPBACK, _audit, _merged_discovery,
+                    _truthy_env, globals_snapshot, process_control_op)
 
 log = logging.getLogger("hestia.web")
 
@@ -166,7 +166,9 @@ async def _login(request):
     user = op.get("user") if isinstance(op, dict) else None
     password = op.get("password") if isinstance(op, dict) else None
     if not (_AUTH_ENABLED and auth.authenticate(user, password, store_sql.current_users())):
+        _audit(_rt(request), user if isinstance(user, str) else "?", "login", result="invalid")
         return _json(HTTPStatus.UNAUTHORIZED, {"ok": False, "error": "invalid credentials"})
+    _audit(_rt(request), user, "login", result="ok")
     token = auth.make_session(user, now=_now(), secret=_SESSION_SECRET)
     resp = _json(HTTPStatus.OK, {"ok": True, "user": user})
     resp.set_cookie(_SESSION_COOKIE, token, max_age=int(auth.SESSION_TTL), httponly=True,
@@ -175,6 +177,8 @@ async def _login(request):
 
 
 async def _logout(_request):  # NOSONAR S7503: aiohttp route handlers must be coroutines (the framework awaits them)
+    # Not audited: /api/logout is public (no session lookup in the middleware), so the actor would
+    # always be "anonymous" — logout is low-value to attribute. Login (success/failure) is audited.
     resp = _json(HTTPStatus.OK, {"ok": True})
     resp.del_cookie(_SESSION_COOKIE, path="/")
     return resp
@@ -182,6 +186,16 @@ async def _logout(_request):  # NOSONAR S7503: aiohttp route handlers must be co
 
 async def _whoami(request):  # NOSONAR S7503: aiohttp route handlers must be coroutines (the framework awaits them)
     return _json(HTTPStatus.OK, {"user": request.get(_USER_KEY)})
+
+
+async def _audit_feed(request):
+    """GET /api/audit — recent audit-log rows (newest first), auth-gated like every /api/* route."""
+    rt = _rt(request)
+    if rt.audit_engine is None:                  # audit backend not wired (bare runtime) → empty feed
+        return _json(HTTPStatus.OK, {"events": []})
+    events = await asyncio.get_running_loop().run_in_executor(
+        None, lambda: store_sql.recent_audit(rt.audit_engine))
+    return _json(HTTPStatus.OK, {"events": events})
 
 
 async def _ui_redirect(_request):  # NOSONAR S7503: aiohttp route handlers must be coroutines (the framework awaits them)
@@ -291,13 +305,44 @@ async def _read_json_body(request, max_body=MAX_BODY):
         return _json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "invalid JSON"}), True
 
 
-async def _dispatch_op(rt, op, *, fail_status=HTTPStatus.INTERNAL_SERVER_ERROR):
-    """Run a control op and map the outcome: ValueError/KeyError/TypeError → 400,
-    ``ok`` → 200, else → ``fail_status``."""
+def _actor(request) -> str:
+    """The audit actor for a request: the logged-in user, else ``anonymous`` (auth-off / loopback)."""
+    return request.get(_USER_KEY) or "anonymous"
+
+
+_AUDIT_DETAIL_MAX = 256                       # cap the recorded params so a 64 KiB rule body can't bloat a row
+
+
+def _audit_fields(op):
+    """(target, detail) for an audit row. For ``automation_set`` the ``rule`` is an ARBITRARY user
+    body (Rule.from_dict ignores unknown top-level fields), so it is NEVER dumped raw — record just
+    the rule id + a fixed summary. Other ops carry only known, bounded device params, dumped as
+    compact JSON (length-capped as a backstop)."""
+    name = op.get("op")
+    if name in ("automation_set", "automation_delete"):
+        # the id is unvalidated user input here (validated inside the op, after this runs) — record it
+        # only when it's a string, never serialize an arbitrary object, and use a fixed detail string.
+        rule = op.get("rule")
+        rid = rule.get("id") if isinstance(rule, dict) else op.get("id")
+        return (rid if isinstance(rid, str) else None), ("rule update" if name == "automation_set" else "rule delete")
+    target = op.get("node", op.get("file", op.get("id")))
+    detail = json.dumps({k: v for k, v in op.items() if k != "op"}, sort_keys=True)
+    return (str(target) if target is not None else None), detail[:_AUDIT_DETAIL_MAX]
+
+
+async def _dispatch_op(rt, op, *, actor="system", fail_status=HTTPStatus.INTERNAL_SERVER_ERROR):
+    """Run a control op and map the outcome: ValueError/KeyError/TypeError → 400, ``ok`` → 200, else
+    → ``fail_status``. Records the action to the audit log (#56) with ``actor`` + outcome (fire-and-
+    forget — ``_audit`` never blocks the response)."""
+    target, detail = _audit_fields(op)
+    action = op.get("op", "?")
     try:
         resp = await process_control_op(rt, op)
     except (ValueError, KeyError, TypeError) as exc:
+        _audit(rt, actor, action, target=target, detail=detail, result=f"error: {exc}")
         return _json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
+    _audit(rt, actor, action, target=target, detail=detail,
+           result="ok" if resp.get("ok") else f"error: {resp.get('error')}")
     if resp.get("ok"):
         return _json(HTTPStatus.OK, resp)
     return _json(fail_status, resp)
@@ -311,7 +356,7 @@ async def _name(request):
     if error is not None:
         return _json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": error})
     op["op"] = "name"                          # normalise after validation
-    return await _dispatch_op(_rt(request), op)
+    return await _dispatch_op(_rt(request), op, actor=_actor(request))
 
 
 async def _control(request):
@@ -321,7 +366,7 @@ async def _control(request):
     error = _validate_control_payload(op)
     if error is not None:
         return _json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": error})
-    return await _dispatch_op(_rt(request), op, fail_status=HTTPStatus.SERVICE_UNAVAILABLE)
+    return await _dispatch_op(_rt(request), op, actor=_actor(request), fail_status=HTTPStatus.SERVICE_UNAVAILABLE)
 
 
 async def _graduate(request):
@@ -331,7 +376,7 @@ async def _graduate(request):
     body, err = await _read_json_body(request)         # enforce the JSON content-type; the parsed body is unused
     if err:
         return body
-    return await _dispatch_op(_rt(request), {"op": "graduate"},
+    return await _dispatch_op(_rt(request), {"op": "graduate"}, actor=_actor(request),
                               fail_status=HTTPStatus.SERVICE_UNAVAILABLE)
 
 
@@ -348,7 +393,7 @@ async def _ir(request):
     if not (isinstance(ir_file, str) and ir_file and isinstance(button, str) and button):
         return _json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "file and button required"})
     return await _dispatch_op(_rt(request), {"op": "ir", "file": ir_file, "button": button},
-                              fail_status=HTTPStatus.SERVICE_UNAVAILABLE)
+                              actor=_actor(request), fail_status=HTTPStatus.SERVICE_UNAVAILABLE)
 
 
 async def _automations_list(request):
@@ -363,7 +408,7 @@ async def _automations_set(request):
     body, err = await _read_json_body(request, MAX_RULE_BODY)
     if err:
         return body
-    return await _dispatch_op(_rt(request), {"op": "automation_set", "rule": body})
+    return await _dispatch_op(_rt(request), {"op": "automation_set", "rule": body}, actor=_actor(request))
 
 
 async def _automations_delete(request):
@@ -374,7 +419,7 @@ async def _automations_delete(request):
     if err:
         return body
     rid = body.get("id") if isinstance(body, dict) else None
-    return await _dispatch_op(_rt(request), {"op": "automation_delete", "id": rid})
+    return await _dispatch_op(_rt(request), {"op": "automation_delete", "id": rid}, actor=_actor(request))
 
 
 def _validate_name_payload(op) -> "str | None":
@@ -481,6 +526,7 @@ def make_app(rt):
     app.router.add_get("/api/discovery", _discovery, allow_head=False)
     app.router.add_get("/api/events", _events, allow_head=False)
     app.router.add_get("/api/automations", _automations_list, allow_head=False)
+    app.router.add_get("/api/audit", _audit_feed, allow_head=False)
     app.router.add_post("/api/name", _name)
     app.router.add_post("/api/ir", _ir)
     app.router.add_post("/api/control", _control)

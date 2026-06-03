@@ -981,6 +981,53 @@ class AutomationsSetTests(_AutomationsWebTestBase):
         self.assertIn("lamp-on-scene", reloaded.rules)
         self.assertEqual(reloaded.rules["lamp-on-scene"].trigger["scene_id"], 1)
 
+
+class AuditFieldsTests(unittest.TestCase):
+    """_audit_fields: an automation rule body is never recorded raw (no arbitrary-field capture)."""
+
+    def test_automation_set_records_id_only_not_raw_body(self):
+        op = {"op": "automation_set", "rule": {"id": "r1", "password": "hunter2",
+                                               "trigger": {}, "actions": []}}
+        target, detail = web._audit_fields(op)
+        self.assertEqual((target, detail), ("r1", "rule update"))
+        self.assertNotIn("hunter2", detail)   # an arbitrary field in the body never reaches the audit
+
+    def test_automation_non_string_id_is_not_serialized(self):
+        # a non-string id (object) must never be str()'d into target or dumped into detail
+        s_target, s_detail = web._audit_fields({"op": "automation_set", "rule": {"id": {"password": "x"}}})
+        d_target, d_detail = web._audit_fields({"op": "automation_delete", "id": {"password": "x"}})
+        self.assertEqual((s_target, s_detail), (None, "rule update"))
+        self.assertEqual((d_target, d_detail), (None, "rule delete"))
+        self.assertNotIn("password", s_detail + d_detail)
+
+    def test_automation_delete_records_string_id(self):
+        self.assertEqual(web._audit_fields({"op": "automation_delete", "id": "r1"}), ("r1", "rule delete"))
+
+    def test_control_op_records_known_params(self):
+        target, detail = web._audit_fields({"op": "switch", "node": 14, "on": True})
+        self.assertEqual(target, "14")
+        self.assertIn('"on": true', detail)
+
+
+class AuditFeedTests(_WebTestBase):
+    """GET /api/audit — the audit-log feed (#56)."""
+
+    def test_empty_without_audit_engine(self):
+        status, _, body = _get(self.web.address, "/api/audit")     # base rt has audit_engine=None
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body), {"events": []})
+
+    def test_returns_recent_events(self):
+        from hestia import db, store_sql
+        engine, _ = db.init_db(self.tmp / "hestia.db")
+        store_sql.append_audit(engine, actor="tata", action="ir", target="/k.ir", result="ok", ts=100.0)
+        self.rt.audit_engine = engine          # rt is shared with the running web; read at request time
+        status, _, body = _get(self.web.address, "/api/audit")
+        self.assertEqual(status, 200)
+        events = json.loads(body)["events"]
+        self.assertEqual((events[0]["actor"], events[0]["action"], events[0]["target"]), ("tata", "ir", "/k.ir"))
+        engine.dispose()
+
     def test_set_replaces_same_id(self):
         _post(self.web.address, "/api/automations", VALID_RULE)
         updated = dict(VALID_RULE, actions=[{"op": "switch", "node": 7, "on": False}])
