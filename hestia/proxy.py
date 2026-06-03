@@ -887,6 +887,34 @@ async def _persist_store(rt) -> None:
     await _persist_obj(rt.save_lock, rt.engine.store)
 
 
+def seed_device_state(rt) -> None:
+    """Best-effort boot seed from the SQLite telemetry cache."""
+    from . import store_sql
+    snap = store_sql.load_device_state()
+    if snap:
+        rt.state.load_snapshot(snap)
+
+
+async def _persist_state(rt) -> None:
+    """Flush the best-effort live telemetry cache to SQLite, if that backend is active."""
+    from . import store_sql
+    if not store_sql._settings_enabled():
+        return
+    if not rt.state.dirty:
+        return
+    rt.state.dirty = False
+    snapshot = rt.state.to_snapshot()
+    loop = asyncio.get_running_loop()
+    try:
+        ok = await loop.run_in_executor(None, lambda: store_sql.save_device_state(snapshot))
+    except Exception:
+        log.exception("device-state cache save failed")
+        rt.state.dirty = True
+        return
+    if not ok:
+        rt.state.dirty = True
+
+
 def _audit(rt, actor, action, *, target=None, detail=None, result=None):
     """Schedule a best-effort audit-log append (#56) OFF the event loop, FIRE-AND-FORGET: never
     awaited, so a slow or locked audit DB can't add latency to the action being recorded (a failed
@@ -994,7 +1022,8 @@ async def _autosave(rt, interval: float = AUTOSAVE_SECS) -> None:
     error so the loop keeps running."""
     while True:
         await asyncio.sleep(interval)
-        for persist, obj in ((_persist, rt.registry), (_persist_store, rt.engine.store)):
+        for persist, obj in ((_persist, rt.registry), (_persist_store, rt.engine.store),
+                             (_persist_state, rt.state)):
             if not obj.dirty:
                 continue
             try:
@@ -1408,6 +1437,7 @@ async def main() -> None:  # pragma: no cover
                                   automations_path=config.automations_path,
                                   users_path=str(users_path()))
     rt = ProxyRuntime(registry=registry, engine=AutomationEngine(store), mode="proxy")
+    seed_device_state(rt)
     _shadow_sync_db(rt)                                # Phase-2 #57: mirror JSON -> SQLite (no-op in sqlite mode)
     rt.audit_engine = open_audit_engine()              # Phase-5 #56: who-did-what audit log
     if FLIPPER_ENABLED:                                # create the IR backlog before anything can fire
@@ -1450,6 +1480,10 @@ async def main() -> None:  # pragma: no cover
             await _persist_store(rt)           # symmetric: don't lose last-interval rule edits
         except OSError:
             log.exception("final automations save failed at shutdown")
+        try:
+            await _persist_state(rt)           # best-effort last telemetry cache
+        except Exception:
+            log.exception("final device-state cache save failed at shutdown")
 
 
 if __name__ == "__main__":  # pragma: no cover

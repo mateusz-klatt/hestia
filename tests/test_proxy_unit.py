@@ -1617,6 +1617,115 @@ class AutosaveTests(unittest.IsolatedAsyncioTestCase):
         self.assertGreaterEqual(calls["n"], 2)   # retried after the failure
         self.assertFalse(reg.dirty)
 
+    def test_seed_device_state_loads_cached_blob_when_present(self):
+        rt = proxy.ProxyRuntime()
+        with mock.patch("hestia.store_sql.load_device_state",
+                        return_value={"switches": {"14": True}, "gang": {"7": {"1": False}}}):
+            proxy.seed_device_state(rt)
+        self.assertEqual(rt.state.switches, {14: True})
+        self.assertEqual(rt.state.gang, {7: {1: False}})
+        self.assertFalse(rt.state.dirty)
+
+    def test_seed_device_state_ignores_absent_blob(self):
+        rt = proxy.ProxyRuntime()
+        with mock.patch("hestia.store_sql.load_device_state", return_value=None):
+            proxy.seed_device_state(rt)
+        self.assertEqual(rt.state.switches, {})
+
+    async def test_persist_state_saves_and_clears_dirty(self):
+        rt = proxy.ProxyRuntime()
+        rt.state.switches[14] = True
+        rt.state.dirty = True
+        saved = []
+        loop = asyncio.get_running_loop()
+
+        async def fake_run(_executor, func):
+            return func()
+
+        with mock.patch("hestia.store_sql._settings_enabled", return_value=True):
+            with mock.patch("hestia.store_sql.save_device_state",
+                            side_effect=lambda snap: saved.append(snap) or True):
+                with mock.patch.object(loop, "run_in_executor", side_effect=fake_run):
+                    await proxy._persist_state(rt)
+        self.assertFalse(rt.state.dirty)
+        self.assertEqual(saved, [{"doors": {}, "levels": {}, "switches": {"14": True},
+                                  "thermostat_setpoint": {}, "thermostat_on": {},
+                                  "temperature": {}, "plug_w": {}, "plug_kwh": {},
+                                  "plug_v": {}, "gang": {}}])
+
+    async def test_persist_state_dirty_false_is_noop(self):
+        rt = proxy.ProxyRuntime()
+        loop = asyncio.get_running_loop()
+        with mock.patch("hestia.store_sql._settings_enabled", return_value=True):
+            with mock.patch.object(loop, "run_in_executor") as run:
+                await proxy._persist_state(rt)
+        run.assert_not_called()
+
+    async def test_persist_state_json_mode_leaves_dirty_and_skips_executor(self):
+        rt = proxy.ProxyRuntime()
+        rt.state.dirty = True
+        loop = asyncio.get_running_loop()
+        with mock.patch("hestia.store_sql._settings_enabled", return_value=False):
+            with mock.patch.object(loop, "run_in_executor") as run:
+                await proxy._persist_state(rt)
+        run.assert_not_called()
+        self.assertTrue(rt.state.dirty)
+
+    async def test_persist_state_save_false_rearms_dirty(self):
+        rt = proxy.ProxyRuntime()
+        rt.state.switches[14] = True
+        rt.state.dirty = True
+        loop = asyncio.get_running_loop()
+
+        async def fake_run(_executor, func):
+            return func()
+
+        with mock.patch("hestia.store_sql._settings_enabled", return_value=True):
+            with mock.patch("hestia.store_sql.save_device_state", return_value=False):
+                with mock.patch.object(loop, "run_in_executor", side_effect=fake_run):
+                    await proxy._persist_state(rt)
+        self.assertTrue(rt.state.dirty)
+
+    async def test_persist_state_executor_exception_rearms_dirty(self):
+        rt = proxy.ProxyRuntime()
+        rt.state.switches[14] = True
+        rt.state.dirty = True
+        loop = asyncio.get_running_loop()
+
+        async def fake_run(_executor, _func):
+            raise OSError("executor")
+
+        with mock.patch("hestia.store_sql._settings_enabled", return_value=True):
+            with mock.patch.object(loop, "run_in_executor", side_effect=fake_run):
+                with self.assertLogs("hestia.proxy", level="ERROR"):
+                    await proxy._persist_state(rt)
+        self.assertTrue(rt.state.dirty)
+
+    async def test_autosave_flushes_state_independently(self):
+        rt = proxy.ProxyRuntime(registry=proxy.Registry(self.path))
+        rt.state.switches[14] = True
+        rt.state.dirty = True
+        saved = asyncio.Event()
+        loop = asyncio.get_running_loop()
+
+        async def fake_run(_executor, func):
+            return func()
+
+        def save(_snapshot):
+            saved.set()
+            return True
+
+        with mock.patch("hestia.store_sql._settings_enabled", return_value=True):
+            with mock.patch("hestia.store_sql.save_device_state", side_effect=save):
+                with mock.patch.object(loop, "run_in_executor", side_effect=fake_run):
+                    task = asyncio.create_task(proxy._autosave(rt, interval=0.02))
+                    try:
+                        self.assertTrue(await self._wait_for(saved.is_set))
+                    finally:
+                        task.cancel()
+                        await asyncio.gather(task, return_exceptions=True)
+        self.assertFalse(rt.state.dirty)
+
     async def test_persist_store_writes_when_dirty(self):
         store_path = self.tmp / "automations.json"
         store = AutomationStore(store_path)

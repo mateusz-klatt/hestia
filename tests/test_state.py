@@ -34,6 +34,84 @@ class DefaultsTests(unittest.TestCase):
         self.assertIsNone(State().outdoor_temp)          # global field, set only by the weather poller
 
 
+class SnapshotTests(unittest.TestCase):
+    def test_roundtrip_node_keyed_maps_and_gang_only(self):
+        st = State()
+        st.doors[0x12] = "open"
+        st.levels[0x05] = 42
+        st.switches[0x0E] = True
+        st.thermostat_setpoint[0x0D] = 21
+        st.thermostat_on[0x0D] = False
+        st.temperature[0x0D] = 19
+        st.plug_w[0x13] = 13
+        st.plug_kwh[0x13] = 8.75
+        st.plug_v[0x14] = 244.58
+        st.gang[0x07] = {1: True, 2: False}
+        st.scene_seq[0x05] = 7
+        st.crib_temp = 22.0
+        st.outdoor_temp = -3.0
+        st.outdoor_humidity = 44.0
+
+        snap = st.to_snapshot()
+        self.assertEqual(snap["doors"], {"18": "open"})
+        self.assertEqual(snap["gang"], {"7": {"1": True, "2": False}})
+        self.assertNotIn("scene_seq", snap)
+        self.assertNotIn("crib_temp", snap)
+        self.assertNotIn("outdoor_temp", snap)
+        self.assertNotIn("outdoor_humidity", snap)
+
+        restored = State()
+        restored.load_snapshot(snap)
+        self.assertEqual(restored.doors, {0x12: "open"})
+        self.assertEqual(restored.levels, {0x05: 42})
+        self.assertEqual(restored.switches, {0x0E: True})
+        self.assertEqual(restored.thermostat_setpoint, {0x0D: 21})
+        self.assertEqual(restored.thermostat_on, {0x0D: False})
+        self.assertEqual(restored.temperature, {0x0D: 19})
+        self.assertEqual(restored.plug_w, {0x13: 13})
+        self.assertEqual(restored.plug_kwh, {0x13: 8.75})
+        self.assertEqual(restored.plug_v, {0x14: 244.58})
+        self.assertEqual(restored.gang, {0x07: {1: True, 2: False}})
+        self.assertFalse(restored.dirty)
+
+    def test_load_snapshot_tolerates_corrupt_partial_wrong_type_blob(self):
+        st = State()
+        st.load_snapshot("not a dict")
+        self.assertEqual(st.doors, {})
+
+        st.load_snapshot({
+            "doors": {"18": "open", "bad": "closed", None: "closed"},
+            "levels": "not a dict",
+            "switches": {"14": True},
+            "thermostat_setpoint": {"13": 21},
+            "thermostat_on": {"13": False},
+            "temperature": {"13": 19},
+            "plug_w": {"19": 13},
+            "plug_kwh": {"19": 8.75},
+            "plug_v": {"20": 244.58},
+            "gang": {
+                "7": {"1": True, "bad": False, None: True},
+                "bad": {"1": True},
+                "8": "not a dict",
+                "9": {"bad": True},
+            },
+        })
+        self.assertEqual(st.doors, {18: "open"})
+        self.assertEqual(st.levels, {})
+        self.assertEqual(st.switches, {14: True})
+        self.assertEqual(st.thermostat_setpoint, {13: 21})
+        self.assertEqual(st.thermostat_on, {13: False})
+        self.assertEqual(st.temperature, {13: 19})
+        self.assertEqual(st.plug_w, {19: 13})
+        self.assertEqual(st.plug_kwh, {19: 8.75})
+        self.assertEqual(st.plug_v, {20: 244.58})
+        self.assertEqual(st.gang, {7: {1: True}})
+        self.assertFalse(st.dirty)
+
+        st.load_snapshot({"gang": "not a dict"})
+        self.assertEqual(st.gang, {7: {1: True}})
+
+
 class ApplyNonEventTests(unittest.TestCase):
     def test_non_c09_ignored(self):
         keepalive = Frame(build_frame(0x66, 0x01)[1:-1])
@@ -56,6 +134,17 @@ class ApplyReturnsChangesTests(unittest.TestCase):
         st = State()
         self.assertEqual(st.apply(event(0x05, b"\x26\x03\x30\x00\xfe")), {"level": 0x30})
         self.assertEqual(st.apply(event(0x09, b"\x43\x03\x01\x04\x00\x00\x00\x15")), {"setpoint": 0x15})
+
+    def test_dirty_set_only_when_apply_returns_changes(self):
+        st = State()
+        self.assertFalse(st.dirty)
+        self.assertEqual(st.apply(event(0x05, b"\x26\x03\x30\x00\xfe")), {"level": 0x30})
+        self.assertTrue(st.dirty)
+        st.dirty = False
+        self.assertEqual(st.apply(event(0x05, b"\x26\x03\x30\x00\xfe")), {})
+        self.assertFalse(st.dirty)
+        self.assertEqual(st.apply(event(0x05, b"\x99\x99")), {})
+        self.assertFalse(st.dirty)
 
     def test_unchanged_value_returns_empty(self):
         st = State()
