@@ -112,7 +112,9 @@ export function renderKlima(box: HTMLElement, klima: Klima, postIr: PostIr): voi
     fillTemps();
     const set = document.createElement("button");
     set.type = "button";
-    set.textContent = t("ctl.set");
+    set.textContent = "✓"; // compact icon so the klima row fits one line; label via title/aria
+    set.title = t("ctl.set");
+    set.setAttribute("aria-label", t("ctl.set"));
     set.style.marginRight = "0.4rem";
     set.addEventListener("click", () => {
       if (mode.value === "" || temp.value === "") return;
@@ -125,7 +127,9 @@ export function renderKlima(box: HTMLElement, klima: Klima, postIr: PostIr): voi
   if (canOff) {
     const off = document.createElement("button");
     off.type = "button";
-    off.textContent = t("ctl.turnOff");
+    off.textContent = "⏻"; // power-off icon (compact); label via title/aria
+    off.title = t("ctl.turnOff");
+    off.setAttribute("aria-label", t("ctl.turnOff"));
     off.style.marginRight = "0.4rem";
     off.addEventListener("click", () => {
       void send("off", t("ctl.turnOff"));

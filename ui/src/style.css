@@ -39,6 +39,13 @@ body {
     max(1.5rem, env(safe-area-inset-bottom)) max(1.5rem, env(safe-area-inset-left));
 }
 
+/* A centred reading column so the UI isn't stretched edge-to-edge on a wide desktop. Full width
+   below the cap; the admin table's 8 narrow columns still fit comfortably within it. */
+#app {
+  max-width: 60rem;
+  margin-inline: auto;
+}
+
 /* Form controls: a ≥16px font stops iOS Safari from zooming the page when an
    input/select gains focus; `touch-action: manipulation` drops the 300ms tap
    delay and the double-tap-to-zoom gesture on buttons. */
