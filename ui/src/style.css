@@ -163,6 +163,10 @@ td.sub-label {
 }
 
 #globals {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 0.4rem 1rem;
   margin: 0 0 0.9rem;
   color: var(--fg-soft);
   font-size: 0.95rem;

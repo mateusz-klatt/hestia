@@ -16,8 +16,10 @@
     <p id="status" hidden></p>
     <!-- Shared: indoor (crib) + outdoor temperature, so the live temps show on the main rooms
          screen (LiveController writes these spans by id, wherever they sit). -->
+    <!-- Icon-only: 🍼 crib temp (left) · 🌡 outdoor temp / humidity (right). LiveController writes the spans. -->
     <div id="globals">
-      🍼 crib: <span id="g-crib">—</span> &nbsp;·&nbsp; 🌡 outdoor: <span id="g-outdoor">—</span> / <span id="g-outdoor-humidity">—</span>
+      <span class="g-item">🍼 <span id="g-crib">—</span></span>
+      <span class="g-item">🌡 <span id="g-outdoor">—</span> / <span id="g-outdoor-humidity">—</span></span>
     </div>
 
     <!-- Wife-friendly room view (default). House-wide IR/klima panels live here in their own
