@@ -895,10 +895,14 @@ def _audit(rt, actor, action, *, target=None, detail=None, result=None):
     scheduled future (tests await it; callers ignore it)."""
     if rt.audit_engine is None:
         return None
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return None                         # no running loop (best-effort) — also lets the engine call this safely
     from . import store_sql
-    fut = asyncio.get_running_loop().run_in_executor(
+    fut = loop.run_in_executor(
         None, lambda: store_sql.append_audit(rt.audit_engine, actor=actor, action=action,
-                                              target=target, detail=detail, result=result, ts=time.time()))
+                                             target=target, detail=detail, result=result, ts=time.time()))
     fut.add_done_callback(_audit_done)
     return fut
 

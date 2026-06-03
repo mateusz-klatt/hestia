@@ -472,6 +472,32 @@ class AuditLogTests(unittest.TestCase):
         with mock.patch("hestia.store_sql.init_db", side_effect=OSError("boom")):
             self.assertIsNone(store_sql.open_audit_engine())   # best-effort: never breaks boot
 
+    def test_audit_without_running_loop_is_noop(self):
+        # _audit may be called from the engine's sync _fire; off a running loop it must not raise
+        # (best-effort). Called here from a plain sync test (no loop) with a real engine → None.
+        self.assertIsNone(proxy._audit(SimpleNamespace(audit_engine=self.engine), "actor", "act"))
+
+
+class AutomationActorAuditTests(unittest.TestCase):
+    """P5b: a rule firing its actions records actor=automation:<rule_id> in the audit log."""
+
+    def setUp(self):
+        self.dir = Path(tempfile.mkdtemp())
+
+    def tearDown(self):
+        shutil.rmtree(self.dir)
+
+    def test_fire_audits_automation_actor(self):
+        from hestia.automations import AutomationEngine, AutomationStore
+        eng = AutomationEngine(AutomationStore(self.dir / "a.json"))
+        eng.set_rule(Rule.from_dict({"id": "r1", "trigger": {"type": "scene", "node": 2, "scene_id": 3},
+                                     "actions": [{"op": "switch", "node": 14, "on": True}]}))
+        rt = proxy.ProxyRuntime()
+        with mock.patch("hestia.proxy._audit") as audit:
+            eng.on_event(rt, 2, {}, {"id": 3, "kind": "scene"})    # fires r1
+        self.assertTrue(any(c.args[1] == "automation:r1" and c.args[2] == "switch"
+                            for c in audit.call_args_list), audit.call_args_list)
+
 
 class AuditHelperTests(unittest.IsolatedAsyncioTestCase):
     """proxy._audit: best-effort, off-loop — no-op without an engine, writes with one, swallows errors."""
