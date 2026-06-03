@@ -332,16 +332,17 @@ def get_user_settings(username) -> "dict | None":
         engine.dispose()
 
 
-def set_user_settings(username, *, locale, temp_scale, theme) -> bool:
-    """Upsert one user's UI settings into SQLite. Returns False when the active backend is JSON."""
+def set_user_settings(username, **fields) -> bool:
+    """Upsert ONLY the named UI-settings columns for one user (an absent kwarg is left untouched, so
+    a partial update preserves the others). The merge happens inside a single transaction, so two
+    concurrent partial updates can't lose each other's field. Returns False under the JSON backend."""
     if not _settings_enabled():
         return False
     engine, session_factory = init_db()
     try:
         with session_scope(session_factory) as session:
             _upsert(session, UserSetting, "username", username,
-                    {"locale": _cap_setting(locale), "temp_scale": _cap_setting(temp_scale),
-                     "theme": _cap_setting(theme)})
+                    {key: _cap_setting(value) for key, value in fields.items()})
         return True
     finally:
         engine.dispose()

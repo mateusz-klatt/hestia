@@ -244,13 +244,11 @@ async def _settings_set(request):
     if user is None:
         return _json(HTTPStatus.OK, {"ok": True})
 
-    def write():
-        current = store_sql.get_user_settings(user) or dict(_EMPTY_SETTINGS)
-        merged = {**current, **{k: body[k] for k in ("locale", "temp_scale", "theme") if k in body}}
-        return store_sql.set_user_settings(user, locale=merged["locale"],
-                                           temp_scale=merged["temp_scale"], theme=merged["theme"])
-
-    wrote = await asyncio.get_running_loop().run_in_executor(None, write)
+    # Pass only the fields actually present so the store's single-transaction upsert preserves the
+    # rest (no read-merge-write race between two concurrent partial POSTs).
+    fields = {k: body[k] for k in ("locale", "temp_scale", "theme") if k in body}
+    wrote = await asyncio.get_running_loop().run_in_executor(
+        None, lambda: store_sql.set_user_settings(user, **fields))
     if wrote:
         _audit(_rt(request), user, "settings",
                detail=f"locale={body.get('locale')},scale={body.get('temp_scale')}")

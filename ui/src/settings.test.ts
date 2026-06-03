@@ -47,6 +47,13 @@ describe("reconcileServerSettings", () => {
     expect(localStorage.getItem("hestia.tempScale")).toBeNull();
   });
 
+  it("ignores an unsupported stored locale (so boot can't reload-loop on a locale it can't apply)", () => {
+    // "xx" isn't in LOCALES: initLocale would fall back, so the effective locale could never equal
+    // it — adopting it would reload forever. Skip it instead.
+    expect(reconcileServerSettings({ locale: "xx", temp_scale: null, theme: null })).toBe(false);
+    expect(localStorage.getItem("hestia.locale")).toBeNull();
+  });
+
   it("reports no change when the local write can't persist (so boot can't reload-loop)", () => {
     // Storage that refuses writes (Safari private mode etc.): differing server values still
     // resolve to "no change" so main.ts won't reload forever against a cache it can't update.

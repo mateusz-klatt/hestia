@@ -385,6 +385,12 @@ class Phase4UsersTests(unittest.TestCase):
             self.assertEqual(store_sql.get_user_settings("tata"),
                              {"locale": "pl", "temp_scale": "K", "theme": None})
 
+            # A partial update touches ONLY the named column; the others are preserved (the merge is
+            # in one transaction, so concurrent partial writes can't clobber each other's field).
+            self.assertTrue(store_sql.set_user_settings("tata", locale="de"))
+            self.assertEqual(store_sql.get_user_settings("tata"),
+                             {"locale": "de", "temp_scale": "K", "theme": None})
+
     def test_open_stores_cuts_users_when_registry_already_authoritative(self):
         # the live Phase-3 box: registry authoritative, users NOT → next boot cuts over ONLY users
         self.users_json.write_text('{"tata": "h"}', encoding="utf-8")
