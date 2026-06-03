@@ -314,8 +314,14 @@ _AUDIT_DETAIL_MAX = 256                       # cap the recorded params so a 64 
 
 
 def _audit_fields(op):
-    """(target, detail) for an audit row from a control op: target = the node / IR file / rule id,
-    detail = the op's parameters (everything but ``op``) as compact JSON, length-capped."""
+    """(target, detail) for an audit row. For ``automation_set`` the ``rule`` is an ARBITRARY user
+    body (Rule.from_dict ignores unknown top-level fields), so it is NEVER dumped raw — record just
+    the rule id + a fixed summary. Other ops carry only known, bounded device params, dumped as
+    compact JSON (length-capped as a backstop)."""
+    if op.get("op") == "automation_set":
+        rule = op.get("rule")
+        rid = rule.get("id") if isinstance(rule, dict) else None
+        return (str(rid) if rid is not None else None), "rule update"
     target = op.get("node", op.get("file", op.get("id")))
     detail = json.dumps({k: v for k, v in op.items() if k != "op"}, sort_keys=True)
     return (str(target) if target is not None else None), detail[:_AUDIT_DETAIL_MAX]

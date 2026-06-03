@@ -982,6 +982,23 @@ class AutomationsSetTests(_AutomationsWebTestBase):
         self.assertEqual(reloaded.rules["lamp-on-scene"].trigger["scene_id"], 1)
 
 
+class AuditFieldsTests(unittest.TestCase):
+    """_audit_fields: an automation rule body is never recorded raw (no arbitrary-field capture)."""
+
+    def test_automation_set_records_id_only_not_raw_body(self):
+        op = {"op": "automation_set", "rule": {"id": "r1", "password": "hunter2",
+                                               "trigger": {}, "actions": []}}
+        target, detail = web._audit_fields(op)
+        self.assertEqual(target, "r1")
+        self.assertEqual(detail, "rule update")
+        self.assertNotIn("hunter2", detail)   # an arbitrary field in the body never reaches the audit
+
+    def test_control_op_records_known_params(self):
+        target, detail = web._audit_fields({"op": "switch", "node": 14, "on": True})
+        self.assertEqual(target, "14")
+        self.assertIn('"on": true', detail)
+
+
 class AuditFeedTests(_WebTestBase):
     """GET /api/audit — the audit-log feed (#56)."""
 
