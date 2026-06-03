@@ -172,6 +172,22 @@ td.sub-label {
 #conn {
   font-size: 0.85rem;
   color: var(--muted);
+  flex-basis: 100%;   /* a permanent, full-width 2nd line (below the title + user menu): the
+                         "reconnecting…" text never crowds the header (esp. on a phone), and the
+                         reserved height means it appearing/clearing doesn't shift the layout. */
+  order: 1;
+  min-height: 1.2em;
+}
+
+/* The klima / IR action status (✓ / ✗) lives on its OWN reserved line within the panel, so showing
+   or clearing it never reflows the room cards below it. flex-basis:100% drops it under the controls;
+   min-height keeps the line even when empty (one fixed status line, no layout jump). */
+#ir-buttons .status,
+#rooms-ir .status,
+#klima .status,
+#rooms-klima .status {
+  flex-basis: 100%;
+  min-height: 1.2em;
 }
 
 #refresh {

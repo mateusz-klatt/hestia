@@ -49,7 +49,8 @@ log = logging.getLogger("hestia.web")
 MAX_BODY = 8192                                      # cap POST body size (bytes)
 MAX_RULE_BODY = 65536                                # larger cap for an automation rule
 MAX_STRING = 256                                     # cap name / room length (chars)
-SSE_IDLE_TIMEOUT = 15.0                              # inner: queue.get idle → keepalive
+SSE_IDLE_TIMEOUT = float(os.environ.get("HESTIA_SSE_KEEPALIVE", "5"))  # idle→keepalive; also how fast a
+#                                                     reloaded-away client's slot is reclaimed (write fails)
 SSE_MAX_LIFETIME = float(os.environ.get("HESTIA_SSE_LIFETIME", "3600"))
 _TYPES = {t.value for t in DeviceType}
 _clock = time.monotonic                              # module-level rebindable for tests

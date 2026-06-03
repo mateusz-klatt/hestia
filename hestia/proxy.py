@@ -353,6 +353,13 @@ class Subscription:
         self.queue = None
 
 
+# Max concurrent SSE subscribers. A page reload opens a new stream while the old one still holds its
+# slot until the server's next keepalive write detects the disconnect (~HESTIA_SSE_KEEPALIVE s), so a
+# burst of reloads (rapid F5) could exhaust a small cap → 429. 32 (was 8) absorbs that for a home box;
+# env-tunable. NOTE: a WebSocket would NOT change this — it's connection churn, not the SSE transport.
+_SSE_MAX_SUBS = int(os.environ.get("HESTIA_SSE_MAX_SUBS", "32"))
+
+
 class EventBus:
     """Loop-owned fan-out for activity / discovery events.
 
@@ -362,7 +369,7 @@ class EventBus:
     every subscriber queue, draining one stale event if needed so the sentinel
     reaches even a full-queue subscriber — guarantees clean SSE handler exit on shutdown."""
 
-    def __init__(self, max_subs: int = 8):
+    def __init__(self, max_subs: int = _SSE_MAX_SUBS):
         self._subs: "set[asyncio.Queue]" = set()
         self._sem = asyncio.Semaphore(max_subs)
         self._closing = False
