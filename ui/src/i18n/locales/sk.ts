@@ -21,6 +21,9 @@ const messages: Partial<Messages> = {
   "user.temperature": "Teplota",
 
   "common.loading": "Načítava sa…",
+  "audit.title": "Denník aktivity",
+  "audit.empty": "Zatiaľ žiadna aktivita",
+  "audit.refresh": "Obnoviť",
   "rooms.empty": "Žiadne zariadenia",
   "rooms.other": "Ostatné",
   "rooms.deviceCount.one": "{n} zariadenie",

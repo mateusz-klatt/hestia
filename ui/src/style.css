@@ -238,9 +238,67 @@ td.sub-label {
   color: var(--err);
 }
 
+#audit-hdr,
 #auto-hdr {
   font-size: 1.05rem;
   margin: 1.8rem 0 0.6rem;
+}
+
+#audit-feed {
+  margin-bottom: 1.2rem;
+}
+
+.audit-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.8rem;
+  margin: 0 0 0.5rem;
+}
+
+.audit-head h3 {
+  flex: 1 1 auto;
+  font-size: 1rem;
+  margin: 0;
+}
+
+.audit-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border-top: 1px solid var(--border);
+}
+
+.audit-row,
+.audit-empty {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.25rem 0.55rem;
+  padding: 0.45rem 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.audit-ts,
+.audit-result {
+  color: var(--muted);
+}
+
+.audit-ts {
+  white-space: nowrap;
+}
+
+.audit-icon {
+  width: 1.5rem;
+  text-align: center;
+}
+
+.audit-actor {
+  font-weight: bold;
+}
+
+.audit-empty {
+  color: var(--muted);
 }
 
 #auto-editor {
@@ -299,7 +357,9 @@ td.seen.fresh {
 
 #user-menu {
   position: absolute;
-  right: 0;
+  inset-inline-end: 0;   /* logical, not `right: 0` — anchors to the menu button's edge in BOTH
+                            directions; in RTL (ar/fa/he) this flips to the left so the dropdown
+                            opens toward the centre instead of spilling off the left edge. */
   top: calc(100% + 0.3rem);
   z-index: 10;
   min-width: 12rem;

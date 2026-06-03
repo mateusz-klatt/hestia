@@ -21,6 +21,9 @@ const messages: Partial<Messages> = {
   "user.temperature": "温度",
 
   "common.loading": "読み込み中…",
+  "audit.title": "アクティビティログ",
+  "audit.empty": "まだアクティビティはありません",
+  "audit.refresh": "更新",
   "rooms.empty": "デバイスがありません",
   "rooms.other": "その他",
   "rooms.deviceCount.other": "{n} 台のデバイス",

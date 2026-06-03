@@ -21,6 +21,9 @@ const messages: Partial<Messages> = {
   "user.temperature": "Halijoto",
 
   "common.loading": "Inapakia…",
+  "audit.title": "Kumbukumbu ya shughuli",
+  "audit.empty": "Hakuna shughuli bado",
+  "audit.refresh": "Onyesha upya",
   "rooms.empty": "Hakuna vifaa",
   "rooms.other": "Nyingine",
   "rooms.deviceCount.one": "{n} kifaa",

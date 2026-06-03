@@ -21,6 +21,9 @@ const messages: Partial<Messages> = {
   "user.temperature": "तापमान",
 
   "common.loading": "लोड हो रहा है…",
+  "audit.title": "गतिविधि लॉग",
+  "audit.empty": "अभी कोई गतिविधि नहीं",
+  "audit.refresh": "रीफ़्रेश करें",
   "rooms.empty": "कोई डिवाइस नहीं",
   "rooms.other": "अन्य",
   "rooms.deviceCount.one": "{n} डिवाइस",

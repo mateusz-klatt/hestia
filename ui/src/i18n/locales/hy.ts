@@ -21,6 +21,9 @@ const messages: Partial<Messages> = {
   "user.temperature": "Ջերմաստիճան",
 
   "common.loading": "Բեռնվում է…",
+  "audit.title": "Գործունեության մատյան",
+  "audit.empty": "Դեռ գործունեություն չկա",
+  "audit.refresh": "Թարմացնել",
   "rooms.empty": "Սարքեր չկան",
   "rooms.other": "Այլ",
   "rooms.deviceCount.one": "{n} սարք",

@@ -21,6 +21,9 @@ const messages: Partial<Messages> = {
   "user.temperature": "Sıcaklık",
 
   "common.loading": "Yükleniyor…",
+  "audit.title": "Etkinlik günlüğü",
+  "audit.empty": "Henüz etkinlik yok",
+  "audit.refresh": "Yenile",
   "rooms.empty": "Cihaz yok",
   "rooms.other": "Diğer",
   "rooms.deviceCount.one": "{n} cihaz",

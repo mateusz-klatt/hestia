@@ -21,6 +21,9 @@ const messages: Partial<Messages> = {
   "user.temperature": "Hőmérséklet",
 
   "common.loading": "Betöltés…",
+  "audit.title": "Tevékenységnapló",
+  "audit.empty": "Még nincs tevékenység",
+  "audit.refresh": "Frissítés",
   "rooms.empty": "Nincsenek eszközök",
   "rooms.other": "Egyéb",
   "rooms.deviceCount.one": "{n} eszköz",

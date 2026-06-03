@@ -21,6 +21,9 @@ const messages: Partial<Messages> = {
   "user.temperature": "온도",
 
   "common.loading": "로딩 중…",
+  "audit.title": "활동 기록",
+  "audit.empty": "아직 활동이 없습니다",
+  "audit.refresh": "새로고침",
   "rooms.empty": "기기가 없습니다",
   "rooms.other": "기타",
   "rooms.deviceCount.other": "{n}개 기기",

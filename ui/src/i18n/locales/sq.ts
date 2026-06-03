@@ -21,6 +21,9 @@ const messages: Partial<Messages> = {
   "user.temperature": "Temperatura",
 
   "common.loading": "Duke u ngarkuar…",
+  "audit.title": "Ditari i aktivitetit",
+  "audit.empty": "Ende nuk ka aktivitet",
+  "audit.refresh": "Rifresko",
   "rooms.empty": "Nuk ka pajisje",
   "rooms.other": "Të tjera",
   "rooms.deviceCount.one": "{n} pajisje",

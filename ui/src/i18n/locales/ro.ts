@@ -21,6 +21,9 @@ const messages: Partial<Messages> = {
   "user.temperature": "Temperatură",
 
   "common.loading": "Se încarcă…",
+  "audit.title": "Jurnal de activitate",
+  "audit.empty": "Nicio activitate încă",
+  "audit.refresh": "Reîmprospătează",
   "rooms.empty": "Niciun dispozitiv",
   "rooms.other": "Altele",
   "rooms.deviceCount.one": "{n} dispozitiv",

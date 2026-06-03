@@ -21,6 +21,9 @@ const messages: Partial<Messages> = {
   "user.temperature": "Temperatūra",
 
   "common.loading": "Notiek ielāde…",
+  "audit.title": "Darbību žurnāls",
+  "audit.empty": "Pagaidām nav darbību",
+  "audit.refresh": "Atsvaidzināt",
   "rooms.empty": "Nav ierīču",
   "rooms.other": "Citi",
   "rooms.deviceCount.zero": "{n} ierīču",

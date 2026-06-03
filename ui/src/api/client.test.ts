@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   apiBase,
   deleteRule,
+  fetchAudit,
   fetchAutomations,
   fetchDiscovery,
   login,
@@ -149,6 +150,43 @@ describe("fetchAutomations", () => {
     expect(await fetchAutomations()).toBeNull();
     vi.stubGlobal("fetch", () => Promise.reject(new Error("offline")));
     expect(await fetchAutomations()).toBeNull();
+  });
+});
+
+describe("fetchAudit", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("returns the event list on 2xx", async () => {
+    const event = {
+      id: 1,
+      ts: 1_800_000_000,
+      actor: "system",
+      action: "boot",
+      target: null,
+      detail: null,
+      result: "ok",
+    };
+    vi.stubGlobal("fetch", () =>
+      Promise.resolve({ ok: true, json: () => Promise.resolve({ events: [event] }) }),
+    );
+    expect(await fetchAudit()).toEqual([event]);
+  });
+
+  it("returns [] when the events key is absent", async () => {
+    vi.stubGlobal("fetch", () => Promise.resolve({ ok: true, json: () => Promise.resolve({}) }));
+    expect(await fetchAudit()).toEqual([]);
+  });
+
+  it("returns null on a non-2xx response", async () => {
+    vi.stubGlobal("fetch", () => Promise.resolve({ ok: false, json: () => Promise.resolve({}) }));
+    expect(await fetchAudit()).toBeNull();
+  });
+
+  it("returns null when fetch rejects", async () => {
+    vi.stubGlobal("fetch", () => Promise.reject(new Error("offline")));
+    expect(await fetchAudit()).toBeNull();
   });
 });
 

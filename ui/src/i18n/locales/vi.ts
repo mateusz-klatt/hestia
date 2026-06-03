@@ -21,6 +21,9 @@ const messages: Partial<Messages> = {
   "user.temperature": "Nhiệt độ",
 
   "common.loading": "Đang tải…",
+  "audit.title": "Nhật ký hoạt động",
+  "audit.empty": "Chưa có hoạt động",
+  "audit.refresh": "Làm mới",
   "rooms.empty": "Không có thiết bị",
   "rooms.other": "Khác",
   "rooms.deviceCount.other": "{n} thiết bị",
