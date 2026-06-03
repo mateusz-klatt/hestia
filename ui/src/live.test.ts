@@ -404,6 +404,104 @@ describe("LiveController onRender hook", () => {
   });
 });
 
+describe("LiveController onState hook", () => {
+  it("fires with the FULLY-MERGED info after a single-value state delta", async () => {
+    const view = harness();
+    const seen: [number, boolean | null][] = [];
+    const live = new LiveController(
+      view,
+      () => Promise.resolve(discovery({ "7": device({ type: "plug", switch: false }) })),
+      undefined,
+      undefined,
+      (node, info) => {
+        seen.push([node, info.switch]);
+      },
+    );
+    await live.refresh();
+    live.applyState(7, { switch: true, power_w: 12 });
+    expect(seen).toEqual([[7, true]]); // merged switch value, fired once
+  });
+
+  it("fires for a multi-gang channel delta too", async () => {
+    const view = harness();
+    const seen: number[] = [];
+    const live = new LiveController(
+      view,
+      () => Promise.resolve(discovery({ "2": device({ type: "light", endpoints: { "1": true, "2": false } }) })),
+      undefined,
+      undefined,
+      (node) => {
+        seen.push(node);
+      },
+    );
+    await live.refresh();
+    live.applyState(2, { endpoints: { "1": true, "2": true } });
+    expect(seen).toEqual([2]);
+  });
+
+  it("does NOT fire mid-refresh; replays once on drain with the merged value", async () => {
+    const view = harness();
+    const gate = deferred<Discovery | null>();
+    const seen: [number, boolean | null][] = [];
+    const live = new LiveController(
+      view,
+      () => gate.promise,
+      undefined,
+      undefined,
+      (node, info) => {
+        seen.push([node, info.switch]);
+      },
+    );
+    const refreshing = live.refresh();
+    live.applyState(7, { switch: true }); // queued — must NOT notify while refreshing
+    expect(seen).toEqual([]);
+    gate.resolve(discovery({ "7": device({ type: "plug", switch: false }) }));
+    await refreshing;
+    expect(seen).toEqual([[7, true]]); // drainPending replayed it, merged
+  });
+
+  it("swallows a throwing onState so the live layer keeps patching", async () => {
+    const view = harness();
+    let calls = 0;
+    const live = new LiveController(
+      view,
+      () => Promise.resolve(discovery({ "7": device({ type: "plug", switch: false }) })),
+      undefined,
+      undefined,
+      () => {
+        calls += 1;
+        throw new Error("observer boom");
+      },
+    );
+    await live.refresh();
+    expect(() => {
+      live.applyState(7, { switch: true });
+    }).not.toThrow();
+    expect(calls).toBe(1);
+    expect(stanval(view, "7")).toBe("on"); // row still patched despite the observer throwing
+    live.applyState(7, { switch: false }); // a later delta still flows
+    expect(calls).toBe(2);
+    expect(stanval(view, "7")).toBe("off");
+  });
+
+  it("does not fire for a node with no cached info (unknown row)", async () => {
+    const view = harness();
+    const seen: number[] = [];
+    const live = new LiveController(
+      view,
+      () => Promise.resolve(discovery({ "7": device({ type: "plug" }) })),
+      undefined,
+      undefined,
+      (node) => {
+        seen.push(node);
+      },
+    );
+    await live.refresh();
+    live.applyState(99, { switch: true }); // unknown node → returns before merge
+    expect(seen).toEqual([]);
+  });
+});
+
 describe("LiveController decorate hook", () => {
   it("runs the decorator against each node row's actions cell after a rebuild", async () => {
     const view = harness();

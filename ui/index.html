@@ -12,6 +12,20 @@
       <span id="hdr-text">hestia — devices</span><span id="conn"></span><span id="auth"></span
       ><button id="refresh" type="button">Refresh</button>
     </h1>
+    <div id="view-switch" class="view-switch"></div>
+    <!-- Shared, so a failed /api/discovery is visible in BOTH views (not buried in the admin view). -->
+    <p id="status" hidden></p>
+
+    <!-- Wife-friendly room view (default). House-wide IR/klima panels live here in their own
+         persistent containers; #room-list is the only part rooms.ts rebuilds. -->
+    <section id="rooms-view">
+      <div id="rooms-ir" class="panel"></div>
+      <div id="rooms-klima" class="panel"></div>
+      <div id="room-list"></div>
+    </section>
+
+    <!-- Full engineer view: the device table, globals, mode line, automations editor. -->
+    <section id="admin-view" hidden>
     <div id="globals">
       🍼 crib: <span id="g-crib">—</span> &nbsp;·&nbsp; 🌡 outdoor: <span id="g-outdoor">—</span> / <span id="g-outdoor-humidity">—</span>
     </div>
@@ -33,7 +47,6 @@
       </thead>
       <tbody id="rows"></tbody>
     </table>
-    <p id="status" hidden></p>
 
     <h2 id="auto-hdr">automations</h2>
     <table>
@@ -64,6 +77,7 @@
         <span id="rule-status" class="status"></span>
       </div>
     </div>
+    </section>
     </div>
 
     <script type="module" src="/src/main.ts"></script>

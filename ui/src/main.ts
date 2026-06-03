@@ -15,9 +15,12 @@ import { renderAutomations } from "./automations";
 import { renderActions } from "./controls";
 import { renderIrButtons, renderKlima } from "./klima";
 import { LiveController } from "./live";
+import type { Discovery } from "./api/types";
 import { renderLogin, renderUser } from "./login";
 import { bindRow, bindSubRow } from "./registry";
+import { createRoomsView } from "./rooms";
 import { renderRuleForm } from "./ruleform";
+import { renderViewSwitch } from "./view";
 
 function el(id: string): HTMLElement {
   const node = document.getElementById(id);
@@ -29,6 +32,14 @@ const irBox = el("ir-buttons");
 const klimaBox = el("klima");
 const ruleForm = el("rule-form");
 const ruleJson = el("rule-json") as HTMLTextAreaElement;
+
+// Rooms view (wife-friendly): house-wide IR/klima panels live in their own persistent containers;
+// the room list/detail rebuilds inside #room-list. `lastDiscovery` lets a view switch render
+// immediately from the most recent snapshot instead of waiting for the next refresh.
+const roomsIrBox = el("rooms-ir");
+const roomsKlimaBox = el("rooms-klima");
+const roomsView = createRoomsView(el("room-list"), { postControl });
+let lastDiscovery: Discovery | null = null;
 
 const live = new LiveController(
   {
@@ -56,6 +67,15 @@ const live = new LiveController(
     renderIrButtons(irBox, data.ir_buttons, postIr); // built once from the static config
     renderKlima(klimaBox, data.klima, postIr);
     renderRuleForm(ruleForm, ruleJson, data.rule_vocab, data.klima); // guided form → fills #rule-json
+    // Rooms view: the same house-wide IR/klima into their own (built-once) containers, then rebuild
+    // the room list from the fresh snapshot. Kept last so a throw here can't skip the panels above.
+    renderIrButtons(roomsIrBox, data.ir_buttons, postIr);
+    renderKlima(roomsKlimaBox, data.klima, postIr);
+    lastDiscovery = data;
+    roomsView.update(data);
+  },
+  (node, info) => {
+    roomsView.patchState(node, info); // live state delta → patch the visible room card's state text
   },
 );
 
@@ -64,6 +84,15 @@ function startApp(): void {
   el("refresh").addEventListener("click", () => {
     void live.refresh();
   });
+
+  // View switcher: 🏠 Pokoje (default) ↔ 🔧 Zaawansowane. Applies the persisted choice immediately;
+  // switching into the rooms view re-renders its cards from the latest snapshot.
+  renderViewSwitch(
+    { switchBox: el("view-switch"), roomsEl: el("rooms-view"), adminEl: el("admin-view") },
+    (view) => {
+      if (view === "rooms") roomsView.update(lastDiscovery);
+    },
+  );
 
   // ---- Automations editor -------------------------------------------------
   const autoRows = el("auto-rows");
