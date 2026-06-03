@@ -221,6 +221,16 @@ export interface ControlResult {
   error?: string;
 }
 
+// ---- House-wide scenes (`POST /api/scene`) -------------------------------
+
+export type SceneOp = "lights_off" | "lights_on" | "blinds_down" | "blinds_up";
+
+export interface SceneResult {
+  ok: boolean;
+  sent: number;
+  total: number;
+}
+
 // ---- Registry mutations (`POST /api/name`) --------------------------------
 // Set a node's user label / room, confirm its inferred type, or label one
 // endpoint of a multi-gang switch (see `_control_name` in hestia/proxy.py).

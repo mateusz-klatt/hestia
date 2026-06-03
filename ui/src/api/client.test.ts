@@ -13,6 +13,7 @@ import {
   postIr,
   postName,
   postRule,
+  postScene,
   saveSettings,
   whoami,
 } from "./client";
@@ -264,6 +265,40 @@ describe("fetchSettings / saveSettings", () => {
 
     vi.stubGlobal("fetch", () => Promise.reject(new Error("offline")));
     expect(await saveSettings({ temp_scale: "K" })).toBe(false);
+  });
+});
+
+describe("postScene", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("POSTs the scene op and returns the parsed result on 2xx", async () => {
+    const seen: { url: string; init: RequestInit }[] = [];
+    const result = { ok: true, sent: 3, total: 4 };
+    vi.stubGlobal("fetch", (url: URL, init: RequestInit) => {
+      seen.push({ url: url.href, init });
+      return Promise.resolve({ ok: true, json: () => Promise.resolve(result) });
+    });
+
+    expect(await postScene("lights_off")).toEqual(result);
+    expect(seen[0]?.url).toContain("/api/scene");
+    expect(seen[0]?.init.method).toBe("POST");
+    expect(seen[0]?.init.headers).toEqual({ "Content-Type": "application/json" });
+    expect(seen[0]?.init.body).toBe(JSON.stringify({ op: "lights_off" }));
+  });
+
+  it("returns null on a non-2xx response, rejected fetch, or bad JSON", async () => {
+    vi.stubGlobal("fetch", () => Promise.resolve({ ok: false, json: () => Promise.resolve({}) }));
+    expect(await postScene("lights_on")).toBeNull();
+
+    vi.stubGlobal("fetch", () => Promise.reject(new Error("offline")));
+    expect(await postScene("blinds_up")).toBeNull();
+
+    vi.stubGlobal("fetch", () =>
+      Promise.resolve({ ok: true, json: () => Promise.reject(new Error("bad json")) }),
+    );
+    expect(await postScene("blinds_down")).toBeNull();
   });
 });
 

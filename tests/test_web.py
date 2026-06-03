@@ -20,6 +20,7 @@ import threading
 import time
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 from hestia import auth, proxy, web
@@ -437,6 +438,89 @@ class ControlEndpointTests(_WebTestBase):
     def test_bad_content_type_is_415(self):
         status, _, _ = _post(self.web.address, "/api/control", b"{}", headers={"Content-Type": "text/plain"})
         self.assertEqual(status, 415)
+
+
+class SceneOpsTests(unittest.TestCase):
+    """House-wide scenes expand into the same per-device ops used by the UI control buttons."""
+
+    DEVICES = {
+        "1": {"type": "light", "level": None},
+        "2": {"type": "light", "level": 42},
+        "3": {"type": "blind", "level": None},
+        "4": {"type": "plug", "level": None},
+    }
+
+    def _ops(self, scene):
+        with mock.patch("hestia.web._merged_discovery", return_value=self.DEVICES):
+            return web._scene_ops(SimpleNamespace(), scene)
+
+    def test_lights_off_switches_plain_lights_and_dimmable_lights_off(self):
+        self.assertEqual(self._ops("lights_off"), [
+            {"op": "switch", "node": 1, "on": False},
+            {"op": "level", "node": 2, "value": 0},
+        ])
+
+    def test_lights_on_switches_plain_lights_and_dimmable_lights_on(self):
+        self.assertEqual(self._ops("lights_on"), [
+            {"op": "switch", "node": 1, "on": True},
+            {"op": "level", "node": 2, "value": 99},
+        ])
+
+    def test_blinds_down_and_up_use_cover_values(self):
+        self.assertEqual(self._ops("blinds_down"), [{"op": "cover", "node": 3, "value": 0}])
+        self.assertEqual(self._ops("blinds_up"), [{"op": "cover", "node": 3, "value": 99}])
+
+
+class SceneEndpointTests(_WebTestBase):
+    """POST /api/scene — fan-out endpoint for house-wide actions."""
+
+    def test_unknown_or_non_object_op_is_400(self):
+        for payload in ({"op": "bogus"}, [1, 2]):
+            with self.subTest(payload=payload):
+                status, _, body = _post(self.web.address, "/api/scene", payload)
+                self.assertEqual(status, 400)
+                self.assertIn("op must be one of", json.loads(body)["error"])
+
+    def test_bad_content_type_is_415(self):
+        status, _, body = _post(self.web.address, "/api/scene", b"{}", headers={"Content-Type": "text/plain"})
+        self.assertEqual(status, 415)
+        self.assertIn("application/json", json.loads(body)["error"])
+
+    def test_total_zero_returns_ok_and_audits(self):
+        with mock.patch("hestia.web._merged_discovery", return_value={}):
+            with mock.patch("hestia.web._audit") as audit:
+                status, _, body = _post(self.web.address, "/api/scene", {"op": "lights_off"})
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body), {"ok": True, "sent": 0, "total": 0})
+        audit.assert_called_once()
+        self.assertEqual(audit.call_args.args[:3], (self.rt, "anonymous", "scene"))
+        self.assertEqual(audit.call_args.kwargs["target"], "lights_off")
+        self.assertEqual(audit.call_args.kwargs["result"], "0/0")
+
+    def test_no_device_is_counted_not_sent(self):
+        with mock.patch("hestia.web._merged_discovery", return_value={"5": {"type": "light", "level": None}}):
+            with mock.patch("hestia.web._audit") as audit:
+                status, _, body = _post(self.web.address, "/api/scene", {"op": "lights_on"})
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body), {"ok": True, "sent": 0, "total": 1})
+        self.assertEqual(audit.call_args.kwargs["result"], "0/1")
+
+    def test_successes_are_summarised_and_audited(self):
+        devices = {
+            "1": {"type": "light", "level": None},
+            "2": {"type": "light", "level": 10},
+        }
+
+        async def fake_control(_rt, op):
+            return {"ok": op["op"] == "switch"}
+
+        with mock.patch("hestia.web._merged_discovery", return_value=devices):
+            with mock.patch("hestia.web.process_control_op", side_effect=fake_control):
+                with mock.patch("hestia.web._audit") as audit:
+                    status, _, body = _post(self.web.address, "/api/scene", {"op": "lights_off"})
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body), {"ok": True, "sent": 1, "total": 2})
+        self.assertEqual(audit.call_args.kwargs["result"], "1/2")
 
 
 class IndexTests(_WebTestBase):

@@ -64,6 +64,12 @@ _CONTROL_FIELDS = {
     "thermostat": {"op", "node", "celsius"},
     "thermostat_power": {"op", "node", "on"},
 }
+_SCENE_TARGETS = {
+    "lights_off": ("light", False),
+    "lights_on": ("light", True),
+    "blinds_down": ("blind", False),
+    "blinds_up": ("blind", True),
+}
 _TEMP_SCALES = {"C", "F", "K"}
 _EMPTY_SETTINGS = {"locale": None, "temp_scale": None, "theme": None}
 _RT_KEY = web.AppKey("rt", object)
@@ -253,6 +259,46 @@ async def _settings_set(request):
         _audit(_rt(request), user, "settings",
                detail=f"locale={body.get('locale')},scale={body.get('temp_scale')}")
     return _json(HTTPStatus.OK, {"ok": True})
+
+
+def _scene_ops(rt, scene: str) -> list[dict]:
+    """Expand a house-wide scene into ordinary per-device control ops."""
+    target_type, active = _SCENE_TARGETS[scene]
+    ops = []
+    for node, info in _merged_discovery(rt).items():
+        if info.get("type") != target_type:
+            continue
+        node_id = int(node)
+        if target_type == "light":
+            if info.get("level") is not None:
+                ops.append({"op": "level", "node": node_id, "value": 99 if active else 0})
+            else:
+                ops.append({"op": "switch", "node": node_id, "on": active})
+        else:
+            ops.append({"op": "cover", "node": node_id, "value": 99 if active else 0})
+    return ops
+
+
+async def _scene(request):
+    """POST /api/scene — fan out one house-wide scene through the normal per-device control path."""
+    body, err = await _read_json_body(request)
+    if err:
+        return body
+    scene = body.get("op") if isinstance(body, dict) else None
+    if scene not in _SCENE_TARGETS:
+        return _json(HTTPStatus.BAD_REQUEST,
+                     {"ok": False, "error": f"op must be one of {', '.join(_SCENE_TARGETS)}"})
+
+    rt = _rt(request)
+    ops = _scene_ops(rt, scene)
+    sent = 0
+    for op in ops:
+        resp = await process_control_op(rt, op)
+        if resp.get("ok"):
+            sent += 1
+    total = len(ops)
+    _audit(rt, _actor(request), "scene", target=scene, result=f"{sent}/{total}")
+    return _json(HTTPStatus.OK, {"ok": True, "sent": sent, "total": total})
 
 
 async def _ui_redirect(_request):  # NOSONAR S7503: aiohttp route handlers must be coroutines (the framework awaits them)
@@ -590,6 +636,7 @@ def make_app(rt):
     app.router.add_post("/api/name", _name)
     app.router.add_post("/api/ir", _ir)
     app.router.add_post("/api/control", _control)
+    app.router.add_post("/api/scene", _scene)
     app.router.add_post("/api/automations", _automations_set)
     app.router.add_post("/api/automations/delete", _automations_delete)
     app.router.add_post("/api/graduate", _graduate)
