@@ -1,3 +1,4 @@
+import type { UserSettings } from "./api/types";
 import { login, logout } from "./api/client";
 import { currentLocale, FLAGS, LOCALES, t } from "./i18n";
 import { setLocaleOverride, setTempScale, tempScale, type TempScale } from "./prefs";
@@ -81,11 +82,12 @@ function localeName(code: string): string {
 export function renderUser(
   container: HTMLElement,
   user: string | null,
-  opts: { onLogout: () => void; reload?: () => void },
+  opts: { onLogout: () => void; reload?: () => void; saveSettings?: (settings: Partial<UserSettings>) => Promise<void> },
 ): void {
   const reload = opts.reload ?? ((): void => {
     location.reload();
   });
+  const saveSettings = opts.saveSettings ?? ((): Promise<void> => Promise.resolve());
   container.replaceChildren();
 
   const wrap = document.createElement("span");
@@ -117,7 +119,11 @@ export function renderUser(
     langSel.appendChild(o);
   }
   langSel.addEventListener("change", () => {
-    if (setLocaleOverride(langSel.value)) reload(); // only reload if the choice actually persisted
+    if (setLocaleOverride(langSel.value)) {
+      void saveSettings({ locale: langSel.value }).finally(() => {
+        reload();
+      }).catch(() => undefined);
+    }
   });
   langRow.appendChild(langSel);
 
@@ -138,7 +144,11 @@ export function renderUser(
     scaleSel.appendChild(o);
   }
   scaleSel.addEventListener("change", () => {
-    if (setTempScale(scaleSel.value as TempScale)) reload();
+    if (setTempScale(scaleSel.value as TempScale)) {
+      void saveSettings({ temp_scale: scaleSel.value }).finally(() => {
+        reload();
+      }).catch(() => undefined);
+    }
   });
   scaleRow.appendChild(scaleSel);
 

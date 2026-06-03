@@ -1,5 +1,5 @@
-// Client-side user preferences, persisted in localStorage. Server-side per-user persistence
-// (synced across devices) lands with the settings work; this is the local-first layer.
+// Client-side user preferences, persisted in localStorage. For logged-in users the server's
+// per-user settings row is authoritative; this is the local-first cache/fallback layer.
 // All access is throw-safe (Safari private mode / disabled storage just falls back to defaults).
 
 const LOCALE_KEY = "hestia.locale";

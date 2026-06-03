@@ -134,29 +134,49 @@ describe("renderUser", () => {
     expect(menu?.hidden).toBe(false);
   });
 
-  it("changing the language persists the override and reloads", () => {
+  it("changing the language persists the override, saves to the server, then reloads", async () => {
     const reload = vi.fn();
+    const saveSettings = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
     const box = document.createElement("div");
-    renderUser(box, "tata", { onLogout: vi.fn(), reload });
+    renderUser(box, "tata", { onLogout: vi.fn(), reload, saveSettings });
     const sel = box.querySelector<HTMLSelectElement>("#locale-select");
     if (sel !== null) {
       sel.value = "pl";
       sel.dispatchEvent(new Event("change"));
     }
     expect(localStorage.getItem("hestia.locale")).toBe("pl");
+    expect(saveSettings).toHaveBeenCalledWith({ locale: "pl" });
+    await flush();
     expect(reload).toHaveBeenCalledOnce();
   });
 
-  it("changing the temperature scale persists it and reloads", () => {
+  it("changing the temperature scale persists it, saves to the server, then reloads", async () => {
     const reload = vi.fn();
+    const saveSettings = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
     const box = document.createElement("div");
-    renderUser(box, "tata", { onLogout: vi.fn(), reload });
+    renderUser(box, "tata", { onLogout: vi.fn(), reload, saveSettings });
     const sel = box.querySelector<HTMLSelectElement>("#scale-select");
     if (sel !== null) {
       sel.value = "F";
       sel.dispatchEvent(new Event("change"));
     }
     expect(localStorage.getItem("hestia.tempScale")).toBe("F");
+    expect(saveSettings).toHaveBeenCalledWith({ temp_scale: "F" });
+    await flush();
+    expect(reload).toHaveBeenCalledOnce();
+  });
+
+  it("reloads even when a server settings save fails", async () => {
+    const reload = vi.fn();
+    const saveSettings = vi.fn<() => Promise<void>>().mockRejectedValue(new Error("offline"));
+    const box = document.createElement("div");
+    renderUser(box, "tata", { onLogout: vi.fn(), reload, saveSettings });
+    const sel = box.querySelector<HTMLSelectElement>("#scale-select");
+    if (sel !== null) {
+      sel.value = "F";
+      sel.dispatchEvent(new Event("change"));
+    }
+    await flush();
     expect(reload).toHaveBeenCalledOnce();
   });
 

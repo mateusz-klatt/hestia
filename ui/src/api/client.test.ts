@@ -7,11 +7,13 @@ import {
   fetchAutomations,
   fetchDbStats,
   fetchDiscovery,
+  fetchSettings,
   login,
   logout,
   postIr,
   postName,
   postRule,
+  saveSettings,
   whoami,
 } from "./client";
 
@@ -215,6 +217,53 @@ describe("fetchDbStats", () => {
       Promise.resolve({ ok: true, json: () => Promise.reject(new Error("bad json")) }),
     );
     expect(await fetchDbStats()).toBeNull();
+  });
+});
+
+describe("fetchSettings / saveSettings", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("fetchSettings returns the parsed settings on 2xx", async () => {
+    const settings = { locale: "pl", temp_scale: "F", theme: null };
+    vi.stubGlobal("fetch", () => Promise.resolve({ ok: true, json: () => Promise.resolve(settings) }));
+    expect(await fetchSettings()).toEqual(settings);
+  });
+
+  it("fetchSettings returns null on non-2xx, rejected fetch, or bad JSON", async () => {
+    vi.stubGlobal("fetch", () => Promise.resolve({ ok: false, json: () => Promise.resolve({}) }));
+    expect(await fetchSettings()).toBeNull();
+
+    vi.stubGlobal("fetch", () => Promise.reject(new Error("offline")));
+    expect(await fetchSettings()).toBeNull();
+
+    vi.stubGlobal("fetch", () =>
+      Promise.resolve({ ok: true, json: () => Promise.reject(new Error("bad json")) }),
+    );
+    expect(await fetchSettings()).toBeNull();
+  });
+
+  it("saveSettings POSTs JSON and returns response.ok", async () => {
+    const seen: { url: string; init: RequestInit }[] = [];
+    vi.stubGlobal("fetch", (url: URL, init: RequestInit) => {
+      seen.push({ url: url.href, init });
+      return Promise.resolve({ ok: true });
+    });
+
+    expect(await saveSettings({ locale: "pl" })).toBe(true);
+    expect(seen[0]?.url).toContain("/api/settings");
+    expect(seen[0]?.init.method).toBe("POST");
+    expect(seen[0]?.init.headers).toEqual({ "Content-Type": "application/json" });
+    expect(seen[0]?.init.body).toBe(JSON.stringify({ locale: "pl" }));
+  });
+
+  it("saveSettings returns false on non-2xx or rejected fetch", async () => {
+    vi.stubGlobal("fetch", () => Promise.resolve({ ok: false }));
+    expect(await saveSettings({ temp_scale: "K" })).toBe(false);
+
+    vi.stubGlobal("fetch", () => Promise.reject(new Error("offline")));
+    expect(await saveSettings({ temp_scale: "K" })).toBe(false);
   });
 });
 

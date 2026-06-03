@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import http.client
 import json
+import os
 import socket
 import shutil
 import tempfile
@@ -585,6 +586,123 @@ class AuthTests(_WebTestBase):
         self.assertEqual(json.loads(body), {"ok": True})
         self.assertIn("hestia_session=", headers["Set-Cookie"])
         self.assertIn('Max-Age=0', headers["Set-Cookie"])      # del_cookie expires it immediately
+
+
+class SettingsEndpointTests(_WebTestBase):
+    """GET/POST /api/settings — per-user server settings, local-first on the client."""
+
+    def setUp(self):
+        super().setUp()
+        self.db_file = self.tmp / "settings.db"
+        self.users = {"tata": auth.hash_password("s3cret")}
+        patches = [
+            mock.patch.object(web, "_AUTH_ENABLED", True),
+            mock.patch.object(web, "_SESSION_SECRET", b"test-secret-bytes"),
+            mock.patch.object(web, "_COOKIE_SECURE", False),
+            mock.patch.object(auth, "load_users", return_value=self.users),
+            mock.patch.dict(os.environ, {"HESTIA_PERSIST": "sqlite", "HESTIA_DB": str(self.db_file)}),
+        ]
+        for p in patches:
+            p.start()
+            self.addCleanup(p.stop)
+
+        from hestia import db
+        engine, Session = db.init_db(self.db_file)
+        with db.session_scope(Session) as s:
+            s.add(db.User(username="tata", password_hash=self.users["tata"]))
+        engine.dispose()
+
+    def _login_cookie(self):
+        status, headers, _ = _post(self.web.address, "/api/login", {"user": "tata", "password": "s3cret"})
+        self.assertEqual(status, 200)
+        return AuthTests._cookie(headers["Set-Cookie"])
+
+    def _headers(self):
+        return {"Cookie": self._login_cookie()}
+
+    def test_settings_routes_are_auth_gated(self):
+        self.assertEqual(_get(self.web.address, "/api/settings")[0], 401)
+        self.assertEqual(_post(self.web.address, "/api/settings", {"locale": "pl"})[0], 401)
+
+    def test_get_returns_nulls_without_row_and_existing_row(self):
+        from hestia import store_sql
+        headers = self._headers()
+        status, _, body = _get(self.web.address, "/api/settings", headers=headers)
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body), {"locale": None, "temp_scale": None, "theme": None})
+
+        store_sql.set_user_settings("tata", locale="pl", temp_scale="F", theme="dark")
+        status, _, body = _get(self.web.address, "/api/settings", headers=headers)
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body), {"locale": "pl", "temp_scale": "F", "theme": "dark"})
+
+    def test_get_auth_off_returns_nulls(self):
+        with mock.patch.object(web, "_AUTH_ENABLED", False):
+            status, _, body = _get(self.web.address, "/api/settings")
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body), {"locale": None, "temp_scale": None, "theme": None})
+
+    def test_post_requires_json_content_type(self):
+        status, _, body = _post(self.web.address, "/api/settings", "x",
+                                headers={"Cookie": self._login_cookie(), "Content-Type": "text/plain"})
+        self.assertEqual(status, 415)
+        self.assertIn("application/json", json.loads(body)["error"])
+
+    def test_post_rejects_invalid_payloads(self):
+        headers = self._headers()
+        bad_payloads = [
+            ([1, 2], "object"),
+            ({"locale": "x" * 36}, "locale"),
+            ({"temp_scale": "X"}, "temp_scale"),
+            ({"temp_scale": []}, "temp_scale"),
+            ({"theme": 5}, "theme"),
+        ]
+        for payload, fragment in bad_payloads:
+            with self.subTest(payload=payload):
+                status, _, body = _post(self.web.address, "/api/settings", payload, headers=headers)
+                self.assertEqual(status, 400)
+                self.assertIn(fragment, json.loads(body)["error"])
+
+    def test_post_json_mode_is_ok_noop_without_audit(self):
+        headers = self._headers()
+        with mock.patch.dict(os.environ, {"HESTIA_PERSIST": "json"}):
+            with mock.patch("hestia.web._audit") as audit:
+                status, _, body = _post(self.web.address, "/api/settings", {"locale": "pl"}, headers=headers)
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body), {"ok": True})
+        self.assertFalse(audit.called)
+
+    def test_post_auth_off_is_ok_noop(self):
+        with mock.patch.object(web, "_AUTH_ENABLED", False):
+            with mock.patch("hestia.store_sql.set_user_settings") as set_settings:
+                status, _, body = _post(self.web.address, "/api/settings", {"locale": "pl"})
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body), {"ok": True})
+        self.assertFalse(set_settings.called)
+
+    def test_post_accepts_theme_and_temp_scale(self):
+        from hestia import store_sql
+        with mock.patch("hestia.web._audit"):
+            status, _, body = _post(self.web.address, "/api/settings",
+                                    {"temp_scale": "K", "theme": "dark"}, headers=self._headers())
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body), {"ok": True})
+        self.assertEqual(store_sql.get_user_settings("tata"),
+                         {"locale": None, "temp_scale": "K", "theme": "dark"})
+
+    def test_post_persists_partial_merge_and_audits(self):
+        from hestia import store_sql
+        headers = self._headers()
+        store_sql.set_user_settings("tata", locale="en", temp_scale="F", theme=None)
+        with mock.patch("hestia.web._audit") as audit:
+            status, _, body = _post(self.web.address, "/api/settings", {"locale": "pl"}, headers=headers)
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body), {"ok": True})
+        self.assertEqual(store_sql.get_user_settings("tata"),
+                         {"locale": "pl", "temp_scale": "F", "theme": None})
+        audit.assert_called_once()
+        self.assertEqual(audit.call_args.args[:3], (self.rt, "tata", "settings"))
+        self.assertIn("locale=pl,scale=None", audit.call_args.kwargs["detail"])
 
 
 class DiscoveryTests(_WebTestBase):

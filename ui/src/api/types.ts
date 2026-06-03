@@ -147,6 +147,14 @@ export interface DbStats {
   tables: Record<string, number>;
 }
 
+// ---- User settings (`GET/POST /api/settings`) ----------------------------
+
+export interface UserSettings {
+  locale: string | null;
+  temp_scale: string | null;
+  theme: string | null;
+}
+
 export interface Discovery {
   devices: Record<string, DeviceInfo>;
   summary: Summary;

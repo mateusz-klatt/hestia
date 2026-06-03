@@ -64,6 +64,8 @@ _CONTROL_FIELDS = {
     "thermostat": {"op", "node", "celsius"},
     "thermostat_power": {"op", "node", "on"},
 }
+_TEMP_SCALES = {"C", "F", "K"}
+_EMPTY_SETTINGS = {"locale": None, "temp_scale": None, "theme": None}
 _RT_KEY = web.AppKey("rt", object)
 _UI_DIST_ENV = "HESTIA_UI_DIST"
 _DEFAULT_UI_DIST = Path(__file__).resolve().parent.parent / "ui" / "dist"
@@ -203,6 +205,56 @@ async def _db_stats(_request):
     """GET /api/db/stats — SQLite file size + row counts, auth-gated like every /api/* route."""
     stats = await asyncio.get_running_loop().run_in_executor(None, store_sql.db_stats)
     return _json(HTTPStatus.OK, stats)
+
+
+async def _settings(request):
+    """GET /api/settings — persisted UI settings for the logged-in user, when SQLite owns prefs."""
+    user = request.get(_USER_KEY)
+    if user is None:
+        return _json(HTTPStatus.OK, dict(_EMPTY_SETTINGS))
+    settings = await asyncio.get_running_loop().run_in_executor(None, lambda: store_sql.get_user_settings(user))
+    return _json(HTTPStatus.OK, settings if settings is not None else dict(_EMPTY_SETTINGS))
+
+
+def _settings_error(body) -> "str | None":
+    if not isinstance(body, dict):
+        return _BODY_NOT_OBJECT
+    locale = body.get("locale")
+    if locale is not None and not (isinstance(locale, str) and len(locale) <= 35):
+        return "locale must be a string ≤ 35 chars"
+    scale = body.get("temp_scale")
+    if scale is not None and not (isinstance(scale, str) and scale in _TEMP_SCALES):
+        return "temp_scale must be one of C, F, K"
+    theme = body.get("theme")
+    if theme is not None and not isinstance(theme, str):
+        return "theme must be a string or null"
+    return None
+
+
+async def _settings_set(request):
+    """POST /api/settings — best-effort server sync for local-first UI preferences."""
+    body, err = await _read_json_body(request)
+    if err:
+        return body
+    error = _settings_error(body)
+    if error is not None:
+        return _json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": error})
+
+    user = request.get(_USER_KEY)
+    if user is None:
+        return _json(HTTPStatus.OK, {"ok": True})
+
+    def write():
+        current = store_sql.get_user_settings(user) or dict(_EMPTY_SETTINGS)
+        merged = {**current, **{k: body[k] for k in ("locale", "temp_scale", "theme") if k in body}}
+        return store_sql.set_user_settings(user, locale=merged["locale"],
+                                           temp_scale=merged["temp_scale"], theme=merged["theme"])
+
+    wrote = await asyncio.get_running_loop().run_in_executor(None, write)
+    if wrote:
+        _audit(_rt(request), user, "settings",
+               detail=f"locale={body.get('locale')},scale={body.get('temp_scale')}")
+    return _json(HTTPStatus.OK, {"ok": True})
 
 
 async def _ui_redirect(_request):  # NOSONAR S7503: aiohttp route handlers must be coroutines (the framework awaits them)
@@ -535,6 +587,8 @@ def make_app(rt):
     app.router.add_get("/api/automations", _automations_list, allow_head=False)
     app.router.add_get("/api/audit", _audit_feed, allow_head=False)
     app.router.add_get("/api/db/stats", _db_stats, allow_head=False)
+    app.router.add_get("/api/settings", _settings, allow_head=False)
+    app.router.add_post("/api/settings", _settings_set)
     app.router.add_post("/api/name", _name)
     app.router.add_post("/api/ir", _ir)
     app.router.add_post("/api/control", _control)

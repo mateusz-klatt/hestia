@@ -305,6 +305,48 @@ def current_users(*, users_path=None) -> dict:
     return auth.load_users(Path(users_path) if users_path is not None else None)
 
 
+# --- Phase 4b/#55: per-user UI settings --------------------------------------------------------
+
+def _settings_enabled() -> bool:
+    return os.environ.get("HESTIA_PERSIST", "json").lower() == "sqlite"
+
+
+def _cap_setting(value):
+    return value[:64] if isinstance(value, str) else None
+
+
+def _settings_dict(row) -> dict:
+    return {"locale": row.locale, "temp_scale": row.temp_scale, "theme": row.theme}
+
+
+def get_user_settings(username) -> "dict | None":
+    """Per-user UI settings from SQLite, or None when settings are unavailable/no row exists."""
+    if not _settings_enabled():
+        return None
+    engine, _ = init_db()
+    try:
+        with Session(engine) as session:
+            row = session.get(UserSetting, username)
+            return None if row is None else _settings_dict(row)
+    finally:
+        engine.dispose()
+
+
+def set_user_settings(username, *, locale, temp_scale, theme) -> bool:
+    """Upsert one user's UI settings into SQLite. Returns False when the active backend is JSON."""
+    if not _settings_enabled():
+        return False
+    engine, session_factory = init_db()
+    try:
+        with session_scope(session_factory) as session:
+            _upsert(session, UserSetting, "username", username,
+                    {"locale": _cap_setting(locale), "temp_scale": _cap_setting(temp_scale),
+                     "theme": _cap_setting(theme)})
+        return True
+    finally:
+        engine.dispose()
+
+
 # --- Operator DB observability (#55/#57 P6a) ----------------------------------------------------
 
 def _sqlite_files(path: Path) -> tuple[Path, Path, Path]:

@@ -8,6 +8,7 @@ import type {
   NameResult,
   Rule,
   RuleResult,
+  UserSettings,
 } from "./types";
 
 /**
@@ -142,6 +143,30 @@ export async function fetchDbStats(): Promise<DbStats | null> {
     return response.ok ? ((await response.json()) as DbStats) : null;
   } catch {
     return null;
+  }
+}
+
+/** GET `/api/settings`; the server-persisted user settings, or `null` on any load failure. */
+export async function fetchSettings(): Promise<UserSettings | null> {
+  try {
+    const response = await fetch(apiUrl("settings"));
+    return response.ok ? ((await response.json()) as UserSettings) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** POST `/api/settings` to best-effort sync local-first user settings to the server. */
+export async function saveSettings(settings: Partial<UserSettings>): Promise<boolean> {
+  try {
+    const response = await fetch(apiUrl("settings"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(settings),
+    });
+    return response.ok;
+  } catch {
+    return false;
   }
 }
 
