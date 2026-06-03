@@ -128,6 +128,22 @@ td.sub-label {
   margin: 0;
 }
 
+/* Keep the IR / klima control rows on one line (label + selects + buttons + status),
+   vertically centred — they'd otherwise misalign against the taller mobile controls. */
+#ir-buttons,
+#rooms-ir,
+#klima,
+#rooms-klima {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem 0.5rem;
+}
+
+#admin-tools {
+  margin: 0 0 0.9rem;
+}
+
 #status {
   color: #c0341d;
   margin-top: 1rem;
@@ -235,15 +251,6 @@ td.seen.fresh {
 .room-card-count {
   font-size: 0.85rem;
   color: color-mix(in srgb, CanvasText 55%, Canvas);
-}
-
-.room-back {
-  margin: 0 0 0.7rem;
-  padding: 0.4rem 0.8rem;
-  border: 1px solid color-mix(in srgb, CanvasText 30%, Canvas);
-  border-radius: 0.5rem;
-  background: Canvas;
-  color: CanvasText;
 }
 
 .room-title {

@@ -32,10 +32,16 @@ describe("modeText", () => {
 });
 
 describe("summaryText", () => {
-  it("renders the confirmed/total/unknown counts", () => {
+  it("shows confirmed/total + unknown when there is something to flag", () => {
     expect(summaryText({ total: 22, confirmed: 19, unknown: 3 })).toBe(
       "hestia — devices (19/22 confirmed, 3 unknown)",
     );
+  });
+  it("omits the unknown part when there are none", () => {
+    expect(summaryText({ total: 22, confirmed: 20, unknown: 0 })).toBe("hestia — devices (20/22 confirmed)");
+  });
+  it("drops the whole parenthetical once everything is confirmed", () => {
+    expect(summaryText({ total: 22, confirmed: 22, unknown: 0 })).toBe("hestia — devices");
   });
 });
 
@@ -220,7 +226,7 @@ describe("renderDiscovery", () => {
       },
     );
     renderDiscovery(view, data);
-    expect(view.hdrText.textContent).toBe("hestia — devices (1/1 confirmed, 0 unknown)");
+    expect(view.hdrText.textContent).toBe("hestia — devices"); // all confirmed, 0 unknown → no parenthetical
     expect(view.crib.textContent).toBe("22.0°");
     expect(view.outdoor.textContent).toBe("14.5°");
     expect(view.outdoorHumidity.textContent).toBe("61%");

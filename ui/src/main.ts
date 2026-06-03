@@ -15,7 +15,6 @@ import { renderAutomations } from "./automations";
 import { renderActions } from "./controls";
 import { renderIrButtons, renderKlima } from "./klima";
 import { LiveController } from "./live";
-import type { Discovery } from "./api/types";
 import { renderLogin, renderUser } from "./login";
 import { bindRow, bindSubRow } from "./registry";
 import { createRoomsView } from "./rooms";
@@ -34,12 +33,11 @@ const ruleForm = el("rule-form");
 const ruleJson = el("rule-json") as HTMLTextAreaElement;
 
 // Rooms view (wife-friendly): house-wide IR/klima panels live in their own persistent containers;
-// the room list/detail rebuilds inside #room-list. `lastDiscovery` lets a view switch render
-// immediately from the most recent snapshot instead of waiting for the next refresh.
+// the room list/detail rebuilds inside #room-list. The rooms view keeps its own latest snapshot
+// (set via update() in onRender), so the switcher just asks it to show the landing.
 const roomsIrBox = el("rooms-ir");
 const roomsKlimaBox = el("rooms-klima");
 const roomsView = createRoomsView(el("room-list"), { postControl });
-let lastDiscovery: Discovery | null = null;
 
 const live = new LiveController(
   {
@@ -71,7 +69,6 @@ const live = new LiveController(
     // the room list from the fresh snapshot. Kept last so a throw here can't skip the panels above.
     renderIrButtons(roomsIrBox, data.ir_buttons, postIr);
     renderKlima(roomsKlimaBox, data.klima, postIr);
-    lastDiscovery = data;
     roomsView.update(data);
   },
   (node, info) => {
@@ -90,7 +87,7 @@ function startApp(): void {
   renderViewSwitch(
     { switchBox: el("view-switch"), roomsEl: el("rooms-view"), adminEl: el("admin-view") },
     (view) => {
-      if (view === "rooms") roomsView.update(lastDiscovery);
+      if (view === "rooms") roomsView.goToLanding(); // tapping 🏠 Pokoje always returns to the room list
     },
   );
 
