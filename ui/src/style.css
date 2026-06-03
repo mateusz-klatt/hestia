@@ -187,6 +187,104 @@ td.seen.fresh {
   transition: none;
 }
 
+/* ---- View switcher + room-grouped view -------------------------------- */
+.view-switch {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 0 0 1rem;
+}
+
+.view-tab {
+  padding: 0.4rem 0.9rem;
+  border: 1px solid color-mix(in srgb, CanvasText 30%, Canvas);
+  border-radius: 0.5rem;
+  background: Canvas;
+  color: CanvasText;
+}
+
+.view-tab.active {
+  background: color-mix(in srgb, CanvasText 12%, Canvas);
+  font-weight: bold;
+}
+
+.room-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(9rem, 1fr));
+  gap: 0.7rem;
+}
+
+.room-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.25rem;
+  padding: 1rem;
+  border: 1px solid color-mix(in srgb, CanvasText 22%, Canvas);
+  border-radius: 0.7rem;
+  background: Canvas;
+  color: CanvasText;
+  text-align: left;
+}
+
+.room-card-title {
+  font-size: 1.05rem;
+  font-weight: bold;
+}
+
+.room-card-count {
+  font-size: 0.85rem;
+  color: color-mix(in srgb, CanvasText 55%, Canvas);
+}
+
+.room-back {
+  margin: 0 0 0.7rem;
+  padding: 0.4rem 0.8rem;
+  border: 1px solid color-mix(in srgb, CanvasText 30%, Canvas);
+  border-radius: 0.5rem;
+  background: Canvas;
+  color: CanvasText;
+}
+
+.room-title {
+  font-size: 1.1rem;
+  margin: 0 0 0.8rem;
+}
+
+.room-device {
+  border: 1px solid color-mix(in srgb, CanvasText 18%, Canvas);
+  border-radius: 0.6rem;
+  padding: 0.7rem 0.9rem;
+  margin: 0 0 0.7rem;
+}
+
+.room-device-head {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 0.3rem 0.8rem;
+  margin-bottom: 0.5rem;
+}
+
+.room-device-name {
+  font-weight: bold;
+}
+
+.room-device-stan {
+  color: color-mix(in srgb, CanvasText 65%, Canvas);
+}
+
+.room-device-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.room-placeholder {
+  color: color-mix(in srgb, CanvasText 55%, Canvas);
+  padding: 1rem 0;
+}
+
 /* ---- Mobile (≤640px): collapse the wide tables into stacked cards --------
    Pure presentation — the DOM and every live.ts query (data-node / .stanval /
    .seen / .ep-stan) are unchanged; only `display` flips and each cell shows its

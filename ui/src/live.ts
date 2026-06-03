@@ -30,6 +30,15 @@ export type RowDecorator = (tr: HTMLTableRowElement, node: number, info: DeviceI
  *  built from the whole payload (IR buttons, klima) that live outside the table. */
 export type RenderHook = (data: Discovery) => void;
 
+/**
+ * Hook run after a single live state delta is merged into a node's cached info,
+ * so a secondary view (the rooms cards) can patch its own copy of that node.
+ * Fired with the FULLY-MERGED `DeviceInfo`. Never fired mid-refresh (deltas
+ * queue and replay afterwards); a throw from the hook is swallowed so an
+ * observer can never wedge the coalescing/heatmap machinery.
+ */
+export type StateHook = (node: number, info: DeviceInfo) => void;
+
 function attr(value: string): string {
   // node ids / endpoint ids are numeric strings from the contract; quote for
   // the attribute selector regardless so a stray value can't break the query.
@@ -62,12 +71,20 @@ export class LiveController {
   private readonly pendingScene = new Map<number, Scene>();
   private readonly decorate: RowDecorator | undefined;
   private readonly onRender: RenderHook | undefined;
+  private readonly onState: StateHook | undefined;
 
-  constructor(view: LiveView, refetch: Refetch, decorate?: RowDecorator, onRender?: RenderHook) {
+  constructor(
+    view: LiveView,
+    refetch: Refetch,
+    decorate?: RowDecorator,
+    onRender?: RenderHook,
+    onState?: StateHook,
+  ) {
     this.view = view;
     this.refetch = refetch;
     this.decorate = decorate;
     this.onRender = onRender;
+    this.onState = onState;
   }
 
   /** Parse + dispatch one raw SSE message; malformed JSON is silently ignored. */
@@ -217,12 +234,25 @@ export class LiveController {
         }
       }
       if (missing) void this.refresh(); // a newly-appeared endpoint → rebuild sub-rows once
+      this.emitState(node, info);
       return;
     }
     const val = this.view.rows.querySelector(
       `tr[data-node="${attr(String(node))}"]:not([data-ep]) .stanval`,
     );
     if (val !== null) val.textContent = stateStr(info);
+    this.emitState(node, info);
+  }
+
+  /** Notify a secondary-view observer of a merged state change; never throws into
+   *  the live layer (a broken observer must not wedge coalescing or the heatmap). */
+  private emitState(node: number, info: DeviceInfo): void {
+    if (this.onState === undefined) return;
+    try {
+      this.onState(node, info);
+    } catch {
+      /* swallow — an observer must never break the live data layer */
+    }
   }
 
   /** Apply a (partial) globals delta — only the field(s) present are written. */
