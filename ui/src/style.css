@@ -7,15 +7,15 @@
   --surface: #fffaf2; /* slightly lighter cards / controls */
   --fg: #2f241b; /* warm dark-brown text */
   --fg-soft: #5b4a3a; /* gently muted text (globals line) */
-  --muted: #8c7a66; /* warm muted (last-seen, labels, counts, conn) */
+  --muted: #7d6a54; /* warm muted (last-seen, labels, counts, conn) — darkened to clear WCAG AA 4.5:1 on bg/surface */
   --border: #e7d8c4; /* warm light border */
   --border-strong: #d8c3a8; /* stronger border (thead, buttons) */
   --accent: #d2691e; /* hearth amber / terracotta */
   --accent-soft: #f3e1cb; /* warm highlight fill (active tab) */
   --ok: #2e7d32; /* confirmed / fresh */
   --err: #c0341d; /* errors / low battery */
-  --glow: rgba(216, 122, 32, 0.18); /* warm "recent" glow */
-  --glow-strong: rgba(216, 122, 32, 0.5); /* warm activity flash */
+  --glow: rgba(216, 122, 32, 0.14); /* warm "recent" glow — gentle so text stays legible */
+  --glow-strong: rgba(216, 122, 32, 0.32); /* warm activity flash — gentle tint, keeps row text readable */
   font-family: ui-monospace, SFMono-Regular, "SF Mono", Consolas, "Liberation Mono", monospace;
   background: var(--bg);
   color: var(--fg);
@@ -84,6 +84,7 @@ button:disabled {
   flex: 0 0 auto;
   display: inline-flex;
   line-height: 0;
+  color: var(--accent); /* the flame SVG uses fill:currentColor so it tracks the palette */
 }
 
 /* Header: flexbox (not floats) so the conn / auth / refresh chips wrap cleanly
