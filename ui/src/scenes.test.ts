@@ -30,7 +30,7 @@ describe("renderSceneControls", () => {
     renderSceneControls(el, post);
     renderSceneControls(el, post);
 
-    expect(el.querySelector("h3")?.textContent).toBe("Whole home");
+    expect(el.querySelector("h3")).toBeNull(); // the detail view supplies the heading, not scenes.ts
     expect(buttonLabels(el)).toEqual([
       "🌙 All lights off",
       "💡 All lights on",

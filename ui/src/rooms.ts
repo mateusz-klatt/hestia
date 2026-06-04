@@ -8,7 +8,9 @@ export interface RoomsDeps {
   postControl: PostControl;
   roomIcons: () => Record<string, string>;
   saveRoomIcon: (room: string, icon: string) => Promise<void>;
-  /** Notified when the view enters (true) / leaves (false) a room detail — drives the back-tab label. */
+  /** Render the whole-home scene controls into a container — the "Cały dom" virtual room's detail body. */
+  renderWholeHome: (container: HTMLElement) => void;
+  /** Notified when the view enters (true) / leaves (false) a detail (a room OR Cały dom) — drives the back-tab. */
   onNav?: (inRoom: boolean) => void;
 }
 
@@ -89,6 +91,13 @@ function roomIcon(room: string, deps: RoomsDeps): string {
   return icon !== undefined && icon !== "" ? icon : DEFAULT_ROOM_ICON;
 }
 
+const WHOLE_HOME_ICON = "🏠";
+
+/** True if any device responds to a whole-home scene (all-lights / all-blinds) — gates the "Cały dom" card. */
+function hasSceneDevices(devices: Record<string, DeviceInfo>): boolean {
+  return Object.values(devices).some((info) => info.type === "light" || info.type === "blind");
+}
+
 /** One controllable device card: name + live state + the (reused) control buttons. Returns the state
  *  span so the live layer can patch it WITHOUT rebuilding the buttons (which would reset their lock). */
 function deviceCard(
@@ -128,6 +137,7 @@ function deviceCard(
  */
 export function createRoomsView(container: HTMLElement, deps: RoomsDeps): RoomsView {
   let selectedRoom: string | null = null;
+  let inWholeHome = false; // showing the "Cały dom" virtual room's scene detail
   let latest: Discovery | null = null;
   let stateSpans = new Map<number, HTMLElement>();
   let editIcons = false;
@@ -198,6 +208,39 @@ export function createRoomsView(container: HTMLElement, deps: RoomsDeps): RoomsV
     container.appendChild(list);
   }
 
+  // The "Cały dom" tile in the landing grid — a virtual room, NOT a `.room-card` (so the table's
+  // room selectors and the tests' "first room" helper still target real rooms). Tapping it opens the
+  // whole-home scene controls in a detail view, instead of a panel cluttering every rooms screen.
+  function wholeHomeCard(): HTMLButtonElement {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "whole-home-card";
+    const icon = document.createElement("span");
+    icon.className = "whole-home-icon";
+    icon.textContent = WHOLE_HOME_ICON;
+    const title = document.createElement("span");
+    title.className = "whole-home-title";
+    title.textContent = t("scene.title");
+    btn.append(icon, title);
+    btn.addEventListener("click", () => {
+      navigateWholeHome();
+    });
+    return btn;
+  }
+
+  function renderWholeHomeDetail(): void {
+    stateSpans = new Map();
+    container.replaceChildren();
+    const title = document.createElement("h2");
+    title.className = "room-title";
+    title.textContent = t("scene.title");
+    container.append(title); // back via the 🏠 Pokoje tab (goToLanding), like a real room detail
+    const panel = document.createElement("div");
+    panel.className = "whole-home-detail";
+    deps.renderWholeHome(panel);
+    container.append(panel);
+  }
+
   function renderLanding(): void {
     stateSpans = new Map();
     container.replaceChildren();
@@ -217,6 +260,7 @@ export function createRoomsView(container: HTMLElement, deps: RoomsDeps): RoomsV
     }
     const grid = document.createElement("div");
     grid.className = "room-grid";
+    if (hasSceneDevices(latest.devices)) grid.appendChild(wholeHomeCard()); // master tile, first
     for (const room of rooms) {
       const list = groups.get(room) ?? [];
       const btn = document.createElement("button");
@@ -265,18 +309,31 @@ export function createRoomsView(container: HTMLElement, deps: RoomsDeps): RoomsV
   }
 
   function render(): void {
-    // resolve a selected room that vanished from the latest snapshot before painting
+    // resolve a selection that vanished from the latest snapshot before painting
     if (selectedRoom !== null && latest !== null && !groupByRoom(latest.devices).has(selectedRoom)) {
       selectedRoom = null;
     }
-    if (selectedRoom === null) renderLanding();
-    else renderDetail();
-    deps.onNav?.(selectedRoom !== null);
+    if (inWholeHome && latest !== null && !hasSceneDevices(latest.devices)) {
+      inWholeHome = false; // the home lost all scene devices → drop back to the landing
+    }
+    if (selectedRoom !== null) renderDetail();
+    else if (inWholeHome) renderWholeHomeDetail();
+    else renderLanding();
+    deps.onNav?.(selectedRoom !== null || inWholeHome); // either detail flips the tab to "← Pokoje"
   }
 
   /** Set the selected room (or null for the landing) and re-render — the single nav choke point. */
   function navigate(room: string | null): void {
     selectedRoom = room;
+    inWholeHome = false;
+    render();
+  }
+
+  /** Open the "Cały dom" virtual room (the whole-home scene controls). */
+  function navigateWholeHome(): void {
+    selectedRoom = null;
+    editIcons = false;
+    inWholeHome = true;
     render();
   }
 

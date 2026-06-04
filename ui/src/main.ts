@@ -47,7 +47,6 @@ const ruleJson = el("rule-json") as HTMLTextAreaElement;
 // Rooms view (wife-friendly): house-wide IR/klima panels live in their own persistent containers;
 // the room list/detail rebuilds inside #room-list. The rooms view keeps its own latest snapshot
 // (set via update() in onRender), so the switcher just asks it to show the landing.
-const roomsSceneBox = el("rooms-scene");
 const roomsIrBox = el("rooms-ir");
 const roomsKlimaBox = el("rooms-klima");
 // Notify the view-switch when the rooms view enters/leaves a room, so its tab can flip to "← Rooms"
@@ -67,6 +66,9 @@ const roomsView = createRoomsView(el("room-list"), {
         roomIcons = { ...roomIcons, [room]: icon };
       }
     }
+  },
+  renderWholeHome: (c) => {
+    renderSceneControls(c, postScene); // the "Cały dom" virtual room's detail body
   },
   onNav: (inRoom) => {
     onRoomsNav(inRoom);
@@ -119,7 +121,6 @@ const live = new LiveController(
 function startApp(): void {
   const audit = renderAuditFeed(el("audit-feed"), fetchAudit);
   const dbStats = renderDbStats(el("dbstats"), fetchDbStats);
-  renderSceneControls(roomsSceneBox, postScene);
 
   el("refresh").addEventListener("click", () => {
     void live.refresh();
