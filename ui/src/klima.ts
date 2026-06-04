@@ -103,15 +103,28 @@ export function renderKlima(box: HTMLElement, klima: Klima, postIr: PostIr): voi
 
   const buttons: HTMLButtonElement[] = [];
   let busy = false;
+  // Brief pulse on the state pictogram so a SUCCESSFUL transmit always confirms the tap registered —
+  // even an idempotent re-send (same mode/temp already active), where the live state delta is suppressed
+  // so the pictogram text doesn't change. Self-clearing so it can replay on the next tap.
+  let flashTimer: ReturnType<typeof setTimeout> | undefined;
+  const flashState = (): void => {
+    stateLabel.classList.add("klima-flash");
+    clearTimeout(flashTimer);
+    flashTimer = setTimeout(() => {
+      stateLabel.classList.remove("klima-flash");
+    }, 600);
+  };
   const send = async (button: string): Promise<void> => {
     if (busy) return;
     busy = true;
     for (const b of buttons) b.disabled = true;
-    status.textContent = ""; // clear any prior error; on success the pictogram reflects the new state
+    status.textContent = ""; // clear any prior error; on success the pictogram (+ a pulse) is the confirmation
     status.className = "status";
     try {
       const res = await postIr(file, button);
-      if (!res.ok) {
+      if (res.ok) {
+        flashState();
+      } else {
         status.textContent = `✗ ${res.error ?? t("ctl.failed")}`;
         status.className = "status err";
       }
