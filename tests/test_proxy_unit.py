@@ -1124,6 +1124,14 @@ class PollGlobalFieldTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sess.sent, [])
         self.assertFalse(rt.state.dirty)                           # nothing read → not dirtied
 
+    async def test_unchanged_value_does_not_redirty(self):
+        # A steady reading must NOT keep re-flushing (and re-running Alembic) the device-state cache.
+        rt, _ = self._rt()
+        rt.state.outdoor_temp = -5.0                               # already at the value
+        rt.state.dirty = False
+        await self._run(rt, read=lambda: -5.0)                     # poll keeps reading the same value
+        self.assertFalse(rt.state.dirty)                          # no change → not re-dirtied
+
     async def test_tick_error_survives(self):
         rt, sess = self._rt()
         with mock.patch.object(rt.engine, "on_global", side_effect=ValueError("boom")):

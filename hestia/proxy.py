@@ -1117,9 +1117,10 @@ async def _poll_global_field(rt, field, read, interval, source) -> None:
             if value is None:                        # failed read -> keep the last value
                 continue
             log.debug("%s: %s = %r", source, field, value)
-            setattr(rt.state, field, value)
-            rt.state.dirty = True                                                 # cache the global across a restart
-            rt.event_bus.publish({"type": "globals", "fields": {field: value}})   # live dashboard update
+            if getattr(rt.state, field) != value:                                # only a REAL change needs persisting —
+                rt.state.dirty = True                                            # else a steady poll re-flushes (+ re-runs
+            setattr(rt.state, field, value)                                      # Alembic) the device-state cache every tick
+            rt.event_bus.publish({"type": "globals", "fields": {field: value}})   # live dashboard update (every tick)
             await _inject(rt, rt.engine.on_global(rt, field, value), source=source)
         except Exception:                            # a daemon loop must never die on a tick error
             log.exception("%s poller tick failed", source)
@@ -1184,9 +1185,11 @@ async def _sensor433_poller(rt, stream=sensor433.stream_readings, enabled: bool 
 
     async def on_reading(reading) -> None:
         try:
+            if (rt.state.outdoor_temp != reading.temperature_C        # only a REAL change needs persisting
+                    or rt.state.outdoor_humidity != reading.humidity):
+                rt.state.dirty = True
             rt.state.outdoor_temp = reading.temperature_C
             rt.state.outdoor_humidity = reading.humidity
-            rt.state.dirty = True                        # cache the globals across a restart
             log.debug("sensor433: outdoor_temp=%r humidity=%r", reading.temperature_C, reading.humidity)
             rt.event_bus.publish({"type": "globals", "fields": {                  # live dashboard delta
                 "outdoor_temp": reading.temperature_C, "outdoor_humidity": reading.humidity}})
