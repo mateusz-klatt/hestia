@@ -181,13 +181,18 @@ def _bool(value) -> bool:
     raise ValueError(f"expected a boolean, got {value!r}")
 
 
-# --- Optimistic command echo -------------------------------------------------
-# Keemple devices ACK a remote SET with a bare ``[1e 08]`` status frame and do
-# NOT volunteer a ``[1e 09]`` state report for it, so a control command would
-# otherwise never reach State (or the live UI). These mirror the report appliers
-# above: given a control op, set the commanded value and record the SAME
-# discovery field a genuine report would. A later real report (a physical press,
-# or a cover/thermostat's own delayed report) overwrites it with ground truth.
+# --- Command echo: learn state from commands, not just reports ---------------
+# A Keemple binary switch / 2-gang ACKs a remote SET with a bare ``[1e 08]`` status
+# frame and does NOT volunteer a ``[1e 09]`` report for it — so without echoing the
+# COMMANDED value, a remotely-set switch never reaches State (or the live UI),
+# whatever the source (this UI's control, a hestia automation, or — in proxy mode —
+# the Keemple cloud/app). We mirror the report applier and record the SAME discovery
+# field a genuine report would; a later real report overwrites it with ground truth.
+#
+# DELIBERATELY switch/2-gang ONLY. Covers + thermostats DO reliably report their own
+# state (level / setpoint / thermostat_on) shortly after acting, so we trust those
+# reports rather than optimistically guess an intermediate ("reports win where they
+# exist") — an operator decision after observing real device behaviour.
 
 def _command_switch(state, node: int, op: dict, changed: dict) -> None:
     endpoint = op.get("endpoint")
@@ -201,24 +206,8 @@ def _command_switch(state, node: int, op: dict, changed: dict) -> None:
         changed["endpoints"] = dict(eps)
 
 
-def _command_level(state, node: int, op: dict, changed: dict) -> None:
-    _set_changed(state.levels, node, changed, "level", _int(op["value"]))
-
-
-def _command_thermostat(state, node: int, op: dict, changed: dict) -> None:
-    _set_changed(state.thermostat_setpoint, node, changed, "setpoint", round(float(op["celsius"])))
-
-
-def _command_thermostat_power(state, node: int, op: dict, changed: dict) -> None:
-    _set_changed(state.thermostat_on, node, changed, "thermostat_on", _bool(op["on"]))
-
-
 _COMMAND_APPLIERS = {
-    "switch": _command_switch,
-    "level": _command_level,
-    "cover": _command_level,                     # a cover reports its position as a level
-    "thermostat": _command_thermostat,
-    "thermostat_power": _command_thermostat_power,
+    "switch": _command_switch,                   # 2-gang rides this too (op carries an `endpoint`)
 }
 
 
@@ -305,16 +294,15 @@ class State:
         return changed
 
     def apply_command(self, op: dict) -> dict:
-        """The state delta a just-injected control command WILL produce.
+        """The state delta a SWITCH / 2-gang control command WILL produce.
 
-        Devices ACK a remote SET (``[1e 08]``) but never send a ``[1e 09]``
-        report for it, so without this echo a control would never update State
-        or the live UI. Reflect the *commanded* value (field names match
-        ``apply`` / ``/api/discovery``); a later genuine report — a physical
-        press, or a cover/thermostat's own delayed report — overwrites it with
-        ground truth. Returns the changed ``{field: value}`` (empty for a
-        non-stateful op — ``raw`` / ``lights`` — a bad node, or a value already
-        cached)."""
+        Those devices ACK a remote SET (``[1e 08]``) but never send a ``[1e 09]``
+        report for it, so without this echo a remotely-set switch never updates
+        State or the live UI. Reflect the *commanded* value (field names match
+        ``apply`` / ``/api/discovery``); a later genuine report overwrites it with
+        ground truth. Returns the changed ``{field: value}``, or empty for ANY
+        non-switch op (cover / level / thermostat — they report their own state —
+        ``raw`` / ``lights``), a bad node, or a value already cached."""
         applier = _COMMAND_APPLIERS.get(op.get("op"))
         if applier is None:
             return {}

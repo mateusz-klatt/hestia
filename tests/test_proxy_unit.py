@@ -46,6 +46,18 @@ SCENE_ELEMENTS = bytes.fromhex("0101030626010002010308260100")
 SCENE_BATCH = build_frame(0x1E, 0x32, tlv(0x001F, b"\x00\x00\x00\x05") + tlv(0x005A, SCENE_ELEMENTS))
 
 
+def cmd_frame(node: int, payload: bytes) -> Frame:
+    """A cloud→device command frame ``[1e 07]`` carrying node (0x0047) + payload (0x0046)."""
+    return Frame(build_frame(0x1E, 0x07, tlv(0x0047, bytes([node])) + tlv(0x0046, payload))[1:-1])
+
+
+def _drain_events(sub) -> list:
+    out = []
+    while not sub.queue.empty():
+        out.append(sub.queue.get_nowait())
+    return out
+
+
 # --- fakes -------------------------------------------------------------------
 
 class FakeWriter:
@@ -504,6 +516,42 @@ class ProcessControlOpTests(unittest.IsolatedAsyncioTestCase):
         while not sub.queue.empty():
             events.append(sub.queue.get_nowait())
         self.assertFalse([e for e in events if e.get("type") == "state"])
+
+
+class CommandEchoTests(unittest.IsolatedAsyncioTestCase):
+    """Learn switch/2-gang state from the cloud's C->D commands (proxy tap) — those relays only ACK,
+    never report. Covers/thermostats are NOT echoed (they report their own state)."""
+
+    def test_command_op_from_frame_switch_and_gang_only(self):
+        f = proxy._command_op_from_frame
+        self.assertEqual(f(cmd_frame(0x0E, b"\x25\x01\xff")), {"op": "switch", "node": 0x0E, "on": True})
+        self.assertEqual(f(cmd_frame(0x0E, b"\x25\x01\x00")), {"op": "switch", "node": 0x0E, "on": False})
+        self.assertEqual(f(cmd_frame(0x07, b"\x60\x0d\x00\x02\x25\x01\xff")),
+                         {"op": "switch", "node": 0x07, "endpoint": 2, "on": True})
+        # ignored — a multilevel (cover/level) command, a non-25-01 60-0d frame, truncated payloads,
+        # a 1e09 report (not a command), and commands missing node / payload:
+        self.assertIsNone(f(cmd_frame(0x04, b"\x26\x01\x63")))                  # cover/level → reports win
+        self.assertIsNone(f(cmd_frame(0x07, b"\x60\x0d\x00\x02\x25\x03\xff")))  # not a 25 01 SET
+        self.assertIsNone(f(cmd_frame(0x0E, b"\x25\x01")))                      # truncated switch
+        self.assertIsNone(f(cmd_frame(0x07, b"\x60\x0d\x00")))                  # truncated 2-gang
+        report = Frame(build_frame(0x1E, 0x09, tlv(0x0047, b"\x0e") + tlv(0x0046, b"\x25\x03\xff"))[1:-1])
+        self.assertIsNone(f(report))                                           # a report, not a 1e07 command
+        self.assertIsNone(f(Frame(build_frame(0x1E, 0x07, tlv(0x0046, b"\x25\x01\xff"))[1:-1])))  # no node
+        self.assertIsNone(f(Frame(build_frame(0x1E, 0x07, tlv(0x0047, b"\x0e"))[1:-1])))          # no payload
+
+    async def test_proxy_echoes_cloud_switch_command(self):
+        rt = proxy.ProxyRuntime()
+        sub = await rt.event_bus.try_subscribe()
+        make_session(rt)._observe(cmd_frame(0x0E, b"\x25\x01\x00"), "C->D")   # cloud/app turns 0x0e OFF
+        self.assertIn({"type": "state", "node": 0x0E, "fields": {"switch": False}}, _drain_events(sub))
+        self.assertIs(rt.state.switches[0x0E], False)
+
+    async def test_cloud_command_not_echoed_device_to_cloud(self):
+        rt = proxy.ProxyRuntime()
+        sub = await rt.event_bus.try_subscribe()
+        make_session(rt)._observe(cmd_frame(0x0E, b"\x25\x01\x00"), "D->C")   # device→cloud: not a cloud command
+        self.assertFalse([e for e in _drain_events(sub) if e.get("type") == "state"])
+        self.assertEqual(rt.state.switches, {})
 
 
 class AutomationOpTests(unittest.IsolatedAsyncioTestCase):
