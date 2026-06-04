@@ -44,20 +44,20 @@ class DbSchemaTests(unittest.TestCase):
     def test_init_db_creates_all_tables(self):
         engine, _ = db.init_db(self.path)
         names = set(inspect(engine).get_table_names())
-        self.assertTrue(ALL_TABLES <= names, names)
+        self.assertLessEqual(ALL_TABLES, names, names)
         self.assertIn("alembic_version", names)
 
     def test_init_db_is_idempotent(self):
         db.init_db(self.path)
         engine, _ = db.init_db(self.path)  # second run upgrades to a no-op
-        self.assertTrue(ALL_TABLES <= set(inspect(engine).get_table_names()))
+        self.assertLessEqual(ALL_TABLES, set(inspect(engine).get_table_names()))
 
     def test_init_db_uses_env_path_when_none(self):
         target = self.dir / "from_env.db"
         with mock.patch.dict(os.environ, {"HESTIA_DB": str(target)}):
             engine, _ = db.init_db()  # path=None -> db_path() -> env
         self.assertTrue(target.exists())
-        self.assertTrue(ALL_TABLES <= set(inspect(engine).get_table_names()))
+        self.assertLessEqual(ALL_TABLES, set(inspect(engine).get_table_names()))
 
     def test_pragmas_applied_on_connect(self):
         engine, _ = db.init_db(self.path)

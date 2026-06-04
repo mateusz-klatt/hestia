@@ -184,7 +184,7 @@ def load_automations(engine, path, *, writer) -> AutomationStore:
     for row in rows:
         try:
             rule = Rule.from_dict(json.loads(row.rule_json))
-        except (ValueError, json.JSONDecodeError) as exc:
+        except ValueError as exc:
             log.warning("automations DB: skipping invalid rule %r (%s)", row.id, exc)
             continue
         store.rules[rule.id] = rule

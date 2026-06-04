@@ -237,6 +237,21 @@ def _settings_error(body) -> "str | None":
     return None
 
 
+def _settings_update_fields(body) -> dict:
+    # Pass only the fields actually present so the store's single-transaction upsert preserves the
+    # rest (no read-merge-write race between two concurrent partial POSTs).
+    return {k: body[k] for k in ("locale", "temp_scale", "theme") if k in body}
+
+
+async def _persist_user_settings(request, user: str, body: dict) -> None:
+    fields = _settings_update_fields(body)
+    wrote = await asyncio.get_running_loop().run_in_executor(
+        None, lambda: store_sql.set_user_settings(user, **fields))
+    if wrote:
+        _audit(_rt(request), user, "settings",
+               detail=f"locale={body.get('locale')},scale={body.get('temp_scale')}")
+
+
 async def _settings_set(request):
     """POST /api/settings — best-effort server sync for local-first UI preferences."""
     body, err = await _read_json_body(request)
@@ -247,17 +262,8 @@ async def _settings_set(request):
         return _json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": error})
 
     user = request.get(_USER_KEY)
-    if user is None:
-        return _json(HTTPStatus.OK, {"ok": True})
-
-    # Pass only the fields actually present so the store's single-transaction upsert preserves the
-    # rest (no read-merge-write race between two concurrent partial POSTs).
-    fields = {k: body[k] for k in ("locale", "temp_scale", "theme") if k in body}
-    wrote = await asyncio.get_running_loop().run_in_executor(
-        None, lambda: store_sql.set_user_settings(user, **fields))
-    if wrote:
-        _audit(_rt(request), user, "settings",
-               detail=f"locale={body.get('locale')},scale={body.get('temp_scale')}")
+    if user is not None:
+        await _persist_user_settings(request, user, body)
     return _json(HTTPStatus.OK, {"ok": True})
 
 
@@ -279,6 +285,13 @@ def _room_icon_error(body) -> "str | None":
     return None
 
 
+async def _persist_room_icon(request, user: str, body: dict) -> None:
+    wrote = await asyncio.get_running_loop().run_in_executor(
+        None, lambda: store_sql.set_room_icon(body["room"], body["icon"]))
+    if wrote:
+        _audit(_rt(request), user, "room_icon", target=body["room"])
+
+
 async def _room_icon_set(request):
     """POST /api/rooms/icons — set/clear one shared room emoji, best-effort."""
     body, err = await _read_json_body(request)
@@ -289,13 +302,8 @@ async def _room_icon_set(request):
         return _json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": error})
 
     user = request.get(_USER_KEY)
-    if user is None:
-        return _json(HTTPStatus.OK, {"ok": True})
-
-    wrote = await asyncio.get_running_loop().run_in_executor(
-        None, lambda: store_sql.set_room_icon(body["room"], body["icon"]))
-    if wrote:
-        _audit(_rt(request), user, "room_icon", target=body["room"])
+    if user is not None:
+        await _persist_room_icon(request, user, body)
     return _json(HTTPStatus.OK, {"ok": True})
 
 
