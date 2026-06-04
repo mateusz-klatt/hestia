@@ -132,8 +132,8 @@ describe("renderActions dispatch", () => {
       { op: "level", node: 6, value: 50 },
       { op: "cover", node: 8, value: 99 },
       { op: "cover", node: 8, value: 0 },
-      { op: "thermostat", node: 9, celsius: 20.5 },
-      { op: "thermostat", node: 9, celsius: 21.5 },
+      { op: "thermostat", node: 9, celsius: 20 },
+      { op: "thermostat", node: 9, celsius: 22 },
       { op: "thermostat_power", node: 9, on: true },
       { op: "thermostat_power", node: 9, on: false },
       { op: "switch", node: 7, endpoint: 1, on: true },
@@ -170,12 +170,12 @@ describe("renderActions dispatch", () => {
     click(cell, "−"); // at the floor
     await flush();
     renderActions(cell, 9, device({ type: "thermostat", setpoint: Number.NaN }), post);
-    click(cell, "+"); // non-finite → 21 fallback, then +0.5
+    click(cell, "+"); // non-finite → 21 fallback, then +1
     await flush();
     expect(sent).toEqual([
-      { op: "thermostat", node: 9, celsius: 30 }, // clamped, not 30.5
-      { op: "thermostat", node: 9, celsius: 5 }, // floored, not 4.5
-      { op: "thermostat", node: 9, celsius: 21.5 }, // Number.isFinite → 21 fallback
+      { op: "thermostat", node: 9, celsius: 30 }, // clamped, not 31
+      { op: "thermostat", node: 9, celsius: 5 }, // floored, not 4
+      { op: "thermostat", node: 9, celsius: 22 }, // Number.isFinite → 21 fallback, +1
     ]);
   });
 });
