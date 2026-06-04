@@ -156,25 +156,25 @@ describe("renderActions dispatch", () => {
     expect(sent).toEqual([{ op: "level", node: 6, value: 10 }]);
   });
 
-  it("clamps the thermostat setpoint to 5–30 °C (21 fallback when unseen/non-finite)", async () => {
+  it("clamps the thermostat setpoint to 4–28 °C (21 fallback when unseen/non-finite)", async () => {
     const sent: ControlOp[] = [];
     const post: PostControl = (op) => {
       sent.push(op);
       return Promise.resolve({ ok: true });
     };
     const cell = td();
-    renderActions(cell, 9, device({ type: "thermostat", setpoint: 30 }), post);
+    renderActions(cell, 9, device({ type: "thermostat", setpoint: 28 }), post);
     click(cell, "+"); // at the ceiling
     await flush();
-    renderActions(cell, 9, device({ type: "thermostat", setpoint: 5 }), post);
+    renderActions(cell, 9, device({ type: "thermostat", setpoint: 4 }), post);
     click(cell, "−"); // at the floor
     await flush();
     renderActions(cell, 9, device({ type: "thermostat", setpoint: Number.NaN }), post);
     click(cell, "+"); // non-finite → 21 fallback, then +1
     await flush();
     expect(sent).toEqual([
-      { op: "thermostat", node: 9, celsius: 30 }, // clamped, not 31
-      { op: "thermostat", node: 9, celsius: 5 }, // floored, not 4
+      { op: "thermostat", node: 9, celsius: 28 }, // clamped, not 29
+      { op: "thermostat", node: 9, celsius: 4 }, // floored, not 3
       { op: "thermostat", node: 9, celsius: 22 }, // Number.isFinite → 21 fallback, +1
     ]);
   });

@@ -90,11 +90,12 @@ export function renderActions(
     return;
   }
 
-  // Clamp a setpoint nudge to the thermostat's 5–30 °C range (default 21).
+  // Clamp a setpoint nudge to the thermostat's 4–28 °C range (the Keemple TRVs' actual limits;
+  // default 21 when unseen / non-finite).
   const clampSetpoint = (delta: number): number => {
     const current = info.setpoint ?? 21;
     const base = Number.isFinite(current) ? current : 21;
-    return Math.min(30, Math.max(5, base + delta));
+    return Math.min(28, Math.max(4, base + delta));
   };
 
   if (info.type === "light") {
