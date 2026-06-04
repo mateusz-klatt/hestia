@@ -481,6 +481,30 @@ class ProcessControlOpTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(resp["ok"])
         self.assertIn("device write failed", resp["error"])
 
+    async def test_success_publishes_optimistic_state(self):
+        # The device only ACKs a remote SET ([1e 08]); it never reports a [1e 09].
+        # A successful control must therefore echo the commanded state onto the live
+        # feed itself, or the dashboard never tracks a control press (the live bug).
+        rt = proxy.ProxyRuntime()
+        rt.sessions.append(FakeSession())
+        sub = await rt.event_bus.try_subscribe()
+        await proxy.process_control_op(rt, {"op": "switch", "node": 5, "on": True})
+        events = []
+        while not sub.queue.empty():
+            events.append(sub.queue.get_nowait())
+        self.assertIn({"type": "state", "node": 5, "fields": {"switch": True}}, events)
+        self.assertIs(rt.state.switches[5], True)                  # State updated too
+
+    async def test_non_stateful_op_publishes_no_state(self):
+        rt = proxy.ProxyRuntime()
+        rt.sessions.append(FakeSession())
+        sub = await rt.event_bus.try_subscribe()
+        await proxy.process_control_op(rt, {"op": "raw", "hex": "abcd"})  # raw → no commanded field
+        events = []
+        while not sub.queue.empty():
+            events.append(sub.queue.get_nowait())
+        self.assertFalse([e for e in events if e.get("type") == "state"])
+
 
 class AutomationOpTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):

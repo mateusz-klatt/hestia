@@ -1321,6 +1321,17 @@ _CONTROL_OP_HANDLERS = {
 }
 
 
+def _publish_command_state(rt, op) -> None:
+    """Reflect a just-injected control command into State + the live feed. A
+    remote SET is only ACKed (``[1e 08]``), never reported (``[1e 09]``), so we
+    echo the commanded value ourselves — otherwise the dashboard never tracks a
+    control press (see ``State.apply_command``). Same ``state`` event the genuine
+    report path publishes, so the client patch is identical."""
+    changed = rt.state.apply_command(op)
+    if changed:
+        rt.event_bus.publish({"type": "state", "node": int(op["node"]), "fields": changed})
+
+
 async def _control_device_command(rt, op):
     session = rt.sessions[-1] if rt.sessions else None
     if session is None:
@@ -1330,6 +1341,7 @@ async def _control_device_command(rt, op):
         await session.inject_to_device(raw)
     except OSError as exc:
         return {"ok": False, "error": f"device write failed: {exc!r}"}
+    _publish_command_state(rt, op)   # device ACKs but never reports a [1e 09]; echo the commanded state
     return {"ok": True, "sent": raw.hex()}
 
 

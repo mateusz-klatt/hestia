@@ -333,5 +333,72 @@ class ApplySceneTests(unittest.TestCase):
         self.assertNotIn("scene_seq", state_snapshot(st))       # dedup bookkeeping never leaks
 
 
+class ApplyCommandTests(unittest.TestCase):
+    """The optimistic echo of a control command — devices ACK a remote SET but
+    never report a [1e 09], so apply_command mirrors the commanded value into
+    State so the live UI tracks a control press (same fields a report would emit)."""
+
+    def test_switch_on_off(self):
+        st = State()
+        self.assertEqual(st.apply_command({"op": "switch", "node": 5, "on": True}), {"switch": True})
+        self.assertIs(st.switches[5], True)
+        self.assertTrue(st.dirty)
+        self.assertEqual(st.apply_command({"op": "switch", "node": 5, "on": False}), {"switch": False})
+        self.assertIs(st.switches[5], False)
+
+    def test_switch_unchanged_emits_nothing(self):
+        st = State()
+        st.apply_command({"op": "switch", "node": 5, "on": True})
+        st.dirty = False
+        self.assertEqual(st.apply_command({"op": "switch", "node": 5, "on": True}), {})  # already on
+        self.assertFalse(st.dirty)                                 # no change → not re-dirtied
+
+    def test_endpoint_switch_emits_full_rollup(self):
+        st = State()
+        self.assertEqual(st.apply_command({"op": "switch", "node": 7, "endpoint": 1, "on": True}),
+                         {"endpoints": {1: True}})
+        # a second channel merges into the same per-node roll-up
+        self.assertEqual(st.apply_command({"op": "switch", "node": 7, "endpoint": 2, "on": False}),
+                         {"endpoints": {1: True, 2: False}})
+        self.assertEqual(st.gang[7], {1: True, 2: False})
+
+    def test_endpoint_switch_unchanged_emits_nothing(self):
+        st = State()
+        st.apply_command({"op": "switch", "node": 7, "endpoint": 1, "on": True})
+        self.assertEqual(st.apply_command({"op": "switch", "node": 7, "endpoint": 1, "on": True}), {})
+
+    def test_level_and_cover_both_set_level(self):
+        st = State()
+        self.assertEqual(st.apply_command({"op": "level", "node": 4, "value": 60}), {"level": 60})
+        self.assertEqual(st.apply_command({"op": "cover", "node": 8, "value": 99}), {"level": 99})
+        self.assertEqual((st.levels[4], st.levels[8]), (60, 99))
+
+    def test_thermostat_setpoint_rounded(self):
+        st = State()
+        self.assertEqual(st.apply_command({"op": "thermostat", "node": 9, "celsius": 21.4}), {"setpoint": 21})
+        self.assertEqual(st.thermostat_setpoint[9], 21)
+
+    def test_thermostat_power(self):
+        st = State()
+        self.assertEqual(st.apply_command({"op": "thermostat_power", "node": 9, "on": True}),
+                         {"thermostat_on": True})
+
+    def test_non_stateful_ops_emit_nothing(self):
+        st = State()
+        self.assertEqual(st.apply_command({"op": "raw", "hex": "deadbeef"}), {})       # not in the table
+        self.assertEqual(st.apply_command({"op": "lights", "channels": []}), {})       # multi-channel, skip
+        self.assertFalse(st.dirty)
+
+    def test_bad_node_emits_nothing(self):
+        st = State()
+        self.assertEqual(st.apply_command({"op": "switch", "on": True}), {})           # no node
+        self.assertEqual(st.apply_command({"op": "switch", "node": "nope", "on": True}), {})  # unparseable
+
+    def test_missing_field_is_swallowed(self):
+        st = State()
+        self.assertEqual(st.apply_command({"op": "switch", "node": 5}), {})            # no "on" → KeyError → {}
+        self.assertFalse(st.dirty)
+
+
 if __name__ == "__main__":
     unittest.main()
