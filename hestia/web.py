@@ -207,6 +207,12 @@ async def _audit_feed(request):
     return _json(HTTPStatus.OK, {"events": events})
 
 
+async def _rf433_feed(request):
+    """GET /api/rf433 — every 433 MHz device hestia has decoded (discovery), newest-seen first;
+    auth-gated like every /api/* route. Display-only; empty until the local-433 feeder is running."""
+    return _json(HTTPStatus.OK, {"devices": _rt(request).rf433.snapshot()})
+
+
 async def _db_stats(_request):
     """GET /api/db/stats — SQLite file size + row counts, auth-gated like every /api/* route."""
     stats = await asyncio.get_running_loop().run_in_executor(None, store_sql.db_stats)
@@ -687,6 +693,7 @@ def make_app(rt):
     app.router.add_get("/api/events", _events, allow_head=False)
     app.router.add_get("/api/automations", _automations_list, allow_head=False)
     app.router.add_get("/api/audit", _audit_feed, allow_head=False)
+    app.router.add_get("/api/rf433", _rf433_feed, allow_head=False)
     app.router.add_get("/api/db/stats", _db_stats, allow_head=False)
     app.router.add_get("/api/settings", _settings, allow_head=False)
     app.router.add_post("/api/settings", _settings_set)

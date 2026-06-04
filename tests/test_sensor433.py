@@ -188,6 +188,20 @@ class StreamReadingsTests(unittest.IsolatedAsyncioTestCase):
         proc = _FakeProc([b"\n", b"   \n", b"not json\n", b"123\n", _line(temperature_C=3.3)])
         self.assertEqual(await _drain(_make_create(proc)), [sensor433.Reading(3.3, None)])
 
+    async def test_on_packet_fires_for_every_decoded_packet(self):
+        packets = []
+        proc = _FakeProc([_line(model="A", id=1, temperature_C=1.0),
+                          _line(model="B", id=2, button=1)])   # 2nd has no temp → not a Reading
+        out = await _drain(_make_create(proc), on_packet=packets.append)
+        self.assertEqual([p["model"] for p in packets], ["A", "B"])    # BOTH packets, pre-filter
+        self.assertEqual(out, [sensor433.Reading(1.0, None)])          # only the matching one is a reading
+
+    async def test_on_packet_skips_blank_and_garbage_lines(self):
+        packets = []
+        proc = _FakeProc([b"\n", b"junk\n", _line(temperature_C=3.3)])
+        await _drain(_make_create(proc), on_packet=packets.append)
+        self.assertEqual(len(packets), 1)                              # only the one decoded JSON object
+
     async def test_spawn_failure_returns_no_readings_and_warns(self):
         for exc in (FileNotFoundError("rtl_433 not found"), OSError("spawn failed"), ValueError("bad argv")):
             with self.assertLogs("hestia.sensor433", level="WARNING") as logs:

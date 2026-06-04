@@ -126,12 +126,15 @@ async def stream_readings(
     model: "str | None" = None,
     sensor_id: "str | None" = None,
     protocol: "str | None" = None,
+    on_packet: "Callable[[dict], None] | None" = None,
     binary: str = RTL_433_BIN,
     create=asyncio.create_subprocess_exec,
 ) -> None:
     """Spawn a long-lived ``rtl_433 -F json`` and ``await on_reading(reading)`` for every matching finite
     reading as it streams in (PUSH — no interval). Returns when the process exits or its stdout closes, so
-    the caller can restart it after a backoff. NEVER raises on a malformed line. The child is always
+    the caller can restart it after a backoff. NEVER raises on a malformed line. ``on_packet(obj)``, if
+    given, is called for EVERY decoded packet (before the model/id filter) — the 433 discovery tap; it must
+    not raise. The child is always
     terminated AND reaped on return/cancel (see :func:`_terminate`) so no ``rtl_433`` is orphaned. ``create``
     is injectable (defaults to :func:`asyncio.create_subprocess_exec`) so tests never spawn a real process."""
     cmd = _rtl433_command(binary, device, protocol)
@@ -149,6 +152,8 @@ async def stream_readings(
             async for raw in stdout:                     # yields one buffered line per decoded packet, in real time
                 obj = _json_line(raw.decode("utf-8", "replace"))   # never raises on undecodable bytes
                 if obj is not None:
+                    if on_packet is not None:
+                        on_packet(obj)                             # discovery: EVERY decoded packet, pre-filter
                     reading = _matching_reading(obj, model, sensor_id)
                     if reading is not None:
                         await on_reading(reading)

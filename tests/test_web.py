@@ -1334,6 +1334,23 @@ class AuditFieldsTests(unittest.TestCase):
         self.assertIn('"on": true', detail)
 
 
+class Rf433FeedTests(_WebTestBase):
+    """GET /api/rf433 — the 433 MHz device-discovery feed."""
+
+    def test_empty_by_default(self):
+        status, _, body = _get(self.web.address, "/api/rf433")
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body), {"devices": []})
+
+    def test_returns_recorded_devices(self):
+        self.rt.rf433.record({"model": "Acme-Doorbell", "id": 7, "code": "abc"}, now=100.0)
+        status, _, body = _get(self.web.address, "/api/rf433")
+        self.assertEqual(status, 200)
+        devices = json.loads(body)["devices"]
+        self.assertEqual(devices[0]["key"], "Acme-Doorbell 7")
+        self.assertEqual(devices[0]["fields"]["code"], "abc")
+
+
 class AuditFeedTests(_WebTestBase):
     """GET /api/audit — the audit-log feed (#56)."""
 
