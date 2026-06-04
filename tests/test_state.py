@@ -388,26 +388,21 @@ class ApplyCommandTests(unittest.TestCase):
         self.assertEqual(st.apply_command({"op": "switch", "node": 5, "on": "false"}), {"switch": False})
         self.assertEqual(st.apply_command({"op": "switch", "node": 5, "on": "on"}), {"switch": True})
 
-    def test_hex_string_node_and_value(self):
+    def test_hex_string_node_matches_the_wire(self):
         st = State()
-        self.assertEqual(st.apply_command({"op": "level", "node": "0x04", "value": "0x40"}), {"level": 64})
-        self.assertEqual(st.levels[4], 64)
+        self.assertEqual(st.apply_command({"op": "switch", "node": "0x05", "on": "on"}), {"switch": True})
+        self.assertIs(st.switches[5], True)
 
-    def test_level_and_cover_both_set_level(self):
+    def test_reporting_ops_are_not_echoed(self):
+        # "reports win where they exist": cover/level/thermostat report their own state, so their
+        # commands are NOT optimistically echoed (only switch/2-gang, which never report, are).
         st = State()
-        self.assertEqual(st.apply_command({"op": "level", "node": 4, "value": 60}), {"level": 60})
-        self.assertEqual(st.apply_command({"op": "cover", "node": 8, "value": 99}), {"level": 99})
-        self.assertEqual((st.levels[4], st.levels[8]), (60, 99))
-
-    def test_thermostat_setpoint_rounded(self):
-        st = State()
-        self.assertEqual(st.apply_command({"op": "thermostat", "node": 9, "celsius": 21.4}), {"setpoint": 21})
-        self.assertEqual(st.thermostat_setpoint[9], 21)
-
-    def test_thermostat_power(self):
-        st = State()
-        self.assertEqual(st.apply_command({"op": "thermostat_power", "node": 9, "on": True}),
-                         {"thermostat_on": True})
+        self.assertEqual(st.apply_command({"op": "level", "node": 4, "value": 60}), {})
+        self.assertEqual(st.apply_command({"op": "cover", "node": 8, "value": 99}), {})
+        self.assertEqual(st.apply_command({"op": "thermostat", "node": 9, "celsius": 21.4}), {})
+        self.assertEqual(st.apply_command({"op": "thermostat_power", "node": 9, "on": True}), {})
+        self.assertEqual((st.levels, st.thermostat_setpoint, st.thermostat_on), ({}, {}, {}))
+        self.assertFalse(st.dirty)
 
     def test_non_stateful_ops_emit_nothing(self):
         st = State()

@@ -508,6 +508,28 @@ def _publish_proxy_events(rt, frame: Frame, node_b: "bytes | None", changed: dic
         rt.event_bus.publish(event)         # heatmap: row flashes (every event)
 
 
+def _command_op_from_frame(frame) -> "dict | None":
+    """A switch / 2-gang control op equivalent to a cloud→device ``[1e 07]`` command, else None.
+
+    Lets proxy mode learn a switch's new state from the Keemple cloud/app's command — those
+    relays only ACK (``[1e 08]``), never report (``[1e 09]``), so without this a cloud-driven
+    light-off (e.g. a PIR rule) would leave hestia's view stale. Cover / level / thermostat
+    commands are deliberately ignored: those devices report their own state, so we trust the
+    report (mirrors ``State.apply_command``'s switch-only policy)."""
+    if (frame.type, frame.cmd) != (0x1E, 0x07):
+        return None
+    node_b = tlv_value(frame, 0x0047)
+    data = tlv_value(frame, 0x0046)
+    if not node_b or not data:
+        return None
+    node = node_b[0]
+    if data[:2] == b"\x25\x01" and len(data) >= 3:                  # binary switch SET: 25 01 <ff/00>
+        return {"op": "switch", "node": node, "on": data[2] == 0xFF}
+    if data[:2] == b"\x60\x0d" and len(data) >= 7 and data[4:6] == b"\x25\x01":  # 2-gang SET: 60 0d 00 <ep> 25 01 <v>
+        return {"op": "switch", "node": node, "endpoint": data[3], "on": data[6] == 0xFF}
+    return None
+
+
 def _arm_pending_scene(session, node_b: "bytes | None", scene, direction: str) -> None:
     if scene and node_b and direction == "D->C":  # press → await its cloud reaction
         session._pending_scene = (node_b[0], scene["id"], time.monotonic())
@@ -596,6 +618,10 @@ class ProxySession:
         scene = changed.pop("scene", None)   # a button press: an event, not state
         _arm_pending_scene(self, node_b, scene, direction)
         _publish_proxy_events(self.rt, frame, node_b, changed, scene)
+        if direction == "C->D":              # cloud/app commanded a switch — echo it (relays don't report)
+            cmd_op = _command_op_from_frame(frame)
+            if cmd_op is not None:
+                _publish_command_state(self.rt, cmd_op)
         self._capture_scene_batch(frame, direction)
         return _proxy_engine_injects(self.rt, node_b, changed, scene, direction)
 
