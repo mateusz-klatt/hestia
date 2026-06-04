@@ -248,7 +248,7 @@ class StandaloneEngineTests(unittest.TestCase):
 class StandaloneCommandEchoTests(unittest.IsolatedAsyncioTestCase):
     """Standalone learns switch/2-gang state from the commands it SENDS — control / scheduler via
     inject_to_device, a fired automation via _write_replies. Those relays never report; the echo is
-    post-send. react ACKs / scene batches are not switch commands → not echoed."""
+    post-send. A react ACK ([1e 0a]) carries no switch command → echoes nothing."""
 
     @staticmethod
     def _drain(sub):
