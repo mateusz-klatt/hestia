@@ -197,6 +197,22 @@ td.sub-label {
   flex-basis: 100%;
 }
 
+/* The leading A/C state pictogram; inline-block so the success pulse (a transform) renders. */
+.klima-state {
+  display: inline-block;
+}
+
+/* A brief "tap registered" pulse on a successful klima transmit — confirms even an idempotent re-send
+   (where the state, and so the pictogram text, doesn't change). */
+.klima-flash {
+  animation: klima-pulse 0.5s ease;
+}
+
+@keyframes klima-pulse {
+  0% { transform: scale(1.35); }
+  100% { transform: scale(1); }
+}
+
 #refresh {
   padding: 0.15rem 0.6rem;
 }
@@ -220,8 +236,11 @@ td.sub-label {
 }
 
 /* ---- Login screen ----------------------------------------------------- */
-/* Centre the card both ways in the viewport; the wrapper fills the (capped) page column. */
-#login {
+/* Centre the card both ways in the viewport; the wrapper fills the (capped) page column.
+   `:not([hidden])` is REQUIRED — an `#login` id selector outranks the UA `[hidden]{display:none}`,
+   so a bare `#login{display:flex}` would render the hidden login div as an empty 80vh block above
+   #app once logged in. Scoping to the un-hidden state keeps it display:none while logged in. */
+#login:not([hidden]) {
   min-height: 80vh;
   display: flex;
   align-items: center;

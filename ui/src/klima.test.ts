@@ -125,6 +125,7 @@ describe("renderKlima", () => {
     await flush();
     expect(sent).toEqual([{ file: "/ext/infrared/klima.ir", button: "on_heat_20" }]);
     expect(el.querySelector(".status")?.textContent).toBe(""); // success → no ✓ line (the pictogram confirms)
+    expect(el.querySelector(".klima-state")?.classList.contains("klima-flash")).toBe(true); // tap-registered pulse
   });
 
   it("Wyłącz sends off", async () => {
