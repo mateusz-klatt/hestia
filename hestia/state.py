@@ -146,6 +146,35 @@ def _state_applier(data: bytes):
     return _PREFIX2_APPLIERS.get(data[:2])
 
 
+# --- Control-op value coercion -----------------------------------------------
+# Shared with the command builder (``proxy.build_command``) so an optimistic echo
+# can NEVER disagree with the bytes actually put on the wire — a control op's
+# fields are interpreted identically whether we encode them or mirror them.
+
+_TRUE = {"true", "1", "on", "yes"}
+_FALSE = {"false", "0", "off", "no"}
+
+
+def _int(value) -> int:
+    """Accept ints or hex/dec strings ('0x0e', '14') from JSON control ops."""
+    return int(value, 0) if isinstance(value, str) else int(value)
+
+
+def _bool(value) -> bool:
+    """Strictly parse a control boolean: a real JSON bool, or an explicit
+    true/false-like string. Reject anything ambiguous, so a switch or thermostat
+    never silently does the opposite of what was asked (``bool("false")`` is True)."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        token = value.strip().lower()
+        if token in _TRUE:
+            return True
+        if token in _FALSE:
+            return False
+    raise ValueError(f"expected a boolean, got {value!r}")
+
+
 # --- Optimistic command echo -------------------------------------------------
 # Keemple devices ACK a remote SET with a bare ``[1e 08]`` status frame and do
 # NOT volunteer a ``[1e 09]`` state report for it, so a control command would
@@ -157,9 +186,9 @@ def _state_applier(data: bytes):
 def _command_switch(state, node: int, op: dict, changed: dict) -> None:
     endpoint = op.get("endpoint")
     if endpoint is None:
-        _set_changed(state.switches, node, changed, "switch", bool(op["on"]))
+        _set_changed(state.switches, node, changed, "switch", _bool(op["on"]))
         return
-    ep, on = int(endpoint), bool(op["on"])
+    ep, on = _int(endpoint), _bool(op["on"])
     eps = state.gang.setdefault(node, {})
     if eps.get(ep) != on:                        # emit the full per-node roll-up (matches _apply_gang)
         eps[ep] = on
@@ -167,7 +196,7 @@ def _command_switch(state, node: int, op: dict, changed: dict) -> None:
 
 
 def _command_level(state, node: int, op: dict, changed: dict) -> None:
-    _set_changed(state.levels, node, changed, "level", int(op["value"]))
+    _set_changed(state.levels, node, changed, "level", _int(op["value"]))
 
 
 def _command_thermostat(state, node: int, op: dict, changed: dict) -> None:
@@ -175,7 +204,7 @@ def _command_thermostat(state, node: int, op: dict, changed: dict) -> None:
 
 
 def _command_thermostat_power(state, node: int, op: dict, changed: dict) -> None:
-    _set_changed(state.thermostat_on, node, changed, "thermostat_on", bool(op["on"]))
+    _set_changed(state.thermostat_on, node, changed, "thermostat_on", _bool(op["on"]))
 
 
 _COMMAND_APPLIERS = {
@@ -272,7 +301,7 @@ class State:
         if applier is None:
             return {}
         try:
-            node = int(op["node"])
+            node = _int(op["node"])
         except (KeyError, TypeError, ValueError):
             return {}
         changed: dict = {}

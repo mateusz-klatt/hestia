@@ -43,7 +43,7 @@ from .automations import AutomationEngine, AutomationStore, Rule, read_present_m
 from .classifier import Classifier, DeviceType
 from .protocol import FLAG, FRAME_TYPES, Deframer, Frame
 from .registry import Registry
-from .state import State, tlv_value
+from .state import State, _bool, _int, tlv_value
 from .tuya import TuyaDevice, TuyaError
 from . import flipper, sensor433, weather
 
@@ -295,8 +295,6 @@ SCENE_CAPTURE_WINDOW = 2.0
 # (type, cmd) pairs that are pure plumbing — logged at DEBUG, not INFO.
 _NOISE = {(0x66, 0x01), (0x64, 0x03), (0x00, 0x00), (0x1E, 0x0A)}
 _LOOPBACK = {"127.0.0.1", "::1", "localhost"}
-_TRUE = {"true", "1", "on", "yes"}
-_FALSE = {"false", "0", "off", "no"}
 
 
 def _safe_seq_counter(start: int = 0x00010000):
@@ -312,26 +310,6 @@ def _safe_seq_counter(start: int = 0x00010000):
         if FLAG not in value.to_bytes(4, "big"):
             yield value
         value = value + 1 if value < 0xFFFFFFFF else start
-
-
-def _int(value) -> int:
-    """Accept ints or hex/dec strings ('0x0e', '14') from JSON control ops."""
-    return int(value, 0) if isinstance(value, str) else int(value)
-
-
-def _bool(value) -> bool:
-    """Strictly parse a control boolean: a real JSON bool, or an explicit
-    true/false-like string. Reject anything ambiguous, so a switch or thermostat
-    never silently does the opposite of what was asked (``bool("false")`` is True)."""
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        token = value.strip().lower()
-        if token in _TRUE:
-            return True
-        if token in _FALSE:
-            return False
-    raise ValueError(f"expected a boolean, got {value!r}")
 
 
 def _require_safe_control_bind(host: str) -> None:
@@ -1329,7 +1307,7 @@ def _publish_command_state(rt, op) -> None:
     report path publishes, so the client patch is identical."""
     changed = rt.state.apply_command(op)
     if changed:
-        rt.event_bus.publish({"type": "state", "node": int(op["node"]), "fields": changed})
+        rt.event_bus.publish({"type": "state", "node": _int(op["node"]), "fields": changed})
 
 
 async def _control_device_command(rt, op):

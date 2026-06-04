@@ -367,6 +367,18 @@ class ApplyCommandTests(unittest.TestCase):
         st.apply_command({"op": "switch", "node": 7, "endpoint": 1, "on": True})
         self.assertEqual(st.apply_command({"op": "switch", "node": 7, "endpoint": 1, "on": True}), {})
 
+    def test_string_boolean_matches_the_wire(self):
+        # Legacy/control-socket string forms coerce exactly like build_command's _bool/_int,
+        # so the echo can NEVER publish the opposite of what was sent on the wire.
+        st = State()
+        self.assertEqual(st.apply_command({"op": "switch", "node": 5, "on": "false"}), {"switch": False})
+        self.assertEqual(st.apply_command({"op": "switch", "node": 5, "on": "on"}), {"switch": True})
+
+    def test_hex_string_node_and_value(self):
+        st = State()
+        self.assertEqual(st.apply_command({"op": "level", "node": "0x04", "value": "0x40"}), {"level": 64})
+        self.assertEqual(st.levels[4], 64)
+
     def test_level_and_cover_both_set_level(self):
         st = State()
         self.assertEqual(st.apply_command({"op": "level", "node": 4, "value": 60}), {"level": 60})
@@ -398,6 +410,11 @@ class ApplyCommandTests(unittest.TestCase):
         st = State()
         self.assertEqual(st.apply_command({"op": "switch", "node": 5}), {})            # no "on" → KeyError → {}
         self.assertFalse(st.dirty)
+
+    def test_ambiguous_boolean_swallowed(self):
+        st = State()
+        self.assertEqual(st.apply_command({"op": "switch", "node": 5, "on": "maybe"}), {})  # _bool → ValueError → {}
+        self.assertEqual(st.switches, {})
 
 
 if __name__ == "__main__":
