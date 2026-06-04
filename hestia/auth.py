@@ -107,7 +107,7 @@ def verify_session(token: str, *, now: float, secret: bytes) -> "str | None":
     try:
         username, expiry_s = payload.decode("utf-8").rsplit("|", 1)
         expiry = int(expiry_s)
-    except (ValueError, UnicodeDecodeError):
+    except ValueError:
         return None
     if now >= expiry:
         return None

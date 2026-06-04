@@ -146,6 +146,38 @@ def _state_applier(data: bytes):
     return _PREFIX2_APPLIERS.get(data[:2])
 
 
+def _load_int_keyed(target: dict, data) -> None:
+    if not isinstance(data, dict):
+        return
+    for node, value in data.items():
+        try:
+            target[int(node)] = value
+        except (TypeError, ValueError):
+            continue
+
+
+def _load_gang(data) -> dict:
+    if not isinstance(data, dict):
+        return {}
+    loaded = {}
+    for node, endpoints in data.items():
+        if not isinstance(endpoints, dict):
+            continue
+        try:
+            node_id = int(node)
+        except (TypeError, ValueError):
+            continue
+        parsed = {}
+        for endpoint, value in endpoints.items():
+            try:
+                parsed[int(endpoint)] = value
+            except (TypeError, ValueError):
+                continue
+        if parsed:
+            loaded[node_id] = parsed
+    return loaded
+
+
 @dataclass
 class State:
     doors: dict = field(default_factory=dict)                # node -> "open"/"closed"
@@ -207,30 +239,5 @@ class State:
         if not isinstance(snap, dict):
             return
         for name in _SNAPSHOT_MAPS:
-            data = snap.get(name)
-            if not isinstance(data, dict):
-                continue
-            target = getattr(self, name)
-            for node, value in data.items():
-                try:
-                    target[int(node)] = value
-                except (TypeError, ValueError):
-                    continue
-        gang = snap.get("gang")
-        if not isinstance(gang, dict):
-            return
-        for node, endpoints in gang.items():
-            if not isinstance(endpoints, dict):
-                continue
-            try:
-                node_id = int(node)
-            except (TypeError, ValueError):
-                continue
-            parsed = {}
-            for endpoint, value in endpoints.items():
-                try:
-                    parsed[int(endpoint)] = value
-                except (TypeError, ValueError):
-                    continue
-            if parsed:
-                self.gang[node_id] = parsed
+            _load_int_keyed(getattr(self, name), snap.get(name))
+        self.gang.update(_load_gang(snap.get("gang")))

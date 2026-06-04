@@ -90,7 +90,7 @@ async def _reap(proc) -> None:
     while proc.returncode is None:
         try:
             await proc.wait()
-        except asyncio.CancelledError as exc:            # don't abandon the reap mid-flight; finish, then propagate
+        except asyncio.CancelledError as exc:            # NOSONAR S7497: deferred re-raise — the cancel is re-raised via `raise pending` after the child is fully reaped (see docstring)
             pending = exc
     if pending is not None:
         raise pending
