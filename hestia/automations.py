@@ -795,7 +795,7 @@ class AutomationEngine:
         if rule.debounce > 0 and now - self._last_fired.get(rule.id, -math.inf) < rule.debounce:
             return []
         self._last_fired[rule.id] = now
-        from .proxy import _audit, _publish_command_state, build_command   # lazy: avoid a proxy<->automations cycle
+        from .proxy import _audit, build_command   # lazy: avoid a proxy<->automations cycle
         actor = f"automation:{rule.id}"            # #56: distinguishes a rule firing from a user action
         frames = []
         for action in rule.actions:
@@ -808,7 +808,6 @@ class AutomationEngine:
                 continue
             try:
                 frames.append(build_command(rt, action))
-                _publish_command_state(rt, action)   # echo a switch/2-gang set (those relays never report)
                 _audit(rt, actor, op, target=target, result="fired")
             except (ValueError, KeyError, TypeError, OverflowError):
                 log.exception("automation %r: action %r failed — skipping", rule.id, action)

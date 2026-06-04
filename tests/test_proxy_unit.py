@@ -519,14 +519,8 @@ class ProcessControlOpTests(unittest.IsolatedAsyncioTestCase):
 
 
 class CommandEchoTests(unittest.IsolatedAsyncioTestCase):
-    """Learn switch/2-gang state from COMMANDS, not just reports — the cloud's C->D commands (proxy
-    tap) and hestia's own automation injects. Covers/thermostats are NOT echoed (they report)."""
-
-    def setUp(self):
-        self.tmp = Path(tempfile.mkdtemp())
-
-    def tearDown(self):
-        shutil.rmtree(self.tmp)
+    """Learn switch/2-gang state from the cloud's C->D commands (proxy tap) — those relays only ACK,
+    never report. Covers/thermostats are NOT echoed (they report their own state)."""
 
     def test_command_op_from_frame_switch_and_gang_only(self):
         f = proxy._command_op_from_frame
@@ -558,14 +552,6 @@ class CommandEchoTests(unittest.IsolatedAsyncioTestCase):
         make_session(rt)._observe(cmd_frame(0x0E, b"\x25\x01\x00"), "D->C")   # device→cloud: not a cloud command
         self.assertFalse([e for e in _drain_events(sub) if e.get("type") == "state"])
         self.assertEqual(rt.state.switches, {})
-
-    async def test_engine_fire_echoes_switch_action(self):
-        rt = proxy.ProxyRuntime(engine=AutomationEngine(AutomationStore(self.tmp / "a.json")))
-        rt.engine.set_rule(Rule.from_dict(AUTO_SCENE_RULE))                   # scene node 2/3 → switch node 14 ON
-        sub = await rt.event_bus.try_subscribe()
-        make_session(rt)._observe(Frame(SCENE_PRESS[1:-1]), "D->C")           # press fires the rule
-        self.assertIn({"type": "state", "node": 14, "fields": {"switch": True}}, _drain_events(sub))
-        self.assertIs(rt.state.switches[14], True)                           # engine echoed its commanded state
 
 
 class AutomationOpTests(unittest.IsolatedAsyncioTestCase):
