@@ -6,6 +6,7 @@ the networking layer wraps; automations read this state and emit commands.
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 
 from .protocol import Frame
@@ -21,6 +22,11 @@ _SNAPSHOT_MAPS = (
     "plug_kwh",
     "plug_v",
 )
+
+# Node-less GLOBAL scalars worth caching across a restart so the dashboard shows
+# the last crib/outdoor temps immediately instead of "—" until the next poll
+# (the niania poller is ~per-minute, the weather poller ~per-10-min).
+_SNAPSHOT_GLOBALS = ("crib_temp", "outdoor_temp", "outdoor_humidity")
 
 
 def tlv_value(frame: Frame, tag: int) -> "bytes | None":
@@ -226,6 +232,18 @@ def _load_int_keyed(target: dict, data) -> None:
             continue
 
 
+def _load_globals(state, data) -> None:
+    """Restore the cached global temps, ignoring anything non-numeric (a corrupt
+    blob must never crash boot or poison a temp). ``bool`` is rejected explicitly
+    (it is an ``int`` subclass, but a temperature is never a boolean)."""
+    if not isinstance(data, dict):
+        return
+    for name in _SNAPSHOT_GLOBALS:
+        value = data.get(name)
+        if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value):
+            setattr(state, name, value)            # reject NaN/inf (a corrupt JSON blob round-trips them)
+
+
 def _load_gang(data) -> dict:
     if not isinstance(data, dict):
         return {}
@@ -314,10 +332,11 @@ class State:
         return changed
 
     def to_snapshot(self) -> dict:
-        """JSON-safe telemetry cache: node-keyed live maps only.
+        """JSON-safe telemetry cache: node-keyed live maps + the global temps.
 
-        This is deliberately narrower than the API state snapshot: scene dedup
-        bookkeeping and node-less globals are runtime-only and are not persisted.
+        Narrower than the API state snapshot — scene-dedup bookkeeping stays
+        runtime-only — but the crib/outdoor globals ARE cached so they survive a
+        restart (otherwise the dashboard shows "—" until the next poll).
         """
         snap = {name: {str(node): value for node, value in getattr(self, name).items()}
                 for name in _SNAPSHOT_MAPS}
@@ -325,16 +344,18 @@ class State:
             str(node): {str(endpoint): value for endpoint, value in endpoints.items()}
             for node, endpoints in self.gang.items()
         }
+        snap["globals"] = {name: getattr(self, name) for name in _SNAPSHOT_GLOBALS}
         return snap
 
     def load_snapshot(self, snap) -> None:
         """Restore a best-effort telemetry cache, ignoring any malformed part.
 
         A corrupt AppMeta blob must never crash boot. Only dict-shaped sections
-        with int-parseable node/endpoint keys are loaded.
+        with int-parseable node/endpoint keys (and numeric globals) are loaded.
         """
         if not isinstance(snap, dict):
             return
         for name in _SNAPSHOT_MAPS:
             _load_int_keyed(getattr(self, name), snap.get(name))
         self.gang.update(_load_gang(snap.get("gang")))
+        _load_globals(self, snap.get("globals"))

@@ -1023,12 +1023,14 @@ class PollGlobalFieldTests(unittest.IsolatedAsyncioTestCase):
         await self._run(rt, read=lambda: -5.0)
         self.assertEqual(rt.state.outdoor_temp, -5.0)
         self.assertEqual(len(sess.sent), 1)                        # -5 < 0 edge → fired once
+        self.assertTrue(rt.state.dirty)                            # global cached across a restart
 
     async def test_none_read_keeps_last(self):
         rt, sess = self._rt()
         await self._run(rt, read=lambda: None)
         self.assertIsNone(rt.state.outdoor_temp)
         self.assertEqual(sess.sent, [])
+        self.assertFalse(rt.state.dirty)                           # nothing read → not dirtied
 
     async def test_tick_error_survives(self):
         rt, sess = self._rt()
@@ -1176,6 +1178,7 @@ class Sensor433PollerTests(unittest.IsolatedAsyncioTestCase):
         rt, sess, stream, _ = await self._run(model="Prologue-TH", sensor_id="204")
         self.assertEqual(rt.state.outdoor_temp, -5.0)
         self.assertEqual(rt.state.outdoor_humidity, 44.0)
+        self.assertTrue(rt.state.dirty)                            # globals cached across a restart
         self.assertGreaterEqual(len(sess.sent), 1)                 # -5 < 0 edge → fired
         self.assertEqual(stream.calls[0], {"device": "rtl_tcp:127.0.0.1:1234",
                                            "model": "Prologue-TH", "sensor_id": "204", "protocol": None})
@@ -1679,7 +1682,9 @@ class AutosaveTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(saved, [{"doors": {}, "levels": {}, "switches": {"14": True},
                                   "thermostat_setpoint": {}, "thermostat_on": {},
                                   "temperature": {}, "plug_w": {}, "plug_kwh": {},
-                                  "plug_v": {}, "gang": {}}])
+                                  "plug_v": {}, "gang": {},
+                                  "globals": {"crib_temp": None, "outdoor_temp": None,
+                                              "outdoor_humidity": None}}])
 
     async def test_persist_state_dirty_false_is_noop(self):
         rt = proxy.ProxyRuntime()
