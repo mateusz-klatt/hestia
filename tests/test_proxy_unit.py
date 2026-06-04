@@ -911,6 +911,84 @@ class SchedulerTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(task.cancelled())               # survived the error, ended via our cancel
 
 
+class ThermostatPollIntervalTests(unittest.TestCase):
+    def test_default_clamp_and_disable(self):
+        self.assertEqual(proxy._thermostat_poll_interval(None), 90.0)        # default
+        self.assertEqual(proxy._thermostat_poll_interval("60"), 60.0)
+        self.assertEqual(proxy._thermostat_poll_interval("5"), 30.0)         # floor (battery-gentle)
+        self.assertEqual(proxy._thermostat_poll_interval("99999"), 3600.0)   # ceiling
+        self.assertEqual(proxy._thermostat_poll_interval("0"), 0.0)          # disabled
+        self.assertEqual(proxy._thermostat_poll_interval("-1"), 0.0)         # disabled
+        self.assertEqual(proxy._thermostat_poll_interval("nope"), 90.0)      # non-numeric → default
+        self.assertEqual(proxy._thermostat_poll_interval("nan"), 90.0)       # non-finite → default
+        self.assertEqual(proxy._thermostat_poll_interval("inf"), 90.0)
+
+
+class ThermostatNodesTests(unittest.TestCase):
+    def test_returns_thermostat_node_ids_sorted(self):
+        rt = proxy.ProxyRuntime()
+        rt.registry.nodes = {"13": {"type": "thermostat"}, "12": {"type": "thermostat"},
+                             "5": {"type": "light"}}
+        self.assertEqual(proxy._thermostat_nodes(rt), [0x0c, 0x0d])          # thermostats only, sorted
+
+
+class ThermostatPollerTests(unittest.IsolatedAsyncioTestCase):
+    """Standalone-only GET-poller for thermostat Mode (40 02) + temperature (31 04)."""
+
+    @staticmethod
+    def _attr_node(raw):
+        m = {t.tag: t.value for t in Frame(raw[1:-1]).tlvs()}
+        return m.get(0x0046), m.get(0x0047)
+
+    async def _run(self, rt, settle=0.05, interval=0.01):
+        task = asyncio.create_task(proxy._thermostat_poller(rt, interval=interval))
+        await asyncio.sleep(settle)
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        return task
+
+    async def test_standalone_polls_mode_and_temp_per_thermostat(self):
+        rt = proxy.ProxyRuntime()
+        rt.mode = "standalone"
+        sess = FakeSession()
+        rt.sessions.append(sess)
+        with mock.patch.object(proxy, "_thermostat_nodes", return_value=[0x0c, 0x0d]):
+            await self._run(rt)
+        attrs = {self._attr_node(raw) for raw in sess.sent}   # set: dedup across the several ticks
+        self.assertIn((b"\x40\x02", b"\x0c"), attrs)          # mode GET, salon
+        self.assertIn((b"\x31\x04\x01", b"\x0c"), attrs)      # temp GET, salon
+        self.assertIn((b"\x40\x02", b"\x0d"), attrs)
+        self.assertIn((b"\x31\x04\x01", b"\x0d"), attrs)
+
+    async def test_proxy_mode_is_a_noop(self):
+        rt = proxy.ProxyRuntime()                              # mode defaults to "proxy"
+        sess = FakeSession()
+        rt.sessions.append(sess)
+        with mock.patch.object(proxy, "_thermostat_nodes", return_value=[0x0c]):
+            task = await self._run(rt)
+        self.assertEqual(sess.sent, [])                        # the cloud polls in proxy → hestia doesn't
+        self.assertTrue(task.done())
+
+    async def test_disabled_interval_is_a_noop(self):
+        rt = proxy.ProxyRuntime()
+        rt.mode = "standalone"
+        sess = FakeSession()
+        rt.sessions.append(sess)
+        with mock.patch.object(proxy, "_thermostat_nodes", return_value=[0x0c]):
+            await self._run(rt, interval=0)
+        self.assertEqual(sess.sent, [])
+
+    async def test_tick_error_is_logged_and_loop_survives(self):
+        rt = proxy.ProxyRuntime()
+        rt.mode = "standalone"
+        rt.sessions.append(FakeSession())
+        with mock.patch.object(proxy, "_thermostat_nodes", side_effect=RuntimeError("classify boom")):
+            with self.assertLogs("hestia.proxy", level="ERROR") as logs:
+                task = await self._run(rt)
+        self.assertTrue(any("thermostat poll tick failed" in m for m in logs.output))
+        self.assertTrue(task.cancelled())                      # survived the error, ended via our cancel
+
+
 class SchedulerPresenceTests(unittest.IsolatedAsyncioTestCase):
     """The scheduler folds presence edges in alongside time/sun, with the not-empty guard placed
     AFTER on_presence (so presence fires on ticks where no time rule is due)."""

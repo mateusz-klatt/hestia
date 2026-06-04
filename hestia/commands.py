@@ -109,3 +109,16 @@ def set_thermostat(seq: int, node: int, celsius: float) -> bytes:
 def set_thermostat_power(seq: int, node: int, on: bool) -> bytes:
     """Turn a thermostat on/off. 0x0046 = 40 01 <01=on / 00=off>."""
     return _node_command(seq, node, bytes([0x40, 0x01, 0x01 if on else 0x00]))
+
+
+def get_thermostat_mode(seq: int, node: int) -> bytes:
+    """GET a thermostat's Mode (0x0046 = 40 02). The device replies `40 03 <mode>` (0x00 = off, any
+    non-zero = an active mode). These TRVs only report mode when polled — the Keemple cloud does this
+    continuously; standalone hestia must, to keep `thermostat_on` live."""
+    return _node_command(seq, node, bytes([0x40, 0x02]))
+
+
+def get_temperature(seq: int, node: int) -> bytes:
+    """GET a node's measured temperature (0x0046 = 31 04 01, Multilevel Sensor GET). The device replies
+    `31 05 01 04 …` — same poll the Keemple cloud uses to keep a thermostat's room temp fresh."""
+    return _node_command(seq, node, bytes([0x31, 0x04, 0x01]))

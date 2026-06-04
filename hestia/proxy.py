@@ -80,6 +80,24 @@ def _scheduler_interval(raw: str) -> float:
 SCHEDULER_SECS = _scheduler_interval(os.environ.get("HESTIA_SCHEDULER_SECS", "20"))
 
 
+def _thermostat_poll_interval(raw: "str | None") -> float:
+    """Parse HESTIA_THERMOSTAT_POLL_SECS. ``<= 0`` disables the poller; otherwise clamp to [30, 3600]
+    (gentle on battery FLiRS thermostats — the on/off mode rarely changes). Non-numeric / non-finite
+    → the 90 s default."""
+    try:
+        value = float(raw) if raw is not None else 90.0
+    except ValueError:
+        return 90.0
+    if not math.isfinite(value):
+        return 90.0
+    if value <= 0:
+        return 0.0
+    return min(max(value, 30.0), 3600.0)
+
+
+THERMOSTAT_POLL_SECS = _thermostat_poll_interval(os.environ.get("HESTIA_THERMOSTAT_POLL_SECS"))
+
+
 def _coord(raw: "str | None", lo: float, hi: float) -> "float | None":
     """Parse a coordinate env var (decimal degrees) to a float in ``[lo, hi]``, or ``None`` when
     unset / malformed / non-finite / out of range — so an unset or bad ``HESTIA_LAT``/``HESTIA_LON``
@@ -1258,6 +1276,34 @@ async def _sensor433_poller(rt, stream=sensor433.stream_readings, enabled: bool 
         await asyncio.sleep(backoff)                 # rtl_433 exited (rtl_tcp down / hiccup) -> back off + relaunch
 
 
+def _thermostat_nodes(rt) -> "list[int]":
+    """The node ids currently classified as thermostats (classifier ∪ user registry). Sorted for a
+    stable poll order."""
+    return sorted(int(node) for node, entry in _merged_discovery(rt).items()
+                  if entry.get("type") == "thermostat")
+
+
+async def _thermostat_poller(rt, interval: float = THERMOSTAT_POLL_SECS) -> None:
+    """Keep each thermostat's on/off Mode (and room temperature) live by GET-polling it — these Keemple
+    TRVs only REPORT their Mode (``40 03``) / temperature (``31 05``) when asked (``40 02`` / ``31 04``).
+    The Keemple cloud does this continuously, so in PROXY the relay tap already sees fresh values; in
+    STANDALONE there is no cloud, so ``thermostat_on`` would freeze without this. Hence: STANDALONE-only,
+    and disabled when ``interval <= 0``. One bad tick never kills the loop. The injected GETs' replies
+    flow through the normal decode → State + a live SSE delta, exactly like a cloud-driven report."""
+    if interval <= 0 or rt.mode != "standalone":         # proxy: the cloud polls; <=0: operator-disabled
+        return
+    while True:
+        await asyncio.sleep(interval)
+        try:
+            frames = []
+            for node in _thermostat_nodes(rt):
+                frames.append(commands.get_thermostat_mode(rt.next_seq(), node))
+                frames.append(commands.get_temperature(rt.next_seq(), node))
+            await _inject(rt, frames, source="thermostat-poll")
+        except Exception:                                # a classify/inject hiccup must not drop the loop
+            log.exception("thermostat poll tick failed")
+
+
 def _record_klima_state(rt, ir_file: str, button: str) -> None:
     """On a SUCCESSFUL klima IR transmit, update the optimistic klima state + publish a live ``klima``
     delta. No-op for a non-klima file or a button that implies no power state (a set-mode adjust / fan
@@ -1574,6 +1620,7 @@ async def main() -> None:  # pragma: no cover
     weather_task = asyncio.create_task(_weather_poller(rt))  # no-op unless HESTIA_OUTDOOR_TEMP + source=open-meteo
     sensor433_task = asyncio.create_task(_sensor433_poller(rt))  # no-op unless HESTIA_OUTDOOR_TEMP + source=local
     ir_worker = asyncio.create_task(_ir_worker(rt))    # no-op unless HESTIA_FLIPPER enabled
+    thermostat_task = asyncio.create_task(_thermostat_poller(rt))  # no-op in proxy (the cloud polls)
     loop = asyncio.get_running_loop()
     _install_term_handler(loop, asyncio.current_task())   # SIGTERM -> graceful persist (docker/systemd stop)
     log.info("hestia proxy: device :%d -> cloud %s:%d | control %s:%d | web %s:%d | registry %s",
@@ -1595,8 +1642,9 @@ async def main() -> None:  # pragma: no cover
         weather_task.cancel()
         sensor433_task.cancel()
         ir_worker.cancel()
+        thermostat_task.cancel()
         await asyncio.gather(autosave, scheduler, niania, weather_task, sensor433_task, ir_worker,
-                             return_exceptions=True)
+                             thermostat_task, return_exceptions=True)
         try:
             await _persist(rt)                 # share save_lock — any in-flight
         except OSError:                        # control-op write finishes first

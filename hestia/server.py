@@ -223,8 +223,8 @@ async def main() -> None:  # pragma: no cover
     from .automations import AutomationEngine
     from .proxy import (FLIPPER_ENABLED, IR_QUEUE_MAX, _autosave, _install_term_handler,
                         _ir_worker, _niania_poller, _persist, _persist_state, _persist_store,
-                        _scheduler, _sensor433_poller, _shadow_sync_db, _weather_poller,
-                        seed_device_state)
+                        _scheduler, _sensor433_poller, _shadow_sync_db, _thermostat_poller,
+                        _weather_poller, seed_device_state)
     from .web import start_web, stop_web
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     config = ProxyConfig()
@@ -246,6 +246,7 @@ async def main() -> None:  # pragma: no cover
     weather_task = asyncio.create_task(_weather_poller(rt))  # no-op unless HESTIA_OUTDOOR_TEMP + source=open-meteo
     sensor433_task = asyncio.create_task(_sensor433_poller(rt))  # no-op unless HESTIA_OUTDOOR_TEMP + source=local
     ir_worker = asyncio.create_task(_ir_worker(rt))    # no-op unless HESTIA_FLIPPER enabled
+    thermostat_task = asyncio.create_task(_thermostat_poller(rt))  # GET-polls thermostat mode/temp (standalone)
     loop = asyncio.get_running_loop()
     _install_term_handler(loop, asyncio.current_task())   # SIGTERM -> graceful persist (docker/systemd stop)
     log.info("hestia STANDALONE: device :%d (no cloud) | control %s:%d | web %s:%d | registry %s",
@@ -266,8 +267,9 @@ async def main() -> None:  # pragma: no cover
         weather_task.cancel()
         sensor433_task.cancel()
         ir_worker.cancel()
+        thermostat_task.cancel()
         await asyncio.gather(autosave, scheduler, niania, weather_task, sensor433_task, ir_worker,
-                             return_exceptions=True)
+                             thermostat_task, return_exceptions=True)
         try:
             await _persist(rt)                 # share save_lock — any in-flight
         except OSError:                        # control-op write finishes first
