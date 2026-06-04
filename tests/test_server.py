@@ -245,6 +245,38 @@ class StandaloneEngineTests(unittest.TestCase):
         self.assertEqual((first.type, first.cmd), (0x1E, 0x32))     # scene-replay batch comes first
 
 
+class StandaloneCommandEchoTests(unittest.IsolatedAsyncioTestCase):
+    """Standalone learns switch/2-gang state from the commands it SENDS — control / scheduler via
+    inject_to_device, a fired automation via _write_replies. Those relays never report; the echo is
+    post-send. react ACKs / scene batches are not switch commands → not echoed."""
+
+    @staticmethod
+    def _drain(sub):
+        out = []
+        while not sub.queue.empty():
+            out.append(sub.queue.get_nowait())
+        return out
+
+    async def test_inject_to_device_echoes_switch(self):
+        rt = ProxyRuntime()
+        sess = make_session(rt)
+        sub = await rt.event_bus.try_subscribe()
+        await sess.inject_to_device(proxy.build_command(rt, {"op": "switch", "node": 0x0E, "on": True}))
+        self.assertIn({"type": "state", "node": 0x0E, "fields": {"switch": True}}, self._drain(sub))
+        self.assertIs(rt.state.switches[0x0E], True)
+
+    async def test_write_replies_echoes_only_the_fired_switch(self):
+        rt = ProxyRuntime()
+        sess = make_session(rt)
+        sub = await rt.event_bus.try_subscribe()
+        switch_cmd = proxy.build_command(rt, {"op": "switch", "node": 0x0E, "on": False})
+        ack = build_frame(0x1E, 0x0A, tlv(0x001F, b"\x00\x01"))          # a react ACK — must NOT echo
+        await sess._write_replies([ack, switch_cmd])
+        states = [e for e in self._drain(sub) if e.get("type") == "state"]
+        self.assertEqual(states, [{"type": "state", "node": 0x0E, "fields": {"switch": False}}])
+        self.assertIs(rt.state.switches[0x0E], False)
+
+
 class StandaloneActivityHookTests(unittest.IsolatedAsyncioTestCase):
     async def test_observe_event_publishes_activity(self):
         rt = ProxyRuntime()

@@ -530,6 +530,23 @@ def _command_op_from_frame(frame) -> "dict | None":
     return None
 
 
+def _echo_command_frame(rt, raw: bytes) -> None:
+    """Echo the switch/2-gang state a command frame hestia JUST WROTE to a device produces — those
+    relays only ACK (never report ``[1e 09]``), so without this a hestia-sent switch change (UI
+    control, a fired automation, a scheduled rule) would never reach State / the live UI. Called
+    AFTER a successful write, so a dropped or failed send can never fake a state change.
+
+    The Deframer yields ONLY checksum-valid frames, so a ``raw`` control-op frame the device would
+    ignore (bad checksum / no flags) yields nothing here and can't fake state. Cover/level/thermostat
+    commands echo nothing (they report their own state). NB ``[1e 32]`` scene BATCHES — which can
+    bundle switch attrs in their ``0x005a`` block — are not yet decoded here; their per-element echo is
+    a follow-up (the UI's own scenes are individual ops, which echo via their own ``[1e 07]`` frames)."""
+    for body in Deframer().feed(raw):
+        op = _command_op_from_frame(Frame(body))
+        if op is not None:
+            _publish_command_state(rt, op)
+
+
 def _arm_pending_scene(session, node_b: "bytes | None", scene, direction: str) -> None:
     if scene and node_b and direction == "D->C":  # press → await its cloud reaction
         session._pending_scene = (node_b[0], scene["id"], time.monotonic())
@@ -658,6 +675,7 @@ class ProxySession:
         self.dev_writer.write(raw)
         await self.dev_writer.drain()
         log.info("INJECT -> %s %s", self.peer, raw.hex())
+        _echo_command_frame(self.rt, raw)            # post-send: a switch/2-gang set never reports — echo it
 
 
 # --- Control: newline-JSON op -> forged command injected to the device --------
@@ -1352,10 +1370,9 @@ async def _control_device_command(rt, op):
         return {"ok": False, "error": "no device connected"}
     raw = build_command(rt, op)
     try:
-        await session.inject_to_device(raw)
+        await session.inject_to_device(raw)          # echoes the commanded switch/2-gang state post-send
     except OSError as exc:
         return {"ok": False, "error": f"device write failed: {exc!r}"}
-    _publish_command_state(rt, op)   # device ACKs but never reports a [1e 09]; echo the commanded state
     return {"ok": True, "sent": raw.hex()}
 
 
