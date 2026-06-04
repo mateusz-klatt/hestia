@@ -508,26 +508,53 @@ def _publish_proxy_events(rt, frame: Frame, node_b: "bytes | None", changed: dic
         rt.event_bus.publish(event)         # heatmap: row flashes (every event)
 
 
-def _command_op_from_frame(frame) -> "dict | None":
-    """A switch / 2-gang control op equivalent to a cloud→device ``[1e 07]`` command, else None.
-
-    Lets proxy mode learn a switch's new state from the Keemple cloud/app's command — those
-    relays only ACK (``[1e 08]``), never report (``[1e 09]``), so without this a cloud-driven
-    light-off (e.g. a PIR rule) would leave hestia's view stale. Cover / level / thermostat
-    commands are deliberately ignored: those devices report their own state, so we trust the
-    report (mirrors ``State.apply_command``'s switch-only policy)."""
-    if (frame.type, frame.cmd) != (0x1E, 0x07):
-        return None
-    node_b = tlv_value(frame, 0x0047)
-    data = tlv_value(frame, 0x0046)
-    if not node_b or not data:
-        return None
-    node = node_b[0]
+def _switch_op_from_payload(node: int, data: bytes) -> "dict | None":
+    """A switch / 2-gang control op for a command payload — the ``0x0046`` of a ``[1e 07]`` SET, or a
+    ``[1e 32]`` scene-batch element body. Cover/level/thermostat payloads → None (they report their own
+    state, so we trust the report — mirrors ``State.apply_command``'s switch-only policy)."""
     if data[:2] == b"\x25\x01" and len(data) >= 3:                  # binary switch SET: 25 01 <ff/00>
         return {"op": "switch", "node": node, "on": data[2] == 0xFF}
     if data[:2] == b"\x60\x0d" and len(data) >= 7 and data[4:6] == b"\x25\x01":  # 2-gang SET: 60 0d 00 <ep> 25 01 <v>
         return {"op": "switch", "node": node, "endpoint": data[3], "on": data[6] == 0xFF}
     return None
+
+
+def _scene_batch_ops(frame) -> list:
+    """The switch / 2-gang ops bundled in a ``[1e 32]`` scene batch's ``0x005a`` element block — e.g.
+    the Keemple app's "all lights on/off", which is NOT individual ``[1e 07]`` commands but one batch.
+    Each element is ``<idx> <01> <cmdlen> <node> <cmd-payload>``, the payload being the same SET form a
+    ``[1e 07]`` carries. A truncated trailing element stops the walk."""
+    elements = tlv_value(frame, 0x005A)
+    ops: list = []
+    if not elements:
+        return ops
+    i = 0
+    while i + 4 <= len(elements):
+        cmdlen = elements[i + 2]
+        payload = elements[i + 4: i + 4 + cmdlen]
+        if len(payload) < cmdlen:                                  # truncated trailing element
+            break
+        op = _switch_op_from_payload(elements[i + 3], payload)     # elements[i+3] = the node
+        if op is not None:
+            ops.append(op)
+        i += 4 + cmdlen
+    return ops
+
+
+def _command_ops_from_frame(frame) -> list:
+    """Every switch / 2-gang state change a cloud→device command frame would actuate — so proxy mode
+    learns it from the cloud/app (those relays only ACK ``[1e 08]``, never report ``[1e 09]``): a single
+    ``[1e 07]`` SET, or each element of a ``[1e 32]`` scene batch. Cover/level/thermostat → skipped."""
+    if (frame.type, frame.cmd) == (0x1E, 0x07):
+        node_b = tlv_value(frame, 0x0047)
+        data = tlv_value(frame, 0x0046)
+        if node_b and data:
+            op = _switch_op_from_payload(node_b[0], data)
+            return [op] if op is not None else []
+        return []
+    if (frame.type, frame.cmd) == (0x1E, 0x32):
+        return _scene_batch_ops(frame)
+    return []
 
 
 def _echo_command_frame(rt, raw: bytes) -> None:
@@ -538,12 +565,10 @@ def _echo_command_frame(rt, raw: bytes) -> None:
 
     The Deframer yields ONLY checksum-valid frames, so a ``raw`` control-op frame the device would
     ignore (bad checksum / no flags) yields nothing here and can't fake state. Cover/level/thermostat
-    commands echo nothing (they report their own state). NB ``[1e 32]`` scene BATCHES — which can
-    bundle switch attrs in their ``0x005a`` block — are not yet decoded here; their per-element echo is
-    a follow-up (the UI's own scenes are individual ops, which echo via their own ``[1e 07]`` frames)."""
+    commands echo nothing (they report their own state). A ``[1e 32]`` scene batch echoes each of its
+    bundled switch/2-gang elements (see ``_command_ops_from_frame`` / ``_scene_batch_ops``)."""
     for body in Deframer().feed(raw):
-        op = _command_op_from_frame(Frame(body))
-        if op is not None:
+        for op in _command_ops_from_frame(Frame(body)):
             _publish_command_state(rt, op)
 
 
@@ -635,9 +660,8 @@ class ProxySession:
         scene = changed.pop("scene", None)   # a button press: an event, not state
         _arm_pending_scene(self, node_b, scene, direction)
         _publish_proxy_events(self.rt, frame, node_b, changed, scene)
-        if direction == "C->D":              # cloud/app commanded a switch — echo it (relays don't report)
-            cmd_op = _command_op_from_frame(frame)
-            if cmd_op is not None:
+        if direction == "C->D":              # cloud/app commanded switch(es) — echo (relays don't report)
+            for cmd_op in _command_ops_from_frame(frame):   # a single SET or a whole scene batch (all-lights)
                 _publish_command_state(self.rt, cmd_op)
         self._capture_scene_batch(frame, direction)
         return _proxy_engine_injects(self.rt, node_b, changed, scene, direction)
