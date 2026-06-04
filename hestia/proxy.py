@@ -43,6 +43,7 @@ from .automations import AutomationEngine, AutomationStore, Rule, read_present_m
 from .classifier import Classifier, DeviceType
 from .protocol import FLAG, FRAME_TYPES, Deframer, Frame
 from .registry import Registry
+from .rf433 import Rf433Registry
 from .state import State, _bool, _int, tlv_value
 from .tuya import TuyaDevice, TuyaError
 from . import flipper, sensor433, weather
@@ -455,6 +456,9 @@ class ProxyRuntime:
     # SQLite audit-log engine (#56). Set in ``main()`` (the DB always exists post-boot); ``None`` in
     # tests / bare runtimes, where ``_audit`` degrades to a clean no-op. Used off the event loop.
     audit_engine: "object | None" = None
+    # 433 MHz device discovery: in-memory roll-up of every decoded rtl_433 packet (the local-433
+    # feeder filters to one sensor; this captures all of them). Display-only; reset on restart.
+    rf433: Rf433Registry = field(default_factory=Rf433Registry)
 
     def __post_init__(self) -> None:
         self._seq = _safe_seq_counter()
@@ -1147,9 +1151,13 @@ async def _sensor433_poller(rt, stream=sensor433.stream_readings, enabled: bool 
         except Exception:                            # one bad reading/rule-eval must NOT drop the SDR stream
             log.exception("sensor433 reading failed")
 
+    def on_packet(obj) -> None:
+        rt.rf433.record(obj, time.time())            # 433 discovery: capture EVERY decoded packet (never raises)
+
     while True:
         try:
-            await stream(on_reading, device=device, model=model, sensor_id=sensor_id, protocol=protocol)
+            await stream(on_reading, device=device, model=model, sensor_id=sensor_id,
+                         protocol=protocol, on_packet=on_packet)
         except asyncio.CancelledError:
             raise                                    # shutdown -> stream already reaped rtl_433; propagate
         except Exception:                            # spawn/stream blew up -> log, then back off and relaunch

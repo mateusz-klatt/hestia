@@ -7,6 +7,7 @@ import {
   fetchAutomations,
   fetchDbStats,
   fetchDiscovery,
+  fetchRf433,
   fetchRoomIcons,
   fetchSettings,
   postControl,
@@ -27,6 +28,7 @@ import { renderIrButtons, renderKlima } from "./klima";
 import { LiveController } from "./live";
 import { renderLogin, renderUser } from "./login";
 import { bindRow, bindSubRow } from "./registry";
+import { renderRf433 } from "./rf433";
 import { createRoomsView } from "./rooms";
 import { renderRuleForm } from "./ruleform";
 import { renderSceneControls } from "./scenes";
@@ -120,6 +122,7 @@ const live = new LiveController(
 /** Wire up the live app (events, intervals, initial fetch). Called only once authenticated. */
 function startApp(): void {
   const audit = renderAuditFeed(el("audit-feed"), fetchAudit);
+  const rf433 = renderRf433(el("rf433"), fetchRf433);
   const dbStats = renderDbStats(el("dbstats"), fetchDbStats);
 
   el("refresh").addEventListener("click", () => {
@@ -137,6 +140,7 @@ function startApp(): void {
         roomsView.goToLanding(); // tapping the rooms tab always returns to the list
       } else {
         void audit.refresh();
+        void rf433.refresh();
         void dbStats.refresh();
       }
     },

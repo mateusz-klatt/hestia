@@ -140,6 +140,15 @@ export interface AuditEvent {
   result: string | null;
 }
 
+// ---- 433 MHz device discovery (`GET /api/rf433`) -------------------------
+export interface Rf433Device {
+  key: string; // model + id + channel, whichever the packet carried
+  count: number;
+  first_seen: number;
+  last_seen: number;
+  fields: Record<string, string | number | boolean>; // last decoded packet's scalar fields
+}
+
 // ---- Database stats (`GET /api/db/stats`) --------------------------------
 
 export interface DbStats {

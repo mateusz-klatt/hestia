@@ -6,6 +6,7 @@ import type {
   Discovery,
   NamePayload,
   NameResult,
+  Rf433Device,
   Rule,
   RuleResult,
   SceneOp,
@@ -133,6 +134,18 @@ export async function fetchAudit(): Promise<AuditEvent[] | null> {
     if (!response.ok) return null;
     const data = (await response.json()) as { events?: AuditEvent[] };
     return data.events ?? [];
+  } catch {
+    return null;
+  }
+}
+
+/** GET `/api/rf433`; discovered 433 MHz devices, or `null` on any load failure. */
+export async function fetchRf433(): Promise<Rf433Device[] | null> {
+  try {
+    const response = await fetch(apiUrl("rf433"));
+    if (!response.ok) return null;
+    const data = (await response.json()) as { devices?: Rf433Device[] };
+    return data.devices ?? [];
   } catch {
     return null;
   }

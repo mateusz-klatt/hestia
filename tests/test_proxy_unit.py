@@ -1180,13 +1180,29 @@ class Sensor433PollerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(rt.state.outdoor_humidity, 44.0)
         self.assertTrue(rt.state.dirty)                            # globals cached across a restart
         self.assertGreaterEqual(len(sess.sent), 1)                 # -5 < 0 edge → fired
-        self.assertEqual(stream.calls[0], {"device": "rtl_tcp:127.0.0.1:1234",
-                                           "model": "Prologue-TH", "sensor_id": "204", "protocol": None})
+        call = stream.calls[0]
+        self.assertEqual({k: call[k] for k in ("device", "model", "sensor_id", "protocol")},
+                         {"device": "rtl_tcp:127.0.0.1:1234", "model": "Prologue-TH",
+                          "sensor_id": "204", "protocol": None})
+        self.assertTrue(callable(call["on_packet"]))               # the 433-discovery tap is wired in
 
     async def test_humidity_none_when_absent(self):
         rt, _, _, _ = await self._run(stream=_FakeStream([sensor433.Reading(-5.0, None)]))
         self.assertEqual(rt.state.outdoor_temp, -5.0)
         self.assertIsNone(rt.state.outdoor_humidity)
+
+    async def test_records_decoded_packets_for_discovery(self):
+        # The poller taps EVERY decoded packet into rt.rf433 (433 device discovery), not just the
+        # configured weather sensor — so a doorbell/garage remote in range shows up to be defined.
+        async def discovering_stream(on_reading, *, on_packet=None, **_kw):
+            on_packet({"model": "Acme-Doorbell", "id": 7, "code": "abc"})
+            on_packet({"model": "Acme-Doorbell", "id": 7})   # same device, second hit
+            await asyncio.Event().wait()                       # stay live until the test cancels
+        rt, _, _, _ = await self._run(stream=discovering_stream)
+        snap = rt.rf433.snapshot()
+        self.assertEqual(len(snap), 1)
+        self.assertEqual(snap[0]["key"], "Acme-Doorbell 7")
+        self.assertEqual(snap[0]["count"], 2)
 
     async def test_publishes_globals_event_with_temp_and_humidity(self):
         rt = proxy.ProxyRuntime()

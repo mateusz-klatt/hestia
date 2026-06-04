@@ -314,6 +314,63 @@ td.sub-label {
   color: var(--muted);
 }
 
+/* ---- 433 MHz device-discovery feed ------------------------------------ */
+#rf433 {
+  margin: 1.8rem 0 1.2rem;
+}
+
+.rf433-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.8rem;
+  margin: 0 0 0.5rem;
+}
+
+.rf433-head h3 {
+  flex: 1 1 auto;
+  font-size: 1rem;
+  margin: 0;
+}
+
+.rf433-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border-top: 1px solid var(--border);
+}
+
+.rf433-row,
+.rf433-empty {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.25rem 0.55rem;
+  padding: 0.45rem 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.rf433-key {
+  font-weight: bold;
+}
+
+.rf433-count,
+.rf433-ts {
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.rf433-fields {
+  flex-basis: 100%; /* decoded fields drop onto their own line under key/count/time */
+  color: var(--fg-soft);
+  font-size: 0.9rem;
+  word-break: break-word;
+}
+
+.rf433-empty {
+  color: var(--muted);
+}
+
 #auto-editor {
   margin-top: 0.9rem;
 }
