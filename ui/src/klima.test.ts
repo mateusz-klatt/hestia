@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import type { ControlResult, IrButton, Klima } from "./api/types";
-import { renderIrButtons, renderKlima, type PostIr } from "./klima";
+import type { ControlResult, IrButton, Klima, KlimaState } from "./api/types";
+import { applyKlimaState, formatKlimaState, renderIrButtons, renderKlima, type PostIr } from "./klima";
 
 const flush = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
 const okIr: PostIr = () => Promise.resolve({ ok: true });
@@ -218,5 +218,46 @@ describe("renderKlima", () => {
     await flush();
     click(el, "⏻"); // lock released
     expect(calls).toBe(2);
+  });
+
+  it("seeds the status pictogram as the snowflake (unknown) until a state arrives", () => {
+    const el = box();
+    renderKlima(el, KLIMA, okIr);
+    expect(el.querySelector(".klima-state")?.textContent).toBe("❄️");
+  });
+});
+
+const klimaState = (overrides: Partial<KlimaState> = {}): KlimaState => ({
+  power: true, mode: "cool", temp: 22, ...overrides,
+});
+
+describe("formatKlimaState", () => {
+  it("shows the mode pictogram + temperature when powered on", () => {
+    expect(formatKlimaState(klimaState({ mode: "cool", temp: 22 }))).toBe("❄️ 22°");
+    expect(formatKlimaState(klimaState({ mode: "heat", temp: 24 }))).toBe("🔥 24°");
+    expect(formatKlimaState(klimaState({ mode: "auto", temp: 20 }))).toBe("🔄 20°");
+  });
+  it("falls back to the snowflake for an unknown / missing mode, dropping a null temp", () => {
+    expect(formatKlimaState(klimaState({ mode: "weird", temp: 19 }))).toBe("❄️ 19°");
+    expect(formatKlimaState(klimaState({ mode: null, temp: null }))).toBe("❄️");
+  });
+  it("shows the power-off glyph when off, and the identity when never commanded", () => {
+    expect(formatKlimaState(klimaState({ power: false }))).toBe("⏻");
+    expect(formatKlimaState(null)).toBe("❄️");
+  });
+});
+
+describe("applyKlimaState", () => {
+  it("updates the .klima-state span in every built panel, ignoring boxes without one", () => {
+    const a = box();
+    const b = box();
+    const bare = box(); // no klima panel built → no .klima-state, must be skipped silently
+    renderKlima(a, KLIMA, okIr);
+    renderKlima(b, KLIMA, okIr);
+    applyKlimaState([a, b, bare], klimaState({ mode: "heat", temp: 20 }));
+    expect(a.querySelector(".klima-state")?.textContent).toBe("🔥 20°");
+    expect(b.querySelector(".klima-state")?.textContent).toBe("🔥 20°");
+    applyKlimaState([a, b, bare], null);
+    expect(a.querySelector(".klima-state")?.textContent).toBe("❄️");
   });
 });

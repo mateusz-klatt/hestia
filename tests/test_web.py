@@ -945,6 +945,13 @@ class DiscoveryTests(_WebTestBase):
             _, _, body = _get(self.web.address, "/api/discovery")
         self.assertEqual(json.loads(body)["klima"], {})
 
+    def test_discovery_includes_klima_state(self):
+        _, _, body = _get(self.web.address, "/api/discovery")
+        self.assertIsNone(json.loads(body)["klima_state"])    # never commanded → null
+        self.rt.state.klima = {"power": True, "mode": "cool", "temp": 22}
+        _, _, body = _get(self.web.address, "/api/discovery")
+        self.assertEqual(json.loads(body)["klima_state"], {"power": True, "mode": "cool", "temp": 22})
+
     def test_discovery_includes_rule_vocab(self):
         _, _, body = _get(self.web.address, "/api/discovery")
         self.assertEqual(json.loads(body)["rule_vocab"], rule_vocab())

@@ -51,6 +51,7 @@ class SnapshotTests(unittest.TestCase):
         st.crib_temp = 22.0
         st.outdoor_temp = -3.0
         st.outdoor_humidity = 44.0
+        st.klima = {"power": True, "mode": "cool", "temp": 22}
 
         snap = st.to_snapshot()
         self.assertEqual(snap["doors"], {"18": "open"})
@@ -58,6 +59,7 @@ class SnapshotTests(unittest.TestCase):
         self.assertNotIn("scene_seq", snap)                # dedup bookkeeping stays runtime-only
         self.assertEqual(snap["globals"],                  # global temps ARE cached now (survive a restart)
                          {"crib_temp": 22.0, "outdoor_temp": -3.0, "outdoor_humidity": 44.0})
+        self.assertEqual(snap["klima"], {"power": True, "mode": "cool", "temp": 22})
 
         restored = State()
         restored.load_snapshot(snap)
@@ -73,6 +75,7 @@ class SnapshotTests(unittest.TestCase):
         self.assertEqual(restored.gang, {0x07: {1: True, 2: False}})
         self.assertEqual((restored.crib_temp, restored.outdoor_temp, restored.outdoor_humidity),
                          (22.0, -3.0, 44.0))               # globals restored → no "—" after a restart
+        self.assertEqual(restored.klima, {"power": True, "mode": "cool", "temp": 22})  # A/C state survives
         self.assertFalse(restored.dirty)
 
     def test_load_snapshot_restores_partial_and_ignores_bad_globals(self):
@@ -87,6 +90,22 @@ class SnapshotTests(unittest.TestCase):
         st.load_snapshot({"globals": {"crib_temp": float("nan"), "outdoor_temp": float("inf")}})
         self.assertEqual(st.crib_temp, 21.5)               # NaN/inf rejected → values unchanged
         self.assertIsNone(st.outdoor_temp)
+
+    def test_load_klima_accepts_valid_shapes_and_rejects_malformed(self):
+        st = State()
+        self.assertIsNone(st.klima)                                   # default: never commanded
+        st.load_snapshot({"klima": {"power": True, "mode": "cool", "temp": 22}})
+        self.assertEqual(st.klima, {"power": True, "mode": "cool", "temp": 22})
+        st.load_snapshot({"klima": {"power": False, "mode": None, "temp": None}})   # off, no mode/temp
+        self.assertEqual(st.klima, {"power": False, "mode": None, "temp": None})
+        for bad in ("not a dict",
+                    {"power": "on"},                                  # power must be a real bool
+                    {"power": 1, "mode": "cool", "temp": 22},         # 1 is not a bool
+                    {"power": True, "mode": 5, "temp": 22},           # mode must be str/None
+                    {"power": True, "mode": "cool", "temp": "22"},    # temp must be int/None
+                    {"power": True, "mode": "cool", "temp": True}):   # bool is an int subclass → rejected
+            st.load_snapshot({"klima": bad})
+            self.assertIsNone(st.klima, bad)                          # a corrupt section clears to None
 
     def test_load_snapshot_tolerates_corrupt_partial_wrong_type_blob(self):
         st = State()

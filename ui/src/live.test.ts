@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { Discovery } from "./api/types";
+import type { Discovery, KlimaState } from "./api/types";
 import { device, discovery } from "./fixtures";
 import { LiveController, type LiveView } from "./live";
 
@@ -673,5 +673,50 @@ describe("LiveController heatmap (flash / scene / last-seen)", () => {
     present = true;
     await live.refresh(); // node 7 back; its last-seen must be "—", not a stale time
     expect(view.rows.querySelector('tr[data-node="7"] .seen')?.textContent).toBe("—");
+  });
+});
+
+describe("LiveController klima (A/C status)", () => {
+  const cool22: KlimaState = { power: true, mode: "cool", temp: 22 };
+  const off: KlimaState = { power: false, mode: "cool", temp: 22 };
+
+  it("routes a klima SSE event to the onKlima hook", () => {
+    const seen: (KlimaState | null)[] = [];
+    const live = new LiveController(harness(), () => Promise.resolve(null),
+      undefined, undefined, undefined, (s) => seen.push(s));
+    live.handleMessage(JSON.stringify({ type: "klima", klima: cool22 }));
+    expect(seen).toEqual([cool22]);
+  });
+
+  it("pushes the snapshot's klima_state through onKlima on render", async () => {
+    const seen: (KlimaState | null)[] = [];
+    const live = new LiveController(harness(), () => Promise.resolve(discovery({}, { klima_state: off })),
+      undefined, undefined, undefined, (s) => seen.push(s));
+    await live.refresh();
+    expect(seen).toEqual([off]);
+  });
+
+  it("queues a klima delta during a refresh and replays it after the snapshot", async () => {
+    const seen: (KlimaState | null)[] = [];
+    const gate = deferred<Discovery | null>();
+    const live = new LiveController(harness(), () => gate.promise,
+      undefined, undefined, undefined, (s) => seen.push(s));
+    const refreshing = live.refresh();
+    live.applyKlima(cool22); // newer than the snapshot → queued
+    gate.resolve(discovery({}, { klima_state: off }));
+    await refreshing;
+    expect(seen).toEqual([off, cool22]); // snapshot first, then the fresher delta — not rolled back
+  });
+
+  it("replays a queued null klima delta (distinct from nothing queued)", async () => {
+    const seen: (KlimaState | null)[] = [];
+    const gate = deferred<Discovery | null>();
+    const live = new LiveController(harness(), () => gate.promise,
+      undefined, undefined, undefined, (s) => seen.push(s));
+    const refreshing = live.refresh();
+    live.applyKlima(null); // A/C cleared mid-refresh → still must replay
+    gate.resolve(discovery({}, { klima_state: cool22 }));
+    await refreshing;
+    expect(seen).toEqual([cool22, null]);
   });
 });

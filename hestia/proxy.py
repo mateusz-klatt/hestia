@@ -275,6 +275,26 @@ def _klima_signals(path: str, sd_file: str) -> dict:
 KLIMA = _klima_signals(KLIMA_IR_PATH, KLIMA_IR_FILE)
 
 
+def parse_klima_command(button: str) -> "dict | None":
+    """The optimistic klima (A/C) state implied by a successfully-transmitted IR signal NAME.
+
+    IR is one-way (no device feedback), so the last command IS the state. ``off`` (when it is a real
+    preset in the parsed signal map) → power off, no mode/temp — the caller retains the previous ones
+    for display context. ``on_<mode>_<temp>`` that exists in the map's ``power_on`` group → power on at
+    that mode+temp. Anything else (a set-mode *adjust*, a ``fan`` preset, an unknown / unsupported name)
+    → ``None`` = leave klima state untouched. Validating against ``KLIMA`` means an arbitrary
+    ``/api/ir`` body can never poison the state with an unsupported mode/temp shape."""
+    if button == "off" and "off" in KLIMA.get("presets", ()):
+        return {"power": False}
+    if button.startswith("on_"):
+        mode, sep, temp = button[3:].rpartition("_")
+        if sep and mode and temp.isascii() and temp.isdigit() and len(temp) <= 3:
+            value = int(temp)
+            if value in KLIMA.get("power_on", {}).get(mode, ()):
+                return {"power": True, "mode": mode, "temp": value}
+    return None
+
+
 def _niania_device():
     """A configured Tuya baby-monitor ``TuyaDevice`` (set to query the temp DP), or ``None`` when not
     configured (HESTIA_NIANIA_IP/ID/KEY) or the key is malformed → the poller no-ops, zero network."""
@@ -1238,6 +1258,28 @@ async def _sensor433_poller(rt, stream=sensor433.stream_readings, enabled: bool 
         await asyncio.sleep(backoff)                 # rtl_433 exited (rtl_tcp down / hiccup) -> back off + relaunch
 
 
+def _record_klima_state(rt, ir_file: str, button: str) -> None:
+    """On a SUCCESSFUL klima IR transmit, update the optimistic klima state + publish a live ``klima``
+    delta. No-op for a non-klima file or a button that implies no power state (a set-mode adjust / fan
+    preset / unknown name — ``parse_klima_command`` returns None). ``off`` retains the last mode/temp for
+    display context. An unchanged re-send publishes nothing — avoids autosave/SSE churn on a repeat press."""
+    klima_file = KLIMA.get("file")
+    if not klima_file or ir_file != klima_file:
+        return
+    parsed = parse_klima_command(button)
+    if parsed is None:
+        return
+    prev = rt.state.klima or {}
+    new_state = {"power": parsed["power"],
+                 "mode": parsed.get("mode", prev.get("mode")),     # `off` keeps the last mode/temp
+                 "temp": parsed.get("temp", prev.get("temp"))}
+    if new_state == rt.state.klima:
+        return
+    rt.state.klima = new_state
+    rt.state.dirty = True                                          # cached in the device-state snapshot
+    rt.event_bus.publish({"type": "klima", "klima": new_state})
+
+
 async def _ir_worker(rt) -> None:
     """The SOLE owner of the Flipper serial port — serialises every IR transmit so two never overlap.
     Drains ``rt.ir_queue`` of ``(ir_file, button, future)`` and transmits each via the BLOCKING
@@ -1262,6 +1304,9 @@ async def _ir_worker(rt) -> None:
             else:
                 log.warning("ir transmit failed for %s/%s: %r", ir_file, button, exc)
         else:
+            # The transmit landed — record the optimistic klima state even if the control-op request
+            # was meanwhile cancelled (the IR still went out). No-op for non-klima signals.
+            _record_klima_state(rt, ir_file, button)
             if future is not None and not future.done():
                 future.set_result(None)
 

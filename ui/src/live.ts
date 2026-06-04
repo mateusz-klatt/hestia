@@ -1,4 +1,4 @@
-import type { DeviceInfo, Discovery, Globals, LiveEvent, Scene } from "./api/types";
+import type { DeviceInfo, Discovery, Globals, KlimaState, LiveEvent, Scene } from "./api/types";
 import { t } from "./i18n";
 import { renderDeviceRows, renderGlobals, renderMode, summaryText } from "./render/devices";
 import { fmtHumidity, fmtTemp, onOff, stateStr } from "./render/format";
@@ -40,6 +40,10 @@ export type RenderHook = (data: Discovery) => void;
  */
 export type StateHook = (node: number, info: DeviceInfo) => void;
 
+/** Hook run with the latest optimistic A/C state — from the snapshot and every
+ *  live `klima` delta — so the klima panels can refresh their status pictogram. */
+export type KlimaHook = (state: KlimaState | null) => void;
+
 function attr(value: string): string {
   // node ids / endpoint ids are numeric strings from the contract; quote for
   // the attribute selector regardless so a stray value can't break the query.
@@ -65,6 +69,7 @@ export class LiveController {
   private refreshAgain = false;
   private readonly pendingState = new Map<number, Partial<DeviceInfo>>();
   private pendingGlobals: Partial<Globals> | null = null;
+  private pendingKlima: { state: KlimaState | null } | null = null;
   private readonly lastActiveByNode = new Map<number, number>();
   private readonly flashTimers = new Map<number | string, ReturnType<typeof setTimeout>>();
   private readonly sceneTimers = new Map<number, ReturnType<typeof setTimeout>>();
@@ -73,6 +78,7 @@ export class LiveController {
   private readonly decorate: RowDecorator | undefined;
   private readonly onRender: RenderHook | undefined;
   private readonly onState: StateHook | undefined;
+  private readonly onKlima: KlimaHook | undefined;
 
   constructor(
     view: LiveView,
@@ -80,12 +86,14 @@ export class LiveController {
     decorate?: RowDecorator,
     onRender?: RenderHook,
     onState?: StateHook,
+    onKlima?: KlimaHook,
   ) {
     this.view = view;
     this.refetch = refetch;
     this.decorate = decorate;
     this.onRender = onRender;
     this.onState = onState;
+    this.onKlima = onKlima;
   }
 
   /** Parse + dispatch one raw SSE message; malformed JSON is silently ignored. */
@@ -102,6 +110,9 @@ export class LiveController {
         break;
       case "globals":
         this.applyGlobals(msg.fields);
+        break;
+      case "klima":
+        this.applyKlima(msg.klima);
         break;
       case "discovery_changed":
         void this.refresh();
@@ -184,6 +195,9 @@ export class LiveController {
     this.prune();
     this.tick(); // populate the "last seen" cells right after a rebuild
     if (this.onRender !== undefined) this.onRender(data); // IR / klima panels (built once)
+    // Refresh the A/C status pictogram from the snapshot; a `klima` delta that arrived mid-refresh
+    // is queued and replayed by drainPending() AFTER this, so a stale snapshot can't win.
+    if (this.onKlima !== undefined) this.onKlima(data.klima_state);
   }
 
   /**
@@ -271,6 +285,15 @@ export class LiveController {
     }
   }
 
+  /** Apply a klima (A/C) state delta — queued during a rebuild, then replayed after it. */
+  applyKlima(state: KlimaState | null): void {
+    if (this.refreshing) {
+      this.pendingKlima = { state }; // wrap so a queued `null` is distinguishable from "nothing queued"
+      return;
+    }
+    if (this.onKlima !== undefined) this.onKlima(state);
+  }
+
   /**
    * Replay deltas that queued during a rebuild, against the fresh rows.
    *
@@ -287,9 +310,12 @@ export class LiveController {
     this.pendingScene.clear();
     const globals = this.pendingGlobals;
     this.pendingGlobals = null;
+    const klima = this.pendingKlima;
+    this.pendingKlima = null;
     for (const [node, fields] of states) this.applyState(node, fields);
     for (const [node, scene] of scenes) this.flashScene(node, scene);
     if (globals !== null) this.applyGlobals(globals);
+    if (klima !== null) this.applyKlima(klima.state);
   }
 
   // ---- heatmap: activity flash, scene badge, "last seen" tick --------------

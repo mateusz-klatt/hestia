@@ -1,8 +1,33 @@
-import type { ControlResult, IrButton, Klima } from "./api/types";
+import type { ControlResult, IrButton, Klima, KlimaState } from "./api/types";
 import { t } from "./i18n";
 
 /** Transmits a saved Flipper signal (`{file, button}`); normalised result (never rejects). */
 export type PostIr = (file: string, button: string) => Promise<ControlResult>;
+
+/** Pictogram per A/C mode; an unknown mode falls back to the snowflake (the panel's identity). */
+const MODE_ICON: Record<string, string> = { cool: "❄️", heat: "🔥", auto: "🔄", dry: "💨", fan: "💨" };
+
+/**
+ * The current A/C state as a compact, language-neutral pictogram line for the
+ * klima panel: `❄️ 22°` (cooling), `🔥 24°` (heating), `🔄 20°` (auto), `⏻` (off),
+ * or just `❄️` when never commanded (the panel's identity, no known state).
+ * Pure — no DOM, no i18n (icons + a temperature number) — so it stays trivially testable.
+ */
+export function formatKlimaState(state: KlimaState | null): string {
+  if (state === null) return "❄️"; // unknown → A/C identity only
+  if (!state.power) return "⏻"; // off (the backend retains mode/temp for future "resume" UX)
+  const icon = state.mode !== null ? (MODE_ICON[state.mode] ?? "❄️") : "❄️";
+  return state.temp !== null ? `${icon} ${String(state.temp)}°` : icon;
+}
+
+/** Update every built klima panel's status pictogram (both the rooms + admin panels). */
+export function applyKlimaState(boxes: Iterable<HTMLElement>, state: KlimaState | null): void {
+  const text = formatKlimaState(state);
+  for (const box of boxes) {
+    const el = box.querySelector<HTMLElement>(".klima-state");
+    if (el !== null) el.textContent = text;
+  }
+}
 
 /**
  * Build the configured one-tap IR buttons into `box` (static config → built
@@ -63,9 +88,12 @@ export function renderKlima(box: HTMLElement, klima: Klima, postIr: PostIr): voi
   if (file === undefined || (modeNames.length === 0 && !canOff)) return;
   box.dataset.built = "1";
 
-  const label = document.createElement("span");
-  label.textContent = "❄️"; // just the snowflake — drop "LG:" so the row stays compact on the landing
-  box.appendChild(label);
+  // Leading status pictogram — updated live by `applyKlimaState` (replaces the old static ❄️ label;
+  // defaults to ❄️ = the A/C identity until the first command / discovery snapshot fills it in).
+  const stateLabel = document.createElement("span");
+  stateLabel.className = "klima-state";
+  stateLabel.textContent = formatKlimaState(null);
+  box.appendChild(stateLabel);
   const status = document.createElement("span");
   status.className = "status";
   status.style.marginLeft = "0.5rem";

@@ -1827,7 +1827,8 @@ class AutosaveTests(unittest.IsolatedAsyncioTestCase):
                                   "temperature": {}, "plug_w": {}, "plug_kwh": {},
                                   "plug_v": {}, "gang": {},
                                   "globals": {"crib_temp": None, "outdoor_temp": None,
-                                              "outdoor_humidity": None}}])
+                                              "outdoor_humidity": None},
+                                  "klima": None}])
 
     async def test_persist_state_dirty_false_is_noop(self):
         rt = proxy.ProxyRuntime()

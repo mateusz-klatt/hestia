@@ -77,6 +77,17 @@ export interface Klima {
   presets?: string[];
 }
 
+/**
+ * The optimistic A/C state — the last one-way IR command we sent (IR has no
+ * feedback, so the command IS the state). `null` until the A/C has ever been
+ * commanded; `off` retains the last `mode`/`temp` for display context.
+ */
+export interface KlimaState {
+  power: boolean;
+  mode: string | null;
+  temp: number | null;
+}
+
 // ---- Automations (`GET/POST /api/automations`, `POST /api/automations/delete`) ----
 // Rules are authored as JSON and validated server-side by Rule.from_dict; the
 // UI lists them, toggles `enabled`, deletes, and edits raw JSON. The trigger
@@ -171,6 +182,7 @@ export interface Discovery {
   globals: Globals;
   ir_buttons: IrButton[];
   klima: Klima;
+  klima_state: KlimaState | null; // optimistic A/C state (last IR command), null until ever commanded
   rule_vocab: RuleVocab; // dropdown grammar for the guided rule form
   mode: string;
   target_mode: string;
@@ -212,7 +224,18 @@ export interface DiscoveryChangedEvent {
   type: "discovery_changed";
 }
 
-export type LiveEvent = ActivityEvent | StateEvent | GlobalsEvent | DiscoveryChangedEvent;
+/** The optimistic A/C state changed (a klima IR command was transmitted). */
+export interface KlimaEvent {
+  type: "klima";
+  klima: KlimaState;
+}
+
+export type LiveEvent =
+  | ActivityEvent
+  | StateEvent
+  | GlobalsEvent
+  | DiscoveryChangedEvent
+  | KlimaEvent;
 
 // ---- Control ops (`POST /api/control`) ------------------------------------
 // The allowlisted device commands the dashboard can send (see the Keemple
