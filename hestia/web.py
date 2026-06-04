@@ -307,22 +307,21 @@ async def _room_icon_set(request):
     return _json(HTTPStatus.OK, {"ok": True})
 
 
+def _scene_device_op(target_type: str, node_id: int, info: dict, active: bool) -> dict:
+    """One per-device control op for a scene, mirroring the per-device UI buttons: a dimmable light
+    (has a level) → ``level`` 0/99; a plain light → ``switch`` off/on; a blind → ``cover`` 0/99."""
+    if target_type == "light" and info.get("level") is None:
+        return {"op": "switch", "node": node_id, "on": active}
+    op = "level" if target_type == "light" else "cover"
+    return {"op": op, "node": node_id, "value": 99 if active else 0}
+
+
 def _scene_ops(rt, scene: str) -> list[dict]:
     """Expand a house-wide scene into ordinary per-device control ops."""
     target_type, active = _SCENE_TARGETS[scene]
-    ops = []
-    for node, info in _merged_discovery(rt).items():
-        if info.get("type") != target_type:
-            continue
-        node_id = int(node)
-        if target_type == "light":
-            if info.get("level") is not None:
-                ops.append({"op": "level", "node": node_id, "value": 99 if active else 0})
-            else:
-                ops.append({"op": "switch", "node": node_id, "on": active})
-        else:
-            ops.append({"op": "cover", "node": node_id, "value": 99 if active else 0})
-    return ops
+    return [_scene_device_op(target_type, int(node), info, active)
+            for node, info in _merged_discovery(rt).items()
+            if info.get("type") == target_type]
 
 
 async def _scene(request):
