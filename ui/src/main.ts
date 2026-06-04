@@ -25,7 +25,7 @@ import { renderAutomations } from "./automations";
 import { renderActions } from "./controls";
 import { renderDbStats } from "./dbstats";
 import { initLocale } from "./i18n";
-import { renderIrButtons, renderKlima } from "./klima";
+import { applyKlimaState, renderIrButtons, renderKlima } from "./klima";
 import { LiveController } from "./live";
 import { renderLogin, renderUser } from "./login";
 import { bindRow, bindSubRow } from "./registry";
@@ -124,6 +124,9 @@ const live = new LiveController(
   },
   (node, info) => {
     roomsView.patchState(node, info); // live state delta → patch the visible room card's state text
+  },
+  (klimaState) => {
+    applyKlimaState([klimaBox, roomsKlimaBox], klimaState); // A/C status pictogram on both panels
   },
 );
 

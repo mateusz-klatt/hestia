@@ -245,5 +245,111 @@ class IrWorkerTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(any("ir transmit failed" in line for line in cm.output))
 
 
+_KLIMA_FIXTURE = {"file": "/k.ir",
+                  "modes": {"cool": [22]},
+                  "power_on": {"cool": [18, 22], "heat": [24], "auto": [20]},
+                  "presets": ["off"]}
+
+
+class ParseKlimaCommandTests(unittest.TestCase):
+    """The pure signal-name → optimistic A/C state map (validated against the parsed signal map)."""
+
+    def test_power_on_and_off(self):
+        with mock.patch.object(proxy, "KLIMA", _KLIMA_FIXTURE):
+            self.assertEqual(proxy.parse_klima_command("on_cool_22"),
+                             {"power": True, "mode": "cool", "temp": 22})
+            self.assertEqual(proxy.parse_klima_command("on_heat_24"),
+                             {"power": True, "mode": "heat", "temp": 24})
+            self.assertEqual(proxy.parse_klima_command("off"), {"power": False})
+
+    def test_unsupported_or_unknown_names_return_none(self):
+        with mock.patch.object(proxy, "KLIMA", _KLIMA_FIXTURE):
+            for name in ("on_cool_99",       # temp not in the cool power_on group
+                         "on_fan_18",        # fan is not a power_on mode
+                         "cool_22",          # set-mode ADJUST (no on_ prefix) — not a power state
+                         "on_cool_2x",       # non-digit temp
+                         "on_cool_",         # empty temp
+                         "on_",              # empty mode+temp
+                         "garbage"):
+                self.assertIsNone(proxy.parse_klima_command(name), name)
+
+    def test_off_rejected_when_not_a_real_preset(self):
+        no_off = {**_KLIMA_FIXTURE, "presets": []}
+        with mock.patch.object(proxy, "KLIMA", no_off):
+            self.assertIsNone(proxy.parse_klima_command("off"))
+
+
+class RecordKlimaStateTests(unittest.IsolatedAsyncioTestCase):
+    """``_record_klima_state``: success-only optimistic update + a live ``klima`` delta."""
+
+    async def test_klima_file_sets_state_and_publishes(self):
+        rt = proxy.ProxyRuntime()
+        sub = await rt.event_bus.try_subscribe()
+        with mock.patch.object(proxy, "KLIMA", _KLIMA_FIXTURE):
+            proxy._record_klima_state(rt, "/k.ir", "on_cool_22")
+        self.assertEqual(rt.state.klima, {"power": True, "mode": "cool", "temp": 22})
+        self.assertTrue(rt.state.dirty)
+        events = [sub.queue.get_nowait() for _ in range(sub.queue.qsize())]
+        self.assertIn({"type": "klima", "klima": {"power": True, "mode": "cool", "temp": 22}}, events)
+
+    async def test_off_retains_last_mode_and_temp(self):
+        rt = proxy.ProxyRuntime()
+        rt.state.klima = {"power": True, "mode": "cool", "temp": 22}
+        with mock.patch.object(proxy, "KLIMA", _KLIMA_FIXTURE):
+            proxy._record_klima_state(rt, "/k.ir", "off")
+        self.assertEqual(rt.state.klima, {"power": False, "mode": "cool", "temp": 22})
+
+    async def test_non_klima_file_is_noop(self):
+        rt = proxy.ProxyRuntime()
+        with mock.patch.object(proxy, "KLIMA", _KLIMA_FIXTURE):
+            proxy._record_klima_state(rt, "/other.ir", "on_cool_22")
+        self.assertIsNone(rt.state.klima)
+        self.assertFalse(rt.state.dirty)
+
+    async def test_unrecognised_button_is_noop(self):
+        rt = proxy.ProxyRuntime()
+        with mock.patch.object(proxy, "KLIMA", _KLIMA_FIXTURE):
+            proxy._record_klima_state(rt, "/k.ir", "cool_22")        # set-mode adjust → not a power state
+        self.assertIsNone(rt.state.klima)
+
+    async def test_unchanged_resend_publishes_nothing(self):
+        rt = proxy.ProxyRuntime()
+        rt.state.klima = {"power": True, "mode": "cool", "temp": 22}
+        rt.state.dirty = False
+        sub = await rt.event_bus.try_subscribe()
+        with mock.patch.object(proxy, "KLIMA", _KLIMA_FIXTURE):
+            proxy._record_klima_state(rt, "/k.ir", "on_cool_22")     # identical → idempotent
+        self.assertFalse(rt.state.dirty)
+        self.assertEqual(sub.queue.qsize(), 0)
+
+
+class IrWorkerKlimaTests(unittest.IsolatedAsyncioTestCase):
+    """The worker records klima state ONLY after a successful transmit."""
+
+    async def test_success_records_klima(self):
+        rt = proxy.ProxyRuntime()
+        rt.ir_queue = asyncio.Queue(maxsize=4)
+        with mock.patch.object(proxy, "KLIMA", _KLIMA_FIXTURE), \
+             mock.patch.object(flipper, "transmit_ir"):
+            worker = asyncio.create_task(proxy._ir_worker(rt))
+            resp = await proxy.process_control_op(rt, {"op": "ir", "file": "/k.ir", "button": "on_cool_22"})
+            worker.cancel()
+            await asyncio.gather(worker, return_exceptions=True)
+        self.assertTrue(resp["ok"])
+        self.assertEqual(rt.state.klima, {"power": True, "mode": "cool", "temp": 22})
+
+    async def test_failed_transmit_does_not_record(self):
+        rt = proxy.ProxyRuntime()
+        rt.ir_queue = asyncio.Queue(maxsize=4)
+        with mock.patch.object(proxy, "KLIMA", _KLIMA_FIXTURE), \
+             mock.patch.object(flipper, "transmit_ir", side_effect=FlipperError("boom")):
+            worker = asyncio.create_task(proxy._ir_worker(rt))
+            resp = await proxy.process_control_op(rt, {"op": "ir", "file": "/k.ir", "button": "on_cool_22"})
+            worker.cancel()
+            await asyncio.gather(worker, return_exceptions=True)
+        self.assertFalse(resp["ok"])
+        self.assertIsNone(rt.state.klima)                            # no fake state on a failed send
+
+
 if __name__ == "__main__":          # pragma: no cover
     unittest.main()

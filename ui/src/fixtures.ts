@@ -54,6 +54,7 @@ export function discovery(
     summary: { total: Object.keys(devices).length, confirmed: 0, unknown: 0 },
     ir_buttons: [],
     klima: {},
+    klima_state: null,
     rule_vocab: ruleVocab(),
     mode: "standalone",
     target_mode: "standalone",

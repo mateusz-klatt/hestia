@@ -386,7 +386,8 @@ async def _discovery(request):  # NOSONAR S7503: aiohttp route handlers must be 
     # applied on next restart); env_override = HESTIA_MODE if it is pinning the mode (else null).
     return _json(HTTPStatus.OK,
                  {"devices": devices, "summary": _summary(devices), "globals": globs,
-                  "ir_buttons": IR_BUTTONS, "klima": KLIMA, "rule_vocab": rule_vocab(),
+                  "ir_buttons": IR_BUTTONS, "klima": KLIMA, "klima_state": rt.state.klima,
+                  "rule_vocab": rule_vocab(),
                   "mode": rt.mode, "target_mode": rt.registry.mode,
                   "env_override": os.environ.get("HESTIA_MODE")})
 

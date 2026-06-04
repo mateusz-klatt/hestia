@@ -242,6 +242,25 @@ def _load_globals(state, data) -> None:
             setattr(state, name, value)            # reject NaN/inf (a corrupt JSON blob round-trips them)
 
 
+def _load_klima(data) -> "dict | None":
+    """Restore the cached optimistic klima (A/C) state, ignoring a malformed blob.
+
+    Shape only — ``power`` must be a bool, ``mode`` a str or None, ``temp`` an int
+    (not bool) or None. Semantic validity (a *known* mode/temp) is enforced at set
+    time against the live signal map; here we only refuse a corrupt cache section.
+    """
+    if not isinstance(data, dict):
+        return None
+    power, mode, temp = data.get("power"), data.get("mode"), data.get("temp")
+    if not isinstance(power, bool):
+        return None
+    if mode is not None and not isinstance(mode, str):
+        return None
+    if temp is not None and (isinstance(temp, bool) or not isinstance(temp, int)):
+        return None
+    return {"power": power, "mode": mode, "temp": temp}
+
+
 def _load_gang(data) -> dict:
     if not isinstance(data, dict):
         return {}
@@ -281,6 +300,7 @@ class State:
     crib_temp: "float | None" = None                         # GLOBAL (node-less) °C from the Tuya baby-monitor poller
     outdoor_temp: "float | None" = None                      # GLOBAL (node-less) °C from the Open-Meteo / local-433 feeder
     outdoor_humidity: "float | None" = None                  # GLOBAL (node-less) %RH companion from the local-433 feeder (display-only)
+    klima: "dict | None" = None                              # GLOBAL (node-less) optimistic A/C state {power,mode,temp} — last one-way IR command (None=never commanded)
     dirty: bool = field(default=False)                       # best-effort SQLite telemetry-cache needs flushing
 
     def apply(self, frame: Frame) -> dict:
@@ -343,6 +363,7 @@ class State:
             for node, endpoints in self.gang.items()
         }
         snap["globals"] = {name: getattr(self, name) for name in _SNAPSHOT_GLOBALS}
+        snap["klima"] = self.klima                # node-less optimistic A/C state (a plain dict or None — JSON-safe)
         return snap
 
     def load_snapshot(self, snap) -> None:
@@ -357,3 +378,4 @@ class State:
             _load_int_keyed(getattr(self, name), snap.get(name))
         self.gang.update(_load_gang(snap.get("gang")))
         _load_globals(self, snap.get("globals"))
+        self.klima = _load_klima(snap.get("klima"))
