@@ -516,22 +516,49 @@ class CommandEchoTests(unittest.IsolatedAsyncioTestCase):
     """Learn switch/2-gang state from the cloud's C->D commands (proxy tap) — those relays only ACK,
     never report. Covers/thermostats are NOT echoed (they report their own state)."""
 
-    def test_command_op_from_frame_switch_and_gang_only(self):
-        f = proxy._command_op_from_frame
-        self.assertEqual(f(cmd_frame(0x0E, b"\x25\x01\xff")), {"op": "switch", "node": 0x0E, "on": True})
-        self.assertEqual(f(cmd_frame(0x0E, b"\x25\x01\x00")), {"op": "switch", "node": 0x0E, "on": False})
+    def test_command_ops_from_single_1e07_frame(self):
+        f = proxy._command_ops_from_frame
+        self.assertEqual(f(cmd_frame(0x0E, b"\x25\x01\xff")), [{"op": "switch", "node": 0x0E, "on": True}])
+        self.assertEqual(f(cmd_frame(0x0E, b"\x25\x01\x00")), [{"op": "switch", "node": 0x0E, "on": False}])
         self.assertEqual(f(cmd_frame(0x07, b"\x60\x0d\x00\x02\x25\x01\xff")),
-                         {"op": "switch", "node": 0x07, "endpoint": 2, "on": True})
-        # ignored — a multilevel (cover/level) command, a non-25-01 60-0d frame, truncated payloads,
-        # a 1e09 report (not a command), and commands missing node / payload:
-        self.assertIsNone(f(cmd_frame(0x04, b"\x26\x01\x63")))                  # cover/level → reports win
-        self.assertIsNone(f(cmd_frame(0x07, b"\x60\x0d\x00\x02\x25\x03\xff")))  # not a 25 01 SET
-        self.assertIsNone(f(cmd_frame(0x0E, b"\x25\x01")))                      # truncated switch
-        self.assertIsNone(f(cmd_frame(0x07, b"\x60\x0d\x00")))                  # truncated 2-gang
+                         [{"op": "switch", "node": 0x07, "endpoint": 2, "on": True}])
+        # ignored → [] : multilevel (cover/level), non-25-01 60-0d, truncated, a report, missing node/payload
+        self.assertEqual(f(cmd_frame(0x04, b"\x26\x01\x63")), [])                   # cover/level → reports win
+        self.assertEqual(f(cmd_frame(0x07, b"\x60\x0d\x00\x02\x25\x03\xff")), [])   # not a 25 01 SET
+        self.assertEqual(f(cmd_frame(0x0E, b"\x25\x01")), [])                       # truncated switch
         report = Frame(build_frame(0x1E, 0x09, tlv(0x0047, b"\x0e") + tlv(0x0046, b"\x25\x03\xff"))[1:-1])
-        self.assertIsNone(f(report))                                           # a report, not a 1e07 command
-        self.assertIsNone(f(Frame(build_frame(0x1E, 0x07, tlv(0x0046, b"\x25\x01\xff"))[1:-1])))  # no node
-        self.assertIsNone(f(Frame(build_frame(0x1E, 0x07, tlv(0x0047, b"\x0e"))[1:-1])))          # no payload
+        self.assertEqual(f(report), [])                                            # a report, not a command
+        self.assertEqual(f(Frame(build_frame(0x1E, 0x07, tlv(0x0046, b"\x25\x01\xff"))[1:-1])), [])  # no node
+        self.assertEqual(f(Frame(build_frame(0x1E, 0x07, tlv(0x0047, b"\x0e"))[1:-1])), [])          # no payload
+
+    def test_command_ops_from_scene_batch(self):
+        # the app's "all off": a [1e 32] batch bundling switch (06) + 2-gang (07 ep1), a cover element
+        # (04, 26 01) that must be SKIPPED, then a truncated trailing element that stops the walk.
+        elements = (b"\x01\x01\x03\x06\x25\x01\x00"                   # node 06 switch off
+                    + b"\x02\x01\x07\x07\x60\x0d\x00\x01\x25\x01\x00"  # node 07 2-gang ep1 off
+                    + b"\x03\x01\x03\x04\x26\x01\x00"                  # node 04 cover (skipped — reports)
+                    + b"\x04\x01\x07\x0a")                            # truncated trailing element → stop
+        batch = Frame(build_frame(0x1E, 0x32, tlv(0x005A, elements))[1:-1])
+        self.assertEqual(proxy._command_ops_from_frame(batch), [
+            {"op": "switch", "node": 0x06, "on": False},
+            {"op": "switch", "node": 0x07, "endpoint": 1, "on": False},
+        ])
+
+    def test_scene_batch_without_005a_is_empty(self):
+        batch = Frame(build_frame(0x1E, 0x32, tlv(0x001F, b"\x00\x00\x00\x05"))[1:-1])  # no 0x005a block
+        self.assertEqual(proxy._command_ops_from_frame(batch), [])
+
+    async def test_proxy_echoes_all_lights_scene_batch(self):
+        rt = proxy.ProxyRuntime()
+        sub = await rt.event_bus.try_subscribe()
+        elements = b"\x01\x01\x03\x06\x25\x01\x00" + b"\x02\x01\x07\x07\x60\x0d\x00\x01\x25\x01\x00"
+        batch = Frame(build_frame(0x1E, 0x32, tlv(0x005A, elements))[1:-1])
+        make_session(rt)._observe(batch, "C->D")                     # the app's "all off" scene batch
+        events = _drain_events(sub)
+        self.assertIn({"type": "state", "node": 0x06, "fields": {"switch": False}}, events)
+        self.assertIn({"type": "state", "node": 0x07, "fields": {"endpoints": {1: False}}}, events)
+        self.assertIs(rt.state.switches[0x06], False)
+        self.assertEqual(rt.state.gang[0x07], {1: False})
 
     async def test_proxy_echoes_cloud_switch_command(self):
         rt = proxy.ProxyRuntime()
