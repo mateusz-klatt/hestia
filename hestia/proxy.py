@@ -534,15 +534,17 @@ def _echo_command_frame(rt, raw: bytes) -> None:
     """Echo the switch/2-gang state a command frame hestia JUST WROTE to a device produces — those
     relays only ACK (never report ``[1e 09]``), so without this a hestia-sent switch change (UI
     control, a fired automation, a scheduled rule) would never reach State / the live UI. Called
-    AFTER a successful write, so a dropped or failed send can never fake a state change. Best-effort:
-    a non-command / malformed frame, or a cover/level/thermostat command (they report), echoes
-    nothing."""
-    try:
-        op = _command_op_from_frame(Frame(raw[1:-1]))
-    except (IndexError, ValueError):                 # a short / garbled frame — nothing to echo
-        return
-    if op is not None:
-        _publish_command_state(rt, op)
+    AFTER a successful write, so a dropped or failed send can never fake a state change.
+
+    The Deframer yields ONLY checksum-valid frames, so a ``raw`` control-op frame the device would
+    ignore (bad checksum / no flags) yields nothing here and can't fake state. Cover/level/thermostat
+    commands echo nothing (they report their own state). NB ``[1e 32]`` scene BATCHES — which can
+    bundle switch attrs in their ``0x005a`` block — are not yet decoded here; their per-element echo is
+    a follow-up (the UI's own scenes are individual ops, which echo via their own ``[1e 07]`` frames)."""
+    for body in Deframer().feed(raw):
+        op = _command_op_from_frame(Frame(body))
+        if op is not None:
+            _publish_command_state(rt, op)
 
 
 def _arm_pending_scene(session, node_b: "bytes | None", scene, direction: str) -> None:

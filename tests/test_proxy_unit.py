@@ -568,10 +568,27 @@ class CommandEchoTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse([e for e in _drain_events(sub) if e.get("type") == "state"])
         self.assertEqual(rt.state.switches, {})                              # no fake state
 
-    def test_echo_command_frame_tolerates_a_garbled_frame(self):
+    def test_echo_command_frame_tolerates_garbled_input(self):
         rt = proxy.ProxyRuntime()
-        proxy._echo_command_frame(rt, b"\x7e\x7e")                            # strips to b"" → no crash, no echo
+        for raw in (b"", b"\x7e\x7e", b"\xab\xcd", b"not a frame"):           # no valid framed command
+            proxy._echo_command_frame(rt, raw)
+        self.assertEqual(rt.state.switches, {})                              # nothing echoed, no crash
+
+    def test_bad_checksum_command_not_echoed(self):
+        # The device ignores a bad-checksum frame (e.g. a hand-rolled `raw` op) — so must we, or we'd
+        # fake a state change for a command that never took effect.
+        rt = proxy.ProxyRuntime()
+        raw = bytearray(proxy.build_command(rt, {"op": "switch", "node": 5, "on": True}))
+        raw[-2] ^= 0x01                                                       # corrupt the checksum byte
+        if raw[-2] == 0x7e:                                                   # never read as a frame flag
+            raw[-2] = 0x00
+        proxy._echo_command_frame(rt, bytes(raw))
         self.assertEqual(rt.state.switches, {})
+
+    def test_valid_non_switch_command_not_echoed(self):
+        rt = proxy.ProxyRuntime()
+        proxy._echo_command_frame(rt, proxy.build_command(rt, {"op": "cover", "node": 8, "value": 99}))
+        self.assertEqual(rt.state.levels, {})                               # cover reports its own state
 
     async def test_publish_command_state_skips_an_unchanged_value(self):
         rt = proxy.ProxyRuntime()
