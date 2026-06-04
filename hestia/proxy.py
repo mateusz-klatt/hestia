@@ -80,22 +80,28 @@ def _scheduler_interval(raw: str) -> float:
 SCHEDULER_SECS = _scheduler_interval(os.environ.get("HESTIA_SCHEDULER_SECS", "20"))
 
 
-def _thermostat_poll_interval(raw: "str | None") -> float:
-    """Parse HESTIA_THERMOSTAT_POLL_SECS. ``<= 0`` disables the poller; otherwise clamp to [30, 3600]
-    (gentle on battery FLiRS thermostats — the on/off mode rarely changes). Non-numeric / non-finite
-    → the 90 s default."""
+def _thermostat_confirm_interval(raw: "str | None") -> float:
+    """Parse HESTIA_THERMOSTAT_CONFIRM_SECS — the DEBOUNCE delay before a confirmation poll after a
+    thermostat change (the optimistic on/off is shown instantly; this poll then confirms it against the
+    device). ``<= 0`` disables confirmation polling entirely (pure optimistic). Otherwise clamp to
+    [2, 120]; non-numeric / non-finite → the 10 s default. There is NO blind periodic poll — a thermostat
+    is only ever GET-polled in the seconds after the user changed it, to spare battery FLiRS TRVs."""
     try:
-        value = float(raw) if raw is not None else 90.0
+        value = float(raw) if raw is not None else 10.0
     except ValueError:
-        return 90.0
+        return 10.0
     if not math.isfinite(value):
-        return 90.0
+        return 10.0
     if value <= 0:
         return 0.0
-    return min(max(value, 30.0), 3600.0)
+    return min(max(value, 2.0), 120.0)
 
 
-THERMOSTAT_POLL_SECS = _thermostat_poll_interval(os.environ.get("HESTIA_THERMOSTAT_POLL_SECS"))
+THERMOSTAT_CONFIRM_SECS = _thermostat_confirm_interval(os.environ.get("HESTIA_THERMOSTAT_CONFIRM_SECS"))
+# How often the confirm loop checks whether the debounce window has elapsed (cheap: no device I/O
+# unless a node is due). A fraction of the delay so the poll lands close to CONFIRM_SECS after the
+# last change; ≥1 s so a misconfigured tiny delay can't busy-loop.
+THERMOSTAT_CONFIRM_TICK = max(1.0, min(2.0, THERMOSTAT_CONFIRM_SECS)) if THERMOSTAT_CONFIRM_SECS > 0 else 2.0
 
 
 def _coord(raw: "str | None", lo: float, hi: float) -> "float | None":
@@ -494,6 +500,11 @@ class ProxyRuntime:
     # SQLite audit-log engine (#56). Set in ``main()`` (the DB always exists post-boot); ``None`` in
     # tests / bare runtimes, where ``_audit`` degrades to a clean no-op. Used off the event loop.
     audit_engine: "object | None" = None
+    # Thermostat confirmation poll (standalone): nodes the user just commanded + a single debounced
+    # monotonic deadline. A thermostat SET adds the node + (re)sets the deadline (collapse: rapid changes
+    # → ONE poll after the last one). The confirm poller drains these; there is no blind periodic poll.
+    thermostat_confirm: set = field(default_factory=set)
+    thermostat_confirm_at: float = 0.0
     # 433 MHz device discovery: in-memory roll-up of every decoded rtl_433 packet (the local-433
     # feeder filters to one sensor; this captures all of them). Display-only; reset on restart.
     rf433: Rf433Registry = field(default_factory=Rf433Registry)
@@ -547,13 +558,33 @@ def _publish_proxy_events(rt, frame: Frame, node_b: "bytes | None", changed: dic
 
 
 def _switch_op_from_payload(node: int, data: bytes) -> "dict | None":
-    """A switch / 2-gang control op for a command payload — the ``0x0046`` of a ``[1e 07]`` SET, or a
-    ``[1e 32]`` scene-batch element body. Cover/level/thermostat payloads → None (they report their own
-    state, so we trust the report — mirrors ``State.apply_command``'s switch-only policy)."""
+    """The control op a command payload actuates — the ``0x0046`` of a ``[1e 07]`` SET, or a ``[1e 32]``
+    scene-batch element body — for the fields hestia echoes OPTIMISTICALLY because the device never
+    reports them (binary switch / 2-gang only ACK) or reports them only when polled (thermostat POWER:
+    its ``40 03`` mode report is poll-only). Cover / level / thermostat SETPOINT → None (the device
+    reports those reliably and fast, so we trust the report)."""
     if data[:2] == b"\x25\x01" and len(data) >= 3:                  # binary switch SET: 25 01 <ff/00>
         return {"op": "switch", "node": node, "on": data[2] == 0xFF}
     if data[:2] == b"\x60\x0d" and len(data) >= 7 and data[4:6] == b"\x25\x01":  # 2-gang SET: 60 0d 00 <ep> 25 01 <v>
         return {"op": "switch", "node": node, "endpoint": data[3], "on": data[6] == 0xFF}
+    if data[:2] == b"\x40\x01" and len(data) >= 3:                  # thermostat power SET: 40 01 <01/00>
+        return {"op": "thermostat_power", "node": node, "on": data[2] != 0x00}
+    return None
+
+
+def _thermostat_node_from_frame(frame) -> "int | None":
+    """The node id if this ``[1e 07]`` frame is a thermostat SET — power (``40 01``) or setpoint
+    (``43 01``) — so a debounced confirmation poll can be scheduled. None otherwise. Deliberately
+    EXCLUDES the GETs hestia itself sends (``40 02`` mode / ``31 04`` temp), so a confirm poll can never
+    re-trigger another confirm poll."""
+    if (frame.type, frame.cmd) != (0x1E, 0x07):
+        return None
+    node_b = tlv_value(frame, 0x0047)
+    data = tlv_value(frame, 0x0046)
+    if not (node_b and data):
+        return None
+    if data[:2] in (b"\x40\x01", b"\x43\x01"):
+        return node_b[0]
     return None
 
 
@@ -606,8 +637,12 @@ def _echo_command_frame(rt, raw: bytes) -> None:
     commands echo nothing (they report their own state). A ``[1e 32]`` scene batch echoes each of its
     bundled switch/2-gang elements (see ``_command_ops_from_frame`` / ``_scene_batch_ops``)."""
     for body in Deframer().feed(raw):
-        for op in _command_ops_from_frame(Frame(body)):
+        frame = Frame(body)
+        for op in _command_ops_from_frame(frame):
             _publish_command_state(rt, op)
+        node = _thermostat_node_from_frame(frame)         # thermostat SET → (debounced) confirm poll
+        if node is not None:
+            _note_thermostat_command(rt, node)
 
 
 def _arm_pending_scene(session, node_b: "bytes | None", scene, direction: str) -> None:
@@ -1276,32 +1311,41 @@ async def _sensor433_poller(rt, stream=sensor433.stream_readings, enabled: bool 
         await asyncio.sleep(backoff)                 # rtl_433 exited (rtl_tcp down / hiccup) -> back off + relaunch
 
 
-def _thermostat_nodes(rt) -> "list[int]":
-    """The node ids currently classified as thermostats (classifier ∪ user registry). Sorted for a
-    stable poll order."""
-    return sorted(int(node) for node, entry in _merged_discovery(rt).items()
-                  if entry.get("type") == "thermostat")
+def _note_thermostat_command(rt, node: int) -> None:
+    """A thermostat was just commanded (power / setpoint) → schedule ONE debounced confirmation poll of
+    it. Adds the node + (re)sets a single monotonic deadline, so rapid changes COLLAPSE into one poll
+    ``THERMOSTAT_CONFIRM_SECS`` after the LAST change. STANDALONE-only (in proxy the cloud confirms) and a
+    no-op when confirmation polling is disabled — so we NEVER blind-poll a battery FLiRS TRV."""
+    if rt.mode != "standalone" or THERMOSTAT_CONFIRM_SECS <= 0:
+        return
+    rt.thermostat_confirm.add(node)
+    rt.thermostat_confirm_at = time.monotonic() + THERMOSTAT_CONFIRM_SECS   # collapse → confirm after the LAST set
 
 
-async def _thermostat_poller(rt, interval: float = THERMOSTAT_POLL_SECS) -> None:
-    """Keep each thermostat's on/off Mode (and room temperature) live by GET-polling it — these Keemple
-    TRVs only REPORT their Mode (``40 03``) / temperature (``31 05``) when asked (``40 02`` / ``31 04``).
-    The Keemple cloud does this continuously, so in PROXY the relay tap already sees fresh values; in
-    STANDALONE there is no cloud, so ``thermostat_on`` would freeze without this. Hence: STANDALONE-only,
-    and disabled when ``interval <= 0``. One bad tick never kills the loop. The injected GETs' replies
-    flow through the normal decode → State + a live SSE delta, exactly like a cloud-driven report."""
-    if interval <= 0 or rt.mode != "standalone":         # proxy: the cloud polls; <=0: operator-disabled
+async def _thermostat_poller(rt, delay: float = THERMOSTAT_CONFIRM_SECS,
+                             tick: float = THERMOSTAT_CONFIRM_TICK, clock=time.monotonic) -> None:
+    """Confirmation poller (NOT a blind periodic poll): once the debounce window has elapsed after the
+    user's last thermostat change, GET-poll JUST the changed node(s)' Mode (40 02) + temp (31 04) once to
+    confirm the optimistic on/off against the device. STANDALONE-only / disabled when ``delay <= 0``. The
+    tick loop is cheap (a sleep + a set check; ZERO device I/O until a node is due), so an idle thermostat
+    is never polled — the whole point, to spare battery FLiRS TRVs. One bad tick never kills the loop."""
+    if delay <= 0 or rt.mode != "standalone":
         return
     while True:
-        await asyncio.sleep(interval)
+        await asyncio.sleep(tick)
         try:
+            if not rt.thermostat_confirm or clock() < rt.thermostat_confirm_at:
+                continue                                 # nothing pending, or still inside the debounce window
+            nodes = sorted(rt.thermostat_confirm)        # read+clear synchronously, then await (a change
+            rt.thermostat_confirm.clear()                # during the inject re-arms for the next cycle)
+            rt.thermostat_confirm_at = 0.0
             frames = []
-            for node in _thermostat_nodes(rt):
+            for node in nodes:
                 frames.append(commands.get_thermostat_mode(rt.next_seq(), node))
                 frames.append(commands.get_temperature(rt.next_seq(), node))
-            await _inject(rt, frames, source="thermostat-poll")
-        except Exception:                                # a classify/inject hiccup must not drop the loop
-            log.exception("thermostat poll tick failed")
+            await _inject(rt, frames, source="thermostat-confirm")
+        except Exception:                                # an inject hiccup must not drop the loop
+            log.exception("thermostat confirm poll failed")
 
 
 def _record_klima_state(rt, ir_file: str, button: str) -> None:
