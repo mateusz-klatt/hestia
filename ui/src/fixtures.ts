@@ -35,6 +35,8 @@ export function device(overrides: Partial<DeviceInfo> = {}): DeviceInfo {
     energy_kwh: null,
     voltage_v: null,
     endpoints: null,
+    thermostat_last_cmd: null,
+    last_seen: null,
     ...overrides,
   };
 }

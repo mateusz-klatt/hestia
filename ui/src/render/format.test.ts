@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { device } from "../fixtures";
-import { battFmt, battLow, fmtHumidity, fmtTemp, stateStr } from "./format";
+import { battFmt, battLow, fmtHumidity, fmtTemp, stateStr, thermostatNotResponding } from "./format";
 
 describe("fmtTemp", () => {
   it("formats one decimal with a degree sign (Celsius default)", () => {
@@ -116,5 +116,38 @@ describe("stateStr", () => {
   it("renders an em dash for a stateless / unknown type", () => {
     expect(stateStr(device({ type: "smoke" }))).toBe("—");
     expect(stateStr(device({ type: "unknown" }))).toBe("—");
+  });
+
+  it("appends ⚠ to a thermostat that was commanded but never confirmed", () => {
+    // stateStr uses real Date.now(), so anchor the command 120 s ago in REAL time (past the 25 s grace).
+    const longAgo = Date.now() / 1000 - 120;
+    const dead = device({ type: "thermostat", setpoint: 22, thermostat_on: true, thermostat_last_cmd: longAgo });
+    expect(thermostatNotResponding(dead)).toBe(true);
+    expect(stateStr(dead)).toContain("⚠"); // commanded, nothing heard since → not responding
+    // a normally-tracking thermostat (never commanded) has no ⚠
+    expect(stateStr(device({ type: "thermostat", setpoint: 22, thermostat_on: true }))).not.toContain("⚠");
+  });
+});
+
+describe("thermostatNotResponding", () => {
+  const now = 1_800_000_000_000;
+  const t = (secAgo: number): number => now / 1000 - secAgo;
+  it("is false when never commanded", () => {
+    expect(thermostatNotResponding(device({ type: "thermostat", thermostat_last_cmd: null }), now)).toBe(false);
+  });
+  it("is false within the confirm grace window", () => {
+    expect(thermostatNotResponding(device({ type: "thermostat", thermostat_last_cmd: t(5) }), now)).toBe(false);
+  });
+  it("is true when commanded, grace passed, and nothing heard since", () => {
+    expect(thermostatNotResponding(device({ type: "thermostat", thermostat_last_cmd: t(60) }), now)).toBe(true);
+    // last_seen BEFORE the command → still silent since
+    const before = new Date((t(60) - 10) * 1000).toISOString();
+    expect(thermostatNotResponding(
+      device({ type: "thermostat", thermostat_last_cmd: t(60), last_seen: before }), now)).toBe(true);
+  });
+  it("is false once a report lands AFTER the command", () => {
+    const after = new Date((t(60) + 5) * 1000).toISOString();
+    expect(thermostatNotResponding(
+      device({ type: "thermostat", thermostat_last_cmd: t(60), last_seen: after }), now)).toBe(false);
   });
 });

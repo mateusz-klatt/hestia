@@ -313,6 +313,7 @@ class State:
     outdoor_temp: "float | None" = None                      # GLOBAL (node-less) °C from the Open-Meteo / local-433 feeder
     outdoor_humidity: "float | None" = None                  # GLOBAL (node-less) %RH companion from the local-433 feeder (display-only)
     klima: "dict | None" = None                              # GLOBAL (node-less) optimistic A/C state {power,mode,temp} — last one-way IR command (None=never commanded)
+    thermostat_last_cmd: dict = field(default_factory=dict)  # node -> wall-clock ts of the last thermostat SET (for the "not responding" badge; runtime-only, not snapshotted)
     dirty: bool = field(default=False)                       # best-effort SQLite telemetry-cache needs flushing
 
     def apply(self, frame: Frame) -> dict:

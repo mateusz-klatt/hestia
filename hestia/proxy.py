@@ -98,18 +98,17 @@ def _thermostat_confirm_interval(raw: "str | None") -> float:
 
 
 def _thermostat_poll_interval(raw: "str | None") -> float:
-    """Parse HESTIA_THERMOSTAT_POLL_SECS — a GENTLE periodic sweep of every thermostat to keep an idle
-    one's state fresh + reveal an unreachable one (the Keemple cloud only polls hard while the APP is
-    open; idle it's ~0, so this is a deliberate light touch, NOT the cloud's cadence). ``<= 0`` disables
-    the sweep (confirm-on-command still runs). Otherwise clamp to [60, 86400]; non-numeric / non-finite
-    → the 900 s (15 min) default."""
+    """Parse HESTIA_THERMOSTAT_POLL_SECS — an OPT-IN gentle periodic sweep of every thermostat. **Default
+    OFF (0)**: a live relay capture proved Keemple itself does NOT periodically poll the TRVs — it only
+    confirm-polls after a SET (exactly our confirm-on-command), so the faithful + battery-minimal default
+    is no sweep (confirm-on-command alone, plus the "not responding" badge for honesty). Set a positive
+    value to opt into a sweep that also refreshes IDLE thermostats; clamped to [60, 86400]. Non-numeric /
+    non-finite / ``<= 0`` → 0 (off)."""
     try:
-        value = float(raw) if raw is not None else 900.0
+        value = float(raw) if raw is not None else 0.0
     except ValueError:
-        return 900.0
-    if not math.isfinite(value):
-        return 900.0
-    if value <= 0:
+        return 0.0
+    if not math.isfinite(value) or value <= 0:
         return 0.0
     return min(max(value, 60.0), 86400.0)
 
@@ -918,6 +917,7 @@ def _add_live_state(entry: dict, state: State, node: int) -> None:
     entry["motion"] = state.motion.get(node)                 # PIR: True=motion / False=idle
     entry["setpoint"] = state.thermostat_setpoint.get(node)  # °C target
     entry["thermostat_on"] = state.thermostat_on.get(node)   # bool
+    entry["thermostat_last_cmd"] = state.thermostat_last_cmd.get(node)  # wall-clock ts of last SET (or None)
     entry["temperature"] = state.temperature.get(node)       # °C measured
     entry["power_w"] = state.plug_w.get(node)                # plug power, W
     entry["energy_kwh"] = state.plug_kwh.get(node)           # plug cumulative energy, kWh
@@ -926,6 +926,7 @@ def _add_live_state(entry: dict, state: State, node: int) -> None:
 
 
 def _add_registry_labels(entry: dict, reg: dict) -> None:
+    entry["last_seen"] = reg.get("last_seen")             # ISO ts of the last frame from this node (or None)
     if "name" in reg:
         entry["name"] = reg["name"]
     if "room" in reg:
@@ -1345,6 +1346,10 @@ def _note_thermostat_command(rt, node: int) -> None:
         return
     rt.thermostat_confirm.add(node)
     rt.thermostat_confirm_at = time.monotonic() + THERMOSTAT_CONFIRM_SECS   # collapse → confirm after the LAST set
+    # wall-clock of this SET; the UI flags "not responding" if no report (registry last_seen) lands after
+    # it. Runtime-only (not snapshotted) — a restart clears it, so nothing is "not responding" until the
+    # next command. NOT dirtying state: this field isn't persisted.
+    rt.state.thermostat_last_cmd[node] = time.time()
 
 
 async def _thermostat_poller(rt, confirm_delay: float = THERMOSTAT_CONFIRM_SECS,

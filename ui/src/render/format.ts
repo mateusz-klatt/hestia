@@ -46,6 +46,25 @@ export function battLow(pct: number | null): boolean {
   return pct !== null && (pct > 100 || pct < 20);
 }
 
+/** Grace after a thermostat SET before its silence counts as "not responding" — the confirm-debounce
+ *  (≤10 s) + the poll round-trip + margin. */
+const THERMOSTAT_CONFIRM_GRACE_MS = 25_000;
+
+/**
+ * A thermostat is "not responding" when we sent it a command but no device frame has arrived SINCE
+ * (the confirm poll went unanswered) and the grace window has passed. In confirm-only mode a healthy
+ * idle TRV and a dead one are both silent, so time-alone can't tell them apart — this keys off
+ * "commanded, but never heard back", which only a genuinely unreachable device sustains.
+ */
+export function thermostatNotResponding(info: DeviceInfo, now: number = Date.now()): boolean {
+  const cmd = info.thermostat_last_cmd;
+  if (cmd === null) return false; // never commanded → nothing to confirm
+  const cmdMs = cmd * 1000;
+  if (now - cmdMs < THERMOSTAT_CONFIRM_GRACE_MS) return false; // still inside the confirm window
+  const seen = info.last_seen === null ? 0 : Date.parse(info.last_seen);
+  return !(seen > cmdMs); // a report landed AFTER the command → it responded; otherwise it's silent
+}
+
 /**
  * Type-aware live-state ("stan") text. Uses `!== null` throughout so a blind at
  * 0 % or a switch that is `false` still renders — only an unseen field is `—`.
@@ -59,6 +78,7 @@ export function stateStr(info: DeviceInfo): string {
       if (info.temperature !== null) s += `${String(info.temperature)}°`;
       if (info.setpoint !== null) s += `${s.length > 0 ? " → " : "→ "}${String(info.setpoint)}°`;
       if (info.thermostat_on !== null) s += `${s.length > 0 ? " " : ""}${onOff(info.thermostat_on)}`;
+      if (thermostatNotResponding(info)) s += `${s.length > 0 ? " " : ""}⚠`; // commanded but never confirmed
       return s.length > 0 ? s : "—";
     }
     case "light": {
