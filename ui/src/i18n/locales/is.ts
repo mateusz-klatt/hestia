@@ -33,6 +33,7 @@ const messages: Partial<Messages> = {
   "rooms.empty": "Engin tæki",
   "rooms.other": "Annað",
   "rooms.editIcons": "Breyta táknum",
+  "rooms.editIconsDone": "Lokið",
   "rooms.iconNone": "—",
   "rooms.deviceCount.one": "{n} tæki",
   "rooms.deviceCount.other": "{n} tæki",

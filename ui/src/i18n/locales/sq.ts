@@ -33,6 +33,7 @@ const messages: Partial<Messages> = {
   "rooms.empty": "Nuk ka pajisje",
   "rooms.other": "Të tjera",
   "rooms.editIcons": "Redakto ikonat",
+  "rooms.editIconsDone": "U krye",
   "rooms.iconNone": "—",
   "rooms.deviceCount.one": "{n} pajisje",
   "rooms.deviceCount.other": "{n} pajisje",

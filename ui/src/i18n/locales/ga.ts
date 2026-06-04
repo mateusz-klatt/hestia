@@ -33,6 +33,7 @@ const messages: Partial<Messages> = {
   "rooms.empty": "Gan ghléasanna",
   "rooms.other": "Eile",
   "rooms.editIcons": "Cuir deilbhíní in eagar",
+  "rooms.editIconsDone": "Déanta",
   "rooms.iconNone": "—",
   "rooms.deviceCount.one": "{n} ghléas",
   "rooms.deviceCount.two": "{n} ghléas",

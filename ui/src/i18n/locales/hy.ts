@@ -33,6 +33,7 @@ const messages: Partial<Messages> = {
   "rooms.empty": "Սարքեր չկան",
   "rooms.other": "Այլ",
   "rooms.editIcons": "Խմբագրել պատկերակները",
+  "rooms.editIconsDone": "Պատրաստ է",
   "rooms.iconNone": "—",
   "rooms.deviceCount.one": "{n} սարք",
   "rooms.deviceCount.other": "{n} սարքեր",

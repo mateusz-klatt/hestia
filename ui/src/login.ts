@@ -82,7 +82,12 @@ function localeName(code: string): string {
 export function renderUser(
   container: HTMLElement,
   user: string | null,
-  opts: { onLogout: () => void; reload?: () => void; saveSettings?: (settings: Partial<UserSettings>) => Promise<void> },
+  opts: {
+    onLogout: () => void;
+    reload?: () => void;
+    saveSettings?: (settings: Partial<UserSettings>) => Promise<void>;
+    onEditIcons?: () => void;
+  },
 ): void {
   const reload = opts.reload ?? ((): void => {
     location.reload();
@@ -154,6 +159,29 @@ export function renderUser(
 
   menu.append(langRow, scaleRow);
 
+  let open = false;
+  const setOpen = (next: boolean): void => {
+    open = next;
+    menu.hidden = !next;
+    btn.setAttribute("aria-expanded", next ? "true" : "false");
+  };
+
+  // Per-room icon editing lives here in settings, not on the rooms screen. Closes the menu, then
+  // hands off to main.ts which switches to the rooms view and enters icon-edit mode.
+  const onEditIcons = opts.onEditIcons;
+  if (onEditIcons !== undefined) {
+    const iconsBtn = document.createElement("button");
+    iconsBtn.id = "edit-room-icons";
+    iconsBtn.type = "button";
+    iconsBtn.className = "menu-action";
+    iconsBtn.textContent = `✏️ ${t("rooms.editIcons")}`;
+    iconsBtn.addEventListener("click", () => {
+      setOpen(false);
+      onEditIcons();
+    });
+    menu.append(iconsBtn);
+  }
+
   // Logout only when there's a session user (auth-off has no one to log out).
   if (user !== null) {
     const logoutBtn = document.createElement("button");
@@ -168,12 +196,6 @@ export function renderUser(
     menu.append(logoutBtn);
   }
 
-  let open = false;
-  const setOpen = (next: boolean): void => {
-    open = next;
-    menu.hidden = !next;
-    btn.setAttribute("aria-expanded", next ? "true" : "false");
-  };
   btn.addEventListener("click", () => {
     setOpen(!open);
   });
