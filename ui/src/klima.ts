@@ -94,22 +94,30 @@ export function renderKlima(box: HTMLElement, klima: Klima, postIr: PostIr): voi
   stateLabel.className = "klima-state";
   stateLabel.textContent = formatKlimaState(null);
   box.appendChild(stateLabel);
+  // The live `.klima-state` pictogram IS the success/state confirmation now, so we no longer keep a
+  // persistent ✓ line (it only reserved empty space). This span is shown ONLY on a FAILED transmit and
+  // its CSS reserves no line, so a healthy panel carries no status row at all.
   const status = document.createElement("span");
   status.className = "status";
   status.style.marginLeft = "0.5rem";
 
   const buttons: HTMLButtonElement[] = [];
   let busy = false;
-  const send = async (button: string, tag: string): Promise<void> => {
+  const send = async (button: string): Promise<void> => {
     if (busy) return;
     busy = true;
     for (const b of buttons) b.disabled = true;
-    status.textContent = "…";
+    status.textContent = ""; // clear any prior error; on success the pictogram reflects the new state
+    status.className = "status";
     try {
       const res = await postIr(file, button);
-      status.textContent = res.ok ? `✓ ${tag}` : `✗ ${res.error ?? t("ctl.failed")}`;
+      if (!res.ok) {
+        status.textContent = `✗ ${res.error ?? t("ctl.failed")}`;
+        status.className = "status err";
+      }
     } catch {
       status.textContent = t("ctl.error");
+      status.className = "status err";
     } finally {
       busy = false;
       for (const b of buttons) b.disabled = false;
@@ -146,7 +154,7 @@ export function renderKlima(box: HTMLElement, klima: Klima, postIr: PostIr): voi
     set.style.marginRight = "0.4rem";
     set.addEventListener("click", () => {
       if (mode.value === "" || temp.value === "") return;
-      void send(`on_${mode.value}_${temp.value}`, `${mode.value} ${temp.value}°`);
+      void send(`on_${mode.value}_${temp.value}`);
     });
     buttons.push(set);
     box.append(mode, temp, set);
@@ -160,7 +168,7 @@ export function renderKlima(box: HTMLElement, klima: Klima, postIr: PostIr): voi
     off.setAttribute("aria-label", t("ctl.turnOff"));
     off.style.marginRight = "0.4rem";
     off.addEventListener("click", () => {
-      void send("off", t("ctl.turnOff"));
+      void send("off");
     });
     buttons.push(off);
     box.appendChild(off);

@@ -33,6 +33,16 @@ describe("renderLogin", () => {
     expect(input(box, "login-pass").type).toBe("password");
   });
 
+  it("shows the hestia logo + wordmark in a centred card", () => {
+    const box = document.createElement("div");
+    renderLogin(box, vi.fn());
+    const card = box.querySelector(".login-card");
+    expect(card).not.toBeNull();
+    expect(card?.querySelector(".login-brand svg")).not.toBeNull(); // hearth flame
+    expect(card?.querySelector(".login-brand-name")?.textContent).toBe("hestia");
+    expect(card?.querySelector("#login-form")).not.toBeNull(); // form lives inside the card
+  });
+
   it("logs in with the entered credentials and calls onSuccess", async () => {
     loginMock.mockResolvedValue(true);
     const box = document.createElement("div");

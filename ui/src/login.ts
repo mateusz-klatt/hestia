@@ -3,12 +3,44 @@ import { login, logout } from "./api/client";
 import { currentLocale, FLAGS, LOCALES, t } from "./i18n";
 import { setLocaleOverride, setTempScale, tempScale, type TempScale } from "./prefs";
 
+const SVG_NS = "http://www.w3.org/2000/svg";
+
+/** The hestia hearth-flame mark as an SVG element (same path as the header logo); `currentColor` fill
+ *  so it inherits the accent. Built via createElementNS — no innerHTML (XSS-safe even for trusted markup). */
+function flameLogo(size: number): SVGSVGElement {
+  const svg = document.createElementNS(SVG_NS, "svg");
+  svg.setAttribute("width", String(size));
+  svg.setAttribute("height", String(size));
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("aria-hidden", "true");
+  const path = document.createElementNS(SVG_NS, "path");
+  path.setAttribute("fill", "currentColor");
+  path.setAttribute(
+    "d",
+    "M13.5.67s.74 2.65.74 4.8c0 2.06-1.35 3.73-3.41 3.73-2.07 0-3.63-1.67-3.63-3.73l.03-.36C5.21 7.51 4 " +
+      "10.62 4 14c0 4.42 3.58 8 8 8s8-3.58 8-8C20 8.61 17.41 3.8 13.5.67zM11.71 19c-1.78 0-3.22-1.4-3.22-3.14 " +
+      "0-1.62 1.05-2.76 2.81-3.12 1.77-.36 3.6-1.21 4.62-2.58.39 1.29.59 2.65.59 4.04 0 2.65-2.15 4.8-4.8 4.8z",
+  );
+  svg.appendChild(path);
+  return svg;
+}
+
 /**
- * Render the login form into `container`; on a successful login call `onSuccess` (main.ts reloads the
- * page, so the now-authenticated app boots normally). XSS-safe (DOM nodes + textContent, no innerHTML).
+ * Render the login form into `container`, centred on the page with the hestia hearth logo + wordmark
+ * above it. On a successful login call `onSuccess` (main.ts reloads the page, so the now-authenticated
+ * app boots normally). XSS-safe (DOM nodes + textContent / createElementNS, no innerHTML).
  */
 export function renderLogin(container: HTMLElement, onSuccess: () => void): void {
   container.replaceChildren();
+
+  // Brand block: the hearth flame + "hestia" wordmark, centred above the form.
+  const brand = document.createElement("div");
+  brand.className = "login-brand";
+  const name = document.createElement("span");
+  name.className = "login-brand-name";
+  name.textContent = "hestia";
+  brand.append(flameLogo(44), name);
+
   const form = document.createElement("form");
   form.id = "login-form";
 
@@ -54,7 +86,11 @@ export function renderLogin(container: HTMLElement, onSuccess: () => void): void
     })();
   });
 
-  container.appendChild(form);
+  // Centre the brand + form together in a card (the page-centring lives in #login's CSS).
+  const card = document.createElement("div");
+  card.className = "login-card";
+  card.append(brand, form);
+  container.appendChild(card);
   user.focus();
 }
 

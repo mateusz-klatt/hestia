@@ -124,7 +124,7 @@ describe("renderKlima", () => {
     click(el, "✓");
     await flush();
     expect(sent).toEqual([{ file: "/ext/infrared/klima.ir", button: "on_heat_20" }]);
-    expect(el.querySelector(".status")?.textContent).toBe("✓ heat 20°");
+    expect(el.querySelector(".status")?.textContent).toBe(""); // success → no ✓ line (the pictogram confirms)
   });
 
   it("Wyłącz sends off", async () => {
@@ -138,7 +138,7 @@ describe("renderKlima", () => {
     click(el, "⏻");
     await flush();
     expect(sent).toEqual(["off"]);
-    expect(el.querySelector(".status")?.textContent).toBe("✓ Turn off"); // localised success tag, not "✓ Wyłącz"
+    expect(el.querySelector(".status")?.textContent).toBe(""); // success → no ✓ line
   });
 
   it("builds nothing for an empty klima map", () => {
@@ -194,9 +194,12 @@ describe("renderKlima", () => {
     click(el, "✓");
     await flush();
     expect(el.querySelector(".status")?.textContent).toBe("✗ error");
+    expect(el.querySelector(".status")?.className).toBe("status err");
     click(el, "⏻"); // lock released by finally → fires again
     await flush();
     expect(calls).toBe(2);
+    expect(el.querySelector(".status")?.textContent).toBe(""); // a later success clears the error line
+    expect(el.querySelector(".status")?.className).toBe("status");
   });
 
   it("shares an in-flight lock across klima buttons", async () => {
