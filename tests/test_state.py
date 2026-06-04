@@ -441,14 +441,28 @@ class ApplyCommandTests(unittest.TestCase):
         self.assertIs(st.switches[5], True)
 
     def test_reporting_ops_are_not_echoed(self):
-        # "reports win where they exist": cover/level/thermostat report their own state, so their
-        # commands are NOT optimistically echoed (only switch/2-gang, which never report, are).
+        # "reports win where they exist": cover/level/thermostat SETPOINT report their own state reliably,
+        # so they are NOT optimistically echoed. (Switch/2-gang never report, thermostat POWER only when
+        # polled — those ARE echoed; see test_thermostat_power_echoed.)
         st = State()
         self.assertEqual(st.apply_command({"op": "level", "node": 4, "value": 60}), {})
         self.assertEqual(st.apply_command({"op": "cover", "node": 8, "value": 99}), {})
         self.assertEqual(st.apply_command({"op": "thermostat", "node": 9, "celsius": 21.4}), {})
-        self.assertEqual(st.apply_command({"op": "thermostat_power", "node": 9, "on": True}), {})
-        self.assertEqual((st.levels, st.thermostat_setpoint, st.thermostat_on), ({}, {}, {}))
+        self.assertEqual((st.levels, st.thermostat_setpoint), ({}, {}))
+        self.assertFalse(st.dirty)
+
+    def test_thermostat_power_echoed(self):
+        # Thermostat ON/OFF (mode) only reports when GET-polled, so the press is echoed optimistically.
+        st = State()
+        self.assertEqual(st.apply_command({"op": "thermostat_power", "node": 9, "on": True}),
+                         {"thermostat_on": True})
+        self.assertIs(st.thermostat_on[9], True)
+        self.assertTrue(st.dirty)
+        self.assertEqual(st.apply_command({"op": "thermostat_power", "node": 9, "on": "false"}),
+                         {"thermostat_on": False})        # string coerces like the wire
+        self.assertIs(st.thermostat_on[9], False)
+        st.dirty = False
+        self.assertEqual(st.apply_command({"op": "thermostat_power", "node": 9, "on": False}), {})  # unchanged
         self.assertFalse(st.dirty)
 
     def test_non_stateful_ops_emit_nothing(self):

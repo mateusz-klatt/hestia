@@ -218,8 +218,17 @@ def _command_switch(state, node: int, op: dict, changed: dict) -> None:
         changed["endpoints"] = dict(eps)
 
 
+def _command_thermostat_power(state, node: int, op: dict, changed: dict) -> None:
+    # Thermostat ON/OFF is OPTIMISTIC: the device only REPORTS its mode (40 03) when GET-polled, so a
+    # press would otherwise not move the badge until the (debounced) confirmation poll. Echo the commanded
+    # power immediately; the confirm poll corrects it if the device disagreed. (Setpoint stays
+    # report-driven — the device reports 43 03 reliably and fast.)
+    _set_changed(state.thermostat_on, node, changed, "thermostat_on", _bool(op["on"]))
+
+
 _COMMAND_APPLIERS = {
     "switch": _command_switch,                   # 2-gang rides this too (op carries an `endpoint`)
+    "thermostat_power": _command_thermostat_power,
 }
 
 

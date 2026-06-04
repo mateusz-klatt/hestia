@@ -911,82 +911,164 @@ class SchedulerTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(task.cancelled())               # survived the error, ended via our cancel
 
 
-class ThermostatPollIntervalTests(unittest.TestCase):
+class ThermostatConfirmIntervalTests(unittest.TestCase):
     def test_default_clamp_and_disable(self):
-        self.assertEqual(proxy._thermostat_poll_interval(None), 90.0)        # default
-        self.assertEqual(proxy._thermostat_poll_interval("60"), 60.0)
-        self.assertEqual(proxy._thermostat_poll_interval("5"), 30.0)         # floor (battery-gentle)
-        self.assertEqual(proxy._thermostat_poll_interval("99999"), 3600.0)   # ceiling
-        self.assertEqual(proxy._thermostat_poll_interval("0"), 0.0)          # disabled
-        self.assertEqual(proxy._thermostat_poll_interval("-1"), 0.0)         # disabled
-        self.assertEqual(proxy._thermostat_poll_interval("nope"), 90.0)      # non-numeric → default
-        self.assertEqual(proxy._thermostat_poll_interval("nan"), 90.0)       # non-finite → default
-        self.assertEqual(proxy._thermostat_poll_interval("inf"), 90.0)
+        self.assertEqual(proxy._thermostat_confirm_interval(None), 10.0)     # default
+        self.assertEqual(proxy._thermostat_confirm_interval("15"), 15.0)
+        self.assertEqual(proxy._thermostat_confirm_interval("1"), 2.0)       # floor
+        self.assertEqual(proxy._thermostat_confirm_interval("999"), 120.0)   # ceiling
+        self.assertEqual(proxy._thermostat_confirm_interval("0"), 0.0)       # disabled (pure optimistic)
+        self.assertEqual(proxy._thermostat_confirm_interval("-1"), 0.0)
+        self.assertEqual(proxy._thermostat_confirm_interval("nope"), 10.0)   # non-numeric → default
+        self.assertEqual(proxy._thermostat_confirm_interval("nan"), 10.0)    # non-finite → default
+        self.assertEqual(proxy._thermostat_confirm_interval("inf"), 10.0)
 
 
-class ThermostatNodesTests(unittest.TestCase):
-    def test_returns_thermostat_node_ids_sorted(self):
+class ThermostatNodeFromFrameTests(unittest.TestCase):
+    def test_power_and_setpoint_sets_yield_node(self):
+        self.assertEqual(proxy._thermostat_node_from_frame(cmd_frame(0x0c, b"\x40\x01\x01")), 0x0c)  # power
+        self.assertEqual(proxy._thermostat_node_from_frame(cmd_frame(0x0d, b"\x43\x01\x01\x22\x00\xa0")), 0x0d)  # setpoint
+
+    def test_excludes_gets_and_non_thermostat_and_non_1e07(self):
+        self.assertIsNone(proxy._thermostat_node_from_frame(cmd_frame(0x0c, b"\x40\x02")))        # mode GET (no re-trigger)
+        self.assertIsNone(proxy._thermostat_node_from_frame(cmd_frame(0x0c, b"\x31\x04\x01")))    # temp GET
+        self.assertIsNone(proxy._thermostat_node_from_frame(cmd_frame(0x0c, b"\x25\x01\xff")))    # a switch SET
+        self.assertIsNone(proxy._thermostat_node_from_frame(Frame(build_frame(0x1E, 0x09)[1:-1])))  # not a 1e07
+        self.assertIsNone(proxy._thermostat_node_from_frame(Frame(build_frame(0x1E, 0x07)[1:-1])))  # 1e07, no node/data
+
+
+class NoteThermostatCommandTests(unittest.TestCase):
+    """A thermostat SET marks the node + (re)sets ONE debounce deadline (collapse)."""
+
+    def test_standalone_marks_node_and_sets_deadline(self):
         rt = proxy.ProxyRuntime()
-        rt.registry.nodes = {"13": {"type": "thermostat"}, "12": {"type": "thermostat"},
-                             "5": {"type": "light"}}
-        self.assertEqual(proxy._thermostat_nodes(rt), [0x0c, 0x0d])          # thermostats only, sorted
+        rt.mode = "standalone"
+        with mock.patch.object(proxy, "THERMOSTAT_CONFIRM_SECS", 10.0):
+            proxy._note_thermostat_command(rt, 0x0c)
+        self.assertEqual(rt.thermostat_confirm, {0x0c})
+        self.assertGreater(rt.thermostat_confirm_at, 0.0)
+
+    def test_collapse_pushes_one_deadline_for_rapid_changes(self):
+        rt = proxy.ProxyRuntime()
+        rt.mode = "standalone"
+        with mock.patch.object(proxy, "THERMOSTAT_CONFIRM_SECS", 10.0):
+            proxy._note_thermostat_command(rt, 0x0c)
+            first = rt.thermostat_confirm_at
+            proxy._note_thermostat_command(rt, 0x0d)            # a 2nd change → same single (pushed) deadline
+        self.assertEqual(rt.thermostat_confirm, {0x0c, 0x0d})   # both nodes collapse into one poll
+        self.assertGreaterEqual(rt.thermostat_confirm_at, first)
+
+    def test_proxy_and_disabled_are_noops(self):
+        proxy_rt = proxy.ProxyRuntime()                         # mode defaults to "proxy"
+        proxy._note_thermostat_command(proxy_rt, 0x0c)
+        self.assertEqual(proxy_rt.thermostat_confirm, set())    # proxy: the cloud confirms
+        rt = proxy.ProxyRuntime()
+        rt.mode = "standalone"
+        with mock.patch.object(proxy, "THERMOSTAT_CONFIRM_SECS", 0.0):
+            proxy._note_thermostat_command(rt, 0x0c)
+        self.assertEqual(rt.thermostat_confirm, set())          # disabled → no confirm scheduled
 
 
-class ThermostatPollerTests(unittest.IsolatedAsyncioTestCase):
-    """Standalone-only GET-poller for thermostat Mode (40 02) + temperature (31 04)."""
+class ThermostatConfirmPollerTests(unittest.IsolatedAsyncioTestCase):
+    """Debounced confirmation poller — GET-polls ONLY the just-changed nodes once the window elapses."""
 
     @staticmethod
     def _attr_node(raw):
         m = {t.tag: t.value for t in Frame(raw[1:-1]).tlvs()}
         return m.get(0x0046), m.get(0x0047)
 
-    async def _run(self, rt, settle=0.05, interval=0.01):
-        task = asyncio.create_task(proxy._thermostat_poller(rt, interval=interval))
+    async def _run(self, rt, settle=0.05, delay=1.0, tick=0.01, clock=None):
+        task = asyncio.create_task(
+            proxy._thermostat_poller(rt, delay=delay, tick=tick, clock=clock or (lambda: 1000.0)))
         await asyncio.sleep(settle)
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
         return task
 
-    async def test_standalone_polls_mode_and_temp_per_thermostat(self):
+    async def test_polls_due_nodes_mode_and_temp(self):
         rt = proxy.ProxyRuntime()
         rt.mode = "standalone"
-        sess = FakeSession()
-        rt.sessions.append(sess)
-        with mock.patch.object(proxy, "_thermostat_nodes", return_value=[0x0c, 0x0d]):
-            await self._run(rt)
-        attrs = {self._attr_node(raw) for raw in sess.sent}   # set: dedup across the several ticks
-        self.assertIn((b"\x40\x02", b"\x0c"), attrs)          # mode GET, salon
-        self.assertIn((b"\x31\x04\x01", b"\x0c"), attrs)      # temp GET, salon
+        rt.sessions.append(sess := FakeSession())
+        rt.thermostat_confirm = {0x0c, 0x0d}
+        rt.thermostat_confirm_at = 1000.0                       # deadline already reached (clock returns 1000)
+        await self._run(rt)
+        attrs = {self._attr_node(raw) for raw in sess.sent}
+        self.assertIn((b"\x40\x02", b"\x0c"), attrs)            # mode GET
+        self.assertIn((b"\x31\x04\x01", b"\x0c"), attrs)        # temp GET
         self.assertIn((b"\x40\x02", b"\x0d"), attrs)
-        self.assertIn((b"\x31\x04\x01", b"\x0d"), attrs)
+        self.assertEqual(rt.thermostat_confirm, set())          # drained
+        self.assertEqual(rt.thermostat_confirm_at, 0.0)
 
-    async def test_proxy_mode_is_a_noop(self):
-        rt = proxy.ProxyRuntime()                              # mode defaults to "proxy"
-        sess = FakeSession()
-        rt.sessions.append(sess)
-        with mock.patch.object(proxy, "_thermostat_nodes", return_value=[0x0c]):
-            task = await self._run(rt)
-        self.assertEqual(sess.sent, [])                        # the cloud polls in proxy → hestia doesn't
-        self.assertTrue(task.done())
-
-    async def test_disabled_interval_is_a_noop(self):
+    async def test_still_in_debounce_window_does_not_poll(self):
         rt = proxy.ProxyRuntime()
         rt.mode = "standalone"
-        sess = FakeSession()
-        rt.sessions.append(sess)
-        with mock.patch.object(proxy, "_thermostat_nodes", return_value=[0x0c]):
-            await self._run(rt, interval=0)
+        rt.sessions.append(sess := FakeSession())
+        rt.thermostat_confirm = {0x0c}
+        rt.thermostat_confirm_at = 2000.0                       # deadline in the future (clock returns 1000)
+        await self._run(rt)
+        self.assertEqual(sess.sent, [])                         # still debouncing → no poll yet
+        self.assertEqual(rt.thermostat_confirm, {0x0c})         # still pending
+
+    async def test_empty_queue_does_not_poll(self):
+        rt = proxy.ProxyRuntime()
+        rt.mode = "standalone"
+        rt.sessions.append(sess := FakeSession())
+        await self._run(rt)
         self.assertEqual(sess.sent, [])
 
-    async def test_tick_error_is_logged_and_loop_survives(self):
+    async def test_proxy_mode_and_disabled_are_noops(self):
+        rt = proxy.ProxyRuntime()                               # proxy
+        rt.sessions.append(sess := FakeSession())
+        rt.thermostat_confirm = {0x0c}
+        rt.thermostat_confirm_at = 1000.0
+        task = await self._run(rt)
+        self.assertEqual(sess.sent, [])
+        self.assertTrue(task.done())
+        rt2 = proxy.ProxyRuntime()
+        rt2.mode = "standalone"
+        rt2.sessions.append(sess2 := FakeSession())
+        rt2.thermostat_confirm = {0x0c}
+        rt2.thermostat_confirm_at = 1000.0
+        await self._run(rt2, delay=0)                           # confirm disabled
+        self.assertEqual(sess2.sent, [])
+
+    async def test_poll_error_is_logged_and_loop_survives(self):
         rt = proxy.ProxyRuntime()
         rt.mode = "standalone"
-        rt.sessions.append(FakeSession())
-        with mock.patch.object(proxy, "_thermostat_nodes", side_effect=RuntimeError("classify boom")):
+        rt.sessions.append(FakeSession(raise_exc=OSError("pipe")))
+        rt.thermostat_confirm = {0x0c}
+        rt.thermostat_confirm_at = 1000.0
+        # _inject swallows the OSError (logs "inject failed"); force a harder error to hit the poller's except:
+        with mock.patch.object(proxy, "_inject", side_effect=RuntimeError("boom")):
             with self.assertLogs("hestia.proxy", level="ERROR") as logs:
                 task = await self._run(rt)
-        self.assertTrue(any("thermostat poll tick failed" in m for m in logs.output))
-        self.assertTrue(task.cancelled())                      # survived the error, ended via our cancel
+        self.assertTrue(any("thermostat confirm poll failed" in m for m in logs.output))
+        self.assertTrue(task.cancelled())
+
+
+class ThermostatEchoSchedulesConfirmTests(unittest.IsolatedAsyncioTestCase):
+    """A thermostat command frame hestia writes echoes power optimistically AND schedules a confirm."""
+
+    async def test_power_set_echoes_on_and_schedules_confirm(self):
+        rt = proxy.ProxyRuntime()
+        rt.mode = "standalone"
+        sub = await rt.event_bus.try_subscribe()
+        raw = commands.set_thermostat_power(rt.next_seq(), 0x0c, True)   # 40 01 01
+        with mock.patch.object(proxy, "THERMOSTAT_CONFIRM_SECS", 10.0):
+            proxy._echo_command_frame(rt, raw)
+        self.assertIs(rt.state.thermostat_on[0x0c], True)               # optimistic echo
+        self.assertIn(0x0c, rt.thermostat_confirm)                      # confirm scheduled
+        events = [sub.queue.get_nowait() for _ in range(sub.queue.qsize())]
+        self.assertIn({"type": "state", "node": 0x0c, "fields": {"thermostat_on": True}}, events)
+
+    async def test_setpoint_set_schedules_confirm_without_echo(self):
+        rt = proxy.ProxyRuntime()
+        rt.mode = "standalone"
+        raw = commands.set_thermostat(rt.next_seq(), 0x0c, 22.0)        # 43 01 … (setpoint)
+        with mock.patch.object(proxy, "THERMOSTAT_CONFIRM_SECS", 10.0):
+            proxy._echo_command_frame(rt, raw)
+        self.assertIn(0x0c, rt.thermostat_confirm)                      # confirm scheduled (catch any mode change)
+        self.assertEqual(rt.state.thermostat_on, {})                   # setpoint is NOT echoed (device reports it)
 
 
 class SchedulerPresenceTests(unittest.IsolatedAsyncioTestCase):
