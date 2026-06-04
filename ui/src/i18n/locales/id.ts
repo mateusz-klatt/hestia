@@ -52,6 +52,8 @@ const messages: Partial<Messages> = {
 
   "state.open": "terbuka",
   "state.closed": "tertutup",
+  "state.motion": "gerakan",
+  "state.noMotion": "tidak ada gerakan",
 };
 
 export default messages;

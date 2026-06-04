@@ -60,6 +60,8 @@ const en = {
 
   "state.open": "open",
   "state.closed": "closed",
+  "state.motion": "motion",
+  "state.noMotion": "no motion",
 };
 
 export default en;

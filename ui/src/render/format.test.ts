@@ -108,8 +108,13 @@ describe("stateStr", () => {
     expect(stateStr(device({ type: "door", door: "tamper" }))).toBe("tamper");   // unexpected → raw
     expect(stateStr(device({ type: "door" }))).toBe("—");
   });
+  it("motion (PIR) shows an icon + localised word; em dash until it has reported", () => {
+    expect(stateStr(device({ type: "motion", motion: true }))).toBe("🏃 motion");
+    expect(stateStr(device({ type: "motion", motion: false }))).toBe("🧍 no motion");
+    expect(stateStr(device({ type: "motion" }))).toBe("—");   // null → unseen
+  });
   it("renders an em dash for a stateless / unknown type", () => {
-    expect(stateStr(device({ type: "motion" }))).toBe("—");
+    expect(stateStr(device({ type: "smoke" }))).toBe("—");
     expect(stateStr(device({ type: "unknown" }))).toBe("—");
   });
 });

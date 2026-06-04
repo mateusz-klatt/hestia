@@ -52,6 +52,8 @@ const messages: Partial<Messages> = {
 
   "state.open": "mở",
   "state.closed": "đóng",
+  "state.motion": "chuyển động",
+  "state.noMotion": "không có chuyển động",
 };
 
 export default messages;

@@ -747,6 +747,7 @@ def state_snapshot(state: State) -> dict:
         return {f"{k:#04x}": v for k, v in mapping.items()}
     return {
         "doors": hexkeys(state.doors),
+        "motion": hexkeys(state.motion),
         "levels": hexkeys(state.levels),
         "switches": hexkeys(state.switches),
         "thermostat_setpoint": hexkeys(state.thermostat_setpoint),
@@ -823,6 +824,7 @@ def _add_live_state(entry: dict, state: State, node: int) -> None:
     entry["level"] = state.levels.get(node)                  # blind/dimmer 0..99
     entry["switch"] = state.switches.get(node)               # on/off relay
     entry["door"] = state.doors.get(node)                    # "open"/"closed"
+    entry["motion"] = state.motion.get(node)                 # PIR: True=motion / False=idle
     entry["setpoint"] = state.thermostat_setpoint.get(node)  # °C target
     entry["thermostat_on"] = state.thermostat_on.get(node)   # bool
     entry["temperature"] = state.temperature.get(node)       # °C measured

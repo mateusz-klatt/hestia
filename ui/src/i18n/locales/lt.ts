@@ -55,6 +55,8 @@ const messages: Partial<Messages> = {
 
   "state.open": "atidaryta",
   "state.closed": "uždaryta",
+  "state.motion": "judesys",
+  "state.noMotion": "nėra judesio",
 };
 
 export default messages;
