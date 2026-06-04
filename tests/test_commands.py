@@ -105,6 +105,16 @@ class NodeCommandTests(unittest.TestCase):
         attr, _, _ = self._node(commands.set_thermostat_power(1, 0x0D, False))
         self.assertEqual(attr, b"\x40\x01\x00")
 
+    def test_get_thermostat_mode(self):
+        attr, node, _ = self._node(commands.get_thermostat_mode(1, 0x0C))
+        self.assertEqual(attr, b"\x40\x02")              # Thermostat Mode GET → device replies 40 03 <mode>
+        self.assertEqual(node, b"\x0c")
+
+    def test_get_temperature(self):
+        attr, node, _ = self._node(commands.get_temperature(1, 0x0C))
+        self.assertEqual(attr, b"\x31\x04\x01")          # Multilevel Sensor GET → device replies 31 05 …
+        self.assertEqual(node, b"\x0c")
+
 
 if __name__ == "__main__":
     unittest.main()
