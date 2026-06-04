@@ -36,6 +36,7 @@ const en = {
   "rooms.empty": "No devices",
   "rooms.other": "Other",
   "rooms.editIcons": "Edit icons",
+  "rooms.editIconsDone": "Done",
   "rooms.iconNone": "—",
   "rooms.deviceCount.zero": "{n} devices",
   "rooms.deviceCount.one": "{n} device",

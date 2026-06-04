@@ -33,6 +33,7 @@ const messages: Partial<Messages> = {
   "rooms.empty": "Nėra įrenginių",
   "rooms.other": "Kita",
   "rooms.editIcons": "Redaguoti piktogramas",
+  "rooms.editIconsDone": "Atlikta",
   "rooms.iconNone": "—",
   "rooms.deviceCount.one": "{n} įrenginys",
   "rooms.deviceCount.few": "{n} įrenginiai",

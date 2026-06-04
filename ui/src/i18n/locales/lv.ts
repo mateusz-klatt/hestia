@@ -33,6 +33,7 @@ const messages: Partial<Messages> = {
   "rooms.empty": "Nav ierīču",
   "rooms.other": "Citi",
   "rooms.editIcons": "Rediģēt ikonas",
+  "rooms.editIconsDone": "Gatavs",
   "rooms.iconNone": "—",
   "rooms.deviceCount.zero": "{n} ierīču",
   "rooms.deviceCount.one": "{n} ierīce",

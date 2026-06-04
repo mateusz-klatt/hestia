@@ -18,6 +18,8 @@ export interface RoomsView {
   patchState: (node: number, info: DeviceInfo) => void;
   /** Return to the room list (the top 🏠 Pokoje tab calls this — there's no in-detail back button). */
   goToLanding: () => void;
+  /** Enter per-room icon-edit mode (the entry point lives in the settings menu, not the rooms screen). */
+  enterIconEdit: () => void;
 }
 
 const NO_ROOM = ""; // empty bucket key for devices with no room set (displayed via roomDisplay)
@@ -130,14 +132,15 @@ export function createRoomsView(container: HTMLElement, deps: RoomsDeps): RoomsV
   let stateSpans = new Map<number, HTMLElement>();
   let editIcons = false;
 
-  function editToggle(): HTMLButtonElement {
+  // Finish editing → back to the plain room grid. (Entering edit mode now lives in the settings
+  // menu, not on the rooms screen — so the landing isn't cluttered with a config toggle.)
+  function iconEditDone(): HTMLButtonElement {
     const btn = document.createElement("button");
     btn.type = "button";
-    btn.className = "room-icon-edit-toggle";
-    btn.setAttribute("aria-pressed", String(editIcons));
-    btn.textContent = `✏️ ${t("rooms.editIcons")}`;
+    btn.className = "room-icon-edit-done";
+    btn.textContent = `✓ ${t("rooms.editIconsDone")}`;
     btn.addEventListener("click", () => {
-      editIcons = !editIcons;
+      editIcons = false;
       renderLanding();
     });
     return btn;
@@ -188,6 +191,7 @@ export function createRoomsView(container: HTMLElement, deps: RoomsDeps): RoomsV
   }
 
   function renderIconEditor(rooms: string[]): void {
+    container.appendChild(iconEditDone());
     const list = document.createElement("div");
     list.className = "room-icon-list";
     for (const room of rooms) list.appendChild(roomIconEditor(room));
@@ -207,7 +211,6 @@ export function createRoomsView(container: HTMLElement, deps: RoomsDeps): RoomsV
       return;
     }
     const rooms = sortedRooms(groups.keys());
-    container.appendChild(editToggle());
     if (editIcons) {
       renderIconEditor(rooms);
       return;
@@ -297,7 +300,12 @@ export function createRoomsView(container: HTMLElement, deps: RoomsDeps): RoomsV
       const span = stateSpans.get(node);
       if (span !== undefined) span.textContent = roomStateText(info);
     },
+    enterIconEdit(): void {
+      editIcons = true;
+      navigate(null); // selectedRoom=null → renderLanding → editIcons → the icon editor
+    },
     goToLanding(): void {
+      editIcons = false; // tapping the 🏠 Pokoje tab always returns to the plain room grid
       navigate(null);
     },
   };

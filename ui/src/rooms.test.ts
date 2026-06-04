@@ -88,11 +88,33 @@ describe("createRoomsView — landing", () => {
     expect(container.querySelector(".room-card-title")?.textContent).toBe("Other");
   });
 
+  it("has no edit-icons toggle on the landing (the entry point moved to settings)", () => {
+    const { container, view } = mk({ Salon: "🛋️" });
+    view.update(discovery({ "1": device({ type: "light", room: "Salon" }) }));
+    expect(container.querySelector(".room-icon-edit-toggle")).toBeNull(); // not on the rooms screen
+    expect(container.querySelector(".room-card")).not.toBeNull();         // just the room grid
+  });
+
+  it("enterIconEdit shows the editor; the Done button (and goToLanding) return to the grid", () => {
+    const { container, view } = mk({ Salon: "🛋️" });
+    view.update(discovery({ "1": device({ type: "light", room: "Salon" }) }));
+    view.enterIconEdit();
+    expect(container.querySelector(".room-card")).toBeNull();             // editor, not the grid
+    expect(container.querySelector(".room-icon-select")).not.toBeNull();
+    container.querySelector<HTMLButtonElement>(".room-icon-edit-done")?.click();
+    expect(container.querySelector(".room-card")).not.toBeNull();         // back to the grid
+    view.enterIconEdit();
+    expect(container.querySelector(".room-icon-select")).not.toBeNull();
+    view.goToLanding();                                                   // tapping 🏠 Pokoje also exits
+    expect(container.querySelector(".room-icon-select")).toBeNull();
+    expect(container.querySelector(".room-card")).not.toBeNull();
+  });
+
   it("toggles icon edit mode and saves preset or clear selections", async () => {
     const { container, roomIcons, savedIcons, view } = mk({ Salon: "🛋️" });
     view.update(discovery({ "1": device({ type: "light", room: "Salon" }) }));
 
-    container.querySelector<HTMLButtonElement>(".room-icon-edit-toggle")?.click();
+    view.enterIconEdit();
     expect(container.querySelector(".room-card")).toBeNull();
     expect(container.querySelector(".room-icon-name")?.textContent).toBe("Salon");
     const select = container.querySelector<HTMLSelectElement>(".room-icon-select");

@@ -190,4 +190,25 @@ describe("renderUser", () => {
     expect(logoutMock).toHaveBeenCalledOnce();
     expect(onLogout).toHaveBeenCalledOnce();
   });
+
+  it("shows the edit-room-icons entry only when onEditIcons is provided", () => {
+    const without = document.createElement("div");
+    renderUser(without, "tata", { onLogout: vi.fn() });
+    expect(without.querySelector("#edit-room-icons")).toBeNull();
+
+    const withCb = document.createElement("div");
+    renderUser(withCb, "tata", { onLogout: vi.fn(), onEditIcons: vi.fn() });
+    expect(withCb.querySelector("#edit-room-icons")).not.toBeNull();
+  });
+
+  it("edit-room-icons fires the callback and closes the menu", () => {
+    const box = document.createElement("div");
+    const onEditIcons = vi.fn();
+    renderUser(box, "tata", { onLogout: vi.fn(), onEditIcons });
+    box.querySelector<HTMLButtonElement>("#user-menu-btn")?.click(); // open the menu
+    expect(box.querySelector<HTMLElement>("#user-menu")?.hidden).toBe(false);
+    box.querySelector<HTMLButtonElement>("#edit-room-icons")?.click();
+    expect(onEditIcons).toHaveBeenCalledOnce();
+    expect(box.querySelector<HTMLElement>("#user-menu")?.hidden).toBe(true); // menu closed
+  });
 });

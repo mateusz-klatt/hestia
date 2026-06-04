@@ -33,6 +33,7 @@ const messages: Partial<Messages> = {
   "rooms.empty": "ไม่มีอุปกรณ์",
   "rooms.other": "อื่นๆ",
   "rooms.editIcons": "แก้ไขไอคอน",
+  "rooms.editIconsDone": "เสร็จสิ้น",
   "rooms.iconNone": "—",
   "rooms.deviceCount.other": "{n} อุปกรณ์",
 

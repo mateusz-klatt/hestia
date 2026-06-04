@@ -33,6 +33,7 @@ const messages: Partial<Messages> = {
   "rooms.empty": "Δεν υπάρχουν συσκευές",
   "rooms.other": "Άλλα",
   "rooms.editIcons": "Επεξεργασία εικονιδίων",
+  "rooms.editIconsDone": "Τέλος",
   "rooms.iconNone": "—",
   "rooms.deviceCount.one": "{n} συσκευή",
   "rooms.deviceCount.other": "{n} συσκευές",

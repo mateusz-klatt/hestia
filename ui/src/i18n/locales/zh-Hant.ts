@@ -33,6 +33,7 @@ const messages: Partial<Messages> = {
   "rooms.empty": "沒有裝置",
   "rooms.other": "其他",
   "rooms.editIcons": "編輯圖示",
+  "rooms.editIconsDone": "完成",
   "rooms.iconNone": "—",
   "rooms.deviceCount.other": "{n} 個裝置",
 

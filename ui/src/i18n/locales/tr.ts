@@ -33,6 +33,7 @@ const messages: Partial<Messages> = {
   "rooms.empty": "Cihaz yok",
   "rooms.other": "Diğer",
   "rooms.editIcons": "Simgeleri düzenle",
+  "rooms.editIconsDone": "Bitti",
   "rooms.iconNone": "—",
   "rooms.deviceCount.one": "{n} cihaz",
   "rooms.deviceCount.other": "{n} cihaz",

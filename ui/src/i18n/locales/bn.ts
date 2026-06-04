@@ -33,6 +33,7 @@ const messages: Partial<Messages> = {
   "rooms.empty": "কোনো ডিভাইস নেই",
   "rooms.other": "অন্যান্য",
   "rooms.editIcons": "আইকন সম্পাদনা",
+  "rooms.editIconsDone": "সম্পন্ন",
   "rooms.iconNone": "—",
   "rooms.deviceCount.one": "{n}টি ডিভাইস",
   "rooms.deviceCount.other": "{n}টি ডিভাইস",

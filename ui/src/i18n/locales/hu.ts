@@ -33,6 +33,7 @@ const messages: Partial<Messages> = {
   "rooms.empty": "Nincsenek eszközök",
   "rooms.other": "Egyéb",
   "rooms.editIcons": "Ikonok szerkesztése",
+  "rooms.editIconsDone": "Kész",
   "rooms.iconNone": "—",
   "rooms.deviceCount.one": "{n} eszköz",
   "rooms.deviceCount.other": "{n} eszköz",

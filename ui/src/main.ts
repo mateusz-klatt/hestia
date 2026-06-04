@@ -53,6 +53,8 @@ const roomsKlimaBox = el("rooms-klima");
 // Notify the view-switch when the rooms view enters/leaves a room, so its tab can flip to "← Rooms"
 // (a discoverable back). Assigned in startApp once the switch exists; nav events only fire after that.
 let onRoomsNav: (inRoom: boolean) => void = () => undefined;
+// Set in startApp once the view switcher exists; the settings-menu "edit icons" entry calls it.
+let triggerIconEdit: () => void = () => undefined;
 let roomIcons: Record<string, string> = {};
 const roomsView = createRoomsView(el("room-list"), {
   postControl,
@@ -142,6 +144,11 @@ function startApp(): void {
   // refresh re-rendering the hidden room detail must not flip the tab while Advanced is showing.
   onRoomsNav = (inRoom) => {
     if (currentView === "rooms") switcher.setRoomsInRoom(inRoom);
+  };
+  // Settings → "Edit icons": make sure the rooms view is showing, then enter icon-edit mode.
+  triggerIconEdit = () => {
+    switcher.apply("rooms");
+    roomsView.enterIconEdit();
   };
 
   // ---- Automations editor -------------------------------------------------
@@ -258,6 +265,9 @@ void (async () => {
   const userOpts = {
     onLogout: () => {
       location.reload();
+    },
+    onEditIcons: () => {
+      triggerIconEdit();
     },
   };
   const authedUserOpts = {

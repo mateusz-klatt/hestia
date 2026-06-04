@@ -35,6 +35,7 @@ const pl: Partial<Messages> = {
   "rooms.empty": "Brak urządzeń",
   "rooms.other": "Inne",
   "rooms.editIcons": "Edytuj ikony",
+  "rooms.editIconsDone": "Gotowe",
   "rooms.iconNone": "—",
   "rooms.deviceCount.one": "{n} urządzenie",
   "rooms.deviceCount.few": "{n} urządzenia",
