@@ -1682,7 +1682,9 @@ class AutosaveTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(saved, [{"doors": {}, "levels": {}, "switches": {"14": True},
                                   "thermostat_setpoint": {}, "thermostat_on": {},
                                   "temperature": {}, "plug_w": {}, "plug_kwh": {},
-                                  "plug_v": {}, "gang": {}}])
+                                  "plug_v": {}, "gang": {},
+                                  "globals": {"crib_temp": None, "outdoor_temp": None,
+                                              "outdoor_humidity": None}}])
 
     async def test_persist_state_dirty_false_is_noop(self):
         rt = proxy.ProxyRuntime()
