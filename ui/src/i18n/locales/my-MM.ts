@@ -52,6 +52,8 @@ const messages: Partial<Messages> = {
 
   "state.open": "ဖွင့်ထားသည်",
   "state.closed": "ပိတ်ထားသည်",
+  "state.motion": "လှုပ်ရှားမှု",
+  "state.noMotion": "လှုပ်ရှားမှု မရှိပါ",
 };
 
 export default messages;

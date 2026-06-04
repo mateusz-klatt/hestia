@@ -185,6 +185,27 @@ class ApplyDoorTests(unittest.TestCase):
         self.assertEqual(st.doors[0x12], "?99")
 
 
+class ApplyMotionTests(unittest.TestCase):
+    """PIR / Home-Security notification `71 05 .. ff 07 <event>` — 0x08 = motion, else idle."""
+
+    def test_motion_detected(self):
+        st = State()
+        self.assertEqual(st.apply(event(0x0F, bytes.fromhex("7105000000ff070800"))), {"motion": True})
+        self.assertIs(st.motion[0x0F], True)
+
+    def test_idle_clears_motion(self):
+        st = State()
+        # the idle/clear frame: event 0x00 with a trailing param naming the cleared event (0x08 = motion)
+        self.assertEqual(st.apply(event(0x0F, bytes.fromhex("7105000000ff07000108"))), {"motion": False})
+        self.assertIs(st.motion[0x0F], False)
+
+    def test_door_and_motion_are_distinct_notification_types(self):
+        st = State()
+        st.apply(event(0x11, bytes.fromhex("7105000000ff061600")))   # ff 06 → door
+        st.apply(event(0x0F, bytes.fromhex("7105000000ff070800")))   # ff 07 → motion
+        self.assertEqual((st.doors, st.motion), ({0x11: "open"}, {0x0F: True}))
+
+
 class ApplyOtherTests(unittest.TestCase):
     def test_level(self):
         st = State()

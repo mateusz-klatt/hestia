@@ -1822,7 +1822,7 @@ class AutosaveTests(unittest.IsolatedAsyncioTestCase):
                 with mock.patch.object(loop, "run_in_executor", side_effect=fake_run):
                     await proxy._persist_state(rt)
         self.assertFalse(rt.state.dirty)
-        self.assertEqual(saved, [{"doors": {}, "levels": {}, "switches": {"14": True},
+        self.assertEqual(saved, [{"doors": {}, "motion": {}, "levels": {}, "switches": {"14": True},
                                   "thermostat_setpoint": {}, "thermostat_on": {},
                                   "temperature": {}, "plug_w": {}, "plug_kwh": {},
                                   "plug_v": {}, "gang": {},

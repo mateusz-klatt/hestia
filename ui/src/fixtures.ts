@@ -27,6 +27,7 @@ export function device(overrides: Partial<DeviceInfo> = {}): DeviceInfo {
     level: null,
     switch: null,
     door: null,
+    motion: null,
     setpoint: null,
     thermostat_on: null,
     temperature: null,

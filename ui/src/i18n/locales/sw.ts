@@ -53,6 +53,8 @@ const messages: Partial<Messages> = {
 
   "state.open": "wazi",
   "state.closed": "imefungwa",
+  "state.motion": "harakati",
+  "state.noMotion": "hakuna harakati",
 };
 
 export default messages;

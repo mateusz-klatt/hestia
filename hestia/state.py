@@ -13,6 +13,7 @@ from .protocol import Frame
 
 _SNAPSHOT_MAPS = (
     "doors",
+    "motion",
     "levels",
     "switches",
     "thermostat_setpoint",
@@ -45,6 +46,12 @@ def _set_changed(store, node: int, changed: dict, key: str, value) -> None:
 def _apply_door(state, node: int, data: bytes, changed: dict) -> None:
     _set_changed(state.doors, node, changed, "door",
                  {0x16: "open", 0x17: "closed"}.get(data[7], f"?{data[7]:02x}"))
+
+
+def _apply_motion(state, node: int, data: bytes, changed: dict) -> None:
+    # PIR / Home-Security notification `71 05 .. ff 07 <event>`: 0x08 = motion detected, anything else
+    # (0x00 idle — the "no motion" clear, plus a trailing cleared-event param) = no motion.
+    _set_changed(state.motion, node, changed, "motion", data[7] == 0x08)
 
 
 def _apply_level(state, node: int, data: bytes, changed: dict) -> None:
@@ -138,6 +145,8 @@ _PREFIX2_APPLIERS = {
 def _state_applier(data: bytes):
     if data[:1] == b"\x71" and len(data) >= 8 and data[5:7] == b"\xff\x06":
         return _apply_door
+    if data[:1] == b"\x71" and len(data) >= 8 and data[5:7] == b"\xff\x07":   # Home-Security: motion (PIR)
+        return _apply_motion
     if data[:2] == b"\x60\x0d" and len(data) >= 7 and data[4:6] == b"\x25\x03":
         return _apply_gang
     if data[:2] == b"\x32\x02" and len(data) >= 4:
@@ -258,6 +267,7 @@ def _load_gang(data) -> dict:
 @dataclass
 class State:
     doors: dict = field(default_factory=dict)                # node -> "open"/"closed"
+    motion: dict = field(default_factory=dict)               # node -> bool (PIR: motion detected / idle)
     levels: dict = field(default_factory=dict)               # node -> 0..99 (dimmer/blind)
     switches: dict = field(default_factory=dict)             # node -> bool (on/off relay)
     thermostat_setpoint: dict = field(default_factory=dict)  # node -> °C

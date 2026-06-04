@@ -53,6 +53,8 @@ const messages: Partial<Messages> = {
 
   "state.open": "açık",
   "state.closed": "kapalı",
+  "state.motion": "hareket",
+  "state.noMotion": "hareket yok",
 };
 
 export default messages;

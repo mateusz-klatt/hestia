@@ -53,6 +53,8 @@ const messages: Partial<Messages> = {
 
   "state.open": "bukas",
   "state.closed": "sarado",
+  "state.motion": "galaw",
+  "state.noMotion": "walang galaw",
 };
 
 export default messages;

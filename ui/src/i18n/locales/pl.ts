@@ -57,6 +57,8 @@ const pl: Partial<Messages> = {
 
   "state.open": "otwarte",
   "state.closed": "zamknięte",
+  "state.motion": "ruch",
+  "state.noMotion": "brak ruchu",
 };
 
 export default pl;

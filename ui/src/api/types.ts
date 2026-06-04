@@ -23,6 +23,7 @@ export interface DeviceInfo {
   level: number | null;
   switch: boolean | null;
   door: string | null;
+  motion: boolean | null; // PIR: true = motion detected, false = idle
   setpoint: number | null;
   thermostat_on: boolean | null;
   temperature: number | null;

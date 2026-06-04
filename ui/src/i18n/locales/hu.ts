@@ -53,6 +53,8 @@ const messages: Partial<Messages> = {
 
   "state.open": "nyitva",
   "state.closed": "zárva",
+  "state.motion": "mozgás",
+  "state.noMotion": "nincs mozgás",
 };
 
 export default messages;

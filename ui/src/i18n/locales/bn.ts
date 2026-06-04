@@ -53,6 +53,8 @@ const messages: Partial<Messages> = {
 
   "state.open": "খোলা",
   "state.closed": "বন্ধ",
+  "state.motion": "নড়াচড়া",
+  "state.noMotion": "নড়াচড়া নেই",
 };
 
 export default messages;

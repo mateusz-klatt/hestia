@@ -52,6 +52,8 @@ const messages: Partial<Messages> = {
 
   "state.open": "열림",
   "state.closed": "닫힘",
+  "state.motion": "움직임",
+  "state.noMotion": "움직임 없음",
 };
 
 export default messages;

@@ -85,8 +85,12 @@ export function stateStr(info: DeviceInfo): string {
       if (info.door === "open") return `🔓 ${t("state.open")}`;
       if (info.door === "closed") return `🔒 ${t("state.closed")}`;
       return info.door;
+    case "motion":
+      // PIR: icon + localised word, null until it has reported.
+      if (info.motion === null) return "—";
+      return info.motion ? `🏃 ${t("state.motion")}` : `🧍 ${t("state.noMotion")}`;
     default:
-      // motion / smoke / water / unknown — no numeric state yet
+      // smoke / water / unknown — no numeric state yet
       return "—";
   }
 }

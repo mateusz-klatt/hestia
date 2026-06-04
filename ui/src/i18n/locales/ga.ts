@@ -56,6 +56,8 @@ const messages: Partial<Messages> = {
 
   "state.open": "oscailte",
   "state.closed": "dúnta",
+  "state.motion": "gluaiseacht",
+  "state.noMotion": "gan ghluaiseacht",
 };
 
 export default messages;
