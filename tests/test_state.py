@@ -55,10 +55,9 @@ class SnapshotTests(unittest.TestCase):
         snap = st.to_snapshot()
         self.assertEqual(snap["doors"], {"18": "open"})
         self.assertEqual(snap["gang"], {"7": {"1": True, "2": False}})
-        self.assertNotIn("scene_seq", snap)
-        self.assertNotIn("crib_temp", snap)
-        self.assertNotIn("outdoor_temp", snap)
-        self.assertNotIn("outdoor_humidity", snap)
+        self.assertNotIn("scene_seq", snap)                # dedup bookkeeping stays runtime-only
+        self.assertEqual(snap["globals"],                  # global temps ARE cached now (survive a restart)
+                         {"crib_temp": 22.0, "outdoor_temp": -3.0, "outdoor_humidity": 44.0})
 
         restored = State()
         restored.load_snapshot(snap)
@@ -72,7 +71,19 @@ class SnapshotTests(unittest.TestCase):
         self.assertEqual(restored.plug_kwh, {0x13: 8.75})
         self.assertEqual(restored.plug_v, {0x14: 244.58})
         self.assertEqual(restored.gang, {0x07: {1: True, 2: False}})
+        self.assertEqual((restored.crib_temp, restored.outdoor_temp, restored.outdoor_humidity),
+                         (22.0, -3.0, 44.0))               # globals restored → no "—" after a restart
         self.assertFalse(restored.dirty)
+
+    def test_load_snapshot_restores_partial_and_ignores_bad_globals(self):
+        st = State()
+        st.load_snapshot({"globals": {"crib_temp": 21.5, "outdoor_temp": "nan",
+                                      "outdoor_humidity": True}})  # str + bool rejected
+        self.assertEqual(st.crib_temp, 21.5)
+        self.assertIsNone(st.outdoor_temp)                 # non-numeric ignored
+        self.assertIsNone(st.outdoor_humidity)             # bool is an int subclass — explicitly rejected
+        st.load_snapshot({"globals": "not a dict"})        # malformed section → no-op
+        self.assertEqual(st.crib_temp, 21.5)
 
     def test_load_snapshot_tolerates_corrupt_partial_wrong_type_blob(self):
         st = State()

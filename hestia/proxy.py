@@ -1070,6 +1070,7 @@ async def _poll_global_field(rt, field, read, interval, source) -> None:
                 continue
             log.debug("%s: %s = %r", source, field, value)
             setattr(rt.state, field, value)
+            rt.state.dirty = True                                                 # cache the global across a restart
             rt.event_bus.publish({"type": "globals", "fields": {field: value}})   # live dashboard update
             await _inject(rt, rt.engine.on_global(rt, field, value), source=source)
         except Exception:                            # a daemon loop must never die on a tick error
@@ -1137,6 +1138,7 @@ async def _sensor433_poller(rt, stream=sensor433.stream_readings, enabled: bool 
         try:
             rt.state.outdoor_temp = reading.temperature_C
             rt.state.outdoor_humidity = reading.humidity
+            rt.state.dirty = True                        # cache the globals across a restart
             log.debug("sensor433: outdoor_temp=%r humidity=%r", reading.temperature_C, reading.humidity)
             rt.event_bus.publish({"type": "globals", "fields": {                  # live dashboard delta
                 "outdoor_temp": reading.temperature_C, "outdoor_humidity": reading.humidity}})
