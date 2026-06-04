@@ -115,15 +115,17 @@ export function renderActions(
   } else if (info.type === "thermostat") {
     addButton(t("ctl.off"), () => ({ op: "thermostat_power", node, on: false }));
     addButton(t("ctl.on"), () => ({ op: "thermostat_power", node, on: true }));
+    // 1 °C step: the device REPORTS its setpoint as a whole integer °C, so a half-degree nudge
+    // wouldn't survive the next report (21.5 comes back as 21/22). Whole degrees match it.
     addButton(
       "−",
-      () => ({ op: "thermostat", node, celsius: clampSetpoint(-0.5) }),
-      () => `${clampSetpoint(-0.5).toFixed(1)}°`,
+      () => ({ op: "thermostat", node, celsius: clampSetpoint(-1) }),
+      () => `${clampSetpoint(-1).toFixed(1)}°`,
     );
     addButton(
       "+",
-      () => ({ op: "thermostat", node, celsius: clampSetpoint(0.5) }),
-      () => `${clampSetpoint(0.5).toFixed(1)}°`,
+      () => ({ op: "thermostat", node, celsius: clampSetpoint(1) }),
+      () => `${clampSetpoint(1).toFixed(1)}°`,
     );
   }
 
