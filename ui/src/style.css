@@ -183,7 +183,7 @@ td.sub-label {
    or clearing it never reflows the room cards below it. flex-basis:100% drops it under the controls;
    min-height keeps the line even when empty (one fixed status line, no layout jump). */
 #ir-buttons .status,
-#rooms-scene .status,
+.whole-home-detail .status,
 #rooms-ir .status,
 #klima .status,
 #rooms-klima .status {
@@ -216,7 +216,7 @@ td.sub-label {
 /* Lay the scene / IR / klima controls out as one centred row (label + selects + buttons + status) — they'd
    otherwise misalign against the taller mobile controls; wraps only when too narrow to fit. */
 #ir-buttons,
-#rooms-scene,
+.whole-home-detail,
 #rooms-ir,
 #klima,
 #rooms-klima {
@@ -224,11 +224,6 @@ td.sub-label {
   flex-wrap: wrap;
   align-items: center;
   gap: 0.4rem 0.5rem;
-}
-
-#rooms-scene h3 {
-  flex-basis: 100%;
-  margin: 0;
 }
 
 #admin-tools {
@@ -483,6 +478,34 @@ td.seen.fresh {
 
 .room-card:hover {
   border-color: var(--accent);
+}
+
+/* The "Cały dom" master tile — same shape as a room card, accented so it reads as the whole-home control. */
+.whole-home-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.25rem;
+  padding: 1rem;
+  border: 1px solid var(--accent);
+  border-radius: 0.7rem;
+  background: var(--accent-soft);
+  color: var(--fg);
+  text-align: left;
+}
+
+.whole-home-card:hover {
+  border-color: var(--accent);
+}
+
+.whole-home-icon {
+  font-size: 1.55rem;
+  line-height: 1;
+}
+
+.whole-home-title {
+  font-size: 1.05rem;
+  font-weight: bold;
 }
 
 .room-card-title {

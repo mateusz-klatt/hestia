@@ -12,14 +12,11 @@ const BUTTONS = [
   { icon: "🌑", label: "scene.blindsDown", op: "blinds_down" },
 ] as const satisfies readonly { icon: string; label: Parameters<typeof t>[0]; op: SceneOp }[];
 
-/** Build the whole-home scene buttons once into their persistent rooms-view panel. */
+/** Build the whole-home scene buttons into a container (the "Cały dom" virtual-room detail body).
+ *  The detail view supplies its own heading, so no title is rendered here. */
 export function renderSceneControls(container: HTMLElement, postScene: PostScene): void {
   if (controls.has(container)) return;
   controls.set(container, true);
-
-  const title = document.createElement("h3");
-  title.textContent = t("scene.title");
-  container.appendChild(title);
 
   const buttons: HTMLButtonElement[] = [];
   const status = document.createElement("span");

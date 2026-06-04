@@ -36,6 +36,12 @@ function mk(initialIcons: Record<string, string> = {}): {
       }
       return Promise.resolve();
     },
+    renderWholeHome: (c) => {
+      const stub = document.createElement("button");
+      stub.className = "scene-stub";
+      stub.textContent = "scenes";
+      c.appendChild(stub);
+    },
   });
   return { container, roomIcons: () => icons, savedIcons, sent, view };
 }
@@ -214,6 +220,65 @@ describe("createRoomsView — room detail", () => {
   });
 });
 
+describe("createRoomsView — whole-home (Cały dom)", () => {
+  it("shows a 'Cały dom' tile when a light or blind exists; tapping it opens the scene detail", () => {
+    const { container, view } = mk();
+    view.update(discovery({ "1": device({ type: "light", room: "Salon" }) }));
+    const card = container.querySelector<HTMLButtonElement>(".whole-home-card");
+    expect(card).not.toBeNull();
+    expect(card?.querySelector(".whole-home-title")?.textContent).toBe("Whole home");
+    expect(container.querySelector(".whole-home-card")).not.toBe(container.querySelector(".room-card")); // distinct class
+    card?.click();
+    expect(container.querySelector(".room-title")?.textContent).toBe("Whole home");
+    expect(container.querySelector(".whole-home-detail .scene-stub")).not.toBeNull(); // renderWholeHome ran
+    expect(container.querySelector(".room-card")).toBeNull();
+  });
+
+  it("hides the 'Cały dom' tile when there are no lights or blinds", () => {
+    const { container, view } = mk();
+    view.update(discovery({ "1": device({ type: "plug", room: "Salon" }), "2": device({ type: "door" }) }));
+    expect(container.querySelector(".whole-home-card")).toBeNull();
+    expect(container.querySelector(".room-card")).not.toBeNull(); // real rooms still render
+  });
+
+  it("the 🏠 Pokoje tab (goToLanding) returns from Cały dom to the grid", () => {
+    const { container, view } = mk();
+    view.update(discovery({ "1": device({ type: "blind", room: "Salon" }) }));
+    container.querySelector<HTMLButtonElement>(".whole-home-card")?.click();
+    expect(container.querySelector(".whole-home-detail")).not.toBeNull();
+    view.goToLanding();
+    expect(container.querySelector(".whole-home-detail")).toBeNull();
+    expect(container.querySelector(".whole-home-card")).not.toBeNull(); // back on the landing
+  });
+
+  it("falls back to the landing if the home loses all scene devices while Cały dom is open", () => {
+    const { container, view } = mk();
+    view.update(discovery({ "1": device({ type: "light", room: "Salon" }) }));
+    container.querySelector<HTMLButtonElement>(".whole-home-card")?.click();
+    expect(container.querySelector(".whole-home-detail")).not.toBeNull();
+    view.update(discovery({ "1": device({ type: "plug", room: "Salon" }) })); // no more light/blind
+    expect(container.querySelector(".whole-home-detail")).toBeNull();
+    expect(container.querySelector(".room-card-title")?.textContent).toBe("Salon");
+  });
+
+  it("fires onNav(true) entering Cały dom, onNav(false) on return", () => {
+    const container = document.createElement("div");
+    const nav: boolean[] = [];
+    const view = createRoomsView(container, {
+      postControl: () => Promise.resolve({ ok: true }),
+      roomIcons: () => ({}),
+      saveRoomIcon: () => Promise.resolve(),
+      renderWholeHome: () => undefined,
+      onNav: (inRoom) => nav.push(inRoom),
+    });
+    view.update(discovery({ "1": device({ type: "light", room: "Salon" }) }));
+    container.querySelector<HTMLButtonElement>(".whole-home-card")?.click();
+    expect(nav.at(-1)).toBe(true); // a detail view → the back tab flips to "← Pokoje"
+    view.goToLanding();
+    expect(nav.at(-1)).toBe(false);
+  });
+});
+
 describe("createRoomsView — live updates", () => {
   it("patchState updates the visible card's state text in place", () => {
     const { container, view } = mk();
@@ -271,6 +336,7 @@ describe("createRoomsView — onNav callback", () => {
       postControl: () => Promise.resolve({ ok: true }),
       roomIcons: () => ({}),
       saveRoomIcon: () => Promise.resolve(),
+      renderWholeHome: () => undefined,
       onNav: (inRoom) => nav.push(inRoom),
     });
     view.update(discovery({ "5": device({ type: "light", room: "Salon" }) }));
@@ -288,6 +354,7 @@ describe("createRoomsView — onNav callback", () => {
       postControl: () => Promise.resolve({ ok: true }),
       roomIcons: () => ({}),
       saveRoomIcon: () => Promise.resolve(),
+      renderWholeHome: () => undefined,
       onNav: (inRoom) => nav.push(inRoom),
     });
     view.update(discovery({ "1": device({ type: "light", room: "Salon" }) }));
