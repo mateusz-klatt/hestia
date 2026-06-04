@@ -26,7 +26,9 @@ export interface RoomsView {
 
 const NO_ROOM = ""; // empty bucket key for devices with no room set (displayed via roomDisplay)
 const DEFAULT_ROOM_ICON = "🚪";
-const ROOM_ICON_PRESETS = ["🚪", "🛋️", "🛏️", "🍳", "🚿", "🧸", "💡", "📺", "🧺", "🌿", "🚗", "🪟"];
+const ROOM_ICON_PRESETS = [
+  "🚪", "🛋️", "🛏️", "🍳", "🍽️", "🚿", "🛁", "🚽", "🧸", "🖥️", "💡", "📺", "🧺", "🌿", "🚗", "🪟",
+];
 
 /** A device's room bucket key, trimmed; blank / unset devices fall into the catch-all bucket. */
 function roomKey(info: DeviceInfo): string {
