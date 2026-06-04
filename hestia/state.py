@@ -78,7 +78,10 @@ def _apply_thermostat_setpoint(state, node: int, data: bytes, changed: dict) -> 
 
 
 def _apply_thermostat_power(state, node: int, data: bytes, changed: dict) -> None:
-    _set_changed(state.thermostat_on, node, changed, "thermostat_on", data[2] == 0x01)
+    # Thermostat Mode report `40 03 <mode>`: 0x00 = Off, ANY non-zero = an active mode
+    # (Heat 0x01 / Cool 0x02 / Auto 0x03 / manufacturer). Treat every active mode as "on" so a
+    # unit running in something other than plain Heat doesn't read as Off.
+    _set_changed(state.thermostat_on, node, changed, "thermostat_on", data[2] != 0x00)
 
 
 def _apply_temperature(state, node: int, data: bytes, changed: dict) -> None:

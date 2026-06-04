@@ -256,6 +256,13 @@ class ApplyOtherTests(unittest.TestCase):
         st.apply(event(0x0D, b"\x40\x03\x00"))
         self.assertIs(st.thermostat_on[0x0D], False)
 
+    def test_thermostat_active_non_heat_mode_is_on(self):
+        # Any non-zero Thermostat Mode (Cool 0x02 / Auto 0x03 / manufacturer) = on, not just Heat 0x01.
+        for mode in (0x02, 0x03, 0x0B):
+            st = State()
+            st.apply(event(0x0D, bytes([0x40, 0x03, mode])))
+            self.assertIs(st.thermostat_on[0x0D], True, mode)
+
     def test_measured_temperature(self):
         st = State()
         st.apply(event(0x0D, b"\x31\x05\x01\x04\x00\x00\x00\x16"))
