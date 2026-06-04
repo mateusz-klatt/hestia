@@ -108,7 +108,15 @@ const live = new LiveController(
       return;
     }
     const cell = tr.querySelector<HTMLElement>(".actions");
-    if (cell !== null) renderActions(cell, node, info, postControl);
+    if (cell !== null) {
+      // A multi-gang node's per-channel on/off lives in the sub-rows below, so the node row must NOT
+      // also render every channel's buttons (that duplicated them). Single-endpoint / non-endpoint
+      // devices have no sub-rows, so they keep their node-level controls. (The rooms view has no
+      // sub-rows either, so it still renders all channels on the card via its own renderActions call.)
+      const eps = info.endpoints;
+      if (eps !== null && Object.keys(eps).length > 1) cell.replaceChildren();
+      else renderActions(cell, node, info, postControl);
+    }
     bindRow(tr, node, info, postName); // confirm + name/room save
   },
   (data) => {
