@@ -207,7 +207,7 @@ async def _audit_feed(request):
     return _json(HTTPStatus.OK, {"events": events})
 
 
-async def _rf433_feed(request):
+async def _rf433_feed(request):  # NOSONAR S7503: aiohttp route handlers must be coroutines (the framework awaits them)
     """GET /api/rf433 — every 433 MHz device hestia has decoded (discovery), newest-seen first;
     auth-gated like every /api/* route. Display-only; empty until the local-433 feeder is running."""
     return _json(HTTPStatus.OK, {"devices": _rt(request).rf433.snapshot()})

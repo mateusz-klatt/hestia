@@ -179,16 +179,22 @@ td.sub-label {
   min-height: 1.2em;
 }
 
-/* The scene / IR / klima action status (✓ / ✗) lives on its OWN reserved line within the panel, so showing
+/* The scene / IR action status (✓ / ✗) lives on its OWN reserved line within the panel, so showing
    or clearing it never reflows the room cards below it. flex-basis:100% drops it under the controls;
    min-height keeps the line even when empty (one fixed status line, no layout jump). */
 #ir-buttons .status,
 .whole-home-detail .status,
-#rooms-ir .status,
+#rooms-ir .status {
+  flex-basis: 100%;
+  min-height: 1.2em;
+}
+
+/* Klima shows its live state as a leading pictogram, so its status span carries text ONLY on a failed
+   transmit — full-width (its own line) but with NO reserved min-height, so a healthy panel keeps no
+   empty status row (it collapses to zero height). */
 #klima .status,
 #rooms-klima .status {
   flex-basis: 100%;
-  min-height: 1.2em;
 }
 
 #refresh {
@@ -211,6 +217,62 @@ td.sub-label {
 
 .panel:empty {
   margin: 0;
+}
+
+/* ---- Login screen ----------------------------------------------------- */
+/* Centre the card both ways in the viewport; the wrapper fills the (capped) page column. */
+#login {
+  min-height: 80vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+}
+
+.login-card {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  width: 100%;
+  max-width: 20rem;
+  padding: 1.6rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 0.8rem;
+  box-shadow: 0 6px 24px rgb(0 0 0 / 8%);
+}
+
+.login-brand {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.3rem;
+  color: var(--accent); /* the flame inherits this via currentColor */
+}
+
+.login-brand-name {
+  font-size: 1.7rem;
+  font-weight: bold;
+  color: var(--fg);
+  letter-spacing: 0.02em;
+}
+
+#login-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+}
+
+#login-form input,
+#login-form button {
+  width: 100%;
+  padding: 0.55rem 0.7rem;
+  font-size: 1rem;
+}
+
+#login-form .status {
+  min-height: 1.2em; /* reserve the error line so a wrong password doesn't shift the form */
+  text-align: center;
 }
 
 /* Lay the scene / IR / klima controls out as one centred row (label + selects + buttons + status) — they'd
