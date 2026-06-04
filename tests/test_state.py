@@ -84,6 +84,9 @@ class SnapshotTests(unittest.TestCase):
         self.assertIsNone(st.outdoor_humidity)             # bool is an int subclass — explicitly rejected
         st.load_snapshot({"globals": "not a dict"})        # malformed section → no-op
         self.assertEqual(st.crib_temp, 21.5)
+        st.load_snapshot({"globals": {"crib_temp": float("nan"), "outdoor_temp": float("inf")}})
+        self.assertEqual(st.crib_temp, 21.5)               # NaN/inf rejected → values unchanged
+        self.assertIsNone(st.outdoor_temp)
 
     def test_load_snapshot_tolerates_corrupt_partial_wrong_type_blob(self):
         st = State()

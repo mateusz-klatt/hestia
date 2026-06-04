@@ -6,6 +6,7 @@ the networking layer wraps; automations read this state and emit commands.
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 
 from .protocol import Frame
@@ -239,8 +240,8 @@ def _load_globals(state, data) -> None:
         return
     for name in _SNAPSHOT_GLOBALS:
         value = data.get(name)
-        if isinstance(value, (int, float)) and not isinstance(value, bool):
-            setattr(state, name, value)
+        if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value):
+            setattr(state, name, value)            # reject NaN/inf (a corrupt JSON blob round-trips them)
 
 
 def _load_gang(data) -> dict:
