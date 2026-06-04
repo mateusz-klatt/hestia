@@ -494,28 +494,22 @@ class ProcessControlOpTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("device write failed", resp["error"])
 
     async def test_success_publishes_optimistic_state(self):
-        # The device only ACKs a remote SET ([1e 08]); it never reports a [1e 09].
-        # A successful control must therefore echo the commanded state onto the live
-        # feed itself, or the dashboard never tracks a control press (the live bug).
+        # The device only ACKs a remote SET ([1e 08]); it never reports a [1e 09]. A successful control
+        # must therefore echo the commanded state — now POST-SEND, inside inject_to_device, so a real
+        # session is needed (FakeSession's stub doesn't echo).
         rt = proxy.ProxyRuntime()
-        rt.sessions.append(FakeSession())
+        rt.sessions.append(make_session(rt))
         sub = await rt.event_bus.try_subscribe()
         await proxy.process_control_op(rt, {"op": "switch", "node": 5, "on": True})
-        events = []
-        while not sub.queue.empty():
-            events.append(sub.queue.get_nowait())
-        self.assertIn({"type": "state", "node": 5, "fields": {"switch": True}}, events)
+        self.assertIn({"type": "state", "node": 5, "fields": {"switch": True}}, _drain_events(sub))
         self.assertIs(rt.state.switches[5], True)                  # State updated too
 
     async def test_non_stateful_op_publishes_no_state(self):
         rt = proxy.ProxyRuntime()
-        rt.sessions.append(FakeSession())
+        rt.sessions.append(make_session(rt))
         sub = await rt.event_bus.try_subscribe()
         await proxy.process_control_op(rt, {"op": "raw", "hex": "abcd"})  # raw → no commanded field
-        events = []
-        while not sub.queue.empty():
-            events.append(sub.queue.get_nowait())
-        self.assertFalse([e for e in events if e.get("type") == "state"])
+        self.assertFalse([e for e in _drain_events(sub) if e.get("type") == "state"])
 
 
 class CommandEchoTests(unittest.IsolatedAsyncioTestCase):
@@ -552,6 +546,39 @@ class CommandEchoTests(unittest.IsolatedAsyncioTestCase):
         make_session(rt)._observe(cmd_frame(0x0E, b"\x25\x01\x00"), "D->C")   # device→cloud: not a cloud command
         self.assertFalse([e for e in _drain_events(sub) if e.get("type") == "state"])
         self.assertEqual(rt.state.switches, {})
+
+    async def test_inject_to_device_echoes_switch_post_send(self):
+        rt = proxy.ProxyRuntime()
+        sess = make_session(rt)
+        sub = await rt.event_bus.try_subscribe()
+        await sess.inject_to_device(proxy.build_command(rt, {"op": "switch", "node": 0x0E, "on": True}))
+        self.assertIn({"type": "state", "node": 0x0E, "fields": {"switch": True}}, _drain_events(sub))
+        self.assertIs(rt.state.switches[0x0E], True)
+
+    async def test_failed_write_does_not_echo(self):
+        # The echo is POST-send (after drain): a write that raises must NOT fake a state change.
+        class _BoomWriter(FakeWriter):
+            async def drain(self):
+                raise OSError("pipe")
+        rt = proxy.ProxyRuntime()
+        sess = proxy.ProxySession(rt, FakeReader(), _BoomWriter(), "cloud", 1)
+        sub = await rt.event_bus.try_subscribe()
+        with self.assertRaises(OSError):
+            await sess.inject_to_device(proxy.build_command(rt, {"op": "switch", "node": 0x0E, "on": True}))
+        self.assertFalse([e for e in _drain_events(sub) if e.get("type") == "state"])
+        self.assertEqual(rt.state.switches, {})                              # no fake state
+
+    def test_echo_command_frame_tolerates_a_garbled_frame(self):
+        rt = proxy.ProxyRuntime()
+        proxy._echo_command_frame(rt, b"\x7e\x7e")                            # strips to b"" → no crash, no echo
+        self.assertEqual(rt.state.switches, {})
+
+    async def test_publish_command_state_skips_an_unchanged_value(self):
+        rt = proxy.ProxyRuntime()
+        rt.state.switches[5] = True
+        sub = await rt.event_bus.try_subscribe()
+        proxy._publish_command_state(rt, {"op": "switch", "node": 5, "on": True})  # already True → no delta
+        self.assertFalse([e for e in _drain_events(sub) if e.get("type") == "state"])
 
 
 class AutomationOpTests(unittest.IsolatedAsyncioTestCase):

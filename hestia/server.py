@@ -21,7 +21,8 @@ import uuid
 
 from . import commands
 from .protocol import Deframer, Frame, build_frame, tlv
-from .proxy import ProxyConfig, ProxyRuntime, _close, _feed_discovery, _start, summarize
+from .proxy import (ProxyConfig, ProxyRuntime, _close, _echo_command_frame, _feed_discovery,
+                    _start, summarize)
 from .state import tlv_value
 
 log = logging.getLogger("hestia.server")
@@ -167,6 +168,8 @@ class StandaloneSession:
             self.writer.write(reply)
         if replies:
             await self.writer.drain()
+            for reply in replies:                        # post-send: echo any switch/2-gang command we
+                _echo_command_frame(self.rt, reply)      # injected here (a fired automation) — relays don't report
 
     async def _finish_run(self, heartbeat) -> None:
         heartbeat.cancel()
@@ -209,6 +212,7 @@ class StandaloneSession:
         self.writer.write(raw)
         await self.writer.drain()
         log.info("INJECT -> %s %s", self.peer, raw.hex())
+        _echo_command_frame(self.rt, raw)            # post-send: echo a switch/2-gang set (control / scheduler)
 
 
 def _standalone_session(rt, reader, writer, _config):
