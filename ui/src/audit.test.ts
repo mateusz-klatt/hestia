@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import type { AuditEvent } from "./api/types";
-import { renderAuditFeed, type FetchAudit } from "./audit";
+import { formatAuditTarget, renderAuditFeed, type FetchAudit } from "./audit";
+import { device } from "./fixtures";
 
 const flush = (): Promise<void> =>
   new Promise((resolve) => {
@@ -119,5 +120,42 @@ describe("renderAuditFeed", () => {
     await second.refresh();
     expect(container.querySelector(".audit-empty")?.textContent).toBe("No activity yet");
     expect(container.textContent).not.toContain("unexpected");
+  });
+
+  it("renders a resolved target when a resolver is supplied", async () => {
+    const container = document.createElement("div");
+    const events: FetchAudit = () =>
+      Promise.resolve([auditEvent({ id: 1, ts: 100, action: "setpoint", target: "13", result: "ok" })]);
+    const feed = renderAuditFeed(container, events, (target, action) =>
+      action === "setpoint" && target === "13" ? "Thermostat · Hall" : target);
+    await feed.refresh();
+    expect(container.querySelector(".audit-target")?.textContent).toBe("Thermostat · Hall");
+  });
+});
+
+describe("formatAuditTarget", () => {
+  const devices = {
+    "13": device({ type: "thermostat", name: "Thermostat", room: "Hall" }),
+    "7": device({ type: "light" }), // no name/room
+  };
+
+  it("resolves a device-action integer target to name · room (incl. a rename)", () => {
+    expect(formatAuditTarget("13", "setpoint", devices)).toBe("Thermostat · Hall");
+    expect(formatAuditTarget("13", "name", devices)).toBe("Thermostat · Hall"); // /api/name targets a node
+  });
+
+  it("uses 'type #node' when the device has no name", () => {
+    expect(formatAuditTarget("7", "switch", devices)).toBe("light #7");
+  });
+
+  it("keeps the raw target for a non-device action (ir file / rule id)", () => {
+    expect(formatAuditTarget("/ext/klima.ir", "ir", devices)).toBe("/ext/klima.ir");
+    expect(formatAuditTarget("bedtime", "automation_set", devices)).toBe("bedtime");
+  });
+
+  it("keeps the raw target for a non-integer or unknown node, and passes null through", () => {
+    expect(formatAuditTarget("nope", "switch", devices)).toBe("nope");
+    expect(formatAuditTarget("99", "switch", devices)).toBe("99"); // unknown node
+    expect(formatAuditTarget(null, "switch", devices)).toBeNull();
   });
 });

@@ -19,7 +19,8 @@ import {
   saveSettings as saveUserSettings,
   whoami,
 } from "./api/client";
-import { renderAuditFeed } from "./audit";
+import type { DeviceInfo } from "./api/types";
+import { formatAuditTarget, renderAuditFeed } from "./audit";
 import { renderAutomations } from "./automations";
 import { renderActions } from "./controls";
 import { renderDbStats } from "./dbstats";
@@ -57,6 +58,12 @@ let onRoomsNav: (inRoom: boolean) => void = () => undefined;
 // Set in startApp once the view switcher exists; the settings-menu "edit icons" entry calls it.
 let triggerIconEdit: () => void = () => undefined;
 let roomIcons: Record<string, string> = {};
+
+// Audit feed: resolve a device row's node-id target → "name · room" at display time (Codex: read-time,
+// UI-side — no DB change, renames fix old rows). The current device map feeds the pure formatter.
+let latestDevices: Record<string, DeviceInfo> = {};
+const resolveAuditTarget = (target: string | null, action: string): string | null =>
+  formatAuditTarget(target, action, latestDevices);
 const roomsView = createRoomsView(el("room-list"), {
   postControl,
   roomIcons: () => roomIcons,
@@ -112,6 +119,7 @@ const live = new LiveController(
     // the room list from the fresh snapshot. Kept last so a throw here can't skip the panels above.
     renderIrButtons(roomsIrBox, data.ir_buttons, postIr);
     renderKlima(roomsKlimaBox, data.klima, postIr);
+    latestDevices = data.devices; // feed the audit-target resolver with current names/rooms
     roomsView.update(data);
   },
   (node, info) => {
@@ -121,7 +129,7 @@ const live = new LiveController(
 
 /** Wire up the live app (events, intervals, initial fetch). Called only once authenticated. */
 function startApp(): void {
-  const audit = renderAuditFeed(el("audit-feed"), fetchAudit);
+  const audit = renderAuditFeed(el("audit-feed"), fetchAudit, resolveAuditTarget);
   const rf433 = renderRf433(el("rf433"), fetchRf433);
   const dbStats = renderDbStats(el("dbstats"), fetchDbStats);
 
