@@ -139,8 +139,9 @@ describe("formatAuditTarget", () => {
     "7": device({ type: "light" }), // no name/room
   };
 
-  it("resolves a device-action integer target to name · room", () => {
+  it("resolves a device-action integer target to name · room (incl. a rename)", () => {
     expect(formatAuditTarget("13", "setpoint", devices)).toBe("Thermostat · Hall");
+    expect(formatAuditTarget("13", "name", devices)).toBe("Thermostat · Hall"); // /api/name targets a node
   });
 
   it("uses 'type #node' when the device has no name", () => {

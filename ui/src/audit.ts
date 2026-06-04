@@ -13,6 +13,7 @@ export type ResolveAuditTarget = (target: string | null, action: string) => stri
 const DEVICE_ACTIONS: ReadonlySet<string> = new Set([
   "switch", "level", "cover", "thermostat", "thermostat_power",
   "setpoint", "thermostat_on", "door", "endpoints", "scene", "motion",
+  "name", // /api/name (rename) targets a node id too
 ]);
 
 /** Map a device-action audit target (a bare-integer node id) to "name · room" using the current
