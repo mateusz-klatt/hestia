@@ -31,6 +31,8 @@ export interface DeviceInfo {
   energy_kwh: number | null;
   voltage_v: number | null;
   endpoints: DeviceEndpoints | null;
+  thermostat_last_cmd: number | null; // wall-clock secs of the last thermostat SET ("not responding" badge)
+  last_seen: string | null; // ISO ts of the last frame from this node (registry)
   // registry labels — optional (absent until set)
   name?: string;
   room?: string;

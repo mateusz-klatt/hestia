@@ -938,14 +938,14 @@ class ThermostatNodeFromFrameTests(unittest.TestCase):
 
 
 class ThermostatPollIntervalTests(unittest.TestCase):
-    def test_gentle_sweep_default_clamp_and_disable(self):
-        self.assertEqual(proxy._thermostat_poll_interval(None), 900.0)       # default 15 min
-        self.assertEqual(proxy._thermostat_poll_interval("600"), 600.0)
+    def test_gentle_sweep_default_off_and_optin_clamp(self):
+        self.assertEqual(proxy._thermostat_poll_interval(None), 0.0)         # DEFAULT OFF (Keemple is confirm-only)
+        self.assertEqual(proxy._thermostat_poll_interval("600"), 600.0)      # opt-in
         self.assertEqual(proxy._thermostat_poll_interval("10"), 60.0)        # floor
         self.assertEqual(proxy._thermostat_poll_interval("999999"), 86400.0) # ceiling (1 day)
-        self.assertEqual(proxy._thermostat_poll_interval("0"), 0.0)          # sweep disabled
-        self.assertEqual(proxy._thermostat_poll_interval("nope"), 900.0)     # non-numeric → default
-        self.assertEqual(proxy._thermostat_poll_interval("inf"), 900.0)      # non-finite → default
+        self.assertEqual(proxy._thermostat_poll_interval("0"), 0.0)          # off
+        self.assertEqual(proxy._thermostat_poll_interval("nope"), 0.0)       # non-numeric → off
+        self.assertEqual(proxy._thermostat_poll_interval("inf"), 0.0)        # non-finite → off
 
 
 class ThermostatNodesTests(unittest.TestCase):

@@ -260,6 +260,13 @@ function startApp(): void {
     live.tick();
   }, 1000);
 
+  // Re-fetch the snapshot every 45 s so time-based UI (the thermostat "not responding ⚠" badge, which
+  // keys off last_seen vs the last command) re-evaluates with fresh data even when no SSE delta arrives.
+  // refresh() is coalesced + skips while the operator is interacting, so it's cheap and non-disruptive.
+  setInterval(() => {
+    void live.refresh();
+  }, 45_000);
+
   void live.refresh();
   void loadAutomations();
 }
