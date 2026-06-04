@@ -39,7 +39,20 @@ class DbSchemaTests(unittest.TestCase):
         self.path = self.dir / "hestia.db"
 
     def tearDown(self):
+        db.reset_engine_cache()   # dispose this test's cached engine(s) before deleting its files
         shutil.rmtree(self.dir)
+
+    def test_init_db_caches_engine_per_path(self):
+        first = db.init_db(self.path)
+        second = db.init_db(self.path)   # cache hit: same engine + factory, Alembic NOT re-run
+        self.assertIs(first[0], second[0])
+        self.assertIs(first[1], second[1])
+
+    def test_reset_engine_cache_disposes_and_rebuilds(self):
+        engine, _ = db.init_db(self.path)
+        db.reset_engine_cache()
+        fresh, _ = db.init_db(self.path)
+        self.assertIsNot(engine, fresh)   # a brand-new engine after a reset
 
     def test_init_db_creates_all_tables(self):
         engine, _ = db.init_db(self.path)
@@ -94,6 +107,7 @@ class SessionScopeTests(unittest.TestCase):
         _, self.Session = db.init_db(self.dir / "hestia.db")
 
     def tearDown(self):
+        db.reset_engine_cache()
         shutil.rmtree(self.dir)
 
     def test_commits_on_success(self):

@@ -131,18 +131,41 @@ def _alembic_config(connection) -> Config:
     return cfg
 
 
+# One engine + session factory per resolved DB path, created (and Alembic-upgraded) ONCE for the
+# process lifetime. The hot store_sql paths (the ~30 s autosave, every audit row, each /api/db/stats)
+# call init_db on every invocation; without this they each built a fresh engine AND re-ran the Alembic
+# upgrade (logging "Context impl SQLiteImpl…" every time + churning a new connection pool). Keyed by the
+# resolved path string so tests on distinct temp DBs stay isolated; reset_engine_cache() disposes them.
+_ENGINE_CACHE: "dict[str, tuple[Engine, sessionmaker[Session]]]" = {}
+
+
 def init_db(path=None) -> tuple[Engine, sessionmaker[Session]]:
-    """Create/upgrade the DB at ``path`` (default ``HESTIA_DB``) to the latest schema via
-    Alembic, returning the engine + a session factory. Idempotent: an already-current DB
-    upgrades to a no-op. Migrations run programmatically — never runtime autogenerate."""
-    engine = make_engine(db_path() if path is None else path)
+    """Engine + session factory for the DB at ``path`` (default ``HESTIA_DB``), upgraded to the latest
+    schema via Alembic. **Cached per resolved path**: the engine is built and the migration run ONCE per
+    DB file for the process lifetime; later calls return the same pair (call ``reset_engine_cache`` to
+    rebuild). Migrations run programmatically — never runtime autogenerate."""
+    key = str(db_path() if path is None else path)
+    cached = _ENGINE_CACHE.get(key)
+    if cached is not None:
+        return cached
+    engine = make_engine(key)
     # The outer engine.begin() owns this connection and its commit. Alembic's env.py calls
     # context.begin_transaction() on the same connection, but for SQLite (non-transactional
     # DDL) that's a no-op context — there is no nested/second BEGIN, and the migration's DDL
     # commits with the outer transaction.
     with engine.begin() as connection:
         command.upgrade(_alembic_config(connection), "head")
-    return engine, sessionmaker(bind=engine)
+    result = (engine, sessionmaker(bind=engine))
+    _ENGINE_CACHE[key] = result
+    return result
+
+
+def reset_engine_cache() -> None:
+    """Dispose every cached engine and clear the cache. For test isolation (a fresh temp DB per test)
+    and the rare case of re-initialising after the on-disk file is replaced underneath us."""
+    for engine, _ in _ENGINE_CACHE.values():
+        engine.dispose()
+    _ENGINE_CACHE.clear()
 
 
 @contextmanager
