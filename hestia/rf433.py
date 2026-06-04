@@ -11,6 +11,8 @@ decoded fields plus a hit count + first/last-seen, oldest evicted past the cap.
 """
 from __future__ import annotations
 
+import math
+
 _DEFAULT_CAP = 200
 # rtl_433 bookkeeping fields that don't help identify a device.
 _NOISE_FIELDS = frozenset({"time", "mic"})
@@ -22,10 +24,17 @@ def _device_key(packet: dict) -> str:
     return " ".join(parts) if parts else "unknown"
 
 
+def _keep_field(key: str, value) -> bool:
+    """A scalar field worth showing: not rtl_433 noise, and a finite number (NaN/Infinity, which
+    ``json.loads`` accepts, are dropped so the feed stays valid JSON for the browser)."""
+    if key in _NOISE_FIELDS or not isinstance(value, (str, int, float, bool)):
+        return False
+    return not (isinstance(value, float) and not math.isfinite(value))
+
+
 def _fields(packet: dict) -> dict:
-    """The decoded fields worth showing — JSON-safe scalars only, minus rtl_433 noise."""
-    return {k: v for k, v in packet.items()
-            if k not in _NOISE_FIELDS and isinstance(v, (str, int, float, bool))}
+    """The decoded fields worth showing — finite JSON-safe scalars only, minus rtl_433 noise."""
+    return {k: v for k, v in packet.items() if _keep_field(k, v)}
 
 
 class Rf433Registry:

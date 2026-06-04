@@ -50,6 +50,13 @@ class Rf433RegistryTests(unittest.TestCase):
                         "nested": {"a": 1}, "list": [1, 2]})
         self.assertEqual(kept, {"model": "X", "temperature_C": 1.0, "battery_ok": True})
 
+    def test_fields_drops_non_finite_floats(self):
+        # rtl_433 JSON can carry NaN/Infinity (json.loads accepts them) — dropping keeps /api/rf433
+        # emitting valid JSON for the browser.
+        kept = _fields({"model": "X", "temperature_C": float("nan"),
+                        "humidity": float("inf"), "rssi": -42})
+        self.assertEqual(kept, {"model": "X", "rssi": -42})
+
 
 if __name__ == "__main__":
     unittest.main()
