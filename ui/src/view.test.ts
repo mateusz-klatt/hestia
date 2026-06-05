@@ -96,10 +96,14 @@ describe("renderViewSwitch", () => {
     const e = els();
     const changes: ViewName[] = [];
     renderViewSwitch(e, (v) => changes.push(v));
-    e.switchBox.querySelectorAll("button")[2]?.click(); // 🔧 Advanced (third tab)
+    const tabs = e.switchBox.querySelectorAll("button");
+    tabs[2]?.click(); // 🔧 Advanced (third tab)
     expect(e.adminEl.hidden).toBe(false);
     expect(e.roomsEl.hidden).toBe(true);
     expect(e.eventsEl.hidden).toBe(true);
+    expect(tabs[2]?.getAttribute("aria-pressed")).toBe("true");
+    expect(tabs[0]?.getAttribute("aria-pressed")).toBe("false");
+    expect(tabs[1]?.getAttribute("aria-pressed")).toBe("false");
     expect(localStorage.getItem("hestia.view")).toBe("admin");
     expect(changes).toEqual(["rooms", "admin"]);
   });
@@ -108,10 +112,14 @@ describe("renderViewSwitch", () => {
     const e = els();
     const changes: ViewName[] = [];
     renderViewSwitch(e, (v) => changes.push(v));
-    e.switchBox.querySelectorAll("button")[1]?.click(); // 📜 Activity (second tab)
+    const tabs = e.switchBox.querySelectorAll("button");
+    tabs[1]?.click(); // 📜 Activity (second tab)
     expect(e.eventsEl.hidden).toBe(false);
     expect(e.roomsEl.hidden).toBe(true);
     expect(e.adminEl.hidden).toBe(true);
+    expect(tabs[1]?.getAttribute("aria-pressed")).toBe("true");
+    expect(tabs[0]?.getAttribute("aria-pressed")).toBe("false");
+    expect(tabs[2]?.getAttribute("aria-pressed")).toBe("false");
     expect(localStorage.getItem("hestia.view")).toBe("events");
     expect(changes).toEqual(["rooms", "events"]);
   });
