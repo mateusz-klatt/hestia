@@ -564,15 +564,18 @@ def _publish_proxy_events(rt, frame: Frame, node_b: "bytes | None", changed: dic
 def _switch_op_from_payload(node: int, data: bytes) -> "dict | None":
     """The control op a command payload actuates — the ``0x0046`` of a ``[1e 07]`` SET, or a ``[1e 32]``
     scene-batch element body — for the fields hestia echoes OPTIMISTICALLY because the device never
-    reports them (binary switch / 2-gang only ACK) or reports them only when polled (thermostat POWER:
-    its ``40 03`` mode report is poll-only). Cover / level / thermostat SETPOINT → None (the device
-    reports those reliably and fast, so we trust the report)."""
+    reports them (binary switch / 2-gang only ACK) or reports them unreliably: thermostat POWER's
+    ``40 03`` mode report is poll-only, and a live capture showed the ``43 03`` SETPOINT report is
+    frequently missing too (so a report-only setpoint left the UI pinned to a stale value). Cover /
+    level → None (the device reports those reliably and fast, so we trust the report)."""
     if data[:2] == b"\x25\x01" and len(data) >= 3:                  # binary switch SET: 25 01 <ff/00>
         return {"op": "switch", "node": node, "on": data[2] == 0xFF}
     if data[:2] == b"\x60\x0d" and len(data) >= 7 and data[4:6] == b"\x25\x01":  # 2-gang SET: 60 0d 00 <ep> 25 01 <v>
         return {"op": "switch", "node": node, "endpoint": data[3], "on": data[6] == 0xFF}
     if data[:2] == b"\x40\x01" and len(data) >= 3:                  # thermostat power SET: 40 01 <01/00>
         return {"op": "thermostat_power", "node": node, "on": data[2] != 0x00}
+    if data[:2] == b"\x43\x01" and len(data) >= 6:                  # thermostat setpoint SET: 43 01 01 22 <°×10 BE>
+        return {"op": "thermostat", "node": node, "celsius": int.from_bytes(data[4:6], "big") / 10}
     return None
 
 
@@ -615,9 +618,10 @@ def _scene_batch_ops(frame) -> list:
 
 
 def _command_ops_from_frame(frame) -> list:
-    """Every switch / 2-gang state change a cloud→device command frame would actuate — so proxy mode
-    learns it from the cloud/app (those relays only ACK ``[1e 08]``, never report ``[1e 09]``): a single
-    ``[1e 07]`` SET, or each element of a ``[1e 32]`` scene batch. Cover/level/thermostat → skipped."""
+    """Every switch / 2-gang / thermostat (power + setpoint) state change a cloud→device command frame
+    would actuate — so proxy mode learns it from the cloud/app (those relays only ACK ``[1e 08]``, never
+    report ``[1e 09]``): a single ``[1e 07]`` SET, or each element of a ``[1e 32]`` scene batch.
+    Cover/level → skipped (the device reports those reliably)."""
     if (frame.type, frame.cmd) == (0x1E, 0x07):
         node_b = tlv_value(frame, 0x0047)
         data = tlv_value(frame, 0x0046)
@@ -631,10 +635,11 @@ def _command_ops_from_frame(frame) -> list:
 
 
 def _echo_command_frame(rt, raw: bytes) -> None:
-    """Echo the switch/2-gang state a command frame hestia JUST WROTE to a device produces — those
-    relays only ACK (never report ``[1e 09]``), so without this a hestia-sent switch change (UI
-    control, a fired automation, a scheduled rule) would never reach State / the live UI. Called
-    AFTER a successful write, so a dropped or failed send can never fake a state change.
+    """Echo the switch/2-gang/thermostat state a command frame hestia JUST WROTE to a device produces —
+    those relays only ACK (never report ``[1e 09]``), and thermostats report mode/setpoint poll-only or
+    unreliably, so without this a hestia-sent change (UI control, a fired automation, a scheduled rule)
+    would never reach State / the live UI. Called AFTER a successful write, so a dropped or failed send
+    can never fake a state change.
 
     The Deframer yields ONLY checksum-valid frames, so a ``raw`` control-op frame the device would
     ignore (bad checksum / no flags) yields nothing here and can't fake state. Cover/level/thermostat

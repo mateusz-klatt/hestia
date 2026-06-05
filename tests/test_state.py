@@ -441,15 +441,32 @@ class ApplyCommandTests(unittest.TestCase):
         self.assertIs(st.switches[5], True)
 
     def test_reporting_ops_are_not_echoed(self):
-        # "reports win where they exist": cover/level/thermostat SETPOINT report their own state reliably,
-        # so they are NOT optimistically echoed. (Switch/2-gang never report, thermostat POWER only when
-        # polled — those ARE echoed; see test_thermostat_power_echoed.)
+        # "reports win where they exist": cover/level report their own state reliably, so they are NOT
+        # optimistically echoed. (Switch/2-gang never report; thermostat POWER and SETPOINT do not report
+        # reliably either, so those ARE echoed — see test_thermostat_power_echoed / _setpoint_echoed.)
         st = State()
         self.assertEqual(st.apply_command({"op": "level", "node": 4, "value": 60}), {})
         self.assertEqual(st.apply_command({"op": "cover", "node": 8, "value": 99}), {})
-        self.assertEqual(st.apply_command({"op": "thermostat", "node": 9, "celsius": 21.4}), {})
-        self.assertEqual((st.levels, st.thermostat_setpoint), ({}, {}))
+        self.assertEqual(st.levels, {})
         self.assertFalse(st.dirty)
+
+    def test_thermostat_setpoint_echoed(self):
+        # Setpoint is echoed too: a live capture showed these TRVs frequently do NOT report 43 03 after a
+        # SET, so a report-only setpoint left State stale (the UI then re-pinned its dropdown to the old
+        # value — "set 18, jumps back to 28"). Echo immediately, stored as the integer the device reports.
+        st = State()
+        self.assertEqual(st.apply_command({"op": "thermostat", "node": 9, "celsius": 18}),
+                         {"setpoint": 18})
+        self.assertEqual(st.thermostat_setpoint[9], 18)
+        self.assertTrue(st.dirty)
+        self.assertEqual(st.apply_command({"op": "thermostat", "node": 9, "celsius": 21.4}),
+                         {"setpoint": 21})            # float rounds to the device's integer °C
+        st.dirty = False
+        self.assertEqual(st.apply_command({"op": "thermostat", "node": 9, "celsius": 21}), {})  # unchanged
+        self.assertFalse(st.dirty)
+        # a missing / non-numeric (incl. bool) celsius is a defensive no-op
+        self.assertEqual(st.apply_command({"op": "thermostat", "node": 9}), {})
+        self.assertEqual(st.apply_command({"op": "thermostat", "node": 9, "celsius": True}), {})
 
     def test_thermostat_power_echoed(self):
         # Thermostat ON/OFF (mode) only reports when GET-polled, so the press is echoed optimistically.

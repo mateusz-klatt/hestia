@@ -513,8 +513,9 @@ class ProcessControlOpTests(unittest.IsolatedAsyncioTestCase):
 
 
 class CommandEchoTests(unittest.IsolatedAsyncioTestCase):
-    """Learn switch/2-gang state from the cloud's C->D commands (proxy tap) — those relays only ACK,
-    never report. Covers/thermostats are NOT echoed (they report their own state)."""
+    """Learn switch/2-gang/thermostat state from the cloud's C->D commands (proxy tap) — those relays
+    only ACK, never report. Covers/levels are NOT echoed (they report reliably); thermostat power AND
+    setpoint ARE echoed (their reports are poll-only / unreliable)."""
 
     def test_command_ops_from_single_1e07_frame(self):
         f = proxy._command_ops_from_frame
@@ -522,10 +523,13 @@ class CommandEchoTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(f(cmd_frame(0x0E, b"\x25\x01\x00")), [{"op": "switch", "node": 0x0E, "on": False}])
         self.assertEqual(f(cmd_frame(0x07, b"\x60\x0d\x00\x02\x25\x01\xff")),
                          [{"op": "switch", "node": 0x07, "endpoint": 2, "on": True}])
+        self.assertEqual(f(cmd_frame(0x0c, b"\x43\x01\x01\x22\x00\xb4")),           # setpoint SET → echoed
+                         [{"op": "thermostat", "node": 0x0c, "celsius": 18.0}])     # (43 03 report unreliable)
         # ignored → [] : multilevel (cover/level), non-25-01 60-0d, truncated, a report, missing node/payload
         self.assertEqual(f(cmd_frame(0x04, b"\x26\x01\x63")), [])                   # cover/level → reports win
         self.assertEqual(f(cmd_frame(0x07, b"\x60\x0d\x00\x02\x25\x03\xff")), [])   # not a 25 01 SET
         self.assertEqual(f(cmd_frame(0x0E, b"\x25\x01")), [])                       # truncated switch
+        self.assertEqual(f(cmd_frame(0x0c, b"\x43\x01\x01\x22\x00")), [])           # truncated setpoint (< 6 B)
         report = Frame(build_frame(0x1E, 0x09, tlv(0x0047, b"\x0e") + tlv(0x0046, b"\x25\x03\xff"))[1:-1])
         self.assertEqual(f(report), [])                                            # a report, not a command
         self.assertEqual(f(Frame(build_frame(0x1E, 0x07, tlv(0x0046, b"\x25\x01\xff"))[1:-1])), [])  # no node
@@ -1061,14 +1065,20 @@ class ThermostatEchoSchedulesConfirmTests(unittest.IsolatedAsyncioTestCase):
         events = [sub.queue.get_nowait() for _ in range(sub.queue.qsize())]
         self.assertIn({"type": "state", "node": 0x0c, "fields": {"thermostat_on": True}}, events)
 
-    async def test_setpoint_set_schedules_confirm_without_echo(self):
+    async def test_setpoint_set_echoes_and_schedules_confirm(self):
+        # Setpoint IS echoed now (the device proved unreliable at reporting 43 03): a real 43 01 frame
+        # through the post-send echo path must update thermostat_setpoint AND publish the state event,
+        # else the UI re-pins its dropdown to the stale value on the next refresh.
         rt = proxy.ProxyRuntime()
         rt.mode = "standalone"
-        raw = commands.set_thermostat(rt.next_seq(), 0x0c, 22.0)        # 43 01 … (setpoint)
+        sub = await rt.event_bus.try_subscribe()
+        raw = commands.set_thermostat(rt.next_seq(), 0x0c, 18.0)        # 43 01 01 22 00B4 (setpoint 18 °C)
         with mock.patch.object(proxy, "THERMOSTAT_CONFIRM_SECS", 10.0):
             proxy._echo_command_frame(rt, raw)
-        self.assertIn(0x0c, rt.thermostat_confirm)                      # confirm scheduled (catch any mode change)
-        self.assertEqual(rt.state.thermostat_on, {})                   # setpoint is NOT echoed (device reports it)
+        self.assertEqual(rt.state.thermostat_setpoint[0x0c], 18)        # optimistic echo (integer °C)
+        self.assertIn(0x0c, rt.thermostat_confirm)                      # confirm still scheduled
+        events = [sub.queue.get_nowait() for _ in range(sub.queue.qsize())]
+        self.assertIn({"type": "state", "node": 0x0c, "fields": {"setpoint": 18}}, events)
 
 
 class SchedulerPresenceTests(unittest.IsolatedAsyncioTestCase):

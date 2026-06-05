@@ -153,7 +153,7 @@ export function renderActions(
     const start = current !== null && Number.isFinite(current)
       ? Math.min(THERMOSTAT_MAX_C, Math.max(THERMOSTAT_MIN_C, Math.round(current)))
       : 21;
-    sel.value = String(start);
+    sel.value = String(start); // seeds from the (now optimistically-echoed) live setpoint
     cell.appendChild(sel);
     addButton("✓", () => [
       { op: "thermostat_power", node, on: true }, // turn on, THEN set — a setpoint alone is ignored while off
