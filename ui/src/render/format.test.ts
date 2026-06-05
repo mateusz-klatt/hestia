@@ -77,11 +77,11 @@ describe("stateStr", () => {
     expect(stateStr(device({ type: "blind", level: 0 }))).toBe("▣ 0%");
     expect(stateStr(device({ type: "blind" }))).toBe("—");
   });
-  it("thermostat composes temperature, setpoint and power (icon + word)", () => {
+  it("thermostat composes temperature, setpoint (user scale) and power (icon + word)", () => {
     expect(
       stateStr(device({ type: "thermostat", temperature: 21, setpoint: 22, thermostat_on: true })),
-    ).toBe("21° → 22° 🟢 On");
-    expect(stateStr(device({ type: "thermostat", setpoint: 22 }))).toBe("→ 22°");
+    ).toBe("21.0° → 22.0° 🟢 On"); // Celsius default via fmtTemp
+    expect(stateStr(device({ type: "thermostat", setpoint: 22 }))).toBe("→ 22.0°");
     expect(stateStr(device({ type: "thermostat", thermostat_on: false }))).toBe("⚪ Off");
     expect(stateStr(device({ type: "thermostat" }))).toBe("—");
   });

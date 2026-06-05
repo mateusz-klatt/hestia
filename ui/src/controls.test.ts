@@ -47,10 +47,23 @@ describe("renderActions button layout", () => {
     expect(labels(cell)).toEqual(["Raise", "Lower"]);
   });
 
-  it("a thermostat gets Wył / Wł / − / +", () => {
+  it("a thermostat gets Off / On + a 4–28 °C target dropdown + Set", () => {
     const cell = td();
-    renderActions(cell, 7, device({ type: "thermostat" }), okPost);
-    expect(labels(cell)).toEqual(["Off", "On", "−", "+"]);
+    renderActions(cell, 7, device({ type: "thermostat", setpoint: 22 }), okPost);
+    expect(labels(cell)).toEqual(["Off", "On", "Set"]);
+    const sel = cell.querySelector("select");
+    const opts = [...(sel?.querySelectorAll("option") ?? [])].map((o) => o.value);
+    expect(opts).toEqual(Array.from({ length: 25 }, (_, i) => String(i + 4))); // 4..28
+    expect(sel?.value).toBe("22"); // pre-selects the current setpoint
+  });
+
+  it("the thermostat dropdown clamps a current setpoint outside 4–28 and falls back to 21 when unseen", () => {
+    const hot = td();
+    renderActions(hot, 7, device({ type: "thermostat", setpoint: 35 }), okPost);
+    expect(hot.querySelector("select")?.value).toBe("28"); // clamped to the ceiling
+    const unseen = td();
+    renderActions(unseen, 7, device({ type: "thermostat" }), okPost);
+    expect(unseen.querySelector("select")?.value).toBe("21"); // null → 21 default
   });
 
   it("multi-gang switches get per-channel buttons and stateless types get no buttons", () => {
@@ -107,8 +120,9 @@ describe("renderActions dispatch", () => {
 
     const thermostat = td();
     renderActions(thermostat, 9, device({ type: "thermostat", setpoint: 21 }), post);
-    await fire(thermostat, "−");
-    await fire(thermostat, "+");
+    const tsel = thermostat.querySelector("select");
+    if (tsel) tsel.value = "25";
+    await fire(thermostat, "Set"); // one command for the chosen target
     await fire(thermostat, "On");
     await fire(thermostat, "Off");
 
@@ -132,8 +146,7 @@ describe("renderActions dispatch", () => {
       { op: "level", node: 6, value: 50 },
       { op: "cover", node: 8, value: 99 },
       { op: "cover", node: 8, value: 0 },
-      { op: "thermostat", node: 9, celsius: 20 },
-      { op: "thermostat", node: 9, celsius: 22 },
+      { op: "thermostat", node: 9, celsius: 25 },
       { op: "thermostat_power", node: 9, on: true },
       { op: "thermostat_power", node: 9, on: false },
       { op: "switch", node: 7, endpoint: 1, on: true },
@@ -156,28 +169,6 @@ describe("renderActions dispatch", () => {
     expect(sent).toEqual([{ op: "level", node: 6, value: 10 }]);
   });
 
-  it("clamps the thermostat setpoint to 4–28 °C (21 fallback when unseen/non-finite)", async () => {
-    const sent: ControlOp[] = [];
-    const post: PostControl = (op) => {
-      sent.push(op);
-      return Promise.resolve({ ok: true });
-    };
-    const cell = td();
-    renderActions(cell, 9, device({ type: "thermostat", setpoint: 28 }), post);
-    click(cell, "+"); // at the ceiling
-    await flush();
-    renderActions(cell, 9, device({ type: "thermostat", setpoint: 4 }), post);
-    click(cell, "−"); // at the floor
-    await flush();
-    renderActions(cell, 9, device({ type: "thermostat", setpoint: Number.NaN }), post);
-    click(cell, "+"); // non-finite → 21 fallback, then +1
-    await flush();
-    expect(sent).toEqual([
-      { op: "thermostat", node: 9, celsius: 28 }, // clamped, not 29
-      { op: "thermostat", node: 9, celsius: 4 }, // floored, not 3
-      { op: "thermostat", node: 9, celsius: 22 }, // Number.isFinite → 21 fallback, +1
-    ]);
-  });
 });
 
 describe("renderActions in-flight lock + status", () => {

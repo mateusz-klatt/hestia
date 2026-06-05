@@ -937,25 +937,6 @@ class ThermostatNodeFromFrameTests(unittest.TestCase):
         self.assertIsNone(proxy._thermostat_node_from_frame(Frame(build_frame(0x1E, 0x07)[1:-1])))  # 1e07, no node/data
 
 
-class ThermostatPollIntervalTests(unittest.TestCase):
-    def test_gentle_sweep_default_off_and_optin_clamp(self):
-        self.assertEqual(proxy._thermostat_poll_interval(None), 0.0)         # DEFAULT OFF (Keemple is confirm-only)
-        self.assertEqual(proxy._thermostat_poll_interval("600"), 600.0)      # opt-in
-        self.assertEqual(proxy._thermostat_poll_interval("10"), 60.0)        # floor
-        self.assertEqual(proxy._thermostat_poll_interval("999999"), 86400.0) # ceiling (1 day)
-        self.assertEqual(proxy._thermostat_poll_interval("0"), 0.0)          # off
-        self.assertEqual(proxy._thermostat_poll_interval("nope"), 0.0)       # non-numeric → off
-        self.assertEqual(proxy._thermostat_poll_interval("inf"), 0.0)        # non-finite → off
-
-
-class ThermostatNodesTests(unittest.TestCase):
-    def test_returns_thermostat_node_ids_sorted(self):
-        rt = proxy.ProxyRuntime()
-        rt.registry.nodes = {"13": {"type": "thermostat"}, "12": {"type": "thermostat"},
-                             "5": {"type": "light"}}
-        self.assertEqual(proxy._thermostat_nodes(rt), [0x0c, 0x0d])          # thermostats only, sorted
-
-
 class NoteThermostatCommandTests(unittest.TestCase):
     """A thermostat SET marks the node + (re)sets ONE debounce deadline (collapse)."""
 
@@ -996,9 +977,9 @@ class ThermostatConfirmPollerTests(unittest.IsolatedAsyncioTestCase):
         m = {t.tag: t.value for t in Frame(raw[1:-1]).tlvs()}
         return m.get(0x0046), m.get(0x0047)
 
-    async def _run(self, rt, settle=0.05, confirm_delay=1.0, sweep=0.0, tick=0.01, clock=None):
+    async def _run(self, rt, settle=0.05, confirm_delay=1.0, tick=0.01, clock=None):
         task = asyncio.create_task(proxy._thermostat_poller(
-            rt, confirm_delay=confirm_delay, sweep=sweep, tick=tick, clock=clock or (lambda: 1000.0)))
+            rt, confirm_delay=confirm_delay, tick=tick, clock=clock or (lambda: 1000.0)))
         await asyncio.sleep(settle)
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
@@ -1048,20 +1029,8 @@ class ThermostatConfirmPollerTests(unittest.IsolatedAsyncioTestCase):
         rt2.sessions.append(sess2 := FakeSession())
         rt2.thermostat_confirm = {0x0c}
         rt2.thermostat_confirm_at = 1000.0
-        await self._run(rt2, confirm_delay=0, sweep=0)          # both disabled → nothing to do
+        await self._run(rt2, confirm_delay=0)                   # confirm disabled → nothing to do
         self.assertEqual(sess2.sent, [])
-
-    async def test_gentle_sweep_polls_all_thermostats(self):
-        rt = proxy.ProxyRuntime()
-        rt.mode = "standalone"
-        rt.sessions.append(sess := FakeSession())
-        clk = iter([1000.0] + [5000.0] * 200)                   # 1st call inits next_sweep; later calls are due
-        with mock.patch.object(proxy, "_thermostat_nodes", return_value=[0x0c, 0x09]):
-            await self._run(rt, confirm_delay=0, sweep=1.0, clock=lambda: next(clk, 5000.0))
-        attrs = {self._attr_node(raw) for raw in sess.sent}
-        self.assertIn((b"\x40\x02", b"\x0c"), attrs)            # swept every thermostat
-        self.assertIn((b"\x40\x02", b"\x09"), attrs)
-        self.assertIn((b"\x31\x04\x01", b"\x09"), attrs)
 
     async def test_poll_error_is_logged_and_loop_survives(self):
         rt = proxy.ProxyRuntime()
@@ -1073,7 +1042,7 @@ class ThermostatConfirmPollerTests(unittest.IsolatedAsyncioTestCase):
         with mock.patch.object(proxy, "_inject", side_effect=RuntimeError("boom")):
             with self.assertLogs("hestia.proxy", level="ERROR") as logs:
                 task = await self._run(rt)
-        self.assertTrue(any("thermostat poll failed" in m for m in logs.output))
+        self.assertTrue(any("thermostat confirm poll failed" in m for m in logs.output))
         self.assertTrue(task.cancelled())
 
 

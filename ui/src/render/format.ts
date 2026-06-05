@@ -74,9 +74,10 @@ export function stateStr(info: DeviceInfo): string {
     case "blind":
       return info.level === null ? "—" : `▣ ${String(info.level)}%`;
     case "thermostat": {
+      // measured temp + setpoint in the user's scale (C/F/K) — the device/backend stay Celsius.
       let s = "";
-      if (info.temperature !== null) s += `${String(info.temperature)}°`;
-      if (info.setpoint !== null) s += `${s.length > 0 ? " → " : "→ "}${String(info.setpoint)}°`;
+      if (info.temperature !== null) s += fmtTemp(info.temperature);
+      if (info.setpoint !== null) s += `${s.length > 0 ? " → " : "→ "}${fmtTemp(info.setpoint)}`;
       if (info.thermostat_on !== null) s += `${s.length > 0 ? " " : ""}${onOff(info.thermostat_on)}`;
       if (thermostatNotResponding(info)) s += `${s.length > 0 ? " " : ""}⚠`; // commanded but never confirmed
       return s.length > 0 ? s : "—";
