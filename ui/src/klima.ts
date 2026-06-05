@@ -157,7 +157,6 @@ export function renderKlima(box: HTMLElement, klima: Klima, postIr: PostIr): voi
   if (modeNames.length > 0) {
     const mode = document.createElement("select");
     mode.setAttribute("aria-label", t("ctl.mode")); // icon-only panel → name the dropdown for screen readers
-    mode.style.marginRight = "0.3rem";
     for (const m of modeNames) {
       const o = document.createElement("option");
       o.value = m;                // the IR signal is keyed by the raw mode; only the label is localised
@@ -166,7 +165,6 @@ export function renderKlima(box: HTMLElement, klima: Klima, postIr: PostIr): voi
     }
     const temp = document.createElement("select");
     temp.setAttribute("aria-label", t("user.temperature")); // name the temperature dropdown for screen readers
-    temp.style.marginRight = "0.3rem";
     const fillTemps = (): void => {
       temp.replaceChildren();
       for (const c of programs[mode.value] ?? []) {
@@ -183,7 +181,6 @@ export function renderKlima(box: HTMLElement, klima: Klima, postIr: PostIr): voi
     set.textContent = "✓"; // compact icon so the klima row fits one line; label via title/aria
     set.title = t("ctl.set");
     set.setAttribute("aria-label", t("ctl.set"));
-    set.style.marginRight = "0.4rem";
     set.addEventListener("click", () => {
       if (mode.value === "" || temp.value === "") return;
       void send(`on_${mode.value}_${temp.value}`);
@@ -198,7 +195,6 @@ export function renderKlima(box: HTMLElement, klima: Klima, postIr: PostIr): voi
     off.textContent = "⏻"; // power-off icon (compact); label via title/aria
     off.title = t("ctl.turnOff");
     off.setAttribute("aria-label", t("ctl.turnOff"));
-    off.style.marginRight = "0.4rem";
     off.addEventListener("click", () => {
       void send("off");
     });

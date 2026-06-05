@@ -30,20 +30,29 @@ function statusSpan(): HTMLSpanElement {
   return s;
 }
 
-/** Inferred type + confidence, plus a "✓ confirm" button (disabled when the
- *  type is unknown or already user-confirmed). Wired by the registry binder. */
+/** Inferred type. A CONFIRMED type just shows the type name in green (the `.confirmed` colour IS the
+ *  signal — no "(confirmed)" word, no permanently-disabled button); an unconfirmed one keeps its
+ *  confidence note in parentheses + a "✓ confirm" button (disabled while the type is still unknown).
+ *  Wired by the registry binder. */
 function typeCell(info: DeviceInfo): HTMLTableCellElement {
   const td = document.createElement("td");
   td.dataset.label = "type";
+  const confirmed = info.confidence === "confirmed";
   const span = document.createElement("span");
-  span.textContent = `${info.type || "?"} (${info.confidence || "?"})`;
-  if (info.confidence === "confirmed") span.className = "confirmed";
-  const confirm = document.createElement("button");
-  confirm.type = "button";
-  confirm.className = "confirm";
-  confirm.textContent = "✓ confirm";
-  confirm.disabled = info.type === "" || info.type === "unknown" || info.confidence === "confirmed";
-  td.append(span, " ", confirm, statusSpan());
+  span.textContent = confirmed ? (info.type || "?") : `${info.type || "?"} (${info.confidence || "?"})`;
+  if (confirmed) span.className = "confirmed";
+  td.append(span);
+  if (!confirmed) {
+    // The confirm button is only useful while a type is still inferred; on a confirmed row it would only
+    // ever be a disabled control, so it's omitted to declutter the table (operator request).
+    const confirm = document.createElement("button");
+    confirm.type = "button";
+    confirm.className = "confirm";
+    confirm.textContent = "✓ confirm";
+    confirm.disabled = info.type === "" || info.type === "unknown";
+    td.append(" ", confirm);
+  }
+  td.append(statusSpan());
   return td;
 }
 

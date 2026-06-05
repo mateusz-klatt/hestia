@@ -297,6 +297,9 @@ function startApp(): void {
 // boot the app; when a username is present (auth on), show the logged-in indicator + a logout button.
 // `whoami` returns {user: null} when auth is OFF, so loopback/dev boots straight through with no login UI.
 void (async () => {
+  if (import.meta.env.DEV && new URLSearchParams(location.search).has("mock")) {
+    (await import("./dev/mock")).installMock(); // frontend-only dev: render the app from fixtures, no backend
+  }
   await initLocale(navigator.languages); // pick + apply the browser locale (sets <html lang>/dir) before any render
   const me = await whoami();
   if (me === null) {
