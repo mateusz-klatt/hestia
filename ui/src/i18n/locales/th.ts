@@ -54,6 +54,14 @@ const messages: Partial<Messages> = {
   "state.closed": "ปิด",
   "state.motion": "การเคลื่อนไหว",
   "state.noMotion": "ไม่มีการเคลื่อนไหว",
+
+  "ctl.mode": "โหมด",
+  "ctl.brightness": "ความสว่าง",
+  "klima.cool": "เย็น",
+  "klima.heat": "ทำความร้อน",
+  "klima.auto": "อัตโนมัติ",
+  "klima.dry": "ลดความชื้น",
+  "klima.fan": "พัดลม",
 };
 
 export default messages;

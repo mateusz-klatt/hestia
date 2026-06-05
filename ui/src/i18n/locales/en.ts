@@ -62,6 +62,18 @@ const en = {
   "state.closed": "closed",
   "state.motion": "motion",
   "state.noMotion": "no motion",
+
+  // Accessible names for the icon-only control <select> dropdowns (screen-reader only).
+  "ctl.mode": "Mode",
+  "ctl.brightness": "Brightness",
+
+  // A/C (klima) mode option labels — the dropdown VALUE stays the raw mode (it keys the IR signal
+  // on_<mode>_<temp>); only the visible label is localised. Unknown modes fall back to the raw name.
+  "klima.cool": "Cool",
+  "klima.heat": "Heat",
+  "klima.auto": "Auto",
+  "klima.dry": "Dry",
+  "klima.fan": "Fan",
 };
 
 export default en;

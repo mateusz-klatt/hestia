@@ -59,6 +59,14 @@ const pl: Partial<Messages> = {
   "state.closed": "zamknięte",
   "state.motion": "ruch",
   "state.noMotion": "brak ruchu",
+
+  "ctl.mode": "Tryb",
+  "ctl.brightness": "Jasność",
+  "klima.cool": "Chłodzenie",
+  "klima.heat": "Grzanie",
+  "klima.auto": "Auto",
+  "klima.dry": "Osuszanie",
+  "klima.fan": "Wentylator",
 };
 
 export default pl;

@@ -85,6 +85,7 @@ export function renderActions(
 
   const addLevelSelect = (): void => {
     const sel = document.createElement("select");
+    sel.setAttribute("aria-label", t("ctl.brightness")); // icon-only panel → name the dropdown for screen readers
     sel.style.marginRight = "0.3rem";
     for (const value of LEVEL_PRESETS) {
       const o = document.createElement("option");
@@ -140,6 +141,7 @@ export function renderActions(
     // intent and add a third TRV command. The optimistic echo only fires per successful inject, so the UI
     // stays consistent with the device; the user just re-taps Set.
     const sel = document.createElement("select");
+    sel.setAttribute("aria-label", t("user.temperature")); // name the setpoint dropdown for screen readers
     sel.style.marginRight = "0.3rem";
     for (let c = THERMOSTAT_MIN_C; c <= THERMOSTAT_MAX_C; c++) {
       const o = document.createElement("option");

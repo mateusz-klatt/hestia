@@ -55,6 +55,14 @@ const messages: Partial<Messages> = {
   "state.closed": "lokað",
   "state.motion": "hreyfing",
   "state.noMotion": "engin hreyfing",
+
+  "ctl.mode": "Hamur",
+  "ctl.brightness": "Birtustig",
+  "klima.cool": "Kæling",
+  "klima.heat": "Hitun",
+  "klima.auto": "Sjálfvirkt",
+  "klima.dry": "Þurrkun",
+  "klima.fan": "Vifta",
 };
 
 export default messages;

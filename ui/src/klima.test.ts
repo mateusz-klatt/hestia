@@ -92,11 +92,22 @@ describe("renderKlima", () => {
     renderKlima(el, KLIMA, okIr);
     const selects = el.querySelectorAll("select");
     expect(selects).toHaveLength(2);
-    const modeValues = [...(selects[0]?.querySelectorAll("option") ?? [])].map((o) => o.value);
-    expect(modeValues).toEqual(["cool", "heat"]); // sorted modes
+    expect(selects[0]?.getAttribute("aria-label")).toBe("Mode"); // named for screen readers
+    expect(selects[1]?.getAttribute("aria-label")).toBe("Temperature");
+    const modeOpts = [...(selects[0]?.querySelectorAll("option") ?? [])];
+    expect(modeOpts.map((o) => o.value)).toEqual(["cool", "heat"]); // sorted modes; VALUE stays raw (keys the IR signal)
+    expect(modeOpts.map((o) => o.textContent)).toEqual(["Cool", "Heat"]); // LABEL is localised
     const tempValues = [...(selects[1]?.querySelectorAll("option") ?? [])].map((o) => o.value);
     expect(tempValues).toEqual(["22", "24"]); // cool's temps
     expect(labels(el)).toEqual(["✓", "⏻"]);
+  });
+
+  it("falls back to the raw mode name for an A/C mode with no translation key", () => {
+    const el = box();
+    renderKlima(el, { file: "/ext/infrared/klima.ir", power_on: { turbo: [18] }, presets: ["off"] }, okIr);
+    const opt = el.querySelector("select")?.querySelector("option");
+    expect(opt?.value).toBe("turbo");
+    expect(opt?.textContent).toBe("turbo"); // unknown mode → raw name, never "undefined"
   });
 
   it("gives the icon-only buttons a localised accessible name (title + aria-label)", () => {

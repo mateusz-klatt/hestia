@@ -55,6 +55,14 @@ const messages: Partial<Messages> = {
   "state.closed": "बंद",
   "state.motion": "हलचल",
   "state.noMotion": "हलचल नहीं",
+
+  "ctl.mode": "मोड",
+  "ctl.brightness": "चमक",
+  "klima.cool": "ठंडा",
+  "klima.heat": "गर्म",
+  "klima.auto": "स्वचालित",
+  "klima.dry": "शुष्क",
+  "klima.fan": "पंखा",
 };
 
 export default messages;

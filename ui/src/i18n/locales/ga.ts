@@ -58,6 +58,14 @@ const messages: Partial<Messages> = {
   "state.closed": "dúnta",
   "state.motion": "gluaiseacht",
   "state.noMotion": "gan ghluaiseacht",
+
+  "ctl.mode": "Mód",
+  "ctl.brightness": "Gile",
+  "klima.cool": "Fuarú",
+  "klima.heat": "Téamh",
+  "klima.auto": "Uathoibríoch",
+  "klima.dry": "Díthaisiú",
+  "klima.fan": "Gaothrán",
 };
 
 export default messages;

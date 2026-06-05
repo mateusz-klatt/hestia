@@ -54,6 +54,14 @@ const messages: Partial<Messages> = {
   "state.closed": "閉じている",
   "state.motion": "動き",
   "state.noMotion": "動きなし",
+
+  "ctl.mode": "モード",
+  "ctl.brightness": "明るさ",
+  "klima.cool": "冷房",
+  "klima.heat": "暖房",
+  "klima.auto": "自動",
+  "klima.dry": "除湿",
+  "klima.fan": "送風",
 };
 
 export default messages;

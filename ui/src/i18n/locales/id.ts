@@ -54,6 +54,14 @@ const messages: Partial<Messages> = {
   "state.closed": "tertutup",
   "state.motion": "gerakan",
   "state.noMotion": "tidak ada gerakan",
+
+  "ctl.mode": "Mode",
+  "ctl.brightness": "Kecerahan",
+  "klima.cool": "Dingin",
+  "klima.heat": "Panas",
+  "klima.auto": "Otomatis",
+  "klima.dry": "Kering",
+  "klima.fan": "Kipas",
 };
 
 export default messages;

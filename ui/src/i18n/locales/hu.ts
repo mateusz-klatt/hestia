@@ -55,6 +55,14 @@ const messages: Partial<Messages> = {
   "state.closed": "zárva",
   "state.motion": "mozgás",
   "state.noMotion": "nincs mozgás",
+
+  "ctl.mode": "Mód",
+  "ctl.brightness": "Fényerő",
+  "klima.cool": "Hűtés",
+  "klima.heat": "Fűtés",
+  "klima.auto": "Auto",
+  "klima.dry": "Párátlanítás",
+  "klima.fan": "Ventilátor",
 };
 
 export default messages;

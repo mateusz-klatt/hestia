@@ -56,6 +56,14 @@ const messages: Partial<Messages> = {
   "state.closed": "fermé",
   "state.motion": "mouvement",
   "state.noMotion": "aucun mouvement",
+
+  "ctl.mode": "Mode",
+  "ctl.brightness": "Luminosité",
+  "klima.cool": "Froid",
+  "klima.heat": "Chaud",
+  "klima.auto": "Auto",
+  "klima.dry": "Déshumidification",
+  "klima.fan": "Ventilation",
 };
 
 export default messages;

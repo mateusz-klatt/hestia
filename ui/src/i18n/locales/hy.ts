@@ -55,6 +55,14 @@ const messages: Partial<Messages> = {
   "state.closed": "փակ",
   "state.motion": "շարժում",
   "state.noMotion": "շարժում չկա",
+
+  "ctl.mode": "Ռեժիմ",
+  "ctl.brightness": "Պայծառություն",
+  "klima.cool": "Սառեցում",
+  "klima.heat": "Ջեռուցում",
+  "klima.auto": "Ավտոմատ",
+  "klima.dry": "Խոնավազրկում",
+  "klima.fan": "Օդափոխիչ",
 };
 
 export default messages;

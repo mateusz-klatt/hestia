@@ -56,6 +56,14 @@ const messages: Partial<Messages> = {
   "state.closed": "aizvērts",
   "state.motion": "kustība",
   "state.noMotion": "nav kustības",
+
+  "ctl.mode": "Režīms",
+  "ctl.brightness": "Spilgtums",
+  "klima.cool": "Dzesēšana",
+  "klima.heat": "Sildīšana",
+  "klima.auto": "Automātiski",
+  "klima.dry": "Sausināšana",
+  "klima.fan": "Ventilators",
 };
 
 export default messages;

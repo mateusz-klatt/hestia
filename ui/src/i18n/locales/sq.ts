@@ -55,6 +55,14 @@ const messages: Partial<Messages> = {
   "state.closed": "mbyllur",
   "state.motion": "lëvizje",
   "state.noMotion": "pa lëvizje",
+
+  "ctl.mode": "Modaliteti",
+  "ctl.brightness": "Ndriçimi",
+  "klima.cool": "Ftohje",
+  "klima.heat": "Ngrohje",
+  "klima.auto": "Automatik",
+  "klima.dry": "Tharje",
+  "klima.fan": "Ventilator",
 };
 
 export default messages;

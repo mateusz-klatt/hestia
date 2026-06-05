@@ -32,7 +32,9 @@ describe("renderActions button layout", () => {
     const cell = td();
     renderActions(cell, 7, device({ type: "light", level: 40 }), okPost);
     expect(labels(cell)).toEqual(["Off", "On", "Set"]);
-    expect(cell.querySelector("select")).not.toBeNull();
+    const sel = cell.querySelector("select");
+    expect(sel).not.toBeNull();
+    expect(sel?.getAttribute("aria-label")).toBe("Brightness"); // the dimmer dropdown is named for screen readers
   });
 
   it("a plug gets Wł / Wył", () => {
@@ -54,7 +56,10 @@ describe("renderActions button layout", () => {
     const [set, off] = [...cell.querySelectorAll("button")];
     expect(set?.title).toBe("Set");
     expect(off?.title).toBe("Turn off");
+    expect(set?.getAttribute("aria-label")).toBe("Set"); // icon-only → accessible name, like klima
+    expect(off?.getAttribute("aria-label")).toBe("Turn off");
     const sel = cell.querySelector("select");
+    expect(sel?.getAttribute("aria-label")).toBe("Temperature"); // the setpoint dropdown is named for screen readers
     const opts = [...(sel?.querySelectorAll("option") ?? [])].map((o) => o.value);
     expect(opts).toEqual(Array.from({ length: 25 }, (_, i) => String(i + 4))); // 4..28 °C values
     expect(sel?.value).toBe("22"); // pre-selects the current setpoint

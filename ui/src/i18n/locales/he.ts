@@ -56,6 +56,14 @@ const messages: Partial<Messages> = {
   "state.closed": "סגור",
   "state.motion": "תנועה",
   "state.noMotion": "אין תנועה",
+
+  "ctl.mode": "מצב",
+  "ctl.brightness": "בהירות",
+  "klima.cool": "קירור",
+  "klima.heat": "חימום",
+  "klima.auto": "אוטומטי",
+  "klima.dry": "ייבוש",
+  "klima.fan": "מאוורר",
 };
 
 export default messages;
