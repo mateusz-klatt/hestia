@@ -53,7 +53,10 @@ describe("renderAuditFeed", () => {
     const rows = [...container.querySelectorAll<HTMLElement>(".audit-row")];
     expect(rows.map((row) => row.dataset.id)).toEqual(["2", "3", "4", "1", "5"]);
     expect(rows[0]?.textContent ?? "").toContain(
-      new Date(400 * 1000).toLocaleString(currentLocale(), { dateStyle: "short", timeStyle: "medium" }));
+      new Date(400 * 1000).toLocaleString(currentLocale(), {
+        year: "numeric", month: "2-digit", day: "2-digit",
+        hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false,
+      }));
     expect(rows[0]?.querySelector(".audit-ts")?.getAttribute("dir")).toBe("ltr"); // bidi-safe in an RTL feed
     expect(rows[0]?.textContent ?? "").toContain("🤖");
     expect(rows[1]?.textContent ?? "").toContain("📟");

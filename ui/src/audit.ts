@@ -258,13 +258,19 @@ function eventRow(event: AuditEvent, devices: Record<string, DeviceInfo>): HTMLL
 
   const ts = document.createElement("time");
   ts.className = "audit-ts";
-  // Format in the APP's locale (not the browser default) so the date matches the chosen language; a
-  // fixed short-date + medium-time avoids the odd "time, date" default. dir="ltr" keeps the datetime a
-  // coherent left-to-right unit inside an RTL feed (Hebrew/Arabic) instead of getting bidi-scrambled.
+  // Format in the APP's locale (not the browser default) so the date matches the chosen language. Use
+  // explicit numeric components in 24-hour time: that drops the AM/PM marker, which in Arabic is a
+  // strong-RTL letter ("م") that scrambled the line. With NO strong-RTL chars, dir="ltr" + the
+  // unicode-bidi:isolate on .audit-ts keep the datetime a coherent LTR unit inside an RTL feed.
   ts.dir = "ltr";
   ts.textContent = new Date(event.ts * 1000).toLocaleString(currentLocale(), {
-    dateStyle: "short",
-    timeStyle: "medium",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
   });
 
   row.append(

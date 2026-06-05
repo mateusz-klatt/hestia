@@ -417,6 +417,7 @@ td.sub-label {
 
 .audit-ts {
   white-space: nowrap;
+  unicode-bidi: isolate; /* the LTR numeric timestamp stays a self-contained unit in an RTL (he/ar) feed */
 }
 
 .audit-icon {
