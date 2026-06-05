@@ -67,6 +67,12 @@ const ACTION_KEYS: Record<string, MessageKey> = {
   endpoints: "audit.action.endpoints",
   thermostat_on: "audit.action.thermostat_on",
   setpoint: "audit.action.setpoint",
+  password: "audit.action.password",
+  user_add: "audit.action.user_add",
+  user_role: "audit.action.user_role",
+  user_enable: "audit.action.user_enable",
+  user_disable: "audit.action.user_disable",
+  user_password: "audit.action.user_password",
 };
 
 /** Localise a known audit action verb; an unknown/new action falls back to its raw code. */

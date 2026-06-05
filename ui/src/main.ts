@@ -1,7 +1,9 @@
 import "./style.css";
 
 import {
+  addUser,
   apiUrl,
+  changeOwnPassword,
   deleteRule,
   fetchAudit,
   fetchAutomations,
@@ -10,13 +12,17 @@ import {
   fetchRf433,
   fetchRoomIcons,
   fetchSettings,
+  fetchUsers,
   postControl,
   postIr,
   postName,
   postRule,
   postScene,
+  resetUserPassword,
   saveRoomIcon as saveRoomIconOnServer,
   saveSettings as saveUserSettings,
+  setUserDisabled,
+  setUserRole,
   whoami,
 } from "./api/client";
 import type { DeviceInfo } from "./api/types";
@@ -34,6 +40,7 @@ import { createRoomsView } from "./rooms";
 import { renderRuleForm } from "./ruleform";
 import { renderSceneControls } from "./scenes";
 import { reconcileServerSettings } from "./settings";
+import { renderUsersPanel } from "./users";
 import { renderViewSwitch, type ViewName } from "./view";
 
 function el(id: string): HTMLElement {
@@ -64,6 +71,7 @@ let roomIcons: Record<string, string> = {};
 // The server is the real boundary (#73) — this gating is convenience, never the security check.
 let canControl = false;
 let isAdmin = false;
+let currentUsername: string | null = null; // the signed-in user (null when auth is off); the admin Users panel marks/guards this row
 
 // Audit feed: the live discovery map feeds the display-time humanizers (Codex/Copilot: read-time,
 // UI-side — no DB change, so renames + locale changes also fix old rows). targets resolve to
@@ -155,6 +163,14 @@ function startApp(): void {
   const audit = renderAuditFeed(el("audit-feed"), fetchAudit, () => latestDevices);
   const rf433 = renderRf433(el("rf433"), fetchRf433);
   const dbStats = renderDbStats(el("dbstats"), fetchDbStats);
+  // Admin-only Users panel (server-gated; the tab only exists for admins anyway). Mounted lazily so a
+  // non-admin never builds it.
+  const users = isAdmin
+    ? renderUsersPanel(el("users"), {
+        fetchUsers, addUser, setUserRole, setUserDisabled, resetUserPassword,
+        currentUser: () => currentUsername,
+      })
+    : null;
 
   el("refresh").addEventListener("click", () => {
     void live.refresh();
@@ -179,6 +195,7 @@ function startApp(): void {
       } else {
         void rf433.refresh();
         void dbStats.refresh();
+        void users?.refresh();
       }
     },
     { showAdmin: isAdmin }, // a non-admin gets only 🏠 Rooms + 📜 Activity (no engineer view)
@@ -319,6 +336,7 @@ void (async () => {
   // Resolve capabilities from the role before the first render. Auth-off (me.user === null) = loopback/dev
   // → full access. The server enforces these for real (#73); this only shapes what the UI offers.
   const authOff = me.user === null;
+  currentUsername = me.user;
   isAdmin = authOff || me.role === "admin";
   canControl = authOff || me.role === "operator" || me.role === "admin";
   // Always render the user/settings chip; auth-off (me.user === null) shows a settings-only menu
@@ -335,6 +353,7 @@ void (async () => {
     saveSettings: async (settings: Parameters<typeof saveUserSettings>[0]): Promise<void> => {
       await saveUserSettings(settings);
     },
+    changePassword: changeOwnPassword, // 🔑 in the ⚙ menu — verifies the current password server-side
   };
   renderUser(el("auth"), me.user, me.user !== null ? authedUserOpts : userOpts);
   startApp();

@@ -11,6 +11,7 @@ import type {
   RuleResult,
   SceneOp,
   SceneResult,
+  UserAccount,
   UserSettings,
 } from "./types";
 
@@ -295,4 +296,71 @@ export async function logout(): Promise<void> {
   } catch {
     return;
   }
+}
+
+// ---- user management (#PR-D) ---------------------------------------------
+
+/** The outcome of a user-management mutation: success, or a server-supplied error string (English) we
+ *  surface only as a fallback — the UI validates the common cases client-side with localized text. */
+export interface MutationResult {
+  ok: boolean;
+  error: string | null;
+}
+
+async function postUser(path: string, payload: unknown): Promise<MutationResult> {
+  try {
+    const response = await fetch(apiUrl(path), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (response.ok) return { ok: true, error: null };
+    let error: string | null = null;
+    try {
+      const body = (await response.json()) as { error?: unknown };
+      if (typeof body.error === "string") error = body.error;
+    } catch {
+      /* non-JSON error body */
+    }
+    return { ok: false, error };
+  } catch {
+    return { ok: false, error: null };
+  }
+}
+
+/** POST `/api/me/password` — the signed-in user changes their OWN password (server verifies current). */
+export function changeOwnPassword(current: string, newPassword: string): Promise<MutationResult> {
+  return postUser("me/password", { current, new: newPassword });
+}
+
+/** GET `/api/users` (admin) — every account's metadata (no hashes), or `null` on 401 / any failure. */
+export async function fetchUsers(): Promise<UserAccount[] | null> {
+  try {
+    const response = await fetch(apiUrl("users"));
+    if (!response.ok) return null;
+    const body = (await response.json()) as { users?: unknown };
+    return Array.isArray(body.users) ? (body.users as UserAccount[]) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** POST `/api/users` (admin) — create a new account. */
+export function addUser(username: string, password: string, role: string): Promise<MutationResult> {
+  return postUser("users", { username, password, role });
+}
+
+/** POST `/api/users/role` (admin) — change another user's role. */
+export function setUserRole(username: string, role: string): Promise<MutationResult> {
+  return postUser("users/role", { username, role });
+}
+
+/** POST `/api/users/disabled` (admin) — enable/disable another account. */
+export function setUserDisabled(username: string, disabled: boolean): Promise<MutationResult> {
+  return postUser("users/disabled", { username, disabled });
+}
+
+/** POST `/api/users/reset-password` (admin) — set a new password for another user. */
+export function resetUserPassword(username: string, newPassword: string): Promise<MutationResult> {
+  return postUser("users/reset-password", { username, new: newPassword });
 }

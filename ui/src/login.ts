@@ -1,6 +1,8 @@
+import type { MutationResult } from "./api/client";
 import type { UserSettings } from "./api/types";
 import { login, logout } from "./api/client";
 import { currentLocale, FLAGS, LOCALES, t } from "./i18n";
+import { MIN_PASSWORD, openFormModal } from "./modal";
 import { setLocaleOverride, setTempScale, tempScale, type TempScale } from "./prefs";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
@@ -123,6 +125,7 @@ export function renderUser(
     reload?: () => void;
     saveSettings?: (settings: Partial<UserSettings>) => Promise<void>;
     onEditIcons?: () => void;
+    changePassword?: (current: string, newPassword: string) => Promise<MutationResult>;
   },
 ): void {
   const reload = opts.reload ?? ((): void => {
@@ -216,6 +219,41 @@ export function renderUser(
       onEditIcons();
     });
     menu.append(iconsBtn);
+  }
+
+  // Change password — any signed-in user (a real session, not auth-off). Opens a modal that verifies
+  // the CURRENT password server-side, so a borrowed cookie can't rotate the credential.
+  const changePassword = opts.changePassword;
+  if (user !== null && changePassword !== undefined) {
+    const pwBtn = document.createElement("button");
+    pwBtn.id = "change-password";
+    pwBtn.type = "button";
+    pwBtn.className = "menu-action";
+    pwBtn.textContent = `🔑 ${t("user.changePassword")}`;
+    pwBtn.addEventListener("click", () => {
+      setOpen(false);
+      openFormModal({
+        title: t("user.changePassword"),
+        fields: [
+          { name: "current", label: t("user.currentPassword"), autocomplete: "current-password" },
+          { name: "next", label: t("user.newPassword"), autocomplete: "new-password" },
+          { name: "confirm", label: t("user.confirmPassword"), autocomplete: "new-password" },
+        ],
+        submitLabel: t("user.changePassword"),
+        successText: t("user.passwordChanged"),
+        onSubmit: (values) => {
+          const next = values["next"] ?? "";
+          if (next.length < MIN_PASSWORD) {
+            return Promise.resolve({ ok: false, error: t("user.passwordTooShort") });
+          }
+          if (next !== (values["confirm"] ?? "")) {
+            return Promise.resolve({ ok: false, error: t("user.passwordMismatch") });
+          }
+          return changePassword(values["current"] ?? "", next);
+        },
+      });
+    });
+    menu.append(pwBtn);
   }
 
   // Logout only when there's a session user (auth-off has no one to log out).

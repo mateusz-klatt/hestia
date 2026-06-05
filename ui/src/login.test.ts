@@ -5,6 +5,7 @@ const { loginMock, logoutMock } = vi.hoisted(() => ({ loginMock: vi.fn(), logout
 vi.mock("./api/client", () => ({ login: loginMock, logout: logoutMock }));
 
 import { renderLogin, renderUser } from "./login";
+import { nth, q } from "./test-dom";
 
 const flush = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
 
@@ -93,6 +94,7 @@ describe("renderUser", () => {
   afterEach(() => {
     logoutMock.mockReset();
     vi.unstubAllGlobals();
+    document.body.replaceChildren(); // drop any change-password modal a test opened
   });
 
   it("shows just the username with a dropdown (no 'signed in' label)", () => {
@@ -220,5 +222,49 @@ describe("renderUser", () => {
     box.querySelector<HTMLButtonElement>("#edit-room-icons")?.click();
     expect(onEditIcons).toHaveBeenCalledOnce();
     expect(box.querySelector<HTMLElement>("#user-menu")?.hidden).toBe(true); // menu closed
+  });
+
+  it("shows the change-password entry only for a signed-in user with the callback", () => {
+    const noCb = document.createElement("div");
+    renderUser(noCb, "tata", { onLogout: vi.fn() });
+    expect(noCb.querySelector("#change-password")).toBeNull(); // no callback supplied
+
+    const authOff = document.createElement("div");
+    renderUser(authOff, null, { onLogout: vi.fn(), changePassword: vi.fn() });
+    expect(authOff.querySelector("#change-password")).toBeNull(); // auth-off (no session user)
+
+    const ok = document.createElement("div");
+    renderUser(ok, "tata", { onLogout: vi.fn(), changePassword: vi.fn() });
+    expect(ok.querySelector("#change-password")).not.toBeNull();
+  });
+
+  it("change-password opens a modal that calls the callback with current + new", async () => {
+    const box = document.createElement("div");
+    const changePassword = vi.fn().mockResolvedValue({ ok: true, error: null });
+    renderUser(box, "tata", { onLogout: vi.fn(), changePassword });
+    box.querySelector<HTMLButtonElement>("#user-menu-btn")?.click(); // open the menu
+    box.querySelector<HTMLButtonElement>("#change-password")?.click();
+    expect(box.querySelector<HTMLElement>("#user-menu")?.hidden).toBe(true); // menu closes
+    expect(document.querySelectorAll(".modal-form input")).toHaveLength(3); // current / new / confirm
+    nth<HTMLInputElement>(document, ".modal-form input", 0).value = "old";
+    nth<HTMLInputElement>(document, ".modal-form input", 1).value = "longenough";
+    nth<HTMLInputElement>(document, ".modal-form input", 2).value = "longenough";
+    q(document, "form").dispatchEvent(new Event("submit"));
+    await flush();
+    expect(changePassword).toHaveBeenCalledWith("old", "longenough");
+  });
+
+  it("change-password rejects a mismatch before calling the server", async () => {
+    const box = document.createElement("div");
+    const changePassword = vi.fn();
+    renderUser(box, "tata", { onLogout: vi.fn(), changePassword });
+    box.querySelector<HTMLButtonElement>("#change-password")?.click();
+    nth<HTMLInputElement>(document, ".modal-form input", 0).value = "old";
+    nth<HTMLInputElement>(document, ".modal-form input", 1).value = "longenough";
+    nth<HTMLInputElement>(document, ".modal-form input", 2).value = "different";
+    q(document, "form").dispatchEvent(new Event("submit"));
+    await flush();
+    expect(changePassword).not.toHaveBeenCalled();
+    expect(document.querySelector(".modal-form .status")?.textContent).toBe("Passwords don't match");
   });
 });

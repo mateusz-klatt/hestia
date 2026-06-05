@@ -73,6 +73,13 @@ const ROUTES: Record<string, () => Response> = {
   automations: () => jsonResponse({ automations: [] }),
   rf433: () => jsonResponse({ devices: [] }),
   "db/stats": () => jsonResponse({ file_bytes: 196608, tables: { nodes: 8, automations: 0, users: 3, audit: 8 } }),
+  users: () => jsonResponse({
+    users: [
+      { username: "mateusz", role: "admin", disabled: false },
+      { username: "anna", role: "operator", disabled: false },
+      { username: "gosc", role: "viewer", disabled: true },
+    ],
+  }),
 };
 
 /** Patch fetch + EventSource so every `/api/*` call resolves from the fixtures above. */
