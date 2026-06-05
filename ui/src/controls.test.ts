@@ -47,13 +47,16 @@ describe("renderActions button layout", () => {
     expect(labels(cell)).toEqual(["Raise", "Lower"]);
   });
 
-  it("a thermostat gets Off / On + a 4–28 °C target dropdown + Set", () => {
+  it("a thermostat mirrors klima: a 4–28 °C dropdown + ✓ Set + ⏻ Off (icon buttons, accessible names)", () => {
     const cell = td();
     renderActions(cell, 7, device({ type: "thermostat", setpoint: 22 }), okPost);
-    expect(labels(cell)).toEqual(["Off", "On", "Set"]);
+    expect(labels(cell)).toEqual(["✓", "⏻"]); // Set + Off pictograms, like klima
+    const [set, off] = [...cell.querySelectorAll("button")];
+    expect(set?.title).toBe("Set");
+    expect(off?.title).toBe("Turn off");
     const sel = cell.querySelector("select");
     const opts = [...(sel?.querySelectorAll("option") ?? [])].map((o) => o.value);
-    expect(opts).toEqual(Array.from({ length: 25 }, (_, i) => String(i + 4))); // 4..28
+    expect(opts).toEqual(Array.from({ length: 25 }, (_, i) => String(i + 4))); // 4..28 °C values
     expect(sel?.value).toBe("22"); // pre-selects the current setpoint
   });
 
@@ -122,9 +125,8 @@ describe("renderActions dispatch", () => {
     renderActions(thermostat, 9, device({ type: "thermostat", setpoint: 21 }), post);
     const tsel = thermostat.querySelector("select");
     if (tsel) tsel.value = "25";
-    await fire(thermostat, "Set"); // one command for the chosen target
-    await fire(thermostat, "On");
-    await fire(thermostat, "Off");
+    await fire(thermostat, "✓"); // Set = power on, THEN setpoint (two commands)
+    await fire(thermostat, "⏻"); // Off
 
     const gang = td();
     renderActions(
@@ -146,9 +148,9 @@ describe("renderActions dispatch", () => {
       { op: "level", node: 6, value: 50 },
       { op: "cover", node: 8, value: 99 },
       { op: "cover", node: 8, value: 0 },
-      { op: "thermostat", node: 9, celsius: 25 },
-      { op: "thermostat_power", node: 9, on: true },
-      { op: "thermostat_power", node: 9, on: false },
+      { op: "thermostat_power", node: 9, on: true }, // ✓ Set = power on, then…
+      { op: "thermostat", node: 9, celsius: 25 }, // …setpoint
+      { op: "thermostat_power", node: 9, on: false }, // ⏻ Off
       { op: "switch", node: 7, endpoint: 1, on: true },
       { op: "switch", node: 7, endpoint: 1, on: false },
       { op: "switch", node: 7, endpoint: 2, on: true },

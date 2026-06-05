@@ -1,5 +1,6 @@
 import type { ControlResult, IrButton, Klima, KlimaState } from "./api/types";
 import { t } from "./i18n";
+import { fmtTemp } from "./render/format";
 
 /** Transmits a saved Flipper signal (`{file, button}`); normalised result (never rejects). */
 export type PostIr = (file: string, button: string) => Promise<ControlResult>;
@@ -8,16 +9,16 @@ export type PostIr = (file: string, button: string) => Promise<ControlResult>;
 const MODE_ICON: Record<string, string> = { cool: "❄️", heat: "🔥", auto: "🔄", dry: "💨", fan: "💨" };
 
 /**
- * The current A/C state as a compact, language-neutral pictogram line for the
- * klima panel: `❄️ 22°` (cooling), `🔥 24°` (heating), `🔄 20°` (auto), `⏻` (off),
- * or just `❄️` when never commanded (the panel's identity, no known state).
- * Pure — no DOM, no i18n (icons + a temperature number) — so it stays trivially testable.
+ * The current A/C state as a compact pictogram line for the klima panel:
+ * `❄️ 22.0°` (cooling), `🔥 24.0°` (heating), `🔄 20.0°` (auto), `⏻` (off), or just
+ * `❄️` when never commanded (the panel's identity, no known state). The temperature
+ * renders in the user's scale (C/F/K) via `fmtTemp`; the device/IR signal stay Celsius.
  */
 export function formatKlimaState(state: KlimaState | null): string {
   if (state === null) return "❄️"; // unknown → A/C identity only
   if (!state.power) return "⏻"; // off (the backend retains mode/temp for future "resume" UX)
   const icon = state.mode !== null ? (MODE_ICON[state.mode] ?? "❄️") : "❄️";
-  return state.temp !== null ? `${icon} ${String(state.temp)}°` : icon;
+  return state.temp !== null ? `${icon} ${fmtTemp(state.temp)}` : icon;
 }
 
 /** Update every built klima panel's status pictogram (both the rooms + admin panels). */
@@ -150,10 +151,10 @@ export function renderKlima(box: HTMLElement, klima: Klima, postIr: PostIr): voi
     temp.style.marginRight = "0.3rem";
     const fillTemps = (): void => {
       temp.replaceChildren();
-      for (const t of programs[mode.value] ?? []) {
+      for (const c of programs[mode.value] ?? []) {
         const o = document.createElement("option");
-        o.value = String(t);
-        o.textContent = `${String(t)}°`;
+        o.value = String(c);            // the IR signal is keyed by the Celsius preset; only the label converts
+        o.textContent = fmtTemp(c);     // C/F/K per user settings
         temp.appendChild(o);
       }
     };
