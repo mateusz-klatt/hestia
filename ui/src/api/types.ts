@@ -178,6 +178,15 @@ export interface UserSettings {
   theme: string | null;
 }
 
+// ---- User management (`GET/POST /api/users*`, admin only) ----------------
+
+/** One account as the admin user list reports it — metadata only, NEVER a password hash. */
+export interface UserAccount {
+  username: string;
+  role: string; // admin | operator | viewer
+  disabled: boolean;
+}
+
 export interface Discovery {
   devices: Record<string, DeviceInfo>;
   summary: Summary;

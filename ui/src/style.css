@@ -855,3 +855,140 @@ td.seen.fresh {
     width: 100%;
   }
 }
+
+/* ---- user management (#PR-D): the change-password modal + the admin Users panel ---- */
+.status.ok {
+  color: var(--ok);
+}
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  background: rgba(47, 36, 27, 0.45); /* warm dark scrim */
+}
+
+.modal-card {
+  width: 100%;
+  max-width: 22rem;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  padding: 1rem 1.1rem 1.2rem;
+  box-shadow: 0 10px 30px rgba(47, 36, 27, 0.25);
+}
+
+.modal-card h3 {
+  margin: 0 0 0.8rem;
+  color: var(--accent);
+}
+
+.modal-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.modal-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.85rem;
+  color: var(--fg-soft);
+}
+
+.modal-row input {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  margin-top: 0.3rem;
+}
+
+.modal-cancel {
+  background: transparent;
+}
+
+/* Users panel */
+.users-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-top: 1rem;
+}
+
+.users-head h3 {
+  margin: 0;
+  color: var(--accent);
+}
+
+.users-add {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  align-items: center;
+  margin: 0.6rem 0;
+}
+
+.users-add input,
+.users-add select {
+  flex: 1 1 8rem;
+  min-width: 0;
+}
+
+.users-add .status {
+  flex-basis: 100%;
+}
+
+.users-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.user-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem 0.6rem;
+  padding: 0.45rem 0.55rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.user-row.user-disabled {
+  opacity: 0.6;
+}
+
+.user-name {
+  flex: 1 1 7rem;
+  font-weight: 600;
+  word-break: break-word;
+}
+
+.user-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  align-items: center;
+}
+
+.user-row .status {
+  flex-basis: 100%;
+  min-height: 1em;
+}
+
+.users-empty {
+  color: var(--muted);
+  margin: 0.4rem 0;
+}

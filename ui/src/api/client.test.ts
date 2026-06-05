@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  addUser,
   apiBase,
+  changeOwnPassword,
   deleteRule,
   fetchAudit,
   fetchAutomations,
@@ -9,14 +11,18 @@ import {
   fetchDiscovery,
   fetchRoomIcons,
   fetchSettings,
+  fetchUsers,
   login,
   logout,
   postIr,
   postName,
   postRule,
   postScene,
+  resetUserPassword,
   saveRoomIcon,
   saveSettings,
+  setUserDisabled,
+  setUserRole,
   whoami,
 } from "./client";
 
@@ -464,5 +470,67 @@ describe("logout", () => {
   it("swallows a rejected fetch (best-effort)", async () => {
     vi.stubGlobal("fetch", () => Promise.reject(new Error("offline")));
     await expect(logout()).resolves.toBeUndefined();
+  });
+});
+
+describe("user management (#PR-D)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("changeOwnPassword POSTs {current,new} and maps the outcome", async () => {
+    const seen: { url: string; init: RequestInit }[] = [];
+    vi.stubGlobal("fetch", (url: URL, init: RequestInit) => {
+      seen.push({ url: url.href, init });
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({}) });
+    });
+    expect(await changeOwnPassword("old", "new12345")).toEqual({ ok: true, error: null });
+    expect(seen[0]?.url).toContain("/api/me/password");
+    expect(seen[0]?.init.method).toBe("POST");
+    expect(seen[0]?.init.body).toBe(JSON.stringify({ current: "old", new: "new12345" }));
+  });
+
+  it("surfaces the server error string on a non-2xx mutation", async () => {
+    vi.stubGlobal("fetch", () =>
+      Promise.resolve({ ok: false, json: () => Promise.resolve({ error: "current password is incorrect" }) }));
+    expect(await changeOwnPassword("bad", "new12345")).toEqual({ ok: false, error: "current password is incorrect" });
+  });
+
+  it("returns a null error when the failure body is not JSON, and on a rejected fetch", async () => {
+    vi.stubGlobal("fetch", () => Promise.resolve({ ok: false, json: () => Promise.reject(new Error("non-json")) }));
+    expect(await addUser("kid", "kidpassword", "viewer")).toEqual({ ok: false, error: null });
+    vi.stubGlobal("fetch", () => Promise.reject(new Error("offline")));
+    expect(await addUser("kid", "kidpassword", "viewer")).toEqual({ ok: false, error: null });
+  });
+
+  it("fetchUsers returns the array, or null on non-2xx / non-array / reject", async () => {
+    const list = [{ username: "a", role: "admin", disabled: false }];
+    vi.stubGlobal("fetch", () => Promise.resolve({ ok: true, json: () => Promise.resolve({ users: list }) }));
+    expect(await fetchUsers()).toEqual(list);
+    vi.stubGlobal("fetch", () => Promise.resolve({ ok: true, json: () => Promise.resolve({ users: "nope" }) }));
+    expect(await fetchUsers()).toBeNull();
+    vi.stubGlobal("fetch", () => Promise.resolve({ ok: false, json: () => Promise.resolve({}) }));
+    expect(await fetchUsers()).toBeNull();
+    vi.stubGlobal("fetch", () => Promise.reject(new Error("offline")));
+    expect(await fetchUsers()).toBeNull();
+  });
+
+  it("the admin mutations hit the right path with the right body", async () => {
+    const calls: { url: string; body: unknown }[] = [];
+    vi.stubGlobal("fetch", (url: URL, init: RequestInit) => {
+      calls.push({ url: url.href, body: init.body });
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({}) });
+    });
+    await addUser("kid", "kidpassword", "operator");
+    await setUserRole("kid", "admin");
+    await setUserDisabled("kid", true);
+    await resetUserPassword("kid", "new12345");
+    expect(calls.map((c) => c.url.replace(/^.*\/api\//, "api/"))).toEqual([
+      "api/users", "api/users/role", "api/users/disabled", "api/users/reset-password",
+    ]);
+    expect(calls[0]?.body).toBe(JSON.stringify({ username: "kid", password: "kidpassword", role: "operator" }));
+    expect(calls[1]?.body).toBe(JSON.stringify({ username: "kid", role: "admin" }));
+    expect(calls[2]?.body).toBe(JSON.stringify({ username: "kid", disabled: true }));
+    expect(calls[3]?.body).toBe(JSON.stringify({ username: "kid", new: "new12345" }));
   });
 });
