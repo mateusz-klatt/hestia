@@ -1,7 +1,15 @@
 import { describe, expect, it } from "vitest";
 
 import type { AuditEvent } from "./api/types";
-import { formatAuditTarget, renderAuditFeed, type FetchAudit } from "./audit";
+import {
+  formatAuditAction,
+  formatAuditActor,
+  formatAuditDetail,
+  formatAuditResult,
+  formatAuditTarget,
+  renderAuditFeed,
+  type FetchAudit,
+} from "./audit";
 import { device } from "./fixtures";
 
 const flush = (): Promise<void> =>
@@ -49,7 +57,7 @@ describe("renderAuditFeed", () => {
     expect(rows[2]?.textContent ?? "").toContain("⚙");
     expect(rows[3]?.textContent ?? "").toContain("👤");
     expect(rows[4]?.textContent ?? "").toContain("👤");
-    expect(rows[0]?.textContent ?? "").toContain("automation:bedtime");
+    expect(rows[0]?.textContent ?? "").toContain("Automation: bedtime"); // actor prefix is localized
     expect(rows[0]?.textContent ?? "").toContain("scene");
     expect(rows[0]?.textContent ?? "").toContain("done");
     expect(rows[2]?.textContent ?? "").not.toContain("null");
@@ -122,14 +130,114 @@ describe("renderAuditFeed", () => {
     expect(container.textContent).not.toContain("unexpected");
   });
 
-  it("renders a resolved target when a resolver is supplied", async () => {
+  it("resolves device names from the live device map (target + 2-gang detail)", async () => {
     const container = document.createElement("div");
     const events: FetchAudit = () =>
-      Promise.resolve([auditEvent({ id: 1, ts: 100, action: "setpoint", target: "13", result: "ok" })]);
-    const feed = renderAuditFeed(container, events, (target, action) =>
-      action === "setpoint" && target === "13" ? "Thermostat · Hall" : target);
+      Promise.resolve([
+        auditEvent({ id: 1, ts: 100, actor: "device", action: "endpoints", target: "13",
+          detail: "{'1': True, '2': False}", result: "reported" }),
+      ]);
+    const feed = renderAuditFeed(container, events, () => ({
+      "13": device({ type: "switch", name: "Sypialnia", room: "Piętro",
+        endpoint_names: { "1": "Lewy", "2": "Prawy" } }),
+    }));
     await feed.refresh();
-    expect(container.querySelector(".audit-target")?.textContent).toBe("Thermostat · Hall");
+    expect(container.querySelector(".audit-target")?.textContent).toBe("Sypialnia · Piętro");
+    expect(container.querySelector(".audit-detail")?.textContent).toBe("Lewy: On · Prawy: Off");
+    expect(container.querySelector(".audit-action")?.textContent).toBe("Channels");
+    expect(container.querySelector(".audit-actor")?.textContent).toBe("Device");
+    expect(container.querySelector(".audit-result")?.textContent).toBe("Reported");
+  });
+
+  it("falls back gracefully when no device map is supplied", async () => {
+    const container = document.createElement("div");
+    const events: FetchAudit = () =>
+      Promise.resolve([auditEvent({ id: 1, ts: 100, action: "switch", target: "13", detail: "True", result: "ok" })]);
+    await renderAuditFeed(container, events).refresh();
+    expect(container.querySelector(".audit-target")?.textContent).toBe("13"); // unknown node → raw
+    expect(container.querySelector(".audit-detail")?.textContent).toBe("On");
+  });
+});
+
+describe("formatAuditActor", () => {
+  it("localizes reserved actors and keeps usernames + the rule id raw", () => {
+    expect(formatAuditActor("device")).toBe("Device");
+    expect(formatAuditActor("system")).toBe("System");
+    expect(formatAuditActor("anonymous")).toBe("Anonymous");
+    expect(formatAuditActor("automation:bedtime")).toBe("Automation: bedtime");
+    expect(formatAuditActor("mateusz")).toBe("mateusz");
+  });
+});
+
+describe("formatAuditAction", () => {
+  it("localizes a known action and passes an unknown one through raw", () => {
+    expect(formatAuditAction("switch")).toBe("Switch");
+    expect(formatAuditAction("door")).toBe("Door state");
+    expect(formatAuditAction("endpoints")).toBe("Channels");
+    expect(formatAuditAction("automation_delete")).toBe("Automation deleted");
+    expect(formatAuditAction("mystery")).toBe("mystery");
+  });
+});
+
+describe("formatAuditResult", () => {
+  it("localizes the known enums; keeps error/ratio/null raw", () => {
+    expect(formatAuditResult("ok")).toBe("OK");
+    expect(formatAuditResult("invalid")).toBe("Invalid");
+    expect(formatAuditResult("reported")).toBe("Reported");
+    expect(formatAuditResult("fired")).toBe("Fired");
+    expect(formatAuditResult("error: serial closed")).toBe("error: serial closed");
+    expect(formatAuditResult("2/3")).toBe("2/3");
+    expect(formatAuditResult(null)).toBeNull();
+  });
+});
+
+describe("formatAuditDetail", () => {
+  const devices = {
+    "12": device({ type: "switch", endpoint_names: { "1": "Lewy", "2": "Prawy" } }),
+    "13": device({ type: "thermostat" }), // no endpoint names
+  };
+
+  it("maps observed booleans (Python repr) to On/Off", () => {
+    expect(formatAuditDetail("True", "switch", "13", devices)).toBe("On");
+    expect(formatAuditDetail("False", "thermostat_on", "13", devices)).toBe("Off");
+  });
+
+  it("maps door words and JSON booleans", () => {
+    expect(formatAuditDetail("open", "door", "13", devices)).toBe("open");
+    expect(formatAuditDetail("closed", "door", "13", devices)).toBe("closed");
+    expect(formatAuditDetail("true", "switch", "13", devices)).toBe("On");
+  });
+
+  it("renders an observed 2-gang map with channel names (named + unnamed fallback)", () => {
+    expect(formatAuditDetail("{'1': True, '2': False}", "endpoints", "12", devices))
+      .toBe("Lewy: On · Prawy: Off");
+    expect(formatAuditDetail("{'1': True, '2': False}", "endpoints", "13", devices))
+      .toBe("#1: On · #2: Off"); // node 13 has no endpoint names
+  });
+
+  it("summarizes a control-op payload (endpoint → name, on → On/Off, node dropped)", () => {
+    expect(formatAuditDetail('{"endpoint": 1, "node": 12, "on": true}', "switch", "12", devices))
+      .toBe("Lewy: On");
+    expect(formatAuditDetail('{"node": 13, "on": false}', "switch", "13", devices)).toBe("Off");
+  });
+
+  it("humanizes numeric values by action (setpoint → temperature, level → percent)", () => {
+    expect(formatAuditDetail("21", "setpoint", "13", devices)).toBe("21.0°");
+    expect(formatAuditDetail("40", "level", "13", devices)).toBe("40%");
+    expect(formatAuditDetail('{"node": 13, "value": 40}', "level", "13", devices)).toBe("40%");
+    expect(formatAuditDetail('{"node": 13, "celsius": 22}', "thermostat", "13", devices)).toBe("22.0°");
+  });
+
+  it("shows unrecognized / unparseable / empty details raw, losing nothing", () => {
+    expect(formatAuditDetail('{"name": "Salon"}', "name", "13", devices)).toBe('{"name": "Salon"}');
+    expect(formatAuditDetail("from web", "login", null, devices)).toBe("from web");
+    expect(formatAuditDetail("None", "switch", "13", devices)).toBe("None");
+    expect(formatAuditDetail("", "switch", "13", devices)).toBe("");
+    expect(formatAuditDetail(null, "switch", "13", devices)).toBeNull();
+    expect(formatAuditDetail("99", "switch", "13", devices)).toBe("99"); // number, no % action → raw
+    // a malformed numeric field falls back to its raw text, never "NaN%"/"NaN°"
+    expect(formatAuditDetail('{"node": 13, "level": "oops"}', "level", "13", devices)).toBe("oops");
+    expect(formatAuditDetail('{"node": 13, "celsius": "x"}', "thermostat", "13", devices)).toBe("x");
   });
 });
 
