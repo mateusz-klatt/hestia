@@ -23,13 +23,6 @@ export function renderActions(
   info: DeviceInfo,
   postControl: PostControl,
 ): void {
-  // The thermostat setpoint dropdown is the USER's input. A background state report / 45 s refresh
-  // re-renders the row, but must NOT yank the user's pick back to the (possibly stale) State setpoint
-  // — "I set 18 °C and it jumps to 28". Preserve the current selection across re-renders; only the
-  // first build seeds it from info.setpoint.
-  const priorSetpoint = info.type === "thermostat"
-    ? cell.querySelector<HTMLSelectElement>("select")?.value
-    : undefined;
   cell.replaceChildren();
 
   const buttons: HTMLButtonElement[] = [];
@@ -160,7 +153,7 @@ export function renderActions(
     const start = current !== null && Number.isFinite(current)
       ? Math.min(THERMOSTAT_MAX_C, Math.max(THERMOSTAT_MIN_C, Math.round(current)))
       : 21;
-    sel.value = priorSetpoint ?? String(start); // keep the user's pick across re-renders; seed once from setpoint
+    sel.value = String(start); // seeds from the (now optimistically-echoed) live setpoint
     cell.appendChild(sel);
     addButton("✓", () => [
       { op: "thermostat_power", node, on: true }, // turn on, THEN set — a setpoint alone is ignored while off

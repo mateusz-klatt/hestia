@@ -74,16 +74,6 @@ describe("renderActions button layout", () => {
     expect(unseen.querySelector("select")?.value).toBe("21"); // null → 21 default
   });
 
-  it("preserves the user's thermostat dropdown pick across a re-render (a stale setpoint report must not reset it)", () => {
-    const cell = td();
-    renderActions(cell, 7, device({ type: "thermostat", setpoint: 22 }), okPost);
-    const sel = cell.querySelector("select");
-    if (sel !== null) sel.value = "18"; // the user picks 18
-    // A background state report / 45 s refresh re-renders the row carrying a stale setpoint (28):
-    renderActions(cell, 7, device({ type: "thermostat", setpoint: 28 }), okPost);
-    expect(cell.querySelector("select")?.value).toBe("18"); // kept the user's pick, NOT reset to 28
-  });
-
   it("multi-gang switches get per-channel buttons and stateless types get no buttons", () => {
     const gang = td();
     renderActions(
