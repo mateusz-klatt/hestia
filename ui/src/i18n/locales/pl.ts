@@ -10,6 +10,7 @@ const pl: Partial<Messages> = {
 
   "view.rooms": "🏠 Pokoje",
   "view.back": "← Pokoje",
+  "view.events": "📜 Dziennik",
   "view.advanced": "🔧 Zaawansowane",
 
   "login.username": "Użytkownik",

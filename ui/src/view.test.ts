@@ -24,6 +24,7 @@ function els(): ViewSwitchEls {
   return {
     switchBox: document.createElement("div"),
     roomsEl: document.createElement("section"),
+    eventsEl: document.createElement("section"),
     adminEl: document.createElement("section"),
   };
 }
@@ -46,6 +47,11 @@ describe("storedView", () => {
     expect(storedView()).toBe("admin");
   });
 
+  it("returns events when that is the stored choice", () => {
+    localStorage.setItem("hestia.view", "events");
+    expect(storedView()).toBe("events");
+  });
+
   it("treats any unknown stored value as the rooms default", () => {
     localStorage.setItem("hestia.view", "garbage");
     expect(storedView()).toBe("rooms");
@@ -53,17 +59,19 @@ describe("storedView", () => {
 });
 
 describe("renderViewSwitch", () => {
-  it("builds two tabs and shows the rooms view by default (applied once on mount)", () => {
+  it("builds three tabs and shows the rooms view by default (applied once on mount)", () => {
     const e = els();
     const changes: ViewName[] = [];
     renderViewSwitch(e, (v) => changes.push(v));
     const tabs = e.switchBox.querySelectorAll("button");
-    expect(tabs).toHaveLength(2);
+    expect(tabs).toHaveLength(3);
     expect(e.roomsEl.hidden).toBe(false);
+    expect(e.eventsEl.hidden).toBe(true);
     expect(e.adminEl.hidden).toBe(true);
     expect(changes).toEqual(["rooms"]);
     expect(tabs[0]?.getAttribute("aria-pressed")).toBe("true");
     expect(tabs[1]?.getAttribute("aria-pressed")).toBe("false");
+    expect(tabs[2]?.getAttribute("aria-pressed")).toBe("false");
   });
 
   it("restores the persisted admin view on mount", () => {
@@ -72,26 +80,62 @@ describe("renderViewSwitch", () => {
     renderViewSwitch(e, () => undefined);
     expect(e.adminEl.hidden).toBe(false);
     expect(e.roomsEl.hidden).toBe(true);
+    expect(e.eventsEl.hidden).toBe(true);
   });
 
-  it("clicking a tab switches the view, persists it, and notifies onChange", () => {
+  it("restores the persisted events view on mount", () => {
+    localStorage.setItem("hestia.view", "events");
+    const e = els();
+    renderViewSwitch(e, () => undefined);
+    expect(e.eventsEl.hidden).toBe(false);
+    expect(e.roomsEl.hidden).toBe(true);
+    expect(e.adminEl.hidden).toBe(true);
+  });
+
+  it("clicking the Advanced tab switches the view, persists it, and notifies onChange", () => {
     const e = els();
     const changes: ViewName[] = [];
     renderViewSwitch(e, (v) => changes.push(v));
-    e.switchBox.querySelectorAll("button")[1]?.click(); // 🔧 Zaawansowane
+    const tabs = e.switchBox.querySelectorAll("button");
+    tabs[2]?.click(); // 🔧 Advanced (third tab)
     expect(e.adminEl.hidden).toBe(false);
     expect(e.roomsEl.hidden).toBe(true);
+    expect(e.eventsEl.hidden).toBe(true);
+    expect(tabs[2]?.getAttribute("aria-pressed")).toBe("true");
+    expect(tabs[0]?.getAttribute("aria-pressed")).toBe("false");
+    expect(tabs[1]?.getAttribute("aria-pressed")).toBe("false");
     expect(localStorage.getItem("hestia.view")).toBe("admin");
     expect(changes).toEqual(["rooms", "admin"]);
+  });
+
+  it("clicking the Activity tab switches to the events view, persists it, and notifies onChange", () => {
+    const e = els();
+    const changes: ViewName[] = [];
+    renderViewSwitch(e, (v) => changes.push(v));
+    const tabs = e.switchBox.querySelectorAll("button");
+    tabs[1]?.click(); // 📜 Activity (second tab)
+    expect(e.eventsEl.hidden).toBe(false);
+    expect(e.roomsEl.hidden).toBe(true);
+    expect(e.adminEl.hidden).toBe(true);
+    expect(tabs[1]?.getAttribute("aria-pressed")).toBe("true");
+    expect(tabs[0]?.getAttribute("aria-pressed")).toBe("false");
+    expect(tabs[2]?.getAttribute("aria-pressed")).toBe("false");
+    expect(localStorage.getItem("hestia.view")).toBe("events");
+    expect(changes).toEqual(["rooms", "events"]);
   });
 
   it("the returned apply switches the view programmatically", () => {
     const e = els();
     const { apply } = renderViewSwitch(e, () => undefined);
+    apply("events");
+    expect(e.eventsEl.hidden).toBe(false);
+    expect(e.roomsEl.hidden).toBe(true);
     apply("admin");
     expect(e.adminEl.hidden).toBe(false);
+    expect(e.eventsEl.hidden).toBe(true);
     apply("rooms");
     expect(e.roomsEl.hidden).toBe(false);
+    expect(e.eventsEl.hidden).toBe(true);
     expect(e.adminEl.hidden).toBe(true);
   });
 

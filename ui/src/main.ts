@@ -148,17 +148,23 @@ function startApp(): void {
     void live.refresh();
   });
 
-  // View switcher: 🏠 Rooms (default) ↔ 🔧 Advanced. Applies the persisted choice immediately;
-  // switching into the rooms view returns to the room list.
+  // View switcher: 🏠 Rooms (default) · 📜 Activity (the event log) · 🔧 Advanced. Applies the persisted
+  // choice immediately; switching into the rooms view returns to the room list.
   let currentView: ViewName = "rooms";
   const switcher = renderViewSwitch(
-    { switchBox: el("view-switch"), roomsEl: el("rooms-view"), adminEl: el("admin-view") },
+    {
+      switchBox: el("view-switch"),
+      roomsEl: el("rooms-view"),
+      eventsEl: el("events-view"),
+      adminEl: el("admin-view"),
+    },
     (view) => {
       currentView = view;
       if (view === "rooms") {
         roomsView.goToLanding(); // tapping the rooms tab always returns to the list
+      } else if (view === "events") {
+        void audit.refresh(); // 📜 the event log is its own top-level view now
       } else {
-        void audit.refresh();
         void rf433.refresh();
         void dbStats.refresh();
       }

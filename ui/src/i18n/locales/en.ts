@@ -11,6 +11,7 @@ const en = {
 
   "view.rooms": "🏠 Rooms",
   "view.back": "← Rooms",
+  "view.events": "📜 Activity",
   "view.advanced": "🔧 Advanced",
 
   "login.username": "Username",

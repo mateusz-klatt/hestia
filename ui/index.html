@@ -43,6 +43,12 @@
       <div id="room-list"></div>
     </section>
 
+    <!-- Event log (📜 Dziennik): the audit feed, promoted to its own top-level view so a viewer can
+         reach it without the engineer's Advanced view. The feed renders its own "Activity log" heading. -->
+    <section id="events-view" hidden>
+      <div id="audit-feed"></div>
+    </section>
+
     <!-- Full engineer view: the device table, globals, mode line, automations editor. -->
     <section id="admin-view" hidden>
     <div id="admin-tools"><button id="refresh" type="button">Refresh</button></div>
@@ -68,9 +74,6 @@
     </div>
 
     <div id="dbstats"></div>
-
-    <h2 id="audit-hdr">audit</h2>
-    <div id="audit-feed"></div>
 
     <div id="rf433"></div>
 
