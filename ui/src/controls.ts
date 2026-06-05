@@ -120,11 +120,16 @@ export function renderActions(
 
   if (info.endpoints !== null) {
     const endpoints = Object.keys(info.endpoints).sort((a, b) => Number(a) - Number(b));
+    // Only prefix the channel name when this cell shows MORE THAN ONE channel (the room card renders all
+    // gangs together, so the name disambiguates the 4 buttons). The engineer table renders one channel
+    // per sub-row — already labelled — so a single-channel cell drops the redundant name: the On/Off pair
+    // then fits on one line instead of wrapping under a long channel name.
+    const prefix = endpoints.length > 1;
     for (const ep of endpoints) {
-      const label = endpointLabel(ep);
+      const label = prefix ? `${endpointLabel(ep)} ` : "";
       const endpoint = Number(ep);
-      addButton(`${label} ${t("ctl.on")}`, () => ({ op: "switch", node, endpoint, on: true }));
-      addButton(`${label} ${t("ctl.off")}`, () => ({ op: "switch", node, endpoint, on: false }));
+      addButton(`${label}${t("ctl.on")}`, () => ({ op: "switch", node, endpoint, on: true }));
+      addButton(`${label}${t("ctl.off")}`, () => ({ op: "switch", node, endpoint, on: false }));
     }
     if (buttons.length > 0) cell.appendChild(status);
     return;

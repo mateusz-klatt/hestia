@@ -1,5 +1,5 @@
 import type { AuditEvent, DeviceInfo } from "./api/types";
-import { t } from "./i18n";
+import { currentLocale, t } from "./i18n";
 import type { MessageKey } from "./i18n/locales/en";
 import { fmtTemp } from "./render/format";
 
@@ -258,7 +258,14 @@ function eventRow(event: AuditEvent, devices: Record<string, DeviceInfo>): HTMLL
 
   const ts = document.createElement("time");
   ts.className = "audit-ts";
-  ts.textContent = new Date(event.ts * 1000).toLocaleString();
+  // Format in the APP's locale (not the browser default) so the date matches the chosen language; a
+  // fixed short-date + medium-time avoids the odd "time, date" default. dir="ltr" keeps the datetime a
+  // coherent left-to-right unit inside an RTL feed (Hebrew/Arabic) instead of getting bidi-scrambled.
+  ts.dir = "ltr";
+  ts.textContent = new Date(event.ts * 1000).toLocaleString(currentLocale(), {
+    dateStyle: "short",
+    timeStyle: "medium",
+  });
 
   row.append(
     ts,

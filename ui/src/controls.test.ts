@@ -116,6 +116,14 @@ describe("renderActions button layout", () => {
     expect(labels(motion)).toEqual([]);
   });
 
+  it("a single-channel cell (engineer sub-row) drops the redundant name so On/Off fit one line", () => {
+    // The engineer table renders ONE channel per sub-row (already labelled), so its buttons omit the
+    // channel name — a long name like "żaluzje" no longer wraps the On/Off pair onto two lines.
+    const cell = td();
+    renderActions(cell, 7, device({ endpoints: { "1": true }, endpoint_names: { "1": "żaluzje" } }), okPost);
+    expect(labels(cell)).toEqual(["On", "Off"]);
+  });
+
   it("re-rendering replaces the previous buttons", () => {
     const cell = td();
     renderActions(cell, 7, device({ type: "plug" }), okPost);

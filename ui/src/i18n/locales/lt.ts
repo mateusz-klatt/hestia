@@ -8,6 +8,7 @@ const messages: Partial<Messages> = {
 
   "view.rooms": "🏠 Kambariai",
   "view.back": "← Kambariai",
+  "view.events": "📜 Veikla",
   "view.advanced": "🔧 Išplėstiniai",
 
   "login.username": "Naudotojo vardas",
