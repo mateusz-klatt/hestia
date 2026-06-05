@@ -604,6 +604,26 @@ td.seen.fresh {
   font-weight: bold;
 }
 
+/* On a phone (operator: iPhone 15 Pro = 393 px), keep the three view tabs on ONE row: they share the
+   width as equal thirds with a slightly smaller font + tighter padding, so "🏠 Pokoje · 📜 Dziennik ·
+   🔧 Zaawansowane" fits without wrapping to a second line. Ellipsis is the safety net for an extreme
+   translation; the active tab stays bold. */
+@media (max-width: 640px) {
+  .view-switch {
+    flex-wrap: nowrap;
+    gap: 0.3rem;
+  }
+  .view-tab {
+    flex: 0 1 auto; /* content-sized: the long "Zaawansowane" gets the room it needs, short tabs don't waste it */
+    min-width: 0;
+    padding: 0.4rem 0.45rem;
+    font-size: 0.78rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+}
+
 .room-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(9rem, 1fr));
