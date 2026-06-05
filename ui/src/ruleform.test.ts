@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import type { DeviceInfo, Klima, RuleVocab } from "./api/types";
+import type { DeviceInfo, Klima, Rule, RuleVocab } from "./api/types";
 import { device, ruleVocab } from "./fixtures";
-import { coerce, num, parseNode, renderRuleForm } from "./ruleform";
+import { coerce, num, parseNode, reconstructionBlocker, renderRuleForm } from "./ruleform";
+import type { RuleFormHandle } from "./ruleform";
 
 // ---- pure helpers ---------------------------------------------------------
 
@@ -76,6 +77,7 @@ const KLIMA: Klima = {
 interface Form {
   box: HTMLElement;
   out: HTMLTextAreaElement;
+  handle: RuleFormHandle;
   control: (label: string) => HTMLElement;
   triggerFields: () => HTMLElement;
   rows: (labelText: string) => HTMLElement;
@@ -89,7 +91,7 @@ function mkForm(
 ): Form {
   const box = document.createElement("div");
   const out = document.createElement("textarea");
-  renderRuleForm(box, out, opts.vocab ?? ruleVocab(), opts.klima ?? {}, opts.devices);
+  const handle = renderRuleForm(box, out, opts.vocab ?? ruleVocab(), opts.klima ?? {}, opts.devices);
 
   const control = (label: string): HTMLElement => {
     for (const lab of box.querySelectorAll("label")) {
@@ -121,7 +123,7 @@ function mkForm(
   const rule = (): Record<string, unknown> => JSON.parse(out.value) as Record<string, unknown>;
   const status = (): string => box.querySelector(".status")?.textContent ?? "";
 
-  return { box, out, control, triggerFields, rows, build, rule, status };
+  return { box, out, handle, control, triggerFields, rows, build, rule, status };
 }
 
 function setInput(container: HTMLElement, placeholder: string, value: string): void {
@@ -763,5 +765,252 @@ describe("renderRuleForm — validation errors", () => {
     expect(f.status()).toContain("built");
     expect(statusClass(f).split(" ")).not.toContain("err"); // success clears the err class
     expect(f.rule().id).toBe("r1");
+  });
+});
+
+// ---- A3: "Edit" reconstructs the wizard from a saved rule -----------------
+function buildButton(f: Form): HTMLButtonElement {
+  const b = [...f.box.querySelectorAll("button")].find((x) => x.textContent === "Build JSON");
+  if (!(b instanceof HTMLButtonElement)) throw new Error("no Build JSON button");
+  return b;
+}
+function asRule(o: unknown): Rule {
+  return o as Rule;
+}
+function makeRule(over: Record<string, unknown>): Rule {
+  return asRule({
+    id: "r1",
+    enabled: true,
+    modes: ["proxy", "standalone"],
+    debounce: 0,
+    trigger: { type: "scene", node: 1, scene_id: 1 },
+    conditions: [],
+    actions: [{ op: "switch", node: 1, on: true }],
+    ...over,
+  });
+}
+
+describe("renderRuleForm — Edit round-trip (loadRule)", () => {
+  it("fully reconstructs a rule and re-emits it unchanged (scene + time_window + predicate + switch)", () => {
+    const rule = makeRule({
+      id: "pir-light",
+      debounce: 2,
+      trigger: { type: "scene", node: 14, scene_id: 1 },
+      conditions: [
+        { type: "time_window", start: "06:00", end: "22:00", days: [0, 1, 2, 3, 4] },
+        { node: 9, field: "temperature", op: "lt", value: 18 },
+      ],
+      actions: [{ op: "switch", node: 14, on: true }],
+    });
+    const f = mkForm();
+    expect(f.handle.loadRule(rule)).toEqual({ mode: "loaded" });
+    f.build();
+    expect(f.rule()).toEqual(rule); // semantic round-trip (key order ignored by deepEqual)
+  });
+
+  const triggers: Record<string, unknown>[] = [
+    { type: "scene", node: 14, scene_id: 3 },
+    { type: "state", node: 7, field: "temperature", op: "lt", value: 18 },
+    { type: "state", field: "crib_temp", op: "gt", value: 24 }, // GLOBAL → no node
+    { type: "time", at: "07:30", days: [0, 4] },
+    { type: "time", at: "07:30" }, // no days
+    { type: "sun", event: "sunset", offset_min: 15, days: [5, 6] },
+    { type: "presence", mac: "aa:bb:cc:dd:ee:ff", event: "arrive" },
+    { type: "cron", expr: "30 7 * * 1" },
+  ];
+  for (const trigger of triggers) {
+    it(`round-trips the ${String(trigger.type)} trigger (${JSON.stringify(trigger)})`, () => {
+      const rule = makeRule({ trigger });
+      const f = mkForm();
+      expect(f.handle.loadRule(rule).mode).toBe("loaded");
+      f.build();
+      expect((f.rule() as { trigger: unknown }).trigger).toEqual(trigger);
+    });
+  }
+
+  const actions: Record<string, unknown>[] = [
+    { op: "switch", node: 14, on: true },
+    { op: "thermostat_power", node: 9, on: false },
+    { op: "level", node: 5, value: 50 },
+    { op: "cover", node: 4, value: 0 },
+    { op: "thermostat", node: 9, celsius: 21 },
+    { op: "ir", file: "/ext/infrared/klima.ir", button: "on_cool_22" },
+  ];
+  for (const action of actions) {
+    it(`round-trips the ${String(action.op)} action`, () => {
+      const rule = makeRule({ actions: [action] });
+      const f = mkForm();
+      expect(f.handle.loadRule(rule).mode).toBe("loaded");
+      f.build();
+      expect((f.rule() as { actions: unknown[] }).actions).toEqual([action]);
+    });
+  }
+
+  it("clears stale condition/action rows when loading a smaller rule", () => {
+    const f = mkForm();
+    f.handle.loadRule(
+      makeRule({
+        conditions: [
+          { node: 1, field: "switch", op: "eq", value: true },
+          { type: "time_window", start: "06:00", end: "22:00" },
+        ],
+        actions: [
+          { op: "switch", node: 1, on: true },
+          { op: "cover", node: 2, value: 0 },
+        ],
+      }),
+    );
+    expect(f.rows("conditions: ").children).toHaveLength(2);
+    expect(f.rows("actions: ").children).toHaveLength(2);
+    f.handle.loadRule(makeRule({ conditions: [], actions: [{ op: "switch", node: 9, on: false }] }));
+    expect(f.rows("conditions: ").children).toHaveLength(0);
+    expect(f.rows("actions: ").children).toHaveLength(1);
+  });
+});
+
+describe("renderRuleForm — Edit raw-only fallback", () => {
+  const cases: [string, Record<string, unknown>, string][] = [
+    ["a raw action op", { actions: [{ op: "raw", frame: "ab" }] }, "raw"],
+    ["a lights action op", { actions: [{ op: "lights", node: 1, on: true }] }, "lights"],
+    ["an action with an extra key", { actions: [{ op: "switch", node: 1, on: true, endpoint: 2 }] }, "switch"],
+    ["an unknown trigger type", { trigger: { type: "webhook", url: "x" } }, "webhook"],
+    ["a malformed condition", { conditions: [{ foo: "bar" }] }, "#1"],
+  ];
+  for (const [label, over, needle] of cases) {
+    it(`falls back to raw-only for ${label} (Build JSON disabled, reason names it)`, () => {
+      const f = mkForm();
+      const report = f.handle.loadRule(makeRule(over));
+      expect(report.mode).toBe("raw-only");
+      if (report.mode === "raw-only") expect(report.reason).toContain(needle);
+      expect(buildButton(f).disabled).toBe(true);
+      expect(f.status()).toContain(needle);
+    });
+  }
+
+  it("reset() re-enables Build JSON and clears the form after a raw-only load", () => {
+    const f = mkForm();
+    f.handle.loadRule(makeRule({ actions: [{ op: "raw", frame: "ab" }] }));
+    expect(buildButton(f).disabled).toBe(true);
+    f.handle.reset();
+    expect(buildButton(f).disabled).toBe(false);
+    expect((f.control("id") as HTMLInputElement).value).toBe("");
+    expect(f.rows("conditions: ").children).toHaveLength(0);
+    expect(f.rows("actions: ").children).toHaveLength(1); // always ≥1 action row
+  });
+
+  it("loading a representable rule after a raw-only one re-enables Build JSON", () => {
+    const f = mkForm();
+    f.handle.loadRule(makeRule({ actions: [{ op: "raw", frame: "ab" }] }));
+    expect(buildButton(f).disabled).toBe(true);
+    expect(f.handle.loadRule(makeRule({})).mode).toBe("loaded");
+    expect(buildButton(f).disabled).toBe(false);
+  });
+});
+
+describe("reconstructionBlocker", () => {
+  const vocab = ruleVocab();
+  it("returns null for a fully representable rule", () => {
+    expect(reconstructionBlocker(makeRule({}), vocab)).toBeNull();
+    expect(
+      reconstructionBlocker(
+        makeRule({
+          trigger: { type: "state", field: "crib_temp", op: "gt", value: 24 },
+          conditions: [{ type: "time_window", start: "06:00", end: "22:00", days: [0] }],
+          actions: [{ op: "ir", file: "/x.ir", button: "b" }],
+        }),
+        vocab,
+      ),
+    ).toBeNull();
+  });
+  it("flags an unknown comparison op as an unrepresentable predicate condition", () => {
+    expect(
+      reconstructionBlocker(makeRule({ conditions: [{ node: 1, field: "switch", op: "between", value: 1 }] }), vocab),
+    ).toContain("#1");
+  });
+  it("flags a non-global predicate missing its node", () => {
+    expect(
+      reconstructionBlocker(makeRule({ trigger: { type: "state", field: "temperature", op: "lt", value: 5 } }), vocab),
+    ).not.toBeNull();
+  });
+  it("flags out-of-range days on a time trigger", () => {
+    expect(reconstructionBlocker(makeRule({ trigger: { type: "time", at: "07:00", days: [9] } }), vocab)).not.toBeNull();
+  });
+  it("accepts a time_window whose days are absent or null", () => {
+    expect(
+      reconstructionBlocker(makeRule({ conditions: [{ type: "time_window", start: "22:00", end: "06:00", days: null }] }), vocab),
+    ).toBeNull();
+  });
+});
+
+// ---- A3 hardening (from the adversarial review) ---------------------------
+describe("renderRuleForm — Edit value-type fidelity & op-change", () => {
+  it("round-trips a genuine string predicate value (door eq \"open\")", () => {
+    const trigger = { type: "state", node: 5, field: "door", op: "eq", value: "open" };
+    const f = mkForm();
+    expect(f.handle.loadRule(makeRule({ trigger })).mode).toBe("loaded");
+    f.build();
+    expect((f.rule() as { trigger: unknown }).trigger).toEqual(trigger);
+  });
+
+  it("sends a numeric-/bool-looking STRING predicate value to raw-only (coerce would re-type it)", () => {
+    for (const value of ["18", "21.5", "true", "false"]) {
+      const f = mkForm();
+      const report = f.handle.loadRule(makeRule({ conditions: [{ node: 9, field: "temperature", op: "eq", value }] }));
+      expect(report.mode).toBe("raw-only"); // would otherwise round-trip to a number/boolean
+    }
+  });
+
+  it("changing an action's op type after load does NOT re-seed the loaded rule's stale values", () => {
+    const f = mkForm();
+    f.handle.loadRule(makeRule({ actions: [{ op: "switch", node: 14, on: true }] }));
+    const actBox = f.rows("actions: ");
+    const opSel = actBox.querySelector("select");
+    if (opSel === null) throw new Error("no op select");
+    setSelect(opSel, "cover");
+    const node = actBox.querySelector<HTMLInputElement>('input[placeholder="node"]');
+    expect(node?.value).toBe(""); // fresh cover fields — not the switch action's node "14"
+  });
+
+  it("round-trips a single-mode subset and enabled:false", () => {
+    const rule = makeRule({ modes: ["standalone"], enabled: false });
+    const f = mkForm();
+    expect(f.handle.loadRule(rule).mode).toBe("loaded");
+    f.build();
+    expect(f.rule()).toEqual(rule);
+  });
+
+  it("reconstructionBlocker accepts a real string value but rejects a numeric-/bool-looking string", () => {
+    const v = ruleVocab();
+    expect(reconstructionBlocker(makeRule({ trigger: { type: "state", node: 5, field: "door", op: "eq", value: "open" } }), v)).toBeNull();
+    expect(reconstructionBlocker(makeRule({ conditions: [{ node: 9, field: "temperature", op: "eq", value: "18" }] }), v)).toContain("#1");
+    expect(reconstructionBlocker(makeRule({ conditions: [{ node: 1, field: "switch", op: "eq", value: "true" }] }), v)).not.toBeNull();
+  });
+});
+
+// ---- A3 hardening round 2 (from the final Codex review): trim/exponent fidelity ----
+describe("renderRuleForm — Edit lossless trim & exponent guards", () => {
+  it("sends an exponent-notation numeric predicate value to raw-only (coerce can't reparse it)", () => {
+    const f = mkForm();
+    const report = f.handle.loadRule(makeRule({ conditions: [{ node: 9, field: "temperature", op: "gt", value: 1e-7 }] }));
+    expect(report.mode).toBe("raw-only"); // 1e-7 → "1e-7" → would re-emit as the STRING "1e-7"
+  });
+
+  it("still loads a plain-decimal numeric value", () => {
+    const f = mkForm();
+    expect(f.handle.loadRule(makeRule({ conditions: [{ node: 9, field: "temperature", op: "gt", value: 21.5 }] })).mode).toBe("loaded");
+  });
+
+  it("sends an ir action with whitespace-padded file/button to raw-only (Build trims them)", () => {
+    const v = ruleVocab();
+    expect(reconstructionBlocker(makeRule({ actions: [{ op: "ir", file: " /x.ir", button: "on" }] }), v)).toContain("ir");
+    expect(reconstructionBlocker(makeRule({ actions: [{ op: "ir", file: "/x.ir", button: "on " }] }), v)).toContain("ir");
+    expect(reconstructionBlocker(makeRule({ actions: [{ op: "ir", file: "/x.ir", button: "on" }] }), v)).toBeNull();
+  });
+
+  it("sends a rule whose id has surrounding whitespace to raw-only (Build trims the id)", () => {
+    const f = mkForm();
+    expect(f.handle.loadRule(makeRule({ id: " r1 " })).mode).toBe("raw-only");
+    expect(reconstructionBlocker(makeRule({ id: " r1 " }), ruleVocab())).not.toBeNull();
+    expect(reconstructionBlocker(makeRule({ id: "r1" }), ruleVocab())).toBeNull();
   });
 });

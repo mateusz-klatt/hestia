@@ -9,7 +9,7 @@
 // text is set via `value` / `textContent`, never innerHTML, so device-supplied
 // strings can never inject markup. The form is built once.
 
-import type { DeviceInfo, Klima, RuleVocab } from "./api/types";
+import type { DeviceInfo, Klima, Rule, RuleAction, RuleVocab } from "./api/types";
 import { currentLocale, t } from "./i18n";
 
 // ---- pure helpers (exported for unit testing) -----------------------------
@@ -116,13 +116,24 @@ function dayNames(): string[] {
   return Array.from({ length: 7 }, (_, i) => fmt.format(new Date(Date.UTC(2024, 0, 1 + i))));
 }
 
-/** Mon=0..Sun=6 weekday checkboxes (matches the backend `_validate_days`); none ticked → `null`. */
-function daysPicker(): { el: HTMLElement; read: () => number[] | null } {
+/** Coerce a seed scalar (from a saved rule) back into the text an input expects; `coerce`/`num`
+ *  reparse it on read. Bool → "true"/"false", number → its decimal text, string → itself. */
+function scalarToInput(v: unknown): string {
+  if (typeof v === "boolean") return v ? "true" : "false";
+  if (typeof v === "number") return String(v);
+  return typeof v === "string" ? v : "";
+}
+
+/** Mon=0..Sun=6 weekday checkboxes (matches the backend `_validate_days`); none ticked → `null`.
+ *  `initial` pre-ticks the given weekday indices (used when reconstructing a saved rule). */
+function daysPicker(initial?: readonly number[] | null): { el: HTMLElement; read: () => number[] | null } {
   const wrap = document.createElement("span");
   wrap.style.marginRight = "0.3rem";
-  const boxes = dayNames().map((nm) => {
+  const seeded = new Set(initial ?? []);
+  const boxes = dayNames().map((nm, i) => {
     const c = document.createElement("input");
     c.type = "checkbox";
+    c.checked = seeded.has(i);
     const l = document.createElement("label");
     l.style.marginRight = "0.15rem";
     l.append(c, document.createTextNode(nm));
@@ -151,7 +162,10 @@ export type Predicate = {
  * the `state` trigger and by each condition. `read()` returns the predicate or
  * throws an Error describing the first invalid input.
  */
-function predicateEditor(vocab: RuleVocab): { el: HTMLElement; read: () => Predicate } {
+function predicateEditor(
+  vocab: RuleVocab,
+  seed?: { node?: number; field: string; op: string; value: unknown },
+): { el: HTMLElement; read: () => Predicate } {
   const wrap = document.createElement("span");
   const field = sel(Object.keys(vocab.state_fields));
   const op = sel(vocab.cmp_ops);
@@ -162,6 +176,12 @@ function predicateEditor(vocab: RuleVocab): { el: HTMLElement; read: () => Predi
   };
   field.addEventListener("change", syncNode);
   wrap.append(field, op, val, node);
+  if (seed !== undefined) {
+    field.value = seed.field;
+    op.value = seed.op;
+    val.value = scalarToInput(seed.value);
+    if (seed.node !== undefined) node.value = String(seed.node);
+  }
   syncNode();
   return {
     el: wrap,
@@ -193,11 +213,15 @@ export type TimeWindow = {
  * start/end (HH:MM) + an optional weekday picker → a `time_window` condition. Empty start/end
  * throw a localized error; the HH:MM format + the start≠end rule are re-checked server-side.
  */
-function timeWindowEditor(): { el: HTMLElement; read: () => TimeWindow } {
+function timeWindowEditor(seed?: TimeWindow): { el: HTMLElement; read: () => TimeWindow } {
   const wrap = document.createElement("span");
   const start = finp(t("rule.phWindowStart"), 6);
   const end = finp(t("rule.phWindowEnd"), 6);
-  const days = daysPicker();
+  const days = daysPicker(seed?.days);
+  if (seed !== undefined) {
+    start.value = seed.start;
+    end.value = seed.end;
+  }
   const sep = document.createElement("span");
   sep.textContent = "→ ";
   sep.style.color = "#555";
@@ -221,10 +245,159 @@ function timeWindowEditor(): { el: HTMLElement; read: () => TimeWindow } {
 
 type ReadObj = Record<string, unknown>;
 
+// ---- "Edit" → reconstruct the wizard from a saved rule (A3) ----------------
+
+/** Imperative handle returned by `renderRuleForm` so the Edit button can drive the wizard. */
+export interface RuleFormHandle {
+  /** Reconstruct the wizard from a saved rule, or report raw-only when it can't be represented. */
+  loadRule: (rule: Rule) => RuleFormLoadReport;
+  /** Reset the wizard to an empty "new rule" state and re-enable Build JSON. */
+  reset: () => void;
+}
+
+/** `loaded`: the wizard now fully represents the rule. `raw-only`: it can't, so Build JSON is disabled
+ *  and the JSON textarea stays authoritative; `reason` names the first unrepresentable part. */
+export type RuleFormLoadReport = { mode: "loaded" } | { mode: "raw-only"; reason: string };
+
+// The action ops the wizard can author, mapped to the EXACT non-`op` keys it emits. An action whose op
+// is absent here (raw/lights/unknown), or that carries any other key (e.g. a per-endpoint `switch`),
+// can't be represented losslessly → the rule loads raw-only.
+const WIZARD_ACTION_KEYS: Record<string, readonly string[]> = {
+  switch: ["node", "on"],
+  thermostat_power: ["node", "on"],
+  level: ["node", "value"],
+  cover: ["node", "value"],
+  thermostat: ["node", "celsius"],
+  ir: ["file", "button"],
+};
+
+const FORM_HANDLES = new WeakMap<HTMLElement, RuleFormHandle>();
+
+function isScalar(v: unknown): v is string | number | boolean {
+  return typeof v === "string" || typeof v === "number" || typeof v === "boolean";
+}
+
+function daysRepresentable(d: unknown): boolean {
+  if (d === undefined || d === null) return true;
+  return (
+    Array.isArray(d) &&
+    d.length > 0 &&
+    d.every((x) => typeof x === "number" && Number.isInteger(x) && x >= 0 && x <= 6)
+  );
+}
+
+function onlyKeys(o: Record<string, unknown>, allowed: readonly string[]): boolean {
+  const set = new Set(allowed);
+  return Object.keys(o).every((k) => set.has(k));
+}
+
+/** A state predicate the wizard can edit: known field + op, a scalar value, a node when the field
+ *  isn't GLOBAL, and no surprise keys. Shared by the `state` trigger and predicate conditions. */
+function predicateRepresentable(o: Record<string, unknown>, vocab: RuleVocab): boolean {
+  if (typeof o.field !== "string" || !(o.field in vocab.state_fields)) return false;
+  if (typeof o.op !== "string" || !vocab.cmp_ops.includes(o.op)) return false;
+  if (!isScalar(o.value)) return false;
+  // The value must survive the wizard's write→read round-trip. coerce re-types a number-/bool-looking
+  // STRING ("18"→18, "true"→true) and can't parse a number whose text isn't plain decimal (1e-7, 1e21),
+  // so those load raw-only; `door eq "open"`, 18, 21.5, true all survive.
+  if (coerce(scalarToInput(o.value)) !== o.value) return false;
+  if (vocab.state_fields[o.field] !== true && typeof o.node !== "number") return false;
+  return onlyKeys(o, ["type", "node", "field", "op", "value"]);
+}
+
+function timeWindowRepresentable(o: Record<string, unknown>): boolean {
+  return (
+    typeof o.start === "string" &&
+    typeof o.end === "string" &&
+    daysRepresentable(o.days) &&
+    onlyKeys(o, ["type", "start", "end", "days"])
+  );
+}
+
+function conditionRepresentable(c: unknown, vocab: RuleVocab): boolean {
+  if (typeof c !== "object" || c === null) return false;
+  const o = c as Record<string, unknown>;
+  return o.type === "time_window" ? timeWindowRepresentable(o) : predicateRepresentable(o, vocab);
+}
+
+function triggerRepresentable(o: Record<string, unknown>, vocab: RuleVocab): boolean {
+  switch (o.type) {
+    case "scene":
+      return typeof o.node === "number" && typeof o.scene_id === "number";
+    case "state":
+      return predicateRepresentable(o, vocab);
+    case "time":
+      return typeof o.at === "string" && daysRepresentable(o.days);
+    case "sun":
+      return (
+        typeof o.event === "string" &&
+        vocab.sun_events.includes(o.event) &&
+        (o.offset_min === undefined || typeof o.offset_min === "number") &&
+        daysRepresentable(o.days)
+      );
+    case "presence":
+      return (
+        typeof o.mac === "string" && typeof o.event === "string" && vocab.presence_events.includes(o.event)
+      );
+    case "cron":
+      return typeof o.expr === "string";
+    default:
+      return false;
+  }
+}
+
+function actionRepresentable(a: unknown): boolean {
+  if (typeof a !== "object" || a === null) return false;
+  const o = a as Record<string, unknown>;
+  if (typeof o.op !== "string") return false;
+  const keys = WIZARD_ACTION_KEYS[o.op];
+  if (keys === undefined) return false; // raw / lights / unknown op
+  if (!onlyKeys(o, ["op", ...keys])) return false; // no extra keys (e.g. a per-endpoint switch)
+  if (!keys.every((k) => k in o)) return false; // every expected field present
+  if ("node" in o && typeof o.node !== "number") return false;
+  if ("on" in o && typeof o.on !== "boolean") return false;
+  if ("value" in o && typeof o.value !== "number") return false;
+  if ("celsius" in o && typeof o.celsius !== "number") return false;
+  if ("file" in o && typeof o.file !== "string") return false;
+  if ("button" in o && typeof o.button !== "string") return false;
+  // Build trims ir file/button, so a saved value padded with whitespace wouldn't round-trip → raw-only.
+  if (typeof o.file === "string" && o.file !== o.file.trim()) return false;
+  if (typeof o.button === "string" && o.button !== o.button.trim()) return false;
+  return true;
+}
+
+/** The first reason the wizard can't losslessly represent `rule` (localized), or null when it can.
+ *  Exported for unit tests. */
+export function reconstructionBlocker(rule: Rule, vocab: RuleVocab): string | null {
+  // Build JSON trims the id, so an id padded with whitespace (or empty) wouldn't round-trip.
+  if (typeof rule.id !== "string" || rule.id === "" || rule.id !== rule.id.trim()) {
+    return t("rule.rcId");
+  }
+  const tr = rule.trigger as unknown as Record<string, unknown>;
+  if (!triggerRepresentable(tr, vocab)) {
+    return t("rule.rcTrigger", { type: typeof tr.type === "string" ? tr.type : "?" });
+  }
+  const conditions = Array.isArray(rule.conditions) ? rule.conditions : [];
+  for (let i = 0; i < conditions.length; i++) {
+    if (!conditionRepresentable(conditions[i], vocab)) return t("rule.rcCondition", { n: i + 1 });
+  }
+  if (!Array.isArray(rule.actions) || rule.actions.length === 0) return t("rule.rcAction", { op: "?" });
+  for (const a of rule.actions) {
+    if (!actionRepresentable(a)) {
+      const op = typeof (a as Record<string, unknown>).op === "string"
+        ? String((a as Record<string, unknown>).op)
+        : "?";
+      return t("rule.rcAction", { op });
+    }
+  }
+  return null;
+}
+
 /**
  * Build the guided rule form into `box`, writing its result into `output` (the
- * rule JSON textarea). Built once — guarded by `dataset.built`, like the IR /
- * klima panels — so it survives the SSE-driven re-renders unchanged.
+ * rule JSON textarea). Built once (cached by `box`), like the IR / klima panels —
+ * so it survives the SSE-driven re-renders unchanged. Returns a handle whose
+ * `loadRule` reconstructs the form from a saved rule (the "Edit" round-trip).
  */
 export function renderRuleForm(
   box: HTMLElement,
@@ -232,10 +405,11 @@ export function renderRuleForm(
   vocab: RuleVocab,
   klima: Klima,
   devices: Record<string, DeviceInfo> = {},
-): void {
-  if (box.dataset.built !== undefined) return;
-  // Clear any partial build left by a prior throw so a retry can't duplicate nodes. `dataset.built`
-  // is set only at the very end (on success) — if a malformed runtime payload makes the build throw,
+): RuleFormHandle {
+  const cached = FORM_HANDLES.get(box);
+  if (cached !== undefined) return cached; // built once → re-renders return the same handle
+  // Clear any partial build left by a prior throw so a retry can't duplicate nodes. The handle is
+  // cached only at the very end (on success) — if a malformed runtime payload makes the build throw,
   // the form stays un-built and a later well-formed render rebuilds it cleanly.
   box.replaceChildren();
   // The shared device-name datalist (built once from the discovery snapshot). Every `node` input is a
@@ -286,26 +460,36 @@ export function renderRuleForm(
   const tFields = document.createElement("span");
   box.appendChild(tFields);
   let tRead: () => ReadObj = () => ({});
-  const buildTrigger = (): void => {
+  // `seed` (a saved rule's trigger) pre-fills the just-built fields when reconstructing via loadRule;
+  // the type-change listener rebuilds with NO seed (a fresh, empty field set).
+  const buildTrigger = (seed?: Record<string, unknown>): void => {
     tFields.replaceChildren();
     const tt = tType.value;
     if (tt === "scene") {
       const node = nodeInput();
       const sid = finp("scene_id", 5);
       tFields.append(node, sid);
+      if (seed !== undefined) {
+        node.value = scalarToInput(seed.node);
+        sid.value = scalarToInput(seed.scene_id);
+      }
       tRead = () => {
         const n = parseNode(node.value);
         if (n === null) throw new Error(t("rule.errRequired", { field: "node" }));
         return { node: n, scene_id: num(sid.value, "scene_id") };
       };
     } else if (tt === "state") {
-      const pe = predicateEditor(vocab);
+      const pe = predicateEditor(
+        vocab,
+        seed === undefined ? undefined : (seed as { node?: number; field: string; op: string; value: unknown }),
+      );
       tFields.append(pe.el);
       tRead = () => pe.read();
     } else if (tt === "time") {
       const at = finp("HH:MM", 6);
-      const days = daysPicker();
+      const days = daysPicker(seed?.days as number[] | null | undefined);
       tFields.append(at, days.el);
+      if (seed !== undefined) at.value = scalarToInput(seed.at);
       tRead = () => {
         const a = at.value.trim();
         if (a === "") throw new Error(t("rule.errRequired", { field: "at" }));
@@ -318,8 +502,12 @@ export function renderRuleForm(
       const ev = sel(vocab.sun_events);
       const off = finp(t("rule.phOffset"), 6);
       off.value = "0";
-      const days = daysPicker();
+      const days = daysPicker(seed?.days as number[] | null | undefined);
       tFields.append(ev, off, days.el);
+      if (seed !== undefined) {
+        if (typeof seed.event === "string") ev.value = seed.event;
+        if (seed.offset_min !== undefined) off.value = scalarToInput(seed.offset_min);
+      }
       tRead = () => {
         const o: ReadObj = {
           event: ev.value,
@@ -333,6 +521,10 @@ export function renderRuleForm(
       const mac = finp("aa:bb:cc:dd:ee:ff", 17);
       const ev = sel(vocab.presence_events);
       tFields.append(mac, ev);
+      if (seed !== undefined) {
+        mac.value = scalarToInput(seed.mac);
+        if (typeof seed.event === "string") ev.value = seed.event;
+      }
       tRead = () => {
         const m = mac.value.trim();
         if (m === "") throw new Error(t("rule.errRequired", { field: "mac" }));
@@ -341,6 +533,7 @@ export function renderRuleForm(
     } else {
       const expr = finp("* * * * *", 14);
       tFields.append(expr);
+      if (seed !== undefined) expr.value = scalarToInput(seed.expr);
       tRead = () => {
         const e = expr.value.trim();
         if (e === "") throw new Error(t("rule.errRequired", { field: "expr" }));
@@ -348,7 +541,9 @@ export function renderRuleForm(
       };
     }
   };
-  tType.addEventListener("change", buildTrigger);
+  tType.addEventListener("change", () => {
+    buildTrigger();
+  });
   buildTrigger();
   line();
 
@@ -399,7 +594,9 @@ export function renderRuleForm(
   box.appendChild(actBox);
   const acts: { read: () => ReadObj }[] = [];
   const klimaModes = klima.power_on !== undefined ? Object.keys(klima.power_on).sort() : [];
-  const addAction = (): void => {
+  // `seed` (a saved action) pre-fills the row when reconstructing. A saved `ir` action reconstructs as
+  // the generic `ir` editor (lossless), never as the `klima` preset — that preset is authoring-only.
+  const addAction = (seed?: RuleAction): void => {
     const row = document.createElement("span");
     row.style.marginRight = "0.3rem";
     const op = sel(
@@ -414,7 +611,9 @@ export function renderRuleForm(
     );
     const fields = document.createElement("span");
     let aRead: () => ReadObj = () => ({});
-    const buildAct = (): void => {
+    // `s` seeds the per-op fields ONLY on the initial build; a manual op-type change rebuilds empty
+    // (mirrors the trigger), so switching op never re-applies the loaded rule's stale values.
+    const buildAct = (s?: RuleAction): void => {
       fields.replaceChildren();
       const k = op.value;
       if (k === "klima") {
@@ -438,6 +637,10 @@ export function renderRuleForm(
         const file = finp("/ext/infrared/x.ir", 18);
         const btn = finp(t("rule.phButton"), 10);
         fields.append(file, btn);
+        if (s !== undefined) {
+          file.value = scalarToInput(s.file);
+          btn.value = scalarToInput(s.button);
+        }
         aRead = () => {
           const f = file.value.trim();
           const b = btn.value.trim();
@@ -448,6 +651,10 @@ export function renderRuleForm(
         const node = nodeInput();
         const on = sel(["on", "off"]);
         fields.append(node, on);
+        if (s !== undefined) {
+          node.value = scalarToInput(s.node);
+          on.value = s.on === false ? "off" : "on";
+        }
         aRead = () => {
           const n = parseNode(node.value);
           if (n === null) throw new Error(t("rule.errRequired", { field: "node" }));
@@ -457,6 +664,10 @@ export function renderRuleForm(
         const node = nodeInput();
         const value = finp(t("rule.phValue"), 5);
         fields.append(node, value);
+        if (s !== undefined) {
+          node.value = scalarToInput(s.node);
+          value.value = scalarToInput(s.value);
+        }
         aRead = () => {
           const n = parseNode(node.value);
           if (n === null) throw new Error(t("rule.errRequired", { field: "node" }));
@@ -466,6 +677,10 @@ export function renderRuleForm(
         const node = nodeInput();
         const c = finp("°C", 5);
         fields.append(node, c);
+        if (s !== undefined) {
+          node.value = scalarToInput(s.node);
+          c.value = scalarToInput(s.celsius);
+        }
         aRead = () => {
           const n = parseNode(node.value);
           if (n === null) throw new Error(t("rule.errRequired", { field: "node" }));
@@ -473,8 +688,11 @@ export function renderRuleForm(
         };
       }
     };
-    op.addEventListener("change", buildAct);
-    buildAct();
+    op.addEventListener("change", () => {
+      buildAct();
+    });
+    if (seed !== undefined && typeof seed.op === "string") op.value = seed.op;
+    buildAct(seed);
     const entry = { read: () => aRead() };
     const rm = document.createElement("button");
     rm.type = "button";
@@ -493,7 +711,9 @@ export function renderRuleForm(
   const addActBtn = document.createElement("button");
   addActBtn.type = "button";
   addActBtn.textContent = t("rule.addAction");
-  addActBtn.addEventListener("click", addAction);
+  addActBtn.addEventListener("click", () => {
+    addAction();
+  });
   box.appendChild(addActBtn);
   addAction();
   line();
@@ -529,5 +749,74 @@ export function renderRuleForm(
     }
   });
   box.append(buildBtn, formStatus);
-  box.dataset.built = "1"; // built successfully → skip on subsequent renders
+
+  // ---- imperative handle (A3): reconstruct the form from a saved rule ----
+  const setModes = (modes?: string[]): void => {
+    const want = modes !== undefined ? new Set(modes) : null; // undefined → all (backend default)
+    for (const [m, cb] of modeBoxes) cb.checked = want === null || want.has(m);
+  };
+  const clearConds = (): void => {
+    condBox.replaceChildren();
+    conds.length = 0;
+  };
+  const clearActs = (): void => {
+    actBox.replaceChildren();
+    acts.length = 0;
+  };
+  const setStatus = (text: string, isErr: boolean): void => {
+    formStatus.textContent = text;
+    formStatus.className = isErr ? "status err" : "status";
+  };
+
+  const reset = (): void => {
+    idIn.value = "";
+    enIn.checked = true;
+    dbIn.value = "0";
+    setModes(undefined);
+    tType.value = vocab.trigger_types[0] ?? "scene";
+    buildTrigger();
+    clearConds();
+    clearActs();
+    addAction();
+    buildBtn.disabled = false;
+    setStatus("", false);
+  };
+
+  const loadRule = (rule: Rule): RuleFormLoadReport => {
+    const reason = reconstructionBlocker(rule, vocab);
+    if (reason !== null) {
+      // raw-only: clear the wizard so it can't misrepresent the saved rule, and disable Build JSON so a
+      // partial reconstruction can't overwrite it. The JSON textarea (already holding the rule) is the truth.
+      reset();
+      buildBtn.disabled = true;
+      setStatus(`⚠ ${t("rule.cantReconstruct", { what: reason })}`, true);
+      return { mode: "raw-only", reason };
+    }
+    idIn.value = rule.id;
+    enIn.checked = rule.enabled;
+    dbIn.value = String(rule.debounce ?? 0);
+    setModes(rule.modes);
+    tType.value = rule.trigger.type;
+    buildTrigger(rule.trigger);
+    clearConds();
+    for (const c of Array.isArray(rule.conditions) ? rule.conditions : []) {
+      const o = c as Record<string, unknown>;
+      if (o.type === "time_window") {
+        addCondRow(timeWindowEditor(o as unknown as TimeWindow));
+      } else {
+        addCondRow(predicateEditor(vocab, o as { node?: number; field: string; op: string; value: unknown }));
+      }
+    }
+    clearActs();
+    for (const a of rule.actions) addAction(a);
+    if (acts.length === 0) addAction(); // a saved rule always has ≥1 action, but never leave zero rows
+    buildBtn.disabled = false;
+    setStatus(t("rule.loadedToForm"), false);
+    return { mode: "loaded" };
+  };
+
+  const handle: RuleFormHandle = { loadRule, reset };
+  FORM_HANDLES.set(box, handle); // re-renders return this same handle (built once)
+  box.dataset.built = "1";
+  return handle;
 }
