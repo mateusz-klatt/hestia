@@ -243,6 +243,7 @@ function startApp(): void {
 
   el("save-rule").addEventListener("click", () => {
     void (async () => {
+      if (!isAdmin) return; // admin-only surface (the button lives in the hidden Advanced view; backend also rejects)
       let parsed: unknown;
       try {
         parsed = JSON.parse(ruleJson.value);
