@@ -6,6 +6,21 @@ import { fmtTemp } from "./render/format";
 const THERMOSTAT_MIN_C = 4;
 const THERMOSTAT_MAX_C = 28;
 
+/**
+ * The user's current thermostat setpoint pick, per node, kept OUTSIDE the DOM so it survives the
+ * device table's periodic FULL rebuild (every refresh replaces the rows with fresh cells). The
+ * dropdown is the user's input: a device report / refresh updates only the "stan" text — it must
+ * never move the dropdown. We seed the dropdown from the live setpoint only until the user first
+ * touches it; after that this pick wins on every re-render. A hard page reload re-inits the module
+ * (empty map) so the dropdown re-seeds from the then-current setpoint.
+ */
+const thermostatPick = new Map<number, string>();
+
+/** Exposed for tests to reset the cross-render pick memory between cases. */
+export function __resetThermostatPicks(): void {
+  thermostatPick.clear();
+}
+
 /** Sends one control op; returns a normalised result (never rejects). */
 export type PostControl = (op: ControlOp) => Promise<ControlResult>;
 
@@ -153,7 +168,12 @@ export function renderActions(
     const start = current !== null && Number.isFinite(current)
       ? Math.min(THERMOSTAT_MAX_C, Math.max(THERMOSTAT_MIN_C, Math.round(current)))
       : 21;
-    sel.value = String(start); // seeds from the (now optimistically-echoed) live setpoint
+    // The user's pick wins on every re-render; only the first render (no remembered pick) seeds from the
+    // live setpoint. A device report / 45 s refresh thus updates the "stan" text but never moves this.
+    sel.value = thermostatPick.get(node) ?? String(start);
+    sel.addEventListener("change", () => {
+      thermostatPick.set(node, sel.value); // remember the user's choice across the table's full rebuilds
+    });
     cell.appendChild(sel);
     addButton("✓", () => [
       { op: "thermostat_power", node, on: true }, // turn on, THEN set — a setpoint alone is ignored while off
