@@ -107,6 +107,11 @@ const messages: Partial<Messages> = {
   "rule.save": "Tallenna sääntö",
   "rule.jsonLabel": "säännön JSON",
   "rule.jsonPlaceholder": "säännön JSON — napsauta ”Uusi sääntömalli” saadaksesi rungon",
+  "rule.editing": "muokataan {id}",
+  "rule.templateLoaded": "malli ladattu — muokkaa ja tallenna sitten",
+  "rule.invalidJson": "virheellinen JSON: {msg}",
+  "rule.saved": "tallennettu",
+  "rule.error": "virhe {status}",
 
   "state.raised": "nostettu",
   "state.lowered": "laskettu",

@@ -107,6 +107,11 @@ const messages: Partial<Messages> = {
   "rule.save": "नियम सहेजें",
   "rule.jsonLabel": "नियम JSON",
   "rule.jsonPlaceholder": "नियम JSON — ढाँचे के लिए “नया नियम टेम्पलेट” क्लिक करें",
+  "rule.editing": "{id} संपादित किया जा रहा है",
+  "rule.templateLoaded": "टेम्पलेट लोड हो गया — संपादित करें, फिर सहेजें",
+  "rule.invalidJson": "अमान्य JSON: {msg}",
+  "rule.saved": "सहेजा गया",
+  "rule.error": "त्रुटि {status}",
 
   "state.raised": "उठा हुआ",
   "state.lowered": "नीचा किया हुआ",

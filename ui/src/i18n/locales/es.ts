@@ -108,6 +108,11 @@ const messages: Partial<Messages> = {
   "rule.save": "Guardar regla",
   "rule.jsonLabel": "JSON de regla",
   "rule.jsonPlaceholder": "JSON de regla — haz clic en «Nueva plantilla de regla» para obtener un esqueleto",
+  "rule.editing": "editando {id}",
+  "rule.templateLoaded": "plantilla cargada — edita y luego guarda",
+  "rule.invalidJson": "JSON no válido: {msg}",
+  "rule.saved": "guardado",
+  "rule.error": "error {status}",
 
   "state.raised": "subida",
   "state.lowered": "bajada",

@@ -107,6 +107,11 @@ const messages: Partial<Messages> = {
   "rule.save": "Hifadhi sheria",
   "rule.jsonLabel": "JSON ya sheria",
   "rule.jsonPlaceholder": "JSON ya sheria — bofya “Kiolezo kipya cha sheria” kwa kiunzi",
+  "rule.editing": "kuhariri {id}",
+  "rule.templateLoaded": "kiolezo kimepakiwa — hariri kisha uhifadhi",
+  "rule.invalidJson": "JSON batili: {msg}",
+  "rule.saved": "imehifadhiwa",
+  "rule.error": "hitilafu {status}",
 
   "state.raised": "imepandishwa",
   "state.lowered": "imeshushwa",

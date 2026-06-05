@@ -97,7 +97,7 @@ describe("renderAutomations", () => {
     renderAutomations(tbody, [rule({ id: "eco" })], deps());
     const labels = [...tbody.querySelectorAll("td")].map((td) => td.dataset.label);
     // the trailing edit/delete cell mirrors its blank <th> → no label
-    expect(labels).toEqual(["id", "on", "trigger", "cond", "actions", undefined]);
+    expect(labels).toEqual(["id", "enabled", "trigger", "conditions", "actions", undefined]);
   });
 
   it("Edit hands the rule to onEdit", () => {

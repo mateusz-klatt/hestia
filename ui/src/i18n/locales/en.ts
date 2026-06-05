@@ -127,6 +127,11 @@ const en = {
   "rule.save": "Save rule",
   "rule.jsonLabel": "rule JSON",
   "rule.jsonPlaceholder": "rule JSON — click \"New rule template\" for a skeleton",
+  "rule.editing": "editing {id}",
+  "rule.templateLoaded": "template loaded — edit then Save",
+  "rule.invalidJson": "invalid JSON: {msg}",
+  "rule.saved": "saved",
+  "rule.error": "error {status}",
 };
 
 export default en;

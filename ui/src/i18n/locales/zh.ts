@@ -106,6 +106,11 @@ const messages: Partial<Messages> = {
   "rule.save": "保存规则",
   "rule.jsonLabel": "规则 JSON",
   "rule.jsonPlaceholder": "规则 JSON — 点击“新规则模板”获取骨架",
+  "rule.editing": "正在编辑 {id}",
+  "rule.templateLoaded": "已加载模板 — 编辑后再保存",
+  "rule.invalidJson": "JSON 无效：{msg}",
+  "rule.saved": "已保存",
+  "rule.error": "错误 {status}",
 
   "state.raised": "已升起",
   "state.lowered": "已降下",

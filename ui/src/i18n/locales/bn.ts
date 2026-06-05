@@ -107,6 +107,11 @@ const messages: Partial<Messages> = {
   "rule.save": "নিয়ম সংরক্ষণ",
   "rule.jsonLabel": "নিয়ম JSON",
   "rule.jsonPlaceholder": "নিয়ম JSON — কাঠামোর জন্য “নতুন নিয়ম টেমপ্লেট” ক্লিক করুন",
+  "rule.editing": "সম্পাদনা করা হচ্ছে {id}",
+  "rule.templateLoaded": "টেমপ্লেট লোড হয়েছে — সম্পাদনা করে তারপর সংরক্ষণ করুন",
+  "rule.invalidJson": "অবৈধ JSON: {msg}",
+  "rule.saved": "সংরক্ষিত",
+  "rule.error": "ত্রুটি {status}",
 
   "state.raised": "উঠানো",
   "state.lowered": "নামানো",

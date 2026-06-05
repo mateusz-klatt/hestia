@@ -108,6 +108,11 @@ const messages: Partial<Messages> = {
   "rule.save": "Сачувај правило",
   "rule.jsonLabel": "JSON правила",
   "rule.jsonPlaceholder": "JSON правила — кликните на „Нови шаблон правила” за костур",
+  "rule.editing": "уређивање {id}",
+  "rule.templateLoaded": "шаблон је учитан — уредите па сачувајте",
+  "rule.invalidJson": "неисправан JSON: {msg}",
+  "rule.saved": "сачувано",
+  "rule.error": "грешка {status}",
 
   "state.raised": "подигнуто",
   "state.lowered": "спуштено",

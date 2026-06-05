@@ -109,6 +109,11 @@ const messages: Partial<Messages> = {
   "rule.save": "Uložiť pravidlo",
   "rule.jsonLabel": "JSON pravidla",
   "rule.jsonPlaceholder": "JSON pravidla — kliknite na „Nová šablóna pravidla” pre kostru",
+  "rule.editing": "úprava {id}",
+  "rule.templateLoaded": "šablóna načítaná — upravte a potom uložte",
+  "rule.invalidJson": "neplatný JSON: {msg}",
+  "rule.saved": "uložené",
+  "rule.error": "chyba {status}",
 
   "state.raised": "vytiahnuté",
   "state.lowered": "stiahnuté",

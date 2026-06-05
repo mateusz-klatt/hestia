@@ -107,6 +107,11 @@ const messages: Partial<Messages> = {
   "rule.save": "Lagre regel",
   "rule.jsonLabel": "regel-JSON",
   "rule.jsonPlaceholder": "regel-JSON — klikk på «Ny regelmal» for et skjelett",
+  "rule.editing": "redigerer {id}",
+  "rule.templateLoaded": "mal lastet — rediger og lagre deretter",
+  "rule.invalidJson": "ugyldig JSON: {msg}",
+  "rule.saved": "lagret",
+  "rule.error": "feil {status}",
 
   "state.raised": "hevet",
   "state.lowered": "senket",

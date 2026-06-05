@@ -108,6 +108,11 @@ const messages: Partial<Messages> = {
   "rule.save": "Saglabāt kārtulu",
   "rule.jsonLabel": "kārtulas JSON",
   "rule.jsonPlaceholder": "kārtulas JSON — noklikšķiniet uz „Jauna kārtulas veidne”, lai iegūtu karkasu",
+  "rule.editing": "rediģē {id}",
+  "rule.templateLoaded": "veidne ielādēta — rediģējiet, pēc tam saglabājiet",
+  "rule.invalidJson": "nederīgs JSON: {msg}",
+  "rule.saved": "saglabāts",
+  "rule.error": "kļūda {status}",
 
   "state.raised": "pacelts",
   "state.lowered": "nolaists",

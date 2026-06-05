@@ -106,6 +106,11 @@ const messages: Partial<Messages> = {
   "rule.save": "규칙 저장",
   "rule.jsonLabel": "규칙 JSON",
   "rule.jsonPlaceholder": "규칙 JSON — 뼈대를 만들려면 “새 규칙 템플릿”을 클릭",
+  "rule.editing": "{id} 편집 중",
+  "rule.templateLoaded": "템플릿을 불러왔습니다 — 편집한 다음 저장",
+  "rule.invalidJson": "잘못된 JSON: {msg}",
+  "rule.saved": "저장됨",
+  "rule.error": "오류 {status}",
 
   "state.raised": "올림",
   "state.lowered": "내림",

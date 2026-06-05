@@ -107,6 +107,11 @@ const messages: Partial<Messages> = {
   "rule.save": "Gem regel",
   "rule.jsonLabel": "regel-JSON",
   "rule.jsonPlaceholder": "regel-JSON — klik på “Ny regelskabelon” for et skelet",
+  "rule.editing": "redigerer {id}",
+  "rule.templateLoaded": "skabelon indlæst — rediger og gem derefter",
+  "rule.invalidJson": "ugyldig JSON: {msg}",
+  "rule.saved": "gemt",
+  "rule.error": "fejl {status}",
 
   "state.raised": "hævet",
   "state.lowered": "sænket",

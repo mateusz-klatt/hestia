@@ -108,6 +108,11 @@ const messages: Partial<Messages> = {
   "rule.save": "שמור כלל",
   "rule.jsonLabel": "JSON של כלל",
   "rule.jsonPlaceholder": "JSON של כלל — לחץ על ״תבנית כלל חדשה״ לקבלת שלד",
+  "rule.editing": "עריכת {id}",
+  "rule.templateLoaded": "התבנית נטענה — ערוך ואז שמור",
+  "rule.invalidJson": "JSON לא תקין: {msg}",
+  "rule.saved": "נשמר",
+  "rule.error": "שגיאה {status}",
 
   "state.raised": "מורם",
   "state.lowered": "מורד",

@@ -65,10 +65,10 @@ function rowButton(label: string, cls: string): HTMLButtonElement {
 function automationRow(rule: Rule, deps: AutomationsDeps): HTMLTableRowElement {
   const tr = document.createElement("tr");
   tr.dataset.id = rule.id;
-  tr.appendChild(cell(rule.id, "id"));
+  tr.appendChild(cell(rule.id, msg("auto.id")));
 
   const enTd = document.createElement("td");
-  enTd.dataset.label = "on";
+  enTd.dataset.label = msg("auto.enabled");
   const en = document.createElement("input");
   en.type = "checkbox";
   en.className = "auto-en";
@@ -76,9 +76,9 @@ function automationRow(rule: Rule, deps: AutomationsDeps): HTMLTableRowElement {
   enTd.appendChild(en);
   tr.appendChild(enTd);
 
-  tr.appendChild(cell(trigSummary(rule.trigger), "trigger"));
-  tr.appendChild(cell(String(rule.conditions.length), "cond"));
-  tr.appendChild(cell(rule.actions.map((a) => a.op).join(", "), "actions"));
+  tr.appendChild(cell(trigSummary(rule.trigger), msg("auto.trigger")));
+  tr.appendChild(cell(String(rule.conditions.length), msg("auto.conditions")));
+  tr.appendChild(cell(rule.actions.map((a) => a.op).join(", "), msg("auto.actions")));
 
   const actTd = document.createElement("td");
   const edit = rowButton(msg("auto.edit"), "auto-edit");

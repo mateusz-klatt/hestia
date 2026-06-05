@@ -107,6 +107,11 @@ const messages: Partial<Messages> = {
   "rule.save": "Regel speichern",
   "rule.jsonLabel": "Regel-JSON",
   "rule.jsonPlaceholder": "Regel-JSON — auf „Neue Regelvorlage“ klicken, um ein Grundgerüst zu erstellen",
+  "rule.editing": "Bearbeite {id}",
+  "rule.templateLoaded": "Vorlage geladen — bearbeiten, dann speichern",
+  "rule.invalidJson": "ungültiges JSON: {msg}",
+  "rule.saved": "gespeichert",
+  "rule.error": "Fehler {status}",
 
   "state.raised": "hochgefahren",
   "state.lowered": "heruntergefahren",

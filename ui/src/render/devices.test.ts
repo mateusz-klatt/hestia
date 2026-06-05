@@ -78,7 +78,7 @@ describe("deviceRow", () => {
   it("tags every cell with a data-label for the mobile card layout", () => {
     const tr = deviceRow("7", device({ type: "plug", name: "fridge", room: "kitchen" }));
     const labels = [...tr.querySelectorAll("td")].map((td) => td.dataset.label);
-    expect(labels).toEqual(["node", "last seen", "battery", "type", "stan", "akcje", "name", "room"]);
+    expect(labels).toEqual(["node", "last seen", "battery", "inferred type", "state", "actions", "name", "room"]);
   });
 
   it("marks a low-battery cell with the 'low' class", () => {
@@ -172,7 +172,7 @@ describe("renderDeviceRows", () => {
     const labels = [...(sub?.querySelectorAll("td") ?? [])].map((td) => td.dataset.label);
     // Lock the full placeholder contract: node / last-seen / battery / kanał / room cells stay unlabeled;
     // per-channel stan, endpoint actions, and editable name carry headings.
-    expect(labels).toEqual([undefined, undefined, undefined, undefined, "stan", "akcje", "name", undefined]);
+    expect(labels).toEqual([undefined, undefined, undefined, undefined, "state", "actions", "name", undefined]);
     expect(sub?.querySelector(".sub-label")?.textContent).toBe("↳ channel 1"); // self-describing → no data-label
   });
 

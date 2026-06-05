@@ -107,6 +107,11 @@ const messages: Partial<Messages> = {
   "rule.save": "Vista reglu",
   "rule.jsonLabel": "reglu-JSON",
   "rule.jsonPlaceholder": "reglu-JSON — smelltu á „Nýtt reglusniðmát” til að fá beinagrind",
+  "rule.editing": "er að breyta {id}",
+  "rule.templateLoaded": "sniðmát hlaðið — breyttu og vistaðu síðan",
+  "rule.invalidJson": "ógilt JSON: {msg}",
+  "rule.saved": "vistað",
+  "rule.error": "villa {status}",
 
   "state.raised": "hækkað",
   "state.lowered": "lækkað",

@@ -36,7 +36,7 @@ function statusSpan(): HTMLSpanElement {
  *  Wired by the registry binder. */
 function typeCell(info: DeviceInfo): HTMLTableCellElement {
   const td = document.createElement("td");
-  td.dataset.label = "type";
+  td.dataset.label = t("tbl.inferredType");
   const confirmed = info.confidence === "confirmed";
   const span = document.createElement("span");
   const label = typeLabel(info.type) || "?";
@@ -60,7 +60,7 @@ function typeCell(info: DeviceInfo): HTMLTableCellElement {
 /** An editable label cell: `<input class="name|room">` + Save + a status span. */
 function editCell(field: "name" | "room", value: string): HTMLTableCellElement {
   const td = document.createElement("td");
-  td.dataset.label = field;
+  td.dataset.label = field === "name" ? t("tbl.name") : t("tbl.room");
   const input = document.createElement("input");
   input.className = field;
   input.value = value;
@@ -80,7 +80,7 @@ function editCell(field: "name" | "room", value: string): HTMLTableCellElement {
 function stanCell(info: DeviceInfo): HTMLTableCellElement {
   const td = document.createElement("td");
   td.className = "stan";
-  td.dataset.label = "stan";
+  td.dataset.label = t("tbl.state");
   const val = document.createElement("span");
   val.className = "stanval";
   val.textContent = stateStr(info);
@@ -95,12 +95,12 @@ export function deviceRow(node: string, info: DeviceInfo): HTMLTableRowElement {
   const tr = document.createElement("tr");
   tr.dataset.node = node;
   tr.dataset.type = info.type;
-  tr.appendChild(cell(node, undefined, "node"));
-  tr.appendChild(cell("—", "seen", "last seen")); // last seen — static until SSE (PR-3) drives it
-  tr.appendChild(cell(battFmt(info.battery), battLow(info.battery) ? "batt low" : "batt", "battery"));
+  tr.appendChild(cell(node, undefined, t("tbl.node")));
+  tr.appendChild(cell("—", "seen", t("tbl.lastSeen"))); // last seen — static until SSE (PR-3) drives it
+  tr.appendChild(cell(battFmt(info.battery), battLow(info.battery) ? "batt low" : "batt", t("tbl.battery")));
   tr.appendChild(typeCell(info));
   tr.appendChild(stanCell(info));
-  tr.appendChild(cell("", "actions", "akcje")); // akcje — control buttons wired by the live decorator (PR-4a)
+  tr.appendChild(cell("", "actions", t("tbl.actions"))); // akcje — control buttons wired by the live decorator (PR-4a)
   tr.appendChild(editCell("name", info.name ?? "")); // name + Save — wired by the registry binder (PR-4b)
   tr.appendChild(editCell("room", info.room ?? ""));
   return tr;
@@ -109,7 +109,7 @@ export function deviceRow(node: string, info: DeviceInfo): HTMLTableRowElement {
 /** An editable per-endpoint label cell: `<input class="ep-name">` + Save + status. */
 function epNameCell(name: string): HTMLTableCellElement {
   const td = document.createElement("td");
-  td.dataset.label = "name";
+  td.dataset.label = t("tbl.name");
   const input = document.createElement("input");
   input.className = "ep-name";
   input.value = name;
@@ -131,8 +131,8 @@ function subRow(node: string, ep: string, on: boolean, name: string): HTMLTableR
   tr.appendChild(cell("")); // last seen
   tr.appendChild(cell("")); // battery
   tr.appendChild(cell(t("dev.channel", { ep }), "sub-label"));
-  tr.appendChild(cell(onOff(on), "stan ep-stan", "stan"));
-  tr.appendChild(cell("", "actions", "akcje")); // akcje — endpoint buttons wired by the live decorator
+  tr.appendChild(cell(onOff(on), "stan ep-stan", t("tbl.state")));
+  tr.appendChild(cell("", "actions", t("tbl.actions"))); // akcje — endpoint buttons wired by the live decorator
   tr.appendChild(epNameCell(name)); // per-channel label — wired by the registry binder (PR-4b)
   tr.appendChild(cell("")); // room
   return tr;

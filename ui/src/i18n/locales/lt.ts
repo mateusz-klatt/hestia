@@ -109,6 +109,11 @@ const messages: Partial<Messages> = {
   "rule.save": "Išsaugoti taisyklę",
   "rule.jsonLabel": "taisyklės JSON",
   "rule.jsonPlaceholder": "taisyklės JSON — spustelėkite „Naujas taisyklės šablonas”, kad gautumėte karkasą",
+  "rule.editing": "redaguojama {id}",
+  "rule.templateLoaded": "šablonas įkeltas — redaguokite, tada išsaugokite",
+  "rule.invalidJson": "netinkamas JSON: {msg}",
+  "rule.saved": "išsaugota",
+  "rule.error": "klaida {status}",
 
   "state.raised": "pakelta",
   "state.lowered": "nuleista",

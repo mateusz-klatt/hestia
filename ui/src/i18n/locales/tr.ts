@@ -107,6 +107,11 @@ const messages: Partial<Messages> = {
   "rule.save": "Kuralı kaydet",
   "rule.jsonLabel": "kural JSON'u",
   "rule.jsonPlaceholder": "kural JSON'u — iskelet için “Yeni kural şablonu”na tıklayın",
+  "rule.editing": "{id} düzenleniyor",
+  "rule.templateLoaded": "şablon yüklendi — düzenleyin, sonra kaydedin",
+  "rule.invalidJson": "geçersiz JSON: {msg}",
+  "rule.saved": "kaydedildi",
+  "rule.error": "hata {status}",
 
   "state.raised": "kaldırılmış",
   "state.lowered": "indirilmiş",

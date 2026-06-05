@@ -107,6 +107,11 @@ const messages: Partial<Messages> = {
   "rule.save": "Αποθήκευση κανόνα",
   "rule.jsonLabel": "JSON κανόνα",
   "rule.jsonPlaceholder": "JSON κανόνα — κάντε κλικ στο «Νέο πρότυπο κανόνα» για σκελετό",
+  "rule.editing": "επεξεργασία {id}",
+  "rule.templateLoaded": "φορτώθηκε το πρότυπο — επεξεργαστείτε και μετά αποθηκεύστε",
+  "rule.invalidJson": "μη έγκυρο JSON: {msg}",
+  "rule.saved": "αποθηκεύτηκε",
+  "rule.error": "σφάλμα {status}",
 
   "state.raised": "ανεβασμένο",
   "state.lowered": "κατεβασμένο",

@@ -108,6 +108,11 @@ const messages: Partial<Messages> = {
   "rule.save": "Salvează regula",
   "rule.jsonLabel": "JSON regulă",
   "rule.jsonPlaceholder": "JSON regulă — faceți clic pe „Șablon nou de regulă” pentru un schelet",
+  "rule.editing": "se editează {id}",
+  "rule.templateLoaded": "șablon încărcat — editați, apoi salvați",
+  "rule.invalidJson": "JSON nevalid: {msg}",
+  "rule.saved": "salvat",
+  "rule.error": "eroare {status}",
 
   "state.raised": "ridicată",
   "state.lowered": "coborâtă",

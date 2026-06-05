@@ -228,7 +228,7 @@ function startApp(): void {
       },
       onEdit: (rule) => {
         ruleJson.value = JSON.stringify(rule, null, 2);
-        setRuleStatus(`editing ${rule.id}`, false);
+        setRuleStatus(t("rule.editing", { id: rule.id }), false);
       },
       postRule,
       deleteRule,
@@ -238,7 +238,7 @@ function startApp(): void {
 
   el("rule-template").addEventListener("click", () => {
     ruleJson.value = JSON.stringify(RULE_TEMPLATE, null, 2);
-    setRuleStatus("template loaded — edit then Save", false);
+    setRuleStatus(t("rule.templateLoaded"), false);
   });
 
   el("save-rule").addEventListener("click", () => {
@@ -248,16 +248,16 @@ function startApp(): void {
       try {
         parsed = JSON.parse(ruleJson.value);
       } catch (e) {
-        setRuleStatus(`invalid JSON: ${e instanceof Error ? e.message : "parse error"}`, true);
+        setRuleStatus(t("rule.invalidJson", { msg: e instanceof Error ? e.message : "parse error" }), true);
         return;
       }
       const res = await postRule(parsed);
       if (res.ok) {
-        setRuleStatus("saved", false);
+        setRuleStatus(t("rule.saved"), false);
         ruleJson.value = "";
         void loadAutomations();
       } else {
-        setRuleStatus(res.body?.error ?? `error ${String(res.status)}`, true);
+        setRuleStatus(res.body?.error ?? t("rule.error", { status: res.status }), true);
       }
     })();
   });

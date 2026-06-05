@@ -110,6 +110,11 @@ const messages: Partial<Messages> = {
   "rule.save": "Sábháil riail",
   "rule.jsonLabel": "JSON riail",
   "rule.jsonPlaceholder": "JSON riail — cliceáil “Teimpléad riail nua” le haghaidh cnámharlaigh",
+  "rule.editing": "ag cur {id} in eagar",
+  "rule.templateLoaded": "teimpléad luchtaithe — cuir in eagar é agus ansin sábháil",
+  "rule.invalidJson": "JSON neamhbhailí: {msg}",
+  "rule.saved": "sábháilte",
+  "rule.error": "earráid {status}",
 
   "state.raised": "ardaithe",
   "state.lowered": "íslithe",

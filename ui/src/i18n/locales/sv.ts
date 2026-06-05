@@ -107,6 +107,11 @@ const messages: Partial<Messages> = {
   "rule.save": "Spara regel",
   "rule.jsonLabel": "regel-JSON",
   "rule.jsonPlaceholder": "regel-JSON — klicka på ”Ny regelmall” för en stomme",
+  "rule.editing": "redigerar {id}",
+  "rule.templateLoaded": "mall inläst — redigera och spara sedan",
+  "rule.invalidJson": "ogiltig JSON: {msg}",
+  "rule.saved": "sparat",
+  "rule.error": "fel {status}",
 
   "state.raised": "höjd",
   "state.lowered": "sänkt",

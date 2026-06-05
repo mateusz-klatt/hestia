@@ -106,6 +106,11 @@ const messages: Partial<Messages> = {
   "rule.save": "Lưu quy tắc",
   "rule.jsonLabel": "JSON quy tắc",
   "rule.jsonPlaceholder": "JSON quy tắc — nhấp “Mẫu quy tắc mới” để lấy khung",
+  "rule.editing": "đang chỉnh sửa {id}",
+  "rule.templateLoaded": "đã tải mẫu — chỉnh sửa rồi lưu",
+  "rule.invalidJson": "JSON không hợp lệ: {msg}",
+  "rule.saved": "đã lưu",
+  "rule.error": "lỗi {status}",
 
   "state.raised": "đã nâng",
   "state.lowered": "đã hạ",

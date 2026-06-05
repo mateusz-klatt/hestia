@@ -107,6 +107,11 @@ const messages: Partial<Messages> = {
   "rule.save": "I-save ang rule",
   "rule.jsonLabel": "rule JSON",
   "rule.jsonPlaceholder": "rule JSON — i-click ang “Bagong template ng rule” para sa skeleton",
+  "rule.editing": "ine-edit ang {id}",
+  "rule.templateLoaded": "na-load ang template — i-edit, pagkatapos ay i-save",
+  "rule.invalidJson": "di-wastong JSON: {msg}",
+  "rule.saved": "na-save",
+  "rule.error": "error {status}",
 
   "state.raised": "nakataas",
   "state.lowered": "nakababa",

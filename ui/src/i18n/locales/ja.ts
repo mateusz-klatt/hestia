@@ -106,6 +106,11 @@ const messages: Partial<Messages> = {
   "rule.save": "ルールを保存",
   "rule.jsonLabel": "ルール JSON",
   "rule.jsonPlaceholder": "ルール JSON — 骨組みを作成するには「新規ルールテンプレート」をクリック",
+  "rule.editing": "{id} を編集中",
+  "rule.templateLoaded": "テンプレートを読み込みました — 編集してから保存",
+  "rule.invalidJson": "無効な JSON: {msg}",
+  "rule.saved": "保存しました",
+  "rule.error": "エラー {status}",
 
   "state.raised": "上げ済み",
   "state.lowered": "下げ済み",

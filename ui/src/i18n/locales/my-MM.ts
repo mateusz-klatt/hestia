@@ -106,6 +106,11 @@ const messages: Partial<Messages> = {
   "rule.save": "စည်းမျဉ်း သိမ်း",
   "rule.jsonLabel": "စည်းမျဉ်း JSON",
   "rule.jsonPlaceholder": "စည်းမျဉ်း JSON — အခြေခံပုံစံရရန် “စည်းမျဉ်း ပုံစံအသစ်” ကို နှိပ်ပါ",
+  "rule.editing": "တည်းဖြတ်နေသည် {id}",
+  "rule.templateLoaded": "ပုံစံကို ဖွင့်ပြီးပါပြီ — တည်းဖြတ်ပြီးနောက် သိမ်းပါ",
+  "rule.invalidJson": "မမှန်ကန်သော JSON: {msg}",
+  "rule.saved": "သိမ်းပြီးပါပြီ",
+  "rule.error": "အမှား {status}",
 
   "state.raised": "တင်ထားသည်",
   "state.lowered": "ချထားသည်",

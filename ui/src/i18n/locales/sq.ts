@@ -107,6 +107,11 @@ const messages: Partial<Messages> = {
   "rule.save": "Ruaj rregullin",
   "rule.jsonLabel": "JSON i rregullit",
   "rule.jsonPlaceholder": "JSON i rregullit — kliko “Shabllon i ri rregulli” për një skelet",
+  "rule.editing": "duke redaktuar {id}",
+  "rule.templateLoaded": "shablloni u ngarkua — redaktoje, pastaj ruaje",
+  "rule.invalidJson": "JSON i pavlefshëm: {msg}",
+  "rule.saved": "u ruajt",
+  "rule.error": "gabim {status}",
 
   "state.raised": "ngritur",
   "state.lowered": "ulur",

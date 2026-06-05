@@ -107,6 +107,11 @@ const messages: Partial<Messages> = {
   "rule.save": "Szabály mentése",
   "rule.jsonLabel": "szabály JSON",
   "rule.jsonPlaceholder": "szabály JSON — kattints az „Új szabálysablon” gombra a vázhoz",
+  "rule.editing": "{id} szerkesztése",
+  "rule.templateLoaded": "sablon betöltve — szerkeszd, majd mentsd",
+  "rule.invalidJson": "érvénytelen JSON: {msg}",
+  "rule.saved": "mentve",
+  "rule.error": "hiba {status}",
 
   "state.raised": "felhúzva",
   "state.lowered": "leengedve",

@@ -106,6 +106,11 @@ const messages: Partial<Messages> = {
   "rule.save": "บันทึกกฎ",
   "rule.jsonLabel": "JSON ของกฎ",
   "rule.jsonPlaceholder": "JSON ของกฎ — คลิก “เทมเพลตกฎใหม่” เพื่อสร้างโครง",
+  "rule.editing": "กำลังแก้ไข {id}",
+  "rule.templateLoaded": "โหลดเทมเพลตแล้ว — แก้ไขแล้วกดบันทึก",
+  "rule.invalidJson": "JSON ไม่ถูกต้อง: {msg}",
+  "rule.saved": "บันทึกแล้ว",
+  "rule.error": "ข้อผิดพลาด {status}",
 
   "state.raised": "ยกขึ้น",
   "state.lowered": "ลดลง",

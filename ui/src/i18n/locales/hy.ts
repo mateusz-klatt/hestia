@@ -107,6 +107,11 @@ const messages: Partial<Messages> = {
   "rule.save": "Պահել կանոնը",
   "rule.jsonLabel": "կանոնի JSON",
   "rule.jsonPlaceholder": "կանոնի JSON — սեղմեք «Նոր կանոնի ձևանմուշ»՝ կմախք ստանալու համար",
+  "rule.editing": "խմբագրվում է {id}",
+  "rule.templateLoaded": "ձևանմուշը բեռնվեց — խմբագրեք, ապա պահպանեք",
+  "rule.invalidJson": "անվավեր JSON: {msg}",
+  "rule.saved": "պահպանվեց",
+  "rule.error": "սխալ {status}",
 
   "state.raised": "բարձրացված",
   "state.lowered": "իջեցված",

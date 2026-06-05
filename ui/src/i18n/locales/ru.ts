@@ -109,6 +109,11 @@ const messages: Partial<Messages> = {
   "rule.save": "Сохранить правило",
   "rule.jsonLabel": "JSON правила",
   "rule.jsonPlaceholder": "JSON правила — нажмите «Новый шаблон правила», чтобы получить каркас",
+  "rule.editing": "редактирование {id}",
+  "rule.templateLoaded": "шаблон загружен — отредактируйте, затем сохраните",
+  "rule.invalidJson": "недопустимый JSON: {msg}",
+  "rule.saved": "сохранено",
+  "rule.error": "ошибка {status}",
 
   "state.raised": "поднято",
   "state.lowered": "опущено",

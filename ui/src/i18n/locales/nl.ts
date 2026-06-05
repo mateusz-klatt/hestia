@@ -107,6 +107,11 @@ const messages: Partial<Messages> = {
   "rule.save": "Regel opslaan",
   "rule.jsonLabel": "regel-JSON",
   "rule.jsonPlaceholder": "regel-JSON — klik op “Nieuwe regelsjabloon” voor een skelet",
+  "rule.editing": "{id} bewerken",
+  "rule.templateLoaded": "sjabloon geladen — bewerk en sla daarna op",
+  "rule.invalidJson": "ongeldige JSON: {msg}",
+  "rule.saved": "opgeslagen",
+  "rule.error": "fout {status}",
 
   "state.raised": "opgetrokken",
   "state.lowered": "neergelaten",

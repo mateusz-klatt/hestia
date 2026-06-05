@@ -49,7 +49,7 @@ export function fmtHumidity(value: number | null): string {
  */
 export function battFmt(pct: number | null): string {
   if (pct === null) return "—";
-  if (pct > 100) return "low";
+  if (pct > 100) return t("dev.battLow"); // Z-Wave low-battery sentinel (e.g. 0xff) → a word, not "255 %"
   return `${String(pct)}%`;
 }
 

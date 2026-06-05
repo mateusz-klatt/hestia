@@ -107,6 +107,11 @@ const messages: Partial<Messages> = {
   "rule.save": "ذخیره قاعده",
   "rule.jsonLabel": "JSON قاعده",
   "rule.jsonPlaceholder": "JSON قاعده — برای یک اسکلت روی «قالب قاعده جدید» کلیک کنید",
+  "rule.editing": "در حال ویرایش {id}",
+  "rule.templateLoaded": "قالب بارگذاری شد — ویرایش کنید، سپس ذخیره کنید",
+  "rule.invalidJson": "JSON نامعتبر: {msg}",
+  "rule.saved": "ذخیره شد",
+  "rule.error": "خطا {status}",
 
   "state.raised": "بالا",
   "state.lowered": "پایین",

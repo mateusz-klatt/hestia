@@ -106,6 +106,11 @@ const messages: Partial<Messages> = {
   "rule.save": "Simpan peraturan",
   "rule.jsonLabel": "JSON peraturan",
   "rule.jsonPlaceholder": "JSON peraturan — klik “Templat peraturan baharu” untuk rangka",
+  "rule.editing": "mengedit {id}",
+  "rule.templateLoaded": "templat dimuatkan — edit kemudian simpan",
+  "rule.invalidJson": "JSON tidak sah: {msg}",
+  "rule.saved": "disimpan",
+  "rule.error": "ralat {status}",
 
   "state.raised": "dinaikkan",
   "state.lowered": "diturunkan",

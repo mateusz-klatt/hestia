@@ -113,6 +113,11 @@ const pl: Partial<Messages> = {
   "rule.save": "Zapisz regułę",
   "rule.jsonLabel": "JSON reguły",
   "rule.jsonPlaceholder": "JSON reguły — kliknij „Nowy szablon reguły”, aby uzyskać szkielet",
+  "rule.editing": "edycja {id}",
+  "rule.templateLoaded": "wczytano szablon — edytuj, potem Zapisz",
+  "rule.invalidJson": "nieprawidłowy JSON: {msg}",
+  "rule.saved": "zapisano",
+  "rule.error": "błąd {status}",
 
   "state.raised": "podniesione",
   "state.lowered": "opuszczone",

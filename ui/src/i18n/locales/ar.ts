@@ -111,6 +111,11 @@ const messages: Partial<Messages> = {
   "rule.save": "حفظ القاعدة",
   "rule.jsonLabel": "JSON القاعدة",
   "rule.jsonPlaceholder": "JSON القاعدة — انقر «قالب قاعدة جديد» للحصول على هيكل",
+  "rule.editing": "تعديل {id}",
+  "rule.templateLoaded": "تم تحميل القالب — عدّل ثم احفظ",
+  "rule.invalidJson": "JSON غير صالح: {msg}",
+  "rule.saved": "تم الحفظ",
+  "rule.error": "خطأ {status}",
 
   "state.raised": "مرفوع",
   "state.lowered": "منزّل",
