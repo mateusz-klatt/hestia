@@ -37,7 +37,7 @@ import { renderLogin, renderUser } from "./login";
 import { bindRow, bindSubRow } from "./registry";
 import { renderRf433 } from "./rf433";
 import { createRoomsView } from "./rooms";
-import { renderRuleForm } from "./ruleform";
+import { renderRuleForm, type RuleFormHandle } from "./ruleform";
 import { renderSceneControls } from "./scenes";
 import { reconcileServerSettings } from "./settings";
 import { renderUsersPanel } from "./users";
@@ -53,6 +53,8 @@ const irBox = el("ir-buttons");
 const klimaBox = el("klima");
 const ruleForm = el("rule-form");
 const ruleJson = el("rule-json") as HTMLTextAreaElement;
+// The guided-wizard handle, captured on first render; the Edit button drives loadRule (A3 round-trip).
+let ruleFormHandle: RuleFormHandle | null = null;
 
 // Rooms view (wife-friendly): house-wide IR/klima panels live in their own persistent containers;
 // the room list/detail rebuilds inside #room-list. The rooms view keeps its own latest snapshot
@@ -139,7 +141,8 @@ const live = new LiveController(
     if (isAdmin) {
       renderIrButtons(irBox, data.ir_buttons, postIr); // built once from the static config
       renderKlima(klimaBox, data.klima, postIr);
-      renderRuleForm(ruleForm, ruleJson, data.rule_vocab, data.klima, data.devices); // guided form → fills #rule-json (node combo over device names)
+      // guided form → fills #rule-json (node combo over device names); handle drives the Edit round-trip
+      ruleFormHandle = renderRuleForm(ruleForm, ruleJson, data.rule_vocab, data.klima, data.devices);
     }
     roomsIrBox.hidden = !canControl;
     roomsKlimaBox.hidden = !canControl;
@@ -243,7 +246,10 @@ function startApp(): void {
         void loadAutomations();
       },
       onEdit: (rule) => {
+        // Always seed the JSON textarea first (the authoritative copy), THEN ask the wizard to
+        // reconstruct itself from the rule — it falls back to raw-only if it can't represent it.
         ruleJson.value = JSON.stringify(rule, null, 2);
+        ruleFormHandle?.loadRule(rule);
         setRuleStatus(t("rule.editing", { id: rule.id }), false);
       },
       postRule,
@@ -254,6 +260,7 @@ function startApp(): void {
 
   el("rule-template").addEventListener("click", () => {
     ruleJson.value = JSON.stringify(RULE_TEMPLATE, null, 2);
+    ruleFormHandle?.reset(); // a fresh template → clear the wizard + re-enable Build JSON
     setRuleStatus(t("rule.templateLoaded"), false);
   });
 
