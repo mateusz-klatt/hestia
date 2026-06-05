@@ -11,6 +11,7 @@ import {
   type FetchAudit,
 } from "./audit";
 import { device } from "./fixtures";
+import { currentLocale } from "./i18n";
 
 const flush = (): Promise<void> =>
   new Promise((resolve) => {
@@ -51,7 +52,9 @@ describe("renderAuditFeed", () => {
 
     const rows = [...container.querySelectorAll<HTMLElement>(".audit-row")];
     expect(rows.map((row) => row.dataset.id)).toEqual(["2", "3", "4", "1", "5"]);
-    expect(rows[0]?.textContent ?? "").toContain(new Date(400 * 1000).toLocaleString());
+    expect(rows[0]?.textContent ?? "").toContain(
+      new Date(400 * 1000).toLocaleString(currentLocale(), { dateStyle: "short", timeStyle: "medium" }));
+    expect(rows[0]?.querySelector(".audit-ts")?.getAttribute("dir")).toBe("ltr"); // bidi-safe in an RTL feed
     expect(rows[0]?.textContent ?? "").toContain("🤖");
     expect(rows[1]?.textContent ?? "").toContain("📟");
     expect(rows[2]?.textContent ?? "").toContain("⚙");
