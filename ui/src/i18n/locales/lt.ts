@@ -57,6 +57,14 @@ const messages: Partial<Messages> = {
   "state.closed": "uždaryta",
   "state.motion": "judesys",
   "state.noMotion": "nėra judesio",
+
+  "ctl.mode": "Režimas",
+  "ctl.brightness": "Ryškumas",
+  "klima.cool": "Vėsinimas",
+  "klima.heat": "Šildymas",
+  "klima.auto": "Automatinis",
+  "klima.dry": "Sausinimas",
+  "klima.fan": "Ventiliatorius",
 };
 
 export default messages;

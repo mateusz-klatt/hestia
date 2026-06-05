@@ -54,6 +54,14 @@ const messages: Partial<Messages> = {
   "state.closed": "đóng",
   "state.motion": "chuyển động",
   "state.noMotion": "không có chuyển động",
+
+  "ctl.mode": "Chế độ",
+  "ctl.brightness": "Độ sáng",
+  "klima.cool": "Làm mát",
+  "klima.heat": "Sưởi",
+  "klima.auto": "Tự động",
+  "klima.dry": "Khử ẩm",
+  "klima.fan": "Quạt",
 };
 
 export default messages;

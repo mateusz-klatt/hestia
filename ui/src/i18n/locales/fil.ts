@@ -55,6 +55,14 @@ const messages: Partial<Messages> = {
   "state.closed": "sarado",
   "state.motion": "galaw",
   "state.noMotion": "walang galaw",
+
+  "ctl.mode": "Mode",
+  "ctl.brightness": "Liwanag",
+  "klima.cool": "Lamig",
+  "klima.heat": "Init",
+  "klima.auto": "Auto",
+  "klima.dry": "Patuyo",
+  "klima.fan": "Bentilador",
 };
 
 export default messages;

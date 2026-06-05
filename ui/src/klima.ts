@@ -1,5 +1,6 @@
 import type { ControlResult, IrButton, Klima, KlimaState } from "./api/types";
 import { t } from "./i18n";
+import type { MessageKey } from "./i18n/locales/en";
 import { fmtTemp } from "./render/format";
 
 /** Transmits a saved Flipper signal (`{file, button}`); normalised result (never rejects). */
@@ -7,6 +8,21 @@ export type PostIr = (file: string, button: string) => Promise<ControlResult>;
 
 /** Pictogram per A/C mode; an unknown mode falls back to the snowflake (the panel's identity). */
 const MODE_ICON: Record<string, string> = { cool: "❄️", heat: "🔥", auto: "🔄", dry: "💨", fan: "💨" };
+
+/** i18n key per known A/C mode; an unknown mode keeps its raw name as the label. */
+const MODE_KEY: Record<string, MessageKey> = {
+  cool: "klima.cool",
+  heat: "klima.heat",
+  auto: "klima.auto",
+  dry: "klima.dry",
+  fan: "klima.fan",
+};
+
+/** Localised label for a mode, falling back to the raw mode name when it isn't a known one. */
+function modeLabel(mode: string): string {
+  const key = MODE_KEY[mode];
+  return key !== undefined ? t(key) : mode;
+}
 
 /**
  * The current A/C state as a compact pictogram line for the klima panel:
@@ -140,14 +156,16 @@ export function renderKlima(box: HTMLElement, klima: Klima, postIr: PostIr): voi
 
   if (modeNames.length > 0) {
     const mode = document.createElement("select");
+    mode.setAttribute("aria-label", t("ctl.mode")); // icon-only panel → name the dropdown for screen readers
     mode.style.marginRight = "0.3rem";
     for (const m of modeNames) {
       const o = document.createElement("option");
-      o.value = m;
-      o.textContent = m;
+      o.value = m;                // the IR signal is keyed by the raw mode; only the label is localised
+      o.textContent = modeLabel(m);
       mode.appendChild(o);
     }
     const temp = document.createElement("select");
+    temp.setAttribute("aria-label", t("user.temperature")); // name the temperature dropdown for screen readers
     temp.style.marginRight = "0.3rem";
     const fillTemps = (): void => {
       temp.replaceChildren();

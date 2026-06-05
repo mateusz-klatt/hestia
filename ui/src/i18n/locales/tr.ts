@@ -55,6 +55,14 @@ const messages: Partial<Messages> = {
   "state.closed": "kapalı",
   "state.motion": "hareket",
   "state.noMotion": "hareket yok",
+
+  "ctl.mode": "Mod",
+  "ctl.brightness": "Parlaklık",
+  "klima.cool": "Soğutma",
+  "klima.heat": "Isıtma",
+  "klima.auto": "Otomatik",
+  "klima.dry": "Nem alma",
+  "klima.fan": "Fan",
 };
 
 export default messages;

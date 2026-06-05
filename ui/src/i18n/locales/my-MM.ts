@@ -54,6 +54,14 @@ const messages: Partial<Messages> = {
   "state.closed": "ပိတ်ထားသည်",
   "state.motion": "လှုပ်ရှားမှု",
   "state.noMotion": "လှုပ်ရှားမှု မရှိပါ",
+
+  "ctl.mode": "မုဒ်",
+  "ctl.brightness": "တောက်ပမှု",
+  "klima.cool": "အအေး",
+  "klima.heat": "အပူ",
+  "klima.auto": "အလိုအလျောက်",
+  "klima.dry": "အခြောက်",
+  "klima.fan": "ပန်ကာ",
 };
 
 export default messages;

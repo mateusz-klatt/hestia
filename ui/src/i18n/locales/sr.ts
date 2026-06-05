@@ -56,6 +56,14 @@ const messages: Partial<Messages> = {
   "state.closed": "затворено",
   "state.motion": "покрет",
   "state.noMotion": "нема покрета",
+
+  "ctl.mode": "Режим",
+  "ctl.brightness": "Осветљеност",
+  "klima.cool": "Хлађење",
+  "klima.heat": "Грејање",
+  "klima.auto": "Аутоматски",
+  "klima.dry": "Одвлаживање",
+  "klima.fan": "Вентилатор",
 };
 
 export default messages;

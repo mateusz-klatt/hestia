@@ -55,6 +55,14 @@ const messages: Partial<Messages> = {
   "state.closed": "kiinni",
   "state.motion": "liike",
   "state.noMotion": "ei liikettä",
+
+  "ctl.mode": "Tila",
+  "ctl.brightness": "Kirkkaus",
+  "klima.cool": "Jäähdytys",
+  "klima.heat": "Lämmitys",
+  "klima.auto": "Auto",
+  "klima.dry": "Kuivaus",
+  "klima.fan": "Puhallin",
 };
 
 export default messages;

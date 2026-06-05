@@ -55,6 +55,14 @@ const messages: Partial<Messages> = {
   "state.closed": "κλειστό",
   "state.motion": "κίνηση",
   "state.noMotion": "καμία κίνηση",
+
+  "ctl.mode": "Λειτουργία",
+  "ctl.brightness": "Φωτεινότητα",
+  "klima.cool": "Ψύξη",
+  "klima.heat": "Θέρμανση",
+  "klima.auto": "Αυτόματο",
+  "klima.dry": "Αφύγρανση",
+  "klima.fan": "Ανεμιστήρας",
 };
 
 export default messages;

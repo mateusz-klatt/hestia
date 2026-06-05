@@ -55,6 +55,14 @@ const messages: Partial<Messages> = {
   "state.closed": "imefungwa",
   "state.motion": "harakati",
   "state.noMotion": "hakuna harakati",
+
+  "ctl.mode": "Hali",
+  "ctl.brightness": "Mwangaza",
+  "klima.cool": "Kupooza",
+  "klima.heat": "Kupasha",
+  "klima.auto": "Otomatiki",
+  "klima.dry": "Kausha",
+  "klima.fan": "Feni",
 };
 
 export default messages;

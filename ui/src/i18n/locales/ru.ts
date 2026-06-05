@@ -57,6 +57,14 @@ const messages: Partial<Messages> = {
   "state.closed": "закрыто",
   "state.motion": "движение",
   "state.noMotion": "нет движения",
+
+  "ctl.mode": "Режим",
+  "ctl.brightness": "Яркость",
+  "klima.cool": "Охлаждение",
+  "klima.heat": "Обогрев",
+  "klima.auto": "Авто",
+  "klima.dry": "Осушение",
+  "klima.fan": "Вентилятор",
 };
 
 export default messages;

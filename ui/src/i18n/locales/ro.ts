@@ -56,6 +56,14 @@ const messages: Partial<Messages> = {
   "state.closed": "închis",
   "state.motion": "mișcare",
   "state.noMotion": "fără mișcare",
+
+  "ctl.mode": "Mod",
+  "ctl.brightness": "Luminozitate",
+  "klima.cool": "Răcire",
+  "klima.heat": "Încălzire",
+  "klima.auto": "Auto",
+  "klima.dry": "Dezumidificare",
+  "klima.fan": "Ventilator",
 };
 
 export default messages;
