@@ -11,7 +11,17 @@ third-party CDN, no public IP. Run it as a transparent **proxy** (relay to the
 cloud while decoding everything) or as a **standalone** server that *replaces* the
 cloud entirely.
 
-![hestia dashboard — 22 devices with live state, power metering, battery, inline naming, and the local rules editor](docs/dashboard.png)
+![hestia — the room-grouped home dashboard: live device state, thermostat / A·C, scenes, and per-room control, fully local](docs/screenshots/rooms.png)
+
+> **Runs completely off-grid.** In standalone mode hestia replaces the vendor cloud
+> entirely, and a local **RTL-SDR (`rtl_433`)** feeder brings 433 MHz **temperature
+> & humidity** sensors in on-device — no gateway, no internet.
+
+| Rooms | Room control | Engineer view (standalone) | Activity / audit log |
+| --- | --- | --- | --- |
+| ![Rooms](docs/screenshots/rooms.png) | ![Room control](docs/screenshots/room.png) | ![Advanced view](docs/screenshots/advanced.png) | ![Audit log](docs/screenshots/activity.png) |
+
+<sub>(Screenshots are sanitised: masked metering values and demo account names.)</sub>
 
 hestia began as a **zero-dependency, pure-stdlib** server on bare metal. Now that it
 ships in a container, that rule is deliberately relaxed for **vetted,
@@ -23,14 +33,10 @@ protocol / command / state codec — the clean-room asset — stays **pure-stdli
 first-party** code; the libraries supply only generic primitives (a block cipher, a
 serial port), never protocol logic.
 
-> **Status — active refactor.** Moving off the bare-metal zero-deps rule now that
-> hestia is containerised, and migrating the stdlib `http.server` + inline-JS
-> dashboard to a **TypeScript** front-end. Expect churn on the surface; the protocol
-> core is stable.
-
-The **TypeScript** dashboard lives in [`ui/`](ui/) (Vite build → `ui/dist`) and is
-served at the root `/`; the old `/ui/` path 302-redirects there. The legacy inline
-dashboard has been removed.
+The **TypeScript + Vite** dashboard lives in [`ui/`](ui/) (built to `ui/dist`) and is
+served at the root `/`; the legacy stdlib inline dashboard has been removed. The web
+layer runs on **aiohttp**, with optional **SQLite** persistence (SQLAlchemy + Alembic)
+for device state, per-user settings, and accounts.
 
 ## Clean-room methodology
 
@@ -71,12 +77,17 @@ sequence.
   command (blinds, dimmers, switches, thermostats, scene/function buttons) and
   every sensor/state report (doors, motion, smoke/flood, smart-plug power
   metering), the login/handshake, and the device roster.
-- **Live web dashboard** (stdlib `http.server` + SSE): per-node state, power
-  metering, battery %, inline naming, and a local rules editor (loopback-only by
-  default).
+- **Live web dashboard** (TypeScript SPA over SSE): a room-grouped home view,
+  thermostat / A·C / blind / scene control, per-node state, smart-plug power
+  metering, battery %, inline naming, and a guided local rules editor. Multi-user
+  **auth + role-based access** (admin / operator / viewer), a full **audit / activity
+  log**, and **45 UI locales** (with RTL).
 - **Automations engine** — a local, cloud-free rules engine: event / time / cron /
   sun / presence / global-field triggers → conditioned, debounced actions. See
   [`docs/AUTOMATIONS.md`](docs/AUTOMATIONS.md).
+- **Local sensor inputs via RTL-SDR** — an `rtl_433` feeder (baked into the Docker
+  image) streams 433 MHz **temperature & humidity** sensors in locally; no gateway,
+  no cloud.
 - **Optional integrations** (all opt-in, off by default): a Tuya v3.3 LAN
   client for a temperature device ([`docs/TUYA.md`](docs/TUYA.md)), an
   outdoor-temperature poller (Open-Meteo), and IR control via a serial-attached
