@@ -145,14 +145,21 @@ def _is_public_route(method: str, path: str) -> bool:
 # table; ``test_every_route_is_classified`` asserts every registered route is here (or public), so this
 # can't silently drift from the routes. Public routes are short-circuited in the middleware before this.
 _VIEWER, _OPERATOR, _ADMIN = "viewer", "operator", "admin"
+# Route paths that appear in BOTH the floor map and the route registration — named once so the two
+# can't drift (and to satisfy the no-duplicate-literal lint). Single-use paths stay inline literals.
+_PATH_SETTINGS = "/api/settings"
+_PATH_ROOM_ICONS = "/api/rooms/icons"
+_PATH_AUTOMATIONS = "/api/automations"
+_PATH_USERS = "/api/users"
+_USERNAME_REQUIRED = "username is required"   # shared 400 message across the admin user verbs
 _ROUTE_MIN_ROLE = {
     # reads every signed-in user (incl. a read-only viewer) needs — the room / event-log / temps / own-prefs surface
     ("GET", "/api/discovery"): _VIEWER,
     ("GET", "/api/events"): _VIEWER,
     ("GET", "/api/audit"): _VIEWER,
-    ("GET", "/api/settings"): _VIEWER,
-    ("POST", "/api/settings"): _VIEWER,            # a user's OWN UI prefs (locale / temp scale / theme)
-    ("GET", "/api/rooms/icons"): _VIEWER,
+    ("GET", _PATH_SETTINGS): _VIEWER,
+    ("POST", _PATH_SETTINGS): _VIEWER,            # a user's OWN UI prefs (locale / temp scale / theme)
+    ("GET", _PATH_ROOM_ICONS): _VIEWER,
     ("GET", "/api/whoami"): _VIEWER,
     ("POST", "/api/me/password"): _VIEWER,         # any signed-in user changes their OWN password (verifies current)
     # room actions: operator and admin (a viewer is read-only — the UI hides these, the server enforces it)
@@ -162,16 +169,16 @@ _ROUTE_MIN_ROLE = {
     # config / engineering surface: admin only — incl. the reads that would leak it (automation rules carry
     # presence-trigger MAC addresses; db-stats / rf433 are engineering observability the operator hides)
     ("POST", "/api/name"): _ADMIN,
-    ("GET", "/api/automations"): _ADMIN,
-    ("POST", "/api/automations"): _ADMIN,
+    ("GET", _PATH_AUTOMATIONS): _ADMIN,
+    ("POST", _PATH_AUTOMATIONS): _ADMIN,
     ("POST", "/api/automations/delete"): _ADMIN,
     ("POST", "/api/graduate"): _ADMIN,
-    ("POST", "/api/rooms/icons"): _ADMIN,
+    ("POST", _PATH_ROOM_ICONS): _ADMIN,
     ("GET", "/api/db/stats"): _ADMIN,
     ("GET", "/api/rf433"): _ADMIN,
     # user administration: admin only (add/list accounts, change roles, disable, reset another's password)
-    ("GET", "/api/users"): _ADMIN,
-    ("POST", "/api/users"): _ADMIN,
+    ("GET", _PATH_USERS): _ADMIN,
+    ("POST", _PATH_USERS): _ADMIN,
     ("POST", "/api/users/role"): _ADMIN,
     ("POST", "/api/users/disabled"): _ADMIN,
     ("POST", "/api/users/reset-password"): _ADMIN,
@@ -508,7 +515,7 @@ async def _users_role(request):
     username = body.get("username") if isinstance(body, dict) else None
     role = body.get("role") if isinstance(body, dict) else None
     if not isinstance(username, str) or not username:
-        return _json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "username is required"})
+        return _json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": _USERNAME_REQUIRED})
     if role not in store_sql.ROLE_RANK:
         return _json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "role must be admin, operator or viewer"})
     if username == request.get(_USER_KEY):
@@ -533,7 +540,7 @@ async def _users_disabled(request):
     username = body.get("username") if isinstance(body, dict) else None
     disabled = body.get("disabled") if isinstance(body, dict) else None
     if not isinstance(username, str) or not username:
-        return _json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "username is required"})
+        return _json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": _USERNAME_REQUIRED})
     if not isinstance(disabled, bool):
         return _json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "disabled must be true or false"})
     if username == request.get(_USER_KEY):
@@ -559,7 +566,7 @@ async def _users_reset_password(request):
     username = body.get("username") if isinstance(body, dict) else None
     new = body.get("new") if isinstance(body, dict) else None
     if not isinstance(username, str) or not username:
-        return _json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "username is required"})
+        return _json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": _USERNAME_REQUIRED})
     perror = _password_error(new)
     if perror is not None:
         return _json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": perror})
@@ -957,24 +964,24 @@ def make_app(rt):
     app.router.add_get("/api/whoami", _whoami, allow_head=False)
     app.router.add_get("/api/discovery", _discovery, allow_head=False)
     app.router.add_get("/api/events", _events, allow_head=False)
-    app.router.add_get("/api/automations", _automations_list, allow_head=False)
+    app.router.add_get(_PATH_AUTOMATIONS, _automations_list, allow_head=False)
     app.router.add_get("/api/audit", _audit_feed, allow_head=False)
     app.router.add_get("/api/rf433", _rf433_feed, allow_head=False)
     app.router.add_get("/api/db/stats", _db_stats, allow_head=False)
-    app.router.add_get("/api/settings", _settings, allow_head=False)
-    app.router.add_post("/api/settings", _settings_set)
-    app.router.add_get("/api/rooms/icons", _room_icons, allow_head=False)
-    app.router.add_post("/api/rooms/icons", _room_icon_set)
+    app.router.add_get(_PATH_SETTINGS, _settings, allow_head=False)
+    app.router.add_post(_PATH_SETTINGS, _settings_set)
+    app.router.add_get(_PATH_ROOM_ICONS, _room_icons, allow_head=False)
+    app.router.add_post(_PATH_ROOM_ICONS, _room_icon_set)
     app.router.add_post("/api/name", _name)
     app.router.add_post("/api/ir", _ir)
     app.router.add_post("/api/control", _control)
     app.router.add_post("/api/scene", _scene)
-    app.router.add_post("/api/automations", _automations_set)
+    app.router.add_post(_PATH_AUTOMATIONS, _automations_set)
     app.router.add_post("/api/automations/delete", _automations_delete)
     app.router.add_post("/api/graduate", _graduate)
     app.router.add_post("/api/me/password", _me_password)
-    app.router.add_get("/api/users", _users_list, allow_head=False)
-    app.router.add_post("/api/users", _users_add)
+    app.router.add_get(_PATH_USERS, _users_list, allow_head=False)
+    app.router.add_post(_PATH_USERS, _users_add)
     app.router.add_post("/api/users/role", _users_role)
     app.router.add_post("/api/users/disabled", _users_disabled)
     app.router.add_post("/api/users/reset-password", _users_reset_password)
