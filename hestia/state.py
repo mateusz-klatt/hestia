@@ -221,14 +221,26 @@ def _command_switch(state, node: int, op: dict, changed: dict) -> None:
 def _command_thermostat_power(state, node: int, op: dict, changed: dict) -> None:
     # Thermostat ON/OFF is OPTIMISTIC: the device only REPORTS its mode (40 03) when GET-polled, so a
     # press would otherwise not move the badge until the (debounced) confirmation poll. Echo the commanded
-    # power immediately; the confirm poll corrects it if the device disagreed. (Setpoint stays
-    # report-driven — the device reports 43 03 reliably and fast.)
+    # power immediately; the confirm poll corrects it if the device disagreed.
     _set_changed(state.thermostat_on, node, changed, "thermostat_on", _bool(op["on"]))
+
+
+def _command_thermostat(state, node: int, op: dict, changed: dict) -> None:
+    # Setpoint is ALSO optimistic. The earlier assumption ("the device reports 43 03 reliably") was
+    # falsified by a live capture: these TRVs frequently do NOT echo a setpoint report after a SET (only
+    # some nodes, sometimes), so a report-only setpoint left State stale at the OLD value — and the UI
+    # then re-pinned its dropdown to that stale value on the next refresh ("I set 18 °C, it jumps back to
+    # 28"). Echo the commanded °C immediately, stored as an integer to match the device's integer-°C
+    # report; a later 43 03 still wins where it arrives.
+    celsius = op.get("celsius")
+    if isinstance(celsius, (int, float)) and not isinstance(celsius, bool):
+        _set_changed(state.thermostat_setpoint, node, changed, "setpoint", round(celsius))
 
 
 _COMMAND_APPLIERS = {
     "switch": _command_switch,                   # 2-gang rides this too (op carries an `endpoint`)
     "thermostat_power": _command_thermostat_power,
+    "thermostat": _command_thermostat,
 }
 
 
