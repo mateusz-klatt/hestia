@@ -731,5 +731,84 @@ class DbPersistIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(reg.dirty)                     # failed write re-armed dirty for the next retry
 
 
+class RolesTests(unittest.TestCase):
+    """RBAC role storage + resolution (#73): the legacy→admin import rule, the viewer column default,
+    the role read/write helpers, and current_user_role's sqlite / JSON / bad-input semantics."""
+
+    def setUp(self):
+        self.dir = Path(tempfile.mkdtemp())
+        self.db = self.dir / "hestia.db"
+
+    def tearDown(self):
+        db.reset_engine_cache()   # current_user_role uses the cached engine WITHOUT disposing it
+        shutil.rmtree(self.dir)
+
+    def _role_of(self, username):
+        engine, Session = db.init_db(self.db)
+        with Session() as s:
+            row = s.get(db.User, username)
+        return None if row is None else row.role
+
+    def test_cutover_users_imports_legacy_accounts_as_admin(self):
+        engine, _ = db.init_db(self.db)
+        store_sql.cutover_users(engine, {"tata": "h", "mama": "h2"})
+        self.assertEqual(self._role_of("tata"), "admin")   # pre-roles accounts → admin (no lockout)
+        self.assertEqual(self._role_of("mama"), "admin")
+
+    def test_mirror_json_to_db_imports_users_as_admin(self):
+        _, Session = db.init_db(self.db)
+        reg = Registry(self.dir / "r.json")
+        store = AutomationStore(self.dir / "a.json")
+        with db.session_scope(Session) as s:
+            store_sql.mirror_json_to_db(s, registry=reg, store=store, users={"ju": "h"})
+        self.assertEqual(self._role_of("ju"), "admin")
+
+    def test_set_user_db_defaults_to_viewer_and_takes_an_explicit_role(self):
+        with mock.patch.dict(os.environ, {"HESTIA_DB": str(self.db)}):
+            store_sql.set_user_db("kid", "h")                    # role omitted → least-privilege viewer
+            store_sql.set_user_db("op", "h", "operator")
+        self.assertEqual(self._role_of("kid"), "viewer")
+        self.assertEqual(self._role_of("op"), "operator")
+
+    def test_get_user_db_role(self):
+        with mock.patch.dict(os.environ, {"HESTIA_DB": str(self.db)}):
+            store_sql.set_user_db("op", "h", "operator")
+            self.assertEqual(store_sql.get_user_db_role("op"), "operator")
+            self.assertIsNone(store_sql.get_user_db_role("ghost"))
+
+    def test_set_user_role_changes_existing_and_reports_missing(self):
+        with mock.patch.dict(os.environ, {"HESTIA_DB": str(self.db)}):
+            store_sql.set_user_db("op", "h", "viewer")
+            self.assertTrue(store_sql.set_user_role("op", "admin"))
+            self.assertEqual(store_sql.get_user_db_role("op"), "admin")
+            self.assertFalse(store_sql.set_user_role("ghost", "admin"))   # never creates an account
+
+    def test_current_user_role_from_db_when_authoritative(self):
+        with mock.patch.dict(os.environ, {"HESTIA_PERSIST": "sqlite", "HESTIA_DB": str(self.db)}):
+            engine, _ = db.init_db(self.db)
+            store_sql.cutover_users(engine, {"tata": "h"})      # tata → admin, users authoritative
+            store_sql.set_user_db("kid", "h", "viewer")
+            self.assertEqual(store_sql.current_user_role("tata"), "admin")
+            self.assertEqual(store_sql.current_user_role("kid"), "viewer")
+            self.assertIsNone(store_sql.current_user_role("ghost"))   # removed account → denied at once
+
+    def test_current_user_role_rejects_bad_input(self):
+        self.assertIsNone(store_sql.current_user_role(None))
+        self.assertIsNone(store_sql.current_user_role(""))
+        self.assertIsNone(store_sql.current_user_role(123))
+
+    def test_current_user_role_json_backend_is_admin_if_present(self):
+        # JSON backend (default): a known account is legacy single-tier → admin; an unknown one → None.
+        with mock.patch.object(store_sql.auth, "load_users", return_value={"tata": "h"}):
+            self.assertEqual(store_sql.current_user_role("tata"), "admin")
+            self.assertIsNone(store_sql.current_user_role("ghost"))
+
+    def test_current_user_role_sqlite_not_authoritative_falls_back_to_json(self):
+        with mock.patch.dict(os.environ, {"HESTIA_PERSIST": "sqlite", "HESTIA_DB": str(self.db)}):
+            db.init_db(self.db)   # schema exists but users NOT cut over → JSON back-compat
+            with mock.patch.object(store_sql.auth, "load_users", return_value={"tata": "h"}):
+                self.assertEqual(store_sql.current_user_role("tata"), "admin")
+
+
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()

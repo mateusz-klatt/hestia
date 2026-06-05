@@ -24,7 +24,7 @@ from pathlib import Path
 
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import Engine, ForeignKey, create_engine, event
+from sqlalchemy import Engine, ForeignKey, create_engine, event, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
 DEFAULT_DB_PATH = "/data/hestia.db"
@@ -66,11 +66,17 @@ class Automation(Base):
 
 
 class User(Base):
-    """An app-login account: username → scrypt password hash (see ``hestia.auth``)."""
+    """An app-login account: username → scrypt password hash (see ``hestia.auth``) + an access ``role``
+    (admin/operator/viewer; enforced by the web authz middleware, resolved via
+    ``store_sql.current_user_role``). The column default is ``viewer`` (least privilege) so a row created
+    without an explicit role is never silently an admin; legacy/imported accounts are set to ``admin`` at
+    migration/cutover (they predate roles, so the operator keeps full access). ``server_default`` mirrors
+    migration ``0002`` exactly — the drift guard (``test_models_match_migration_no_drift``) enforces it."""
 
     __tablename__ = "users"
     username: Mapped[str] = mapped_column(primary_key=True)
     password_hash: Mapped[str]
+    role: Mapped[str] = mapped_column(default="viewer", server_default=text("'viewer'"))
 
 
 class UserSetting(Base):
