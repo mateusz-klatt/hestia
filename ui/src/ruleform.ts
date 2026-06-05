@@ -9,7 +9,7 @@
 // text is set via `value` / `textContent`, never innerHTML, so device-supplied
 // strings can never inject markup. The form is built once.
 
-import type { Klima, RuleVocab } from "./api/types";
+import type { DeviceInfo, Klima, RuleVocab } from "./api/types";
 import { currentLocale, t } from "./i18n";
 
 // ---- pure helpers (exported for unit testing) -----------------------------
@@ -74,6 +74,39 @@ function finp(placeholder: string, size = 7): HTMLInputElement {
   return i;
 }
 
+// The shared <datalist> id every `node` input points at, so picking a device name inserts its node id.
+const NODE_LIST_ID = "rule-node-options";
+
+/** A `node` field as a COMBO box: a free-text input (so an undiscovered node id still works, and
+ *  `parseNode` reads it unchanged) backed by the shared datalist of discovered device names. */
+function nodeInput(): HTMLInputElement {
+  const i = finp(t("rule.phNode"), 14); // wider so a picked "name · room" label stays readable
+  i.setAttribute("list", NODE_LIST_ID);
+  return i;
+}
+
+/** Build the datalist of discovered nodes: option value = the node id (what lands in the input and
+ *  feeds `parseNode`); option label = "name · room" (or the bare node id when unnamed). Sorted by
+ *  label so the dropdown reads alphabetically. XSS-safe (value/label only, never innerHTML). */
+function nodeDatalist(devices: Record<string, DeviceInfo>): HTMLDataListElement {
+  const dl = document.createElement("datalist");
+  dl.id = NODE_LIST_ID;
+  const rows = Object.entries(devices).map(([node, info]) => {
+    const name = info.name ?? "";
+    const room = info.room ?? "";
+    const label = name === "" ? `${t("rule.phNode")} ${node}` : room === "" ? name : `${name} · ${room}`;
+    return { node, label };
+  });
+  rows.sort((a, b) => a.label.localeCompare(b.label));
+  for (const { node, label } of rows) {
+    const o = document.createElement("option");
+    o.value = node;
+    o.label = label;
+    dl.appendChild(o);
+  }
+  return dl;
+}
+
 /** Localized Mon..Sun short weekday names for the day picker (backend order: Mon=0..Sun=6).
  *  2024-01-01 is a Monday; format it + the next 6 days in the app's locale. */
 function dayNames(): string[] {
@@ -123,7 +156,7 @@ function predicateEditor(vocab: RuleVocab): { el: HTMLElement; read: () => Predi
   const field = sel(Object.keys(vocab.state_fields));
   const op = sel(vocab.cmp_ops);
   const val = finp(t("rule.phValue"), 7);
-  const node = finp(t("rule.phNode"), 6);
+  const node = nodeInput();
   const syncNode = (): void => {
     node.style.display = vocab.state_fields[field.value] === true ? "none" : "";
   };
@@ -198,12 +231,16 @@ export function renderRuleForm(
   output: HTMLTextAreaElement,
   vocab: RuleVocab,
   klima: Klima,
+  devices: Record<string, DeviceInfo> = {},
 ): void {
   if (box.dataset.built !== undefined) return;
   // Clear any partial build left by a prior throw so a retry can't duplicate nodes. `dataset.built`
   // is set only at the very end (on success) — if a malformed runtime payload makes the build throw,
   // the form stays un-built and a later well-formed render rebuilds it cleanly.
   box.replaceChildren();
+  // The shared device-name datalist (built once from the discovery snapshot). Every `node` input is a
+  // combo box over it: pick a name → its node id lands in the field; an undiscovered id is still typable.
+  box.appendChild(nodeDatalist(devices));
 
   // label + control on one inline span; returns the control so callers keep its precise type.
   const mk = <T extends HTMLElement>(label: string, element: T): T => {
@@ -253,7 +290,7 @@ export function renderRuleForm(
     tFields.replaceChildren();
     const tt = tType.value;
     if (tt === "scene") {
-      const node = finp(t("rule.phNode"), 6);
+      const node = nodeInput();
       const sid = finp("scene_id", 5);
       tFields.append(node, sid);
       tRead = () => {
@@ -408,7 +445,7 @@ export function renderRuleForm(
           return { op: "ir", file: f, button: b };
         };
       } else if (k === "switch" || k === "thermostat_power") {
-        const node = finp(t("rule.phNode"), 6);
+        const node = nodeInput();
         const on = sel(["on", "off"]);
         fields.append(node, on);
         aRead = () => {
@@ -417,7 +454,7 @@ export function renderRuleForm(
           return { op: k, node: n, on: on.value === "on" };
         };
       } else if (k === "level" || k === "cover") {
-        const node = finp(t("rule.phNode"), 6);
+        const node = nodeInput();
         const value = finp(t("rule.phValue"), 5);
         fields.append(node, value);
         aRead = () => {
@@ -426,7 +463,7 @@ export function renderRuleForm(
           return { op: k, node: n, value: num(value.value, `${k} value`) };
         };
       } else {
-        const node = finp(t("rule.phNode"), 6);
+        const node = nodeInput();
         const c = finp("°C", 5);
         fields.append(node, c);
         aRead = () => {

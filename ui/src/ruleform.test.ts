@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import type { Klima, RuleVocab } from "./api/types";
-import { ruleVocab } from "./fixtures";
+import type { DeviceInfo, Klima, RuleVocab } from "./api/types";
+import { device, ruleVocab } from "./fixtures";
 import { coerce, num, parseNode, renderRuleForm } from "./ruleform";
 
 // ---- pure helpers ---------------------------------------------------------
@@ -84,10 +84,12 @@ interface Form {
   status: () => string;
 }
 
-function mkForm(opts: { klima?: Klima; vocab?: RuleVocab } = {}): Form {
+function mkForm(
+  opts: { klima?: Klima; vocab?: RuleVocab; devices?: Record<string, DeviceInfo> } = {},
+): Form {
   const box = document.createElement("div");
   const out = document.createElement("textarea");
-  renderRuleForm(box, out, opts.vocab ?? ruleVocab(), opts.klima ?? {});
+  renderRuleForm(box, out, opts.vocab ?? ruleVocab(), opts.klima ?? {}, opts.devices);
 
   const control = (label: string): HTMLElement => {
     for (const lab of box.querySelectorAll("label")) {
@@ -404,6 +406,56 @@ describe("renderRuleForm — conditions", () => {
     }
     f.build();
     expect(f.status()).toContain("start"); // first blank field flagged, no JSON emitted
+  });
+});
+
+describe("renderRuleForm — node device combo", () => {
+  const devices = {
+    "26": device({ name: "Salon lampa", room: "Salon" }),
+    "9": device({ name: "Termostat" }), // no room
+    "40": device(), // unnamed → labelled by node id
+  };
+
+  it("builds a datalist of device names (value = node id), sorted by label; node inputs reference it", () => {
+    const f = mkForm({ devices });
+    const dl = f.box.querySelector<HTMLDataListElement>("datalist#rule-node-options");
+    expect(dl).not.toBeNull();
+    const opts = [...(dl?.querySelectorAll("option") ?? [])].map((o) => [o.value, o.label]);
+    // sorted by label: "node 40" (n) < "Salon lampa · Salon" (S) < "Termostat" (T)
+    expect(opts).toEqual([
+      ["40", "node 40"],
+      ["26", "Salon lampa · Salon"],
+      ["9", "Termostat"],
+    ]);
+    // a node field (the scene trigger's) is a combo wired to the shared list
+    setSelect(f.control("trigger") as HTMLSelectElement, "scene");
+    const nodeInput = f.triggerFields().querySelector<HTMLInputElement>('input[placeholder="node"]');
+    expect(nodeInput?.getAttribute("list")).toBe("rule-node-options");
+  });
+
+  it("picking a device inserts its node id, which serialises as the numeric node", () => {
+    const f = mkForm({ devices });
+    fillBasics(f);
+    setSelect(f.control("trigger") as HTMLSelectElement, "scene");
+    // datalist selection drops the option VALUE (the node id) into the input — emulate that
+    setInput(f.triggerFields(), "node", "26");
+    setInput(f.triggerFields(), "scene_id", "1");
+    fillSwitchAction(f);
+    f.build();
+    expect((f.rule().trigger as { node: number }).node).toBe(26);
+  });
+
+  it("tolerates an empty device map (no options; free-text node still works)", () => {
+    const f = mkForm(); // no devices
+    const dl = f.box.querySelector<HTMLDataListElement>("datalist#rule-node-options");
+    expect(dl?.querySelectorAll("option")).toHaveLength(0);
+    fillBasics(f);
+    setSelect(f.control("trigger") as HTMLSelectElement, "scene");
+    setInput(f.triggerFields(), "node", "0x1a"); // undiscovered, hand-typed hex
+    setInput(f.triggerFields(), "scene_id", "1");
+    fillSwitchAction(f);
+    f.build();
+    expect((f.rule().trigger as { node: number }).node).toBe(26);
   });
 });
 
