@@ -123,6 +123,7 @@ export interface RuleVocab {
   modes: string[];
   sun_events: string[];
   presence_events: string[];
+  condition_types: string[];
 }
 
 export interface Rule {

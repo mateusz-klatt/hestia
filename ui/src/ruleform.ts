@@ -147,6 +147,43 @@ function predicateEditor(vocab: RuleVocab): { el: HTMLElement; read: () => Predi
   };
 }
 
+/** A time-of-day GUARD condition: the rule fires only while `now` ∈ [start, end). `start > end`
+ * wraps midnight; optional `days` (Mon=0..Sun=6) restricts it to those weekdays. */
+export type TimeWindow = {
+  type: "time_window";
+  start: string;
+  end: string;
+  days?: number[];
+};
+
+/**
+ * start/end (HH:MM) + an optional weekday picker → a `time_window` condition. Empty start/end
+ * throw a localized error; the HH:MM format + the start≠end rule are re-checked server-side.
+ */
+function timeWindowEditor(): { el: HTMLElement; read: () => TimeWindow } {
+  const wrap = document.createElement("span");
+  const start = finp(t("rule.phWindowStart"), 6);
+  const end = finp(t("rule.phWindowEnd"), 6);
+  const days = daysPicker();
+  const sep = document.createElement("span");
+  sep.textContent = "→ ";
+  sep.style.color = "#555";
+  wrap.append(t("rule.windowFrom") + " ", start, sep, end, days.el);
+  return {
+    el: wrap,
+    read: () => {
+      const s = start.value.trim();
+      const e = end.value.trim();
+      if (s === "") throw new Error(t("rule.errRequired", { field: "start" }));
+      if (e === "") throw new Error(t("rule.errRequired", { field: "end" }));
+      const w: TimeWindow = { type: "time_window", start: s, end: e };
+      const d = days.read();
+      if (d !== null) w.days = d;
+      return w;
+    },
+  };
+}
+
 // ---- the form -------------------------------------------------------------
 
 type ReadObj = Record<string, unknown>;
@@ -285,15 +322,12 @@ export function renderRuleForm(
   box.appendChild(condLbl);
   const condBox = document.createElement("span");
   box.appendChild(condBox);
-  const conds: { read: () => Predicate }[] = [];
-  const addCondBtn = document.createElement("button");
-  addCondBtn.type = "button";
-  addCondBtn.textContent = t("rule.addCondition");
-  addCondBtn.addEventListener("click", () => {
-    const pe = predicateEditor(vocab);
+  const conds: { read: () => Predicate | TimeWindow }[] = [];
+  // Add one condition row (a state predicate or a time_window) with its own ✕ remove button.
+  const addCondRow = (editor: { el: HTMLElement; read: () => Predicate | TimeWindow }): void => {
     const row = document.createElement("span");
     row.style.marginRight = "0.3rem";
-    const entry = { read: pe.read };
+    const entry = { read: editor.read };
     const rm = document.createElement("button");
     rm.type = "button";
     rm.textContent = "×";
@@ -303,11 +337,20 @@ export function renderRuleForm(
       const i = conds.indexOf(entry);
       if (i >= 0) conds.splice(i, 1);
     });
-    row.append(pe.el, rm);
+    row.append(editor.el, rm);
     condBox.appendChild(row);
     conds.push(entry);
-  });
-  box.appendChild(addCondBtn);
+  };
+  const addCondBtn = document.createElement("button");
+  addCondBtn.type = "button";
+  addCondBtn.textContent = t("rule.addCondition");
+  addCondBtn.addEventListener("click", () => { addCondRow(predicateEditor(vocab)); });
+  const addWindowBtn = document.createElement("button");
+  addWindowBtn.type = "button";
+  addWindowBtn.style.marginLeft = "0.3rem";
+  addWindowBtn.textContent = t("rule.addWindow");
+  addWindowBtn.addEventListener("click", () => { addCondRow(timeWindowEditor()); });
+  box.append(addCondBtn, addWindowBtn);
   line();
 
   // actions (1+) — klima offered as a friendly preset when a klima.ir is loaded

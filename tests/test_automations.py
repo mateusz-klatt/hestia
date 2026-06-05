@@ -56,9 +56,14 @@ def _rt(mode="proxy"):
     return rt
 
 
-def _engine(*rules, clock=None):
+def _engine(*rules, clock=None, wall=None):
     store = AutomationStore("unused.json")
-    eng = AutomationEngine(store) if clock is None else AutomationEngine(store, clock=clock)
+    kwargs = {}
+    if clock is not None:
+        kwargs["clock"] = clock
+    if wall is not None:
+        kwargs["wall"] = wall
+    eng = AutomationEngine(store, **kwargs)
     for spec in rules:
         eng.set_rule(Rule.from_dict(spec))
     return eng
@@ -500,6 +505,129 @@ class EngineTimeTests(unittest.TestCase):
 
     def test_non_time_rule_ignored(self):
         self.assertEqual(_engine(SCENE_RULE).on_time(_rt(), MON_0730), [])
+
+
+# --- time_window condition (A1: active-hours guard) --------------------------
+def _tw(start, end, days=None):
+    c = {"type": "time_window", "start": start, "end": end}
+    if days is not None:
+        c["days"] = days
+    return c
+
+
+class TimeWindowValidationTests(unittest.TestCase):
+    def _mk(self, **window):
+        return Rule.from_dict(dict(STATE_RULE, conditions=[dict({"type": "time_window"}, **window)]))
+
+    def test_valid_no_days_roundtrips(self):
+        rule = self._mk(start="06:00", end="22:00")
+        cond = rule.conditions[0]
+        self.assertEqual(cond, {"type": "time_window", "start": "06:00", "end": "22:00"})  # no days key
+        self.assertEqual(Rule.from_dict(rule.to_dict()).to_dict(), rule.to_dict())          # round-trips
+
+    def test_valid_with_days(self):
+        cond = self._mk(start="22:00", end="06:00", days=[0, 4]).conditions[0]
+        self.assertEqual(cond["days"], [0, 4])
+
+    def test_canonicalises_hhmm(self):
+        cond = self._mk(start="6:5", end="9:00").conditions[0]
+        self.assertEqual((cond["start"], cond["end"]), ("06:05", "09:00"))
+
+    def test_rejects_equal_start_end(self):
+        with self.assertRaisesRegex(ValueError, "start and end must differ"):
+            self._mk(start="08:00", end="08:00")
+
+    def test_rejects_bad_start_type(self):
+        with self.assertRaisesRegex(ValueError, r"conditions\[0\].start"):
+            self._mk(start=800, end="09:00")
+
+    def test_rejects_bad_end_time(self):
+        with self.assertRaisesRegex(ValueError, r"conditions\[0\].end"):
+            self._mk(start="08:00", end="25:00")
+
+    def test_rejects_bad_days(self):
+        with self.assertRaisesRegex(ValueError, r"conditions\[0\].days"):
+            self._mk(start="08:00", end="09:00", days=[7])
+
+    def test_to_dict_copies_days(self):
+        rule = self._mk(start="22:00", end="06:00", days=[0])
+        dumped = rule.to_dict()
+        dumped["conditions"][0]["days"].append(6)               # mutate the copy
+        self.assertEqual(rule.conditions[0]["days"], [0])        # stored rule unchanged
+
+    def test_vocab_lists_condition_types(self):
+        self.assertEqual(automations.rule_vocab()["condition_types"], ["state", "time_window"])
+
+
+class TimeWindowEvalTests(unittest.TestCase):
+    """``_eval_time_window`` boundary semantics. 2026-01-05 is a Monday (weekday 0)."""
+    def _at(self, hh, mm, day=5):
+        return datetime.datetime(2026, 1, day, hh, mm)
+
+    def test_same_day_inclusive_start_exclusive_end(self):
+        win = _tw("06:00", "22:00")
+        self.assertTrue(automations._eval_time_window(win, self._at(6, 0)))    # start inclusive
+        self.assertTrue(automations._eval_time_window(win, self._at(13, 0)))   # inside
+        self.assertFalse(automations._eval_time_window(win, self._at(22, 0)))  # end exclusive
+        self.assertFalse(automations._eval_time_window(win, self._at(5, 59)))  # before
+        self.assertFalse(automations._eval_time_window(win, self._at(22, 1)))  # after
+
+    def test_wrapped_head_tail_gap(self):
+        win = _tw("22:00", "06:00")
+        self.assertTrue(automations._eval_time_window(win, self._at(23, 0)))   # head (still today)
+        self.assertTrue(automations._eval_time_window(win, self._at(0, 30)))   # tail (after midnight)
+        self.assertFalse(automations._eval_time_window(win, self._at(6, 0)))   # end exclusive
+        self.assertFalse(automations._eval_time_window(win, self._at(12, 0)))  # gap
+
+    def test_same_day_days_filter(self):
+        win = _tw("06:00", "22:00", days=[0])                                   # Monday only
+        self.assertTrue(automations._eval_time_window(win, self._at(13, 0, day=5)))   # Mon
+        self.assertFalse(automations._eval_time_window(win, self._at(13, 0, day=6)))  # Tue
+
+    def test_wrapped_tail_owned_by_start_day(self):
+        win = _tw("22:00", "06:00", days=[0])                                   # window STARTS Monday
+        self.assertTrue(automations._eval_time_window(win, self._at(23, 0, day=5)))   # Mon head
+        self.assertTrue(automations._eval_time_window(win, self._at(3, 0, day=6)))    # Tue tail → owned by Mon
+        self.assertFalse(automations._eval_time_window(win, self._at(3, 0, day=7)))   # Wed tail → owned by Tue, not in days
+
+    def test_days_none_ignores_weekday(self):
+        win = _tw("06:00", "22:00")
+        self.assertTrue(automations._eval_time_window(win, self._at(13, 0, day=7)))   # any day
+
+
+class TimeWindowEngineTests(unittest.TestCase):
+    """The guard works on EDGE triggers (the PIR use case) and on scheduled rules."""
+    def test_state_edge_gated_by_window(self):
+        wall = self._at(7, 0)
+        eng = _engine(dict(STATE_RULE, conditions=[_tw("06:00", "22:00")]), wall=lambda: wall)
+        rt = _rt()
+        self.assertEqual(len(eng.on_event(rt, 7, {"temperature": 17}, None)), 1)   # 07:00 inside → fires
+
+    def test_state_edge_suppressed_outside_window_consumes_edge(self):
+        clock = [datetime.datetime(2026, 1, 5, 23, 0)]                              # 23:00 — outside
+        eng = _engine(dict(STATE_RULE, conditions=[_tw("06:00", "22:00")]), wall=lambda: clock[0])
+        rt = _rt()
+        self.assertEqual(eng.on_event(rt, 7, {"temperature": 17}, None), [])        # suppressed (edge consumed)
+        clock[0] = datetime.datetime(2026, 1, 5, 7, 0)                              # move inside the window
+        self.assertEqual(eng.on_event(rt, 7, {"temperature": 16}, None), [])        # still no edge (already true)
+        self.assertEqual(eng.on_event(rt, 7, {"temperature": 20}, None), [])        # back to false
+        self.assertEqual(len(eng.on_event(rt, 7, {"temperature": 15}, None)), 1)    # fresh edge, now inside → fires
+
+    def test_scheduled_rule_gated_by_window(self):
+        fires = _engine(dict(TIME_RULE, conditions=[_tw("07:00", "08:00")])).on_time(_rt(), MON_0730)
+        self.assertEqual(len(fires), 1)                                             # 07:30 inside
+        blocked = _engine(dict(TIME_RULE, conditions=[_tw("08:00", "09:00")])).on_time(_rt(), MON_0730)
+        self.assertEqual(blocked, [])                                              # 07:30 outside
+
+    def _at(self, hh, mm):
+        return datetime.datetime(2026, 1, 5, hh, mm)
+
+
+class LocalNowTests(unittest.TestCase):
+    def test_local_now_is_naive_datetime(self):
+        now = automations._local_now()
+        self.assertIsInstance(now, datetime.datetime)
+        self.assertIsNone(now.tzinfo)                  # naive-local, matches the scheduler's `now`
 
 
 CRON_RULE = {       # fires Monday 07:30 — MON_0730 matches

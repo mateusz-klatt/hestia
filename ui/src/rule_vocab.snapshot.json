@@ -17,5 +17,6 @@
   "frame_action_ops": ["cover", "level", "lights", "raw", "switch", "thermostat", "thermostat_power"],
   "modes": ["proxy", "standalone"],
   "sun_events": ["sunrise", "sunset"],
-  "presence_events": ["arrive", "leave"]
+  "presence_events": ["arrive", "leave"],
+  "condition_types": ["state", "time_window"]
 }
