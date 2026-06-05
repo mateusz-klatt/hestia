@@ -97,24 +97,7 @@ def _thermostat_confirm_interval(raw: "str | None") -> float:
     return min(max(value, 2.0), 120.0)
 
 
-def _thermostat_poll_interval(raw: "str | None") -> float:
-    """Parse HESTIA_THERMOSTAT_POLL_SECS — an OPT-IN gentle periodic sweep of every thermostat. **Default
-    OFF (0)**: a live relay capture proved Keemple itself does NOT periodically poll the TRVs — it only
-    confirm-polls after a SET (exactly our confirm-on-command), so the faithful + battery-minimal default
-    is no sweep (confirm-on-command alone, plus the "not responding" badge for honesty). Set a positive
-    value to opt into a sweep that also refreshes IDLE thermostats; clamped to [60, 86400]. Non-numeric /
-    non-finite / ``<= 0`` → 0 (off)."""
-    try:
-        value = float(raw) if raw is not None else 0.0
-    except ValueError:
-        return 0.0
-    if not math.isfinite(value) or value <= 0:
-        return 0.0
-    return min(max(value, 60.0), 86400.0)
-
-
 THERMOSTAT_CONFIRM_SECS = _thermostat_confirm_interval(os.environ.get("HESTIA_THERMOSTAT_CONFIRM_SECS"))
-THERMOSTAT_POLL_SECS = _thermostat_poll_interval(os.environ.get("HESTIA_THERMOSTAT_POLL_SECS"))
 # How often the confirm loop checks whether the debounce window has elapsed (cheap: no device I/O
 # unless a node is due). A fraction of the delay so the poll lands close to CONFIRM_SECS after the
 # last change; ≥1 s so a misconfigured tiny delay can't busy-loop.
@@ -1330,13 +1313,6 @@ async def _sensor433_poller(rt, stream=sensor433.stream_readings, enabled: bool 
         await asyncio.sleep(backoff)                 # rtl_433 exited (rtl_tcp down / hiccup) -> back off + relaunch
 
 
-def _thermostat_nodes(rt) -> "list[int]":
-    """Node ids currently classified as thermostats (classifier ∪ registry) — the gentle periodic sweep
-    targets all of them."""
-    return sorted(int(node) for node, entry in _merged_discovery(rt).items()
-                  if entry.get("type") == "thermostat")
-
-
 def _note_thermostat_command(rt, node: int) -> None:
     """A thermostat was just commanded (power / setpoint) → schedule ONE debounced confirmation poll of
     it. Adds the node + (re)sets a single monotonic deadline, so rapid changes COLLAPSE into one poll
@@ -1353,43 +1329,31 @@ def _note_thermostat_command(rt, node: int) -> None:
 
 
 async def _thermostat_poller(rt, confirm_delay: float = THERMOSTAT_CONFIRM_SECS,
-                             sweep: float = THERMOSTAT_POLL_SECS, tick: float = THERMOSTAT_CONFIRM_TICK,
-                             clock=time.monotonic) -> None:
-    """Standalone-only thermostat keep-alive. Two cheap mechanisms in one tick loop (a sleep + a couple
-    of comparisons; ZERO device I/O until something is due):
-
-    1. **Confirm-on-command** — once the debounce window has elapsed after the user's last change, GET-poll
-       just the changed node(s)' Mode (40 02) + temp (31 04) once, to confirm the optimistic on/off.
-    2. **Gentle periodic sweep** — every ``sweep`` seconds GET-poll ALL thermostats, so an idle one's
-       state stays fresh and an unreachable one becomes visible (the Keemple cloud only polls hard while
-       its app is open; idle it's ~0, so this light touch keeps standalone usable without hammering).
-
-    No-op outside standalone; with both ``confirm_delay`` and ``sweep`` ``<= 0`` there is nothing to do.
-    One bad tick never kills the loop."""
-    if rt.mode != "standalone" or (confirm_delay <= 0 and sweep <= 0):
+                             tick: float = THERMOSTAT_CONFIRM_TICK, clock=time.monotonic) -> None:
+    """Confirm-on-command poller — the ONLY thermostat polling hestia does, exactly mirroring Keemple
+    (measured on the relay: the cloud does NOT periodically poll; it only confirm-polls after a SET).
+    Once the debounce window has elapsed after the user's last change, GET-poll JUST the changed node(s)'
+    Mode (40 02) + temp (31 04) once, to confirm the optimistic on/off. There is deliberately NO periodic
+    sweep — an idle thermostat is NEVER polled, so battery FLiRS TRVs are spared. STANDALONE-only / a
+    no-op when confirmation is disabled. The tick loop is cheap (sleep + a set check; zero device I/O
+    until a node is due) and one bad tick never kills it."""
+    if rt.mode != "standalone" or confirm_delay <= 0:
         return
-    next_sweep = (clock() + sweep) if sweep > 0 else math.inf
     while True:
         await asyncio.sleep(tick)
         try:
-            now = clock()
-            due: "set[int]" = set()
-            if confirm_delay > 0 and rt.thermostat_confirm and now >= rt.thermostat_confirm_at:
-                due |= rt.thermostat_confirm             # read into `due`, then clear (before any await)
-                rt.thermostat_confirm.clear()
-                rt.thermostat_confirm_at = 0.0
-            if now >= next_sweep:
-                next_sweep = now + sweep
-                due.update(_thermostat_nodes(rt))        # the gentle sweep: every thermostat
-            if not due:
-                continue
+            if not rt.thermostat_confirm or clock() < rt.thermostat_confirm_at:
+                continue                                 # nothing pending, or still inside the debounce window
+            nodes = sorted(rt.thermostat_confirm)        # read+clear synchronously, then await (a change
+            rt.thermostat_confirm.clear()                # during the inject re-arms for the next cycle)
+            rt.thermostat_confirm_at = 0.0
             frames = []
-            for node in sorted(due):
+            for node in nodes:
                 frames.append(commands.get_thermostat_mode(rt.next_seq(), node))
                 frames.append(commands.get_temperature(rt.next_seq(), node))
-            await _inject(rt, frames, source="thermostat-poll")
-        except Exception:                                # an inject / classify hiccup must not drop the loop
-            log.exception("thermostat poll failed")
+            await _inject(rt, frames, source="thermostat-confirm")
+        except Exception:                                # an inject hiccup must not drop the loop
+            log.exception("thermostat confirm poll failed")
 
 
 def _record_klima_state(rt, ir_file: str, button: str) -> None:

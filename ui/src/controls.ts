@@ -1,5 +1,10 @@
 import type { ControlOp, ControlResult, DeviceInfo } from "./api/types";
 import { t } from "./i18n";
+import { fmtTemp } from "./render/format";
+
+/** The Keemple TRVs' setpoint range, in whole °C (the device reports/accepts integer Celsius). */
+const THERMOSTAT_MIN_C = 4;
+const THERMOSTAT_MAX_C = 28;
 
 /** Sends one control op; returns a normalised result (never rejects). */
 export type PostControl = (op: ControlOp) => Promise<ControlResult>;
@@ -90,14 +95,6 @@ export function renderActions(
     return;
   }
 
-  // Clamp a setpoint nudge to the thermostat's 4–28 °C range (the Keemple TRVs' actual limits;
-  // default 21 when unseen / non-finite).
-  const clampSetpoint = (delta: number): number => {
-    const current = info.setpoint ?? 21;
-    const base = Number.isFinite(current) ? current : 21;
-    return Math.min(28, Math.max(4, base + delta));
-  };
-
   if (info.type === "light") {
     if (info.level !== null) {
       addButton(t("ctl.off"), () => ({ op: "level", node, value: 0 }));
@@ -116,18 +113,25 @@ export function renderActions(
   } else if (info.type === "thermostat") {
     addButton(t("ctl.off"), () => ({ op: "thermostat_power", node, on: false }));
     addButton(t("ctl.on"), () => ({ op: "thermostat_power", node, on: true }));
-    // 1 °C step: the device REPORTS its setpoint as a whole integer °C, so a half-degree nudge
-    // wouldn't survive the next report (21.5 comes back as 21/22). Whole degrees match it.
-    addButton(
-      "−",
-      () => ({ op: "thermostat", node, celsius: clampSetpoint(-1) }),
-      () => `${clampSetpoint(-1).toFixed(1)}°`,
-    );
-    addButton(
-      "+",
-      () => ({ op: "thermostat", node, celsius: clampSetpoint(1) }),
-      () => `${clampSetpoint(1).toFixed(1)}°`,
-    );
+    // A target-temperature DROPDOWN (4–28 °C, shown in the user's C/F/K scale) + Set — ONE command per
+    // change. The old − / + sent a SET per degree, so dragging from 18→25 spammed the TRV with 7 SETs in
+    // a row and hung it; picking a target + Set is a single command. The option VALUE stays Celsius (the
+    // device/backend speak Celsius); only the label is converted.
+    const sel = document.createElement("select");
+    sel.style.marginRight = "0.3rem";
+    for (let c = THERMOSTAT_MIN_C; c <= THERMOSTAT_MAX_C; c++) {
+      const o = document.createElement("option");
+      o.value = String(c);
+      o.textContent = fmtTemp(c);
+      sel.appendChild(o);
+    }
+    const current = info.setpoint;
+    const start = current !== null && Number.isFinite(current)
+      ? Math.min(THERMOSTAT_MAX_C, Math.max(THERMOSTAT_MIN_C, Math.round(current)))
+      : 21;
+    sel.value = String(start);
+    cell.appendChild(sel);
+    addButton(t("ctl.set"), () => ({ op: "thermostat", node, celsius: Number(sel.value) }));
   }
 
   if (buttons.length > 0) cell.appendChild(status);

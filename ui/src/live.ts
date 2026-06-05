@@ -137,7 +137,8 @@ export class LiveController {
     // Refresh button still works (unlike the legacy page-wide guard).
     const active = document.activeElement;
     if (
-      (active instanceof HTMLInputElement || active instanceof HTMLButtonElement) &&
+      (active instanceof HTMLInputElement || active instanceof HTMLButtonElement ||
+        active instanceof HTMLSelectElement) && // a thermostat/level <select> mid-pick must survive a refresh
       this.view.rows.contains(active)
     ) {
       return;
