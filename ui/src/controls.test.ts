@@ -72,8 +72,16 @@ describe("renderActions button layout", () => {
     renderActions(hot, 7, device({ type: "thermostat", setpoint: 35 }), okPost);
     expect(hot.querySelector("select")?.value).toBe("28"); // clamped to the ceiling
     const unseen = td();
-    renderActions(unseen, 7, device({ type: "thermostat" }), okPost);
+    renderActions(unseen, 8, device({ type: "thermostat" }), okPost); // a DIFFERENT node (each freezes its own seed)
     expect(unseen.querySelector("select")?.value).toBe("21"); // null → 21 default
+  });
+
+  it("freezes an UNTOUCHED dropdown after the first render — a later report never moves it", () => {
+    const first = td();
+    renderActions(first, 13, device({ type: "thermostat", setpoint: 22 }), okPost); // first render seeds + freezes 22
+    const rebuilt = td();
+    renderActions(rebuilt, 13, device({ type: "thermostat", setpoint: 28 }), okPost); // a report says 28
+    expect(rebuilt.querySelector("select")?.value).toBe("22"); // never touched → stays at the first-seen 22, not 28
   });
 
   it("remembers the user's setpoint pick across a FULL rebuild (fresh cell) so a report can't reset the dropdown", () => {

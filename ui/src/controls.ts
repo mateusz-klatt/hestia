@@ -7,12 +7,13 @@ const THERMOSTAT_MIN_C = 4;
 const THERMOSTAT_MAX_C = 28;
 
 /**
- * The user's current thermostat setpoint pick, per node, kept OUTSIDE the DOM so it survives the
- * device table's periodic FULL rebuild (every refresh replaces the rows with fresh cells). The
- * dropdown is the user's input: a device report / refresh updates only the "stan" text — it must
- * never move the dropdown. We seed the dropdown from the live setpoint only until the user first
- * touches it; after that this pick wins on every re-render. A hard page reload re-inits the module
- * (empty map) so the dropdown re-seeds from the then-current setpoint.
+ * The thermostat setpoint dropdown's value, per node, kept OUTSIDE the DOM so it survives the device
+ * table's periodic FULL rebuild (every refresh replaces the rows with fresh cells). The dropdown is the
+ * user's input: a device report / refresh updates only the "stan" text — it must NEVER move the
+ * dropdown. We seed it from the live setpoint exactly ONCE (the first render of that node this session)
+ * and FREEZE it there; after that only the user moves it (and reports never do), whether or not they've
+ * touched it. A hard page reload re-inits the module (empty map) so it re-seeds from the then-current
+ * setpoint.
  */
 const thermostatPick = new Map<number, string>();
 
@@ -168,11 +169,16 @@ export function renderActions(
     const start = current !== null && Number.isFinite(current)
       ? Math.min(THERMOSTAT_MAX_C, Math.max(THERMOSTAT_MIN_C, Math.round(current)))
       : 21;
-    // The user's pick wins on every re-render; only the first render (no remembered pick) seeds from the
-    // live setpoint. A device report / 45 s refresh thus updates the "stan" text but never moves this.
-    sel.value = thermostatPick.get(node) ?? String(start);
+    // Seed from the live setpoint exactly ONCE per node, then FREEZE: a device report / 45 s refresh
+    // updates the "stan" text but never moves the dropdown — touched or not. Only the user moves it.
+    let pick = thermostatPick.get(node);
+    if (pick === undefined) {
+      pick = String(start);
+      thermostatPick.set(node, pick);
+    }
+    sel.value = pick;
     sel.addEventListener("change", () => {
-      thermostatPick.set(node, sel.value); // remember the user's choice across the table's full rebuilds
+      thermostatPick.set(node, sel.value); // the user's choice wins, kept across the table's full rebuilds
     });
     cell.appendChild(sel);
     addButton("✓", () => [
