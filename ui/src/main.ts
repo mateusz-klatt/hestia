@@ -24,7 +24,7 @@ import { formatAuditTarget, renderAuditFeed } from "./audit";
 import { renderAutomations } from "./automations";
 import { renderActions } from "./controls";
 import { renderDbStats } from "./dbstats";
-import { initLocale } from "./i18n";
+import { applyStaticI18n, initLocale, t } from "./i18n";
 import { applyKlimaState, renderIrButtons, renderKlima } from "./klima";
 import { LiveController } from "./live";
 import { renderLogin, renderUser } from "./login";
@@ -219,7 +219,7 @@ function startApp(): void {
     const rules = await fetchAutomations();
     if (rules === null) {
       autoRows.replaceChildren();
-      setRuleStatus("(automations unavailable)", true);
+      setRuleStatus(t("auto.unavailable"), true);
       return;
     }
     renderAutomations(autoRows, rules, {
@@ -228,7 +228,7 @@ function startApp(): void {
       },
       onEdit: (rule) => {
         ruleJson.value = JSON.stringify(rule, null, 2);
-        setRuleStatus(`editing ${rule.id}`, false);
+        setRuleStatus(t("rule.editing", { id: rule.id }), false);
       },
       postRule,
       deleteRule,
@@ -238,7 +238,7 @@ function startApp(): void {
 
   el("rule-template").addEventListener("click", () => {
     ruleJson.value = JSON.stringify(RULE_TEMPLATE, null, 2);
-    setRuleStatus("template loaded — edit then Save", false);
+    setRuleStatus(t("rule.templateLoaded"), false);
   });
 
   el("save-rule").addEventListener("click", () => {
@@ -248,16 +248,16 @@ function startApp(): void {
       try {
         parsed = JSON.parse(ruleJson.value);
       } catch (e) {
-        setRuleStatus(`invalid JSON: ${e instanceof Error ? e.message : "parse error"}`, true);
+        setRuleStatus(t("rule.invalidJson", { msg: e instanceof Error ? e.message : "parse error" }), true);
         return;
       }
       const res = await postRule(parsed);
       if (res.ok) {
-        setRuleStatus("saved", false);
+        setRuleStatus(t("rule.saved"), false);
         ruleJson.value = "";
         void loadAutomations();
       } else {
-        setRuleStatus(res.body?.error ?? `error ${String(res.status)}`, true);
+        setRuleStatus(res.body?.error ?? t("rule.error", { status: res.status }), true);
       }
     })();
   });
@@ -301,6 +301,7 @@ void (async () => {
     (await import("./dev/mock")).installMock(); // frontend-only dev: render the app from fixtures, no backend
   }
   await initLocale(navigator.languages); // pick + apply the browser locale (sets <html lang>/dir) before any render
+  applyStaticI18n(); // localise the static index.html headers / buttons (Advanced view) once
   const me = await whoami();
   if (me === null) {
     el("app").hidden = true;

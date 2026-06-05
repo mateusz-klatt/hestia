@@ -1,4 +1,5 @@
 import type { Rule, RuleResult, Trigger } from "./api/types";
+import { t as msg } from "./i18n"; // aliased: `trigSummary` already binds `t` to its Trigger argument
 
 /** One-line human summary of a rule's trigger (for the list). */
 export function trigSummary(t: Trigger): string {
@@ -64,10 +65,10 @@ function rowButton(label: string, cls: string): HTMLButtonElement {
 function automationRow(rule: Rule, deps: AutomationsDeps): HTMLTableRowElement {
   const tr = document.createElement("tr");
   tr.dataset.id = rule.id;
-  tr.appendChild(cell(rule.id, "id"));
+  tr.appendChild(cell(rule.id, msg("auto.id")));
 
   const enTd = document.createElement("td");
-  enTd.dataset.label = "on";
+  enTd.dataset.label = msg("auto.enabled");
   const en = document.createElement("input");
   en.type = "checkbox";
   en.className = "auto-en";
@@ -75,13 +76,13 @@ function automationRow(rule: Rule, deps: AutomationsDeps): HTMLTableRowElement {
   enTd.appendChild(en);
   tr.appendChild(enTd);
 
-  tr.appendChild(cell(trigSummary(rule.trigger), "trigger"));
-  tr.appendChild(cell(String(rule.conditions.length), "cond"));
-  tr.appendChild(cell(rule.actions.map((a) => a.op).join(", "), "actions"));
+  tr.appendChild(cell(trigSummary(rule.trigger), msg("auto.trigger")));
+  tr.appendChild(cell(String(rule.conditions.length), msg("auto.conditions")));
+  tr.appendChild(cell(rule.actions.map((a) => a.op).join(", "), msg("auto.actions")));
 
   const actTd = document.createElement("td");
-  const edit = rowButton("Edit", "auto-edit");
-  const del = rowButton("Delete", "auto-del");
+  const edit = rowButton(msg("auto.edit"), "auto-edit");
+  const del = rowButton(msg("auto.delete"), "auto-del");
   const status = document.createElement("span");
   status.className = "status";
   actTd.append(edit, del, status);
@@ -98,7 +99,7 @@ function automationRow(rule: Rule, deps: AutomationsDeps): HTMLTableRowElement {
 
   let deleting = false;
   del.addEventListener("click", () => {
-    if (deleting || !deps.confirm(`Delete rule "${rule.id}"?`)) return;
+    if (deleting || !deps.confirm(msg("auto.deleteConfirm", { id: rule.id }))) return;
     deleting = true;
     del.disabled = true;
     void (async () => {
@@ -107,7 +108,7 @@ function automationRow(rule: Rule, deps: AutomationsDeps): HTMLTableRowElement {
         if (res.ok) deps.reload(); // success rebuilds the list
         else showError(ruleError(res));
       } catch {
-        showError("błąd");
+        showError(msg("ctl.error"));
       } finally {
         // Always release — a no-op reload, an unexpected reject, etc. must never
         // leave the row permanently dead. (On success the row is replaced anyway.)
@@ -134,7 +135,7 @@ function automationRow(rule: Rule, deps: AutomationsDeps): HTMLTableRowElement {
         }
       } catch {
         en.checked = rule.enabled;
-        showError("błąd");
+        showError(msg("ctl.error"));
       } finally {
         toggling = false;
         en.disabled = false;

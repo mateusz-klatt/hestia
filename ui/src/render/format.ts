@@ -1,11 +1,23 @@
 import type { DeviceInfo } from "../api/types";
 import { t } from "../i18n";
+import type { MessageKey } from "../i18n/locales/en";
 import { tempScale } from "../prefs";
 
 /** A binary on/off live state as an icon + the localised word (🟢 On / ⚪ Off) — language-neutral
  *  glyph for the wife-friendly view, plus the translated word so it reads in the chosen language. */
 export function onOff(on: boolean): string {
   return on ? `🟢 ${t("ctl.on")}` : `⚪ ${t("ctl.off")}`;
+}
+
+const TYPE_KEYS: Record<string, MessageKey> = {
+  light: "type.light", blind: "type.blind", thermostat: "type.thermostat", plug: "type.plug",
+  motion: "type.motion", door: "type.door", water: "type.water", smoke: "type.smoke", unknown: "type.unknown",
+};
+
+/** The localised device-type name (light/blind/…); falls back to the raw value for an unmapped type. */
+export function typeLabel(type: string): string {
+  const key = TYPE_KEYS[type];
+  return key !== undefined ? t(key) : type;
 }
 
 /**
@@ -37,7 +49,7 @@ export function fmtHumidity(value: number | null): string {
  */
 export function battFmt(pct: number | null): string {
   if (pct === null) return "—";
-  if (pct > 100) return "low";
+  if (pct > 100) return t("dev.battLow"); // Z-Wave low-battery sentinel (e.g. 0xff) → a word, not "255 %"
   return `${String(pct)}%`;
 }
 
@@ -73,7 +85,10 @@ export function thermostatNotResponding(info: DeviceInfo, now: number = Date.now
 export function stateStr(info: DeviceInfo): string {
   switch (info.type) {
     case "blind":
-      return info.level === null ? "—" : `▣ ${String(info.level)}%`;
+      if (info.level === null) return "—";
+      if (info.level >= 99) return t("state.raised"); // fully open → a word, not "99 %"
+      if (info.level <= 0) return t("state.lowered"); // fully closed → a word, not "0 %"
+      return `▣ ${String(info.level)}%`; // partially open → the percentage
     case "thermostat": {
       // measured temp + setpoint in the user's scale (C/F/K) — the device/backend stay Celsius.
       let s = "";

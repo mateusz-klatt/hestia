@@ -72,9 +72,10 @@ describe("battFmt / battLow", () => {
 });
 
 describe("stateStr", () => {
-  it("blind shows the level, em dash when unseen", () => {
-    expect(stateStr(device({ type: "blind", level: 40 }))).toBe("▣ 40%");
-    expect(stateStr(device({ type: "blind", level: 0 }))).toBe("▣ 0%");
+  it("blind: raised/lowered at the ends, a percentage in between, em dash when unseen", () => {
+    expect(stateStr(device({ type: "blind", level: 40 }))).toBe("▣ 40%"); // partially open → percent
+    expect(stateStr(device({ type: "blind", level: 99 }))).toBe("raised"); // fully open → a word
+    expect(stateStr(device({ type: "blind", level: 0 }))).toBe("lowered"); // fully closed → a word
     expect(stateStr(device({ type: "blind" }))).toBe("—");
   });
   it("thermostat composes temperature, setpoint (user scale) and power (icon + word)", () => {

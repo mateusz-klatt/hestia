@@ -1,7 +1,7 @@
 import type { DeviceInfo, Discovery } from "./api/types";
 import { type PostControl, renderActions } from "./controls";
 import { currentLocale, t, tPlural } from "./i18n";
-import { onOff, stateStr } from "./render/format";
+import { onOff, stateStr, typeLabel } from "./render/format";
 
 /** Devices the rooms view controls; only postControl is needed (IR/klima have their own panels). */
 export interface RoomsDeps {
@@ -81,7 +81,7 @@ function roomStateText(info: DeviceInfo): string {
 /** A device's display name: its registry label, else `type #node`. XSS-safe (textContent only). */
 function deviceLabel(node: string, info: DeviceInfo): string {
   const name = info.name?.trim();
-  return name !== undefined && name !== "" ? name : `${info.type || "?"} #${node}`;
+  return name !== undefined && name !== "" ? name : `${typeLabel(info.type) || "?"} #${node}`;
 }
 
 function placeholder(text: string): HTMLElement {
