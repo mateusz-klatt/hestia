@@ -20,7 +20,7 @@ import {
   whoami,
 } from "./api/client";
 import type { DeviceInfo } from "./api/types";
-import { formatAuditTarget, renderAuditFeed } from "./audit";
+import { renderAuditFeed } from "./audit";
 import { renderAutomations } from "./automations";
 import { renderActions } from "./controls";
 import { renderDbStats } from "./dbstats";
@@ -65,11 +65,10 @@ let roomIcons: Record<string, string> = {};
 let canControl = false;
 let isAdmin = false;
 
-// Audit feed: resolve a device row's node-id target → "name · room" at display time (Codex: read-time,
-// UI-side — no DB change, renames fix old rows). The current device map feeds the pure formatter.
+// Audit feed: the live discovery map feeds the display-time humanizers (Codex/Copilot: read-time,
+// UI-side — no DB change, so renames + locale changes also fix old rows). targets resolve to
+// "name · room"; 2-gang detail endpoints resolve to channel names.
 let latestDevices: Record<string, DeviceInfo> = {};
-const resolveAuditTarget = (target: string | null, action: string): string | null =>
-  formatAuditTarget(target, action, latestDevices);
 const roomsView = createRoomsView(el("room-list"), {
   postControl,
   canControl: () => canControl, // a viewer's room cards render read-only (no buttons, no scene tile)
@@ -153,7 +152,7 @@ const live = new LiveController(
 
 /** Wire up the live app (events, intervals, initial fetch). Called only once authenticated. */
 function startApp(): void {
-  const audit = renderAuditFeed(el("audit-feed"), fetchAudit, resolveAuditTarget);
+  const audit = renderAuditFeed(el("audit-feed"), fetchAudit, () => latestDevices);
   const rf433 = renderRf433(el("rf433"), fetchRf433);
   const dbStats = renderDbStats(el("dbstats"), fetchDbStats);
 

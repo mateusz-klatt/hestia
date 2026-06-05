@@ -36,16 +36,28 @@ const RICH: Discovery = discovery(
   },
 );
 
+// Hand-picked rows that exercise every display-time humanizer (actor/action/result localization +
+// detail value substitution): a physical 2-gang transition, a per-channel control, a door close, a
+// setpoint, a scene, a dimmer level, a login, a plug toggle.
 const AUDIT = {
-  events: Array.from({ length: 8 }, (_, i) => ({
-    id: 100 - i,
-    ts: 1717590000 - i * 600,
-    actor: i % 3 === 0 ? "mateusz" : i % 3 === 1 ? "automation:wieczorny-scenariusz" : "device",
-    action: ["switch", "thermostat", "scene", "level"][i % 4] ?? "switch",
-    target: String(5 + (i % 4)),
-    detail: '{"on": true}',
-    result: "ok",
-  })),
+  events: [
+    { id: 108, ts: 1717590000, actor: "device", action: "endpoints", target: "12",
+      detail: "{'1': True, '2': False}", result: "reported" },
+    { id: 107, ts: 1717589400, actor: "mateusz", action: "switch", target: "12",
+      detail: '{"endpoint": 1, "node": 12, "on": true}', result: "ok" },
+    { id: 106, ts: 1717588800, actor: "device", action: "door", target: "11",
+      detail: "closed", result: "reported" },
+    { id: 105, ts: 1717588200, actor: "mateusz", action: "thermostat", target: "9",
+      detail: '{"node": 9, "celsius": 22}', result: "ok" },
+    { id: 104, ts: 1717587600, actor: "automation:wieczorny-scenariusz", action: "scene",
+      target: "wieczorny-scenariusz", detail: null, result: "fired" },
+    { id: 103, ts: 1717587000, actor: "mateusz", action: "level", target: "8",
+      detail: '{"node": 8, "value": 40}', result: "ok" },
+    { id: 102, ts: 1717586400, actor: "mateusz", action: "login", target: "dashboard",
+      detail: null, result: "ok" },
+    { id: 101, ts: 1717585800, actor: "device", action: "switch", target: "7",
+      detail: "False", result: "reported" },
+  ],
 };
 
 function jsonResponse(body: unknown): Response {
