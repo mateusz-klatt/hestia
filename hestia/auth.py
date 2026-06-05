@@ -158,7 +158,8 @@ def save_user_json(username: str, password_hash: str, path: "Path | None" = None
 
 
 _USAGE = ("usage: python -m hestia.auth add <username> [--role admin|operator|viewer]\n"
-          "       python -m hestia.auth role <username> <admin|operator|viewer>")
+          "       python -m hestia.auth role <username> <admin|operator|viewer>\n"
+          "       python -m hestia.auth disable|enable <username>")
 
 
 def _cli(argv: list, *, prompt=getpass.getpass, path: "Path | None" = None) -> int:
@@ -169,10 +170,37 @@ def _cli(argv: list, *, prompt=getpass.getpass, path: "Path | None" = None) -> i
     JSON mode — ``store_sql`` is imported only on the SQLite branches)."""
     if argv[:1] == ["role"]:
         return _cli_role(argv[1:])
+    if argv[:1] == ["disable"] or argv[:1] == ["enable"]:
+        return _cli_disable(argv[0], argv[1:])
     if argv[:1] != ["add"]:
         print(_USAGE, file=sys.stderr)
         return 2
     return _cli_add(argv[1:], prompt=prompt, path=path)
+
+
+def _cli_disable(command: str, args: list) -> int:
+    """``disable|enable <username>`` — flip a user's account on/off (SQLite users-authoritative only).
+    Refuses to disable the only enabled admin (lockout guard)."""
+    if len(args) != 1:
+        print(f"usage: python -m hestia.auth {command} <username>", file=sys.stderr)
+        return 2
+    username = args[0]
+    if os.environ.get("HESTIA_PERSIST", "json").lower() != "sqlite":
+        print("disable/enable require the SQLite backend (HESTIA_PERSIST=sqlite)", file=sys.stderr)
+        return 1
+    from . import store_sql
+    if not store_sql.users_db_authoritative():
+        print("disable/enable require the SQLite users store (users not yet cut over)", file=sys.stderr)
+        return 1
+    outcome = store_sql.set_user_disabled(username, command == "disable")
+    if outcome == "not_found":
+        print(f"no such user {username!r}", file=sys.stderr)
+        return 1
+    if outcome == "last_admin":
+        print(f"refused: {username!r} is the only enabled admin (would lock everyone out)", file=sys.stderr)
+        return 1
+    print(f"{command}d user {username!r}")
+    return 0
 
 
 def _parse_add_args(args: list) -> "tuple[str | None, str | None, str | None]":

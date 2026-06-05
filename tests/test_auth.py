@@ -261,6 +261,33 @@ class CliSqliteTests(unittest.TestCase):
         with mock.patch.dict(os.environ, {"HESTIA_DB": str(other)}):
             self.assertEqual(auth._cli(["role", "tata", "admin"]), 1)
 
+    def test_disable_and_enable(self):
+        # a 2nd admin so disabling tata won't trip the last-admin guard
+        self.assertEqual(auth._cli(["add", "boss", "--role", "admin"], prompt=_Prompt("pw", "pw")), 0)
+        self.assertEqual(auth._cli(["disable", "tata"]), 0)
+        self.assertIsNone(store_sql.current_user_role("tata"))         # disabled → denied
+        self.assertEqual(auth._cli(["enable", "tata"]), 0)
+        self.assertEqual(store_sql.current_user_role("tata"), "admin")  # re-enabled
+
+    def test_disable_last_admin_refused(self):
+        self.assertEqual(auth._cli(["disable", "tata"]), 1)   # tata is the only enabled admin
+
+    def test_disable_unknown_user(self):
+        self.assertEqual(auth._cli(["disable", "ghost"]), 1)
+
+    def test_disable_bad_argc(self):
+        self.assertEqual(auth._cli(["disable"]), 2)
+        self.assertEqual(auth._cli(["enable", "a", "b"]), 2)
+
+    def test_disable_requires_sqlite(self):
+        with mock.patch.dict(os.environ, {"HESTIA_PERSIST": "json"}):
+            self.assertEqual(auth._cli(["disable", "tata"]), 1)
+
+    def test_disable_requires_users_cut_over(self):
+        other = self.dir / "fresh2.db"
+        with mock.patch.dict(os.environ, {"HESTIA_DB": str(other)}):
+            self.assertEqual(auth._cli(["disable", "tata"]), 1)
+
 
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()

@@ -71,12 +71,17 @@ class User(Base):
     ``store_sql.current_user_role``). The column default is ``viewer`` (least privilege) so a row created
     without an explicit role is never silently an admin; legacy/imported accounts are set to ``admin`` at
     migration/cutover (they predate roles, so the operator keeps full access). ``server_default`` mirrors
-    migration ``0002`` exactly — the drift guard (``test_models_match_migration_no_drift``) enforces it."""
+    migration ``0002`` exactly — the drift guard (``test_models_match_migration_no_drift``) enforces it.
+
+    ``disabled`` (#PR-D) temporarily revokes access without deleting the account: a disabled user is
+    filtered out of ``current_users`` (can't log in) AND ``current_user_role`` returns None for them (any
+    live cookie dies at once). Default ``false`` (existing accounts stay enabled); mirrors migration 0003."""
 
     __tablename__ = "users"
     username: Mapped[str] = mapped_column(primary_key=True)
     password_hash: Mapped[str]
     role: Mapped[str] = mapped_column(default="viewer", server_default=text("'viewer'"))
+    disabled: Mapped[bool] = mapped_column(default=False, server_default=text("0"))
 
 
 class UserSetting(Base):
