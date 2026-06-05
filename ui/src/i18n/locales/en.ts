@@ -192,6 +192,33 @@ const en = {
   "rule.invalidJson": "invalid JSON: {msg}",
   "rule.saved": "saved",
   "rule.error": "error {status}",
+  // Guided rule wizard (ruleform.ts) — chrome + messages. Trigger/action TYPE tokens + format hints
+  // (HH:MM, cron, MAC, °C) stay literal: they map 1:1 to the JSON the operator reviews below.
+  "rule.wizardTitle": "Rule wizard",
+  "rule.id": "id",
+  "rule.enabled": "enabled",
+  "rule.debounce": "debounce s",
+  "rule.trigger": "trigger",
+  "rule.conditions": "conditions:",
+  "rule.actions": "actions:",
+  "rule.addCondition": "+ condition",
+  "rule.addAction": "+ action",
+  "rule.buildJson": "Build JSON",
+  "rule.remove": "remove",
+  "rule.built": "built — review then \"Save rule\"",
+  "rule.phNode": "node",
+  "rule.phValue": "value",
+  "rule.phRuleId": "rule-id",
+  "rule.phButton": "button",
+  "rule.phOffset": "offset min",
+  "rule.errNumberRequired": "{label}: number required",
+  "rule.errInvalidNumber": "{label}: invalid number",
+  "rule.errNoValue": "predicate \"{field}\": no value",
+  "rule.errNoNode": "predicate \"{field}\": node required",
+  "rule.errRequired": "{field}: required",
+  "rule.errIdRequired": "id required",
+  "rule.errSelectMode": "select a mode",
+  "rule.errGeneric": "error",
 };
 
 export default en;

@@ -56,12 +56,12 @@ describe("num", () => {
     expect(num("-2", "x")).toBe(-2);
   });
   it("throws (labelled) on blank", () => {
-    expect(() => num("", "celsius")).toThrow("celsius: liczba wymagana");
-    expect(() => num("   ", "celsius")).toThrow("celsius: liczba wymagana");
+    expect(() => num("", "celsius")).toThrow("celsius: number required");
+    expect(() => num("   ", "celsius")).toThrow("celsius: number required");
   });
   it("throws (labelled) on non-numbers and infinities", () => {
-    expect(() => num("abc", "scene_id")).toThrow("scene_id: nieprawidłowa liczba");
-    expect(() => num("1e999", "scene_id")).toThrow("scene_id: nieprawidłowa liczba");
+    expect(() => num("abc", "scene_id")).toThrow("scene_id: invalid number");
+    expect(() => num("1e999", "scene_id")).toThrow("scene_id: invalid number");
   });
 });
 
@@ -103,7 +103,7 @@ function mkForm(opts: { klima?: Klima; vocab?: RuleVocab } = {}): Form {
     if (!(next instanceof HTMLElement)) throw new Error("no trigger fields");
     return next;
   };
-  // the rows container is the span right after a standalone "warunki: " / "akcje: " label span
+  // the rows container is the span right after a standalone "conditions: " / "actions: " label span
   const rows = (labelText: string): HTMLElement => {
     const lab = [...box.querySelectorAll("span")].find((s) => s.textContent === labelText);
     const next = lab?.nextElementSibling;
@@ -114,7 +114,7 @@ function mkForm(opts: { klima?: Klima; vocab?: RuleVocab } = {}): Form {
     [...box.querySelectorAll("button")].find((b) => b.textContent === text)?.click();
   };
   const build = (): void => {
-    click("Zbuduj JSON");
+    click("Build JSON");
   };
   const rule = (): Record<string, unknown> => JSON.parse(out.value) as Record<string, unknown>;
   const status = (): string => box.querySelector(".status")?.textContent ?? "";
@@ -143,13 +143,13 @@ function fillBasics(f: Form, id = "r1"): void {
   setInput(f.box, "rule-id", id);
 }
 function fillSwitchAction(f: Form, node = "7"): void {
-  setInput(f.rows("akcje: "), "node", node);
+  setInput(f.rows("actions: "), "node", node);
 }
 
 describe("renderRuleForm — structure", () => {
   it("renders the header, trigger types, both helper buttons, and the build button", () => {
     const f = mkForm();
-    expect(f.box.querySelector("div")?.textContent).toBe("Kreator reguły");
+    expect(f.box.querySelector("div")?.textContent).toBe("Rule wizard");
     const trig = f.control("trigger") as HTMLSelectElement;
     expect([...trig.querySelectorAll("option")].map((o) => o.value)).toEqual([
       "scene",
@@ -160,15 +160,24 @@ describe("renderRuleForm — structure", () => {
       "cron",
     ]);
     const buttonLabels = [...f.box.querySelectorAll("button")].map((b) => b.textContent);
-    expect(buttonLabels).toContain("+ warunek");
-    expect(buttonLabels).toContain("+ akcja");
-    expect(buttonLabels).toContain("Zbuduj JSON");
+    expect(buttonLabels).toContain("+ condition");
+    expect(buttonLabels).toContain("+ action");
+    expect(buttonLabels).toContain("Build JSON");
   });
 
   it("renders one checkbox per mode, all checked by default", () => {
     const f = mkForm();
     expect((f.control("proxy") as HTMLInputElement).checked).toBe(true);
     expect((f.control("standalone") as HTMLInputElement).checked).toBe(true);
+  });
+
+  it("the time-trigger day picker shows localized Mon..Sun in backend order (UTC-pinned)", () => {
+    // Guards the off-by-one: without timeZone:"UTC" a west-of-UTC runner would render the prior weekday,
+    // mislabelling the Mon=0..Sun=6 checkboxes. The labels must always start at Monday.
+    const f = mkForm();
+    setSelect(f.control("trigger") as HTMLSelectElement, "time");
+    const dayLabels = [...f.triggerFields().querySelectorAll("label")].map((l) => l.textContent);
+    expect(dayLabels).toEqual(["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]);
   });
 
   it("is built only once (idempotent across re-renders)", () => {
@@ -203,8 +212,8 @@ describe("renderRuleForm — structure", () => {
     renderRuleForm(box, out, ruleVocab(), {}); // a later well-formed render
     expect(box.dataset.built).toBe("1");
     const buttons = [...box.querySelectorAll("button")].map((b) => b.textContent);
-    expect(buttons).toContain("Zbuduj JSON");
-    expect(buttons.filter((t) => t === "Zbuduj JSON")).toHaveLength(1); // no duplicate from the partial attempt
+    expect(buttons).toContain("Build JSON");
+    expect(buttons.filter((t) => t === "Build JSON")).toHaveLength(1); // no duplicate from the partial attempt
   });
 });
 
@@ -326,10 +335,10 @@ describe("renderRuleForm — conditions", () => {
     setInput(f.triggerFields(), "scene_id", "1");
     fillSwitchAction(f);
 
-    const addCond = [...f.box.querySelectorAll("button")].find((b) => b.textContent === "+ warunek");
+    const addCond = [...f.box.querySelectorAll("button")].find((b) => b.textContent === "+ condition");
     addCond?.click();
     addCond?.click();
-    const condBox = f.rows("warunki: ");
+    const condBox = f.rows("conditions: ");
     const editors = [...condBox.children];
     expect(editors).toHaveLength(2);
 
@@ -361,7 +370,7 @@ describe("renderRuleForm — actions", () => {
     fillBasics(f);
     setInput(f.triggerFields(), "node", "5");
     setInput(f.triggerFields(), "scene_id", "1");
-    const actBox = f.rows("akcje: ");
+    const actBox = f.rows("actions: ");
     setInput(actBox, "node", "7"); // default op = switch
     f.build();
     expect(f.rule().actions).toEqual([{ op: "switch", node: 7, on: true }]);
@@ -381,7 +390,7 @@ describe("renderRuleForm — actions", () => {
     fillBasics(f);
     setInput(f.triggerFields(), "node", "5");
     setInput(f.triggerFields(), "scene_id", "1");
-    const actBox = f.rows("akcje: ");
+    const actBox = f.rows("actions: ");
     setSelect(firstSelect(actBox), "level");
     setInput(actBox, "node", "3");
     setInput(actBox, "value", "50");
@@ -400,7 +409,7 @@ describe("renderRuleForm — actions", () => {
     fillBasics(f);
     setInput(f.triggerFields(), "node", "5");
     setInput(f.triggerFields(), "scene_id", "1");
-    const actBox = f.rows("akcje: ");
+    const actBox = f.rows("actions: ");
     setSelect(firstSelect(actBox), "thermostat");
     setInput(actBox, "node", "6");
     setInput(actBox, "°C", "21");
@@ -413,7 +422,7 @@ describe("renderRuleForm — actions", () => {
     fillBasics(f);
     setInput(f.triggerFields(), "node", "5");
     setInput(f.triggerFields(), "scene_id", "1");
-    const actBox = f.rows("akcje: ");
+    const actBox = f.rows("actions: ");
     setSelect(firstSelect(actBox), "ir");
     setInput(actBox, "/ext/infrared/x.ir", "/ext/infrared/tv.ir");
     setInput(actBox, "button", "Power");
@@ -426,8 +435,8 @@ describe("renderRuleForm — actions", () => {
     fillBasics(f);
     setInput(f.triggerFields(), "node", "5");
     setInput(f.triggerFields(), "scene_id", "1");
-    const actBox = f.rows("akcje: ");
-    const addAct = [...f.box.querySelectorAll("button")].find((b) => b.textContent === "+ akcja");
+    const actBox = f.rows("actions: ");
+    const addAct = [...f.box.querySelectorAll("button")].find((b) => b.textContent === "+ action");
     addAct?.click();
     expect(actBox.children).toHaveLength(2);
     // remove the second
@@ -451,7 +460,7 @@ describe("renderRuleForm — klima action", () => {
     fillBasics(f);
     setInput(f.triggerFields(), "node", "5");
     setInput(f.triggerFields(), "scene_id", "1");
-    const actBox = f.rows("akcje: ");
+    const actBox = f.rows("actions: ");
     expect([...firstSelect(actBox).options].map((o) => o.value)).toEqual([
       "klima",
       "switch",
@@ -473,7 +482,7 @@ describe("renderRuleForm — klima action", () => {
     fillBasics(f);
     setInput(f.triggerFields(), "node", "5");
     setInput(f.triggerFields(), "scene_id", "1");
-    const actBox = f.rows("akcje: ");
+    const actBox = f.rows("actions: ");
     const selects = actBox.querySelectorAll("select");
     const mode = selects[1]; // [0]=op, [1]=mode, [2]=temp
     const temp = selects[2];
@@ -492,7 +501,7 @@ describe("renderRuleForm — klima action", () => {
 
   it("does not offer klima when no klima.ir is loaded", () => {
     const f = mkForm(); // no klima
-    const actBox = f.rows("akcje: ");
+    const actBox = f.rows("actions: ");
     expect([...firstSelect(actBox).options].map((o) => o.value)).not.toContain("klima");
   });
 
@@ -504,7 +513,7 @@ describe("renderRuleForm — klima action", () => {
     fillBasics(f);
     setInput(f.triggerFields(), "node", "5");
     setInput(f.triggerFields(), "scene_id", "1");
-    const actBox = f.rows("akcje: ");
+    const actBox = f.rows("actions: ");
     const mode = actBox.querySelectorAll("select")[1]; // [0]=op, [1]=mode (+off), [2]=temp
     expect([...(mode?.options ?? [])].map((o) => o.value)).toEqual(["auto", "cool", "heat", "off"]);
     // default selected mode = first sorted ("auto") → its temp 21
@@ -573,7 +582,7 @@ describe("renderRuleForm — validation errors", () => {
   };
 
   it("missing id", () => {
-    expectErr(() => undefined, "id wymagane");
+    expectErr(() => undefined, "id required");
   });
 
   it("no mode selected", () => {
@@ -581,7 +590,7 @@ describe("renderRuleForm — validation errors", () => {
       fillBasics(f);
       (f.control("proxy") as HTMLInputElement).checked = false;
       (f.control("standalone") as HTMLInputElement).checked = false;
-    }, "wybierz tryb");
+    }, "select a mode");
   });
 
   it("scene node invalid", () => {
@@ -589,7 +598,7 @@ describe("renderRuleForm — validation errors", () => {
       fillBasics(f);
       setInput(f.triggerFields(), "node", "nope");
       setInput(f.triggerFields(), "scene_id", "1");
-    }, "scene: node");
+    }, "node: required");
   });
 
   it("scene_id not a number", () => {
@@ -597,14 +606,14 @@ describe("renderRuleForm — validation errors", () => {
       fillBasics(f);
       setInput(f.triggerFields(), "node", "5");
       setInput(f.triggerFields(), "scene_id", "");
-    }, "scene_id: liczba wymagana");
+    }, "scene_id: number required");
   });
 
   it("predicate without a value", () => {
     expectErr((f) => {
       fillBasics(f);
       setSelect(f.control("trigger") as HTMLSelectElement, "state");
-    }, "brak wartości");
+    }, "no value");
   });
 
   it("predicate (non-global) without a node", () => {
@@ -613,28 +622,28 @@ describe("renderRuleForm — validation errors", () => {
       setSelect(f.control("trigger") as HTMLSelectElement, "state");
       setSelect(firstSelect(f.triggerFields()), "temperature");
       setInput(f.triggerFields(), "value", "22");
-    }, "node wymagany");
+    }, "node required");
   });
 
   it("time without at", () => {
     expectErr((f) => {
       fillBasics(f);
       setSelect(f.control("trigger") as HTMLSelectElement, "time");
-    }, "time: at");
+    }, "at: required");
   });
 
   it("presence without mac", () => {
     expectErr((f) => {
       fillBasics(f);
       setSelect(f.control("trigger") as HTMLSelectElement, "presence");
-    }, "presence: mac");
+    }, "mac: required");
   });
 
   it("cron without expr", () => {
     expectErr((f) => {
       fillBasics(f);
       setSelect(f.control("trigger") as HTMLSelectElement, "cron");
-    }, "cron: expr");
+    }, "expr: required");
   });
 
   it("ir action missing file/button", () => {
@@ -642,21 +651,21 @@ describe("renderRuleForm — validation errors", () => {
       fillBasics(f);
       setInput(f.triggerFields(), "node", "5");
       setInput(f.triggerFields(), "scene_id", "1");
-      setSelect(firstSelect(f.rows("akcje: ")), "ir");
-    }, "ir: file+button");
+      setSelect(firstSelect(f.rows("actions: ")), "ir");
+    }, "file+button: required");
   });
 
   it("a successful build after an error replaces the error status and clears the err class", () => {
     const f = mkForm();
     f.build();
-    expect(f.status()).toContain("id wymagane");
+    expect(f.status()).toContain("id required");
     expect(statusClass(f).split(" ")).toContain("err");
     fillBasics(f);
     setInput(f.triggerFields(), "node", "5");
     setInput(f.triggerFields(), "scene_id", "1");
     fillSwitchAction(f);
     f.build();
-    expect(f.status()).toContain("zbudowano");
+    expect(f.status()).toContain("built");
     expect(statusClass(f).split(" ")).not.toContain("err"); // success clears the err class
     expect(f.rule().id).toBe("r1");
   });
