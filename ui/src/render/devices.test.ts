@@ -13,20 +13,20 @@ import {
 describe("modeText", () => {
   it("notes cloud-free when running standalone", () => {
     expect(modeText({ mode: "standalone", target_mode: "standalone", env_override: null })).toBe(
-      "tryb: standalone (cloud-free)",
+      "mode: standalone (cloud-free)",
     );
   });
   it("is plain when running proxy with nothing pending", () => {
-    expect(modeText({ mode: "proxy", target_mode: "proxy", env_override: null })).toBe("tryb: proxy");
+    expect(modeText({ mode: "proxy", target_mode: "proxy", env_override: null })).toBe("mode: proxy");
   });
   it("flags a saved-but-not-applied standalone graduation", () => {
     expect(modeText({ mode: "proxy", target_mode: "standalone", env_override: null })).toBe(
-      "tryb: proxy → standalone zapisane — zrestartuj hestię",
+      "mode: proxy → standalone saved — restart hestia",
     );
   });
   it("flags an env-pinned mode", () => {
     expect(modeText({ mode: "proxy", target_mode: "standalone", env_override: "proxy" })).toBe(
-      "tryb: proxy (HESTIA_MODE=proxy wymusza tryb; zapisany: standalone)",
+      "mode: proxy (HESTIA_MODE=proxy forces the mode; saved: standalone)",
     );
   });
 });
@@ -136,7 +136,7 @@ describe("renderDeviceRows", () => {
     expect(rows[1]?.classList.contains("subrow")).toBe(true);
     expect(rows[1]?.dataset.node).toBe("2"); // shares the parent node id (addressable by SSE)
     expect(rows[1]?.dataset.ep).toBe("1");
-    expect(rows[1]?.querySelector(".sub-label")?.textContent).toBe("↳ kanał 1");
+    expect(rows[1]?.querySelector(".sub-label")?.textContent).toBe("↳ channel 1");
     expect(rows[1]?.querySelectorAll("td")[4]?.textContent).toBe("🟢 On"); // stan
     expect(rows[1]?.querySelectorAll("td")[5]?.classList.contains("actions")).toBe(true);
     expect(rows[1]?.querySelectorAll("td")[6]?.querySelector<HTMLInputElement>("input.ep-name")?.value).toBe("lewy"); // labelled channel
@@ -154,11 +154,11 @@ describe("renderDeviceRows", () => {
     const rows = tbody.querySelectorAll("tr"); // exercises the whole-object `endpoint_names ?? {}` fallback
     expect(rows).toHaveLength(3); // node + 2 sub-rows
     expect(rows[1]?.dataset.ep).toBe("1");
-    expect(rows[1]?.querySelector(".sub-label")?.textContent).toBe("↳ kanał 1");
+    expect(rows[1]?.querySelector(".sub-label")?.textContent).toBe("↳ channel 1");
     expect(rows[1]?.querySelectorAll("td")[4]?.textContent).toBe("🟢 On");
     expect(rows[1]?.querySelectorAll("td")[6]?.querySelector<HTMLInputElement>("input.ep-name")?.value).toBe("");
     expect(rows[2]?.dataset.ep).toBe("2");
-    expect(rows[2]?.querySelector(".sub-label")?.textContent).toBe("↳ kanał 2");
+    expect(rows[2]?.querySelector(".sub-label")?.textContent).toBe("↳ channel 2");
     expect(rows[2]?.querySelectorAll("td")[4]?.textContent).toBe("⚪ Off");
     expect(rows[2]?.querySelectorAll("td")[6]?.querySelector<HTMLInputElement>("input.ep-name")?.value).toBe("");
   });
@@ -173,7 +173,7 @@ describe("renderDeviceRows", () => {
     // Lock the full placeholder contract: node / last-seen / battery / kanał / room cells stay unlabeled;
     // per-channel stan, endpoint actions, and editable name carry headings.
     expect(labels).toEqual([undefined, undefined, undefined, undefined, "stan", "akcje", "name", undefined]);
-    expect(sub?.querySelector(".sub-label")?.textContent).toBe("↳ kanał 1"); // self-describing → no data-label
+    expect(sub?.querySelector(".sub-label")?.textContent).toBe("↳ channel 1"); // self-describing → no data-label
   });
 
   it("does not emit sub-rows for a single-endpoint switch", () => {

@@ -91,6 +91,25 @@ export function t(key: MessageKey, params?: Record<string, string | number>): st
 }
 
 /**
+ * Localise static markup: every `[data-i18n="key"]` element gets its `textContent` set to `t(key)`, and
+ * `[data-i18n-placeholder]` / `[data-i18n-aria]` set the placeholder / aria-label. Called once at boot
+ * (after `initLocale`) so the index.html table headers / buttons localise without a `t()` call each.
+ */
+export function applyStaticI18n(root: ParentNode = document): void {
+  for (const el of root.querySelectorAll<HTMLElement>("[data-i18n]")) {
+    if (el.dataset.i18n !== undefined) el.textContent = t(el.dataset.i18n as MessageKey);
+  }
+  for (const el of root.querySelectorAll<HTMLElement>("[data-i18n-placeholder]")) {
+    if (el.dataset.i18nPlaceholder !== undefined) {
+      el.setAttribute("placeholder", t(el.dataset.i18nPlaceholder as MessageKey));
+    }
+  }
+  for (const el of root.querySelectorAll<HTMLElement>("[data-i18n-aria]")) {
+    if (el.dataset.i18nAria !== undefined) el.setAttribute("aria-label", t(el.dataset.i18nAria as MessageKey));
+  }
+}
+
+/**
  * Plural-aware translate: `Intl.PluralRules` picks the CLDR category for `n`
  * (zero/one/two/few/many/other) → looks up `<key>.<category>`, falling back to `<key>.other`
  * then English. `n` is available to the template as `{n}`.

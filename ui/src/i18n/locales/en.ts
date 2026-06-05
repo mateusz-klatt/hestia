@@ -63,6 +63,8 @@ const en = {
   "state.closed": "closed",
   "state.motion": "motion",
   "state.noMotion": "no motion",
+  "state.raised": "raised",
+  "state.lowered": "lowered",
 
   // Accessible names for the icon-only control <select> dropdowns (screen-reader only).
   "ctl.mode": "Mode",
@@ -75,6 +77,56 @@ const en = {
   "klima.auto": "Auto",
   "klima.dry": "Dry",
   "klima.fan": "Fan",
+
+  // Engineer (Advanced) device table — column headers + cell labels.
+  "tbl.node": "node",
+  "tbl.lastSeen": "last seen",
+  "tbl.battery": "battery",
+  "tbl.inferredType": "inferred type",
+  "tbl.state": "state",
+  "tbl.actions": "actions",
+  "tbl.name": "name",
+  "tbl.room": "room",
+  "dev.confirm": "✓ confirm",
+  "dev.save": "Save",
+  "dev.battLow": "low",
+  "dev.channel": "↳ channel {ep}",
+
+  // Device type names (the classifier's values), shown in the "inferred type" cell + as a fallback label.
+  "type.light": "light",
+  "type.blind": "blind",
+  "type.thermostat": "thermostat",
+  "type.plug": "plug",
+  "type.motion": "motion",
+  "type.door": "door",
+  "type.water": "water",
+  "type.smoke": "smoke",
+  "type.unknown": "unknown",
+
+  // Running-mode status line ("mode: …"): standalone is cloud-free; an env override or a saved-but-not-
+  // applied graduation each get a note. {mode}/{target}/{override} are the raw mode names.
+  "mode.plain": "mode: {mode}",
+  "mode.cloudFree": "mode: {mode} (cloud-free)",
+  "mode.graduated": "mode: {mode} → standalone saved — restart hestia",
+  "mode.envPinned": "mode: {mode} (HESTIA_MODE={override} forces the mode; saved: {target})",
+  "discovery.loadError": "could not load /api/discovery",
+  "adv.refresh": "Refresh",
+
+  // Automations editor (Advanced) — table headers, row actions, editor buttons.
+  "auto.title": "automations",
+  "auto.id": "id",
+  "auto.enabled": "enabled",
+  "auto.trigger": "trigger",
+  "auto.conditions": "conditions",
+  "auto.actions": "actions",
+  "auto.edit": "Edit",
+  "auto.delete": "Delete",
+  "auto.deleteConfirm": "Delete rule {id}?",
+  "auto.unavailable": "(automations unavailable)",
+  "rule.newTemplate": "New rule template",
+  "rule.save": "Save rule",
+  "rule.jsonLabel": "rule JSON",
+  "rule.jsonPlaceholder": "rule JSON — click \"New rule template\" for a skeleton",
 };
 
 export default en;

@@ -24,7 +24,7 @@ import { formatAuditTarget, renderAuditFeed } from "./audit";
 import { renderAutomations } from "./automations";
 import { renderActions } from "./controls";
 import { renderDbStats } from "./dbstats";
-import { initLocale } from "./i18n";
+import { applyStaticI18n, initLocale, t } from "./i18n";
 import { applyKlimaState, renderIrButtons, renderKlima } from "./klima";
 import { LiveController } from "./live";
 import { renderLogin, renderUser } from "./login";
@@ -219,7 +219,7 @@ function startApp(): void {
     const rules = await fetchAutomations();
     if (rules === null) {
       autoRows.replaceChildren();
-      setRuleStatus("(automations unavailable)", true);
+      setRuleStatus(t("auto.unavailable"), true);
       return;
     }
     renderAutomations(autoRows, rules, {
@@ -301,6 +301,7 @@ void (async () => {
     (await import("./dev/mock")).installMock(); // frontend-only dev: render the app from fixtures, no backend
   }
   await initLocale(navigator.languages); // pick + apply the browser locale (sets <html lang>/dir) before any render
+  applyStaticI18n(); // localise the static index.html headers / buttons (Advanced view) once
   const me = await whoami();
   if (me === null) {
     el("app").hidden = true;

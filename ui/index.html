@@ -51,7 +51,7 @@
 
     <!-- Full engineer view: the device table, globals, mode line, automations editor. -->
     <section id="admin-view" hidden>
-    <div id="admin-tools"><button id="refresh" type="button">Refresh</button></div>
+    <div id="admin-tools"><button id="refresh" type="button" data-i18n="adv.refresh">Refresh</button></div>
     <div id="mode"></div>
     <div id="ir-buttons" class="panel"></div>
     <div id="klima" class="panel"></div>
@@ -59,14 +59,14 @@
     <table>
       <thead>
         <tr>
-          <th>node</th>
-          <th>last seen</th>
-          <th>battery</th>
-          <th>inferred type</th>
-          <th>stan</th>
-          <th>akcje</th>
-          <th>name</th>
-          <th>room</th>
+          <th data-i18n="tbl.node">node</th>
+          <th data-i18n="tbl.lastSeen">last seen</th>
+          <th data-i18n="tbl.battery">battery</th>
+          <th data-i18n="tbl.inferredType">inferred type</th>
+          <th data-i18n="tbl.state">stan</th>
+          <th data-i18n="tbl.actions">akcje</th>
+          <th data-i18n="tbl.name">name</th>
+          <th data-i18n="tbl.room">room</th>
         </tr>
       </thead>
       <tbody id="rows"></tbody>
@@ -77,16 +77,16 @@
 
     <div id="rf433"></div>
 
-    <h2 id="auto-hdr">automations</h2>
+    <h2 id="auto-hdr" data-i18n="auto.title">automations</h2>
     <div class="table-wrap">
     <table>
       <thead>
         <tr>
-          <th>id</th>
-          <th>on</th>
-          <th>trigger</th>
-          <th>cond</th>
-          <th>actions</th>
+          <th data-i18n="auto.id">id</th>
+          <th data-i18n="auto.enabled">on</th>
+          <th data-i18n="auto.trigger">trigger</th>
+          <th data-i18n="auto.conditions">cond</th>
+          <th data-i18n="auto.actions">actions</th>
           <th></th>
         </tr>
       </thead>
@@ -100,11 +100,13 @@
         rows="11"
         spellcheck="false"
         aria-label="rule JSON"
+        data-i18n-aria="rule.jsonLabel"
         placeholder="rule JSON — click &quot;New rule template&quot; for a skeleton"
+        data-i18n-placeholder="rule.jsonPlaceholder"
       ></textarea>
       <div>
-        <button id="rule-template" type="button">New rule template</button>
-        <button id="save-rule" type="button">Save rule</button>
+        <button id="rule-template" type="button" data-i18n="rule.newTemplate">New rule template</button>
+        <button id="save-rule" type="button" data-i18n="rule.save">Save rule</button>
         <span id="rule-status" class="status"></span>
       </div>
     </div>

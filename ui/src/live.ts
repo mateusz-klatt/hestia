@@ -151,7 +151,7 @@ export class LiveController {
     try {
       const data = await this.refetch(); // deltas arriving now queue (refreshing === true)
       if (data === null) {
-        this.view.status.textContent = "could not load /api/discovery";
+        this.view.status.textContent = t("discovery.loadError");
         this.view.status.hidden = false;
       } else {
         this.view.status.hidden = true;

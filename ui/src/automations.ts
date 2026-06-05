@@ -1,4 +1,5 @@
 import type { Rule, RuleResult, Trigger } from "./api/types";
+import { t as msg } from "./i18n"; // aliased: `trigSummary` already binds `t` to its Trigger argument
 
 /** One-line human summary of a rule's trigger (for the list). */
 export function trigSummary(t: Trigger): string {
@@ -80,8 +81,8 @@ function automationRow(rule: Rule, deps: AutomationsDeps): HTMLTableRowElement {
   tr.appendChild(cell(rule.actions.map((a) => a.op).join(", "), "actions"));
 
   const actTd = document.createElement("td");
-  const edit = rowButton("Edit", "auto-edit");
-  const del = rowButton("Delete", "auto-del");
+  const edit = rowButton(msg("auto.edit"), "auto-edit");
+  const del = rowButton(msg("auto.delete"), "auto-del");
   const status = document.createElement("span");
   status.className = "status";
   actTd.append(edit, del, status);
@@ -98,7 +99,7 @@ function automationRow(rule: Rule, deps: AutomationsDeps): HTMLTableRowElement {
 
   let deleting = false;
   del.addEventListener("click", () => {
-    if (deleting || !deps.confirm(`Delete rule "${rule.id}"?`)) return;
+    if (deleting || !deps.confirm(msg("auto.deleteConfirm", { id: rule.id }))) return;
     deleting = true;
     del.disabled = true;
     void (async () => {
@@ -107,7 +108,7 @@ function automationRow(rule: Rule, deps: AutomationsDeps): HTMLTableRowElement {
         if (res.ok) deps.reload(); // success rebuilds the list
         else showError(ruleError(res));
       } catch {
-        showError("błąd");
+        showError(msg("ctl.error"));
       } finally {
         // Always release — a no-op reload, an unexpected reject, etc. must never
         // leave the row permanently dead. (On success the row is replaced anyway.)
@@ -134,7 +135,7 @@ function automationRow(rule: Rule, deps: AutomationsDeps): HTMLTableRowElement {
         }
       } catch {
         en.checked = rule.enabled;
-        showError("błąd");
+        showError(msg("ctl.error"));
       } finally {
         toggling = false;
         en.disabled = false;

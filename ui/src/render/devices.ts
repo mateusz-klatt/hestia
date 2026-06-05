@@ -1,6 +1,6 @@
 import type { DeviceInfo, Discovery, Globals, Summary } from "../api/types";
 import { t } from "../i18n";
-import { battFmt, battLow, fmtHumidity, fmtTemp, onOff, stateStr } from "./format";
+import { battFmt, battLow, fmtHumidity, fmtTemp, onOff, stateStr, typeLabel } from "./format";
 
 /** The DOM nodes the discovery view writes into (queried once in `main.ts`). */
 export interface DeviceView {
@@ -39,7 +39,8 @@ function typeCell(info: DeviceInfo): HTMLTableCellElement {
   td.dataset.label = "type";
   const confirmed = info.confidence === "confirmed";
   const span = document.createElement("span");
-  span.textContent = confirmed ? (info.type || "?") : `${info.type || "?"} (${info.confidence || "?"})`;
+  const label = typeLabel(info.type) || "?";
+  span.textContent = confirmed ? label : `${label} (${info.confidence || "?"})`;
   if (confirmed) span.className = "confirmed";
   td.append(span);
   if (!confirmed) {
@@ -48,7 +49,7 @@ function typeCell(info: DeviceInfo): HTMLTableCellElement {
     const confirm = document.createElement("button");
     confirm.type = "button";
     confirm.className = "confirm";
-    confirm.textContent = "✓ confirm";
+    confirm.textContent = t("dev.confirm");
     confirm.disabled = info.type === "" || info.type === "unknown";
     td.append(" ", confirm);
   }
@@ -66,7 +67,7 @@ function editCell(field: "name" | "room", value: string): HTMLTableCellElement {
   const save = document.createElement("button");
   save.type = "button";
   save.className = `save-${field}`;
-  save.textContent = "Save";
+  save.textContent = t("dev.save");
   td.append(input, save, statusSpan());
   return td;
 }
@@ -115,7 +116,7 @@ function epNameCell(name: string): HTMLTableCellElement {
   const save = document.createElement("button");
   save.type = "button";
   save.className = "save-ep-name";
-  save.textContent = "Save";
+  save.textContent = t("dev.save");
   td.append(input, save, statusSpan());
   return td;
 }
@@ -129,7 +130,7 @@ function subRow(node: string, ep: string, on: boolean, name: string): HTMLTableR
   tr.appendChild(cell("")); // node
   tr.appendChild(cell("")); // last seen
   tr.appendChild(cell("")); // battery
-  tr.appendChild(cell(`↳ kanał ${ep}`, "sub-label"));
+  tr.appendChild(cell(t("dev.channel", { ep }), "sub-label"));
   tr.appendChild(cell(onOff(on), "stan ep-stan", "stan"));
   tr.appendChild(cell("", "actions", "akcje")); // akcje — endpoint buttons wired by the live decorator
   tr.appendChild(epNameCell(name)); // per-channel label — wired by the registry binder (PR-4b)
@@ -188,11 +189,11 @@ export function modeText(d: Pick<Discovery, "mode" | "target_mode" | "env_overri
   const running = d.mode || "proxy";
   const target = d.target_mode || "proxy";
   if (d.env_override) {
-    return `tryb: ${running} (HESTIA_MODE=${d.env_override} wymusza tryb; zapisany: ${target})`;
+    return t("mode.envPinned", { mode: running, override: d.env_override, target });
   }
-  if (running === "standalone") return `tryb: ${running} (cloud-free)`;
-  if (target === "standalone") return `tryb: ${running} → standalone zapisane — zrestartuj hestię`;
-  return `tryb: ${running}`;
+  if (running === "standalone") return t("mode.cloudFree", { mode: running });
+  if (target === "standalone") return t("mode.graduated", { mode: running });
+  return t("mode.plain", { mode: running });
 }
 
 export function renderMode(el: HTMLElement, d: Pick<Discovery, "mode" | "target_mode" | "env_override">): void {
