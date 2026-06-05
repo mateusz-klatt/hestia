@@ -298,21 +298,21 @@ class ValidateControlPayloadTests(unittest.TestCase):
             with self.subTest(payload=payload):
                 self.assertEqual(self._validate(payload), "value must be an integer 0..99")
 
-    def test_celsius_must_be_number_between_5_and_30(self):
+    def test_celsius_must_be_number_between_4_and_28(self):
         bad = [
             {"op": "thermostat", "node": 13},
             {"op": "thermostat", "node": 13, "celsius": True},
             {"op": "thermostat", "node": 13, "celsius": "21"},
             {"op": "thermostat", "node": 13, "celsius": float("nan")},
             {"op": "thermostat", "node": 13, "celsius": float("inf")},
-            {"op": "thermostat", "node": 13, "celsius": 4.9},
-            {"op": "thermostat", "node": 13, "celsius": 30.1},
+            {"op": "thermostat", "node": 13, "celsius": 3.9},     # below the 4 °C TRV floor
+            {"op": "thermostat", "node": 13, "celsius": 28.1},    # above the 28 °C TRV ceiling
             {"op": "thermostat", "node": 13, "celsius": 10**10000},
         ]
         for payload in bad:
             with self.subTest(payload=payload):
                 self.assertEqual(self._validate(payload),
-                                 "celsius must be a number between 5 and 30")
+                                 "celsius must be a number between 4 and 28")
 
     def test_valid_cases(self):
         good = [
@@ -323,6 +323,8 @@ class ValidateControlPayloadTests(unittest.TestCase):
             {"op": "cover", "node": 8, "value": 0},
             {"op": "thermostat", "node": 13, "celsius": 21},
             {"op": "thermostat", "node": 13, "celsius": 21.5},
+            {"op": "thermostat", "node": 13, "celsius": 4},      # TRV floor — the frost-safe OFF setpoint
+            {"op": "thermostat", "node": 13, "celsius": 28},     # TRV ceiling
             {"op": "thermostat_power", "node": 13, "on": True},
         ]
         for payload in good:

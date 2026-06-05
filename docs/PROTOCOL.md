@@ -120,7 +120,7 @@ level primitive. Single node: `[1e 07]` `0x0046 = 25 01 <ff/00>`, `0x0047 = node
 reports use the short form `25 03 ff` / `25 03 00`.
 
 ### 5.3 Thermostat
-- Setpoint: `[1e 07]` `0x0046 = 43 01 01 22 <°C×10 : 2B BE>`  (e.g. 21.0 °C → `2200d2`; 28.0 → `220118`; 4.0 → `220028`). Observed range 16–30 °C; the device's setpoint *report* (§5.4) is integer °C.
+- Setpoint: `[1e 07]` `0x0046 = 43 01 01 22 <°C×10 : 2B BE>`  (e.g. 21.0 °C → `2200d2`; 28.0 → `220118`; 4.0 → `220028`). Range **4–28 °C** (verified live against the Keemple app: setpoints 4/14/25/28 °C all accepted); the device's setpoint *report* (§5.4) is integer °C.
 - Power: `[1e 07]` `0x0046 = 40 01 <01=on / 00=off>`.
 - **Cloud poll (read-request):** `40 02` (power) and `31 04 01` (temperature) are sent `[1e 07]`-style to thermostat nodes `09/0c/0d`; the cloud periodically reads state and the device answers with the `40 03` / `31 05` reports below. hestia can poll likewise or just rely on the spontaneous reports.
 
@@ -237,7 +237,7 @@ exactly (4 blinds + 3 thermostats + 6 lights + 2 doors + 2 PIR + 3 plugs + flood
 **Roster `flag 00` (16) — NB: thermostats here are battery, see note above:**
 - lights: `0x02` (ep02), `0x03`, `0x06`, `0x07` (2-gang: ep01 / ep02), `0x0a` (2-gang: ep01 / ep02), `0x0e` (also PIR-driven)
 - blinds: `0x04`, `0x05`, `0x08`, `0x0b`
-- thermostats: `0x09`, `0x0c`, `0x0d` (range 16–30 °C)
+- thermostats: `0x09`, `0x0c`, `0x0d` (range 4–28 °C)
 - smart plugs: `0x13` (nr 1), `0x14` (nr 2), `0x15` (nr 3) — all confirmed (on/off + metering)
 
 **Roster `flag 01` (6) — deep-sleep sensors (thermostats also battery, but flag 00):**

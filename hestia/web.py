@@ -645,12 +645,13 @@ def _control_value_error(op) -> "str | None":
 
 def _control_celsius_error(op) -> "str | None":
     # Reject non-numbers, bool (True == 1), and json's NaN/Infinity (a float that isn't finite)
-    # before the range check; round(°C*10) is the wire encoding, so 5..30 °C is the safe band.
+    # before the range check; round(°C*10) is the wire encoding. The Keemple TRVs accept 4..28 °C
+    # (verified live against the app — the UI dropdown and the frost-safe OFF's 4 °C both need 4).
     celsius = op.get("celsius")
     if (not isinstance(celsius, (int, float)) or isinstance(celsius, bool)
             or (isinstance(celsius, float) and not math.isfinite(celsius))
-            or not 5 <= celsius <= 30):
-        return "celsius must be a number between 5 and 30"
+            or not 4 <= celsius <= 28):
+        return "celsius must be a number between 4 and 28"
     return None
 
 

@@ -159,7 +159,14 @@ export function renderActions(
       { op: "thermostat_power", node, on: true }, // turn on, THEN set — a setpoint alone is ignored while off
       { op: "thermostat", node, celsius: Number(sel.value) },
     ], () => "", t("ctl.set"));
-    addButton("⏻", () => ({ op: "thermostat_power", node, on: false }), () => "", t("ctl.turnOff"));
+    // Off = drop to the frost-protection minimum FIRST, then power off. Sending 4 °C before the off means
+    // that even if the power-off frame is lost, the TRV is left at its lowest setpoint (won't heat) rather
+    // than stuck at the old high target — "on the safe side". We always supply a temperature on Set anyway,
+    // so losing the prior setpoint here costs nothing. (Keemple's own off keeps the setpoint; this is safer.)
+    addButton("⏻", () => [
+      { op: "thermostat", node, celsius: THERMOSTAT_MIN_C },
+      { op: "thermostat_power", node, on: false },
+    ], () => "", t("ctl.turnOff"));
   }
 
   if (buttons.length > 0) cell.appendChild(status);
