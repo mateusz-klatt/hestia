@@ -68,6 +68,16 @@ textarea {
   border-radius: 0.4rem;
 }
 
+/* The name / room / endpoint-label inputs fit their table column (border-box so the 1px border doesn't
+   widen the cell). Their default ~20ch intrinsic width spilled the engineer table past its 60rem cap and
+   showed a horizontal scrollbar on desktop; filling the cell instead keeps the table within the page.
+   The mobile card layout (media query below) overrides them to full width anyway. */
+td input {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 6rem;
+}
+
 /* Buttons get a warm, tactile default; .view-tab / .room-card override below. */
 button {
   touch-action: manipulation;
@@ -305,6 +315,32 @@ td.sub-label {
   flex-wrap: wrap;
   align-items: center;
   gap: 0.4rem 0.5rem;
+}
+
+/* Keep the klima control row on ONE line even with long localised mode names (e.g. PL "Chłodzenie" /
+   "Wentylator", DE "Entfeuchten"): a tighter gap + a smaller control font shrink the mode select's
+   intrinsic (widest-option) width below the panel width, so the ✓/⏻ buttons never wrap to a second
+   line. Form controls don't inherit font-size, so it's set on them explicitly. A max-width caps the
+   mode select so even an extreme translation ellipsis-shrinks rather than pushing the buttons down;
+   the dropdown still shows full names when opened. The error .status keeps its own full-width line. */
+#klima,
+#rooms-klima {
+  gap: 0.3rem;
+}
+#klima select,
+#rooms-klima select,
+#klima button,
+#rooms-klima button {
+  font-size: 0.82rem;
+}
+#klima select,
+#rooms-klima select {
+  min-width: 0;
+  max-width: 9rem;
+}
+#klima .klima-state,
+#rooms-klima .klima-state {
+  font-size: 0.85rem;
 }
 
 #admin-tools {
@@ -553,7 +589,7 @@ td.seen.fresh {
 }
 
 .view-tab {
-  padding: 0.4rem 0.9rem;
+  padding: 0.4rem 0.7rem; /* a touch tighter so three tabs (Rooms · Activity · Advanced) fit more locales on one row */
   border: 1px solid var(--border-strong);
   border-radius: 0.5rem;
   background: var(--surface);

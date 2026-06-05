@@ -64,9 +64,9 @@ describe("deviceRow", () => {
     expect(tds[0]?.textContent).toBe("7");
     expect(tds[1]?.textContent).toBe("—"); // last seen — static until SSE drives it
     expect(tds[2]?.textContent).toBe("80%");
-    expect(tds[3]?.querySelector("span")?.textContent).toBe("plug (confirmed)");
-    expect(tds[3]?.querySelector(".confirmed")).not.toBeNull();
-    expect(tds[3]?.querySelector<HTMLButtonElement>(".confirm")?.disabled).toBe(true); // already confirmed
+    expect(tds[3]?.querySelector("span")?.textContent).toBe("plug"); // confirmed → no "(confirmed)" word
+    expect(tds[3]?.querySelector(".confirmed")).not.toBeNull();      // the green colour IS the signal
+    expect(tds[3]?.querySelector(".confirm")).toBeNull();            // confirmed → the disabled button is omitted
     expect(tds[4]?.textContent).toBe("🟢 On · 12 W");
     expect(tds[5]?.classList.contains("actions")).toBe(true); // akcje — empty until decorated
     expect(tds[6]?.querySelector<HTMLInputElement>("input.name")?.value).toBe("fridge");
@@ -90,6 +90,14 @@ describe("deviceRow", () => {
   it("does not mark the confirmed class for an inferred type", () => {
     const tr = deviceRow("3", device({ type: "light", confidence: "inferred" }));
     expect(tr.querySelector(".confirmed")).toBeNull();
+  });
+
+  it("shows an enabled confirm button for an inferred type and a disabled one for unknown", () => {
+    const inferred = deviceRow("3", device({ type: "light", confidence: "inferred" })).querySelectorAll("td")[3];
+    expect(inferred?.querySelector("span")?.textContent).toBe("light (inferred)"); // keeps the confidence note
+    expect(inferred?.querySelector<HTMLButtonElement>(".confirm")?.disabled).toBe(false); // a type to confirm
+    const unknown = deviceRow("4", device({ type: "unknown", confidence: "guess" })).querySelectorAll("td")[3];
+    expect(unknown?.querySelector<HTMLButtonElement>(".confirm")?.disabled).toBe(true); // nothing to confirm yet
   });
 
   it("keeps a hostile name inert — set via input.value, never parsed as HTML", () => {
