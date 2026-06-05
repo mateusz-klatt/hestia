@@ -1,8 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 
 import type { ControlOp, ControlResult } from "./api/types";
-import { renderActions, type PostControl } from "./controls";
+import { __resetThermostatPicks, renderActions, type PostControl } from "./controls";
 import { device } from "./fixtures";
+
+beforeEach(__resetThermostatPicks); // the thermostat dropdown's cross-render pick memory is module-level
 
 function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
   let resolve: (value: T) => void = () => undefined;
@@ -72,6 +74,24 @@ describe("renderActions button layout", () => {
     const unseen = td();
     renderActions(unseen, 7, device({ type: "thermostat" }), okPost);
     expect(unseen.querySelector("select")?.value).toBe("21"); // null → 21 default
+  });
+
+  it("remembers the user's setpoint pick across a FULL rebuild (fresh cell) so a report can't reset the dropdown", () => {
+    const first = td();
+    renderActions(first, 9, device({ type: "thermostat", setpoint: 22 }), okPost);
+    const sel = first.querySelector("select");
+    if (sel !== null) {
+      sel.value = "18";
+      sel.dispatchEvent(new Event("change")); // the user picks 18
+    }
+    // The 45 s refresh rebuilds the row in a BRAND-NEW cell carrying a (stale) setpoint of 28:
+    const rebuilt = td();
+    renderActions(rebuilt, 9, device({ type: "thermostat", setpoint: 28 }), okPost);
+    expect(rebuilt.querySelector("select")?.value).toBe("18"); // kept the user's pick, NOT reset to 28
+    // a DIFFERENT node is unaffected — it still seeds from its own setpoint
+    const other = td();
+    renderActions(other, 11, device({ type: "thermostat", setpoint: 24 }), okPost);
+    expect(other.querySelector("select")?.value).toBe("24");
   });
 
   it("multi-gang switches get per-channel buttons and stateless types get no buttons", () => {
