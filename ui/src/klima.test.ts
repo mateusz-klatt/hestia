@@ -237,12 +237,12 @@ const klimaState = (overrides: Partial<KlimaState> = {}): KlimaState => ({
 
 describe("formatKlimaState", () => {
   it("shows the mode pictogram + temperature when powered on", () => {
-    expect(formatKlimaState(klimaState({ mode: "cool", temp: 22 }))).toBe("❄️ 22°");
-    expect(formatKlimaState(klimaState({ mode: "heat", temp: 24 }))).toBe("🔥 24°");
-    expect(formatKlimaState(klimaState({ mode: "auto", temp: 20 }))).toBe("🔄 20°");
+    expect(formatKlimaState(klimaState({ mode: "cool", temp: 22 }))).toBe("❄️ 22.0°");
+    expect(formatKlimaState(klimaState({ mode: "heat", temp: 24 }))).toBe("🔥 24.0°");
+    expect(formatKlimaState(klimaState({ mode: "auto", temp: 20 }))).toBe("🔄 20.0°");
   });
   it("falls back to the snowflake for an unknown / missing mode, dropping a null temp", () => {
-    expect(formatKlimaState(klimaState({ mode: "weird", temp: 19 }))).toBe("❄️ 19°");
+    expect(formatKlimaState(klimaState({ mode: "weird", temp: 19 }))).toBe("❄️ 19.0°");
     expect(formatKlimaState(klimaState({ mode: null, temp: null }))).toBe("❄️");
   });
   it("shows the power-off glyph when off, and the identity when never commanded", () => {
@@ -259,8 +259,8 @@ describe("applyKlimaState", () => {
     renderKlima(a, KLIMA, okIr);
     renderKlima(b, KLIMA, okIr);
     applyKlimaState([a, b, bare], klimaState({ mode: "heat", temp: 20 }));
-    expect(a.querySelector(".klima-state")?.textContent).toBe("🔥 20°");
-    expect(b.querySelector(".klima-state")?.textContent).toBe("🔥 20°");
+    expect(a.querySelector(".klima-state")?.textContent).toBe("🔥 20.0°");
+    expect(b.querySelector(".klima-state")?.textContent).toBe("🔥 20.0°");
     applyKlimaState([a, b, bare], null);
     expect(a.querySelector(".klima-state")?.textContent).toBe("❄️");
   });

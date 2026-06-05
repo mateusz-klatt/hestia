@@ -34,16 +34,25 @@ export function renderActions(
     for (const b of buttons) b.disabled = disabled;
   };
 
-  const send = async (op: ControlOp, pending: string): Promise<void> => {
+  // Sends one OR a sequence of ops under a single in-flight lock (a multi-command action like the
+  // thermostat "Set" = power-on then setpoint sends both before re-enabling; it stops on the first error).
+  const send = async (ops: ControlOp | ControlOp[], pending: string): Promise<void> => {
     if (busy) return;
     busy = true;
     setDisabled(true);
     status.textContent = pending.length > 0 ? `… ${pending}` : "…";
     status.className = "status";
     try {
-      const res = await postControl(op);
-      status.textContent = res.ok ? t("ctl.sent") : `✗ ${res.error ?? t("ctl.failed")}`;
-      status.className = res.ok ? "status" : "status err";
+      let failed: string | undefined;
+      for (const op of Array.isArray(ops) ? ops : [ops]) {
+        const res = await postControl(op);
+        if (!res.ok) {
+          failed = res.error ?? t("ctl.failed");
+          break;
+        }
+      }
+      status.textContent = failed === undefined ? t("ctl.sent") : `✗ ${failed}`;
+      status.className = failed === undefined ? "status" : "status err";
     } catch {
       status.textContent = t("ctl.error");
       status.className = "status err";
@@ -53,11 +62,20 @@ export function renderActions(
     }
   };
 
-  const addButton = (label: string, op: () => ControlOp, pending: () => string = () => ""): void => {
+  const addButton = (
+    label: string,
+    op: () => ControlOp | ControlOp[],
+    pending: () => string = () => "",
+    title?: string,
+  ): void => {
     const btn = document.createElement("button");
     btn.type = "button";
     btn.textContent = label;
     btn.style.marginRight = "0.3rem";
+    if (title !== undefined) {
+      btn.title = title; // icon-only buttons (thermostat ✓/⏻) get an accessible name, like klima
+      btn.setAttribute("aria-label", title);
+    }
     btn.addEventListener("click", () => {
       void send(op(), pending());
     });
@@ -111,12 +129,16 @@ export function renderActions(
     addButton(t("ctl.raise"), () => ({ op: "cover", node, value: 99 }));
     addButton(t("ctl.lower"), () => ({ op: "cover", node, value: 0 }));
   } else if (info.type === "thermostat") {
-    addButton(t("ctl.off"), () => ({ op: "thermostat_power", node, on: false }));
-    addButton(t("ctl.on"), () => ({ op: "thermostat_power", node, on: true }));
-    // A target-temperature DROPDOWN (4–28 °C, shown in the user's C/F/K scale) + Set — ONE command per
-    // change. The old − / + sent a SET per degree, so dragging from 18→25 spammed the TRV with 7 SETs in
-    // a row and hung it; picking a target + Set is a single command. The option VALUE stays Celsius (the
-    // device/backend speak Celsius); only the label is converted.
+    // Mirrors the klima panel: a target-temperature DROPDOWN (4–28 °C, shown in the user's C/F/K scale) +
+    // ✓ Set + ⏻ Off. A setpoint SET while the thermostat is OFF doesn't take, so Set is power-ON then the
+    // setpoint (two commands, in that order — like the Keemple app) so the user just picks a temperature
+    // and taps Set; there is no separate On. The option VALUE stays Celsius (device/backend speak Celsius);
+    // only the label is C/F/K-converted. One Set command per change — no per-degree − / + SET burst that
+    // spammed and hung the TRV.
+    // Partial failure (power-on ok, setpoint fails) deliberately leaves the device ON at its old setpoint
+    // and surfaces the ✗ error — we do NOT auto-revert to OFF: that would countermand the user's "on"
+    // intent and add a third TRV command. The optimistic echo only fires per successful inject, so the UI
+    // stays consistent with the device; the user just re-taps Set.
     const sel = document.createElement("select");
     sel.style.marginRight = "0.3rem";
     for (let c = THERMOSTAT_MIN_C; c <= THERMOSTAT_MAX_C; c++) {
@@ -131,7 +153,11 @@ export function renderActions(
       : 21;
     sel.value = String(start);
     cell.appendChild(sel);
-    addButton(t("ctl.set"), () => ({ op: "thermostat", node, celsius: Number(sel.value) }));
+    addButton("✓", () => [
+      { op: "thermostat_power", node, on: true }, // turn on, THEN set — a setpoint alone is ignored while off
+      { op: "thermostat", node, celsius: Number(sel.value) },
+    ], () => "", t("ctl.set"));
+    addButton("⏻", () => ({ op: "thermostat_power", node, on: false }), () => "", t("ctl.turnOff"));
   }
 
   if (buttons.length > 0) cell.appendChild(status);
