@@ -1,6 +1,6 @@
 import { t } from "./i18n";
 
-export type ViewName = "rooms" | "admin";
+export type ViewName = "rooms" | "events" | "admin";
 
 const STORAGE_KEY = "hestia.view";
 
@@ -10,7 +10,8 @@ const STORAGE_KEY = "hestia.view";
  */
 export function storedView(): ViewName {
   try {
-    return localStorage.getItem(STORAGE_KEY) === "admin" ? "admin" : "rooms";
+    const stored = localStorage.getItem(STORAGE_KEY);
+    return stored === "admin" || stored === "events" ? stored : "rooms";
   } catch {
     return "rooms";
   }
@@ -24,10 +25,11 @@ function persistView(view: ViewName): void {
   }
 }
 
-/** The DOM the switcher drives: its own button container + the two view sections it toggles. */
+/** The DOM the switcher drives: its own button container + the three view sections it toggles. */
 export interface ViewSwitchEls {
   switchBox: HTMLElement;
   roomsEl: HTMLElement;
+  eventsEl: HTMLElement;
   adminEl: HTMLElement;
 }
 
@@ -39,25 +41,27 @@ export interface ViewSwitch {
 }
 
 /**
- * Build the 🏠 Rooms / 🔧 Advanced segmented control into `switchBox` and wire it to show exactly one
- * view section. Applies the persisted choice immediately (calling `onChange` once). The rooms tab
- * doubles as the back affordance: inside a room it reads "← Rooms" (set via `setRoomsInRoom`), so a
- * first-time user knows tapping it returns to the room list.
+ * Build the 🏠 Rooms / 📜 Activity / 🔧 Advanced segmented control into `switchBox` and wire it to show
+ * exactly one view section. Applies the persisted choice immediately (calling `onChange` once). The
+ * rooms tab doubles as the back affordance: inside a room it reads "← Rooms" (set via `setRoomsInRoom`),
+ * so a first-time user knows tapping it returns to the room list. The container `flex-wrap`s, so the
+ * third tab wraps to a second line on a narrow phone rather than overflowing.
  */
 export function renderViewSwitch(els: ViewSwitchEls, onChange: (view: ViewName) => void): ViewSwitch {
   const roomsBtn = document.createElement("button");
+  const eventsBtn = document.createElement("button");
   const adminBtn = document.createElement("button");
-  const tabs: { name: ViewName; btn: HTMLButtonElement }[] = [
-    { name: "rooms", btn: roomsBtn },
-    { name: "admin", btn: adminBtn },
+  const tabs: { name: ViewName; btn: HTMLButtonElement; section: HTMLElement }[] = [
+    { name: "rooms", btn: roomsBtn, section: els.roomsEl },
+    { name: "events", btn: eventsBtn, section: els.eventsEl },
+    { name: "admin", btn: adminBtn, section: els.adminEl },
   ];
 
   const apply = (view: ViewName): void => {
-    els.roomsEl.hidden = view !== "rooms";
-    els.adminEl.hidden = view !== "admin";
     roomsBtn.textContent = t("view.rooms"); // reset; setRoomsInRoom(true) flips it to "← Rooms" in a room
     for (const tab of tabs) {
       const active = tab.name === view;
+      tab.section.hidden = !active;
       tab.btn.classList.toggle("active", active);
       tab.btn.setAttribute("aria-pressed", active ? "true" : "false");
     }
@@ -70,8 +74,9 @@ export function renderViewSwitch(els: ViewSwitchEls, onChange: (view: ViewName) 
   };
 
   els.switchBox.replaceChildren();
-  adminBtn.textContent = t("view.advanced");
   roomsBtn.textContent = t("view.rooms");
+  eventsBtn.textContent = t("view.events");
+  adminBtn.textContent = t("view.advanced");
   for (const tab of tabs) {
     tab.btn.type = "button";
     tab.btn.className = "view-tab";

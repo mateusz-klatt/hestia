@@ -321,7 +321,6 @@ td.sub-label {
   color: var(--err);
 }
 
-#audit-hdr,
 #auto-hdr {
   font-size: 1.05rem;
   margin: 1.8rem 0 0.6rem;
