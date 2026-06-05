@@ -135,6 +135,10 @@ export function renderActions(
     // and taps Set; there is no separate On. The option VALUE stays Celsius (device/backend speak Celsius);
     // only the label is C/F/K-converted. One Set command per change — no per-degree − / + SET burst that
     // spammed and hung the TRV.
+    // Partial failure (power-on ok, setpoint fails) deliberately leaves the device ON at its old setpoint
+    // and surfaces the ✗ error — we do NOT auto-revert to OFF: that would countermand the user's "on"
+    // intent and add a third TRV command. The optimistic echo only fires per successful inject, so the UI
+    // stays consistent with the device; the user just re-taps Set.
     const sel = document.createElement("select");
     sel.style.marginRight = "0.3rem";
     for (let c = THERMOSTAT_MIN_C; c <= THERMOSTAT_MAX_C; c++) {
