@@ -349,10 +349,11 @@ class State:
         return changed
 
     def apply_command(self, op: dict) -> dict:
-        """The state delta a SWITCH / 2-gang control command WILL produce.
+        """The state delta a SWITCH / 2-gang / thermostat (power + setpoint) control command WILL produce.
 
         Those devices ACK a remote SET (``[1e 08]``) but never send a ``[1e 09]``
-        report for it, so without this echo a remotely-set switch never updates
+        report for it (and thermostats report mode/setpoint poll-only or unreliably),
+        so without this echo a remotely-set value never updates
         State or the live UI. Reflect the *commanded* value (field names match
         ``apply`` / ``/api/discovery``); a later genuine report overwrites it with
         ground truth. Returns the changed ``{field: value}``, or empty for ANY

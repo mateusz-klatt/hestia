@@ -618,9 +618,10 @@ def _scene_batch_ops(frame) -> list:
 
 
 def _command_ops_from_frame(frame) -> list:
-    """Every switch / 2-gang state change a cloud→device command frame would actuate — so proxy mode
-    learns it from the cloud/app (those relays only ACK ``[1e 08]``, never report ``[1e 09]``): a single
-    ``[1e 07]`` SET, or each element of a ``[1e 32]`` scene batch. Cover/level/thermostat → skipped."""
+    """Every switch / 2-gang / thermostat (power + setpoint) state change a cloud→device command frame
+    would actuate — so proxy mode learns it from the cloud/app (those relays only ACK ``[1e 08]``, never
+    report ``[1e 09]``): a single ``[1e 07]`` SET, or each element of a ``[1e 32]`` scene batch.
+    Cover/level → skipped (the device reports those reliably)."""
     if (frame.type, frame.cmd) == (0x1E, 0x07):
         node_b = tlv_value(frame, 0x0047)
         data = tlv_value(frame, 0x0046)
@@ -634,10 +635,11 @@ def _command_ops_from_frame(frame) -> list:
 
 
 def _echo_command_frame(rt, raw: bytes) -> None:
-    """Echo the switch/2-gang state a command frame hestia JUST WROTE to a device produces — those
-    relays only ACK (never report ``[1e 09]``), so without this a hestia-sent switch change (UI
-    control, a fired automation, a scheduled rule) would never reach State / the live UI. Called
-    AFTER a successful write, so a dropped or failed send can never fake a state change.
+    """Echo the switch/2-gang/thermostat state a command frame hestia JUST WROTE to a device produces —
+    those relays only ACK (never report ``[1e 09]``), and thermostats report mode/setpoint poll-only or
+    unreliably, so without this a hestia-sent change (UI control, a fired automation, a scheduled rule)
+    would never reach State / the live UI. Called AFTER a successful write, so a dropped or failed send
+    can never fake a state change.
 
     The Deframer yields ONLY checksum-valid frames, so a ``raw`` control-op frame the device would
     ignore (bad checksum / no flags) yields nothing here and can't fake state. Cover/level/thermostat
