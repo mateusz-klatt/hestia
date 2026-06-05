@@ -68,11 +68,13 @@ textarea {
   border-radius: 0.4rem;
 }
 
-/* The name / room / endpoint-label inputs fit their table column (border-box so the 1px border doesn't
-   widen the cell). Their default ~20ch intrinsic width spilled the engineer table past its 60rem cap and
-   showed a horizontal scrollbar on desktop; filling the cell instead keeps the table within the page.
-   The mobile card layout (media query below) overrides them to full width anyway. */
-td input {
+/* The name / room / endpoint-label text inputs fit their table column (border-box so the 1px border
+   doesn't widen the cell). Their default ~20ch intrinsic width spilled the engineer table past its 60rem
+   cap and showed a horizontal scrollbar on desktop; filling the cell instead keeps the table within the
+   page. Scoped to these inputs by class so it can't touch the automations table's enable checkbox. */
+td input.name,
+td input.room,
+td input.ep-name {
   box-sizing: border-box;
   width: 100%;
   min-width: 6rem;
