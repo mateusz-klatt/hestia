@@ -247,8 +247,13 @@ class CliSqliteTests(unittest.TestCase):
         self.assertIsNone(store_sql.get_user_db_role("x"))   # nothing written
 
     def test_role_changes_existing_user(self):
+        self.assertEqual(auth._cli(["add", "boss", "--role", "admin"], prompt=_Prompt("pw", "pw")), 0)  # 2nd admin
         self.assertEqual(auth._cli(["role", "tata", "viewer"]), 0)
         self.assertEqual(store_sql.get_user_db_role("tata"), "viewer")
+
+    def test_role_refuses_demoting_the_last_admin(self):
+        self.assertEqual(auth._cli(["role", "tata", "viewer"]), 1)        # tata is the only admin → refused
+        self.assertEqual(store_sql.get_user_db_role("tata"), "admin")     # unchanged
 
     def test_role_unknown_user(self):
         self.assertEqual(auth._cli(["role", "ghost", "admin"]), 1)

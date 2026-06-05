@@ -154,6 +154,7 @@ _ROUTE_MIN_ROLE = {
     ("POST", "/api/settings"): _VIEWER,            # a user's OWN UI prefs (locale / temp scale / theme)
     ("GET", "/api/rooms/icons"): _VIEWER,
     ("GET", "/api/whoami"): _VIEWER,
+    ("POST", "/api/me/password"): _VIEWER,         # any signed-in user changes their OWN password (verifies current)
     # room actions: operator and admin (a viewer is read-only — the UI hides these, the server enforces it)
     ("POST", "/api/control"): _OPERATOR,
     ("POST", "/api/ir"): _OPERATOR,
@@ -168,6 +169,12 @@ _ROUTE_MIN_ROLE = {
     ("POST", "/api/rooms/icons"): _ADMIN,
     ("GET", "/api/db/stats"): _ADMIN,
     ("GET", "/api/rf433"): _ADMIN,
+    # user administration: admin only (add/list accounts, change roles, disable, reset another's password)
+    ("GET", "/api/users"): _ADMIN,
+    ("POST", "/api/users"): _ADMIN,
+    ("POST", "/api/users/role"): _ADMIN,
+    ("POST", "/api/users/disabled"): _ADMIN,
+    ("POST", "/api/users/reset-password"): _ADMIN,
 }
 _MUTATING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 
@@ -373,6 +380,200 @@ async def _room_icon_set(request):
     user = request.get(_USER_KEY)
     if user is not None:
         await _persist_room_icon(request, user, body)
+    return _json(HTTPStatus.OK, {"ok": True})
+
+
+# ---- user management (#PR-D): own-password change + admin user administration -------------------
+# The SERVER is the security boundary. Floors: /api/me/password = any signed-in user (verifies the
+# current password); every /api/users* route = admin (the middleware enforces it before these run).
+# All require the SQLite users backend (roles/disable live there) → 409 otherwise. Self-targeting is
+# blocked on the admin verbs so an admin can't lock themselves out or bypass the current-password check.
+
+_MIN_PASSWORD = 8
+_MAX_PASSWORD = 1024
+
+
+def _username_error(username) -> "str | None":
+    """Validate a username for account creation. ``|`` is forbidden because the session token is
+    ``username|expiry`` (a ``|`` would corrupt parsing); ``/`` mirrors the JSON-store CLI guard."""
+    if not isinstance(username, str) or not username or len(username) > 64 or "|" in username or "/" in username:
+        return "invalid username (non-empty, ≤ 64 chars, no '|' or '/')"
+    return None
+
+
+def _password_error(password) -> "str | None":
+    if not isinstance(password, str) or len(password) < _MIN_PASSWORD:
+        return f"password must be a string of at least {_MIN_PASSWORD} characters"
+    if len(password) > _MAX_PASSWORD:
+        return f"password must be ≤ {_MAX_PASSWORD} characters"
+    return None
+
+
+async def _users_backend_ready() -> bool:
+    """True when SQLite owns the users store (roles + disable + DB writes are meaningful)."""
+    return await asyncio.get_running_loop().run_in_executor(None, store_sql.users_db_authoritative)
+
+
+def _requires_sqlite():
+    """A FRESH 409 response (a Response can't be reused across requests) for user-management endpoints
+    hit while the JSON backend is active — roles / disable / DB writes only exist under SQLite."""
+    return _json(HTTPStatus.CONFLICT,
+                 {"ok": False, "error": "user management requires the SQLite backend"})
+
+
+def _user_outcome(outcome: str):
+    """Map a store mutation outcome to an error response, or ``None`` when it succeeded (``"ok"``)."""
+    if outcome == "ok":
+        return None
+    if outcome == "not_found":
+        return _json(HTTPStatus.NOT_FOUND, {"ok": False, "error": "no such user"})
+    if outcome == "exists":
+        return _json(HTTPStatus.CONFLICT, {"ok": False, "error": "a user with that name already exists"})
+    if outcome == "last_admin":
+        return _json(HTTPStatus.CONFLICT,
+                     {"ok": False, "error": "refused: that would leave no enabled admin"})
+    return _json(HTTPStatus.INTERNAL_SERVER_ERROR, {"ok": False, "error": "unexpected error"})
+
+
+async def _me_password(request):
+    """POST /api/me/password — the signed-in user changes their OWN password. Verifies the CURRENT
+    password (so a stolen cookie alone can't change it) before writing the new scrypt hash."""
+    body, err = await _read_json_body(request)
+    if err:
+        return body
+    user = request.get(_USER_KEY)
+    if user is None:                                   # auth-off / no session → nothing to change
+        return _json(HTTPStatus.UNAUTHORIZED, {"ok": False, "error": "not signed in"})
+    current = body.get("current") if isinstance(body, dict) else None
+    new = body.get("new") if isinstance(body, dict) else None
+    perror = _password_error(new)
+    if perror is not None:
+        return _json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": perror})
+    if not isinstance(current, str):
+        return _json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "current password is required"})
+    loop = asyncio.get_running_loop()
+    if not await _users_backend_ready():
+        return _requires_sqlite()
+    verified = await loop.run_in_executor(
+        None, lambda: auth.authenticate(user, current, store_sql.current_users()))
+    if not verified:
+        _audit(_rt(request), user, "password", result="invalid")
+        return _json(HTTPStatus.FORBIDDEN, {"ok": False, "error": "current password is incorrect"})
+    new_hash = await loop.run_in_executor(None, lambda: auth.hash_password(new))
+    wrote = await loop.run_in_executor(None, lambda: store_sql.set_user_password(user, new_hash))
+    if not wrote:                                      # account vanished between verify and write
+        return _json(HTTPStatus.CONFLICT, {"ok": False, "error": "account no longer exists"})
+    _audit(_rt(request), user, "password", result="ok")
+    return _json(HTTPStatus.OK, {"ok": True})
+
+
+async def _users_list(request):
+    """GET /api/users — admin: every account's username / role / disabled (NEVER the password hash)."""
+    if not await _users_backend_ready():
+        return _requires_sqlite()
+    users = await asyncio.get_running_loop().run_in_executor(None, store_sql.list_users)
+    return _json(HTTPStatus.OK, {"users": users})
+
+
+async def _users_add(request):
+    """POST /api/users — admin: create a new account {username, password, role}. 409 on a duplicate."""
+    body, err = await _read_json_body(request)
+    if err:
+        return body
+    username = body.get("username") if isinstance(body, dict) else None
+    password = body.get("password") if isinstance(body, dict) else None
+    role = body.get("role") if isinstance(body, dict) else None
+    for problem in (_username_error(username), _password_error(password),
+                    None if role in store_sql.ROLE_RANK else "role must be admin, operator or viewer"):
+        if problem is not None:
+            return _json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": problem})
+    loop = asyncio.get_running_loop()
+    if not await _users_backend_ready():
+        return _requires_sqlite()
+    new_hash = await loop.run_in_executor(None, lambda: auth.hash_password(password))
+    outcome = await loop.run_in_executor(None, lambda: store_sql.add_user(username, new_hash, role))
+    failed = _user_outcome(outcome)
+    if failed is not None:
+        return failed
+    _audit(_rt(request), _actor(request), "user_add", target=username, detail=f"role={role}")
+    return _json(HTTPStatus.OK, {"ok": True})
+
+
+async def _users_role(request):
+    """POST /api/users/role — admin: change another user's role. Refuses self (no self-demote) and the
+    last enabled admin (store-guarded)."""
+    body, err = await _read_json_body(request)
+    if err:
+        return body
+    username = body.get("username") if isinstance(body, dict) else None
+    role = body.get("role") if isinstance(body, dict) else None
+    if not isinstance(username, str) or not username:
+        return _json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "username is required"})
+    if role not in store_sql.ROLE_RANK:
+        return _json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "role must be admin, operator or viewer"})
+    if username == request.get(_USER_KEY):
+        return _json(HTTPStatus.FORBIDDEN, {"ok": False, "error": "you cannot change your own role"})
+    if not await _users_backend_ready():
+        return _requires_sqlite()
+    outcome = await asyncio.get_running_loop().run_in_executor(
+        None, lambda: store_sql.set_user_role(username, role))
+    failed = _user_outcome(outcome)
+    if failed is not None:
+        return failed
+    _audit(_rt(request), _actor(request), "user_role", target=username, detail=f"role={role}")
+    return _json(HTTPStatus.OK, {"ok": True})
+
+
+async def _users_disabled(request):
+    """POST /api/users/disabled — admin: enable/disable another account. Refuses self (no self-lockout)
+    and the last enabled admin (store-guarded)."""
+    body, err = await _read_json_body(request)
+    if err:
+        return body
+    username = body.get("username") if isinstance(body, dict) else None
+    disabled = body.get("disabled") if isinstance(body, dict) else None
+    if not isinstance(username, str) or not username:
+        return _json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "username is required"})
+    if not isinstance(disabled, bool):
+        return _json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "disabled must be true or false"})
+    if username == request.get(_USER_KEY):
+        return _json(HTTPStatus.FORBIDDEN, {"ok": False, "error": "you cannot disable your own account"})
+    if not await _users_backend_ready():
+        return _requires_sqlite()
+    outcome = await asyncio.get_running_loop().run_in_executor(
+        None, lambda: store_sql.set_user_disabled(username, disabled))
+    failed = _user_outcome(outcome)
+    if failed is not None:
+        return failed
+    _audit(_rt(request), _actor(request), "user_disable" if disabled else "user_enable", target=username)
+    return _json(HTTPStatus.OK, {"ok": True})
+
+
+async def _users_reset_password(request):
+    """POST /api/users/reset-password — admin: set a new password for ANOTHER user (no current-password
+    check). Refuses self: an admin changing their OWN password must use /api/me/password (which verifies
+    the current one), so a hijacked admin session can't silently rotate its own credential here."""
+    body, err = await _read_json_body(request)
+    if err:
+        return body
+    username = body.get("username") if isinstance(body, dict) else None
+    new = body.get("new") if isinstance(body, dict) else None
+    if not isinstance(username, str) or not username:
+        return _json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "username is required"})
+    perror = _password_error(new)
+    if perror is not None:
+        return _json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": perror})
+    if username == request.get(_USER_KEY):
+        return _json(HTTPStatus.FORBIDDEN,
+                     {"ok": False, "error": "use change-password for your own account"})
+    loop = asyncio.get_running_loop()
+    if not await _users_backend_ready():
+        return _requires_sqlite()
+    new_hash = await loop.run_in_executor(None, lambda: auth.hash_password(new))
+    wrote = await loop.run_in_executor(None, lambda: store_sql.set_user_password(username, new_hash))
+    if not wrote:
+        return _json(HTTPStatus.NOT_FOUND, {"ok": False, "error": "no such user"})
+    _audit(_rt(request), _actor(request), "user_password", target=username)
     return _json(HTTPStatus.OK, {"ok": True})
 
 
@@ -771,6 +972,12 @@ def make_app(rt):
     app.router.add_post("/api/automations", _automations_set)
     app.router.add_post("/api/automations/delete", _automations_delete)
     app.router.add_post("/api/graduate", _graduate)
+    app.router.add_post("/api/me/password", _me_password)
+    app.router.add_get("/api/users", _users_list, allow_head=False)
+    app.router.add_post("/api/users", _users_add)
+    app.router.add_post("/api/users/role", _users_role)
+    app.router.add_post("/api/users/disabled", _users_disabled)
+    app.router.add_post("/api/users/reset-password", _users_reset_password)
     return app
 
 

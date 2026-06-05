@@ -21,13 +21,14 @@ import logging
 import os
 from pathlib import Path
 
-from sqlalchemy import delete, func, select
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy import delete, event, func, select
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from . import auth
 from .automations import AutomationStore, Rule
-from .db import AppMeta, Audit, Automation, Node, User, UserSetting, db_path, init_db, session_scope
+from .db import (AppMeta, Audit, Automation, Node, User, UserSetting, db_path, init_db, make_engine,
+                 session_scope)
 from .registry import Registry
 
 log = logging.getLogger("hestia.store_sql")
@@ -324,39 +325,63 @@ def get_user_db_role(username: str, *, path=None) -> "str | None":
         engine.dispose()
 
 
-def set_user_role(username: str, role: str, *, path=None) -> bool:
-    """Change an existing user's role in the DB. Returns ``False`` (and changes nothing) when the user
-    doesn't exist — never creates an account (use ``set_user_db`` for that)."""
-    engine, _ = init_db(path)
-    try:
-        with Session(engine) as session, session.begin():
-            row = session.get(User, username)
-            if row is None:
-                return False
-            row.role = role
-        return True
-    finally:
-        engine.dispose()
+def _immediate_engine(path=None):
+    """A fresh, uncached engine that emits ``BEGIN IMMEDIATE`` for every transaction so a guarded admin
+    mutation holds SQLite's single write lock for its WHOLE read-modify-write. That serialises concurrent
+    admins: the ≥1-enabled-admin invariant is checked AFTER the lock is held, so two admins each
+    demoting/disabling the other (a TOCTOU that a deferred transaction would lose) can't strand the
+    system with zero admins — the second writer waits (busy_timeout), then sees the first's commit and
+    refuses. Schema is ensured via ``init_db`` (cached) first; the caller disposes this short engine."""
+    resolved = str(db_path() if path is None else path)
+    init_db(resolved)                                   # ensure the schema exists (idempotent, cached)
+    engine = make_engine(resolved)
+    # pysqlite recipe: stop the driver's implicit deferred BEGIN, emit our own write-locking one.
+    event.listen(engine, "connect", lambda dbapi_conn, _rec: setattr(dbapi_conn, "isolation_level", None))
+    event.listen(engine, "begin", lambda conn: conn.exec_driver_sql("BEGIN IMMEDIATE"))
+    return engine
 
 
-def set_user_disabled(username: str, disabled: bool, *, path=None) -> str:
-    """Enable/disable a user in the DB. Returns ``"ok"``, ``"not_found"`` (no such user), or
-    ``"last_admin"`` (REFUSED: disabling this account would leave no enabled admin — lockout). The
-    enabled-admin count + the flip happen in ONE transaction so the invariant can't be read stale within
-    this call. (The future web layer adds an actor self-guard + a BEGIN IMMEDIATE write-lock for
-    concurrent admins; the auth CLI runs serially, so a single transaction suffices here.)"""
-    engine, _ = init_db(path)
+def _other_enabled_admins(session, exclude_username: str) -> int:
+    """How many ENABLED admins exist OTHER than ``exclude_username`` — the ≥1-admin invariant guard."""
+    return session.execute(
+        select(func.count()).select_from(User)
+        .where(User.role == "admin", User.disabled.is_(False), User.username != exclude_username)
+    ).scalar_one()
+
+
+def set_user_role(username: str, role: str, *, path=None) -> str:
+    """Change an existing user's role under a write-locked (BEGIN IMMEDIATE) transaction. Returns
+    ``"ok"``, ``"not_found"`` (no such user — never creates an account), or ``"last_admin"`` (REFUSED:
+    demoting this account would leave no enabled admin — lockout). The invariant check + the write share
+    one write-locked transaction, so concurrent admins can't race past it (see ``_immediate_engine``)."""
+    engine = _immediate_engine(path)
     try:
         with Session(engine) as session, session.begin():
             row = session.get(User, username)
             if row is None:
                 return "not_found"
-            if disabled and not row.disabled and row.role == "admin":
-                enabled_admins = session.execute(
-                    select(func.count()).select_from(User)
-                    .where(User.role == "admin", User.disabled.is_(False))).scalar_one()
-                if enabled_admins <= 1:
-                    return "last_admin"
+            if row.role == "admin" and role != "admin" and _other_enabled_admins(session, username) == 0:
+                return "last_admin"
+            row.role = role
+        return "ok"
+    finally:
+        engine.dispose()
+
+
+def set_user_disabled(username: str, disabled: bool, *, path=None) -> str:
+    """Enable/disable a user under a write-locked (BEGIN IMMEDIATE) transaction. Returns ``"ok"``,
+    ``"not_found"`` (no such user), or ``"last_admin"`` (REFUSED: disabling this account would leave no
+    enabled admin — lockout). The enabled-admin count + the flip share one write-locked transaction so
+    concurrent admins can't both disable the last two admins (see ``_immediate_engine``)."""
+    engine = _immediate_engine(path)
+    try:
+        with Session(engine) as session, session.begin():
+            row = session.get(User, username)
+            if row is None:
+                return "not_found"
+            if disabled and not row.disabled and row.role == "admin" \
+                    and _other_enabled_admins(session, username) == 0:
+                return "last_admin"
             row.disabled = disabled
         return "ok"
     finally:
@@ -396,6 +421,54 @@ def current_users(*, users_path=None) -> dict:
         finally:
             engine.dispose()
     return auth.load_users(Path(users_path) if users_path is not None else None)
+
+
+# --- admin user management (#PR-D) -----------------------------------------------------------------
+# The admin user-mgmt web endpoints (and the operator-facing UI) read/write through these. They NEVER
+# expose a password hash: list_users returns metadata only; add/reset take a pre-computed scrypt hash.
+
+def list_users(*, path=None) -> "list[dict]":
+    """Every account's metadata (username / role / disabled), username-sorted, for the admin user list.
+    **Never returns the password hash** — the web layer must not be able to leak it."""
+    engine, _ = init_db(path)
+    try:
+        with Session(engine) as session:
+            rows = session.execute(select(User).order_by(User.username)).scalars()
+            return [{"username": u.username, "role": u.role, "disabled": bool(u.disabled)} for u in rows]
+    finally:
+        engine.dispose()
+
+
+def add_user(username: str, password_hash: str, role: str, *, path=None) -> str:
+    """Insert a NEW account (admin "add user"). Returns ``"ok"`` or ``"exists"`` — never overwrites an
+    existing user (unlike ``set_user_db``'s upsert), so a duplicate add can't silently reset a password or
+    role. The username PRIMARY KEY is the arbiter (``IntegrityError`` → ``"exists"``), so even a concurrent
+    duplicate add can't both win. The account starts enabled (the ``disabled`` column default)."""
+    engine, _ = init_db(path)
+    try:
+        with Session(engine) as session, session.begin():
+            session.add(User(username=username, password_hash=password_hash, role=role))
+        return "ok"
+    except IntegrityError:
+        return "exists"
+    finally:
+        engine.dispose()
+
+
+def set_user_password(username: str, password_hash: str, *, path=None) -> bool:
+    """Replace an existing account's password hash (self change-password + admin reset). Returns
+    ``False`` (changes nothing) when the user doesn't exist — never creates an account. Role + disabled
+    are untouched."""
+    engine, _ = init_db(path)
+    try:
+        with Session(engine) as session, session.begin():
+            row = session.get(User, username)
+            if row is None:
+                return False
+            row.password_hash = password_hash
+        return True
+    finally:
+        engine.dispose()
 
 
 # --- Phase 4b/#55: per-user UI settings --------------------------------------------------------
