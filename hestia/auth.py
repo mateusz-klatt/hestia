@@ -272,8 +272,13 @@ def _cli_role(args: list) -> int:
     if role not in store_sql.ROLE_RANK:
         print(f"invalid role {role!r} (use admin, operator or viewer)", file=sys.stderr)
         return 2
-    if not store_sql.set_user_role(username, role):
+    outcome = store_sql.set_user_role(username, role)
+    if outcome == "not_found":
         print(f"no such user {username!r}", file=sys.stderr)
+        return 1
+    if outcome == "last_admin":
+        print(f"refused: {username!r} is the only enabled admin (demoting it would lock everyone out)",
+              file=sys.stderr)
         return 1
     print(f"set {username!r} role to {role!r}")
     return 0

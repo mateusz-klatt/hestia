@@ -779,9 +779,11 @@ class RolesTests(unittest.TestCase):
     def test_set_user_role_changes_existing_and_reports_missing(self):
         with mock.patch.dict(os.environ, {"HESTIA_DB": str(self.db)}):
             store_sql.set_user_db("op", "h", "viewer")
-            self.assertTrue(store_sql.set_user_role("op", "admin"))
+            self.assertEqual(store_sql.set_user_role("op", "admin"), "ok")   # promote (no guard)
             self.assertEqual(store_sql.get_user_db_role("op"), "admin")
-            self.assertFalse(store_sql.set_user_role("ghost", "admin"))   # never creates an account
+            self.assertEqual(store_sql.set_user_role("ghost", "admin"), "not_found")  # never creates an account
+            self.assertEqual(store_sql.set_user_role("op", "viewer"), "last_admin")   # op is now the only admin
+            self.assertEqual(store_sql.get_user_db_role("op"), "admin")               # refused → unchanged
 
     def test_current_user_role_from_db_when_authoritative(self):
         with mock.patch.dict(os.environ, {"HESTIA_PERSIST": "sqlite", "HESTIA_DB": str(self.db)}):
@@ -828,6 +830,37 @@ class RolesTests(unittest.TestCase):
             self.assertEqual(store_sql.current_user_role("tata"), "admin")
             self.assertIsNone(store_sql.current_user_role("mama"))         # disabled → role None (live cookie dies)
             self.assertEqual(set(store_sql.current_users()), {"tata"})     # disabled filtered out of the login map
+
+    def test_list_users_returns_metadata_without_hashes(self):
+        with mock.patch.dict(os.environ, {"HESTIA_DB": str(self.db)}):
+            store_sql.set_user_db("mama", "secret-hash", "admin")
+            store_sql.set_user_db("kid", "h", "viewer")
+            store_sql.set_user_disabled("kid", True)                        # a disabled non-admin (no guard trip)
+            rows = store_sql.list_users()
+        self.assertEqual([r["username"] for r in rows], ["kid", "mama"])    # username-sorted
+        self.assertEqual(rows[0], {"username": "kid", "role": "viewer", "disabled": True})
+        self.assertEqual(rows[1], {"username": "mama", "role": "admin", "disabled": False})
+        for r in rows:                                                      # NEVER leak the password hash
+            self.assertNotIn("password_hash", r)
+            self.assertNotIn("secret-hash", r.values())
+
+    def test_add_user_inserts_once_then_reports_exists(self):
+        with mock.patch.dict(os.environ, {"HESTIA_DB": str(self.db)}):
+            self.assertEqual(store_sql.add_user("newbie", "h", "operator"), "ok")
+            self.assertEqual(self._role_of("newbie"), "operator")
+            self.assertEqual(store_sql.add_user("newbie", "h2", "admin"), "exists")  # never overwrites
+            self.assertEqual(self._role_of("newbie"), "operator")                    # role + hash untouched
+
+    def test_set_user_password_updates_existing_only(self):
+        with mock.patch.dict(os.environ, {"HESTIA_DB": str(self.db)}):
+            store_sql.set_user_db("mama", "old-hash", "admin")
+            self.assertTrue(store_sql.set_user_password("mama", "new-hash"))
+            self.assertFalse(store_sql.set_user_password("ghost", "x"))    # never creates an account
+            engine, Session = db.init_db(self.db)
+            with Session() as s:
+                row = s.get(db.User, "mama")
+            self.assertEqual(row.password_hash, "new-hash")
+            self.assertEqual(row.role, "admin")                            # role preserved
 
 
 if __name__ == "__main__":  # pragma: no cover

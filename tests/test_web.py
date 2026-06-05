@@ -1827,5 +1827,195 @@ class AuthzTests(_WebTestBase):
         self.assertEqual(self._get("/api/does-not-exist", "viewer"), 404)   # viewer floor → routing → 404
 
 
+class UserMgmtValidatorTests(unittest.TestCase):
+    """The pure validators + the store-outcome→HTTP mapper for #PR-D user management (no server)."""
+
+    def test_username_error(self):
+        self.assertIsNone(web._username_error("mama"))
+        self.assertIsNotNone(web._username_error(123))        # not a string
+        self.assertIsNotNone(web._username_error(""))         # empty
+        self.assertIsNotNone(web._username_error("x" * 65))   # too long
+        self.assertIsNotNone(web._username_error("a|b"))      # '|' would corrupt the session token
+        self.assertIsNotNone(web._username_error("a/b"))      # '/'
+
+    def test_password_error(self):
+        self.assertIsNone(web._password_error("longenough"))
+        self.assertIsNotNone(web._password_error(1234))           # not a string
+        self.assertIsNotNone(web._password_error("short"))        # < 8 chars
+        self.assertIsNotNone(web._password_error("x" * 1025))     # > max
+
+    def test_user_outcome_mapping(self):
+        self.assertIsNone(web._user_outcome("ok"))                # success → no error response
+        self.assertEqual(web._user_outcome("not_found").status, 404)
+        self.assertEqual(web._user_outcome("exists").status, 409)
+        self.assertEqual(web._user_outcome("last_admin").status, 409)
+        self.assertEqual(web._user_outcome("???").status, 500)    # unexpected store result → 500
+
+
+class UserMgmtTests(_WebTestBase):
+    """#PR-D user management endpoints, against a real sqlite-authoritative users DB with an
+    authenticated ADMIN session (the middleware resolves the real role from the DB)."""
+
+    def setUp(self):
+        super().setUp()
+        self.db_file = self.tmp / "users.db"
+        self.env = mock.patch.dict(os.environ, {"HESTIA_PERSIST": "sqlite", "HESTIA_DB": str(self.db_file)})
+        self.env.start()
+        self.addCleanup(self.env.stop)
+        self.addCleanup(db.reset_engine_cache)
+        engine, _ = db.init_db(self.db_file)
+        store_sql.cutover_users(engine, {"admin": auth.hash_password("adminpw")})   # admin → admin, authoritative
+        engine.dispose()
+        store_sql.set_user_db("op1", auth.hash_password("oppw"), "operator")
+        store_sql.set_user_db("viewer1", auth.hash_password("vpw"), "viewer")
+        for p in (mock.patch.object(web, "_AUTH_ENABLED", True),
+                  mock.patch.object(web, "_SESSION_SECRET", b"test-secret-bytes"),
+                  mock.patch.object(web, "_COOKIE_SECURE", False)):
+            p.start()
+            self.addCleanup(p.stop)
+        self.cookie = self._login("admin", "adminpw")
+
+    def _login(self, user, password):
+        _, headers, _ = _post(self.web.address, "/api/login", {"user": user, "password": password})
+        return AuthTests._cookie(headers["Set-Cookie"])
+
+    def _p(self, path, body, cookie=None):
+        return _post(self.web.address, path, body, headers={"Cookie": cookie or self.cookie})[0]
+
+    def _g(self, path, cookie=None):
+        return _get(self.web.address, path, headers={"Cookie": cookie or self.cookie})
+
+    # ---- GET /api/users ----
+    def test_list_users_admin_sees_metadata_without_hashes(self):
+        status, _, body = self._g("/api/users")
+        self.assertEqual(status, 200)
+        users = json.loads(body)["users"]
+        self.assertEqual({u["username"] for u in users}, {"admin", "op1", "viewer1"})
+        self.assertEqual({u["role"] for u in users}, {"admin", "operator", "viewer"})
+        for u in users:
+            self.assertNotIn("password_hash", u)
+        self.assertNotIn("scrypt", body.decode())        # no hash material anywhere in the payload
+
+    def test_list_users_non_admin_is_403(self):
+        self.assertEqual(self._g("/api/users", self._login("viewer1", "vpw"))[0], 403)
+
+    def test_list_users_requires_sqlite_409(self):
+        with mock.patch.object(store_sql, "users_db_authoritative", return_value=False):
+            self.assertEqual(self._g("/api/users")[0], 409)
+
+    # ---- POST /api/me/password ----
+    def test_me_password_change_then_login_with_new(self):
+        self.assertEqual(self._p("/api/me/password", {"current": "adminpw", "new": "brandnewpw"}), 200)
+        self.assertEqual(_post(self.web.address, "/api/login", {"user": "admin", "password": "adminpw"})[0], 401)
+        self.assertEqual(_post(self.web.address, "/api/login", {"user": "admin", "password": "brandnewpw"})[0], 200)
+
+    def test_viewer_can_change_own_password(self):
+        viewer = self._login("viewer1", "vpw")
+        self.assertEqual(self._p("/api/me/password", {"current": "vpw", "new": "viewernewpw"}, viewer), 200)
+
+    def test_me_password_wrong_current_is_403(self):
+        self.assertEqual(self._p("/api/me/password", {"current": "nope", "new": "brandnewpw"}), 403)
+
+    def test_me_password_validation(self):
+        self.assertEqual(self._p("/api/me/password", {"current": "adminpw", "new": "short"}), 400)  # weak new
+        self.assertEqual(self._p("/api/me/password", {"new": "brandnewpw"}), 400)                   # missing current
+
+    def test_me_password_requires_sqlite_409(self):
+        with mock.patch.object(store_sql, "users_db_authoritative", return_value=False):
+            self.assertEqual(self._p("/api/me/password", {"current": "adminpw", "new": "brandnewpw"}), 409)
+
+    def test_me_password_account_vanished_is_409(self):
+        with mock.patch.object(store_sql, "set_user_password", return_value=False):
+            self.assertEqual(self._p("/api/me/password", {"current": "adminpw", "new": "brandnewpw"}), 409)
+
+    def test_me_password_no_session_is_401(self):
+        with mock.patch.object(web, "_AUTH_ENABLED", False):   # auth off → no resolved user
+            status, _, _ = _post(self.web.address, "/api/me/password", {"current": "x", "new": "brandnewpw"})
+        self.assertEqual(status, 401)
+
+    # ---- POST /api/users (add) ----
+    def test_add_user_success_then_login(self):
+        self.assertEqual(self._p("/api/users", {"username": "kid", "password": "kidpassword", "role": "viewer"}), 200)
+        self.assertEqual(_post(self.web.address, "/api/login", {"user": "kid", "password": "kidpassword"})[0], 200)
+
+    def test_add_user_duplicate_is_409(self):
+        self.assertEqual(self._p("/api/users", {"username": "admin", "password": "whatever12", "role": "admin"}), 409)
+
+    def test_add_user_validation(self):
+        self.assertEqual(self._p("/api/users", {"username": "a|b", "password": "longenough", "role": "viewer"}), 400)
+        self.assertEqual(self._p("/api/users", {"username": "ok", "password": "x", "role": "viewer"}), 400)
+        self.assertEqual(self._p("/api/users", {"username": "ok", "password": "longenough", "role": "root"}), 400)
+
+    def test_add_user_requires_sqlite_409(self):
+        with mock.patch.object(store_sql, "users_db_authoritative", return_value=False):
+            self.assertEqual(
+                self._p("/api/users", {"username": "kid", "password": "kidpassword", "role": "viewer"}), 409)
+
+    # ---- POST /api/users/role ----
+    def test_set_role_success(self):
+        self.assertEqual(self._p("/api/users/role", {"username": "viewer1", "role": "operator"}), 200)
+        self.assertEqual(store_sql.get_user_db_role("viewer1"), "operator")
+
+    def test_set_role_self_is_forbidden(self):
+        self.assertEqual(self._p("/api/users/role", {"username": "admin", "role": "viewer"}), 403)
+
+    def test_set_role_validation_and_missing(self):
+        self.assertEqual(self._p("/api/users/role", {"username": "", "role": "viewer"}), 400)
+        self.assertEqual(self._p("/api/users/role", {"username": "viewer1", "role": "root"}), 400)
+        self.assertEqual(self._p("/api/users/role", {"username": "ghost", "role": "viewer"}), 404)
+
+    def test_set_role_last_admin_is_409(self):
+        with mock.patch.object(store_sql, "set_user_role", return_value="last_admin"):
+            self.assertEqual(self._p("/api/users/role", {"username": "op1", "role": "admin"}), 409)
+
+    def test_set_role_requires_sqlite_409(self):
+        with mock.patch.object(store_sql, "users_db_authoritative", return_value=False):
+            self.assertEqual(self._p("/api/users/role", {"username": "viewer1", "role": "operator"}), 409)
+
+    # ---- POST /api/users/disabled ----
+    def test_disable_then_enable(self):
+        self.assertEqual(self._p("/api/users/disabled", {"username": "op1", "disabled": True}), 200)
+        self.assertIsNone(store_sql.current_user_role("op1"))          # disabled → role denied at once
+        self.assertEqual(self._p("/api/users/disabled", {"username": "op1", "disabled": False}), 200)
+        self.assertEqual(store_sql.current_user_role("op1"), "operator")
+
+    def test_disable_self_is_forbidden(self):
+        self.assertEqual(self._p("/api/users/disabled", {"username": "admin", "disabled": True}), 403)
+
+    def test_disable_validation_and_missing(self):
+        self.assertEqual(self._p("/api/users/disabled", {"username": "", "disabled": True}), 400)
+        self.assertEqual(self._p("/api/users/disabled", {"username": "op1", "disabled": "yes"}), 400)  # not a bool
+        self.assertEqual(self._p("/api/users/disabled", {"username": "ghost", "disabled": True}), 404)
+
+    def test_disable_requires_sqlite_409(self):
+        with mock.patch.object(store_sql, "users_db_authoritative", return_value=False):
+            self.assertEqual(self._p("/api/users/disabled", {"username": "op1", "disabled": True}), 409)
+
+    # ---- POST /api/users/reset-password ----
+    def test_reset_password_success_then_login(self):
+        self.assertEqual(self._p("/api/users/reset-password", {"username": "viewer1", "new": "resetpassw"}), 200)
+        self.assertEqual(_post(self.web.address, "/api/login", {"user": "viewer1", "password": "resetpassw"})[0], 200)
+
+    def test_reset_password_self_is_forbidden(self):
+        self.assertEqual(self._p("/api/users/reset-password", {"username": "admin", "new": "resetpassw"}), 403)
+
+    def test_reset_password_validation_and_missing(self):
+        self.assertEqual(self._p("/api/users/reset-password", {"username": "", "new": "resetpassw"}), 400)
+        self.assertEqual(self._p("/api/users/reset-password", {"username": "viewer1", "new": "x"}), 400)
+        self.assertEqual(self._p("/api/users/reset-password", {"username": "ghost", "new": "resetpassw"}), 404)
+
+    def test_reset_password_requires_sqlite_409(self):
+        with mock.patch.object(store_sql, "users_db_authoritative", return_value=False):
+            self.assertEqual(self._p("/api/users/reset-password", {"username": "viewer1", "new": "resetpassw"}), 409)
+
+    def test_all_post_endpoints_enforce_json_content_type(self):
+        # the shared CSRF guard (415 on a non-JSON Content-Type) fires in each handler's `if err` path
+        for path in ("/api/me/password", "/api/users", "/api/users/role",
+                     "/api/users/disabled", "/api/users/reset-password"):
+            status, _, _ = _post(self.web.address, path, "x",
+                                 headers={"Cookie": self.cookie, "Content-Type": "text/plain"})
+            self.assertEqual(status, 415, path)
+
+
 if __name__ == "__main__":
     unittest.main()
