@@ -122,6 +122,28 @@ class DbSchemaTests(unittest.TestCase):
         finally:
             engine.dispose()
 
+    def test_migration_0003_keeps_existing_users_enabled(self):
+        # The PR-D guarantee: adding `disabled` must not lock anyone out — every pre-existing account, and
+        # every new row, comes out ENABLED (disabled = 0).
+        engine = db.make_engine(self.path)
+        try:
+            with engine.begin() as conn:
+                command.upgrade(db._alembic_config(conn), "0002")              # schema BEFORE the disabled column
+            with engine.begin() as conn:
+                conn.exec_driver_sql(
+                    "INSERT INTO users (username, password_hash, role) VALUES ('legacy', 'h', 'admin')")
+            with engine.begin() as conn:
+                command.upgrade(db._alembic_config(conn), "head")              # 0003 adds disabled
+            with engine.connect() as conn:
+                legacy = conn.exec_driver_sql("SELECT disabled FROM users WHERE username='legacy'").scalar()
+                conn.exec_driver_sql(
+                    "INSERT INTO users (username, password_hash, role) VALUES ('fresh', 'h', 'viewer')")
+                fresh = conn.exec_driver_sql("SELECT disabled FROM users WHERE username='fresh'").scalar()
+            self.assertEqual(legacy, 0)              # pre-existing account stays enabled (no migration lockout)
+            self.assertEqual(fresh, 0)               # a new row defaults to enabled
+        finally:
+            engine.dispose()
+
 
 class SessionScopeTests(unittest.TestCase):
     def setUp(self):

@@ -280,8 +280,10 @@ def users_db_authoritative() -> bool:
 
 
 def load_users_db(engine) -> dict:
+    # ENABLED users only — a disabled account is filtered out here so it can't authenticate at login.
     with Session(engine) as session:
-        return {u.username: u.password_hash for u in session.execute(select(User)).scalars()}
+        rows = session.execute(select(User).where(User.disabled.is_(False))).scalars()
+        return {u.username: u.password_hash for u in rows}
 
 
 def cutover_users(engine, users: dict) -> None:
@@ -337,6 +339,30 @@ def set_user_role(username: str, role: str, *, path=None) -> bool:
         engine.dispose()
 
 
+def set_user_disabled(username: str, disabled: bool, *, path=None) -> str:
+    """Enable/disable a user in the DB. Returns ``"ok"``, ``"not_found"`` (no such user), or
+    ``"last_admin"`` (REFUSED: disabling this account would leave no enabled admin — lockout). The
+    enabled-admin count + the flip happen in ONE transaction so the invariant can't be read stale within
+    this call. (The future web layer adds an actor self-guard + a BEGIN IMMEDIATE write-lock for
+    concurrent admins; the auth CLI runs serially, so a single transaction suffices here.)"""
+    engine, _ = init_db(path)
+    try:
+        with Session(engine) as session, session.begin():
+            row = session.get(User, username)
+            if row is None:
+                return "not_found"
+            if disabled and not row.disabled and row.role == "admin":
+                enabled_admins = session.execute(
+                    select(func.count()).select_from(User)
+                    .where(User.role == "admin", User.disabled.is_(False))).scalar_one()
+                if enabled_admins <= 1:
+                    return "last_admin"
+            row.disabled = disabled
+        return "ok"
+    finally:
+        engine.dispose()
+
+
 def current_user_role(username) -> "str | None":
     """The access role of ``username`` in the ACTIVE users backend, for the web authz middleware:
 
@@ -355,7 +381,7 @@ def current_user_role(username) -> "str | None":
         if is_users_db_authoritative(engine):
             with Session(engine) as session:
                 row = session.get(User, username)
-            return row.role if row is not None else None
+            return None if row is None or row.disabled else row.role   # gone or disabled → denied at once
     return LEGACY_ROLE if username in auth.load_users() else None
 
 

@@ -809,6 +809,26 @@ class RolesTests(unittest.TestCase):
             with mock.patch.object(store_sql.auth, "load_users", return_value={"tata": "h"}):
                 self.assertEqual(store_sql.current_user_role("tata"), "admin")
 
+    def test_set_user_disabled_toggles_and_guards_the_last_admin(self):
+        with mock.patch.dict(os.environ, {"HESTIA_PERSIST": "sqlite", "HESTIA_DB": str(self.db)}):
+            engine, _ = db.init_db(self.db)
+            store_sql.cutover_users(engine, {"tata": "h", "mama": "h2"})   # both admin (legacy import)
+            store_sql.set_user_db("kid", "h", "viewer")
+            self.assertEqual(store_sql.set_user_disabled("tata", True), "ok")        # 2 admins → one off is fine
+            self.assertEqual(store_sql.set_user_disabled("mama", True), "last_admin")  # mama is the only enabled admin
+            self.assertEqual(store_sql.set_user_disabled("ghost", True), "not_found")
+            self.assertEqual(store_sql.set_user_disabled("tata", False), "ok")       # re-enable is always allowed
+            self.assertEqual(store_sql.set_user_disabled("kid", True), "ok")         # a non-admin never trips the guard
+
+    def test_disabled_user_is_denied_role_and_filtered_from_login(self):
+        with mock.patch.dict(os.environ, {"HESTIA_PERSIST": "sqlite", "HESTIA_DB": str(self.db)}):
+            engine, _ = db.init_db(self.db)
+            store_sql.cutover_users(engine, {"tata": "h", "mama": "h2"})   # 2 admins so one can be disabled
+            store_sql.set_user_disabled("mama", True)
+            self.assertEqual(store_sql.current_user_role("tata"), "admin")
+            self.assertIsNone(store_sql.current_user_role("mama"))         # disabled → role None (live cookie dies)
+            self.assertEqual(set(store_sql.current_users()), {"tata"})     # disabled filtered out of the login map
+
 
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()
