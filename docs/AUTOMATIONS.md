@@ -111,12 +111,31 @@ runtime.
 
 ### Conditions
 
-A list of state predicates, all of which must hold (AND) at the instant the trigger
-fires, evaluated against **live** state:
+A list of conditions, all of which must hold (AND) at the instant the trigger fires.
+Two kinds, freely mixed:
 
-```json
-[ { "node": 10, "field": "switch", "op": "eq", "value": false } ]
-```
+- **State predicate** — `{node, field, op, value}` evaluated against **live** state
+  (`node` omitted for a global field):
+
+  ```json
+  [ { "node": 10, "field": "switch", "op": "eq", "value": false } ]
+  ```
+
+- **Time window** — `{type:"time_window", start, end, days?}` — a time-of-day guard so a
+  rule fires only during certain hours. `start`/`end` are `"HH:MM"` (local wall clock);
+  the window is the half-open interval `[start, end)` (so `end` is exclusive). `start > end`
+  **wraps midnight** (active when `now >= start` **or** `now < end`); `start == end` is
+  rejected. Optional `days` (a list of `0..6`, Mon=0) restricts it to those weekdays — for a
+  wrapped window the post-midnight tail belongs to the weekday the window **started** on
+  (`Mon 22:00–06:00` covers Tue 00:00–05:59).
+
+  ```json
+  [ { "type": "time_window", "start": "06:00", "end": "22:00", "days": [0, 1, 2, 3, 4] } ]
+  ```
+
+  Because it is a condition, it applies uniformly to **every** trigger type — including
+  edge triggers (a flaky PIR can't switch a light on at night; a no-motion→OFF rule won't
+  fire mid-bath).
 
 A condition becoming true does **not** retro-fire the rule — only a trigger edge fires;
 conditions are an instantaneous gate sampled at that moment.

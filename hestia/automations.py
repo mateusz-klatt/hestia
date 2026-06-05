@@ -85,6 +85,9 @@ _VALID_MODES = frozenset({"proxy", "standalone"})
 # lockstep with validation. These tuples are ALSO the single source used inside ``_validate_trigger``
 # (its accepted-type list + the sun/presence event checks), so form and validator cannot drift.
 _TRIGGER_TYPES = ("scene", "state", "time", "sun", "presence", "cron")
+# Condition kinds the guided form offers: a state predicate (the unmarked default — `{node,field,op,value}`)
+# or a `time_window` guard (`{type:"time_window", start, end, days?}`). Both are ANDed at fire time.
+_CONDITION_TYPES = ("state", "time_window")
 _SUN_EVENTS = ("sunrise", "sunset")
 _PRESENCE_EVENTS = ("arrive", "leave")
 
@@ -101,6 +104,7 @@ def rule_vocab() -> dict:
         "modes": sorted(_VALID_MODES),
         "sun_events": list(_SUN_EVENTS),
         "presence_events": list(_PRESENCE_EVENTS),
+        "condition_types": list(_CONDITION_TYPES),
     }
 
 
@@ -315,17 +319,22 @@ def _validate_scene_trigger(spec):
     return {"type": "scene", "node": node, "scene_id": sid}
 
 
-def _validate_time_trigger(spec):
-    at = spec.get("at")
-    if not isinstance(at, str):
-        raise ValueError(f"trigger.at must be an 'HH:MM' string, got {at!r}")
+def _validate_hhmm(value, label):
+    """Validate a wall-clock 'HH:MM' string and return it canonicalised (zero-padded). Shared by
+    the `time` trigger and the `time_window` condition so they cannot drift. Raises ValueError."""
+    if not isinstance(value, str):
+        raise ValueError(f"{label} must be an 'HH:MM' string, got {value!r}")
     try:
-        parsed = datetime.datetime.strptime(at, "%H:%M")
+        parsed = datetime.datetime.strptime(value, "%H:%M")
     except ValueError:
-        raise ValueError(f"trigger.at must be a valid 'HH:MM' time, got {at!r}") from None
+        raise ValueError(f"{label} must be a valid 'HH:MM' time, got {value!r}") from None
+    return parsed.strftime("%H:%M")
+
+
+def _validate_time_trigger(spec):
     # Store the PUBLIC schema (canonical, zero-padded `at`) — never hour/minute — so
     # `Rule.to_dict` (= dict(self.trigger)) round-trips and the listing stays public.
-    return {"type": "time", "at": parsed.strftime("%H:%M"),
+    return {"type": "time", "at": _validate_hhmm(spec.get("at"), "trigger.at"),
             "days": _validate_days(spec.get("days"))}
 
 
@@ -427,11 +436,66 @@ def _validate_debounce(spec):
     return float(debounce)
 
 
+def _validate_time_window(spec, where):
+    """Validate a time-of-day GUARD condition: ``{type:"time_window", start, end, days?}``. The window
+    is the half-open interval ``[start, end)`` in local wall-clock time; ``start > end`` WRAPS midnight
+    (active when ``now >= start`` OR ``now < end``). ``start == end`` is rejected (empty / all-day is
+    ambiguous). Optional ``days`` (Mon=0..Sun=6) restricts the window to those weekdays — for a wrapped
+    window the post-midnight tail belongs to the weekday the window STARTED on (see ``_eval_time_window``).
+    Returns the canonical public dict (no ``days`` key when unset)."""
+    start = _validate_hhmm(spec.get("start"), f"{where}.start")
+    end = _validate_hhmm(spec.get("end"), f"{where}.end")
+    if start == end:
+        raise ValueError(f"{where} start and end must differ (empty/all-day window), got {start!r}")
+    out = {"type": "time_window", "start": start, "end": end}
+    days = _validate_days(spec.get("days"), f"{where}.days")
+    if days is not None:
+        out["days"] = days
+    return out
+
+
+def _validate_condition(spec, where):
+    """One rule condition: either a ``time_window`` guard or a state predicate. A predicate carries no
+    ``type`` key, so unmarked conditions stay backward-compatible and route to ``_validate_predicate``."""
+    if isinstance(spec, dict) and spec.get("type") == "time_window":
+        return _validate_time_window(spec, where)
+    return _validate_predicate(spec, where)
+
+
 def _validate_conditions(spec):
     conditions = spec.get("conditions", [])
     if not isinstance(conditions, list):
         raise ValueError(f"rule.conditions must be a list, got {conditions!r}")
-    return [_validate_predicate(c, f"conditions[{i}]") for i, c in enumerate(conditions)]
+    return [_validate_condition(c, f"conditions[{i}]") for i, c in enumerate(conditions)]
+
+
+def _eval_time_window(cond, now_local) -> bool:
+    """True iff the naive-local ``now_local`` falls inside the ``time_window`` ``cond``. Non-wrapping
+    (``start < end``): active on ``[start, end)`` the same calendar day. Wrapping (``start > end``):
+    active when ``now >= start`` (head, today) OR ``now < end`` (tail, after midnight). An optional
+    ``days`` filter is checked against the weekday the window STARTED on — so the post-midnight tail of
+    a wrapped window is owned by the previous day (``Mon 22:00-06:00`` includes Tue 00:00-05:59)."""
+    cur = now_local.hour * 60 + now_local.minute
+    sh, sm = (int(p) for p in cond["start"].split(":"))
+    eh, em = (int(p) for p in cond["end"].split(":"))
+    start, end = sh * 60 + sm, eh * 60 + em
+    if start < end:                                    # same-day window
+        if not start <= cur < end:
+            return False
+        owning_day = now_local.weekday()
+    elif cur >= start:                                 # wrapped: head (still today)
+        owning_day = now_local.weekday()
+    elif cur < end:                                    # wrapped: tail (after midnight — owned by yesterday)
+        owning_day = (now_local - datetime.timedelta(days=1)).weekday()
+    else:                                              # wrapped: in the gap between end and start
+        return False
+    return cond.get("days") is None or owning_day in cond["days"]
+
+
+def _local_now():
+    """The current naive-local wall-clock ``datetime`` — the default ``time_window`` clock. Matches
+    the naive-local ``now`` the scheduler already feeds ``on_time`` (see ``proxy``). Injectable in tests."""
+    return datetime.datetime.now()
 
 
 def _validate_action(action, i: int) -> None:
@@ -453,6 +517,15 @@ def _validate_actions(spec):
     for i, action in enumerate(actions):
         _validate_action(action, i)
     return [dict(a) for a in actions]
+
+
+def _copy_condition(cond):
+    """A one-level copy of a condition, also copying a ``time_window``'s ``days`` list so a caller
+    editing ``to_dict`` output cannot mutate the stored rule (mirrors the trigger ``days`` copy)."""
+    out = dict(cond)
+    if isinstance(out.get("days"), list):
+        out["days"] = list(out["days"])
+    return out
 
 
 class Rule:
@@ -496,7 +569,7 @@ class Rule:
             "modes": list(self.modes),
             "debounce": self.debounce,
             "trigger": trigger,
-            "conditions": [dict(c) for c in self.conditions],
+            "conditions": [_copy_condition(c) for c in self.conditions],
             "actions": [dict(a) for a in self.actions],
         }
 
@@ -607,11 +680,13 @@ class AutomationEngine:
     Owns the in-memory loop-guard caches (``_last_match`` for state-trigger edges,
     ``_last_fired`` for debounce), keyed by rule id. Rule CRUD goes THROUGH the engine
     (``set_rule``/``delete_rule``) so a replaced or deleted id can never inherit stale
-    edge/debounce state. ``clock`` is injectable for deterministic tests."""
+    edge/debounce state. ``clock`` (monotonic, for debounce) and ``wall`` (naive-local
+    ``datetime`` now, for ``time_window`` conditions) are injectable for deterministic tests."""
 
-    def __init__(self, store: "AutomationStore", clock=time.monotonic):
+    def __init__(self, store: "AutomationStore", clock=time.monotonic, wall=_local_now):
         self.store = store
         self._clock = clock
+        self._wall = wall
         self._last_match: "dict[str, bool]" = {}        # state-trigger edge
         self._last_fired: "dict[str, float]" = {}       # debounce (monotonic)
         self._last_time_fire: "dict[str, tuple]" = {}   # time-trigger minute-slot dedup
@@ -675,7 +750,7 @@ class AutomationEngine:
             if not ready:
                 continue
             self._last_time_fire[rule.id] = slot
-            frames.extend(self._fire(rt, rule))
+            frames.extend(self._fire(rt, rule, now))
         return frames
 
     def _sun_due(self, rt, now_utc, tg) -> bool:
@@ -766,8 +841,8 @@ class AutomationEngine:
         # cron has no `days` key (it owns dow); time/sun always set it → `.get` is equivalent there.
         return tg.get("days") is None or now.weekday() in tg["days"]
 
-    def _scheduled_conditions_ok(self, rt, rule) -> bool:
-        return all(self._condition_ok(rt.state, c) for c in rule.conditions)
+    def _scheduled_conditions_ok(self, rt, rule, now) -> bool:
+        return all(self._condition_ok(rt.state, c, now) for c in rule.conditions)
 
     def _scheduled_rule_ready(self, rt, rule, now, now_utc, slot):
         if not rule.enabled or rt.mode not in rule.modes:
@@ -780,16 +855,20 @@ class AutomationEngine:
             return False, now_utc
         # Check conditions BEFORE consuming the minute slot: if they're false now, the
         # slot stays free so a later tick this minute can retry once they hold. (_fire
-        # re-checks — harmless — and applies debounce + builds the actions.)
-        if not self._scheduled_conditions_ok(rt, rule):
+        # re-checks with the SAME `now` — harmless — and applies debounce + builds the actions.)
+        if not self._scheduled_conditions_ok(rt, rule, now):
             return False, now_utc
         return True, now_utc
 
-    def _fire(self, rt, rule) -> list:
+    def _fire(self, rt, rule, now_local=None) -> list:
         """Shared firing tail once a rule's trigger has matched: AND its conditions against
         live state, apply per-rule debounce, then build its action frames (one bad action
-        logged + skipped, never tearing down the loop). Returns the frames (possibly empty)."""
-        if not all(self._condition_ok(rt.state, c) for c in rule.conditions):
+        logged + skipped, never tearing down the loop). Returns the frames (possibly empty).
+        ``now_local`` (naive-local) gates ``time_window`` conditions; event-driven callers pass
+        None to sample ``self._wall()`` here, while ``on_time`` threads its own scheduler ``now``."""
+        if now_local is None:
+            now_local = self._wall()
+        if not all(self._condition_ok(rt.state, c, now_local) for c in rule.conditions):
             return []
         now = self._clock()
         if rule.debounce > 0 and now - self._last_fired.get(rule.id, -math.inf) < rule.debounce:
@@ -841,7 +920,10 @@ class AutomationEngine:
         return now_true and not prev             # later suppress the action (the edge is real)
 
     @staticmethod
-    def _condition_ok(state, cond) -> bool:
+    def _condition_ok(state, cond, now_local) -> bool:
+        # A time_window guard is evaluated against the wall clock; everything else is a state predicate.
+        if cond.get("type") == "time_window":
+            return _eval_time_window(cond, now_local)
         # cond.get("node"): a global-field condition has no `node` (current_value ignores it anyway).
         return _eval_predicate(current_value(state, cond.get("node"), cond["field"]),
                                cond["op"], cond["value"])

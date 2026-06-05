@@ -362,6 +362,49 @@ describe("renderRuleForm — conditions", () => {
     f.build();
     expect(f.rule().conditions).toEqual([{ field: "temperature", op: "gt", value: 22, node: 9 }]);
   });
+
+  it("adds a time_window condition with optional days", () => {
+    const f = mkForm();
+    fillBasics(f);
+    setInput(f.triggerFields(), "node", "5");
+    setInput(f.triggerFields(), "scene_id", "1");
+    fillSwitchAction(f);
+
+    [...f.box.querySelectorAll("button")].find((b) => b.textContent === "+ active window")?.click();
+    const condBox = f.rows("conditions: ");
+    const win = condBox.children[0];
+    expect(win).toBeInstanceOf(HTMLElement);
+    if (win instanceof HTMLElement) {
+      const times = win.querySelectorAll<HTMLInputElement>('input[placeholder="HH:MM"]');
+      expect(times).toHaveLength(2);
+      times.item(0).value = "6:00"; // canonicalised server-side; the wizard emits it verbatim
+      times.item(1).value = "22:00";
+      const day0 = win.querySelector<HTMLInputElement>('input[type="checkbox"]'); // Monday
+      if (day0 !== null) day0.checked = true;
+    }
+    f.build();
+    expect(f.rule().conditions).toEqual([
+      { type: "time_window", start: "6:00", end: "22:00", days: [0] },
+    ]);
+  });
+
+  it("rejects an active window with a blank time", () => {
+    const f = mkForm();
+    fillBasics(f);
+    setInput(f.triggerFields(), "node", "5");
+    setInput(f.triggerFields(), "scene_id", "1");
+    fillSwitchAction(f);
+
+    [...f.box.querySelectorAll("button")].find((b) => b.textContent === "+ active window")?.click();
+    const win = f.rows("conditions: ").children[0];
+    if (win instanceof HTMLElement) {
+      const times = win.querySelectorAll<HTMLInputElement>('input[placeholder="HH:MM"]');
+      expect(times).toHaveLength(2);
+      times.item(1).value = "22:00";
+    }
+    f.build();
+    expect(f.status()).toContain("start"); // first blank field flagged, no JSON emitted
+  });
 });
 
 describe("renderRuleForm — actions", () => {
