@@ -8,6 +8,7 @@ const messages: Partial<Messages> = {
 
   "view.rooms": "🏠 Սենյակներ",
   "view.back": "← Սենյակներ",
+  "view.events": "📜 Գործունեություն",
   "view.advanced": "🔧 Ընդլայնված",
 
   "login.username": "Օգտանուն",

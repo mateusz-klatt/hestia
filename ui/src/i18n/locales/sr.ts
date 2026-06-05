@@ -8,6 +8,7 @@ const messages: Partial<Messages> = {
 
   "view.rooms": "🏠 Просторије",
   "view.back": "← Просторије",
+  "view.events": "📜 Активност",
   "view.advanced": "🔧 Напредно",
 
   "login.username": "Корисничко име",

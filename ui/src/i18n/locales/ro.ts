@@ -8,6 +8,7 @@ const messages: Partial<Messages> = {
 
   "view.rooms": "🏠 Camere",
   "view.back": "← Camere",
+  "view.events": "📜 Activitate",
   "view.advanced": "🔧 Avansat",
 
   "login.username": "Nume de utilizator",

@@ -8,6 +8,7 @@ const messages: Partial<Messages> = {
 
   "view.rooms": "🏠 部屋",
   "view.back": "← 部屋",
+  "view.events": "📜 アクティビティ",
   "view.advanced": "🔧 詳細",
 
   "login.username": "ユーザー名",

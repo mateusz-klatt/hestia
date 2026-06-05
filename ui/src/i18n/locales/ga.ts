@@ -8,6 +8,7 @@ const messages: Partial<Messages> = {
 
   "view.rooms": "🏠 Seomraí",
   "view.back": "← Seomraí",
+  "view.events": "📜 Gníomhaíocht",
   "view.advanced": "🔧 Ardroghanna",
 
   "login.username": "Ainm úsáideora",
