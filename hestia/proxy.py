@@ -84,14 +84,18 @@ def _thermostat_confirm_interval(raw: "str | None") -> float:
     """Parse HESTIA_THERMOSTAT_CONFIRM_SECS — the DEBOUNCE delay before a confirmation poll after a
     thermostat change (the optimistic on/off is shown instantly; this poll then confirms it against the
     device). ``<= 0`` disables confirmation polling entirely (pure optimistic). Otherwise clamp to
-    [2, 120]; non-numeric / non-finite → the 10 s default. There is NO blind periodic poll — a thermostat
-    is only ever GET-polled in the seconds after the user changed it, to spare battery FLiRS TRVs."""
+    [2, 120]; non-numeric / non-finite → the 40 s default. There is NO blind periodic poll — a thermostat
+    is only ever GET-polled in the seconds after the user changed it, to spare battery FLiRS TRVs.
+
+    The 40 s default mirrors the Keemple app, measured live in proxy mode: after a SET/power command the
+    app waits ~40 s before its confirming `40 02`/`31 04` GET poll. Polling much sooner just wakes the
+    FLiRS TRV for nothing (the optimistic echo already shows the new state)."""
     try:
-        value = float(raw) if raw is not None else 10.0
+        value = float(raw) if raw is not None else 40.0
     except ValueError:
-        return 10.0
+        return 40.0
     if not math.isfinite(value):
-        return 10.0
+        return 40.0
     if value <= 0:
         return 0.0
     return min(max(value, 2.0), 120.0)

@@ -913,15 +913,15 @@ class SchedulerTests(unittest.IsolatedAsyncioTestCase):
 
 class ThermostatConfirmIntervalTests(unittest.TestCase):
     def test_default_clamp_and_disable(self):
-        self.assertEqual(proxy._thermostat_confirm_interval(None), 10.0)     # default
+        self.assertEqual(proxy._thermostat_confirm_interval(None), 40.0)     # default (Keemple-aligned)
         self.assertEqual(proxy._thermostat_confirm_interval("15"), 15.0)
         self.assertEqual(proxy._thermostat_confirm_interval("1"), 2.0)       # floor
         self.assertEqual(proxy._thermostat_confirm_interval("999"), 120.0)   # ceiling
         self.assertEqual(proxy._thermostat_confirm_interval("0"), 0.0)       # disabled (pure optimistic)
         self.assertEqual(proxy._thermostat_confirm_interval("-1"), 0.0)
-        self.assertEqual(proxy._thermostat_confirm_interval("nope"), 10.0)   # non-numeric → default
-        self.assertEqual(proxy._thermostat_confirm_interval("nan"), 10.0)    # non-finite → default
-        self.assertEqual(proxy._thermostat_confirm_interval("inf"), 10.0)
+        self.assertEqual(proxy._thermostat_confirm_interval("nope"), 40.0)   # non-numeric → default
+        self.assertEqual(proxy._thermostat_confirm_interval("nan"), 40.0)    # non-finite → default
+        self.assertEqual(proxy._thermostat_confirm_interval("inf"), 40.0)
 
 
 class ThermostatNodeFromFrameTests(unittest.TestCase):

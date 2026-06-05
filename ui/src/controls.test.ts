@@ -155,7 +155,8 @@ describe("renderActions dispatch", () => {
       { op: "cover", node: 8, value: 0 },
       { op: "thermostat_power", node: 9, on: true }, // ✓ Set = power on, then…
       { op: "thermostat", node: 9, celsius: 25 }, // …setpoint
-      { op: "thermostat_power", node: 9, on: false }, // ⏻ Off
+      { op: "thermostat", node: 9, celsius: 4 }, // ⏻ Off = frost-safe 4° first…
+      { op: "thermostat_power", node: 9, on: false }, // …then power off
       { op: "switch", node: 7, endpoint: 1, on: true },
       { op: "switch", node: 7, endpoint: 1, on: false },
       { op: "switch", node: 7, endpoint: 2, on: true },

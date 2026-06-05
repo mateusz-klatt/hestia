@@ -46,9 +46,10 @@ export function battLow(pct: number | null): boolean {
   return pct !== null && (pct > 100 || pct < 20);
 }
 
-/** Grace after a thermostat SET before its silence counts as "not responding" — the confirm-debounce
- *  (≤10 s) + the poll round-trip + margin. */
-const THERMOSTAT_CONFIRM_GRACE_MS = 25_000;
+/** Grace after a thermostat SET before its silence counts as "not responding" — must clear the
+ *  confirm-debounce (~40 s, Keemple-aligned) + the GET poll round-trip + margin, else ⚠ would flash
+ *  in the gap before the confirm poll lands. */
+const THERMOSTAT_CONFIRM_GRACE_MS = 50_000;
 
 /**
  * A thermostat is "not responding" when we sent it a command but no device frame has arrived SINCE
