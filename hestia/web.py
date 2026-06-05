@@ -86,6 +86,7 @@ _AUTH_ENABLED = bool(_SESSION_SECRET)
 _COOKIE_SECURE = _truthy_env(os.environ.get("HESTIA_COOKIE_SECURE"))   # set on the HTTPS (Apache) deployment
 _SESSION_COOKIE = "hestia_session"
 _USER_KEY = "hestia_user"
+_ROLE_KEY = "hestia_role"          # the request's resolved RBAC role (set by the auth middleware)
 _now = time.time          # WALL clock for session expiry (must survive restarts, unlike _clock); rebindable for tests
 
 
@@ -140,17 +141,77 @@ def _is_public_route(method: str, path: str) -> bool:
     return method == "POST" and path in ("/api/login", "/api/logout")
 
 
+# RBAC route policy (#73). The MINIMUM role for each non-public route, kept adjacent to make_app's route
+# table; ``test_every_route_is_classified`` asserts every registered route is here (or public), so this
+# can't silently drift from the routes. Public routes are short-circuited in the middleware before this.
+_VIEWER, _OPERATOR, _ADMIN = "viewer", "operator", "admin"
+_ROUTE_MIN_ROLE = {
+    # reads every signed-in user (incl. a read-only viewer) needs — the room / event-log / temps / own-prefs surface
+    ("GET", "/api/discovery"): _VIEWER,
+    ("GET", "/api/events"): _VIEWER,
+    ("GET", "/api/audit"): _VIEWER,
+    ("GET", "/api/settings"): _VIEWER,
+    ("POST", "/api/settings"): _VIEWER,            # a user's OWN UI prefs (locale / temp scale / theme)
+    ("GET", "/api/rooms/icons"): _VIEWER,
+    ("GET", "/api/whoami"): _VIEWER,
+    # room actions: operator and admin (a viewer is read-only — the UI hides these, the server enforces it)
+    ("POST", "/api/control"): _OPERATOR,
+    ("POST", "/api/ir"): _OPERATOR,
+    ("POST", "/api/scene"): _OPERATOR,
+    # config / engineering surface: admin only — incl. the reads that would leak it (automation rules carry
+    # presence-trigger MAC addresses; db-stats / rf433 are engineering observability the operator hides)
+    ("POST", "/api/name"): _ADMIN,
+    ("GET", "/api/automations"): _ADMIN,
+    ("POST", "/api/automations"): _ADMIN,
+    ("POST", "/api/automations/delete"): _ADMIN,
+    ("POST", "/api/graduate"): _ADMIN,
+    ("POST", "/api/rooms/icons"): _ADMIN,
+    ("GET", "/api/db/stats"): _ADMIN,
+    ("GET", "/api/rf433"): _ADMIN,
+}
+_MUTATING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+
+
+def _required_role(method: str, path: str) -> str:
+    """The minimum role for a non-public route. Fail-closed: an UNclassified mutating method → admin (a
+    new write route stays locked down until explicitly classified); any other unclassified method
+    (GET/HEAD) → viewer. ``test_every_route_is_classified`` keeps the map complete, so the fallbacks are
+    a backstop, not the normal path."""
+    floor = _ROUTE_MIN_ROLE.get((method, path))
+    if floor is not None:
+        return floor
+    return _ADMIN if method in _MUTATING_METHODS else _VIEWER
+
+
+def _role_allows(role, floor: str) -> bool:
+    """True iff the user's resolved ``role`` clears the route's ``floor``. An unknown / None role fails
+    every floor (denied) — fail closed."""
+    rank = store_sql.ROLE_RANK.get(role)
+    return rank is not None and rank >= store_sql.ROLE_RANK[floor]
+
+
 @web.middleware
 async def _auth_middleware(request, handler):
-    """Gate every non-public route on a valid session cookie when auth is enabled (a HESTIA_SESSION_SECRET
-    is set). An absent / expired / forged cookie → 401 (the TS app then shows the login form). No-op when
-    auth is off. Runs OUTERMOST so an unauthenticated request is rejected before it reaches any handler."""
+    """Authenticate + authorize every non-public route when auth is enabled (a HESTIA_SESSION_SECRET is
+    set). An absent / expired / forged cookie → 401 (the TS app then shows the login form); a cookie for
+    an account that no longer exists → 401 (immediate revocation, not at cookie expiry); a valid user
+    whose role is below the route's floor → 403. No-op when auth is off (loopback/dev stays fully open).
+    Runs OUTERMOST so an unauthenticated/unauthorized request is rejected before it reaches any handler."""
     if not _AUTH_ENABLED or _is_public_route(request.method, request.path):
         return await handler(request)
     user = auth.verify_session(request.cookies.get(_SESSION_COOKIE, ""), now=_now(), secret=_SESSION_SECRET)
     if user is None:
         return _empty(HTTPStatus.UNAUTHORIZED)
-    request[_USER_KEY] = user                     # for /api/whoami (and future per-user UI)
+    # Resolve the role fresh on EVERY authenticated request (offloaded off the loop): a demotion or a
+    # removed account takes effect immediately, instead of living on in the 30-day signed cookie.
+    role = await asyncio.get_running_loop().run_in_executor(
+        None, lambda: store_sql.current_user_role(user))
+    if role is None:                              # the account is gone → the still-signed cookie is moot
+        return _empty(HTTPStatus.UNAUTHORIZED)
+    request[_USER_KEY] = user                     # for /api/whoami + the audit actor
+    request[_ROLE_KEY] = role                     # for /api/whoami + the floor check below
+    if not _role_allows(role, _required_role(request.method, request.path)):
+        return _empty(HTTPStatus.FORBIDDEN)
     return await handler(request)
 
 
@@ -194,7 +255,9 @@ async def _logout(_request):  # NOSONAR S7503: aiohttp route handlers must be co
 
 
 async def _whoami(request):  # NOSONAR S7503: aiohttp route handlers must be coroutines (the framework awaits them)
-    return _json(HTTPStatus.OK, {"user": request.get(_USER_KEY)})
+    # The role is resolved once by the auth middleware (request[_ROLE_KEY]); both are None when auth is
+    # off (loopback/dev), which the TS app reads as "fully open, no role gating".
+    return _json(HTTPStatus.OK, {"user": request.get(_USER_KEY), "role": request.get(_ROLE_KEY)})
 
 
 async def _audit_feed(request):

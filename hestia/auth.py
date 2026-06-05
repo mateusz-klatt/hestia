@@ -157,17 +157,51 @@ def save_user_json(username: str, password_hash: str, path: "Path | None" = None
     return target
 
 
+_USAGE = ("usage: python -m hestia.auth add <username> [--role admin|operator|viewer]\n"
+          "       python -m hestia.auth role <username> <admin|operator|viewer>")
+
+
 def _cli(argv: list, *, prompt=getpass.getpass, path: "Path | None" = None) -> int:
-    """``add <username>`` — prompt a password (twice), hash it, and upsert it into the AUTHORITATIVE
-    users store: the SQLite DB when it is in charge (HESTIA_PERSIST=sqlite and the users table is cut
-    over), else the JSON file. Writing where the daemon reads avoids a silent no-op after cutover. A
-    test ``path`` forces the JSON file (and keeps this module import-clean of the DB layer)."""
-    if len(argv) != 2 or argv[0] != "add":
-        print("usage: python -m hestia.auth add <username>", file=sys.stderr)
+    """``add <username> [--role …]`` — prompt a password (twice), hash it, and upsert the user into the
+    AUTHORITATIVE store: the SQLite DB when it owns users (HESTIA_PERSIST=sqlite and the users table is
+    cut over), else the JSON file. ``role <username> <role>`` — change an existing user's role (SQLite
+    only). A test ``path`` forces the JSON file (and keeps this module import-clean of the DB layer in
+    JSON mode — ``store_sql`` is imported only on the SQLite branches)."""
+    if argv[:1] == ["role"]:
+        return _cli_role(argv[1:])
+    if argv[:1] != ["add"]:
+        print(_USAGE, file=sys.stderr)
         return 2
-    username = argv[1]
+    return _cli_add(argv[1:], prompt=prompt, path=path)
+
+
+def _parse_add_args(args: list) -> "tuple[str | None, str | None, str | None]":
+    """Parse ``<username> [--role ROLE]`` → ``(username, role, error)``. ``role`` is None when omitted;
+    on any problem ``(None, None, message)``. Validation only — never touches the store."""
+    role = None
+    positional = []
+    i = 0
+    while i < len(args):
+        if args[i] == "--role":
+            if i + 1 >= len(args):
+                return None, None, "missing value for --role"
+            role = args[i + 1]
+            i += 2
+        else:
+            positional.append(args[i])
+            i += 1
+    if len(positional) != 1:
+        return None, None, _USAGE
+    username = positional[0]
     if not username or "|" in username or "/" in username:
-        print("invalid username (no empty, '|' or '/')", file=sys.stderr)
+        return None, None, "invalid username (no empty, '|' or '/')"
+    return username, role, None
+
+
+def _cli_add(args: list, *, prompt, path: "Path | None") -> int:
+    username, role, error = _parse_add_args(args)
+    if error is not None:
+        print(error, file=sys.stderr)
         return 2
     first = prompt("password: ")
     if not first:
@@ -180,11 +214,40 @@ def _cli(argv: list, *, prompt=getpass.getpass, path: "Path | None" = None) -> i
     if path is None and os.environ.get("HESTIA_PERSIST", "json").lower() == "sqlite":
         from . import store_sql
         if store_sql.users_db_authoritative():
-            store_sql.set_user_db(username, password_hash)
-            print(f"saved user {username!r} to the SQLite DB")
+            if role is not None and role not in store_sql.ROLE_RANK:
+                print(f"invalid role {role!r} (use admin, operator or viewer)", file=sys.stderr)
+                return 2
+            # explicit --role wins; a bare password reset preserves the existing role; a brand-new
+            # account defaults to the least-privilege viewer.
+            effective = role or store_sql.get_user_db_role(username) or store_sql.DEFAULT_NEW_ROLE
+            store_sql.set_user_db(username, password_hash, effective)
+            print(f"saved user {username!r} (role {effective!r}) to the SQLite DB")
             return 0
     target = save_user_json(username, password_hash, path)
-    print(f"saved user {username!r} to {target}")
+    note = " (roles need the SQLite backend; saved without one)" if role is not None else ""
+    print(f"saved user {username!r} to {target}{note}")
+    return 0
+
+
+def _cli_role(args: list) -> int:
+    if len(args) != 2:
+        print("usage: python -m hestia.auth role <username> <admin|operator|viewer>", file=sys.stderr)
+        return 2
+    username, role = args
+    if os.environ.get("HESTIA_PERSIST", "json").lower() != "sqlite":
+        print("roles require the SQLite backend (HESTIA_PERSIST=sqlite)", file=sys.stderr)
+        return 1
+    from . import store_sql
+    if not store_sql.users_db_authoritative():
+        print("roles require the SQLite users store (users not yet cut over)", file=sys.stderr)
+        return 1
+    if role not in store_sql.ROLE_RANK:
+        print(f"invalid role {role!r} (use admin, operator or viewer)", file=sys.stderr)
+        return 2
+    if not store_sql.set_user_role(username, role):
+        print(f"no such user {username!r}", file=sys.stderr)
+        return 1
+    print(f"set {username!r} role to {role!r}")
     return 0
 
 

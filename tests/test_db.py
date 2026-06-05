@@ -100,6 +100,28 @@ class DbSchemaTests(unittest.TestCase):
         names = set(inspect(engine).get_table_names())
         self.assertEqual(ALL_TABLES & names, set(), names)
 
+    def test_migration_0002_backfills_existing_users_to_admin(self):
+        # The #73 guarantee: accounts that existed before roles must come out of the migration as admin
+        # (no operator lockout), while the column default for any new row is the least-privilege viewer.
+        engine = db.make_engine(self.path)   # not init_db: we step the revision manually (0001 → head)
+        try:
+            with engine.begin() as conn:
+                command.upgrade(db._alembic_config(conn), "0001")           # schema BEFORE the role column
+            with engine.begin() as conn:
+                conn.exec_driver_sql("INSERT INTO users (username, password_hash) VALUES ('legacy', 'h')")
+            with engine.begin() as conn:
+                command.upgrade(db._alembic_config(conn), "head")           # 0002 adds role + backfills
+            with engine.connect() as conn:
+                legacy = conn.exec_driver_sql("SELECT role FROM users WHERE username='legacy'").scalar()
+                fresh = conn.exec_driver_sql(
+                    "INSERT INTO users (username, password_hash) VALUES ('fresh', 'h')").rowcount
+                new_role = conn.exec_driver_sql("SELECT role FROM users WHERE username='fresh'").scalar()
+            self.assertEqual(legacy, "admin")        # pre-existing → admin (operator keeps full access)
+            self.assertEqual(fresh, 1)
+            self.assertEqual(new_role, "viewer")     # a row inserted without a role defaults to viewer
+        finally:
+            engine.dispose()
+
 
 class SessionScopeTests(unittest.TestCase):
     def setUp(self):
@@ -126,7 +148,8 @@ class SessionScopeTests(unittest.TestCase):
 
     def test_every_model_roundtrips(self):
         with db.session_scope(self.Session) as s:
-            s.add(db.User(username="tata", password_hash="scrypt$x"))
+            s.add(db.User(username="tata", password_hash="scrypt$x"))          # role omitted → default
+            s.add(db.User(username="mama", password_hash="scrypt$y", role="operator"))
             s.flush()  # satisfy the user_settings FK before inserting the setting
             s.add(db.UserSetting(username="tata", locale="pl", temp_scale="C", theme=None))
             s.add(db.Node(key="5", entry_json='{"type": "blind"}'))
@@ -134,6 +157,8 @@ class SessionScopeTests(unittest.TestCase):
             s.add(db.Audit(ts=1.5, actor="tata", action="control", target="5", detail=None, result="ok"))
         with db.session_scope(self.Session) as s:
             self.assertEqual(s.get(db.User, "tata").password_hash, "scrypt$x")
+            self.assertEqual(s.get(db.User, "tata").role, "viewer")        # column default (least privilege)
+            self.assertEqual(s.get(db.User, "mama").role, "operator")      # explicit role roundtrips
             setting = s.get(db.UserSetting, "tata")
             self.assertEqual((setting.locale, setting.temp_scale, setting.theme), ("pl", "C", None))
             self.assertEqual(s.get(db.Node, "5").entry_json, '{"type": "blind"}')

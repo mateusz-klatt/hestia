@@ -23,7 +23,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
-from hestia import auth, proxy, web
+from hestia import auth, db, proxy, store_sql, web
 from hestia.automations import AutomationEngine, AutomationStore, rule_vocab
 from hestia.protocol import Frame, build_frame, tlv
 
@@ -677,7 +677,8 @@ class AuthTests(_WebTestBase):
         cookie = self._cookie(headers["Set-Cookie"])
         status, _, body = _get(self.web.address, "/api/whoami", headers={"Cookie": cookie})
         self.assertEqual(status, 200)
-        self.assertEqual(json.loads(body), {"user": "tata"})
+        # role resolves to admin here: JSON-backed users (mocked load_users) are legacy single-tier (#73)
+        self.assertEqual(json.loads(body), {"user": "tata", "role": "admin"})
 
     def test_logout_clears_cookie(self):
         status, headers, body = _post(self.web.address, "/api/logout", {})
@@ -1710,6 +1711,120 @@ class SSEHandlerTests(_WebTestBase):
             self._wait_unsubscribed()
         finally:
             s.close()
+
+
+class RoleHelpersTests(unittest.TestCase):
+    """Pure RBAC helpers (#73): the route→floor map (incl. fail-closed fallbacks) and the rank compare."""
+
+    def test_required_role_classified_routes(self):
+        self.assertEqual(web._required_role("GET", "/api/discovery"), "viewer")
+        self.assertEqual(web._required_role("POST", "/api/settings"), "viewer")
+        self.assertEqual(web._required_role("POST", "/api/control"), "operator")
+        self.assertEqual(web._required_role("POST", "/api/automations"), "admin")
+        self.assertEqual(web._required_role("GET", "/api/automations"), "admin")  # leaks presence MACs → admin
+
+    def test_required_role_unclassified_write_is_admin(self):
+        self.assertEqual(web._required_role("POST", "/api/brand-new"), "admin")   # fail-closed
+        self.assertEqual(web._required_role("DELETE", "/x"), "admin")
+
+    def test_required_role_unclassified_read_is_viewer(self):
+        self.assertEqual(web._required_role("GET", "/api/brand-new"), "viewer")
+        self.assertEqual(web._required_role("HEAD", "/x"), "viewer")
+
+    def test_role_allows_hierarchy(self):
+        self.assertTrue(web._role_allows("admin", "viewer"))
+        self.assertTrue(web._role_allows("admin", "admin"))
+        self.assertTrue(web._role_allows("operator", "viewer"))
+        self.assertTrue(web._role_allows("operator", "operator"))
+        self.assertFalse(web._role_allows("viewer", "operator"))
+        self.assertFalse(web._role_allows("operator", "admin"))
+
+    def test_role_allows_unknown_or_none_role_denied(self):
+        self.assertFalse(web._role_allows("superuser", "viewer"))   # unknown role → fail closed
+        self.assertFalse(web._role_allows(None, "viewer"))
+
+
+class RoutePolicyTests(unittest.TestCase):
+    """Completeness guard: every route make_app registers must be either public or have a role floor, so
+    the policy map can't silently drift from the route table (a new route fails this until classified)."""
+
+    def test_every_registered_route_is_public_or_classified(self):
+        app = web.make_app(SimpleNamespace())
+        for route in app.router.routes():
+            canonical = route.resource.canonical
+            path = canonical.replace("{path}", "asset.js") if "{path}" in canonical else canonical
+            classified = (web._is_public_route(route.method, path)
+                          or (route.method, path) in web._ROUTE_MIN_ROLE)
+            self.assertTrue(classified, f"unclassified route: {route.method} {path}")
+
+
+class AuthzTests(_WebTestBase):
+    """RBAC floor enforcement (#73): the auth middleware resolves the role per request and gates each
+    route by its floor. A removed account 401s immediately; an unclassified write route is admin-only."""
+
+    def setUp(self):
+        super().setUp()
+        self.users = {"u": auth.hash_password("pw")}
+        self.role = "admin"   # what current_user_role returns; each request flips it via _get/_post
+        patches = [
+            mock.patch.object(web, "_AUTH_ENABLED", True),
+            mock.patch.object(web, "_SESSION_SECRET", b"test-secret-bytes"),
+            mock.patch.object(web, "_COOKIE_SECURE", False),
+            mock.patch.object(auth, "load_users", return_value=self.users),
+            mock.patch.object(store_sql, "current_user_role", side_effect=lambda user: self.role),
+            mock.patch.dict(os.environ, {"HESTIA_DB": str(self.tmp / "authz.db")}),  # keep db-stats off /data
+        ]
+        for p in patches:
+            p.start()
+            self.addCleanup(p.stop)
+        self.addCleanup(db.reset_engine_cache)
+        _, headers, _ = _post(self.web.address, "/api/login", {"user": "u", "password": "pw"})
+        self.cookie = AuthTests._cookie(headers["Set-Cookie"])
+
+    def _get(self, path, role):
+        self.role = role
+        return _get(self.web.address, path, headers={"Cookie": self.cookie})[0]
+
+    def _post(self, path, role, body=None):
+        self.role = role
+        return _post(self.web.address, path, body if body is not None else {},
+                     headers={"Cookie": self.cookie})[0]
+
+    def test_viewer_reads_but_cannot_control_or_see_admin_surface(self):
+        self.assertEqual(self._get("/api/discovery", "viewer"), 200)
+        self.assertEqual(self._get("/api/audit", "viewer"), 200)
+        self.assertEqual(self._post("/api/settings", "viewer", {"locale": "pl"}), 200)   # own UI prefs
+        self.assertEqual(self._post("/api/control", "viewer", {"op": "switch", "node": 5, "on": True}), 403)
+        self.assertEqual(self._post("/api/scene", "viewer", {"op": "lights_off"}), 403)
+        self.assertEqual(self._get("/api/automations", "viewer"), 403)   # admin-only read (leaks MACs)
+        self.assertEqual(self._get("/api/db/stats", "viewer"), 403)
+        self.assertEqual(self._get("/api/rf433", "viewer"), 403)
+
+    def test_operator_controls_but_not_the_admin_surface(self):
+        self.assertEqual(self._post("/api/control", "operator", {"op": "switch", "node": 5, "on": True}), 503)
+        self.assertEqual(self._post("/api/scene", "operator", {"op": "lights_off"}), 200)
+        self.assertEqual(self._post("/api/automations", "operator", {}), 403)   # rule editing is admin-only
+        self.assertEqual(self._post("/api/automations/delete", "operator", {"id": "x"}), 403)
+        self.assertEqual(self._post("/api/name", "operator", {"node": 5, "name": "x"}), 403)
+        self.assertEqual(self._post("/api/graduate", "operator"), 403)
+        self.assertEqual(self._post("/api/rooms/icons", "operator", {"room": "x", "icon": "🚪"}), 403)
+        self.assertEqual(self._get("/api/automations", "operator"), 403)
+
+    def test_admin_clears_every_floor(self):
+        self.assertEqual(self._get("/api/automations", "admin"), 200)
+        self.assertEqual(self._get("/api/db/stats", "admin"), 200)
+        self.assertNotEqual(self._post("/api/name", "admin", {"node": 5, "name": "x"}), 403)
+
+    def test_removed_account_is_401_everywhere(self):
+        self.assertEqual(self._get("/api/discovery", None), 401)   # current_user_role → None → cookie moot
+
+    def test_unclassified_write_route_is_admin_only(self):
+        # POST to a GET-only path → fail-closed to admin: a viewer 403s, an admin passes the floor (405 route)
+        self.assertEqual(self._post("/api/discovery", "viewer"), 403)
+        self.assertEqual(self._post("/api/discovery", "admin"), 405)
+
+    def test_unclassified_read_route_is_viewer(self):
+        self.assertEqual(self._get("/api/does-not-exist", "viewer"), 404)   # viewer floor → routing → 404
 
 
 if __name__ == "__main__":

@@ -32,6 +32,14 @@ from .registry import Registry
 
 log = logging.getLogger("hestia.store_sql")
 
+# RBAC roles (#73). Ranked low→high: the web authz middleware admits a request when the user's role
+# rank ≥ the route's required floor. ``admin`` is the legacy/pre-roles role — accounts that predate
+# roles (migration backfill + json→sqlite cutover imports) get it so the operator keeps full access;
+# ``viewer`` is the least-privilege default a brand-new account gets unless the CLI sets one explicitly.
+ROLE_RANK = {"viewer": 0, "operator": 1, "admin": 2}
+LEGACY_ROLE = "admin"
+DEFAULT_NEW_ROLE = "viewer"
+
 # app_meta markers: set once at cutover so subsequent boots load from the DB instead of re-importing
 # the (now-frozen) JSON. registry + automations cut over together (Phase 3); users separately (Phase 4).
 _AUTHORITATIVE = "registry_authoritative"
@@ -82,7 +90,11 @@ def mirror_json_to_db(session: Session, *, registry: Registry, store: Automation
 
     usernames = set(users)
     for username, password_hash in users.items():
-        _upsert(session, User, "username", username, {"password_hash": password_hash})
+        # JSON users predate roles → import them as admin (legacy single-tier). This mirror runs only
+        # pre-cutover (the shadow is a no-op once HESTIA_PERSIST=sqlite) and at the one-time cutover, so
+        # it never clobbers a role set in the authoritative DB.
+        _upsert(session, User, "username", username,
+                {"password_hash": password_hash, "role": LEGACY_ROLE})
     session.execute(delete(User).where(User.username.not_in(usernames)))
 
 
@@ -278,20 +290,73 @@ def cutover_users(engine, users: dict) -> None:
     sqlite for registry+automations (Phase 3) flips users on the next boot."""
     with Session(engine) as session, session.begin():
         for username, password_hash in users.items():
-            _upsert(session, User, "username", username, {"password_hash": password_hash})
+            # legacy (pre-roles) JSON accounts → admin so the operator keeps full access after cutover
+            _upsert(session, User, "username", username,
+                    {"password_hash": password_hash, "role": LEGACY_ROLE})
         session.execute(delete(User).where(User.username.not_in(set(users))))
         _upsert(session, AppMeta, "key", _USERS_AUTHORITATIVE, {"value": "1"})
 
 
-def set_user_db(username: str, password_hash: str, *, path=None) -> None:
-    """Upsert one user into the DB (auth CLI / change-password). Own short session; WAL lets this run
-    concurrently with the daemon."""
+def set_user_db(username: str, password_hash: str, role: str = DEFAULT_NEW_ROLE, *, path=None) -> None:
+    """Upsert one user (username, hash, role) into the DB (auth CLI / change-password). Own short
+    session; WAL lets this run concurrently with the daemon. The caller passes the role explicitly so
+    a forgotten role can never silently become admin (the CLI preserves an existing user's role on a
+    bare password reset and defaults a brand-new account to viewer)."""
     engine, _ = init_db(path)
     try:
         with Session(engine) as session, session.begin():
-            _upsert(session, User, "username", username, {"password_hash": password_hash})
+            _upsert(session, User, "username", username, {"password_hash": password_hash, "role": role})
     finally:
         engine.dispose()
+
+
+def get_user_db_role(username: str, *, path=None) -> "str | None":
+    """The role stored for ``username`` in the DB, or ``None`` if the account doesn't exist. DB-only (no
+    JSON fallback) — for the auth CLI's preserve-role-on-password-reset and the ``role`` subcommand."""
+    engine, _ = init_db(path)
+    try:
+        with Session(engine) as session:
+            row = session.get(User, username)
+        return row.role if row is not None else None
+    finally:
+        engine.dispose()
+
+
+def set_user_role(username: str, role: str, *, path=None) -> bool:
+    """Change an existing user's role in the DB. Returns ``False`` (and changes nothing) when the user
+    doesn't exist — never creates an account (use ``set_user_db`` for that)."""
+    engine, _ = init_db(path)
+    try:
+        with Session(engine) as session, session.begin():
+            row = session.get(User, username)
+            if row is None:
+                return False
+            row.role = role
+        return True
+    finally:
+        engine.dispose()
+
+
+def current_user_role(username) -> "str | None":
+    """The access role of ``username`` in the ACTIVE users backend, for the web authz middleware:
+
+    * sqlite + users-authoritative → the stored ``role`` (``None`` if the account no longer exists, so a
+      removed/renamed user is denied at once rather than at cookie expiry);
+    * otherwise (JSON backend, or sqlite before the users cutover) → ``admin`` iff the username still
+      exists in the JSON users map (legacy single-tier, back-compat), else ``None``.
+
+    ``None`` for a non-string / empty / unknown username so the caller fails closed. Uses the CACHED
+    engine WITHOUT disposing it — unlike the per-login helpers, this runs on every authenticated request,
+    so churning the connection pool each call would be wasteful (the cache owns the engine lifecycle)."""
+    if not isinstance(username, str) or not username:
+        return None
+    if os.environ.get("HESTIA_PERSIST", "json").lower() == "sqlite":
+        engine, _ = init_db()
+        if is_users_db_authoritative(engine):
+            with Session(engine) as session:
+                row = session.get(User, username)
+            return row.role if row is not None else None
+    return LEGACY_ROLE if username in auth.load_users() else None
 
 
 def current_users(*, users_path=None) -> dict:

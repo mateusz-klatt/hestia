@@ -15,7 +15,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from hestia import auth
+from hestia import auth, db, store_sql
 
 SECRET = b"unit-test-secret"
 
@@ -193,6 +193,73 @@ class CliTests(unittest.TestCase):
         auth._cli(["add", "mama"], prompt=_Prompt("b", "b"), path=self.path)
         users = json.loads(self.path.read_text(encoding="utf-8"))
         self.assertEqual(sorted(users), ["mama", "tata"])   # both kept
+
+    def test_add_with_role_in_json_mode_saves_without_role(self):
+        # JSON has no role column; --role is accepted but noted as ignored (the user is still saved).
+        rc = auth._cli(["add", "tata", "--role", "viewer"], prompt=_Prompt("a", "a"), path=self.path)
+        self.assertEqual(rc, 0)
+        self.assertIn("tata", json.loads(self.path.read_text(encoding="utf-8")))
+
+    def test_add_missing_role_value_is_usage_error(self):
+        self.assertEqual(auth._cli(["add", "tata", "--role"], prompt=_Prompt(), path=self.path), 2)
+
+    def test_add_too_many_positionals_is_usage_error(self):
+        self.assertEqual(auth._cli(["add", "tata", "extra"], prompt=_Prompt(), path=self.path), 2)
+
+    def test_role_subcommand_requires_sqlite(self):
+        with mock.patch.dict(os.environ, {"HESTIA_PERSIST": "json"}):
+            self.assertEqual(auth._cli(["role", "tata", "admin"]), 1)
+
+    def test_role_subcommand_bad_argc(self):
+        self.assertEqual(auth._cli(["role", "tata"]), 2)
+
+
+class CliSqliteTests(unittest.TestCase):
+    """The CLI's SQLite branches: add (new→viewer / explicit role / preserve-role-on-reset / invalid) and
+    the role subcommand, against a cut-over users DB (tata = admin)."""
+
+    def setUp(self):
+        self.dir = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.dir, ignore_errors=True)
+        self.db = self.dir / "hestia.db"
+        self.env = mock.patch.dict(os.environ, {"HESTIA_PERSIST": "sqlite", "HESTIA_DB": str(self.db)})
+        self.env.start()
+        self.addCleanup(self.env.stop)
+        self.addCleanup(db.reset_engine_cache)
+        engine, _ = db.init_db(self.db)
+        store_sql.cutover_users(engine, {"tata": auth.hash_password("old")})  # tata=admin, users authoritative
+        engine.dispose()
+
+    def test_add_new_user_defaults_to_viewer(self):
+        self.assertEqual(auth._cli(["add", "kid"], prompt=_Prompt("pw", "pw")), 0)
+        self.assertEqual(store_sql.get_user_db_role("kid"), "viewer")
+
+    def test_add_with_explicit_role(self):
+        self.assertEqual(auth._cli(["add", "mama", "--role", "operator"], prompt=_Prompt("pw", "pw")), 0)
+        self.assertEqual(store_sql.get_user_db_role("mama"), "operator")
+
+    def test_add_existing_user_password_reset_preserves_role(self):
+        self.assertEqual(auth._cli(["add", "tata"], prompt=_Prompt("new", "new")), 0)
+        self.assertEqual(store_sql.get_user_db_role("tata"), "admin")   # not demoted to viewer
+
+    def test_add_invalid_role_is_rejected(self):
+        self.assertEqual(auth._cli(["add", "x", "--role", "superuser"], prompt=_Prompt("pw", "pw")), 2)
+        self.assertIsNone(store_sql.get_user_db_role("x"))   # nothing written
+
+    def test_role_changes_existing_user(self):
+        self.assertEqual(auth._cli(["role", "tata", "viewer"]), 0)
+        self.assertEqual(store_sql.get_user_db_role("tata"), "viewer")
+
+    def test_role_unknown_user(self):
+        self.assertEqual(auth._cli(["role", "ghost", "admin"]), 1)
+
+    def test_role_invalid_role(self):
+        self.assertEqual(auth._cli(["role", "tata", "boss"]), 2)
+
+    def test_role_requires_users_cut_over(self):
+        other = self.dir / "fresh.db"   # a sqlite DB whose users table is NOT yet authoritative
+        with mock.patch.dict(os.environ, {"HESTIA_DB": str(other)}):
+            self.assertEqual(auth._cli(["role", "tata", "admin"]), 1)
 
 
 if __name__ == "__main__":  # pragma: no cover
