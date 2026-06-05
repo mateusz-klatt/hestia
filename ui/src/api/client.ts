@@ -254,11 +254,12 @@ export function deleteRule(id: string): Promise<RuleResult> {
 
 export interface WhoAmI {
   user: string | null; // the logged-in username, or null when auth is disabled
+  role: string | null; // the RBAC role (admin|operator|viewer), or null when auth is disabled
 }
 
 /**
- * GET `/api/whoami`: `{user}` on 200 (`user` is null when auth is off), or `null` on 401 / any failure.
- * The app uses `null` as "not logged in → show the login form".
+ * GET `/api/whoami`: `{user, role}` on 200 (both null when auth is off), or `null` on 401 / any failure.
+ * The app uses `null` as "not logged in → show the login form"; a null role means "auth off → full access".
  */
 export async function whoami(): Promise<WhoAmI | null> {
   try {

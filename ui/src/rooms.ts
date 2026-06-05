@@ -12,6 +12,9 @@ export interface RoomsDeps {
   renderWholeHome: (container: HTMLElement) => void;
   /** Notified when the view enters (true) / leaves (false) a detail (a room OR Cały dom) — drives the back-tab. */
   onNav?: (inRoom: boolean) => void;
+  /** Whether the current user may actuate devices (operator/admin, or auth-off). A read-only viewer gets
+   *  cards with name + live state but no control buttons and no whole-home scene tile. Default: yes. */
+  canControl?: () => boolean;
 }
 
 /** The rooms view's public surface: a full re-render from a snapshot + a per-node live state patch. */
@@ -121,12 +124,16 @@ function deviceCard(
   stan.textContent = roomStateText(info);
   head.append(name, stan);
 
-  const actions = document.createElement("div");
-  actions.className = "room-device-actions";
-  // Reuse the table's control renderer verbatim, including per-channel controls for multi-gang switches.
-  renderActions(actions, Number(node), info, deps.postControl);
-
-  card.append(head, actions);
+  // A read-only viewer gets the card's name + live state but NO control affordances; an operator/admin
+  // (or auth-off) gets the table's control renderer verbatim, incl. per-channel controls for multi-gang.
+  if (deps.canControl?.() ?? true) {
+    const actions = document.createElement("div");
+    actions.className = "room-device-actions";
+    renderActions(actions, Number(node), info, deps.postControl);
+    card.append(head, actions);
+  } else {
+    card.append(head);
+  }
   return { card, stan };
 }
 
@@ -143,6 +150,7 @@ export function createRoomsView(container: HTMLElement, deps: RoomsDeps): RoomsV
   let latest: Discovery | null = null;
   let stateSpans = new Map<number, HTMLElement>();
   let editIcons = false;
+  const canControl = deps.canControl ?? ((): boolean => true); // viewer = read-only (no buttons, no scenes)
 
   // Finish editing → back to the plain room grid. (Entering edit mode now lives in the settings
   // menu, not on the rooms screen — so the landing isn't cluttered with a config toggle.)
@@ -262,7 +270,7 @@ export function createRoomsView(container: HTMLElement, deps: RoomsDeps): RoomsV
     }
     const grid = document.createElement("div");
     grid.className = "room-grid";
-    if (hasSceneDevices(latest.devices)) grid.appendChild(wholeHomeCard()); // master tile, first
+    if (canControl() && hasSceneDevices(latest.devices)) grid.appendChild(wholeHomeCard()); // master tile (controllers only)
     for (const room of rooms) {
       const list = groups.get(room) ?? [];
       const btn = document.createElement("button");

@@ -394,18 +394,18 @@ describe("whoami", () => {
     vi.unstubAllGlobals();
   });
 
-  it("returns the {user} payload on 200 (auth on)", async () => {
+  it("returns the {user, role} payload on 200 (auth on)", async () => {
     vi.stubGlobal("fetch", () =>
-      Promise.resolve({ ok: true, json: () => Promise.resolve({ user: "tata" }) }),
+      Promise.resolve({ ok: true, json: () => Promise.resolve({ user: "tata", role: "admin" }) }),
     );
-    expect(await whoami()).toEqual({ user: "tata" });
+    expect(await whoami()).toEqual({ user: "tata", role: "admin" });
   });
 
-  it("returns {user:null} on 200 when auth is off", async () => {
+  it("returns {user:null, role:null} on 200 when auth is off", async () => {
     vi.stubGlobal("fetch", () =>
-      Promise.resolve({ ok: true, json: () => Promise.resolve({ user: null }) }),
+      Promise.resolve({ ok: true, json: () => Promise.resolve({ user: null, role: null }) }),
     );
-    expect(await whoami()).toEqual({ user: null });
+    expect(await whoami()).toEqual({ user: null, role: null });
   });
 
   it("returns null on 401 (not logged in)", async () => {

@@ -58,6 +58,12 @@ let onRoomsNav: (inRoom: boolean) => void = () => undefined;
 // Set in startApp once the view switcher exists; the settings-menu "edit icons" entry calls it.
 let triggerIconEdit: () => void = () => undefined;
 let roomIcons: Record<string, string> = {};
+// The current user's capabilities, resolved from /api/whoami BEFORE startApp. Default to the most
+// restrictive until known; auth-off resolves both to true (loopback/dev = fully open). `canControl` =
+// operator/admin (room controls + scenes + IR/klima panels); `isAdmin` = admin (the 🔧 Advanced view).
+// The server is the real boundary (#73) — this gating is convenience, never the security check.
+let canControl = false;
+let isAdmin = false;
 
 // Audit feed: resolve a device row's node-id target → "name · room" at display time (Codex: read-time,
 // UI-side — no DB change, renames fix old rows). The current device map feeds the pure formatter.
@@ -66,6 +72,7 @@ const resolveAuditTarget = (target: string | null, action: string): string | nul
   formatAuditTarget(target, action, latestDevices);
 const roomsView = createRoomsView(el("room-list"), {
   postControl,
+  canControl: () => canControl, // a viewer's room cards render read-only (no buttons, no scene tile)
   roomIcons: () => roomIcons,
   saveRoomIcon: async (room, icon) => {
     if (await saveRoomIconOnServer(room, icon)) {
@@ -120,13 +127,19 @@ const live = new LiveController(
     bindRow(tr, node, info, postName); // confirm + name/room save
   },
   (data) => {
-    renderIrButtons(irBox, data.ir_buttons, postIr); // built once from the static config
-    renderKlima(klimaBox, data.klima, postIr);
-    renderRuleForm(ruleForm, ruleJson, data.rule_vocab, data.klima); // guided form → fills #rule-json
-    // Rooms view: the same house-wide IR/klima into their own (built-once) containers, then rebuild
-    // the room list from the fresh snapshot. Kept last so a throw here can't skip the panels above.
-    renderIrButtons(roomsIrBox, data.ir_buttons, postIr);
-    renderKlima(roomsKlimaBox, data.klima, postIr);
+    // Role-gated panels: the 🔧 Advanced IR/klima/rule-form (only an admin opens that view) and the
+    // rooms-view IR/klima (only a controller may transmit — a viewer's rooms screen is read-only).
+    if (isAdmin) {
+      renderIrButtons(irBox, data.ir_buttons, postIr); // built once from the static config
+      renderKlima(klimaBox, data.klima, postIr);
+      renderRuleForm(ruleForm, ruleJson, data.rule_vocab, data.klima); // guided form → fills #rule-json
+    }
+    roomsIrBox.hidden = !canControl;
+    roomsKlimaBox.hidden = !canControl;
+    if (canControl) {
+      renderIrButtons(roomsIrBox, data.ir_buttons, postIr);
+      renderKlima(roomsKlimaBox, data.klima, postIr);
+    }
     latestDevices = data.devices; // feed the audit-target resolver with current names/rooms
     roomsView.update(data);
   },
@@ -169,6 +182,7 @@ function startApp(): void {
         void dbStats.refresh();
       }
     },
+    { showAdmin: isAdmin }, // a non-admin gets only 🏠 Rooms + 📜 Activity (no engineer view)
   );
   // The "← Rooms" back label only reflects nav while the rooms view is the active one — a background
   // refresh re-rendering the hidden room detail must not flip the tab while Advanced is showing.
@@ -201,6 +215,7 @@ function startApp(): void {
   }
 
   async function loadAutomations(): Promise<void> {
+    if (!isAdmin) return; // the automations editor lives only in the admin-only Advanced view
     const rules = await fetchAutomations();
     if (rules === null) {
       autoRows.replaceChildren();
@@ -297,15 +312,19 @@ void (async () => {
     return;
   }
   roomIcons = (await fetchRoomIcons()) ?? {};
+  // Resolve capabilities from the role before the first render. Auth-off (me.user === null) = loopback/dev
+  // → full access. The server enforces these for real (#73); this only shapes what the UI offers.
+  const authOff = me.user === null;
+  isAdmin = authOff || me.role === "admin";
+  canControl = authOff || me.role === "operator" || me.role === "admin";
   // Always render the user/settings chip; auth-off (me.user === null) shows a settings-only menu
   // (language + temperature scale, no logout — see renderUser).
   const userOpts = {
     onLogout: () => {
       location.reload();
     },
-    onEditIcons: () => {
-      triggerIconEdit();
-    },
+    // Editing shared room icons is admin-only (POST /api/rooms/icons) — the entry only shows for admins.
+    ...(isAdmin ? { onEditIcons: (): void => { triggerIconEdit(); } } : {}),
   };
   const authedUserOpts = {
     ...userOpts,

@@ -167,4 +167,28 @@ describe("renderViewSwitch", () => {
     expect(() => renderViewSwitch(e, () => undefined)).not.toThrow();
     expect(e.roomsEl.hidden).toBe(false); // defaulted to rooms despite the storage failure
   });
+
+  it("omits the Advanced tab and force-hides the admin section when showAdmin is false (non-admin)", () => {
+    const e = els();
+    renderViewSwitch(e, () => undefined, { showAdmin: false });
+    expect(e.switchBox.querySelectorAll("button")).toHaveLength(2); // 🏠 Rooms + 📜 Activity only
+    expect(e.adminEl.hidden).toBe(true);
+  });
+
+  it("coerces a persisted admin view back to rooms for a non-admin", () => {
+    localStorage.setItem("hestia.view", "admin");
+    const e = els();
+    const changes: ViewName[] = [];
+    renderViewSwitch(e, (v) => changes.push(v), { showAdmin: false });
+    expect(e.roomsEl.hidden).toBe(false); // fell back to rooms
+    expect(e.adminEl.hidden).toBe(true);
+    expect(changes).toEqual(["rooms"]); // onChange got the coerced view
+    expect(localStorage.getItem("hestia.view")).toBe("rooms"); // and the coercion was persisted
+  });
+
+  it("offers all three tabs when showAdmin is true (the default)", () => {
+    const e = els();
+    renderViewSwitch(e, () => undefined, { showAdmin: true });
+    expect(e.switchBox.querySelectorAll("button")).toHaveLength(3);
+  });
 });
