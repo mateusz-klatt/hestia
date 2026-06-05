@@ -139,7 +139,7 @@ const live = new LiveController(
     if (isAdmin) {
       renderIrButtons(irBox, data.ir_buttons, postIr); // built once from the static config
       renderKlima(klimaBox, data.klima, postIr);
-      renderRuleForm(ruleForm, ruleJson, data.rule_vocab, data.klima); // guided form → fills #rule-json
+      renderRuleForm(ruleForm, ruleJson, data.rule_vocab, data.klima, data.devices); // guided form → fills #rule-json (node combo over device names)
     }
     roomsIrBox.hidden = !canControl;
     roomsKlimaBox.hidden = !canControl;
