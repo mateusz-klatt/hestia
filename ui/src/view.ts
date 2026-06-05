@@ -40,6 +40,12 @@ export interface ViewSwitch {
   setRoomsInRoom: (inRoom: boolean) => void;
 }
 
+export interface ViewSwitchOptions {
+  /** Whether to offer the 🔧 Advanced tab (admin only). When false the tab is omitted, the admin
+   *  section is force-hidden, and a persisted "admin" choice is coerced back to rooms. Default true. */
+  showAdmin?: boolean;
+}
+
 /**
  * Build the 🏠 Rooms / 📜 Activity / 🔧 Advanced segmented control into `switchBox` and wire it to show
  * exactly one view section. Applies the persisted choice immediately (calling `onChange` once). The
@@ -47,26 +53,35 @@ export interface ViewSwitch {
  * so a first-time user knows tapping it returns to the room list. The container `flex-wrap`s, so the
  * third tab wraps to a second line on a narrow phone rather than overflowing.
  */
-export function renderViewSwitch(els: ViewSwitchEls, onChange: (view: ViewName) => void): ViewSwitch {
+export function renderViewSwitch(
+  els: ViewSwitchEls,
+  onChange: (view: ViewName) => void,
+  opts: ViewSwitchOptions = {},
+): ViewSwitch {
+  const showAdmin = opts.showAdmin ?? true;
   const roomsBtn = document.createElement("button");
   const eventsBtn = document.createElement("button");
   const adminBtn = document.createElement("button");
   const tabs: { name: ViewName; btn: HTMLButtonElement; section: HTMLElement }[] = [
     { name: "rooms", btn: roomsBtn, section: els.roomsEl },
     { name: "events", btn: eventsBtn, section: els.eventsEl },
-    { name: "admin", btn: adminBtn, section: els.adminEl },
   ];
+  if (showAdmin) tabs.push({ name: "admin", btn: adminBtn, section: els.adminEl });
+  // A non-admin never sees the engineer view — force it hidden so a stale stored "admin" can't reveal it.
+  if (!showAdmin) els.adminEl.hidden = true;
 
   const apply = (view: ViewName): void => {
+    // Coerce a view this user can't reach (e.g. a persisted "admin" for a non-admin) back to rooms.
+    const target = tabs.some((tab) => tab.name === view) ? view : "rooms";
     roomsBtn.textContent = t("view.rooms"); // reset; setRoomsInRoom(true) flips it to "← Rooms" in a room
     for (const tab of tabs) {
-      const active = tab.name === view;
+      const active = tab.name === target;
       tab.section.hidden = !active;
       tab.btn.classList.toggle("active", active);
       tab.btn.setAttribute("aria-pressed", active ? "true" : "false");
     }
-    persistView(view);
-    onChange(view);
+    persistView(target);
+    onChange(target);
   };
 
   const setRoomsInRoom = (inRoom: boolean): void => {

@@ -395,3 +395,48 @@ describe("createRoomsView — rebuild safety vs a focused control", () => {
     expect(after?.querySelector(".room-device-stan")?.textContent).toBe("🟢 On");
   });
 });
+
+describe("createRoomsView — read-only viewer (canControl false)", () => {
+  function mkReadOnly(): {
+    container: HTMLElement;
+    sent: ControlOp[];
+    view: ReturnType<typeof createRoomsView>;
+  } {
+    const container = document.createElement("div");
+    const sent: ControlOp[] = [];
+    const view = createRoomsView(container, {
+      postControl: (op) => {
+        sent.push(op);
+        return Promise.resolve({ ok: true });
+      },
+      canControl: () => false, // a viewer: browse only
+      roomIcons: () => ({}),
+      saveRoomIcon: () => Promise.resolve(),
+      renderWholeHome: (c) => {
+        const stub = document.createElement("button");
+        stub.className = "scene-stub";
+        c.appendChild(stub);
+      },
+    });
+    return { container, sent, view };
+  }
+
+  it("hides the whole-home scene tile even with scene-capable devices", () => {
+    const { container, view } = mkReadOnly();
+    view.update(discovery({ "5": device({ type: "light", room: "Salon", name: "Lampa" }) }));
+    expect(container.querySelector(".room-card")).not.toBeNull();   // rooms are still listed
+    expect(container.querySelector(".whole-home-card")).toBeNull(); // but no scene tile for a viewer
+  });
+
+  it("renders a device card with name + live state but no control buttons", () => {
+    const { container, sent, view } = mkReadOnly();
+    view.update(discovery({ "5": device({ type: "light", switch: false, room: "Salon", name: "Lampa" }) }));
+    openFirstRoom(container);
+    const card = container.querySelector(".room-device");
+    expect(card?.querySelector(".room-device-name")?.textContent).toBe("Lampa");
+    expect(card?.querySelector(".room-device-stan")?.textContent).toBe("⚪ Off"); // state still shown
+    expect(card?.querySelector(".room-device-actions")).toBeNull();               // no actions block
+    expect(container.querySelectorAll(".room-device-actions button")).toHaveLength(0);
+    expect(sent).toEqual([]);
+  });
+});
