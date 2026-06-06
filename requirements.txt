@@ -15,8 +15,13 @@
 #                  engine driven off the event loop via run_in_executor; the schema
 #                  is Alembic-managed. The Keemple codec / state model stay first-party.
 #   alembic      — schema migrations for the SQLite DB (run programmatically at startup).
+#   pydantic     — typed DTOs for the PUBLIC API contract (hestia/api_contract.py) → generated
+#                  OpenAPI for typed clients (web TS + the iOS "Vesta" app). Wire-shape only; the
+#                  authoritative validators (web._validate_control_payload, automations.Rule.from_dict)
+#                  stay first-party and a test pins the DTOs to them.
 cryptography>=46.0.0,<47.0.0
 pyserial>=3.5,<4.0
 aiohttp>=3.13,<4
 SQLAlchemy>=2.0,<2.1
 alembic>=1.18,<2
+pydantic>=2.12,<3
