@@ -552,6 +552,69 @@
         "title": "KlimaState",
         "type": "object"
       },
+      "LoginRequest": {
+        "additionalProperties": false,
+        "description": "POST /api/login body. ``bearer: true`` opts a native client into a token in the response (which\nit then sends as ``Authorization: Bearer``); the browser omits it and relies on the httponly cookie.",
+        "properties": {
+          "bearer": {
+            "title": "Bearer",
+            "type": "boolean"
+          },
+          "password": {
+            "title": "Password",
+            "type": "string"
+          },
+          "user": {
+            "title": "User",
+            "type": "string"
+          }
+        },
+        "required": [
+          "user",
+          "password"
+        ],
+        "title": "LoginRequest",
+        "type": "object"
+      },
+      "LoginSuccess": {
+        "additionalProperties": false,
+        "description": "200 from /api/login. ``token`` is present ONLY when the request set ``bearer: true``.",
+        "properties": {
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          },
+          "token": {
+            "title": "Token",
+            "type": "string"
+          },
+          "user": {
+            "title": "User",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ok",
+          "user"
+        ],
+        "title": "LoginSuccess",
+        "type": "object"
+      },
+      "OkResult": {
+        "additionalProperties": false,
+        "description": "A bare ``{ok: true}`` acknowledgement (e.g. /api/logout).",
+        "properties": {
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "title": "OkResult",
+        "type": "object"
+      },
       "RuleVocab": {
         "additionalProperties": false,
         "description": "The automation-rule grammar the guided form builds from (``automations.rule_vocab``).",
@@ -650,6 +713,40 @@
         ],
         "title": "Summary",
         "type": "object"
+      },
+      "WhoAmI": {
+        "additionalProperties": false,
+        "description": "GET /api/whoami \u2014 the caller's identity + RBAC role; both null when auth is off (loopback/dev).",
+        "properties": {
+          "role": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Role"
+          },
+          "user": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "User"
+          }
+        },
+        "required": [
+          "user",
+          "role"
+        ],
+        "title": "WhoAmI",
+        "type": "object"
       }
     }
   },
@@ -707,6 +804,83 @@
           }
         },
         "summary": "Issue a device control command"
+      }
+    },
+    "/api/login": {
+      "post": {
+        "description": "Public. Sets the httponly session cookie; with `bearer: true` the 200 body also carries a `token` for `Authorization: Bearer` (native clients).",
+        "operationId": "login",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoginSuccess"
+                }
+              }
+            },
+            "description": "authenticated"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ControlError"
+                }
+              }
+            },
+            "description": "invalid credentials"
+          }
+        },
+        "summary": "Exchange credentials for a session (cookie + optional bearer token)"
+      }
+    },
+    "/api/logout": {
+      "post": {
+        "description": "Public. Clears the cookie; a bearer client simply discards its token.",
+        "operationId": "logout",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OkResult"
+                }
+              }
+            },
+            "description": "logged out"
+          }
+        },
+        "summary": "Clear the session cookie"
+      }
+    },
+    "/api/whoami": {
+      "get": {
+        "description": "Requires a session (cookie or bearer). user/role are null when auth is off.",
+        "operationId": "whoami",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WhoAmI"
+                }
+              }
+            },
+            "description": "the current session's identity"
+          }
+        },
+        "summary": "The caller's identity + RBAC role"
       }
     }
   }

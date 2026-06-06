@@ -219,6 +219,44 @@ class KlimaState(BaseModel):
 _READ_MODELS = (Globals, Summary, DeviceInfo, RuleVocab, KlimaState)
 
 
+# ---- auth (login / whoami / logout) ----------------------------------------
+class LoginRequest(BaseModel):
+    """POST /api/login body. ``bearer: true`` opts a native client into a token in the response (which
+    it then sends as ``Authorization: Bearer``); the browser omits it and relies on the httponly cookie."""
+
+    model_config = ConfigDict(extra="forbid")
+    user: str
+    password: str
+    bearer: Annotated[bool, Field(default=None, json_schema_extra=_OMIT)] = None
+
+
+class LoginSuccess(BaseModel):
+    """200 from /api/login. ``token`` is present ONLY when the request set ``bearer: true``."""
+
+    model_config = ConfigDict(extra="forbid")
+    ok: bool
+    user: str
+    token: Annotated[str, Field(default=None, json_schema_extra=_OMIT)] = None
+
+
+class WhoAmI(BaseModel):
+    """GET /api/whoami — the caller's identity + RBAC role; both null when auth is off (loopback/dev)."""
+
+    model_config = _READ
+    user: Union[str, None]
+    role: Union[str, None]
+
+
+class OkResult(BaseModel):
+    """A bare ``{ok: true}`` acknowledgement (e.g. /api/logout)."""
+
+    model_config = ConfigDict(extra="forbid")
+    ok: bool
+
+
+_AUTH_MODELS = (LoginRequest, LoginSuccess, WhoAmI, OkResult)
+
+
 def _ref(name: str) -> dict:
     return {"$ref": f"#/components/schemas/{name}"}
 
@@ -227,7 +265,7 @@ def _component_schemas() -> dict:
     """The OpenAPI ``components.schemas`` map for every model, with cross-refs under that path."""
     _, combined = models_json_schema(
         [(model, "validation")
-         for model in (*_CONTROL_MODELS, ControlSuccess, ControlError, *_READ_MODELS)],
+         for model in (*_CONTROL_MODELS, ControlSuccess, ControlError, *_READ_MODELS, *_AUTH_MODELS)],
         ref_template="#/components/schemas/{model}",
     )
     schemas = combined.get("$defs", {})
@@ -276,7 +314,52 @@ def build_openapi() -> dict:
                         "503": {"description": "device unavailable / command rejected", **err},
                     },
                 }
-            }
+            },
+            "/api/login": {
+                "post": {
+                    "operationId": "login",
+                    "summary": "Exchange credentials for a session (cookie + optional bearer token)",
+                    "description": "Public. Sets the httponly session cookie; with `bearer: true` the 200 "
+                    "body also carries a `token` for `Authorization: Bearer` (native clients).",
+                    "requestBody": {
+                        "required": True,
+                        "content": {"application/json": {"schema": _ref("LoginRequest")}},
+                    },
+                    "responses": {
+                        "200": {
+                            "description": "authenticated",
+                            "content": {"application/json": {"schema": _ref("LoginSuccess")}},
+                        },
+                        "401": {"description": "invalid credentials", **err},
+                    },
+                }
+            },
+            "/api/logout": {
+                "post": {
+                    "operationId": "logout",
+                    "summary": "Clear the session cookie",
+                    "description": "Public. Clears the cookie; a bearer client simply discards its token.",
+                    "responses": {
+                        "200": {
+                            "description": "logged out",
+                            "content": {"application/json": {"schema": _ref("OkResult")}},
+                        }
+                    },
+                }
+            },
+            "/api/whoami": {
+                "get": {
+                    "operationId": "whoami",
+                    "summary": "The caller's identity + RBAC role",
+                    "description": "Requires a session (cookie or bearer). user/role are null when auth is off.",
+                    "responses": {
+                        "200": {
+                            "description": "the current session's identity",
+                            "content": {"application/json": {"schema": _ref("WhoAmI")}},
+                        }
+                    },
+                }
+            },
         },
         "components": {"schemas": _component_schemas()},
     }
