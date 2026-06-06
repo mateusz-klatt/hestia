@@ -30,6 +30,41 @@
         "title": "ActivityEvent",
         "type": "object"
       },
+      "AddUserRequest": {
+        "additionalProperties": false,
+        "description": "POST /api/users \u2014 admin: create an account. ``username`` non-empty, \u2264 64 chars, no ``|`` or ``/``\n(the session token is ``username|expiry``); ``password`` 8..1024; ``role`` one of the three. A\nduplicate username is a 409 (never an overwrite).",
+        "properties": {
+          "password": {
+            "maxLength": 1024,
+            "minLength": 8,
+            "title": "Password",
+            "type": "string"
+          },
+          "role": {
+            "enum": [
+              "viewer",
+              "operator",
+              "admin"
+            ],
+            "title": "Role",
+            "type": "string"
+          },
+          "username": {
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "^[^|/]+$",
+            "title": "Username",
+            "type": "string"
+          }
+        },
+        "required": [
+          "username",
+          "password",
+          "role"
+        ],
+        "title": "AddUserRequest",
+        "type": "object"
+      },
       "AuditEvent": {
         "additionalProperties": false,
         "description": "One audit-log row (store_sql.recent_audit). id/ts are non-null; the five string fields are\nnullable at the DB layer (model defensively as str|null), null when the action has no such field.",
@@ -189,6 +224,28 @@
           "automations"
         ],
         "title": "AutomationsList",
+        "type": "object"
+      },
+      "ChangePasswordRequest": {
+        "additionalProperties": false,
+        "description": "POST /api/me/password \u2014 the signed-in user changes their OWN password. ``current`` is verified\n(a stolen cookie alone can't rotate it) before the ``new`` hash is written. ``new`` is 8..1024.",
+        "properties": {
+          "current": {
+            "title": "Current",
+            "type": "string"
+          },
+          "new": {
+            "maxLength": 1024,
+            "minLength": 8,
+            "title": "New",
+            "type": "string"
+          }
+        },
+        "required": [
+          "current",
+          "new"
+        ],
+        "title": "ChangePasswordRequest",
         "type": "object"
       },
       "ControlCover": {
@@ -430,6 +487,29 @@
           "on"
         ],
         "title": "ControlThermostatPower",
+        "type": "object"
+      },
+      "DbStats": {
+        "additionalProperties": false,
+        "description": "GET /api/db/stats \u2014 SQLite on-disk size + per-table row counts (admin). ``tables`` maps each\ntracked table name to its current row count.",
+        "properties": {
+          "file_bytes": {
+            "title": "File Bytes",
+            "type": "integer"
+          },
+          "tables": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Tables",
+            "type": "object"
+          }
+        },
+        "required": [
+          "file_bytes",
+          "tables"
+        ],
+        "title": "DbStats",
         "type": "object"
       },
       "DeviceInfo": {
@@ -1301,6 +1381,98 @@
         "title": "OkResult",
         "type": "object"
       },
+      "ResetPasswordRequest": {
+        "additionalProperties": false,
+        "description": "POST /api/users/reset-password \u2014 admin: set ANOTHER user's password (no current-password check).\nRefuses self (an admin rotates their OWN credential via /api/me/password, which verifies the current\none). NOTE the field is ``new`` (not ``password``).",
+        "properties": {
+          "new": {
+            "maxLength": 1024,
+            "minLength": 8,
+            "title": "New",
+            "type": "string"
+          },
+          "username": {
+            "minLength": 1,
+            "title": "Username",
+            "type": "string"
+          }
+        },
+        "required": [
+          "username",
+          "new"
+        ],
+        "title": "ResetPasswordRequest",
+        "type": "object"
+      },
+      "Rf433Device": {
+        "additionalProperties": false,
+        "description": "One discovered 433 MHz device (``rf433.Rf433Registry.snapshot``). ``fields`` is the last decoded\npacket's JSON-safe scalars (rtl_433 ``time``/``mic`` noise stripped). All five keys are always present.",
+        "properties": {
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          },
+          "fields": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "string"
+                }
+              ]
+            },
+            "title": "Fields",
+            "type": "object"
+          },
+          "first_seen": {
+            "title": "First Seen",
+            "type": "number"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "last_seen": {
+            "title": "Last Seen",
+            "type": "number"
+          }
+        },
+        "required": [
+          "key",
+          "first_seen",
+          "last_seen",
+          "count",
+          "fields"
+        ],
+        "title": "Rf433Device",
+        "type": "object"
+      },
+      "Rf433Feed": {
+        "additionalProperties": false,
+        "description": "GET /api/rf433 \u2014 every decoded 433 device, newest-seen first (admin observability). ``devices`` is\n``[]`` until the local-433 feeder is running.",
+        "properties": {
+          "devices": {
+            "items": {
+              "$ref": "#/components/schemas/Rf433Device"
+            },
+            "title": "Devices",
+            "type": "array"
+          }
+        },
+        "required": [
+          "devices"
+        ],
+        "title": "Rf433Feed",
+        "type": "object"
+      },
       "RoomIconRequest": {
         "additionalProperties": false,
         "description": "POST /api/rooms/icons \u2014 set one shared room emoji. Send icon=\"\" (empty string, NOT null) to clear.",
@@ -1668,6 +1840,53 @@
           "total"
         ],
         "title": "SceneResult",
+        "type": "object"
+      },
+      "SetDisabledRequest": {
+        "additionalProperties": false,
+        "description": "POST /api/users/disabled \u2014 admin: enable/disable ANOTHER account. Refuses self + the last enabled admin.",
+        "properties": {
+          "disabled": {
+            "title": "Disabled",
+            "type": "boolean"
+          },
+          "username": {
+            "minLength": 1,
+            "title": "Username",
+            "type": "string"
+          }
+        },
+        "required": [
+          "username",
+          "disabled"
+        ],
+        "title": "SetDisabledRequest",
+        "type": "object"
+      },
+      "SetRoleRequest": {
+        "additionalProperties": false,
+        "description": "POST /api/users/role \u2014 admin: change ANOTHER user's role. Refuses self (no self-demote) and the\nlast enabled admin (server-enforced). ``username`` only has to be non-empty (it names an existing\naccount, so the create-time char rules don't re-apply).",
+        "properties": {
+          "role": {
+            "enum": [
+              "viewer",
+              "operator",
+              "admin"
+            ],
+            "title": "Role",
+            "type": "string"
+          },
+          "username": {
+            "minLength": 1,
+            "title": "Username",
+            "type": "string"
+          }
+        },
+        "required": [
+          "username",
+          "role"
+        ],
+        "title": "SetRoleRequest",
         "type": "object"
       },
       "Settings": {
@@ -2135,6 +2354,54 @@
         "title": "TriggerTime",
         "type": "object"
       },
+      "UserRow": {
+        "additionalProperties": false,
+        "description": "One account in the admin user list (``store_sql.list_users``) \u2014 username / role / disabled,\nNEVER the password hash.",
+        "properties": {
+          "disabled": {
+            "title": "Disabled",
+            "type": "boolean"
+          },
+          "role": {
+            "enum": [
+              "viewer",
+              "operator",
+              "admin"
+            ],
+            "title": "Role",
+            "type": "string"
+          },
+          "username": {
+            "title": "Username",
+            "type": "string"
+          }
+        },
+        "required": [
+          "username",
+          "role",
+          "disabled"
+        ],
+        "title": "UserRow",
+        "type": "object"
+      },
+      "UsersList": {
+        "additionalProperties": false,
+        "description": "GET /api/users \u2014 every account (admin). ``users`` is always present; there is NO top-level ``ok``.",
+        "properties": {
+          "users": {
+            "items": {
+              "$ref": "#/components/schemas/UserRow"
+            },
+            "title": "Users",
+            "type": "array"
+          }
+        },
+        "required": [
+          "users"
+        ],
+        "title": "UsersList",
+        "type": "object"
+      },
       "WhoAmI": {
         "additionalProperties": false,
         "description": "GET /api/whoami \u2014 the caller's identity + RBAC role; both null when auth is off (loopback/dev).",
@@ -2375,6 +2642,26 @@
         "x-required-role": "operator"
       }
     },
+    "/api/db/stats": {
+      "get": {
+        "description": "Requires the admin role.",
+        "operationId": "dbStats",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DbStats"
+                }
+              }
+            },
+            "description": "the database stats"
+          }
+        },
+        "summary": "SQLite file size + per-table row counts",
+        "x-required-role": "admin"
+      }
+    },
     "/api/discovery": {
       "get": {
         "description": "Requires the viewer role. The primary read a client polls/refetches.",
@@ -2525,6 +2812,76 @@
         "x-required-role": "public"
       }
     },
+    "/api/me/password": {
+      "post": {
+        "description": "Requires a session (viewer+). 401 when not signed in; 403 when the current password is wrong.",
+        "operationId": "changeOwnPassword",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChangePasswordRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OkResult"
+                }
+              }
+            },
+            "description": "password changed"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ControlError"
+                }
+              }
+            },
+            "description": "invalid / missing fields"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ControlError"
+                }
+              }
+            },
+            "description": "not signed in"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ControlError"
+                }
+              }
+            },
+            "description": "current password is incorrect"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ControlError"
+                }
+              }
+            },
+            "description": "account no longer exists (or SQLite backend inactive)"
+          }
+        },
+        "summary": "Change your own password (verifies the current one)",
+        "x-required-role": "viewer"
+      }
+    },
     "/api/name": {
       "post": {
         "description": "Requires the admin role. Save failure maps to 500 (not 503).",
@@ -2572,6 +2929,26 @@
           }
         },
         "summary": "Set a device's registry labels (name / room / type / endpoint)",
+        "x-required-role": "admin"
+      }
+    },
+    "/api/rf433": {
+      "get": {
+        "description": "Requires the admin role. Engineering observability; empty until the local-433 feeder runs.",
+        "operationId": "rf433",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Rf433Feed"
+                }
+              }
+            },
+            "description": "the 433 device feed"
+          }
+        },
+        "summary": "Discovered 433 MHz devices (newest-seen first)",
         "x-required-role": "admin"
       }
     },
@@ -2732,6 +3109,294 @@
         },
         "summary": "Update UI preferences (partial \u2014 only the keys sent are persisted)",
         "x-required-role": "viewer"
+      }
+    },
+    "/api/users": {
+      "get": {
+        "description": "Requires the admin role. 409 when the SQLite users backend isn't active.",
+        "operationId": "listUsers",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UsersList"
+                }
+              }
+            },
+            "description": "the accounts"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ControlError"
+                }
+              }
+            },
+            "description": "user management requires the SQLite backend"
+          }
+        },
+        "summary": "List every account (username / role / disabled \u2014 never the password hash)",
+        "x-required-role": "admin"
+      },
+      "post": {
+        "description": "Requires the admin role. 409 on a duplicate username (never an overwrite).",
+        "operationId": "addUser",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AddUserRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OkResult"
+                }
+              }
+            },
+            "description": "account created"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ControlError"
+                }
+              }
+            },
+            "description": "invalid username / password / role"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ControlError"
+                }
+              }
+            },
+            "description": "duplicate username (or SQLite backend inactive)"
+          }
+        },
+        "summary": "Create a new account",
+        "x-required-role": "admin"
+      }
+    },
+    "/api/users/disabled": {
+      "post": {
+        "description": "Requires the admin role. Refuses self (403) and the last enabled admin (409).",
+        "operationId": "setUserDisabled",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetDisabledRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OkResult"
+                }
+              }
+            },
+            "description": "updated"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ControlError"
+                }
+              }
+            },
+            "description": "invalid username / disabled flag"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ControlError"
+                }
+              }
+            },
+            "description": "cannot disable your own account"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ControlError"
+                }
+              }
+            },
+            "description": "no such user"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ControlError"
+                }
+              }
+            },
+            "description": "would leave no enabled admin (or SQLite backend inactive)"
+          }
+        },
+        "summary": "Enable or disable another account",
+        "x-required-role": "admin"
+      }
+    },
+    "/api/users/reset-password": {
+      "post": {
+        "description": "Requires the admin role. Refuses self (403); rotate your own via /api/me/password.",
+        "operationId": "resetUserPassword",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResetPasswordRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OkResult"
+                }
+              }
+            },
+            "description": "password reset"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ControlError"
+                }
+              }
+            },
+            "description": "invalid username / password"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ControlError"
+                }
+              }
+            },
+            "description": "use change-password for your own account"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ControlError"
+                }
+              }
+            },
+            "description": "no such user"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ControlError"
+                }
+              }
+            },
+            "description": "SQLite backend inactive"
+          }
+        },
+        "summary": "Reset another user's password (admin reset \u2014 no current-password check)",
+        "x-required-role": "admin"
+      }
+    },
+    "/api/users/role": {
+      "post": {
+        "description": "Requires the admin role. Refuses self (403) and the last enabled admin (409).",
+        "operationId": "setUserRole",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetRoleRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OkResult"
+                }
+              }
+            },
+            "description": "role changed"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ControlError"
+                }
+              }
+            },
+            "description": "invalid username / role"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ControlError"
+                }
+              }
+            },
+            "description": "cannot change your own role"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ControlError"
+                }
+              }
+            },
+            "description": "no such user"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ControlError"
+                }
+              }
+            },
+            "description": "would leave no enabled admin (or SQLite backend inactive)"
+          }
+        },
+        "summary": "Change another user's role",
+        "x-required-role": "admin"
       }
     },
     "/api/whoami": {

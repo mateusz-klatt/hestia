@@ -631,6 +631,116 @@ class OkResult(BaseModel):
 _AUTH_MODELS = (LoginRequest, LoginSuccess, WhoAmI, OkResult)
 
 
+# ---- user management + engineering observability ----------------------------
+# Admin account administration (/api/users*), the self-service password change (/api/me/password,
+# viewer floor — any signed-in user, with the CURRENT password verified), and two admin read-only
+# diagnostics (/api/rf433, /api/db/stats). Request DTOs are pinned to the authoritative validators
+# (web._username_error / web._password_error / store_sql.ROLE_RANK) by the binding tests.
+Role = Literal["viewer", "operator", "admin"]  # the three RBAC roles (store_sql.ROLE_RANK keys)
+
+
+class AddUserRequest(BaseModel):
+    """POST /api/users — admin: create an account. ``username`` non-empty, ≤ 64 chars, no ``|`` or ``/``
+    (the session token is ``username|expiry``); ``password`` 8..1024; ``role`` one of the three. A
+    duplicate username is a 409 (never an overwrite)."""
+
+    model_config = _STRICT
+    username: Annotated[str, Field(min_length=1, max_length=64, pattern=r"^[^|/]+$")]
+    password: Annotated[str, Field(min_length=8, max_length=1024)]
+    role: Role
+
+
+class SetRoleRequest(BaseModel):
+    """POST /api/users/role — admin: change ANOTHER user's role. Refuses self (no self-demote) and the
+    last enabled admin (server-enforced). ``username`` only has to be non-empty (it names an existing
+    account, so the create-time char rules don't re-apply)."""
+
+    model_config = _STRICT
+    username: Annotated[str, Field(min_length=1)]
+    role: Role
+
+
+class SetDisabledRequest(BaseModel):
+    """POST /api/users/disabled — admin: enable/disable ANOTHER account. Refuses self + the last enabled admin."""
+
+    model_config = _STRICT
+    username: Annotated[str, Field(min_length=1)]
+    disabled: bool
+
+
+class ResetPasswordRequest(BaseModel):
+    """POST /api/users/reset-password — admin: set ANOTHER user's password (no current-password check).
+    Refuses self (an admin rotates their OWN credential via /api/me/password, which verifies the current
+    one). NOTE the field is ``new`` (not ``password``)."""
+
+    model_config = _STRICT
+    username: Annotated[str, Field(min_length=1)]
+    new: Annotated[str, Field(min_length=8, max_length=1024)]
+
+
+class ChangePasswordRequest(BaseModel):
+    """POST /api/me/password — the signed-in user changes their OWN password. ``current`` is verified
+    (a stolen cookie alone can't rotate it) before the ``new`` hash is written. ``new`` is 8..1024."""
+
+    model_config = _STRICT
+    current: str
+    new: Annotated[str, Field(min_length=8, max_length=1024)]
+
+
+class UserRow(BaseModel):
+    """One account in the admin user list (``store_sql.list_users``) — username / role / disabled,
+    NEVER the password hash."""
+
+    model_config = _READ
+    username: str
+    role: Role
+    disabled: bool
+
+
+class UsersList(BaseModel):
+    """GET /api/users — every account (admin). ``users`` is always present; there is NO top-level ``ok``."""
+
+    model_config = ConfigDict(extra="forbid")
+    users: list[UserRow]
+
+
+# A decoded-433 field value: rf433._keep_field admits only FINITE str/int/float/bool scalars.
+Rf433Value = Union[bool, int, float, str]
+
+
+class Rf433Device(BaseModel):
+    """One discovered 433 MHz device (``rf433.Rf433Registry.snapshot``). ``fields`` is the last decoded
+    packet's JSON-safe scalars (rtl_433 ``time``/``mic`` noise stripped). All five keys are always present."""
+
+    model_config = _READ
+    key: str
+    first_seen: float
+    last_seen: float
+    count: int
+    fields: dict[str, Rf433Value]
+
+
+class Rf433Feed(BaseModel):
+    """GET /api/rf433 — every decoded 433 device, newest-seen first (admin observability). ``devices`` is
+    ``[]`` until the local-433 feeder is running."""
+
+    model_config = ConfigDict(extra="forbid")
+    devices: list[Rf433Device]
+
+
+class DbStats(BaseModel):
+    """GET /api/db/stats — SQLite on-disk size + per-table row counts (admin). ``tables`` maps each
+    tracked table name to its current row count."""
+
+    model_config = _READ
+    file_bytes: int
+    tables: dict[str, int]
+
+
+_USER_MODELS = (AddUserRequest, SetRoleRequest, SetDisabledRequest, ResetPasswordRequest,
+                ChangePasswordRequest, UserRow, UsersList, Rf433Device, Rf433Feed, DbStats)
+
+
 def _ref(name: str) -> dict:
     return {"$ref": f"#/components/schemas/{name}"}
 
@@ -656,6 +766,14 @@ _PATH_ROLES = {
     ("POST", "/api/automations/delete"): "admin",
     ("GET", "/api/audit"): "viewer",
     ("GET", "/api/events"): "viewer",
+    ("GET", "/api/users"): "admin",
+    ("POST", "/api/users"): "admin",
+    ("POST", "/api/users/role"): "admin",
+    ("POST", "/api/users/disabled"): "admin",
+    ("POST", "/api/users/reset-password"): "admin",
+    ("POST", "/api/me/password"): "viewer",
+    ("GET", "/api/rf433"): "admin",
+    ("GET", "/api/db/stats"): "admin",
 }
 
 
@@ -664,7 +782,8 @@ def _component_schemas() -> dict:
     _, combined = models_json_schema(
         [(model, "validation")
          for model in (*_CONTROL_MODELS, ControlSuccess, ControlError, *_COMMAND_MODELS,
-                       *_READ_MODELS, *_AUTH_MODELS, *_AUTOMATION_MODELS, *_EVENT_MODELS)],
+                       *_READ_MODELS, *_AUTH_MODELS, *_AUTOMATION_MODELS, *_EVENT_MODELS,
+                       *_USER_MODELS)],
         ref_template="#/components/schemas/{model}",
     )
     schemas = combined.get("$defs", {})
@@ -947,6 +1066,124 @@ def build_openapi() -> dict:
                         "500": {"description": "save failed", **err},
                     },
                 },
+            },
+            "/api/users": {
+                "get": {
+                    "operationId": "listUsers",
+                    "summary": "List every account (username / role / disabled — never the password hash)",
+                    "description": "Requires the admin role. 409 when the SQLite users backend isn't active.",
+                    "responses": {
+                        "200": {"description": "the accounts",
+                                "content": {"application/json": {"schema": _ref("UsersList")}}},
+                        "409": {"description": "user management requires the SQLite backend", **err},
+                    },
+                },
+                "post": {
+                    "operationId": "addUser",
+                    "summary": "Create a new account",
+                    "description": "Requires the admin role. 409 on a duplicate username (never an overwrite).",
+                    "requestBody": {"required": True,
+                                    "content": {"application/json": {"schema": _ref("AddUserRequest")}}},
+                    "responses": {
+                        "200": {"description": "account created",
+                                "content": {"application/json": {"schema": _ref("OkResult")}}},
+                        "400": {"description": "invalid username / password / role", **err},
+                        "409": {"description": "duplicate username (or SQLite backend inactive)", **err},
+                    },
+                },
+            },
+            "/api/users/role": {
+                "post": {
+                    "operationId": "setUserRole",
+                    "summary": "Change another user's role",
+                    "description": "Requires the admin role. Refuses self (403) and the last enabled admin (409).",
+                    "requestBody": {"required": True,
+                                    "content": {"application/json": {"schema": _ref("SetRoleRequest")}}},
+                    "responses": {
+                        "200": {"description": "role changed",
+                                "content": {"application/json": {"schema": _ref("OkResult")}}},
+                        "400": {"description": "invalid username / role", **err},
+                        "403": {"description": "cannot change your own role", **err},
+                        "404": {"description": "no such user", **err},
+                        "409": {"description": "would leave no enabled admin (or SQLite backend inactive)", **err},
+                    },
+                },
+            },
+            "/api/users/disabled": {
+                "post": {
+                    "operationId": "setUserDisabled",
+                    "summary": "Enable or disable another account",
+                    "description": "Requires the admin role. Refuses self (403) and the last enabled admin (409).",
+                    "requestBody": {"required": True,
+                                    "content": {"application/json": {"schema": _ref("SetDisabledRequest")}}},
+                    "responses": {
+                        "200": {"description": "updated",
+                                "content": {"application/json": {"schema": _ref("OkResult")}}},
+                        "400": {"description": "invalid username / disabled flag", **err},
+                        "403": {"description": "cannot disable your own account", **err},
+                        "404": {"description": "no such user", **err},
+                        "409": {"description": "would leave no enabled admin (or SQLite backend inactive)", **err},
+                    },
+                },
+            },
+            "/api/users/reset-password": {
+                "post": {
+                    "operationId": "resetUserPassword",
+                    "summary": "Reset another user's password (admin reset — no current-password check)",
+                    "description": "Requires the admin role. Refuses self (403); rotate your own via "
+                    "/api/me/password.",
+                    "requestBody": {"required": True,
+                                    "content": {"application/json": {"schema": _ref("ResetPasswordRequest")}}},
+                    "responses": {
+                        "200": {"description": "password reset",
+                                "content": {"application/json": {"schema": _ref("OkResult")}}},
+                        "400": {"description": "invalid username / password", **err},
+                        "403": {"description": "use change-password for your own account", **err},
+                        "404": {"description": "no such user", **err},
+                        "409": {"description": "SQLite backend inactive", **err},
+                    },
+                },
+            },
+            "/api/me/password": {
+                "post": {
+                    "operationId": "changeOwnPassword",
+                    "summary": "Change your own password (verifies the current one)",
+                    "description": "Requires a session (viewer+). 401 when not signed in; 403 when the "
+                    "current password is wrong.",
+                    "requestBody": {"required": True,
+                                    "content": {"application/json": {"schema": _ref("ChangePasswordRequest")}}},
+                    "responses": {
+                        "200": {"description": "password changed",
+                                "content": {"application/json": {"schema": _ref("OkResult")}}},
+                        "400": {"description": "invalid / missing fields", **err},
+                        "401": {"description": "not signed in", **err},
+                        "403": {"description": "current password is incorrect", **err},
+                        "409": {"description": "account no longer exists (or SQLite backend inactive)", **err},
+                    },
+                },
+            },
+            "/api/rf433": {
+                "get": {
+                    "operationId": "rf433",
+                    "summary": "Discovered 433 MHz devices (newest-seen first)",
+                    "description": "Requires the admin role. Engineering observability; empty until the "
+                    "local-433 feeder runs.",
+                    "responses": {
+                        "200": {"description": "the 433 device feed",
+                                "content": {"application/json": {"schema": _ref("Rf433Feed")}}},
+                    },
+                }
+            },
+            "/api/db/stats": {
+                "get": {
+                    "operationId": "dbStats",
+                    "summary": "SQLite file size + per-table row counts",
+                    "description": "Requires the admin role.",
+                    "responses": {
+                        "200": {"description": "the database stats",
+                                "content": {"application/json": {"schema": _ref("DbStats")}}},
+                    },
+                }
             },
         },
         "components": {"schemas": _component_schemas()},
