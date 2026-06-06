@@ -1,6 +1,133 @@
 {
   "components": {
     "schemas": {
+      "ActivityEvent": {
+        "additionalProperties": false,
+        "description": "Heatmap row-flash on every decoded frame with a node; `scene` rides only a function-button frame.",
+        "properties": {
+          "node": {
+            "title": "Node",
+            "type": "integer"
+          },
+          "scene": {
+            "$ref": "#/components/schemas/Scene"
+          },
+          "ts": {
+            "title": "Ts",
+            "type": "number"
+          },
+          "type": {
+            "const": "activity",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "node",
+          "ts"
+        ],
+        "title": "ActivityEvent",
+        "type": "object"
+      },
+      "AuditEvent": {
+        "additionalProperties": false,
+        "description": "One audit-log row (store_sql.recent_audit). id/ts are non-null; the five string fields are\nnullable at the DB layer (model defensively as str|null), null when the action has no such field.",
+        "properties": {
+          "action": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Action"
+          },
+          "actor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actor"
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Result"
+          },
+          "target": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target"
+          },
+          "ts": {
+            "title": "Ts",
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "ts",
+          "actor",
+          "action",
+          "target",
+          "detail",
+          "result"
+        ],
+        "title": "AuditEvent",
+        "type": "object"
+      },
+      "AuditFeed": {
+        "additionalProperties": false,
+        "description": "GET /api/audit \u2014 newest-first rows (capped 200); `events` always present ([] when audit off).",
+        "properties": {
+          "events": {
+            "items": {
+              "$ref": "#/components/schemas/AuditEvent"
+            },
+            "title": "Events",
+            "type": "array"
+          }
+        },
+        "required": [
+          "events"
+        ],
+        "title": "AuditFeed",
+        "type": "object"
+      },
       "AutomationDeleted": {
         "additionalProperties": false,
         "description": "200 from POST /api/automations/delete: `deleted` is false (200, not 404) for an absent id.",
@@ -530,6 +657,138 @@
         "title": "DeviceInfo",
         "type": "object"
       },
+      "DeviceStatePatch": {
+        "additionalProperties": false,
+        "description": "A partial of DeviceInfo \u2014 exactly the live-state keys a frame can change (State.apply's `changed`\nmap, after `scene` is popped). Discovery-side fields (power/type/confidence/battery/last_seen) never\nride a `state` event \u2014 they arrive via a discovery_changed refetch.",
+        "properties": {
+          "door": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Door"
+          },
+          "endpoints": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "boolean"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Endpoints"
+          },
+          "energy_kwh": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Energy Kwh"
+          },
+          "level": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Level"
+          },
+          "motion": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Motion"
+          },
+          "power_w": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Power W"
+          },
+          "setpoint": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Setpoint"
+          },
+          "switch": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Switch"
+          },
+          "temperature": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Temperature"
+          },
+          "thermostat_on": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Thermostat On"
+          },
+          "voltage_v": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Voltage V"
+          }
+        },
+        "title": "DeviceStatePatch",
+        "type": "object"
+      },
       "Discovery": {
         "additionalProperties": false,
         "description": "``GET /api/discovery`` \u2014 the whole dashboard snapshot. Every key is always present; ``klima_state``\nis null until an A/C IR command is seen, ``env_override`` is null unless ``HESTIA_MODE`` pins the mode.",
@@ -605,6 +864,22 @@
         "title": "Discovery",
         "type": "object"
       },
+      "DiscoveryChangedEvent": {
+        "additionalProperties": false,
+        "description": "Re-fetch GET /api/discovery (identity/name/classifier change). No payload.",
+        "properties": {
+          "type": {
+            "const": "discovery_changed",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "title": "DiscoveryChangedEvent",
+        "type": "object"
+      },
       "Globals": {
         "additionalProperties": false,
         "description": "Node-less global fields (``proxy.globals_snapshot``). Every key is ALWAYS present (required),\nnull when its poller is off.",
@@ -649,6 +924,66 @@
           "outdoor_humidity"
         ],
         "title": "Globals",
+        "type": "object"
+      },
+      "GlobalsEvent": {
+        "additionalProperties": false,
+        "properties": {
+          "fields": {
+            "$ref": "#/components/schemas/GlobalsPatch"
+          },
+          "type": {
+            "const": "globals",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "fields"
+        ],
+        "title": "GlobalsEvent",
+        "type": "object"
+      },
+      "GlobalsPatch": {
+        "additionalProperties": false,
+        "description": "A partial of Globals \u2014 the changed global field(s) in a `globals` event (1 key, or 2 for 433).",
+        "properties": {
+          "crib_temp": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Crib Temp"
+          },
+          "outdoor_humidity": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Outdoor Humidity"
+          },
+          "outdoor_temp": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Outdoor Temp"
+          }
+        },
+        "title": "GlobalsPatch",
         "type": "object"
       },
       "IrButton": {
@@ -737,6 +1072,25 @@
         "title": "Klima",
         "type": "object"
       },
+      "KlimaEvent": {
+        "additionalProperties": false,
+        "properties": {
+          "klima": {
+            "$ref": "#/components/schemas/KlimaState"
+          },
+          "type": {
+            "const": "klima",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "klima"
+        ],
+        "title": "KlimaEvent",
+        "type": "object"
+      },
       "KlimaState": {
         "additionalProperties": false,
         "description": "The A/C state derived from IR traffic (``state``): power + optional mode/target.",
@@ -775,6 +1129,36 @@
         ],
         "title": "KlimaState",
         "type": "object"
+      },
+      "LiveEvent": {
+        "description": "One Server-Sent-Events frame (the JSON after `data:`).",
+        "discriminator": {
+          "mapping": {
+            "activity": "#/components/schemas/ActivityEvent",
+            "discovery_changed": "#/components/schemas/DiscoveryChangedEvent",
+            "globals": "#/components/schemas/GlobalsEvent",
+            "klima": "#/components/schemas/KlimaEvent",
+            "state": "#/components/schemas/StateEvent"
+          },
+          "propertyName": "type"
+        },
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/DiscoveryChangedEvent"
+          },
+          {
+            "$ref": "#/components/schemas/StateEvent"
+          },
+          {
+            "$ref": "#/components/schemas/ActivityEvent"
+          },
+          {
+            "$ref": "#/components/schemas/GlobalsEvent"
+          },
+          {
+            "$ref": "#/components/schemas/KlimaEvent"
+          }
+        ]
       },
       "LoginRequest": {
         "additionalProperties": false,
@@ -1216,6 +1600,30 @@
         "title": "RuleVocab",
         "type": "object"
       },
+      "Scene": {
+        "additionalProperties": false,
+        "description": "A function-button press riding an `activity` event. `kind` distinguishes the two frame types.",
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "kind": {
+            "enum": [
+              "scene",
+              "central"
+            ],
+            "title": "Kind",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "kind"
+        ],
+        "title": "Scene",
+        "type": "object"
+      },
       "SceneRequest": {
         "additionalProperties": false,
         "description": "POST /api/scene \u2014 fan one house-wide scene out across the per-device control path.",
@@ -1353,6 +1761,30 @@
           }
         },
         "title": "SettingsUpdate",
+        "type": "object"
+      },
+      "StateEvent": {
+        "additionalProperties": false,
+        "properties": {
+          "fields": {
+            "$ref": "#/components/schemas/DeviceStatePatch"
+          },
+          "node": {
+            "title": "Node",
+            "type": "integer"
+          },
+          "type": {
+            "const": "state",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "node",
+          "fields"
+        ],
+        "title": "StateEvent",
         "type": "object"
       },
       "StatePredicate": {
@@ -1746,6 +2178,26 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/api/audit": {
+      "get": {
+        "description": "Requires the viewer role.",
+        "operationId": "audit",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuditFeed"
+                }
+              }
+            },
+            "description": "the audit feed"
+          }
+        },
+        "summary": "Recent audit-log rows (newest first, capped 200)",
+        "x-required-role": "viewer"
+      }
+    },
     "/api/automations": {
       "get": {
         "description": "Requires the admin role (rules can carry presence-trigger MACs).",
@@ -1940,6 +2392,26 @@
           }
         },
         "summary": "The full dashboard snapshot (devices + globals + klima + rule grammar)",
+        "x-required-role": "viewer"
+      }
+    },
+    "/api/events": {
+      "get": {
+        "description": "Requires the viewer role. An unbounded text/event-stream; each `data:` frame is one LiveEvent. `:`-comment keepalives carry no data. Browser/native clients auto-reconnect (the stream closes on a max-lifetime deadline).",
+        "operationId": "events",
+        "responses": {
+          "200": {
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/LiveEvent"
+                }
+              }
+            },
+            "description": "the event stream (one LiveEvent per data frame)"
+          }
+        },
+        "summary": "Live updates (Server-Sent Events)",
         "x-required-role": "viewer"
       }
     },

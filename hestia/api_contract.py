@@ -486,6 +486,113 @@ class Discovery(BaseModel):
 _READ_MODELS = (Globals, Summary, DeviceInfo, RuleVocab, KlimaState, IrButton, Klima, Discovery)
 
 
+# ---- audit feed -------------------------------------------------------------
+class AuditEvent(BaseModel):
+    """One audit-log row (store_sql.recent_audit). id/ts are non-null; the five string fields are
+    nullable at the DB layer (model defensively as str|null), null when the action has no such field."""
+
+    model_config = _READ
+    id: int
+    ts: float
+    actor: Union[str, None]
+    action: Union[str, None]
+    target: Union[str, None]
+    detail: Union[str, None]
+    result: Union[str, None]
+
+
+class AuditFeed(BaseModel):
+    """GET /api/audit — newest-first rows (capped 200); `events` always present ([] when audit off)."""
+
+    model_config = ConfigDict(extra="forbid")
+    events: list[AuditEvent]
+
+
+# ---- live events (GET /api/events, Server-Sent Events) ----------------------
+# Each SSE `data:` frame is one LiveEvent, a discriminated union on `type` (5 variants). `state`/`globals`
+# carry a PARTIAL of DeviceInfo / Globals (only the changed keys). `conn` is NOT a server event (it's a
+# UI-derived connection indicator). Keepalive `:` comment lines carry no data.
+class Scene(BaseModel):
+    """A function-button press riding an `activity` event. `kind` distinguishes the two frame types."""
+
+    model_config = _READ
+    id: int
+    kind: Literal["scene", "central"]
+
+
+class DeviceStatePatch(BaseModel):
+    """A partial of DeviceInfo — exactly the live-state keys a frame can change (State.apply's `changed`
+    map, after `scene` is popped). Discovery-side fields (power/type/confidence/battery/last_seen) never
+    ride a `state` event — they arrive via a discovery_changed refetch."""
+
+    model_config = _READ
+    door: Annotated[Union[str, None], Field(default=None, json_schema_extra=_OMIT)] = None
+    motion: Annotated[Union[bool, None], Field(default=None, json_schema_extra=_OMIT)] = None
+    level: Annotated[Union[int, None], Field(default=None, json_schema_extra=_OMIT)] = None
+    switch: Annotated[Union[bool, None], Field(default=None, json_schema_extra=_OMIT)] = None
+    endpoints: Annotated[Union[dict[str, bool], None], Field(default=None, json_schema_extra=_OMIT)] = None
+    setpoint: Annotated[Union[float, None], Field(default=None, json_schema_extra=_OMIT)] = None
+    thermostat_on: Annotated[Union[bool, None], Field(default=None, json_schema_extra=_OMIT)] = None
+    temperature: Annotated[Union[float, None], Field(default=None, json_schema_extra=_OMIT)] = None
+    power_w: Annotated[Union[float, None], Field(default=None, json_schema_extra=_OMIT)] = None
+    energy_kwh: Annotated[Union[float, None], Field(default=None, json_schema_extra=_OMIT)] = None
+    voltage_v: Annotated[Union[float, None], Field(default=None, json_schema_extra=_OMIT)] = None
+
+
+class GlobalsPatch(BaseModel):
+    """A partial of Globals — the changed global field(s) in a `globals` event (1 key, or 2 for 433)."""
+
+    model_config = _READ
+    crib_temp: Annotated[Union[float, None], Field(default=None, json_schema_extra=_OMIT)] = None
+    outdoor_temp: Annotated[Union[float, None], Field(default=None, json_schema_extra=_OMIT)] = None
+    outdoor_humidity: Annotated[Union[float, None], Field(default=None, json_schema_extra=_OMIT)] = None
+
+
+class DiscoveryChangedEvent(BaseModel):
+    """Re-fetch GET /api/discovery (identity/name/classifier change). No payload."""
+
+    model_config = _READ
+    type: Literal["discovery_changed"]
+
+
+class StateEvent(BaseModel):
+    model_config = _READ
+    type: Literal["state"]
+    node: int
+    fields: DeviceStatePatch
+
+
+class ActivityEvent(BaseModel):
+    """Heatmap row-flash on every decoded frame with a node; `scene` rides only a function-button frame."""
+
+    model_config = _READ
+    type: Literal["activity"]
+    node: int
+    ts: float
+    scene: Annotated[Scene, Field(default=None, json_schema_extra=_OMIT)] = None
+
+
+class GlobalsEvent(BaseModel):
+    model_config = _READ
+    type: Literal["globals"]
+    fields: GlobalsPatch
+
+
+class KlimaEvent(BaseModel):
+    model_config = _READ
+    type: Literal["klima"]
+    klima: KlimaState
+
+
+LiveEvent = Annotated[
+    Union[DiscoveryChangedEvent, StateEvent, ActivityEvent, GlobalsEvent, KlimaEvent],
+    Field(discriminator="type"),
+]
+
+_EVENT_MODELS = (AuditEvent, AuditFeed, Scene, DeviceStatePatch, GlobalsPatch,
+                 DiscoveryChangedEvent, StateEvent, ActivityEvent, GlobalsEvent, KlimaEvent)
+
+
 # ---- auth (login / whoami / logout) ----------------------------------------
 class LoginRequest(BaseModel):
     """POST /api/login body. ``bearer: true`` opts a native client into a token in the response (which
@@ -547,6 +654,8 @@ _PATH_ROLES = {
     ("GET", "/api/automations"): "admin",
     ("POST", "/api/automations"): "admin",
     ("POST", "/api/automations/delete"): "admin",
+    ("GET", "/api/audit"): "viewer",
+    ("GET", "/api/events"): "viewer",
 }
 
 
@@ -555,7 +664,7 @@ def _component_schemas() -> dict:
     _, combined = models_json_schema(
         [(model, "validation")
          for model in (*_CONTROL_MODELS, ControlSuccess, ControlError, *_COMMAND_MODELS,
-                       *_READ_MODELS, *_AUTH_MODELS, *_AUTOMATION_MODELS)],
+                       *_READ_MODELS, *_AUTH_MODELS, *_AUTOMATION_MODELS, *_EVENT_MODELS)],
         ref_template="#/components/schemas/{model}",
     )
     schemas = combined.get("$defs", {})
@@ -569,6 +678,15 @@ def _component_schemas() -> dict:
                         for m in _CONTROL_MODELS},
         },
         "description": "A device control command — one variant per device op.",
+    }
+    # One SSE `data:` frame — a discriminated union on `type` over the 5 live-event variants.
+    _events = {"discovery_changed": DiscoveryChangedEvent, "state": StateEvent, "activity": ActivityEvent,
+               "globals": GlobalsEvent, "klima": KlimaEvent}
+    schemas["LiveEvent"] = {
+        "oneOf": [_ref(m.__name__) for m in _events.values()],
+        "discriminator": {"propertyName": "type",
+                          "mapping": {k: f"#/components/schemas/{m.__name__}" for k, m in _events.items()}},
+        "description": "One Server-Sent-Events frame (the JSON after `data:`).",
     }
     return schemas
 
@@ -702,6 +820,32 @@ def build_openapi() -> dict:
                         "400": {"description": "malformed", **err},
                     },
                 },
+            },
+            "/api/audit": {
+                "get": {
+                    "operationId": "audit",
+                    "summary": "Recent audit-log rows (newest first, capped 200)",
+                    "description": "Requires the viewer role.",
+                    "responses": {
+                        "200": {"description": "the audit feed",
+                                "content": {"application/json": {"schema": _ref("AuditFeed")}}},
+                    },
+                }
+            },
+            "/api/events": {
+                "get": {
+                    "operationId": "events",
+                    "summary": "Live updates (Server-Sent Events)",
+                    "description": "Requires the viewer role. An unbounded text/event-stream; each `data:` "
+                    "frame is one LiveEvent. `:`-comment keepalives carry no data. Browser/native clients "
+                    "auto-reconnect (the stream closes on a max-lifetime deadline).",
+                    "responses": {
+                        "200": {
+                            "description": "the event stream (one LiveEvent per data frame)",
+                            "content": {"text/event-stream": {"schema": _ref("LiveEvent")}},
+                        },
+                    },
+                }
             },
             "/api/login": {
                 "post": {
