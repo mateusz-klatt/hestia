@@ -3,6 +3,12 @@
 // module needs no exported members.
 declare module "*.css";
 
+// An imported asset (e.g. the logo SVG) resolves to its built URL string under /assets/.
+declare module "*.svg" {
+  const src: string;
+  export default src;
+}
+
 // Minimal typing for the Vite build-time env (only what we use): `import.meta.env.DEV` is `true` in
 // `npm run dev` and statically `false` in `vite build`, so a `if (import.meta.env.DEV)` branch (the
 // dev-only API mock) is dead-eliminated from the production bundle.

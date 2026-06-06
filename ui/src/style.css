@@ -100,12 +100,16 @@ button:disabled {
   cursor: default;
 }
 
-/* The hearth mark in the header (inline SVG; warm flame). */
+/* The hearth mark in the header (the shared logo.svg, loaded as an <img>; carries its own colours). */
 #logo {
   flex: 0 0 auto;
   display: inline-flex;
   line-height: 0;
-  color: var(--accent); /* the flame SVG uses fill:currentColor so it tracks the palette */
+}
+#logo img {
+  display: block;
+  height: 1.5em; /* track the header text size; width follows the SVG's portrait aspect */
+  width: auto;
 }
 
 /* Header: flexbox (not floats) so the conn / auth / refresh chips wrap cleanly
@@ -278,7 +282,9 @@ td.sub-label {
   flex-direction: column;
   align-items: center;
   gap: 0.3rem;
-  color: var(--accent); /* the flame inherits this via currentColor */
+}
+.login-brand img {
+  display: block;
 }
 
 .login-brand-name {
