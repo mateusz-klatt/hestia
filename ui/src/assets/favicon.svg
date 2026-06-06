@@ -1,0 +1,29 @@
+<svg viewBox="112 138 800 800" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Hestia">
+  <defs>
+    <linearGradient id="iconbg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#3E2217"/>
+      <stop offset="100%" stop-color="#130905"/>
+    </linearGradient>
+    <linearGradient id="flame" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#FFE48E"/>
+      <stop offset="40%" stop-color="#FF9D3C"/>
+      <stop offset="100%" stop-color="#EE451A"/>
+    </linearGradient>
+    <linearGradient id="core" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#FFFBEC"/>
+      <stop offset="100%" stop-color="#FFC247"/>
+    </linearGradient>
+    <linearGradient id="bowl" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#D6803B"/>
+      <stop offset="100%" stop-color="#6B3214"/>
+    </linearGradient>
+  </defs>
+
+  <rect x="112" y="138" width="800" height="800" rx="150" fill="url(#iconbg)"/>
+
+  <path d="M268 792 Q 512 742 756 792 C 736 872, 632 906, 512 906 C 392 906, 288 872, 268 792 Z" fill="url(#bowl)"/>
+  <path d="M268 792 Q 512 742 756 792" fill="none" stroke="#FFD79A" stroke-opacity="0.7" stroke-width="9" stroke-linecap="round"/>
+
+  <path d="M512 170 C 606 326, 712 470, 700 590 C 692 690, 632 748, 588 792 C 552 828, 472 828, 436 792 C 392 748, 332 690, 324 590 C 312 470, 418 326, 512 170 Z" fill="url(#flame)"/>
+  <path d="M512 416 C 562 500, 614 558, 606 640 C 600 714, 558 760, 512 784 C 466 760, 424 714, 418 640 C 410 558, 462 500, 512 416 Z" fill="url(#core)"/>
+</svg>

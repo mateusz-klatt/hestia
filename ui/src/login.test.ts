@@ -39,7 +39,7 @@ describe("renderLogin", () => {
     renderLogin(box, vi.fn());
     const card = box.querySelector(".login-card");
     expect(card).not.toBeNull();
-    expect(card?.querySelector(".login-brand svg")).not.toBeNull(); // hearth flame
+    expect(card?.querySelector(".login-brand img")).not.toBeNull(); // hearth logo
     expect(card?.querySelector(".login-brand-name")?.textContent).toBe("hestia");
     expect(card?.querySelector("#login-form")).not.toBeNull(); // form lives inside the card
   });
