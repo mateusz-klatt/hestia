@@ -225,6 +225,33 @@ class ReadShapeContractTests(unittest.TestCase):
         _wire(api_contract.KlimaState, {"power": True, "mode": "cool", "temp": 22})
         _wire(api_contract.KlimaState, {"power": False, "mode": None, "temp": None})
 
+    def test_klima_and_ir_buttons_match_real_constants(self):
+        from hestia.proxy import IR_BUTTONS, KLIMA
+        _wire(api_contract.Klima, KLIMA)             # the deployed klima.ir map (or {})
+        _wire(api_contract.Klima, {})                # empty when no klima.ir — every field optional
+        _wire(api_contract.Klima, {"file": "/x.ir", "modes": {"cool": [18, 22]},
+                                   "power_on": {"cool": [22]}, "presets": ["off"]})
+        for button in IR_BUTTONS:
+            _wire(api_contract.IrButton, button)
+        _wire(api_contract.IrButton, {"label": "TV", "file": "/tv.ir", "button": "power"})
+
+    def test_discovery_envelope_matches_assembled_real_pieces(self):
+        from hestia.proxy import IR_BUTTONS, KLIMA
+        st = State()
+        st.switches[5] = True
+        cls = {"type": "light", "confidence": "high", "power": "mains", "battery": None}
+        devices = {"5": _discovery_entry(SimpleNamespace(state=st), 5, cls, {})}
+        payload = {
+            "devices": devices, "summary": _summary(devices), "globals": globals_snapshot(State()),
+            "ir_buttons": IR_BUTTONS, "klima": KLIMA, "klima_state": None, "rule_vocab": rule_vocab(),
+            "mode": "standalone", "target_mode": "standalone", "env_override": None,
+        }
+        d = _wire(api_contract.Discovery, payload)
+        self.assertEqual(list(d.devices), ["5"])
+        # a missing envelope key is drift → must fail (every key is required)
+        with self.assertRaises(ValueError):
+            api_contract.Discovery.model_validate({k: v for k, v in payload.items() if k != "mode"})
+
     def test_read_models_forbid_unknown_fields(self):
         # extra=forbid is the drift sentinel: a new backend field must fail until the DTO adds it
         with self.assertRaises(ValueError):

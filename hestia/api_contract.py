@@ -216,7 +216,45 @@ class KlimaState(BaseModel):
     temp: Union[int, None]
 
 
-_READ_MODELS = (Globals, Summary, DeviceInfo, RuleVocab, KlimaState)
+class IrButton(BaseModel):
+    """A configured one-tap IR button (``HESTIA_IR_BUTTONS``) → transmits a saved Flipper signal."""
+
+    model_config = _READ
+    label: str
+    file: str
+    button: str
+
+
+class Klima(BaseModel):
+    """The A/C control map parsed from the klima.ir signal names — an empty ``{}`` when no klima.ir is
+    present, so every field is OPTIONAL (absent, never null). ``modes``/``power_on`` map each mode to its
+    sorted temps; ``presets`` carries ``off`` + any non-temp signal."""
+
+    model_config = _READ
+    file: Annotated[str, Field(default=None, json_schema_extra=_OMIT)] = None
+    modes: Annotated[dict[str, list[int]], Field(default=None, json_schema_extra=_OMIT)] = None
+    power_on: Annotated[dict[str, list[int]], Field(default=None, json_schema_extra=_OMIT)] = None
+    presets: Annotated[list[str], Field(default=None, json_schema_extra=_OMIT)] = None
+
+
+class Discovery(BaseModel):
+    """``GET /api/discovery`` — the whole dashboard snapshot. Every key is always present; ``klima_state``
+    is null until an A/C IR command is seen, ``env_override`` is null unless ``HESTIA_MODE`` pins the mode."""
+
+    model_config = _READ
+    devices: dict[str, DeviceInfo]
+    summary: Summary
+    globals: Globals
+    ir_buttons: list[IrButton]
+    klima: Klima
+    klima_state: Union[KlimaState, None]
+    rule_vocab: RuleVocab
+    mode: str
+    target_mode: str
+    env_override: Union[str, None]
+
+
+_READ_MODELS = (Globals, Summary, DeviceInfo, RuleVocab, KlimaState, IrButton, Klima, Discovery)
 
 
 # ---- auth (login / whoami / logout) ----------------------------------------
@@ -356,6 +394,19 @@ def build_openapi() -> dict:
                         "200": {
                             "description": "the current session's identity",
                             "content": {"application/json": {"schema": _ref("WhoAmI")}},
+                        }
+                    },
+                }
+            },
+            "/api/discovery": {
+                "get": {
+                    "operationId": "discovery",
+                    "summary": "The full dashboard snapshot (devices + globals + klima + rule grammar)",
+                    "description": "Requires the viewer role. The primary read a client polls/refetches.",
+                    "responses": {
+                        "200": {
+                            "description": "the current snapshot",
+                            "content": {"application/json": {"schema": _ref("Discovery")}},
                         }
                     },
                 }

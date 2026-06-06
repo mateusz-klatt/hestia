@@ -672,6 +672,13 @@ class AuthTests(_WebTestBase):
         status, _, _ = _get(self.web.address, "/api/discovery", headers={"Cookie": cookie})
         self.assertEqual(status, 200)
 
+    def test_discovery_response_matches_the_contract(self):
+        from hestia import api_contract
+        cookie = self._cookie(self._login()[1]["Set-Cookie"])
+        status, _, body = _get(self.web.address, "/api/discovery", headers={"Cookie": cookie})
+        self.assertEqual(status, 200)
+        api_contract.Discovery.model_validate(json.loads(body))  # the LIVE envelope matches the DTO
+
     def test_whoami_returns_logged_in_user(self):
         _, headers, _ = self._login()
         cookie = self._cookie(headers["Set-Cookie"])
