@@ -467,6 +467,81 @@
         "title": "DeviceInfo",
         "type": "object"
       },
+      "Discovery": {
+        "additionalProperties": false,
+        "description": "``GET /api/discovery`` \u2014 the whole dashboard snapshot. Every key is always present; ``klima_state``\nis null until an A/C IR command is seen, ``env_override`` is null unless ``HESTIA_MODE`` pins the mode.",
+        "properties": {
+          "devices": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/DeviceInfo"
+            },
+            "title": "Devices",
+            "type": "object"
+          },
+          "env_override": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Env Override"
+          },
+          "globals": {
+            "$ref": "#/components/schemas/Globals"
+          },
+          "ir_buttons": {
+            "items": {
+              "$ref": "#/components/schemas/IrButton"
+            },
+            "title": "Ir Buttons",
+            "type": "array"
+          },
+          "klima": {
+            "$ref": "#/components/schemas/Klima"
+          },
+          "klima_state": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/KlimaState"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "mode": {
+            "title": "Mode",
+            "type": "string"
+          },
+          "rule_vocab": {
+            "$ref": "#/components/schemas/RuleVocab"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/Summary"
+          },
+          "target_mode": {
+            "title": "Target Mode",
+            "type": "string"
+          }
+        },
+        "required": [
+          "devices",
+          "summary",
+          "globals",
+          "ir_buttons",
+          "klima",
+          "klima_state",
+          "rule_vocab",
+          "mode",
+          "target_mode",
+          "env_override"
+        ],
+        "title": "Discovery",
+        "type": "object"
+      },
       "Globals": {
         "additionalProperties": false,
         "description": "Node-less global fields (``proxy.globals_snapshot``). Every key is ALWAYS present (required),\nnull when its poller is off.",
@@ -511,6 +586,70 @@
           "outdoor_humidity"
         ],
         "title": "Globals",
+        "type": "object"
+      },
+      "IrButton": {
+        "additionalProperties": false,
+        "description": "A configured one-tap IR button (``HESTIA_IR_BUTTONS``) \u2192 transmits a saved Flipper signal.",
+        "properties": {
+          "button": {
+            "title": "Button",
+            "type": "string"
+          },
+          "file": {
+            "title": "File",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          }
+        },
+        "required": [
+          "label",
+          "file",
+          "button"
+        ],
+        "title": "IrButton",
+        "type": "object"
+      },
+      "Klima": {
+        "additionalProperties": false,
+        "description": "The A/C control map parsed from the klima.ir signal names \u2014 an empty ``{}`` when no klima.ir is\npresent, so every field is OPTIONAL (absent, never null). ``modes``/``power_on`` map each mode to its\nsorted temps; ``presets`` carries ``off`` + any non-temp signal.",
+        "properties": {
+          "file": {
+            "title": "File",
+            "type": "string"
+          },
+          "modes": {
+            "additionalProperties": {
+              "items": {
+                "type": "integer"
+              },
+              "type": "array"
+            },
+            "title": "Modes",
+            "type": "object"
+          },
+          "power_on": {
+            "additionalProperties": {
+              "items": {
+                "type": "integer"
+              },
+              "type": "array"
+            },
+            "title": "Power On",
+            "type": "object"
+          },
+          "presets": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Presets",
+            "type": "array"
+          }
+        },
+        "title": "Klima",
         "type": "object"
       },
       "KlimaState": {
@@ -804,6 +943,25 @@
           }
         },
         "summary": "Issue a device control command"
+      }
+    },
+    "/api/discovery": {
+      "get": {
+        "description": "Requires the viewer role. The primary read a client polls/refetches.",
+        "operationId": "discovery",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Discovery"
+                }
+              }
+            },
+            "description": "the current snapshot"
+          }
+        },
+        "summary": "The full dashboard snapshot (devices + globals + klima + rule grammar)"
       }
     },
     "/api/login": {
