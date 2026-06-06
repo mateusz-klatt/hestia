@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Annotated, Literal, Union
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 from pydantic.json_schema import models_json_schema
@@ -29,6 +29,16 @@ from pydantic.json_schema import models_json_schema
 # The contract's own version, independent of the app release — bumped when the wire shape changes.
 CONTRACT_VERSION = "0.1.0"
 OPENAPI_PATH = Path(__file__).resolve().parent.parent / "docs" / "api" / "openapi.json"
+
+# De-duplicated string literals (SonarPython S1192): the OpenAPI content-type, the paths reused
+# across the role map + the doc, and a couple of repeated descriptions/messages.
+_APP_JSON = "application/json"
+_P_SETTINGS = "/api/settings"
+_P_ROOM_ICONS = "/api/rooms/icons"
+_P_AUTOMATIONS = "/api/automations"
+_P_USERS = "/api/users"
+_ADMIN_ROLE_DESC = "Requires the admin role."
+_NO_SUCH_USER = "no such user"
 
 # Strict, exactly like the aiohttp handlers: reject unknown fields, bool-as-int, and int-as-float — so a
 # payload the DTO accepts is one ``_validate_control_payload`` accepts (the binding test pins this).
@@ -101,15 +111,13 @@ class ControlThermostat(BaseModel):
     node: NodeId
     # int OR float in 4..28 (the handler accepts both). Bounds live on EACH arm so they emit standard
     # JSON-Schema minimum/maximum per anyOf branch (an outer Field on the union emits non-standard ge/le).
-    celsius: Union[
-        Annotated[int, Field(ge=4, le=28)],
-        Annotated[float, Field(ge=4, le=28)],
-    ] = Field(description="target °C, 4..28")
+    celsius: Annotated[int, Field(ge=4, le=28)] | Annotated[float, Field(ge=4, le=28)] = Field(
+        description="target °C, 4..28")
 
 
 # A device control command — a oneOf discriminated on ``op`` (mirrors ``web._CONTROL_OPS``).
 ControlRequest = Annotated[
-    Union[ControlSwitch, ControlThermostatPower, ControlLevel, ControlCover, ControlThermostat],
+    ControlSwitch | ControlThermostatPower | ControlLevel | ControlCover | ControlThermostat,
     Field(discriminator="op"),
 ]
 
@@ -165,13 +173,13 @@ class NameRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     node: int
     op: Annotated[Literal["name"], Field(default=None, json_schema_extra=_OMIT)] = None
-    name: Annotated[Union[str, None], Field(default=None, max_length=256, json_schema_extra=_OMIT)] = None
-    room: Annotated[Union[str, None], Field(default=None, max_length=256, json_schema_extra=_OMIT)] = None
+    name: Annotated[str | None, Field(default=None, max_length=256, json_schema_extra=_OMIT)] = None
+    room: Annotated[str | None, Field(default=None, max_length=256, json_schema_extra=_OMIT)] = None
     type: Annotated[
-        Union[Literal["light", "blind", "thermostat", "door", "motion", "smoke", "water", "plug", "unknown"], None],
+        Literal["light", "blind", "thermostat", "door", "motion", "smoke", "water", "plug", "unknown"] | None,
         Field(default=None, json_schema_extra=_OMIT),
     ] = None
-    ep: Annotated[Union[int, None], Field(default=None, ge=0, json_schema_extra=_OMIT)] = None
+    ep: Annotated[int | None, Field(default=None, ge=0, json_schema_extra=_OMIT)] = None
 
 
 class Settings(BaseModel):
@@ -179,9 +187,9 @@ class Settings(BaseModel):
     unset (an unauthenticated / no-row request returns all-null, never an error)."""
 
     model_config = ConfigDict(extra="forbid")
-    locale: Union[str, None]
-    temp_scale: Union[str, None]
-    theme: Union[str, None]
+    locale: str | None
+    temp_scale: str | None
+    theme: str | None
 
 
 class SettingsUpdate(BaseModel):
@@ -189,11 +197,11 @@ class SettingsUpdate(BaseModel):
     untouched). null clears a field. temp_scale ∈ {C,F,K}. locale ≤ 35 chars."""
 
     model_config = ConfigDict(extra="forbid", strict=True)
-    locale: Annotated[Union[str, None], Field(default=None, max_length=35, json_schema_extra=_OMIT)] = None
+    locale: Annotated[str | None, Field(default=None, max_length=35, json_schema_extra=_OMIT)] = None
     temp_scale: Annotated[
-        Union[Literal["C", "F", "K"], None], Field(default=None, json_schema_extra=_OMIT)
+        Literal["C", "F", "K"] | None, Field(default=None, json_schema_extra=_OMIT)
     ] = None
-    theme: Annotated[Union[str, None], Field(default=None, json_schema_extra=_OMIT)] = None
+    theme: Annotated[str | None, Field(default=None, json_schema_extra=_OMIT)] = None
 
 
 class RoomIconRequest(BaseModel):
@@ -217,7 +225,7 @@ _RULE_FIELDS = frozenset({"door", "level", "switch", "setpoint", "thermostat_on"
 RuleField = Literal["door", "level", "switch", "setpoint", "thermostat_on", "temperature",
                     "power_w", "energy_kwh", "voltage_v", "crib_temp", "outdoor_temp"]
 CmpOp = Literal["eq", "ne", "lt", "le", "gt", "ge"]
-RuleValue = Union[bool, int, float, str]  # a predicate target — never null/list/dict
+RuleValue = bool | int | float | str  # a predicate target — never null/list/dict
 Weekday = Annotated[int, Field(ge=0, le=6)]
 
 
@@ -241,7 +249,7 @@ class TriggerTime(BaseModel):
     model_config = _READ
     type: Literal["time"]
     at: str
-    days: Union[list[Weekday], None]  # always present; null when unset
+    days: list[Weekday] | None  # always present; null when unset
 
 
 class TriggerSun(BaseModel):
@@ -249,7 +257,7 @@ class TriggerSun(BaseModel):
     type: Literal["sun"]
     event: Literal["sunrise", "sunset"]
     offset_min: int
-    days: Union[list[Weekday], None]
+    days: list[Weekday] | None
 
 
 class TriggerPresence(BaseModel):
@@ -266,7 +274,7 @@ class TriggerCron(BaseModel):
 
 
 Trigger = Annotated[
-    Union[TriggerScene, TriggerState, TriggerTime, TriggerSun, TriggerPresence, TriggerCron],
+    TriggerScene | TriggerState | TriggerTime | TriggerSun | TriggerPresence | TriggerCron,
     Field(discriminator="type"),
 ]
 
@@ -293,7 +301,7 @@ class TimeWindowCondition(BaseModel):
 
 # A condition is a time_window (has `type`) OR a bare state predicate (no `type`) — disjoint by their
 # required fields, so a smart union resolves them without a shared discriminator.
-RuleCondition = Union[TimeWindowCondition, StatePredicate]
+RuleCondition = TimeWindowCondition | StatePredicate
 
 
 class RuleAction(BaseModel):
@@ -378,9 +386,9 @@ class Globals(BaseModel):
     null when its poller is off."""
 
     model_config = _READ
-    crib_temp: Union[float, None]
-    outdoor_temp: Union[float, None]
-    outdoor_humidity: Union[float, None]
+    crib_temp: float | None
+    outdoor_temp: float | None
+    outdoor_humidity: float | None
 
 
 class Summary(BaseModel):
@@ -400,23 +408,23 @@ class DeviceInfo(BaseModel):
     ``confidence``) can surface null, so the contract admits it."""
 
     model_config = _READ
-    power: Union[str, None]
+    power: str | None
     type: str
-    confidence: Union[str, None]
-    battery: Union[int, None]
-    level: Union[int, None]
-    switch: Union[bool, None]
-    door: Union[str, None]
-    motion: Union[bool, None]
-    setpoint: Union[float, None]
-    thermostat_on: Union[bool, None]
-    thermostat_last_cmd: Union[float, None]
-    temperature: Union[float, None]
-    power_w: Union[float, None]
-    energy_kwh: Union[float, None]
-    voltage_v: Union[float, None]
-    endpoints: Union[DeviceEndpoints, None]
-    last_seen: Union[str, None]
+    confidence: str | None
+    battery: int | None
+    level: int | None
+    switch: bool | None
+    door: str | None
+    motion: bool | None
+    setpoint: float | None
+    thermostat_on: bool | None
+    thermostat_last_cmd: float | None
+    temperature: float | None
+    power_w: float | None
+    energy_kwh: float | None
+    voltage_v: float | None
+    endpoints: DeviceEndpoints | None
+    last_seen: str | None
     name: Annotated[str, Field(default=None, json_schema_extra=_OMIT)] = None
     room: Annotated[str, Field(default=None, json_schema_extra=_OMIT)] = None
     endpoint_names: Annotated[dict[str, str], Field(default=None, json_schema_extra=_OMIT)] = None
@@ -441,8 +449,8 @@ class KlimaState(BaseModel):
 
     model_config = _READ
     power: bool
-    mode: Union[str, None]
-    temp: Union[int, None]
+    mode: str | None
+    temp: int | None
 
 
 class IrButton(BaseModel):
@@ -476,11 +484,11 @@ class Discovery(BaseModel):
     globals: Globals
     ir_buttons: list[IrButton]
     klima: Klima
-    klima_state: Union[KlimaState, None]
+    klima_state: KlimaState | None
     rule_vocab: RuleVocab
     mode: str
     target_mode: str
-    env_override: Union[str, None]
+    env_override: str | None
 
 
 _READ_MODELS = (Globals, Summary, DeviceInfo, RuleVocab, KlimaState, IrButton, Klima, Discovery)
@@ -494,11 +502,11 @@ class AuditEvent(BaseModel):
     model_config = _READ
     id: int
     ts: float
-    actor: Union[str, None]
-    action: Union[str, None]
-    target: Union[str, None]
-    detail: Union[str, None]
-    result: Union[str, None]
+    actor: str | None
+    action: str | None
+    target: str | None
+    detail: str | None
+    result: str | None
 
 
 class AuditFeed(BaseModel):
@@ -526,26 +534,26 @@ class DeviceStatePatch(BaseModel):
     ride a `state` event — they arrive via a discovery_changed refetch."""
 
     model_config = _READ
-    door: Annotated[Union[str, None], Field(default=None, json_schema_extra=_OMIT)] = None
-    motion: Annotated[Union[bool, None], Field(default=None, json_schema_extra=_OMIT)] = None
-    level: Annotated[Union[int, None], Field(default=None, json_schema_extra=_OMIT)] = None
-    switch: Annotated[Union[bool, None], Field(default=None, json_schema_extra=_OMIT)] = None
-    endpoints: Annotated[Union[dict[str, bool], None], Field(default=None, json_schema_extra=_OMIT)] = None
-    setpoint: Annotated[Union[float, None], Field(default=None, json_schema_extra=_OMIT)] = None
-    thermostat_on: Annotated[Union[bool, None], Field(default=None, json_schema_extra=_OMIT)] = None
-    temperature: Annotated[Union[float, None], Field(default=None, json_schema_extra=_OMIT)] = None
-    power_w: Annotated[Union[float, None], Field(default=None, json_schema_extra=_OMIT)] = None
-    energy_kwh: Annotated[Union[float, None], Field(default=None, json_schema_extra=_OMIT)] = None
-    voltage_v: Annotated[Union[float, None], Field(default=None, json_schema_extra=_OMIT)] = None
+    door: Annotated[str | None, Field(default=None, json_schema_extra=_OMIT)] = None
+    motion: Annotated[bool | None, Field(default=None, json_schema_extra=_OMIT)] = None
+    level: Annotated[int | None, Field(default=None, json_schema_extra=_OMIT)] = None
+    switch: Annotated[bool | None, Field(default=None, json_schema_extra=_OMIT)] = None
+    endpoints: Annotated[dict[str, bool] | None, Field(default=None, json_schema_extra=_OMIT)] = None
+    setpoint: Annotated[float | None, Field(default=None, json_schema_extra=_OMIT)] = None
+    thermostat_on: Annotated[bool | None, Field(default=None, json_schema_extra=_OMIT)] = None
+    temperature: Annotated[float | None, Field(default=None, json_schema_extra=_OMIT)] = None
+    power_w: Annotated[float | None, Field(default=None, json_schema_extra=_OMIT)] = None
+    energy_kwh: Annotated[float | None, Field(default=None, json_schema_extra=_OMIT)] = None
+    voltage_v: Annotated[float | None, Field(default=None, json_schema_extra=_OMIT)] = None
 
 
 class GlobalsPatch(BaseModel):
     """A partial of Globals — the changed global field(s) in a `globals` event (1 key, or 2 for 433)."""
 
     model_config = _READ
-    crib_temp: Annotated[Union[float, None], Field(default=None, json_schema_extra=_OMIT)] = None
-    outdoor_temp: Annotated[Union[float, None], Field(default=None, json_schema_extra=_OMIT)] = None
-    outdoor_humidity: Annotated[Union[float, None], Field(default=None, json_schema_extra=_OMIT)] = None
+    crib_temp: Annotated[float | None, Field(default=None, json_schema_extra=_OMIT)] = None
+    outdoor_temp: Annotated[float | None, Field(default=None, json_schema_extra=_OMIT)] = None
+    outdoor_humidity: Annotated[float | None, Field(default=None, json_schema_extra=_OMIT)] = None
 
 
 class DiscoveryChangedEvent(BaseModel):
@@ -585,7 +593,7 @@ class KlimaEvent(BaseModel):
 
 
 LiveEvent = Annotated[
-    Union[DiscoveryChangedEvent, StateEvent, ActivityEvent, GlobalsEvent, KlimaEvent],
+    DiscoveryChangedEvent | StateEvent | ActivityEvent | GlobalsEvent | KlimaEvent,
     Field(discriminator="type"),
 ]
 
@@ -617,8 +625,8 @@ class WhoAmI(BaseModel):
     """GET /api/whoami — the caller's identity + RBAC role; both null when auth is off (loopback/dev)."""
 
     model_config = _READ
-    user: Union[str, None]
-    role: Union[str, None]
+    user: str | None
+    role: str | None
 
 
 class OkResult(BaseModel):
@@ -705,7 +713,7 @@ class UsersList(BaseModel):
 
 
 # A decoded-433 field value: rf433._keep_field admits only FINITE str/int/float/bool scalars.
-Rf433Value = Union[bool, int, float, str]
+Rf433Value = bool | int | float | str
 
 
 class Rf433Device(BaseModel):
@@ -753,21 +761,21 @@ _PATH_ROLES = {
     ("POST", "/api/ir"): "operator",
     ("POST", "/api/scene"): "operator",
     ("POST", "/api/name"): "admin",
-    ("GET", "/api/settings"): "viewer",
-    ("POST", "/api/settings"): "viewer",
-    ("GET", "/api/rooms/icons"): "viewer",
-    ("POST", "/api/rooms/icons"): "admin",
+    ("GET", _P_SETTINGS): "viewer",
+    ("POST", _P_SETTINGS): "viewer",
+    ("GET", _P_ROOM_ICONS): "viewer",
+    ("POST", _P_ROOM_ICONS): "admin",
     ("POST", "/api/login"): "public",
     ("POST", "/api/logout"): "public",
     ("GET", "/api/whoami"): "viewer",
     ("GET", "/api/discovery"): "viewer",
-    ("GET", "/api/automations"): "admin",
-    ("POST", "/api/automations"): "admin",
+    ("GET", _P_AUTOMATIONS): "admin",
+    ("POST", _P_AUTOMATIONS): "admin",
     ("POST", "/api/automations/delete"): "admin",
     ("GET", "/api/audit"): "viewer",
     ("GET", "/api/events"): "viewer",
-    ("GET", "/api/users"): "admin",
-    ("POST", "/api/users"): "admin",
+    ("GET", _P_USERS): "admin",
+    ("POST", _P_USERS): "admin",
     ("POST", "/api/users/role"): "admin",
     ("POST", "/api/users/disabled"): "admin",
     ("POST", "/api/users/reset-password"): "admin",
@@ -813,7 +821,7 @@ def _component_schemas() -> dict:
 def build_openapi() -> dict:
     """Assemble the OpenAPI 3.1 document for the current contract slice. Deterministic (no clock/host),
     so the checked-in ``docs/api/openapi.json`` stays byte-stable across regenerations."""
-    err = {"content": {"application/json": {"schema": _ref("ControlError")}}}
+    err = {"content": {_APP_JSON: {"schema": _ref("ControlError")}}}
     doc = {
         "openapi": "3.1.0",
         "info": {
@@ -830,12 +838,12 @@ def build_openapi() -> dict:
                     "description": "Requires the operator role.",
                     "requestBody": {
                         "required": True,
-                        "content": {"application/json": {"schema": _ref("ControlRequest")}},
+                        "content": {_APP_JSON: {"schema": _ref("ControlRequest")}},
                     },
                     "responses": {
                         "200": {
                             "description": "command sent to the device",
-                            "content": {"application/json": {"schema": _ref("ControlSuccess")}},
+                            "content": {_APP_JSON: {"schema": _ref("ControlSuccess")}},
                         },
                         "400": {"description": "malformed command", **err},
                         "503": {"description": "device unavailable / command rejected", **err},
@@ -849,12 +857,12 @@ def build_openapi() -> dict:
                     "description": "Requires the operator role.",
                     "requestBody": {
                         "required": True,
-                        "content": {"application/json": {"schema": _ref("IrRequest")}},
+                        "content": {_APP_JSON: {"schema": _ref("IrRequest")}},
                     },
                     "responses": {
                         # the IR success body is just {"ok": true} (no `sent` frame, unlike /api/control)
                         "200": {"description": "transmitted",
-                                "content": {"application/json": {"schema": _ref("OkResult")}}},
+                                "content": {_APP_JSON: {"schema": _ref("OkResult")}}},
                         "400": {"description": "malformed", **err},
                         "503": {"description": "IR disabled / queue full / failed", **err},
                     },
@@ -867,11 +875,11 @@ def build_openapi() -> dict:
                     "description": "Requires the operator role. 200 reports how many device commands landed.",
                     "requestBody": {
                         "required": True,
-                        "content": {"application/json": {"schema": _ref("SceneRequest")}},
+                        "content": {_APP_JSON: {"schema": _ref("SceneRequest")}},
                     },
                     "responses": {
                         "200": {"description": "scene dispatched",
-                                "content": {"application/json": {"schema": _ref("SceneResult")}}},
+                                "content": {_APP_JSON: {"schema": _ref("SceneResult")}}},
                         "400": {"description": "unknown scene", **err},
                     },
                 }
@@ -882,23 +890,23 @@ def build_openapi() -> dict:
                     "summary": "Set a device's registry labels (name / room / type / endpoint)",
                     "description": "Requires the admin role. Save failure maps to 500 (not 503).",
                     "requestBody": {"required": True,
-                                    "content": {"application/json": {"schema": _ref("NameRequest")}}},
+                                    "content": {_APP_JSON: {"schema": _ref("NameRequest")}}},
                     "responses": {
                         "200": {"description": "labels saved",
-                                "content": {"application/json": {"schema": _ref("OkResult")}}},
+                                "content": {_APP_JSON: {"schema": _ref("OkResult")}}},
                         "400": {"description": "malformed", **err},
                         "500": {"description": "registry save failed", **err},
                     },
                 }
             },
-            "/api/settings": {
+            _P_SETTINGS: {
                 "get": {
                     "operationId": "getSettings",
                     "summary": "The logged-in user's UI preferences",
                     "description": "Requires the viewer role. All keys present, null when unset.",
                     "responses": {
                         "200": {"description": "the user's settings",
-                                "content": {"application/json": {"schema": _ref("Settings")}}},
+                                "content": {_APP_JSON: {"schema": _ref("Settings")}}},
                     },
                 },
                 "post": {
@@ -906,15 +914,15 @@ def build_openapi() -> dict:
                     "summary": "Update UI preferences (partial — only the keys sent are persisted)",
                     "description": "Requires the viewer role.",
                     "requestBody": {"required": True,
-                                    "content": {"application/json": {"schema": _ref("SettingsUpdate")}}},
+                                    "content": {_APP_JSON: {"schema": _ref("SettingsUpdate")}}},
                     "responses": {
                         "200": {"description": "saved",
-                                "content": {"application/json": {"schema": _ref("OkResult")}}},
+                                "content": {_APP_JSON: {"schema": _ref("OkResult")}}},
                         "400": {"description": "malformed", **err},
                     },
                 },
             },
-            "/api/rooms/icons": {
+            _P_ROOM_ICONS: {
                 "get": {
                     "operationId": "getRoomIcons",
                     "summary": "Shared room→emoji map",
@@ -922,7 +930,7 @@ def build_openapi() -> dict:
                     "responses": {
                         "200": {
                             "description": "the room→icon map",
-                            "content": {"application/json": {
+                            "content": {_APP_JSON: {
                                 "schema": {"type": "object", "additionalProperties": {"type": "string"}}}},
                         },
                     },
@@ -930,12 +938,12 @@ def build_openapi() -> dict:
                 "post": {
                     "operationId": "setRoomIcon",
                     "summary": "Set one room's emoji (send icon=\"\" to clear)",
-                    "description": "Requires the admin role.",
+                    "description": _ADMIN_ROLE_DESC,
                     "requestBody": {"required": True,
-                                    "content": {"application/json": {"schema": _ref("RoomIconRequest")}}},
+                                    "content": {_APP_JSON: {"schema": _ref("RoomIconRequest")}}},
                     "responses": {
                         "200": {"description": "saved",
-                                "content": {"application/json": {"schema": _ref("OkResult")}}},
+                                "content": {_APP_JSON: {"schema": _ref("OkResult")}}},
                         "400": {"description": "malformed", **err},
                     },
                 },
@@ -947,7 +955,7 @@ def build_openapi() -> dict:
                     "description": "Requires the viewer role.",
                     "responses": {
                         "200": {"description": "the audit feed",
-                                "content": {"application/json": {"schema": _ref("AuditFeed")}}},
+                                "content": {_APP_JSON: {"schema": _ref("AuditFeed")}}},
                     },
                 }
             },
@@ -974,12 +982,12 @@ def build_openapi() -> dict:
                     "body also carries a `token` for `Authorization: Bearer` (native clients).",
                     "requestBody": {
                         "required": True,
-                        "content": {"application/json": {"schema": _ref("LoginRequest")}},
+                        "content": {_APP_JSON: {"schema": _ref("LoginRequest")}},
                     },
                     "responses": {
                         "200": {
                             "description": "authenticated",
-                            "content": {"application/json": {"schema": _ref("LoginSuccess")}},
+                            "content": {_APP_JSON: {"schema": _ref("LoginSuccess")}},
                         },
                         "401": {"description": "invalid credentials", **err},
                     },
@@ -993,7 +1001,7 @@ def build_openapi() -> dict:
                     "responses": {
                         "200": {
                             "description": "logged out",
-                            "content": {"application/json": {"schema": _ref("OkResult")}},
+                            "content": {_APP_JSON: {"schema": _ref("OkResult")}},
                         }
                     },
                 }
@@ -1006,7 +1014,7 @@ def build_openapi() -> dict:
                     "responses": {
                         "200": {
                             "description": "the current session's identity",
-                            "content": {"application/json": {"schema": _ref("WhoAmI")}},
+                            "content": {_APP_JSON: {"schema": _ref("WhoAmI")}},
                         }
                     },
                 }
@@ -1019,19 +1027,19 @@ def build_openapi() -> dict:
                     "responses": {
                         "200": {
                             "description": "the current snapshot",
-                            "content": {"application/json": {"schema": _ref("Discovery")}},
+                            "content": {_APP_JSON: {"schema": _ref("Discovery")}},
                         }
                     },
                 }
             },
-            "/api/automations": {
+            _P_AUTOMATIONS: {
                 "get": {
                     "operationId": "listAutomations",
                     "summary": "List every saved automation rule",
                     "description": "Requires the admin role (rules can carry presence-trigger MACs).",
                     "responses": {
                         "200": {"description": "the rules",
-                                "content": {"application/json": {"schema": _ref("AutomationsList")}}},
+                                "content": {_APP_JSON: {"schema": _ref("AutomationsList")}}},
                     },
                 },
                 "post": {
@@ -1039,10 +1047,10 @@ def build_openapi() -> dict:
                     "summary": "Create or replace a rule (the body IS the rule; id is client-supplied)",
                     "description": "Requires the admin role. Authoritative validation is Rule.from_dict.",
                     "requestBody": {"required": True,
-                                    "content": {"application/json": {"schema": _ref("RuleInput")}}},
+                                    "content": {_APP_JSON: {"schema": _ref("RuleInput")}}},
                     "responses": {
                         "200": {"description": "saved",
-                                "content": {"application/json": {"schema": _ref("AutomationSaved")}}},
+                                "content": {_APP_JSON: {"schema": _ref("AutomationSaved")}}},
                         "400": {"description": "invalid rule", **err},
                         "500": {"description": "save failed", **err},
                     },
@@ -1052,29 +1060,29 @@ def build_openapi() -> dict:
                 "post": {
                     "operationId": "deleteAutomation",
                     "summary": "Delete a rule by id (deleted=false, still 200, for an absent id)",
-                    "description": "Requires the admin role.",
+                    "description": _ADMIN_ROLE_DESC,
                     "requestBody": {
                         "required": True,
-                        "content": {"application/json": {"schema": {
+                        "content": {_APP_JSON: {"schema": {
                             "type": "object", "required": ["id"], "additionalProperties": False,
                             "properties": {"id": {"type": "string"}}}}},
                     },
                     "responses": {
                         "200": {"description": "deleted (or no-op)",
-                                "content": {"application/json": {"schema": _ref("AutomationDeleted")}}},
+                                "content": {_APP_JSON: {"schema": _ref("AutomationDeleted")}}},
                         "400": {"description": "invalid id", **err},
                         "500": {"description": "save failed", **err},
                     },
                 },
             },
-            "/api/users": {
+            _P_USERS: {
                 "get": {
                     "operationId": "listUsers",
                     "summary": "List every account (username / role / disabled — never the password hash)",
                     "description": "Requires the admin role. 409 when the SQLite users backend isn't active.",
                     "responses": {
                         "200": {"description": "the accounts",
-                                "content": {"application/json": {"schema": _ref("UsersList")}}},
+                                "content": {_APP_JSON: {"schema": _ref("UsersList")}}},
                         "409": {"description": "user management requires the SQLite backend", **err},
                     },
                 },
@@ -1083,10 +1091,10 @@ def build_openapi() -> dict:
                     "summary": "Create a new account",
                     "description": "Requires the admin role. 409 on a duplicate username (never an overwrite).",
                     "requestBody": {"required": True,
-                                    "content": {"application/json": {"schema": _ref("AddUserRequest")}}},
+                                    "content": {_APP_JSON: {"schema": _ref("AddUserRequest")}}},
                     "responses": {
                         "200": {"description": "account created",
-                                "content": {"application/json": {"schema": _ref("OkResult")}}},
+                                "content": {_APP_JSON: {"schema": _ref("OkResult")}}},
                         "400": {"description": "invalid username / password / role", **err},
                         "409": {"description": "duplicate username (or SQLite backend inactive)", **err},
                     },
@@ -1098,13 +1106,13 @@ def build_openapi() -> dict:
                     "summary": "Change another user's role",
                     "description": "Requires the admin role. Refuses self (403) and the last enabled admin (409).",
                     "requestBody": {"required": True,
-                                    "content": {"application/json": {"schema": _ref("SetRoleRequest")}}},
+                                    "content": {_APP_JSON: {"schema": _ref("SetRoleRequest")}}},
                     "responses": {
                         "200": {"description": "role changed",
-                                "content": {"application/json": {"schema": _ref("OkResult")}}},
+                                "content": {_APP_JSON: {"schema": _ref("OkResult")}}},
                         "400": {"description": "invalid username / role", **err},
                         "403": {"description": "cannot change your own role", **err},
-                        "404": {"description": "no such user", **err},
+                        "404": {"description": _NO_SUCH_USER, **err},
                         "409": {"description": "would leave no enabled admin (or SQLite backend inactive)", **err},
                     },
                 },
@@ -1115,13 +1123,13 @@ def build_openapi() -> dict:
                     "summary": "Enable or disable another account",
                     "description": "Requires the admin role. Refuses self (403) and the last enabled admin (409).",
                     "requestBody": {"required": True,
-                                    "content": {"application/json": {"schema": _ref("SetDisabledRequest")}}},
+                                    "content": {_APP_JSON: {"schema": _ref("SetDisabledRequest")}}},
                     "responses": {
                         "200": {"description": "updated",
-                                "content": {"application/json": {"schema": _ref("OkResult")}}},
+                                "content": {_APP_JSON: {"schema": _ref("OkResult")}}},
                         "400": {"description": "invalid username / disabled flag", **err},
                         "403": {"description": "cannot disable your own account", **err},
-                        "404": {"description": "no such user", **err},
+                        "404": {"description": _NO_SUCH_USER, **err},
                         "409": {"description": "would leave no enabled admin (or SQLite backend inactive)", **err},
                     },
                 },
@@ -1133,13 +1141,13 @@ def build_openapi() -> dict:
                     "description": "Requires the admin role. Refuses self (403); rotate your own via "
                     "/api/me/password.",
                     "requestBody": {"required": True,
-                                    "content": {"application/json": {"schema": _ref("ResetPasswordRequest")}}},
+                                    "content": {_APP_JSON: {"schema": _ref("ResetPasswordRequest")}}},
                     "responses": {
                         "200": {"description": "password reset",
-                                "content": {"application/json": {"schema": _ref("OkResult")}}},
+                                "content": {_APP_JSON: {"schema": _ref("OkResult")}}},
                         "400": {"description": "invalid username / password", **err},
                         "403": {"description": "use change-password for your own account", **err},
-                        "404": {"description": "no such user", **err},
+                        "404": {"description": _NO_SUCH_USER, **err},
                         "409": {"description": "SQLite backend inactive", **err},
                     },
                 },
@@ -1151,10 +1159,10 @@ def build_openapi() -> dict:
                     "description": "Requires a session (viewer+). 401 when not signed in; 403 when the "
                     "current password is wrong.",
                     "requestBody": {"required": True,
-                                    "content": {"application/json": {"schema": _ref("ChangePasswordRequest")}}},
+                                    "content": {_APP_JSON: {"schema": _ref("ChangePasswordRequest")}}},
                     "responses": {
                         "200": {"description": "password changed",
-                                "content": {"application/json": {"schema": _ref("OkResult")}}},
+                                "content": {_APP_JSON: {"schema": _ref("OkResult")}}},
                         "400": {"description": "invalid / missing fields", **err},
                         "401": {"description": "not signed in", **err},
                         "403": {"description": "current password is incorrect", **err},
@@ -1170,7 +1178,7 @@ def build_openapi() -> dict:
                     "local-433 feeder runs.",
                     "responses": {
                         "200": {"description": "the 433 device feed",
-                                "content": {"application/json": {"schema": _ref("Rf433Feed")}}},
+                                "content": {_APP_JSON: {"schema": _ref("Rf433Feed")}}},
                     },
                 }
             },
@@ -1178,10 +1186,10 @@ def build_openapi() -> dict:
                 "get": {
                     "operationId": "dbStats",
                     "summary": "SQLite file size + per-table row counts",
-                    "description": "Requires the admin role.",
+                    "description": _ADMIN_ROLE_DESC,
                     "responses": {
                         "200": {"description": "the database stats",
-                                "content": {"application/json": {"schema": _ref("DbStats")}}},
+                                "content": {_APP_JSON: {"schema": _ref("DbStats")}}},
                     },
                 }
             },

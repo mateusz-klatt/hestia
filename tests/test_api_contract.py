@@ -261,7 +261,7 @@ class ReadShapeContractTests(unittest.TestCase):
         schemas = api_contract.build_openapi()["components"]["schemas"]
         for name in ("DeviceInfo", "Globals", "Summary", "RuleVocab", "KlimaState"):
             self.assertIn(name, schemas)
-            self.assertEqual(schemas[name].get("additionalProperties"), False)  # forbids unknowns
+            self.assertIs(schemas[name].get("additionalProperties"), False)  # forbids unknowns
 
 
 class AuthContractTests(unittest.TestCase):
