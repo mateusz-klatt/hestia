@@ -469,3 +469,44 @@ class AutomationsContractTests(unittest.TestCase):
         paths = api_contract.build_openapi()["paths"]
         for p in ("/api/automations", "/api/automations/delete"):
             self.assertIn(p, paths)
+
+
+class AuditEventsContractTests(unittest.TestCase):
+    def test_audit_event_and_feed(self):
+        # recent_audit emits exactly these 7 keys; the 5 strings are nullable at the DB layer
+        api_contract.AuditEvent.model_validate(
+            {"id": 1, "ts": 1749200000.1, "actor": "tata", "action": "login", "target": None,
+             "detail": None, "result": "ok"})
+        api_contract.AuditEvent.model_validate(
+            {"id": 2, "ts": 1.0, "actor": None, "action": None, "target": None, "detail": None, "result": None})
+        api_contract.AuditFeed.model_validate({"events": []})        # the audit-off / empty case
+        with self.assertRaises(ValueError):
+            api_contract.AuditEvent.model_validate({"id": 1, "ts": 1.0, "actor": "x"})  # missing keys (required)
+
+    def test_live_event_variants(self):
+        from pydantic import TypeAdapter
+        le = TypeAdapter(api_contract.LiveEvent)
+        for ev in (
+            {"type": "discovery_changed"},
+            {"type": "state", "node": 7, "fields": {"switch": True, "level": 50}},
+            {"type": "state", "node": 7, "fields": {"temperature": None, "endpoints": {"1": True}}},  # nullable + int-key map
+            {"type": "activity", "node": 2, "ts": 1749200000.1},
+            {"type": "activity", "node": 2, "ts": 1749200000.1, "scene": {"id": 3, "kind": "scene"}},
+            {"type": "activity", "node": 2, "ts": 1749200000.1, "scene": {"id": 5, "kind": "central"}},
+            {"type": "globals", "fields": {"crib_temp": 21.5}},
+            {"type": "globals", "fields": {"outdoor_temp": 14.0, "outdoor_humidity": 56}},  # 433 two-key
+            {"type": "klima", "klima": {"power": True, "mode": "cool", "temp": 22}},
+        ):
+            le.validate_python(ev)
+        with self.assertRaises(ValueError):
+            le.validate_python({"type": "conn"})       # `conn` is a UI-derived indicator, NOT a server event
+
+    def test_live_event_discriminator_covers_the_five_published_types(self):
+        mapping = api_contract.build_openapi()["components"]["schemas"]["LiveEvent"]["discriminator"]["mapping"]
+        self.assertEqual(set(mapping), {"discovery_changed", "state", "activity", "globals", "klima"})
+
+    def test_audit_and_events_paths_present(self):
+        paths = api_contract.build_openapi()["paths"]
+        self.assertIn("/api/audit", paths)
+        self.assertEqual(  # /api/events is an SSE stream, not JSON
+            list(paths["/api/events"]["get"]["responses"]["200"]["content"]), ["text/event-stream"])
