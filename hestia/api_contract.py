@@ -34,6 +34,10 @@ OPENAPI_PATH = Path(__file__).resolve().parent.parent / "docs" / "api" / "openap
 # payload the DTO accepts is one ``_validate_control_payload`` accepts (the binding test pins this).
 _STRICT = ConfigDict(extra="forbid", strict=True)
 
+# Read/response config: forbid unknown fields (a new backend key fails the contract test = drift
+# detection), but non-strict (these DESCRIBE output, so an int in a float field is fine).
+_READ = ConfigDict(extra="forbid")
+
 # A device node id (every control op carries one). Matches ``web._control_node_error``.
 NodeId = Annotated[int, Field(ge=0, le=255, description="device node id")]
 
@@ -204,11 +208,161 @@ _COMMAND_MODELS = (IrRequest, SceneRequest, SceneResult,
                    NameRequest, Settings, SettingsUpdate, RoomIconRequest)
 
 
+# ---- automation rules (the Rule.to_dict wire shape) ------------------------
+# Output (Rule.to_dict) always emits all 7 keys; trigger/condition dicts carry only known keys (extra
+# forbid), but ACTIONS pass author fields through verbatim (extra allow). Conditions discriminate by the
+# ABSENCE of `type` (state predicate) vs type="time_window". Mirrors hestia/automations.py.
+_RULE_FIELDS = frozenset({"door", "level", "switch", "setpoint", "thermostat_on", "temperature",
+                          "power_w", "energy_kwh", "voltage_v", "crib_temp", "outdoor_temp"})
+RuleField = Literal["door", "level", "switch", "setpoint", "thermostat_on", "temperature",
+                    "power_w", "energy_kwh", "voltage_v", "crib_temp", "outdoor_temp"]
+CmpOp = Literal["eq", "ne", "lt", "le", "gt", "ge"]
+RuleValue = Union[bool, int, float, str]  # a predicate target — never null/list/dict
+Weekday = Annotated[int, Field(ge=0, le=6)]
+
+
+class TriggerScene(BaseModel):
+    model_config = _READ
+    type: Literal["scene"]
+    node: int
+    scene_id: int
+
+
+class TriggerState(BaseModel):
+    model_config = _READ
+    type: Literal["state"]
+    field: RuleField
+    op: CmpOp
+    value: RuleValue
+    node: Annotated[int, Field(default=None, json_schema_extra=_OMIT)] = None  # omitted for GLOBAL fields
+
+
+class TriggerTime(BaseModel):
+    model_config = _READ
+    type: Literal["time"]
+    at: str
+    days: Union[list[Weekday], None]  # always present; null when unset
+
+
+class TriggerSun(BaseModel):
+    model_config = _READ
+    type: Literal["sun"]
+    event: Literal["sunrise", "sunset"]
+    offset_min: int
+    days: Union[list[Weekday], None]
+
+
+class TriggerPresence(BaseModel):
+    model_config = _READ
+    type: Literal["presence"]
+    mac: str
+    event: Literal["arrive", "leave"]
+
+
+class TriggerCron(BaseModel):
+    model_config = _READ
+    type: Literal["cron"]
+    expr: str
+
+
+Trigger = Annotated[
+    Union[TriggerScene, TriggerState, TriggerTime, TriggerSun, TriggerPresence, TriggerCron],
+    Field(discriminator="type"),
+]
+
+
+class StatePredicate(BaseModel):
+    """A condition with NO `type` key (the absence IS the discriminant vs time_window)."""
+
+    model_config = _READ
+    field: RuleField
+    op: CmpOp
+    value: RuleValue
+    node: Annotated[int, Field(default=None, json_schema_extra=_OMIT)] = None
+
+
+class TimeWindowCondition(BaseModel):
+    """A time-of-day guard condition. `days` is OMITTED entirely when unset (unlike time/sun triggers)."""
+
+    model_config = _READ
+    type: Literal["time_window"]
+    start: str
+    end: str
+    days: Annotated[list[Weekday], Field(default=None, json_schema_extra=_OMIT)] = None
+
+
+# A condition is a time_window (has `type`) OR a bare state predicate (no `type`) — disjoint by their
+# required fields, so a smart union resolves them without a shared discriminator.
+RuleCondition = Union[TimeWindowCondition, StatePredicate]
+
+
+class RuleAction(BaseModel):
+    """One action. Only `op` (+ ir's file/button) is validated at save; all other per-op fields are
+    author-supplied and pass through verbatim — so this is open (extra=allow), not a closed per-op union."""
+
+    model_config = ConfigDict(extra="allow")
+    op: Literal["raw", "cover", "level", "switch", "lights", "thermostat", "thermostat_power", "ir"]
+
+
+class Rule(BaseModel):
+    """A saved automation rule (automations.Rule.to_dict) — all 7 keys ALWAYS present in the output."""
+
+    model_config = _READ
+    id: str
+    enabled: bool
+    modes: list[str]
+    debounce: float
+    trigger: Trigger
+    conditions: list[RuleCondition]
+    actions: list[RuleAction]
+
+
+class RuleInput(BaseModel):
+    """POST /api/automations body. id/trigger/actions required; enabled/modes/debounce/conditions are
+    optional (server-defaulted by Rule.from_dict: enabled=true, modes=[proxy,standalone], debounce=0,
+    conditions=[]). Authoritative validation is Rule.from_dict — this shape is the codegen guide."""
+
+    model_config = ConfigDict(extra="forbid")
+    id: str
+    trigger: Trigger
+    actions: list[RuleAction]
+    enabled: Annotated[bool, Field(default=None, json_schema_extra=_OMIT)] = None
+    modes: Annotated[list[str], Field(default=None, json_schema_extra=_OMIT)] = None
+    debounce: Annotated[float, Field(default=None, json_schema_extra=_OMIT)] = None
+    conditions: Annotated[list[RuleCondition], Field(default=None, json_schema_extra=_OMIT)] = None
+
+
+class AutomationsList(BaseModel):
+    """GET /api/automations — every saved rule. `automations` (NOT `rules`) is always present."""
+
+    model_config = ConfigDict(extra="forbid")
+    ok: bool
+    automations: list[Rule]
+
+
+class AutomationSaved(BaseModel):
+    """200 from POST /api/automations: the saved rule's id (NOT the rule object)."""
+
+    model_config = ConfigDict(extra="forbid")
+    ok: bool
+    id: str
+
+
+class AutomationDeleted(BaseModel):
+    """200 from POST /api/automations/delete: `deleted` is false (200, not 404) for an absent id."""
+
+    model_config = ConfigDict(extra="forbid")
+    ok: bool
+    deleted: bool
+
+
+_AUTOMATION_MODELS = (TriggerScene, TriggerState, TriggerTime, TriggerSun, TriggerPresence, TriggerCron,
+                      StatePredicate, TimeWindowCondition, RuleAction, Rule, RuleInput,
+                      AutomationsList, AutomationSaved, AutomationDeleted)
+
+
 # ---- read shapes (responses the web UI + Vesta consume) --------------------
-# extra="forbid" here is DELIBERATE drift detection: if a backend dict grows a field the DTO doesn't
-# list, the contract test (which validates real handler output) fails — forcing the model to keep up.
-# Non-strict (no `strict=True`): these DESCRIBE output, so an int landing in a float field is fine.
-_READ = ConfigDict(extra="forbid")
+# (read/response config `_READ` is defined near the top, beside `_STRICT`.)
 
 # A multi-gang switch's per-endpoint on/off, keyed by endpoint id (string on the wire). null when N/A.
 DeviceEndpoints = dict[str, bool]
@@ -390,6 +544,9 @@ _PATH_ROLES = {
     ("POST", "/api/logout"): "public",
     ("GET", "/api/whoami"): "viewer",
     ("GET", "/api/discovery"): "viewer",
+    ("GET", "/api/automations"): "admin",
+    ("POST", "/api/automations"): "admin",
+    ("POST", "/api/automations/delete"): "admin",
 }
 
 
@@ -398,7 +555,7 @@ def _component_schemas() -> dict:
     _, combined = models_json_schema(
         [(model, "validation")
          for model in (*_CONTROL_MODELS, ControlSuccess, ControlError, *_COMMAND_MODELS,
-                       *_READ_MODELS, *_AUTH_MODELS)],
+                       *_READ_MODELS, *_AUTH_MODELS, *_AUTOMATION_MODELS)],
         ref_template="#/components/schemas/{model}",
     )
     schemas = combined.get("$defs", {})
@@ -603,6 +760,49 @@ def build_openapi() -> dict:
                         }
                     },
                 }
+            },
+            "/api/automations": {
+                "get": {
+                    "operationId": "listAutomations",
+                    "summary": "List every saved automation rule",
+                    "description": "Requires the admin role (rules can carry presence-trigger MACs).",
+                    "responses": {
+                        "200": {"description": "the rules",
+                                "content": {"application/json": {"schema": _ref("AutomationsList")}}},
+                    },
+                },
+                "post": {
+                    "operationId": "saveAutomation",
+                    "summary": "Create or replace a rule (the body IS the rule; id is client-supplied)",
+                    "description": "Requires the admin role. Authoritative validation is Rule.from_dict.",
+                    "requestBody": {"required": True,
+                                    "content": {"application/json": {"schema": _ref("RuleInput")}}},
+                    "responses": {
+                        "200": {"description": "saved",
+                                "content": {"application/json": {"schema": _ref("AutomationSaved")}}},
+                        "400": {"description": "invalid rule", **err},
+                        "500": {"description": "save failed", **err},
+                    },
+                },
+            },
+            "/api/automations/delete": {
+                "post": {
+                    "operationId": "deleteAutomation",
+                    "summary": "Delete a rule by id (deleted=false, still 200, for an absent id)",
+                    "description": "Requires the admin role.",
+                    "requestBody": {
+                        "required": True,
+                        "content": {"application/json": {"schema": {
+                            "type": "object", "required": ["id"], "additionalProperties": False,
+                            "properties": {"id": {"type": "string"}}}}},
+                    },
+                    "responses": {
+                        "200": {"description": "deleted (or no-op)",
+                                "content": {"application/json": {"schema": _ref("AutomationDeleted")}}},
+                        "400": {"description": "invalid id", **err},
+                        "500": {"description": "save failed", **err},
+                    },
+                },
             },
         },
         "components": {"schemas": _component_schemas()},
