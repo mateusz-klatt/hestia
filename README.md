@@ -100,3 +100,10 @@ python3 -m unittest discover -s tests
 ```
 
 100 % line + branch coverage (stdlib `unittest`; `.coveragerc` `fail_under=100`).
+
+## License
+
+Copyright (C) 2026 Mateusz Klatt
+
+This project is licensed under the GNU Affero General Public License v3.0.
+See the [LICENSE](LICENSE) file for details.
