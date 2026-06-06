@@ -204,16 +204,30 @@ def _role_allows(role, floor: str) -> bool:
     return rank is not None and rank >= store_sql.ROLE_RANK[floor]
 
 
+_BEARER_PREFIX = "Bearer "
+
+
+def _request_token(request) -> str:
+    """The session token for this request: ``Authorization: Bearer <token>`` (native clients, e.g. the
+    iOS app) when present, else the ``hestia_session`` cookie (the browser). Both carry the SAME signed
+    ``username|expiry`` token; the bearer header wins so a native client never depends on the cookie jar."""
+    header = request.headers.get("Authorization", "")
+    if header.startswith(_BEARER_PREFIX):
+        return header[len(_BEARER_PREFIX):]
+    return request.cookies.get(_SESSION_COOKIE, "")
+
+
 @web.middleware
 async def _auth_middleware(request, handler):
     """Authenticate + authorize every non-public route when auth is enabled (a HESTIA_SESSION_SECRET is
-    set). An absent / expired / forged cookie → 401 (the TS app then shows the login form); a cookie for
-    an account that no longer exists → 401 (immediate revocation, not at cookie expiry); a valid user
+    set). An absent / expired / forged token → 401 (the TS app then shows the login form); a token for
+    an account that no longer exists → 401 (immediate revocation, not at token expiry); a valid user
     whose role is below the route's floor → 403. No-op when auth is off (loopback/dev stays fully open).
-    Runs OUTERMOST so an unauthenticated/unauthorized request is rejected before it reaches any handler."""
+    The token comes from the bearer header or the session cookie (see ``_request_token``). Runs OUTERMOST
+    so an unauthenticated/unauthorized request is rejected before it reaches any handler."""
     if not _AUTH_ENABLED or _is_public_route(request.method, request.path):
         return await handler(request)
-    user = auth.verify_session(request.cookies.get(_SESSION_COOKIE, ""), now=_now(), secret=_SESSION_SECRET)
+    user = auth.verify_session(_request_token(request), now=_now(), secret=_SESSION_SECRET)
     if user is None:
         return _empty(HTTPStatus.UNAUTHORIZED)
     # Resolve the role fresh on EVERY authenticated request (offloaded off the loop): a demotion or a
@@ -254,7 +268,13 @@ async def _login(request):
         return _json(HTTPStatus.UNAUTHORIZED, {"ok": False, "error": "invalid credentials"})
     _audit(_rt(request), user, "login", result="ok")
     token = auth.make_session(user, now=_now(), secret=_SESSION_SECRET)
-    resp = _json(HTTPStatus.OK, {"ok": True, "user": user})
+    body = {"ok": True, "user": user}
+    # A native client opts in with {"bearer": true} and stores the returned token (sent back as
+    # `Authorization: Bearer`). The browser does NOT ask, so the token never reaches page JS — the
+    # httponly cookie below stays the web session's sole carrier (XSS can't read it).
+    if op.get("bearer") is True:
+        body["token"] = token
+    resp = _json(HTTPStatus.OK, body)
     resp.set_cookie(_SESSION_COOKIE, token, max_age=int(auth.SESSION_TTL), httponly=True,
                     samesite="Strict", secure=_COOKIE_SECURE, path="/")
     return resp

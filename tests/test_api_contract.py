@@ -235,3 +235,28 @@ class ReadShapeContractTests(unittest.TestCase):
         for name in ("DeviceInfo", "Globals", "Summary", "RuleVocab", "KlimaState"):
             self.assertIn(name, schemas)
             self.assertEqual(schemas[name].get("additionalProperties"), False)  # forbids unknowns
+
+
+class AuthContractTests(unittest.TestCase):
+    def test_auth_request_response_shapes_validate(self):
+        api_contract.LoginRequest.model_validate({"user": "x", "password": "y"})
+        api_contract.LoginRequest.model_validate({"user": "x", "password": "y", "bearer": True})
+        api_contract.LoginSuccess.model_validate({"ok": True, "user": "x"})              # token optional
+        api_contract.LoginSuccess.model_validate({"ok": True, "user": "x", "token": "t"})
+        api_contract.WhoAmI.model_validate({"user": None, "role": None})                 # auth off → nulls
+        api_contract.WhoAmI.model_validate({"user": "x", "role": "admin"})
+        api_contract.OkResult.model_validate({"ok": True})
+
+    def test_login_token_is_optional_no_default(self):
+        ls = api_contract.build_openapi()["components"]["schemas"]["LoginSuccess"]
+        self.assertNotIn("token", ls.get("required", []))   # present only when bearer requested
+        self.assertNotIn("default", ls["properties"]["token"])
+
+    def test_whoami_fields_required_even_when_null(self):
+        with self.assertRaises(ValueError):
+            api_contract.WhoAmI.model_validate({"user": "x"})   # role is required (nullable), not optional
+
+    def test_auth_paths_present(self):
+        paths = api_contract.build_openapi()["paths"]
+        for p in ("/api/login", "/api/logout", "/api/whoami"):
+            self.assertIn(p, paths)

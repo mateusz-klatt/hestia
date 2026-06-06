@@ -687,6 +687,36 @@ class AuthTests(_WebTestBase):
         self.assertIn("hestia_session=", headers["Set-Cookie"])
         self.assertIn('Max-Age=0', headers["Set-Cookie"])      # del_cookie expires it immediately
 
+    # ---- bearer token (native clients, e.g. the iOS app) ----
+    def _bearer_token(self):
+        _, _, body = _post(self.web.address, "/api/login",
+                           {"user": "tata", "password": "s3cret", "bearer": True})
+        return json.loads(body)["token"]
+
+    def test_login_with_bearer_returns_a_valid_token(self):
+        status, _, body = _post(self.web.address, "/api/login",
+                                {"user": "tata", "password": "s3cret", "bearer": True})
+        self.assertEqual(status, 200)
+        payload = json.loads(body)
+        self.assertEqual(payload["user"], "tata")
+        # the returned token is a real session token for this user
+        self.assertEqual(
+            auth.verify_session(payload["token"], now=web._now(), secret=b"test-secret-bytes"), "tata")
+
+    def test_login_without_bearer_omits_token(self):
+        self.assertNotIn("token", json.loads(self._login()[2]))  # web UI never gets the token in the body
+
+    def test_bearer_header_authenticates_a_gated_route(self):
+        status, _, body = _get(self.web.address, "/api/whoami",
+                               headers={"Authorization": f"Bearer {self._bearer_token()}"})
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body), {"user": "tata", "role": "admin"})
+
+    def test_forged_bearer_401(self):
+        status, _, _ = _get(self.web.address, "/api/discovery",
+                            headers={"Authorization": "Bearer forged.token"})
+        self.assertEqual(status, 401)
+
 
 class SettingsEndpointTests(_WebTestBase):
     """GET/POST /api/settings — per-user server settings, local-first on the client."""
