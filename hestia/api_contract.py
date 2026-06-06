@@ -153,7 +153,55 @@ class SceneResult(BaseModel):
     total: int
 
 
-_COMMAND_MODELS = (IrRequest, SceneRequest, SceneResult)
+class NameRequest(BaseModel):
+    """POST /api/name — set a device's registry labels. ``node`` is required; at least one of
+    name/room/type must be present (server-enforced cross-field, not expressible here). name/room
+    accept null (clear); type is a DeviceType; ep is a multi-gang channel label. Unknown keys → 400."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+    node: int
+    op: Annotated[Literal["name"], Field(default=None, json_schema_extra=_OMIT)] = None
+    name: Annotated[Union[str, None], Field(default=None, max_length=256, json_schema_extra=_OMIT)] = None
+    room: Annotated[Union[str, None], Field(default=None, max_length=256, json_schema_extra=_OMIT)] = None
+    type: Annotated[
+        Union[Literal["light", "blind", "thermostat", "door", "motion", "smoke", "water", "plug", "unknown"], None],
+        Field(default=None, json_schema_extra=_OMIT),
+    ] = None
+    ep: Annotated[Union[int, None], Field(default=None, ge=0, json_schema_extra=_OMIT)] = None
+
+
+class Settings(BaseModel):
+    """GET /api/settings — the logged-in user's UI prefs. All three keys are ALWAYS present, null when
+    unset (an unauthenticated / no-row request returns all-null, never an error)."""
+
+    model_config = ConfigDict(extra="forbid")
+    locale: Union[str, None]
+    temp_scale: Union[str, None]
+    theme: Union[str, None]
+
+
+class SettingsUpdate(BaseModel):
+    """POST /api/settings — a PARTIAL update: only the keys present are persisted (absent keys are left
+    untouched). null clears a field. temp_scale ∈ {C,F,K}. locale ≤ 35 chars."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+    locale: Annotated[Union[str, None], Field(default=None, max_length=35, json_schema_extra=_OMIT)] = None
+    temp_scale: Annotated[
+        Union[Literal["C", "F", "K"], None], Field(default=None, json_schema_extra=_OMIT)
+    ] = None
+    theme: Annotated[Union[str, None], Field(default=None, json_schema_extra=_OMIT)] = None
+
+
+class RoomIconRequest(BaseModel):
+    """POST /api/rooms/icons — set one shared room emoji. Send icon="" (empty string, NOT null) to clear."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+    room: Annotated[str, Field(max_length=64)]
+    icon: Annotated[str, Field(max_length=16)]
+
+
+_COMMAND_MODELS = (IrRequest, SceneRequest, SceneResult,
+                   NameRequest, Settings, SettingsUpdate, RoomIconRequest)
 
 
 # ---- read shapes (responses the web UI + Vesta consume) --------------------
@@ -326,6 +374,25 @@ def _ref(name: str) -> dict:
     return {"$ref": f"#/components/schemas/{name}"}
 
 
+# The RBAC floor for each contracted operation, as `x-required-role` (mirrors web._ROUTE_MIN_ROLE;
+# "public" = no auth). A test pins each value to web._required_role / web._is_public_route — so a
+# mislabelled role fails CI rather than misleading a client.
+_PATH_ROLES = {
+    ("POST", "/api/control"): "operator",
+    ("POST", "/api/ir"): "operator",
+    ("POST", "/api/scene"): "operator",
+    ("POST", "/api/name"): "admin",
+    ("GET", "/api/settings"): "viewer",
+    ("POST", "/api/settings"): "viewer",
+    ("GET", "/api/rooms/icons"): "viewer",
+    ("POST", "/api/rooms/icons"): "admin",
+    ("POST", "/api/login"): "public",
+    ("POST", "/api/logout"): "public",
+    ("GET", "/api/whoami"): "viewer",
+    ("GET", "/api/discovery"): "viewer",
+}
+
+
 def _component_schemas() -> dict:
     """The OpenAPI ``components.schemas`` map for every model, with cross-refs under that path."""
     _, combined = models_json_schema(
@@ -353,7 +420,7 @@ def build_openapi() -> dict:
     """Assemble the OpenAPI 3.1 document for the current contract slice. Deterministic (no clock/host),
     so the checked-in ``docs/api/openapi.json`` stays byte-stable across regenerations."""
     err = {"content": {"application/json": {"schema": _ref("ControlError")}}}
-    return {
+    doc = {
         "openapi": "3.1.0",
         "info": {
             "title": "hestia API",
@@ -414,6 +481,70 @@ def build_openapi() -> dict:
                         "400": {"description": "unknown scene", **err},
                     },
                 }
+            },
+            "/api/name": {
+                "post": {
+                    "operationId": "setName",
+                    "summary": "Set a device's registry labels (name / room / type / endpoint)",
+                    "description": "Requires the admin role. Save failure maps to 500 (not 503).",
+                    "requestBody": {"required": True,
+                                    "content": {"application/json": {"schema": _ref("NameRequest")}}},
+                    "responses": {
+                        "200": {"description": "labels saved",
+                                "content": {"application/json": {"schema": _ref("OkResult")}}},
+                        "400": {"description": "malformed", **err},
+                        "500": {"description": "registry save failed", **err},
+                    },
+                }
+            },
+            "/api/settings": {
+                "get": {
+                    "operationId": "getSettings",
+                    "summary": "The logged-in user's UI preferences",
+                    "description": "Requires the viewer role. All keys present, null when unset.",
+                    "responses": {
+                        "200": {"description": "the user's settings",
+                                "content": {"application/json": {"schema": _ref("Settings")}}},
+                    },
+                },
+                "post": {
+                    "operationId": "setSettings",
+                    "summary": "Update UI preferences (partial — only the keys sent are persisted)",
+                    "description": "Requires the viewer role.",
+                    "requestBody": {"required": True,
+                                    "content": {"application/json": {"schema": _ref("SettingsUpdate")}}},
+                    "responses": {
+                        "200": {"description": "saved",
+                                "content": {"application/json": {"schema": _ref("OkResult")}}},
+                        "400": {"description": "malformed", **err},
+                    },
+                },
+            },
+            "/api/rooms/icons": {
+                "get": {
+                    "operationId": "getRoomIcons",
+                    "summary": "Shared room→emoji map",
+                    "description": "Requires the viewer role. A bare object (room name → emoji); {} when none set.",
+                    "responses": {
+                        "200": {
+                            "description": "the room→icon map",
+                            "content": {"application/json": {
+                                "schema": {"type": "object", "additionalProperties": {"type": "string"}}}},
+                        },
+                    },
+                },
+                "post": {
+                    "operationId": "setRoomIcon",
+                    "summary": "Set one room's emoji (send icon=\"\" to clear)",
+                    "description": "Requires the admin role.",
+                    "requestBody": {"required": True,
+                                    "content": {"application/json": {"schema": _ref("RoomIconRequest")}}},
+                    "responses": {
+                        "200": {"description": "saved",
+                                "content": {"application/json": {"schema": _ref("OkResult")}}},
+                        "400": {"description": "malformed", **err},
+                    },
+                },
             },
             "/api/login": {
                 "post": {
@@ -476,6 +607,12 @@ def build_openapi() -> dict:
         },
         "components": {"schemas": _component_schemas()},
     }
+    # Tag every operation with its RBAC floor (machine-readable; a test cross-checks each against the
+    # real web._required_role / public allowlist so the contract's roles can never drift from the server).
+    for path, ops in doc["paths"].items():
+        for method, op in ops.items():
+            op["x-required-role"] = _PATH_ROLES[(method.upper(), path)]
+    return doc
 
 
 def write_openapi(path: Path = OPENAPI_PATH) -> None:

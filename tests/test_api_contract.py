@@ -317,3 +317,91 @@ class CommandContractTests(unittest.TestCase):
         # IR success is {ok:true} (OkResult), NOT control's {ok,sent} (ControlSuccess)
         self.assertEqual(paths["/api/ir"]["post"]["responses"]["200"]["content"]["application/json"]["schema"],
                          {"$ref": "#/components/schemas/OkResult"})
+
+
+class RegistrySettingsContractTests(unittest.TestCase):
+    def test_settings_matches_real_empty_default(self):
+        from hestia.web import _EMPTY_SETTINGS
+        api_contract.Settings.model_validate(_EMPTY_SETTINGS)                 # the real all-null default
+        api_contract.Settings.model_validate({"locale": "pl", "temp_scale": "C", "theme": "warm"})
+        with self.assertRaises(ValueError):                                   # all 3 keys required (nullable)
+            api_contract.Settings.model_validate({"locale": None, "temp_scale": None})
+
+    def test_settings_update_is_partial_with_scale_enum(self):
+        api_contract.SettingsUpdate.model_validate({})                        # empty partial is valid
+        api_contract.SettingsUpdate.model_validate({"theme": "dark"})
+        api_contract.SettingsUpdate.model_validate({"locale": None, "temp_scale": "F"})
+        with self.assertRaises(ValueError):
+            api_contract.SettingsUpdate.model_validate({"temp_scale": "X"})   # not C/F/K
+
+    def test_name_request(self):
+        api_contract.NameRequest.model_validate({"node": 14, "name": "Lamp", "room": "Hall"})
+        api_contract.NameRequest.model_validate({"node": 1, "room": None})    # null clears
+        api_contract.NameRequest.model_validate({"node": 1, "type": "thermostat"})
+        for bad in ({"node": 1, "type": "nope"}, {"node": 1, "name": "x", "zzz": 1}, {"name": "x"}):
+            with self.assertRaises(ValueError):
+                api_contract.NameRequest.model_validate(bad)                  # bad type / unknown field / node missing
+
+    def test_room_icon_request(self):
+        api_contract.RoomIconRequest.model_validate({"room": "Salon", "icon": "\U0001f6cb"})
+        api_contract.RoomIconRequest.model_validate({"room": "Salon", "icon": ""})   # "" clears
+        with self.assertRaises(ValueError):
+            api_contract.RoomIconRequest.model_validate({"room": "Salon"})           # icon required
+
+    def test_command_paths_present(self):
+        paths = api_contract.build_openapi()["paths"]
+        for p in ("/api/name", "/api/settings", "/api/rooms/icons"):
+            self.assertIn(p, paths)
+        # name's save-failure is 500, not 503 (it omits fail_status)
+        self.assertIn("500", paths["/api/name"]["post"]["responses"])
+        # room-icons GET is a bare string→string map (no envelope)
+        self.assertEqual(
+            paths["/api/rooms/icons"]["get"]["responses"]["200"]["content"]["application/json"]["schema"],
+            {"type": "object", "additionalProperties": {"type": "string"}})
+
+
+class RoleAndBindingContractTests(unittest.TestCase):
+    """x-required-role on every operation must match the real server floor; the request DTOs must agree
+    with the authoritative validators on the field rules."""
+
+    def test_x_required_role_matches_the_server(self):
+        from hestia import web
+        for path, ops in api_contract.build_openapi()["paths"].items():
+            for method, op in ops.items():
+                m = method.upper()
+                # symmetric: derive the truth from the server, compare to the contract's claim — so a
+                # public route mislabelled with a role (or vice-versa) fails, not just a wrong floor.
+                expected = "public" if web._is_public_route(m, path) else web._required_role(m, path)
+                self.assertEqual(op["x-required-role"], expected, f"{m} {path}")
+
+    def test_settings_update_agrees_with_validator(self):
+        from hestia.web import _settings_error
+        for body in ({}, {"theme": "dark"}, {"temp_scale": "C"}, {"locale": None}, {"locale": "pl-PL"},
+                     {"temp_scale": "X"}, {"locale": "x" * 36}, {"theme": 123}, {"temp_scale": 1}):
+            backend_ok = _settings_error(body) is None
+            try:
+                api_contract.SettingsUpdate.model_validate(body)
+                dto_ok = True
+            except ValueError:
+                dto_ok = False
+            self.assertEqual(backend_ok, dto_ok, f"settings disagree on {body}")
+
+    def test_room_icon_agrees_with_validator(self):
+        from hestia.web import _room_icon_error
+        for body in ({"room": "S", "icon": "x"}, {"room": "S", "icon": ""}, {"room": "S"},
+                     {"room": "x" * 65, "icon": "a"}, {"room": "S", "icon": "x" * 17}, {"icon": "a"},
+                     {"room": 1, "icon": "a"}):
+            backend_ok = _room_icon_error(body) is None
+            try:
+                api_contract.RoomIconRequest.model_validate(body)
+                dto_ok = True
+            except ValueError:
+                dto_ok = False
+            self.assertEqual(backend_ok, dto_ok, f"room-icon disagree on {body}")
+
+    def test_name_type_literals_match_device_types(self):
+        from hestia.web import _TYPES
+        for t in _TYPES:
+            api_contract.NameRequest.model_validate({"node": 1, "type": t})
+        with self.assertRaises(ValueError):
+            api_contract.NameRequest.model_validate({"node": 1, "type": "bogus"})
