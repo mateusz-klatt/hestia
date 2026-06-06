@@ -129,6 +129,33 @@ class ControlError(BaseModel):
     error: str
 
 
+class IrRequest(BaseModel):
+    """POST /api/ir — transmit a saved Flipper IR signal (same 200/400/503 envelopes as /api/control)."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+    file: Annotated[str, Field(min_length=1)]
+    button: Annotated[str, Field(min_length=1)]
+
+
+class SceneRequest(BaseModel):
+    """POST /api/scene — fan one house-wide scene out across the per-device control path."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+    op: Literal["lights_off", "lights_on", "blinds_down", "blinds_up"]
+
+
+class SceneResult(BaseModel):
+    """200 from /api/scene: how many of the scene's per-device commands the gateway accepted."""
+
+    model_config = ConfigDict(extra="forbid")
+    ok: bool
+    sent: int
+    total: int
+
+
+_COMMAND_MODELS = (IrRequest, SceneRequest, SceneResult)
+
+
 # ---- read shapes (responses the web UI + Vesta consume) --------------------
 # extra="forbid" here is DELIBERATE drift detection: if a backend dict grows a field the DTO doesn't
 # list, the contract test (which validates real handler output) fails — forcing the model to keep up.
@@ -303,7 +330,8 @@ def _component_schemas() -> dict:
     """The OpenAPI ``components.schemas`` map for every model, with cross-refs under that path."""
     _, combined = models_json_schema(
         [(model, "validation")
-         for model in (*_CONTROL_MODELS, ControlSuccess, ControlError, *_READ_MODELS, *_AUTH_MODELS)],
+         for model in (*_CONTROL_MODELS, ControlSuccess, ControlError, *_COMMAND_MODELS,
+                       *_READ_MODELS, *_AUTH_MODELS)],
         ref_template="#/components/schemas/{model}",
     )
     schemas = combined.get("$defs", {})
@@ -350,6 +378,40 @@ def build_openapi() -> dict:
                         },
                         "400": {"description": "malformed command", **err},
                         "503": {"description": "device unavailable / command rejected", **err},
+                    },
+                }
+            },
+            "/api/ir": {
+                "post": {
+                    "operationId": "ir",
+                    "summary": "Transmit a saved IR signal via the Flipper",
+                    "description": "Requires the operator role.",
+                    "requestBody": {
+                        "required": True,
+                        "content": {"application/json": {"schema": _ref("IrRequest")}},
+                    },
+                    "responses": {
+                        # the IR success body is just {"ok": true} (no `sent` frame, unlike /api/control)
+                        "200": {"description": "transmitted",
+                                "content": {"application/json": {"schema": _ref("OkResult")}}},
+                        "400": {"description": "malformed", **err},
+                        "503": {"description": "IR disabled / queue full / failed", **err},
+                    },
+                }
+            },
+            "/api/scene": {
+                "post": {
+                    "operationId": "scene",
+                    "summary": "Run a house-wide scene (all lights/blinds on/off)",
+                    "description": "Requires the operator role. 200 reports how many device commands landed.",
+                    "requestBody": {
+                        "required": True,
+                        "content": {"application/json": {"schema": _ref("SceneRequest")}},
+                    },
+                    "responses": {
+                        "200": {"description": "scene dispatched",
+                                "content": {"application/json": {"schema": _ref("SceneResult")}}},
+                        "400": {"description": "unknown scene", **err},
                     },
                 }
             },

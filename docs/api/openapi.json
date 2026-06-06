@@ -613,6 +613,28 @@
         "title": "IrButton",
         "type": "object"
       },
+      "IrRequest": {
+        "additionalProperties": false,
+        "description": "POST /api/ir \u2014 transmit a saved Flipper IR signal (same 200/400/503 envelopes as /api/control).",
+        "properties": {
+          "button": {
+            "minLength": 1,
+            "title": "Button",
+            "type": "string"
+          },
+          "file": {
+            "minLength": 1,
+            "title": "File",
+            "type": "string"
+          }
+        },
+        "required": [
+          "file",
+          "button"
+        ],
+        "title": "IrRequest",
+        "type": "object"
+      },
       "Klima": {
         "additionalProperties": false,
         "description": "The A/C control map parsed from the klima.ir signal names \u2014 an empty ``{}`` when no klima.ir is\npresent, so every field is OPTIONAL (absent, never null). ``modes``/``power_on`` map each mode to its\nsorted temps; ``presets`` carries ``off`` + any non-temp signal.",
@@ -828,6 +850,52 @@
         "title": "RuleVocab",
         "type": "object"
       },
+      "SceneRequest": {
+        "additionalProperties": false,
+        "description": "POST /api/scene \u2014 fan one house-wide scene out across the per-device control path.",
+        "properties": {
+          "op": {
+            "enum": [
+              "lights_off",
+              "lights_on",
+              "blinds_down",
+              "blinds_up"
+            ],
+            "title": "Op",
+            "type": "string"
+          }
+        },
+        "required": [
+          "op"
+        ],
+        "title": "SceneRequest",
+        "type": "object"
+      },
+      "SceneResult": {
+        "additionalProperties": false,
+        "description": "200 from /api/scene: how many of the scene's per-device commands the gateway accepted.",
+        "properties": {
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          },
+          "sent": {
+            "title": "Sent",
+            "type": "integer"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "ok",
+          "sent",
+          "total"
+        ],
+        "title": "SceneResult",
+        "type": "object"
+      },
       "Summary": {
         "additionalProperties": false,
         "description": "Discovery roster counters (``web._summary``).",
@@ -964,6 +1032,55 @@
         "summary": "The full dashboard snapshot (devices + globals + klima + rule grammar)"
       }
     },
+    "/api/ir": {
+      "post": {
+        "description": "Requires the operator role.",
+        "operationId": "ir",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IrRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OkResult"
+                }
+              }
+            },
+            "description": "transmitted"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ControlError"
+                }
+              }
+            },
+            "description": "malformed"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ControlError"
+                }
+              }
+            },
+            "description": "IR disabled / queue full / failed"
+          }
+        },
+        "summary": "Transmit a saved IR signal via the Flipper"
+      }
+    },
     "/api/login": {
       "post": {
         "description": "Public. Sets the httponly session cookie; with `bearer: true` the 200 body also carries a `token` for `Authorization: Bearer` (native clients).",
@@ -1020,6 +1137,45 @@
           }
         },
         "summary": "Clear the session cookie"
+      }
+    },
+    "/api/scene": {
+      "post": {
+        "description": "Requires the operator role. 200 reports how many device commands landed.",
+        "operationId": "scene",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SceneRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SceneResult"
+                }
+              }
+            },
+            "description": "scene dispatched"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ControlError"
+                }
+              }
+            },
+            "description": "unknown scene"
+          }
+        },
+        "summary": "Run a house-wide scene (all lights/blinds on/off)"
       }
     },
     "/api/whoami": {

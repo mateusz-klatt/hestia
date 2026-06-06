@@ -287,3 +287,33 @@ class AuthContractTests(unittest.TestCase):
         paths = api_contract.build_openapi()["paths"]
         for p in ("/api/login", "/api/logout", "/api/whoami"):
             self.assertIn(p, paths)
+
+
+class CommandContractTests(unittest.TestCase):
+    def test_ir_request(self):
+        api_contract.IrRequest.model_validate({"file": "/x.ir", "button": "power"})
+        for bad in ({"file": "", "button": "p"}, {"file": "/x.ir"}, {"file": "/x.ir", "button": "p", "x": 1}):
+            with self.assertRaises(ValueError):
+                api_contract.IrRequest.model_validate(bad)
+
+    def test_scene_request_literals_match_the_handler(self):
+        from hestia.web import _SCENE_TARGETS
+        from typing import get_args
+        lit = api_contract.SceneRequest.model_fields["op"].annotation
+        self.assertEqual(set(get_args(lit)), set(_SCENE_TARGETS))   # contract ≡ handler allowlist
+        for op in _SCENE_TARGETS:
+            api_contract.SceneRequest.model_validate({"op": op})
+        with self.assertRaises(ValueError):
+            api_contract.SceneRequest.model_validate({"op": "nope"})
+
+    def test_scene_result(self):
+        api_contract.SceneResult.model_validate({"ok": True, "sent": 3, "total": 4})
+
+    def test_command_paths_present(self):
+        doc = api_contract.build_openapi()
+        paths = doc["paths"]
+        self.assertIn("/api/ir", paths)
+        self.assertIn("/api/scene", paths)
+        # IR success is {ok:true} (OkResult), NOT control's {ok,sent} (ControlSuccess)
+        self.assertEqual(paths["/api/ir"]["post"]["responses"]["200"]["content"]["application/json"]["schema"],
+                         {"$ref": "#/components/schemas/OkResult"})
