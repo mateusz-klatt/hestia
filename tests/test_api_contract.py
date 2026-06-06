@@ -510,3 +510,116 @@ class AuditEventsContractTests(unittest.TestCase):
         self.assertIn("/api/audit", paths)
         self.assertEqual(  # /api/events is an SSE stream, not JSON
             list(paths["/api/events"]["get"]["responses"]["200"]["content"]), ["text/event-stream"])
+
+
+class UserManagementContractTests(unittest.TestCase):
+    """User-mgmt + observability DTOs: requests pinned to the real validators, reads to real output."""
+
+    def test_add_user_agrees_with_validators(self):
+        from hestia.store_sql import ROLE_RANK
+        from hestia.web import _password_error, _username_error
+        cases = [
+            {"username": "tata", "password": "longenough", "role": "admin"},      # valid
+            {"username": "", "password": "longenough", "role": "admin"},           # empty username
+            {"username": "a|b", "password": "longenough", "role": "viewer"},       # forbidden '|'
+            {"username": "a/b", "password": "longenough", "role": "viewer"},       # forbidden '/'
+            {"username": "x" * 65, "password": "longenough", "role": "operator"},  # username too long
+            {"username": "ok", "password": "short", "role": "viewer"},             # password too short
+            {"username": "ok", "password": "longenough", "role": "root"},          # role not in ROLE_RANK
+            # edge cases where the `^[^|/]+$` pattern must track _username_error exactly: a username is
+            # rejected ONLY for '|' / '/' / empty / >64 — newlines, tabs, unicode are all allowed (the
+            # Rust-regex `$` does NOT special-case a trailing newline, so "abc\n" still validates).
+            {"username": "abc\n", "password": "longenough", "role": "viewer"},     # trailing newline (allowed)
+            {"username": "ab\ncd", "password": "longenough", "role": "viewer"},    # embedded newline (allowed)
+            {"username": "café", "password": "longenough", "role": "viewer"},      # unicode (allowed)
+            {"username": "ab\tcd", "password": "longenough", "role": "viewer"},    # tab (allowed)
+            {"username": "\n|", "password": "longenough", "role": "viewer"},       # newline + '|' (rejected)
+        ]
+        for c in cases:
+            backend_ok = (_username_error(c["username"]) is None
+                          and _password_error(c["password"]) is None
+                          and c["role"] in ROLE_RANK)
+            try:
+                api_contract.AddUserRequest.model_validate(c)
+                dto_ok = True
+            except ValueError:
+                dto_ok = False
+            self.assertEqual(backend_ok, dto_ok, f"add-user disagrees on {c}")
+
+    def test_role_literal_matches_role_rank(self):
+        from typing import get_args
+        from hestia.store_sql import ROLE_RANK
+        self.assertEqual(set(get_args(api_contract.Role)), set(ROLE_RANK))
+
+    def test_password_fields_agree_with_password_error(self):
+        from hestia.web import _password_error
+        for pw in ("", "short", "x" * 7, "x" * 8, "x" * 1024, "x" * 1025, "exactly8"):
+            backend_ok = _password_error(pw) is None
+            for model, body in ((api_contract.ChangePasswordRequest, {"current": "whatever", "new": pw}),
+                                (api_contract.ResetPasswordRequest, {"username": "u", "new": pw})):
+                try:
+                    model.model_validate(body)
+                    dto_ok = True
+                except ValueError:
+                    dto_ok = False
+                self.assertEqual(backend_ok, dto_ok, f"{model.__name__} `new` disagrees on len {len(pw)}")
+
+    def test_change_password_requires_both_fields(self):
+        api_contract.ChangePasswordRequest.model_validate({"current": "", "new": "longenough"})  # empty current ok
+        for bad in ({"new": "longenough"}, {"current": "x"}, {"current": "x", "new": "longenough", "z": 1}):
+            with self.assertRaises(ValueError):
+                api_contract.ChangePasswordRequest.model_validate(bad)
+
+    def test_set_disabled_requires_strict_bool(self):
+        api_contract.SetDisabledRequest.model_validate({"username": "u", "disabled": True})
+        for bad in ({"username": "u", "disabled": 1}, {"username": "u"}, {"username": "", "disabled": True}):
+            with self.assertRaises(ValueError):
+                api_contract.SetDisabledRequest.model_validate(bad)   # strict bool / missing / empty username
+
+    def test_users_list_and_db_stats_match_real_output(self):
+        import shutil
+
+        from hestia import store_sql
+        d = Path(tempfile.mkdtemp())
+        try:
+            dbp = d / "hestia.db"
+            self.assertEqual(store_sql.add_user("mama", "scrypt$h", "admin", path=dbp), "ok")
+            self.assertEqual(store_sql.add_user("kid", "scrypt$h2", "viewer", path=dbp), "ok")
+            rows = store_sql.list_users(path=dbp)
+            api_contract.UsersList.model_validate({"users": rows})       # the real list shape
+            for r in rows:
+                api_contract.UserRow.model_validate(r)
+            m = api_contract.DbStats.model_validate(store_sql.db_stats(path=dbp))
+            self.assertIn("users", m.tables)
+            self.assertGreaterEqual(m.file_bytes, 0)
+        finally:
+            shutil.rmtree(d)
+
+    def test_rf433_feed_matches_real_snapshot(self):
+        from hestia.rf433 import Rf433Registry
+        reg = Rf433Registry()
+        reg.record({"model": "Prologue-TH", "id": 204, "channel": 1, "temperature_C": 14.5,
+                    "humidity": 56, "battery_ok": 1, "time": "2026-06-06 00:00:00", "mic": "CRC"}, 1749200000.0)
+        reg.record({"model": "Acurite-Rain", "id": 9, "rain_mm": 0.0, "button": True}, 1749200100.0)
+        snap = reg.snapshot()
+        self.assertEqual(len(snap), 2)
+        _wire(api_contract.Rf433Feed, {"devices": snap})                # real snapshot validates
+        for dev in snap:
+            _wire(api_contract.Rf433Device, dev)
+        api_contract.Rf433Feed.model_validate({"devices": []})          # empty until the feeder runs
+
+    def test_required_read_fields_fail_when_missing(self):
+        with self.assertRaises(ValueError):
+            api_contract.UserRow.model_validate({"username": "u", "role": "admin"})        # missing disabled
+        with self.assertRaises(ValueError):
+            api_contract.DbStats.model_validate({"file_bytes": 0})                          # missing tables
+        with self.assertRaises(ValueError):
+            api_contract.Rf433Device.model_validate({"key": "k", "first_seen": 1.0})        # missing keys
+
+    def test_user_paths_present_and_floored(self):
+        paths = api_contract.build_openapi()["paths"]
+        for p in ("/api/users", "/api/users/role", "/api/users/disabled",
+                  "/api/users/reset-password", "/api/me/password", "/api/rf433", "/api/db/stats"):
+            self.assertIn(p, paths)
+        self.assertEqual(paths["/api/me/password"]["post"]["x-required-role"], "viewer")  # any signed-in user
+        self.assertEqual(paths["/api/users"]["get"]["x-required-role"], "admin")
