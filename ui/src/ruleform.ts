@@ -794,7 +794,7 @@ export function renderRuleForm(
     }
     idIn.value = rule.id;
     enIn.checked = rule.enabled;
-    dbIn.value = String(rule.debounce ?? 0);
+    dbIn.value = String(rule.debounce);
     setModes(rule.modes);
     tType.value = rule.trigger.type;
     buildTrigger(rule.trigger);

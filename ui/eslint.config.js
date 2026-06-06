@@ -7,7 +7,7 @@ const tsconfigRootDir = path.dirname(fileURLToPath(import.meta.url));
 
 export default tseslint.config(
   {
-    ignores: ["dist", "eslint.config.js"],
+    ignores: ["dist", "eslint.config.js", "src/api/openapi.ts"],
   },
   js.configs.recommended,
   ...tseslint.configs.strictTypeChecked,

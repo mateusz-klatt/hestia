@@ -273,14 +273,18 @@ function eventRow(event: AuditEvent, devices: Record<string, DeviceInfo>): HTMLL
     hour12: false,
   });
 
+  // actor/action are nullable in the contract (the audit DB columns allow it) but the writer always
+  // sets them; coerce a theoretical null to "" here so the row still renders (blank) rather than crash.
+  const actor = event.actor ?? "";
+  const action = event.action ?? "";
   row.append(
     ts,
-    span("audit-icon", actorIcon(event.actor)),
-    span("audit-actor", formatAuditActor(event.actor)),
-    span("audit-action", formatAuditAction(event.action)),
+    span("audit-icon", actorIcon(actor)),
+    span("audit-actor", formatAuditActor(actor)),
+    span("audit-action", formatAuditAction(action)),
   );
-  appendOptional(row, "audit-target", formatAuditTarget(event.target, event.action, devices));
-  appendOptional(row, "audit-detail", formatAuditDetail(event.detail, event.action, event.target, devices));
+  appendOptional(row, "audit-target", formatAuditTarget(event.target, action, devices));
+  appendOptional(row, "audit-detail", formatAuditDetail(event.detail, action, event.target, devices));
   appendOptional(row, "audit-result", formatAuditResult(event.result));
   return row;
 }
