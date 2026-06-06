@@ -405,3 +405,67 @@ class RoleAndBindingContractTests(unittest.TestCase):
             api_contract.NameRequest.model_validate({"node": 1, "type": t})
         with self.assertRaises(ValueError):
             api_contract.NameRequest.model_validate({"node": 1, "type": "bogus"})
+
+
+class AutomationsContractTests(unittest.TestCase):
+    """The Rule DTO must accept the real Rule.to_dict() output for EVERY trigger/condition/action variant."""
+
+    SWITCH = [{"op": "switch", "node": 14, "on": True}]
+    TRIGGERS = {
+        "scene": {"type": "scene", "node": 2, "scene_id": 3},
+        "state-node": {"type": "state", "node": 7, "field": "temperature", "op": "lt", "value": 18},
+        "state-global": {"type": "state", "field": "crib_temp", "op": "gt", "value": 24},  # no node
+        "time-days": {"type": "time", "at": "07:30", "days": [0, 4]},
+        "time-nodays": {"type": "time", "at": "07:30"},
+        "sun": {"type": "sun", "event": "sunset", "offset_min": 15, "days": [5, 6]},
+        "presence": {"type": "presence", "mac": "AA:BB:CC:DD:EE:FF", "event": "arrive"},
+        "cron": {"type": "cron", "expr": "30 7 * * 1"},
+    }
+
+    def _real_rule(self, **spec):
+        from hestia.automations import Rule as BackendRule
+        return BackendRule.from_dict({"id": "r", "actions": self.SWITCH, **spec}).to_dict()
+
+    def test_every_trigger_variant_round_trips(self):
+        for name, tg in self.TRIGGERS.items():
+            api_contract.Rule.model_validate(self._real_rule(trigger=tg))  # raises → fails with the variant name
+            self.assertTrue(name)
+
+    def test_condition_variants_round_trip(self):
+        rule = self._real_rule(trigger=self.TRIGGERS["scene"], conditions=[
+            {"node": 9, "field": "switch", "op": "eq", "value": True},          # state predicate (no type)
+            {"type": "time_window", "start": "06:00", "end": "22:00", "days": [0, 1]},
+            {"type": "time_window", "start": "22:00", "end": "06:00"},           # wrap, no days
+        ])
+        m = api_contract.Rule.model_validate(rule)
+        self.assertEqual(len(m.conditions), 3)
+
+    def test_all_action_ops_round_trip(self):
+        acts = [{"op": "switch", "node": 14, "on": True, "endpoint": 2}, {"op": "ir", "file": "/x.ir", "button": "p"},
+                {"op": "thermostat", "node": 9, "celsius": 21}, {"op": "cover", "node": 4, "value": 0},
+                {"op": "level", "node": 5, "value": 50}, {"op": "thermostat_power", "node": 9, "on": False},
+                {"op": "lights", "channels": [[1, 0], [2, 1]]}, {"op": "raw", "hex": "5aa5"}]
+        from hestia.automations import Rule as BackendRule
+        rule = BackendRule.from_dict({"id": "r", "trigger": self.TRIGGERS["scene"], "actions": acts}).to_dict()
+        m = api_contract.Rule.model_validate(rule)
+        self.assertEqual(m.actions[0].op, "switch")
+        self.assertEqual(getattr(m.actions[0], "endpoint", None), 2)  # author field passed through (extra=allow)
+
+    def test_automations_list_wraps_real_rules(self):
+        rules = [self._real_rule(trigger=tg) for tg in self.TRIGGERS.values()]
+        api_contract.AutomationsList.model_validate({"ok": True, "automations": rules})
+
+    def test_rule_input_minimal_and_responses(self):
+        api_contract.RuleInput.model_validate({"id": "r", "trigger": self.TRIGGERS["scene"], "actions": self.SWITCH})
+        api_contract.RuleInput.model_validate(  # with the optional defaults
+            {"id": "r", "trigger": self.TRIGGERS["cron"], "actions": self.SWITCH,
+             "enabled": False, "modes": ["standalone"], "debounce": 2.0, "conditions": []})
+        with self.assertRaises(ValueError):
+            api_contract.RuleInput.model_validate({"id": "r", "trigger": self.TRIGGERS["scene"]})  # actions required
+        api_contract.AutomationSaved.model_validate({"ok": True, "id": "r"})
+        api_contract.AutomationDeleted.model_validate({"ok": True, "deleted": False})
+
+    def test_automations_paths_present(self):
+        paths = api_contract.build_openapi()["paths"]
+        for p in ("/api/automations", "/api/automations/delete"):
+            self.assertIn(p, paths)

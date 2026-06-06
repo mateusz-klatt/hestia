@@ -1,6 +1,69 @@
 {
   "components": {
     "schemas": {
+      "AutomationDeleted": {
+        "additionalProperties": false,
+        "description": "200 from POST /api/automations/delete: `deleted` is false (200, not 404) for an absent id.",
+        "properties": {
+          "deleted": {
+            "title": "Deleted",
+            "type": "boolean"
+          },
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "deleted"
+        ],
+        "title": "AutomationDeleted",
+        "type": "object"
+      },
+      "AutomationSaved": {
+        "additionalProperties": false,
+        "description": "200 from POST /api/automations: the saved rule's id (NOT the rule object).",
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "id"
+        ],
+        "title": "AutomationSaved",
+        "type": "object"
+      },
+      "AutomationsList": {
+        "additionalProperties": false,
+        "description": "GET /api/automations \u2014 every saved rule. `automations` (NOT `rules`) is always present.",
+        "properties": {
+          "automations": {
+            "items": {
+              "$ref": "#/components/schemas/Rule"
+            },
+            "title": "Automations",
+            "type": "array"
+          },
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "automations"
+        ],
+        "title": "AutomationsList",
+        "type": "object"
+      },
       "ControlCover": {
         "additionalProperties": false,
         "description": "Set a blind/cover position (0..99).",
@@ -876,6 +939,209 @@
         "title": "RoomIconRequest",
         "type": "object"
       },
+      "Rule": {
+        "additionalProperties": false,
+        "description": "A saved automation rule (automations.Rule.to_dict) \u2014 all 7 keys ALWAYS present in the output.",
+        "properties": {
+          "actions": {
+            "items": {
+              "$ref": "#/components/schemas/RuleAction"
+            },
+            "title": "Actions",
+            "type": "array"
+          },
+          "conditions": {
+            "items": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/TimeWindowCondition"
+                },
+                {
+                  "$ref": "#/components/schemas/StatePredicate"
+                }
+              ]
+            },
+            "title": "Conditions",
+            "type": "array"
+          },
+          "debounce": {
+            "title": "Debounce",
+            "type": "number"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "modes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Modes",
+            "type": "array"
+          },
+          "trigger": {
+            "discriminator": {
+              "mapping": {
+                "cron": "#/components/schemas/TriggerCron",
+                "presence": "#/components/schemas/TriggerPresence",
+                "scene": "#/components/schemas/TriggerScene",
+                "state": "#/components/schemas/TriggerState",
+                "sun": "#/components/schemas/TriggerSun",
+                "time": "#/components/schemas/TriggerTime"
+              },
+              "propertyName": "type"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TriggerScene"
+              },
+              {
+                "$ref": "#/components/schemas/TriggerState"
+              },
+              {
+                "$ref": "#/components/schemas/TriggerTime"
+              },
+              {
+                "$ref": "#/components/schemas/TriggerSun"
+              },
+              {
+                "$ref": "#/components/schemas/TriggerPresence"
+              },
+              {
+                "$ref": "#/components/schemas/TriggerCron"
+              }
+            ],
+            "title": "Trigger"
+          }
+        },
+        "required": [
+          "id",
+          "enabled",
+          "modes",
+          "debounce",
+          "trigger",
+          "conditions",
+          "actions"
+        ],
+        "title": "Rule",
+        "type": "object"
+      },
+      "RuleAction": {
+        "additionalProperties": true,
+        "description": "One action. Only `op` (+ ir's file/button) is validated at save; all other per-op fields are\nauthor-supplied and pass through verbatim \u2014 so this is open (extra=allow), not a closed per-op union.",
+        "properties": {
+          "op": {
+            "enum": [
+              "raw",
+              "cover",
+              "level",
+              "switch",
+              "lights",
+              "thermostat",
+              "thermostat_power",
+              "ir"
+            ],
+            "title": "Op",
+            "type": "string"
+          }
+        },
+        "required": [
+          "op"
+        ],
+        "title": "RuleAction",
+        "type": "object"
+      },
+      "RuleInput": {
+        "additionalProperties": false,
+        "description": "POST /api/automations body. id/trigger/actions required; enabled/modes/debounce/conditions are\noptional (server-defaulted by Rule.from_dict: enabled=true, modes=[proxy,standalone], debounce=0,\nconditions=[]). Authoritative validation is Rule.from_dict \u2014 this shape is the codegen guide.",
+        "properties": {
+          "actions": {
+            "items": {
+              "$ref": "#/components/schemas/RuleAction"
+            },
+            "title": "Actions",
+            "type": "array"
+          },
+          "conditions": {
+            "items": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/TimeWindowCondition"
+                },
+                {
+                  "$ref": "#/components/schemas/StatePredicate"
+                }
+              ]
+            },
+            "title": "Conditions",
+            "type": "array"
+          },
+          "debounce": {
+            "title": "Debounce",
+            "type": "number"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "modes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Modes",
+            "type": "array"
+          },
+          "trigger": {
+            "discriminator": {
+              "mapping": {
+                "cron": "#/components/schemas/TriggerCron",
+                "presence": "#/components/schemas/TriggerPresence",
+                "scene": "#/components/schemas/TriggerScene",
+                "state": "#/components/schemas/TriggerState",
+                "sun": "#/components/schemas/TriggerSun",
+                "time": "#/components/schemas/TriggerTime"
+              },
+              "propertyName": "type"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TriggerScene"
+              },
+              {
+                "$ref": "#/components/schemas/TriggerState"
+              },
+              {
+                "$ref": "#/components/schemas/TriggerTime"
+              },
+              {
+                "$ref": "#/components/schemas/TriggerSun"
+              },
+              {
+                "$ref": "#/components/schemas/TriggerPresence"
+              },
+              {
+                "$ref": "#/components/schemas/TriggerCron"
+              }
+            ],
+            "title": "Trigger"
+          }
+        },
+        "required": [
+          "id",
+          "trigger",
+          "actions"
+        ],
+        "title": "RuleInput",
+        "type": "object"
+      },
       "RuleVocab": {
         "additionalProperties": false,
         "description": "The automation-rule grammar the guided form builds from (``automations.rule_vocab``).",
@@ -1089,6 +1355,69 @@
         "title": "SettingsUpdate",
         "type": "object"
       },
+      "StatePredicate": {
+        "additionalProperties": false,
+        "description": "A condition with NO `type` key (the absence IS the discriminant vs time_window).",
+        "properties": {
+          "field": {
+            "enum": [
+              "door",
+              "level",
+              "switch",
+              "setpoint",
+              "thermostat_on",
+              "temperature",
+              "power_w",
+              "energy_kwh",
+              "voltage_v",
+              "crib_temp",
+              "outdoor_temp"
+            ],
+            "title": "Field",
+            "type": "string"
+          },
+          "node": {
+            "title": "Node",
+            "type": "integer"
+          },
+          "op": {
+            "enum": [
+              "eq",
+              "ne",
+              "lt",
+              "le",
+              "gt",
+              "ge"
+            ],
+            "title": "Op",
+            "type": "string"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "title": "Value"
+          }
+        },
+        "required": [
+          "field",
+          "op",
+          "value"
+        ],
+        "title": "StatePredicate",
+        "type": "object"
+      },
       "Summary": {
         "additionalProperties": false,
         "description": "Discovery roster counters (``web._summary``).",
@@ -1112,6 +1441,266 @@
           "unknown"
         ],
         "title": "Summary",
+        "type": "object"
+      },
+      "TimeWindowCondition": {
+        "additionalProperties": false,
+        "description": "A time-of-day guard condition. `days` is OMITTED entirely when unset (unlike time/sun triggers).",
+        "properties": {
+          "days": {
+            "items": {
+              "maximum": 6,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "title": "Days",
+            "type": "array"
+          },
+          "end": {
+            "title": "End",
+            "type": "string"
+          },
+          "start": {
+            "title": "Start",
+            "type": "string"
+          },
+          "type": {
+            "const": "time_window",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "start",
+          "end"
+        ],
+        "title": "TimeWindowCondition",
+        "type": "object"
+      },
+      "TriggerCron": {
+        "additionalProperties": false,
+        "properties": {
+          "expr": {
+            "title": "Expr",
+            "type": "string"
+          },
+          "type": {
+            "const": "cron",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "expr"
+        ],
+        "title": "TriggerCron",
+        "type": "object"
+      },
+      "TriggerPresence": {
+        "additionalProperties": false,
+        "properties": {
+          "event": {
+            "enum": [
+              "arrive",
+              "leave"
+            ],
+            "title": "Event",
+            "type": "string"
+          },
+          "mac": {
+            "title": "Mac",
+            "type": "string"
+          },
+          "type": {
+            "const": "presence",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "mac",
+          "event"
+        ],
+        "title": "TriggerPresence",
+        "type": "object"
+      },
+      "TriggerScene": {
+        "additionalProperties": false,
+        "properties": {
+          "node": {
+            "title": "Node",
+            "type": "integer"
+          },
+          "scene_id": {
+            "title": "Scene Id",
+            "type": "integer"
+          },
+          "type": {
+            "const": "scene",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "node",
+          "scene_id"
+        ],
+        "title": "TriggerScene",
+        "type": "object"
+      },
+      "TriggerState": {
+        "additionalProperties": false,
+        "properties": {
+          "field": {
+            "enum": [
+              "door",
+              "level",
+              "switch",
+              "setpoint",
+              "thermostat_on",
+              "temperature",
+              "power_w",
+              "energy_kwh",
+              "voltage_v",
+              "crib_temp",
+              "outdoor_temp"
+            ],
+            "title": "Field",
+            "type": "string"
+          },
+          "node": {
+            "title": "Node",
+            "type": "integer"
+          },
+          "op": {
+            "enum": [
+              "eq",
+              "ne",
+              "lt",
+              "le",
+              "gt",
+              "ge"
+            ],
+            "title": "Op",
+            "type": "string"
+          },
+          "type": {
+            "const": "state",
+            "title": "Type",
+            "type": "string"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "title": "Value"
+          }
+        },
+        "required": [
+          "type",
+          "field",
+          "op",
+          "value"
+        ],
+        "title": "TriggerState",
+        "type": "object"
+      },
+      "TriggerSun": {
+        "additionalProperties": false,
+        "properties": {
+          "days": {
+            "anyOf": [
+              {
+                "items": {
+                  "maximum": 6,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Days"
+          },
+          "event": {
+            "enum": [
+              "sunrise",
+              "sunset"
+            ],
+            "title": "Event",
+            "type": "string"
+          },
+          "offset_min": {
+            "title": "Offset Min",
+            "type": "integer"
+          },
+          "type": {
+            "const": "sun",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "event",
+          "offset_min",
+          "days"
+        ],
+        "title": "TriggerSun",
+        "type": "object"
+      },
+      "TriggerTime": {
+        "additionalProperties": false,
+        "properties": {
+          "at": {
+            "title": "At",
+            "type": "string"
+          },
+          "days": {
+            "anyOf": [
+              {
+                "items": {
+                  "maximum": 6,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Days"
+          },
+          "type": {
+            "const": "time",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "at",
+          "days"
+        ],
+        "title": "TriggerTime",
         "type": "object"
       },
       "WhoAmI": {
@@ -1157,6 +1746,133 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/api/automations": {
+      "get": {
+        "description": "Requires the admin role (rules can carry presence-trigger MACs).",
+        "operationId": "listAutomations",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AutomationsList"
+                }
+              }
+            },
+            "description": "the rules"
+          }
+        },
+        "summary": "List every saved automation rule",
+        "x-required-role": "admin"
+      },
+      "post": {
+        "description": "Requires the admin role. Authoritative validation is Rule.from_dict.",
+        "operationId": "saveAutomation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RuleInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AutomationSaved"
+                }
+              }
+            },
+            "description": "saved"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ControlError"
+                }
+              }
+            },
+            "description": "invalid rule"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ControlError"
+                }
+              }
+            },
+            "description": "save failed"
+          }
+        },
+        "summary": "Create or replace a rule (the body IS the rule; id is client-supplied)",
+        "x-required-role": "admin"
+      }
+    },
+    "/api/automations/delete": {
+      "post": {
+        "description": "Requires the admin role.",
+        "operationId": "deleteAutomation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AutomationDeleted"
+                }
+              }
+            },
+            "description": "deleted (or no-op)"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ControlError"
+                }
+              }
+            },
+            "description": "invalid id"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ControlError"
+                }
+              }
+            },
+            "description": "save failed"
+          }
+        },
+        "summary": "Delete a rule by id (deleted=false, still 200, for an absent id)",
+        "x-required-role": "admin"
+      }
+    },
     "/api/control": {
       "post": {
         "description": "Requires the operator role.",
