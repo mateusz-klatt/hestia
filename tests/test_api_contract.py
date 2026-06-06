@@ -12,9 +12,27 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 from hestia import api_contract
-from hestia.web import _validate_control_payload
+from hestia.automations import rule_vocab
+from hestia.proxy import _discovery_entry, globals_snapshot
+from hestia.state import State
+from hestia.web import _summary, _validate_control_payload
+
+
+def _wire(model, payload):
+    """Validate the JSON-roundtripped payload — the ACTUAL wire shape the client sees (so e.g. a
+    multi-gang's int endpoint keys become strings, matching the DTO)."""
+    return model.model_validate(json.loads(json.dumps(payload)))
+
+
+def _min_device() -> dict:
+    """A minimal valid DeviceInfo: every always-present field null, no optional labels."""
+    nulls = ("power", "confidence", "battery", "level", "switch", "door", "motion", "setpoint",
+             "thermostat_on", "thermostat_last_cmd", "temperature", "power_w", "energy_kwh",
+             "voltage_v", "endpoints", "last_seen")
+    return {**{k: None for k in nulls}, "type": "light"}
 
 
 def _dto_accepts(payload) -> bool:
@@ -145,3 +163,75 @@ class ControlContractBindingTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ReadShapeContractTests(unittest.TestCase):
+    """Each read DTO must accept the REAL handler output (drift gate — extra=forbid fails on a new field)."""
+
+    def test_globals_matches_real_output(self):
+        _wire(api_contract.Globals, globals_snapshot(State()))  # all-null (pollers off)
+        st = State()
+        st.crib_temp, st.outdoor_temp, st.outdoor_humidity = 21.0, 14.5, 56.0
+        g = _wire(api_contract.Globals, globals_snapshot(st))
+        self.assertEqual((g.crib_temp, g.outdoor_temp, g.outdoor_humidity), (21.0, 14.5, 56.0))
+
+    def test_summary_matches_real_output(self):
+        s = _summary({"1": {"confidence": "confirmed", "type": "light"},
+                      "2": {"confidence": "high", "type": "unknown"}})
+        m = _wire(api_contract.Summary, s)
+        self.assertEqual((m.total, m.confirmed, m.unknown), (2, 1, 1))
+
+    def test_rule_vocab_matches_real_output(self):
+        rv = _wire(api_contract.RuleVocab, rule_vocab())
+        self.assertIn("time_window", rv.condition_types)
+
+    def test_device_info_matches_real_discovery_entry(self):
+        # minimal: an unseen node with no registry labels — every live field null, no name/room
+        _wire(api_contract.DeviceInfo, _discovery_entry(SimpleNamespace(state=State()), 5, {}, {}))
+        # fully populated: live state + a multi-gang's int endpoint keys (→ strings on the wire) + labels
+        st = State()
+        st.levels[5], st.switches[5], st.temperature[5], st.plug_w[5] = 50, True, 21.5, 12.0
+        st.gang[5] = {1: True, 2: False}
+        cls = {"power": "mains", "type": "light", "confidence": "high", "battery": None}
+        reg = {"last_seen": "2026-06-06T00:00:00Z", "name": "Lamp", "room": "Hall",
+               "endpoint_names": {"1": "L", "2": "R"}}
+        d = _wire(api_contract.DeviceInfo, _discovery_entry(SimpleNamespace(state=st), 5, cls, reg))
+        self.assertEqual(d.endpoints, {"1": True, "2": False})  # int gang keys serialized to strings
+        self.assertEqual((d.name, d.room, d.level, d.temperature), ("Lamp", "Hall", 50, 21.5))
+
+    def test_device_info_admits_null_confidence_from_a_legacy_registry_node(self):
+        # a hand-edited/legacy registry node with a `type` but no `confidence` surfaces confidence=null
+        entry = _discovery_entry(SimpleNamespace(state=State()), 7, {}, {"type": "light"})
+        self.assertIsNone(entry["confidence"])
+        self.assertIsNone(_wire(api_contract.DeviceInfo, entry).confidence)
+
+    def test_always_present_fields_are_required_not_optional(self):
+        # the backend ALWAYS emits these keys (null when unseen) — a MISSING key is drift and must fail
+        with self.assertRaises(ValueError):
+            api_contract.Globals.model_validate({"crib_temp": None, "outdoor_temp": None})  # missing humidity
+        with self.assertRaises(ValueError):
+            api_contract.KlimaState.model_validate({"power": True, "mode": "cool"})          # missing temp
+
+    def test_optional_labels_are_omittable_non_null_no_default(self):
+        di = api_contract.build_openapi()["components"]["schemas"]["DeviceInfo"]
+        for label in ("name", "room", "endpoint_names"):
+            self.assertNotIn(label, di.get("required", []))              # optional (absent ok)
+            self.assertNotIn("default", di["properties"][label])         # no leaked default:null
+        # present-but-null is rejected (the type is non-nullable when present → generated `name?: string`)
+        with self.assertRaises(ValueError):
+            api_contract.DeviceInfo.model_validate(_min_device() | {"name": None})
+
+    def test_klima_state_shape(self):
+        _wire(api_contract.KlimaState, {"power": True, "mode": "cool", "temp": 22})
+        _wire(api_contract.KlimaState, {"power": False, "mode": None, "temp": None})
+
+    def test_read_models_forbid_unknown_fields(self):
+        # extra=forbid is the drift sentinel: a new backend field must fail until the DTO adds it
+        with self.assertRaises(ValueError):
+            api_contract.Globals.model_validate({"crib_temp": None, "surprise": 1})
+
+    def test_read_schemas_present_in_openapi(self):
+        schemas = api_contract.build_openapi()["components"]["schemas"]
+        for name in ("DeviceInfo", "Globals", "Summary", "RuleVocab", "KlimaState"):
+            self.assertIn(name, schemas)
+            self.assertEqual(schemas[name].get("additionalProperties"), False)  # forbids unknowns
