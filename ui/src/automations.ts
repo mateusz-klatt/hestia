@@ -15,10 +15,9 @@ export function trigSummary(t: Trigger): string {
       // Array.isArray — a bare `=== undefined` check let `null.join()` throw and killed the row loop.
       return `at ${t.at}${Array.isArray(t.days) ? ` [${t.days.join(",")}]` : ""}`;
     case "sun": {
+      // offset_min is always present in the contract (0 when unset), so no undefined guard needed.
       const off =
-        t.offset_min !== undefined && t.offset_min !== 0
-          ? `${t.offset_min > 0 ? "+" : ""}${String(t.offset_min)}m`
-          : "";
+        t.offset_min !== 0 ? `${t.offset_min > 0 ? "+" : ""}${String(t.offset_min)}m` : "";
       return `${t.event}${off}${Array.isArray(t.days) ? ` [${t.days.join(",")}]` : ""}`;
     }
     case "presence":

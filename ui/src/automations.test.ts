@@ -17,6 +17,8 @@ function rule(overrides: Partial<Rule> = {}): Rule {
   return {
     id: "r1",
     enabled: true,
+    modes: ["proxy", "standalone"], // Rule.to_dict always emits modes + debounce
+    debounce: 0,
     trigger: { type: "scene", node: 5, scene_id: 2 },
     conditions: [],
     actions: [{ op: "switch", node: 5, on: true }],
@@ -36,19 +38,21 @@ function deps(overrides: Partial<AutomationsDeps> = {}): AutomationsDeps {
 }
 
 describe("trigSummary", () => {
+  // op codes are the backend's CmpOp ("gt"/"lt"/…), echoed verbatim by trigSummary; time/sun triggers
+  // always carry `days` (null when unscheduled) and `offset_min` per the contract.
   const cases: [Trigger, string][] = [
     [{ type: "scene", node: 5, scene_id: 2 }, "scene 2 @node 5"],
-    [{ type: "state", node: 7, field: "temperature", op: ">", value: 22 }, "node 7 temperature > 22"],
-    [{ type: "state", field: "crib_temp", op: "<", value: 18 }, "crib_temp < 18"], // global, no node
-    [{ type: "time", at: "07:30" }, "at 07:30"],
+    [{ type: "state", node: 7, field: "temperature", op: "gt", value: 22 }, "node 7 temperature gt 22"],
+    [{ type: "state", field: "crib_temp", op: "lt", value: 18 }, "crib_temp lt 18"], // global, no node
+    [{ type: "time", at: "07:30", days: null }, "at 07:30"],
     [{ type: "time", at: "07:30", days: [0, 4] }, "at 07:30 [0,4]"],
-    [{ type: "sun", event: "sunset" }, "sunset"],
-    [{ type: "sun", event: "sunset", offset_min: 0 }, "sunset"], // 0 → no suffix
-    [{ type: "sun", event: "sunset", offset_min: -15 }, "sunset-15m"],
+    [{ type: "sun", event: "sunset", offset_min: 0, days: null }, "sunset"],
+    [{ type: "sun", event: "sunset", offset_min: 0, days: null }, "sunset"], // 0 → no suffix
+    [{ type: "sun", event: "sunset", offset_min: -15, days: null }, "sunset-15m"],
     [{ type: "sun", event: "sunrise", offset_min: 30, days: [5, 6] }, "sunrise+30m [5,6]"],
-    [{ type: "time", at: "07:30", days: [] }, "at 07:30 []"], // empty days ≠ undefined
+    [{ type: "time", at: "07:30", days: [] }, "at 07:30 []"], // empty days ≠ null
     [{ type: "time", at: "01:00", days: null }, "at 01:00"], // server sends days:null (NOT undefined) — must not throw
-    [{ type: "sun", event: "sunrise", days: null }, "sunrise"], // same null shape for sun
+    [{ type: "sun", event: "sunrise", offset_min: 0, days: null }, "sunrise"], // same null shape for sun
     [{ type: "presence", mac: "aa:bb", event: "leave" }, "aa:bb leave"],
     [{ type: "cron", expr: "*/5 * * * *" }, "cron */5 * * * *"],
   ];
@@ -64,7 +68,16 @@ describe("renderAutomations", () => {
     const tbody = document.createElement("tbody");
     renderAutomations(
       tbody,
-      [rule({ id: "eco", conditions: [1, 2], actions: [{ op: "ir" }, { op: "switch" }] })],
+      [
+        rule({
+          id: "eco",
+          conditions: [
+            { field: "switch", op: "eq", value: true },
+            { field: "door", op: "eq", value: "open" },
+          ],
+          actions: [{ op: "ir" }, { op: "switch" }],
+        }),
+      ],
       deps(),
     );
     const tds = tbody.querySelectorAll("td");

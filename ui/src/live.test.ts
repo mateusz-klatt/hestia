@@ -564,7 +564,7 @@ describe("LiveController heatmap (flash / scene / last-seen)", () => {
     const gate = deferred<Discovery | null>();
     const live = new LiveController(view, () => gate.promise);
     const refreshing = live.refresh(); // in flight
-    live.flashScene(7, { id: 9 }); // refreshing → queued (and the row isn't built yet)
+    live.flashScene(7, { id: 9, kind: "scene" }); // refreshing → queued (and the row isn't built yet)
     expect(view.rows.querySelector('tr[data-node="7"] .scene-badge')).toBeNull();
     gate.resolve(discovery({ "7": device({ type: "plug" }) }));
     await refreshing;
@@ -593,7 +593,7 @@ describe("LiveController heatmap (flash / scene / last-seen)", () => {
     const view = harness();
     const live = new LiveController(view, () => Promise.resolve(onePlug()));
     await live.refresh();
-    live.flashScene(7, { id: 5 });
+    live.flashScene(7, { id: 5, kind: "scene" });
     const badge = view.rows.querySelector('tr[data-node="7"] .scene-badge');
     expect(badge?.textContent).toBe("⏏ scena 5");
     live.applyState(7, { switch: true }); // patches .stanval only
