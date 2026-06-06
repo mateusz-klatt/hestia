@@ -129,6 +129,96 @@ class ControlError(BaseModel):
     error: str
 
 
+# ---- read shapes (responses the web UI + Vesta consume) --------------------
+# extra="forbid" here is DELIBERATE drift detection: if a backend dict grows a field the DTO doesn't
+# list, the contract test (which validates real handler output) fails — forcing the model to keep up.
+# Non-strict (no `strict=True`): these DESCRIBE output, so an int landing in a float field is fine.
+_READ = ConfigDict(extra="forbid")
+
+# A multi-gang switch's per-endpoint on/off, keyed by endpoint id (string on the wire). null when N/A.
+DeviceEndpoints = dict[str, bool]
+
+# An OPTIONAL registry label: ABSENT until the operator sets it, then a value — NEVER an explicit null
+# (so the generated type is `name?: T`, not `name?: T | null`). The default=None is the "omitted"
+# sentinel; strip it from the schema so a client never materializes the field as null.
+_OMIT = lambda s: s.pop("default", None)  # noqa: E731 — tiny schema post-processor
+
+
+class Globals(BaseModel):
+    """Node-less global fields (``proxy.globals_snapshot``). Every key is ALWAYS present (required),
+    null when its poller is off."""
+
+    model_config = _READ
+    crib_temp: Union[float, None]
+    outdoor_temp: Union[float, None]
+    outdoor_humidity: Union[float, None]
+
+
+class Summary(BaseModel):
+    """Discovery roster counters (``web._summary``)."""
+
+    model_config = _READ
+    total: int
+    confirmed: int
+    unknown: int
+
+
+class DeviceInfo(BaseModel):
+    """One device, merged from the classifier + the user registry (``proxy._discovery_entry``). The base
+    + live-state fields are ALWAYS present (required), null when unseen — so `0`/`false` are never lost.
+    The registry labels (``name``/``room``/``endpoint_names``) are OPTIONAL — absent until set, never null.
+    ``confidence`` is usually a string but a legacy/hand-edited registry node (a ``type`` without a
+    ``confidence``) can surface null, so the contract admits it."""
+
+    model_config = _READ
+    power: Union[str, None]
+    type: str
+    confidence: Union[str, None]
+    battery: Union[int, None]
+    level: Union[int, None]
+    switch: Union[bool, None]
+    door: Union[str, None]
+    motion: Union[bool, None]
+    setpoint: Union[float, None]
+    thermostat_on: Union[bool, None]
+    thermostat_last_cmd: Union[float, None]
+    temperature: Union[float, None]
+    power_w: Union[float, None]
+    energy_kwh: Union[float, None]
+    voltage_v: Union[float, None]
+    endpoints: Union[DeviceEndpoints, None]
+    last_seen: Union[str, None]
+    name: Annotated[str, Field(default=None, json_schema_extra=_OMIT)] = None
+    room: Annotated[str, Field(default=None, json_schema_extra=_OMIT)] = None
+    endpoint_names: Annotated[dict[str, str], Field(default=None, json_schema_extra=_OMIT)] = None
+
+
+class RuleVocab(BaseModel):
+    """The automation-rule grammar the guided form builds from (``automations.rule_vocab``)."""
+
+    model_config = _READ
+    trigger_types: list[str]
+    state_fields: dict[str, bool]
+    cmp_ops: list[str]
+    frame_action_ops: list[str]
+    modes: list[str]
+    sun_events: list[str]
+    presence_events: list[str]
+    condition_types: list[str]
+
+
+class KlimaState(BaseModel):
+    """The A/C state derived from IR traffic (``state``): power + optional mode/target."""
+
+    model_config = _READ
+    power: bool
+    mode: Union[str, None]
+    temp: Union[int, None]
+
+
+_READ_MODELS = (Globals, Summary, DeviceInfo, RuleVocab, KlimaState)
+
+
 def _ref(name: str) -> dict:
     return {"$ref": f"#/components/schemas/{name}"}
 
@@ -136,7 +226,8 @@ def _ref(name: str) -> dict:
 def _component_schemas() -> dict:
     """The OpenAPI ``components.schemas`` map for every model, with cross-refs under that path."""
     _, combined = models_json_schema(
-        [(model, "validation") for model in (*_CONTROL_MODELS, ControlSuccess, ControlError)],
+        [(model, "validation")
+         for model in (*_CONTROL_MODELS, ControlSuccess, ControlError, *_READ_MODELS)],
         ref_template="#/components/schemas/{model}",
     )
     schemas = combined.get("$defs", {})

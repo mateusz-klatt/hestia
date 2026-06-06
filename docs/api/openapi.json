@@ -241,6 +241,415 @@
         ],
         "title": "ControlThermostatPower",
         "type": "object"
+      },
+      "DeviceInfo": {
+        "additionalProperties": false,
+        "description": "One device, merged from the classifier + the user registry (``proxy._discovery_entry``). The base\n+ live-state fields are ALWAYS present (required), null when unseen \u2014 so `0`/`false` are never lost.\nThe registry labels (``name``/``room``/``endpoint_names``) are OPTIONAL \u2014 absent until set, never null.\n``confidence`` is usually a string but a legacy/hand-edited registry node (a ``type`` without a\n``confidence``) can surface null, so the contract admits it.",
+        "properties": {
+          "battery": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Battery"
+          },
+          "confidence": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confidence"
+          },
+          "door": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Door"
+          },
+          "endpoint_names": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Endpoint Names",
+            "type": "object"
+          },
+          "endpoints": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "boolean"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Endpoints"
+          },
+          "energy_kwh": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Energy Kwh"
+          },
+          "last_seen": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Seen"
+          },
+          "level": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Level"
+          },
+          "motion": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Motion"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "power": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Power"
+          },
+          "power_w": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Power W"
+          },
+          "room": {
+            "title": "Room",
+            "type": "string"
+          },
+          "setpoint": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Setpoint"
+          },
+          "switch": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Switch"
+          },
+          "temperature": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Temperature"
+          },
+          "thermostat_last_cmd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Thermostat Last Cmd"
+          },
+          "thermostat_on": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Thermostat On"
+          },
+          "type": {
+            "title": "Type",
+            "type": "string"
+          },
+          "voltage_v": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Voltage V"
+          }
+        },
+        "required": [
+          "power",
+          "type",
+          "confidence",
+          "battery",
+          "level",
+          "switch",
+          "door",
+          "motion",
+          "setpoint",
+          "thermostat_on",
+          "thermostat_last_cmd",
+          "temperature",
+          "power_w",
+          "energy_kwh",
+          "voltage_v",
+          "endpoints",
+          "last_seen"
+        ],
+        "title": "DeviceInfo",
+        "type": "object"
+      },
+      "Globals": {
+        "additionalProperties": false,
+        "description": "Node-less global fields (``proxy.globals_snapshot``). Every key is ALWAYS present (required),\nnull when its poller is off.",
+        "properties": {
+          "crib_temp": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Crib Temp"
+          },
+          "outdoor_humidity": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Outdoor Humidity"
+          },
+          "outdoor_temp": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Outdoor Temp"
+          }
+        },
+        "required": [
+          "crib_temp",
+          "outdoor_temp",
+          "outdoor_humidity"
+        ],
+        "title": "Globals",
+        "type": "object"
+      },
+      "KlimaState": {
+        "additionalProperties": false,
+        "description": "The A/C state derived from IR traffic (``state``): power + optional mode/target.",
+        "properties": {
+          "mode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mode"
+          },
+          "power": {
+            "title": "Power",
+            "type": "boolean"
+          },
+          "temp": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Temp"
+          }
+        },
+        "required": [
+          "power",
+          "mode",
+          "temp"
+        ],
+        "title": "KlimaState",
+        "type": "object"
+      },
+      "RuleVocab": {
+        "additionalProperties": false,
+        "description": "The automation-rule grammar the guided form builds from (``automations.rule_vocab``).",
+        "properties": {
+          "cmp_ops": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Cmp Ops",
+            "type": "array"
+          },
+          "condition_types": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Condition Types",
+            "type": "array"
+          },
+          "frame_action_ops": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Frame Action Ops",
+            "type": "array"
+          },
+          "modes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Modes",
+            "type": "array"
+          },
+          "presence_events": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Presence Events",
+            "type": "array"
+          },
+          "state_fields": {
+            "additionalProperties": {
+              "type": "boolean"
+            },
+            "title": "State Fields",
+            "type": "object"
+          },
+          "sun_events": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Sun Events",
+            "type": "array"
+          },
+          "trigger_types": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Trigger Types",
+            "type": "array"
+          }
+        },
+        "required": [
+          "trigger_types",
+          "state_fields",
+          "cmp_ops",
+          "frame_action_ops",
+          "modes",
+          "sun_events",
+          "presence_events",
+          "condition_types"
+        ],
+        "title": "RuleVocab",
+        "type": "object"
+      },
+      "Summary": {
+        "additionalProperties": false,
+        "description": "Discovery roster counters (``web._summary``).",
+        "properties": {
+          "confirmed": {
+            "title": "Confirmed",
+            "type": "integer"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          },
+          "unknown": {
+            "title": "Unknown",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "total",
+          "confirmed",
+          "unknown"
+        ],
+        "title": "Summary",
+        "type": "object"
       }
     }
   },
