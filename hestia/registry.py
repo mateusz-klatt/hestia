@@ -138,22 +138,27 @@ class Registry:
                     changed = True
         return changed
 
-    def set_user(self, node, *, name=None, room=None, dtype=None, ep=None) -> None:
+    def set_user(self, node, *, name=None, room=None, dtype=None, ep=None,
+                 exclude_from_all=None) -> None:
         """Apply a user edit. Confirming a *type* freezes it against auto-discovery;
         a name or room does not (a named-but-unclassified node can still be typed).
         When ``ep`` is given, a ``name`` labels that endpoint of a multi-gang switch
         (stored under ``endpoint_names[str(ep)]``) instead of the node itself.
+        ``exclude_from_all`` is a node-level boolean (independent of ``ep``) that drops
+        the device from the house-wide "all lights / all blinds" scene sweeps; ``False``
+        re-includes it. ``None`` leaves it unchanged.
 
-        A call with nothing to write (an ``ep`` with no ``name``, or all fields
-        ``None``) is a no-op — it neither creates a stub entry nor dirties the file."""
+        A call with nothing to write (an ``ep`` with no ``name`` and no flag, or all
+        fields ``None``) is a no-op — it neither creates a stub entry nor dirties the file."""
         if ep is not None:
-            if name is None:
-                return                                # endpoint label with no name → nothing to do
-        elif name is None and room is None and dtype is None:
+            if name is None and exclude_from_all is None:
+                return                                # endpoint label with no name (no flag) → nothing to do
+        elif name is None and room is None and dtype is None and exclude_from_all is None:
             return                                    # pure no-op → don't create a ghost / dirty
         entry = self.nodes.setdefault(_key(node), {"first_seen": _now()})
         if ep is not None:
-            entry.setdefault("endpoint_names", {})[str(ep)] = name
+            if name is not None:
+                entry.setdefault("endpoint_names", {})[str(ep)] = name
         elif name is not None:
             entry["name"] = name
         if room is not None:
@@ -162,6 +167,8 @@ class Registry:
             entry["type"] = dtype
             entry["confidence"] = "confirmed"
             entry["type_confirmed"] = True
+        if exclude_from_all is not None:
+            entry["exclude_from_all"] = exclude_from_all   # node-level scene-sweep opt-out (bool)
         self.dirty = True
 
     def record_scene(self, node, scene_id, batch_hex) -> bool:

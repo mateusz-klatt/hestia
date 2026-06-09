@@ -27,7 +27,8 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 from pydantic.json_schema import models_json_schema
 
 # The contract's own version, independent of the app release — bumped when the wire shape changes.
-CONTRACT_VERSION = "0.1.0"
+# 0.2.0: + DeviceInfo/NameRequest `exclude_from_all` (per-device opt-out of the house-wide scene sweeps).
+CONTRACT_VERSION = "0.2.0"
 OPENAPI_PATH = Path(__file__).resolve().parent.parent / "docs" / "api" / "openapi.json"
 
 # De-duplicated string literals (SonarPython S1192): the OpenAPI content-type, the paths reused
@@ -167,8 +168,10 @@ class SceneResult(BaseModel):
 
 class NameRequest(BaseModel):
     """POST /api/name — set a device's registry labels. ``node`` is required; at least one of
-    name/room/type must be present (server-enforced cross-field, not expressible here). name/room
-    accept null (clear); type is a DeviceType; ep is a multi-gang channel label. Unknown keys → 400."""
+    name/room/type/exclude_from_all must be present (server-enforced cross-field, not expressible here).
+    name/room accept null (clear); type is a DeviceType; ep is a multi-gang channel label;
+    ``exclude_from_all`` opts the device out of the house-wide "all lights / all blinds" scene sweeps
+    (true = excluded, false = re-include). Unknown keys → 400."""
 
     model_config = ConfigDict(extra="forbid", strict=True)
     node: int
@@ -180,6 +183,7 @@ class NameRequest(BaseModel):
         Field(default=None, json_schema_extra=_OMIT),
     ] = None
     ep: Annotated[int | None, Field(default=None, ge=0, json_schema_extra=_OMIT)] = None
+    exclude_from_all: Annotated[bool | None, Field(default=None, json_schema_extra=_OMIT)] = None
 
 
 class Settings(BaseModel):
@@ -403,9 +407,10 @@ class Summary(BaseModel):
 class DeviceInfo(BaseModel):
     """One device, merged from the classifier + the user registry (``proxy._discovery_entry``). The base
     + live-state fields are ALWAYS present (required), null when unseen — so `0`/`false` are never lost.
-    The registry labels (``name``/``room``/``endpoint_names``) are OPTIONAL — absent until set, never null.
-    ``confidence`` is usually a string but a legacy/hand-edited registry node (a ``type`` without a
-    ``confidence``) can surface null, so the contract admits it."""
+    The registry labels (``name``/``room``/``endpoint_names``/``exclude_from_all``) are OPTIONAL — absent
+    until set, never null. ``exclude_from_all`` true means the device is opted out of the house-wide
+    "all lights / all blinds" scene sweeps. ``confidence`` is usually a string but a legacy/hand-edited
+    registry node (a ``type`` without a ``confidence``) can surface null, so the contract admits it."""
 
     model_config = _READ
     power: str | None
@@ -428,6 +433,7 @@ class DeviceInfo(BaseModel):
     name: Annotated[str, Field(default=None, json_schema_extra=_OMIT)] = None
     room: Annotated[str, Field(default=None, json_schema_extra=_OMIT)] = None
     endpoint_names: Annotated[dict[str, str], Field(default=None, json_schema_extra=_OMIT)] = None
+    exclude_from_all: Annotated[bool, Field(default=None, json_schema_extra=_OMIT)] = None
 
 
 class RuleVocab(BaseModel):

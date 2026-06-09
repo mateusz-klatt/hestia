@@ -514,7 +514,7 @@
       },
       "DeviceInfo": {
         "additionalProperties": false,
-        "description": "One device, merged from the classifier + the user registry (``proxy._discovery_entry``). The base\n+ live-state fields are ALWAYS present (required), null when unseen \u2014 so `0`/`false` are never lost.\nThe registry labels (``name``/``room``/``endpoint_names``) are OPTIONAL \u2014 absent until set, never null.\n``confidence`` is usually a string but a legacy/hand-edited registry node (a ``type`` without a\n``confidence``) can surface null, so the contract admits it.",
+        "description": "One device, merged from the classifier + the user registry (``proxy._discovery_entry``). The base\n+ live-state fields are ALWAYS present (required), null when unseen \u2014 so `0`/`false` are never lost.\nThe registry labels (``name``/``room``/``endpoint_names``/``exclude_from_all``) are OPTIONAL \u2014 absent\nuntil set, never null. ``exclude_from_all`` true means the device is opted out of the house-wide\n\"all lights / all blinds\" scene sweeps. ``confidence`` is usually a string but a legacy/hand-edited\nregistry node (a ``type`` without a ``confidence``) can surface null, so the contract admits it.",
         "properties": {
           "battery": {
             "anyOf": [
@@ -580,6 +580,10 @@
               }
             ],
             "title": "Energy Kwh"
+          },
+          "exclude_from_all": {
+            "title": "Exclude From All",
+            "type": "boolean"
           },
           "last_seen": {
             "anyOf": [
@@ -1290,7 +1294,7 @@
       },
       "NameRequest": {
         "additionalProperties": false,
-        "description": "POST /api/name \u2014 set a device's registry labels. ``node`` is required; at least one of\nname/room/type must be present (server-enforced cross-field, not expressible here). name/room\naccept null (clear); type is a DeviceType; ep is a multi-gang channel label. Unknown keys \u2192 400.",
+        "description": "POST /api/name \u2014 set a device's registry labels. ``node`` is required; at least one of\nname/room/type/exclude_from_all must be present (server-enforced cross-field, not expressible here).\nname/room accept null (clear); type is a DeviceType; ep is a multi-gang channel label;\n``exclude_from_all`` opts the device out of the house-wide \"all lights / all blinds\" scene sweeps\n(true = excluded, false = re-include). Unknown keys \u2192 400.",
         "properties": {
           "ep": {
             "anyOf": [
@@ -1303,6 +1307,17 @@
               }
             ],
             "title": "Ep"
+          },
+          "exclude_from_all": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exclude From All"
           },
           "name": {
             "anyOf": [
@@ -2441,7 +2456,7 @@
   "info": {
     "description": "Local cloud-free smart-home control API. Generated from hestia/api_contract.py \u2014 do not edit by hand; run `python -m hestia.api_contract`.",
     "title": "hestia API",
-    "version": "0.1.0"
+    "version": "0.2.0"
   },
   "openapi": "3.1.0",
   "paths": {

@@ -42,6 +42,7 @@ import { renderSceneControls } from "./scenes";
 import { reconcileServerSettings } from "./settings";
 import { renderUsersPanel } from "./users";
 import { renderViewSwitch, type ViewName } from "./view";
+import { openWholeHomeConfig } from "./wholehome";
 
 function el(id: string): HTMLElement {
   const node = document.getElementById(id);
@@ -352,8 +353,20 @@ void (async () => {
     onLogout: () => {
       location.reload();
     },
-    // Editing shared room icons is admin-only (POST /api/rooms/icons) — the entry only shows for admins.
-    ...(isAdmin ? { onEditIcons: (): void => { triggerIconEdit(); } } : {}),
+    // Editing shared room icons + whole-home "all" membership is admin-only (both write the shared
+    // registry: POST /api/rooms/icons and POST /api/name) — the entries only show for admins.
+    ...(isAdmin
+      ? {
+          onEditIcons: (): void => { triggerIconEdit(); },
+          onConfigureWholeHome: (): void => {
+            openWholeHomeConfig({
+              devices: latestDevices,
+              setExcluded: async (node, excluded): Promise<boolean> =>
+                (await postName({ node, exclude_from_all: excluded })).ok,
+            });
+          },
+        }
+      : {}),
   };
   const authedUserOpts = {
     ...userOpts,
