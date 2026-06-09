@@ -3512,6 +3512,16 @@
               }
             },
             "description": "malformed"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ControlError"
+                }
+              }
+            },
+            "description": "registry save failed"
           }
         },
         "summary": "Opt one device in/out of the house-wide \"all\" sweeps",

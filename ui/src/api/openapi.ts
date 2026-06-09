@@ -2332,6 +2332,15 @@ export interface operations {
                     "application/json": components["schemas"]["ControlError"];
                 };
             };
+            /** @description registry save failed */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ControlError"];
+                };
+            };
         };
     };
 }

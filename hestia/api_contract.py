@@ -27,7 +27,9 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 from pydantic.json_schema import models_json_schema
 
 # The contract's own version, independent of the app release — bumped when the wire shape changes.
-# 0.2.0: + DeviceInfo/NameRequest `exclude_from_all` (per-device opt-out of the house-wide scene sweeps).
+# 0.2.0: + GET/POST /api/whole-home — a dedicated admin surface for the per-device opt-out of the
+#        house-wide scene sweeps, kept OFF DeviceInfo so the device snapshot stays wire-stable for
+#        pinned native clients (additive: new paths/schemas only; DeviceInfo/NameRequest unchanged).
 CONTRACT_VERSION = "0.2.0"
 OPENAPI_PATH = Path(__file__).resolve().parent.parent / "docs" / "api" / "openapi.json"
 
@@ -994,6 +996,7 @@ def build_openapi() -> dict:
                         "200": {"description": "saved",
                                 "content": {_APP_JSON: {"schema": _ref("OkResult")}}},
                         "400": {"description": "malformed", **err},
+                        "500": {"description": "registry save failed", **err},
                     },
                 },
             },
