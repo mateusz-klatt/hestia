@@ -32,7 +32,10 @@ from pydantic.json_schema import models_json_schema
 #        pinned native clients (additive: new paths/schemas only; DeviceInfo/NameRequest unchanged).
 # 0.3.0: /api/whole-home grows per-GANG opt-outs — WholeHomeConfig.excluded_endpoints +
 #        WholeHomeRequest.ep (still confined to the whole-home surface; DeviceInfo untouched).
-CONTRACT_VERSION = "0.3.0"
+# 0.4.0: response schemas become TOLERANT READERS (additionalProperties:false stripped from every
+#        non-request-only schema in the emitted doc) — so a client built from this contract never
+#        breaks on a future additive response field. Wire DATA unchanged; requests stay strict.
+CONTRACT_VERSION = "0.4.0"
 OPENAPI_PATH = Path(__file__).resolve().parent.parent / "docs" / "api" / "openapi.json"
 
 # De-duplicated string literals (SonarPython S1192): the OpenAPI content-type, the paths reused
@@ -50,8 +53,11 @@ _NO_SUCH_USER = "no such user"
 # payload the DTO accepts is one ``_validate_control_payload`` accepts (the binding test pins this).
 _STRICT = ConfigDict(extra="forbid", strict=True)
 
-# Read/response config: forbid unknown fields (a new backend key fails the contract test = drift
-# detection), but non-strict (these DESCRIBE output, so an int in a float field is fine).
+# Read/response config: forbid unknown fields IN PYTHON (a new backend key fails the binding tests =
+# drift detection), but non-strict (these DESCRIBE output, so an int in a float field is fine).
+# NOTE: the strictness is deliberately NOT emitted into the artifact — ``_make_responses_tolerant``
+# strips ``additionalProperties: false`` from every response schema so generated clients are tolerant
+# readers (the #122 Vesta lesson: a strict decoder turns an additive response field into a crash).
 _READ = ConfigDict(extra="forbid")
 
 # A device node id (every control op carries one). Matches ``web._control_node_error``.
@@ -1258,7 +1264,72 @@ def build_openapi() -> dict:
     for path, ops in doc["paths"].items():
         for method, op in ops.items():
             op["x-required-role"] = _PATH_ROLES[(method.upper(), path)]
+    _make_responses_tolerant(doc)
     return doc
+
+
+def _schema_refs(node) -> "set[str]":
+    """Every ``#/components/schemas/<name>`` referenced anywhere under ``node``."""
+    found = set()
+    if isinstance(node, dict):
+        ref = node.get("$ref")
+        if isinstance(ref, str) and ref.startswith("#/components/schemas/"):
+            found.add(ref.rsplit("/", 1)[1])
+        for value in node.values():
+            found |= _schema_refs(value)
+    elif isinstance(node, list):
+        for value in node:
+            found |= _schema_refs(value)
+    return found
+
+
+def _ref_closure(schemas: dict, roots: "set[str]") -> "set[str]":
+    """``roots`` plus every component schema transitively referenced from them."""
+    seen, queue = set(), list(roots)
+    while queue:
+        name = queue.pop()
+        if name in seen or name not in schemas:
+            continue
+        seen.add(name)
+        queue.extend(_schema_refs(schemas[name]))
+    return seen
+
+
+def _drop_strictness(node) -> None:
+    """Recursively remove ``additionalProperties: false`` (typed maps like string→string are kept)."""
+    if isinstance(node, dict):
+        if node.get("additionalProperties") is False:
+            del node["additionalProperties"]
+        for value in node.values():
+            _drop_strictness(value)
+    elif isinstance(node, list):
+        for value in node:
+            _drop_strictness(value)
+
+
+def _make_responses_tolerant(doc: dict) -> None:
+    """Make every RESPONSE schema a tolerant reader: strip ``additionalProperties: false`` from each
+    component schema except the request-ONLY ones (request DTOs keep it — it documents the server's
+    unknown-field 400). Why: a pinned native client (Vesta) code-generates STRICT decoders from
+    ``additionalProperties: false``, so adding a field to a response would crash it — exactly the
+    #122 incident. Tolerant response schemas make additive changes safe for every future client
+    build. Schemas shared by requests and responses (the Rule components) go tolerant too — the
+    reader side must win; the server still rejects unknown request fields at runtime. The Python
+    models stay ``extra="forbid"`` so the binding/drift tests keep catching undescribed backend
+    fields — strictness moves out of the ARTIFACT, not out of the gate."""
+    schemas = doc["components"]["schemas"]
+    request_roots, response_roots = set(), set()
+    for ops in doc["paths"].values():
+        for op in ops.values():
+            request_roots |= _schema_refs(op.get("requestBody", {}))
+            response_roots |= _schema_refs(op.get("responses", {}))
+    request_only = _ref_closure(schemas, request_roots) - _ref_closure(schemas, response_roots)
+    for name, schema in schemas.items():
+        if name not in request_only:
+            _drop_strictness(schema)
+    for ops in doc["paths"].values():                  # inline (non-$ref) response schemas, if any
+        for op in ops.values():
+            _drop_strictness(op.get("responses", {}))
 
 
 def write_openapi(path: Path = OPENAPI_PATH) -> None:
