@@ -38,6 +38,7 @@ const messages: Partial<Messages> = {
   "wholeHome.lights": "Lichter",
   "wholeHome.blinds": "Jalousien",
   "wholeHome.include": "In „alle“ einbeziehen",
+  "wholeHome.gang": "Taste {n}",
   "wholeHome.empty": "Keine Lichter oder Jalousien zum Konfigurieren",
   "wholeHome.saved": "✓ Gespeichert",
   "wholeHome.saveError": "✗ Konnte nicht gespeichert werden — erneut versuchen",

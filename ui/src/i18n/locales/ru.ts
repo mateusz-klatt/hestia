@@ -38,6 +38,7 @@ const messages: Partial<Messages> = {
   "wholeHome.lights": "Светильники",
   "wholeHome.blinds": "Жалюзи",
   "wholeHome.include": "Включить в «всё»",
+  "wholeHome.gang": "Клавиша {n}",
   "wholeHome.empty": "Нет светильников или жалюзи для настройки",
   "wholeHome.saved": "✓ Сохранено",
   "wholeHome.saveError": "✗ Не удалось сохранить — попробуйте снова",

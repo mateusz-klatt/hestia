@@ -38,6 +38,7 @@ const messages: Partial<Messages> = {
   "wholeHome.lights": "Luci",
   "wholeHome.blinds": "Tapparelle",
   "wholeHome.include": "Includi in «tutto»",
+  "wholeHome.gang": "Tasto {n}",
   "wholeHome.empty": "Nessuna luce o tapparella da configurare",
   "wholeHome.saved": "✓ Salvato",
   "wholeHome.saveError": "✗ Impossibile salvare — riprova",

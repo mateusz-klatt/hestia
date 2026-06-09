@@ -1489,17 +1489,39 @@ async def _control_name(rt, op):
     return {"ok": True}
 
 
+def _known_endpoints(rt, node: int, entry: dict) -> set:
+    """Every gang we know this node has: the live gang map ∪ the labelled ∪ the already-flagged
+    endpoints (the same universe the scene sweep uses — a gang recorded only by a past opt-out
+    flag must not slip out of a demote)."""
+    eps = {int(k) for k in rt.state.gang.get(node) or {}}
+    eps |= {int(k) for k in entry.get("endpoint_names") or {}}
+    eps |= {int(k) for k in entry.get("endpoint_exclude") or {}}
+    return eps
+
+
 async def _control_whole_home(rt, op):
     """Set a device's whole-home "all" opt-out (registry-only; NOT surfaced in discovery so the
-    DeviceInfo wire shape stays stable for native clients). The web validator pins the shape; this
-    re-checks defensively and persists like the name op."""
+    DeviceInfo wire shape stays stable for native clients). With ``ep`` the opt-out targets one
+    GANG of a multi-gang switch. The web validator pins the shape; this re-checks defensively
+    and persists like the name op."""
     node = op.get("node")
     if not isinstance(node, int) or isinstance(node, bool):
         raise ValueError(f"whole_home_set requires an integer 'node', got {node!r}")
     exclude = op.get("exclude")
     if not isinstance(exclude, bool):
         raise ValueError(f"whole_home_set requires a boolean 'exclude', got {exclude!r}")
-    rt.registry.set_user(node, exclude_from_all=exclude)
+    ep = op.get("ep")
+    if ep is not None and (not isinstance(ep, int) or isinstance(ep, bool) or ep < 1):
+        raise ValueError(f"invalid endpoint {ep!r}")
+    entry = rt.registry.nodes.get(str(node), {})
+    if ep is not None and entry.get("exclude_from_all"):
+        # A per-gang write arrives while the whole NODE is opted out (set via the older node-level
+        # panel): demote the node flag to per-gang flags so the user's intent is preserved — every
+        # OTHER known gang stays excluded, and only the addressed gang follows this request.
+        rt.registry.set_user(node, exclude_from_all=False)
+        for other in _known_endpoints(rt, node, entry) - {ep}:
+            rt.registry.set_user(node, ep=other, exclude_from_all=True)
+    rt.registry.set_user(node, ep=ep, exclude_from_all=exclude)
     try:
         await _persist(rt)                       # share the autosave lock (same as the name op)
     except OSError as exc:

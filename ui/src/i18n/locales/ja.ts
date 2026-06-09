@@ -38,6 +38,7 @@ const messages: Partial<Messages> = {
   "wholeHome.lights": "照明",
   "wholeHome.blinds": "ブラインド",
   "wholeHome.include": "「すべて」に含める",
+  "wholeHome.gang": "ボタン {n}",
   "wholeHome.empty": "設定できる照明またはブラインドがありません",
   "wholeHome.saved": "✓ 保存しました",
   "wholeHome.saveError": "✗ 保存できませんでした — もう一度お試しください",

@@ -2438,8 +2438,18 @@
       },
       "WholeHomeConfig": {
         "additionalProperties": false,
-        "description": "GET /api/whole-home \u2014 which devices are opted out of the house-wide \"all lights / all blinds\"\nsweeps. Registry-only config (deliberately NOT in DeviceInfo, so adding the opt-out never changes\nthe device-snapshot wire shape a pinned native client decodes). ``excluded_nodes`` = the node ids\na device is fully opted out by.",
+        "description": "GET /api/whole-home \u2014 what is opted out of the house-wide \"all lights / all blinds\" sweeps.\nRegistry-only config (deliberately NOT in DeviceInfo, so adding the opt-out never changes the\ndevice-snapshot wire shape a pinned native client decodes). ``excluded_nodes`` = whole devices;\n``excluded_endpoints`` = single gangs of a multi-gang switch (node id \u2192 sorted gang numbers).",
         "properties": {
+          "excluded_endpoints": {
+            "additionalProperties": {
+              "items": {
+                "type": "integer"
+              },
+              "type": "array"
+            },
+            "title": "Excluded Endpoints",
+            "type": "object"
+          },
           "excluded_nodes": {
             "items": {
               "type": "integer"
@@ -2449,15 +2459,29 @@
           }
         },
         "required": [
-          "excluded_nodes"
+          "excluded_nodes",
+          "excluded_endpoints"
         ],
         "title": "WholeHomeConfig",
         "type": "object"
       },
       "WholeHomeRequest": {
         "additionalProperties": false,
-        "description": "POST /api/whole-home \u2014 opt one device in (``exclude``=false) / out (true) of the house-wide\n\"all\" sweeps.",
+        "description": "POST /api/whole-home \u2014 opt one device in (``exclude``=false) / out (true) of the house-wide\n\"all\" sweeps. With ``ep`` (gang 1 or 2, like the control op's ``endpoint``) the opt-out targets\nthat single gang of a multi-gang switch instead of the whole node.",
         "properties": {
+          "ep": {
+            "anyOf": [
+              {
+                "maximum": 2,
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ep"
+          },
           "exclude": {
             "title": "Exclude",
             "type": "boolean"
@@ -2482,7 +2506,7 @@
   "info": {
     "description": "Local cloud-free smart-home control API. Generated from hestia/api_contract.py \u2014 do not edit by hand; run `python -m hestia.api_contract`.",
     "title": "hestia API",
-    "version": "0.2.0"
+    "version": "0.3.0"
   },
   "openapi": "3.1.0",
   "paths": {

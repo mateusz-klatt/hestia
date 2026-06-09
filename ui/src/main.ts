@@ -364,8 +364,13 @@ void (async () => {
             // Membership lives on its own endpoint (NOT on DeviceInfo — keeps the device snapshot
             // wire-stable for native clients), so fetch the current opt-outs before opening the panel.
             void (async () => {
-              const excluded = new Set((await fetchWholeHome()) ?? []);
-              openWholeHomeConfig({ devices: latestDevices, excluded, setExcluded: setWholeHomeExclude });
+              const state = await fetchWholeHome();
+              openWholeHomeConfig({
+                devices: latestDevices,
+                excluded: state?.excludedNodes ?? new Set(),
+                excludedEndpoints: state?.excludedEndpoints ?? new Map(),
+                setExcluded: setWholeHomeExclude,
+              });
             })();
           },
         }

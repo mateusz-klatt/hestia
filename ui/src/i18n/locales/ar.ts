@@ -38,6 +38,7 @@ const messages: Partial<Messages> = {
   "wholeHome.lights": "الأضواء",
   "wholeHome.blinds": "الستائر",
   "wholeHome.include": "تضمين في «الكل»",
+  "wholeHome.gang": "زر {n}",
   "wholeHome.empty": "لا توجد أضواء أو ستائر للتهيئة",
   "wholeHome.saved": "✓ تم الحفظ",
   "wholeHome.saveError": "✗ تعذّر الحفظ — حاول مرة أخرى",

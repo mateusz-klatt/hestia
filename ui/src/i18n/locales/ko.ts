@@ -38,6 +38,7 @@ const messages: Partial<Messages> = {
   "wholeHome.lights": "조명",
   "wholeHome.blinds": "블라인드",
   "wholeHome.include": "“전체”에 포함",
+  "wholeHome.gang": "버튼 {n}",
   "wholeHome.empty": "설정할 조명이나 블라인드가 없습니다",
   "wholeHome.saved": "✓ 저장됨",
   "wholeHome.saveError": "✗ 저장할 수 없습니다 — 다시 시도하세요",

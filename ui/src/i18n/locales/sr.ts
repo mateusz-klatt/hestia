@@ -38,6 +38,7 @@ const messages: Partial<Messages> = {
   "wholeHome.lights": "Светла",
   "wholeHome.blinds": "Ролетне",
   "wholeHome.include": "Укључи у „све”",
+  "wholeHome.gang": "Тастер {n}",
   "wholeHome.empty": "Нема светала ни ролетни за подешавање",
   "wholeHome.saved": "✓ Сачувано",
   "wholeHome.saveError": "✗ Није могуће сачувати — покушајте поново",

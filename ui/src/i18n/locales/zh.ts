@@ -38,6 +38,7 @@ const messages: Partial<Messages> = {
   "wholeHome.lights": "灯光",
   "wholeHome.blinds": "百叶窗",
   "wholeHome.include": "纳入“全部”",
+  "wholeHome.gang": "按键 {n}",
   "wholeHome.empty": "没有可配置的灯光或百叶窗",
   "wholeHome.saved": "✓ 已保存",
   "wholeHome.saveError": "✗ 无法保存 — 请重试",

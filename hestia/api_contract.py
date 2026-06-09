@@ -30,7 +30,9 @@ from pydantic.json_schema import models_json_schema
 # 0.2.0: + GET/POST /api/whole-home — a dedicated admin surface for the per-device opt-out of the
 #        house-wide scene sweeps, kept OFF DeviceInfo so the device snapshot stays wire-stable for
 #        pinned native clients (additive: new paths/schemas only; DeviceInfo/NameRequest unchanged).
-CONTRACT_VERSION = "0.2.0"
+# 0.3.0: /api/whole-home grows per-GANG opt-outs — WholeHomeConfig.excluded_endpoints +
+#        WholeHomeRequest.ep (still confined to the whole-home surface; DeviceInfo untouched).
+CONTRACT_VERSION = "0.3.0"
 OPENAPI_PATH = Path(__file__).resolve().parent.parent / "docs" / "api" / "openapi.json"
 
 # De-duplicated string literals (SonarPython S1192): the OpenAPI content-type, the paths reused
@@ -217,22 +219,25 @@ class RoomIconRequest(BaseModel):
 
 
 class WholeHomeConfig(BaseModel):
-    """GET /api/whole-home — which devices are opted out of the house-wide "all lights / all blinds"
-    sweeps. Registry-only config (deliberately NOT in DeviceInfo, so adding the opt-out never changes
-    the device-snapshot wire shape a pinned native client decodes). ``excluded_nodes`` = the node ids
-    a device is fully opted out by."""
+    """GET /api/whole-home — what is opted out of the house-wide "all lights / all blinds" sweeps.
+    Registry-only config (deliberately NOT in DeviceInfo, so adding the opt-out never changes the
+    device-snapshot wire shape a pinned native client decodes). ``excluded_nodes`` = whole devices;
+    ``excluded_endpoints`` = single gangs of a multi-gang switch (node id → sorted gang numbers)."""
 
     model_config = _READ
     excluded_nodes: list[int]
+    excluded_endpoints: dict[str, list[int]]
 
 
 class WholeHomeRequest(BaseModel):
     """POST /api/whole-home — opt one device in (``exclude``=false) / out (true) of the house-wide
-    "all" sweeps."""
+    "all" sweeps. With ``ep`` (gang 1 or 2, like the control op's ``endpoint``) the opt-out targets
+    that single gang of a multi-gang switch instead of the whole node."""
 
     model_config = ConfigDict(extra="forbid", strict=True)
     node: NodeId
     exclude: bool
+    ep: Annotated[int | None, Field(default=None, ge=1, le=2, json_schema_extra=_OMIT)] = None
 
 
 _COMMAND_MODELS = (IrRequest, SceneRequest, SceneResult, NameRequest, Settings, SettingsUpdate,

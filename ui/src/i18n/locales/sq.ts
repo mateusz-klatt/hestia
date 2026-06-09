@@ -38,6 +38,7 @@ const messages: Partial<Messages> = {
   "wholeHome.lights": "Dritat",
   "wholeHome.blinds": "Grilat",
   "wholeHome.include": "Përfshi te “të gjitha”",
+  "wholeHome.gang": "Butoni {n}",
   "wholeHome.empty": "Nuk ka drita apo grila për t’u konfiguruar",
   "wholeHome.saved": "✓ U ruajt",
   "wholeHome.saveError": "✗ Nuk u ruajt dot — provoni përsëri",

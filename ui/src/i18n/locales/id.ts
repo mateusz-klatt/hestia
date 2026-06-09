@@ -38,6 +38,7 @@ const messages: Partial<Messages> = {
   "wholeHome.lights": "Lampu",
   "wholeHome.blinds": "Tirai",
   "wholeHome.include": "Sertakan dalam “semua”",
+  "wholeHome.gang": "Tombol {n}",
   "wholeHome.empty": "Tidak ada lampu atau tirai untuk dikonfigurasi",
   "wholeHome.saved": "✓ Tersimpan",
   "wholeHome.saveError": "✗ Tidak dapat menyimpan — coba lagi",

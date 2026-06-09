@@ -38,6 +38,7 @@ const messages: Partial<Messages> = {
   "wholeHome.lights": "लाइटें",
   "wholeHome.blinds": "ब्लाइंड्स",
   "wholeHome.include": "“सब” में शामिल करें",
+  "wholeHome.gang": "बटन {n}",
   "wholeHome.empty": "कॉन्फ़िगर करने के लिए कोई लाइट या ब्लाइंड नहीं",
   "wholeHome.saved": "✓ सहेजा गया",
   "wholeHome.saveError": "✗ सहेजा नहीं जा सका — फिर से कोशिश करें",

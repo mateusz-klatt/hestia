@@ -40,6 +40,7 @@ const pl: Partial<Messages> = {
   "wholeHome.lights": "Światła",
   "wholeHome.blinds": "Żaluzje",
   "wholeHome.include": "Uwzględnij w „wszystkie”",
+  "wholeHome.gang": "Klawisz {n}",
   "wholeHome.empty": "Brak świateł i żaluzji do skonfigurowania",
   "wholeHome.saved": "✓ Zapisano",
   "wholeHome.saveError": "✗ Nie udało się zapisać — spróbuj ponownie",

@@ -38,6 +38,7 @@ const messages: Partial<Messages> = {
   "wholeHome.lights": "Ljós",
   "wholeHome.blinds": "Gardínur",
   "wholeHome.include": "Hafa með í „allt“",
+  "wholeHome.gang": "Hnappur {n}",
   "wholeHome.empty": "Engin ljós eða gardínur til að stilla",
   "wholeHome.saved": "✓ Vistað",
   "wholeHome.saveError": "✗ Gat ekki vistað — reyndu aftur",

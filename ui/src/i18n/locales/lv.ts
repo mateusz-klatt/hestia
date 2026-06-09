@@ -38,6 +38,7 @@ const messages: Partial<Messages> = {
   "wholeHome.lights": "Gaismas",
   "wholeHome.blinds": "Žalūzijas",
   "wholeHome.include": "Iekļaut „visi“",
+  "wholeHome.gang": "Poga {n}",
   "wholeHome.empty": "Nav konfigurējamu gaismu vai žalūziju",
   "wholeHome.saved": "✓ Saglabāts",
   "wholeHome.saveError": "✗ Neizdevās saglabāt — mēģiniet vēlreiz",

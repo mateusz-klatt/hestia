@@ -38,6 +38,7 @@ const messages: Partial<Messages> = {
   "wholeHome.lights": "Lumini",
   "wholeHome.blinds": "Jaluzele",
   "wholeHome.include": "Include în „tot”",
+  "wholeHome.gang": "Buton {n}",
   "wholeHome.empty": "Nu există lumini sau jaluzele de configurat",
   "wholeHome.saved": "✓ Salvat",
   "wholeHome.saveError": "✗ Nu s-a putut salva — încercați din nou",

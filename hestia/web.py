@@ -373,16 +373,23 @@ async def _settings_set(request):
     return _json(HTTPStatus.OK, {"ok": True})
 
 
-_WHOLE_HOME_FIELDS = {"node", "exclude"}   # allowlist for POST /api/whole-home
+_WHOLE_HOME_FIELDS = {"node", "exclude", "ep"}   # allowlist for POST /api/whole-home (ep = one gang)
+
+
+def _excluded_endpoints(entry: dict) -> "list[int]":
+    """The gang numbers this node has opted out (truthy ``endpoint_exclude`` keys), sorted."""
+    return sorted(int(k) for k, v in (entry.get("endpoint_exclude") or {}).items() if v)
 
 
 async def _whole_home(request):
-    """GET /api/whole-home — the node ids opted out of the house-wide "all lights / all blinds" sweeps.
-    Registry-only: deliberately kept OFF the DeviceInfo wire shape (so adding it never breaks a strictly-
-    decoding pinned native client); the admin panel reads it from here instead. Admin."""
+    """GET /api/whole-home — what is opted out of the house-wide "all lights / all blinds" sweeps:
+    whole nodes (``excluded_nodes``) and single gangs of multi-gang switches (``excluded_endpoints``,
+    node → gang numbers). Registry-only: deliberately kept OFF the DeviceInfo wire shape (so adding
+    it never breaks a strictly-decoding pinned native client); the admin panel reads it here. Admin."""
     nodes = _rt(request).registry.nodes
     excluded = sorted(int(n) for n, e in nodes.items() if n.isdigit() and e.get("exclude_from_all"))
-    return _json(HTTPStatus.OK, {"excluded_nodes": excluded})
+    endpoints = {n: eps for n, e in nodes.items() if n.isdigit() and (eps := _excluded_endpoints(e))}
+    return _json(HTTPStatus.OK, {"excluded_nodes": excluded, "excluded_endpoints": endpoints})
 
 
 def _whole_home_error(body) -> "str | None":
@@ -396,12 +403,16 @@ def _whole_home_error(body) -> "str | None":
         return "node must be an integer 0..255"
     if not isinstance(body.get("exclude"), bool):
         return "exclude must be a boolean"
+    ep = body.get("ep")
+    if ep is not None and (not isinstance(ep, int) or isinstance(ep, bool) or ep not in (1, 2)):
+        return "ep must be the integer 1 or 2"      # one gang of a 2-gang switch (same as /api/control)
     return None
 
 
 async def _whole_home_set(request):
-    """POST /api/whole-home — opt one device in (exclude=false) / out (exclude=true) of the house-wide
-    "all" sweeps. Admin. Registry-only, so it never changes the DeviceInfo wire shape."""
+    """POST /api/whole-home — opt one device (or, with ``ep``, one GANG of a multi-gang switch) in
+    (exclude=false) / out (exclude=true) of the house-wide "all" sweeps. Admin. Registry-only, so it
+    never changes the DeviceInfo wire shape."""
     body, err = await _read_json_body(request)
     if err:
         return body
@@ -409,6 +420,8 @@ async def _whole_home_set(request):
     if error is not None:
         return _json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": error})
     op = {"op": "whole_home_set", "node": body["node"], "exclude": body["exclude"]}
+    if body.get("ep") is not None:
+        op["ep"] = body["ep"]
     return await _dispatch_op(_rt(request), op, actor=_actor(request))
 
 
@@ -655,6 +668,23 @@ def _scene_device_op(target_type: str, node_id: int, info: dict, active: bool) -
     return {"op": op, "node": node_id, "value": 99 if active else 0}
 
 
+def _scene_node_ops(target_type: str, node_id: int, info: dict, active: bool, entry: dict) -> "list[dict]":
+    """The scene ops for ONE device. A plain switch light whose registry entry opts single GANGS out
+    (``endpoint_exclude``) is driven per-gang — one endpoint-addressed switch op per NON-excluded gang
+    (the same op the room UI's per-gang buttons post) — so e.g. a 2-gang hall/nightlight node keeps the
+    nightlight untouched. Every other device keeps today's single node-level op (one frame)."""
+    excluded = {int(k) for k, v in (entry.get("endpoint_exclude") or {}).items() if v}
+    if target_type != "light" or info.get("level") is not None or not excluded:
+        return [_scene_device_op(target_type, node_id, info, active)]
+    # Any truthy opt-out takes THIS branch unconditionally — the node-level frame (which would drive
+    # every gang at once) is never used for such a node. Gangs we can't enumerate (live gang state ∪
+    # labels) are therefore deliberately skipped, not swept: fail-safe in the excluded gang's favour.
+    eps = {int(k) for k in info.get("endpoints") or {}}
+    eps |= {int(k) for k in entry.get("endpoint_names") or {}}
+    return [{"op": "switch", "node": node_id, "on": active, "endpoint": ep}
+            for ep in sorted(eps - excluded)]
+
+
 def _scene_ops(rt, scene: str) -> list[dict]:
     """Expand a house-wide scene into ordinary per-device control ops."""
     target_type, active = _SCENE_TARGETS[scene]
@@ -662,9 +692,10 @@ def _scene_ops(rt, scene: str) -> list[dict]:
     # SceneResult.total reflects only the devices the scene targets. The opt-out is read straight from
     # the registry (NOT from discovery) so the DeviceInfo wire shape stays stable for native clients.
     reg = rt.registry.nodes
-    return [_scene_device_op(target_type, int(node), info, active)
+    return [op
             for node, info in _merged_discovery(rt).items()
-            if info.get("type") == target_type and not reg.get(node, {}).get("exclude_from_all")]
+            if info.get("type") == target_type and not reg.get(node, {}).get("exclude_from_all")
+            for op in _scene_node_ops(target_type, int(node), info, active, reg.get(node, {}))]
 
 
 async def _scene(request):

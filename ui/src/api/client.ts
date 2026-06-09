@@ -210,25 +210,40 @@ export async function saveRoomIcon(room: string, icon: string): Promise<boolean>
   }
 }
 
-/** GET `/api/whole-home`; the node ids opted out of the house-wide "all" sweeps, or `null` on failure. */
-export async function fetchWholeHome(): Promise<number[] | null> {
+/** What is opted out of the house-wide "all" sweeps: whole nodes + single gangs (node → gang set). */
+export interface WholeHomeState {
+  excludedNodes: Set<number>;
+  excludedEndpoints: Map<number, Set<number>>;
+}
+
+/** GET `/api/whole-home`; the whole-home opt-out config, or `null` on failure. */
+export async function fetchWholeHome(): Promise<WholeHomeState | null> {
   try {
     const response = await fetch(apiUrl("whole-home"));
     if (!response.ok) return null;
-    const data = (await response.json()) as { excluded_nodes?: number[] };
-    return data.excluded_nodes ?? [];
+    const data = (await response.json()) as {
+      excluded_nodes?: number[];
+      excluded_endpoints?: Record<string, number[]>;
+    };
+    return {
+      excludedNodes: new Set(data.excluded_nodes ?? []),
+      excludedEndpoints: new Map(
+        Object.entries(data.excluded_endpoints ?? {}).map(([node, eps]) => [Number(node), new Set(eps)]),
+      ),
+    };
   } catch {
     return null;
   }
 }
 
-/** POST `/api/whole-home` to opt one device in (`exclude=false`) / out (`true`) of the "all" sweeps. */
-export async function setWholeHomeExclude(node: number, exclude: boolean): Promise<boolean> {
+/** POST `/api/whole-home` to opt one device — or, with `ep`, one GANG of a multi-gang switch — in
+ *  (`exclude=false`) / out (`true`) of the "all" sweeps. */
+export async function setWholeHomeExclude(node: number, exclude: boolean, ep?: number): Promise<boolean> {
   try {
     const response = await fetch(apiUrl("whole-home"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ node, exclude }),
+      body: JSON.stringify(ep === undefined ? { node, exclude } : { node, exclude, ep }),
     });
     return response.ok;
   } catch {

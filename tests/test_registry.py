@@ -138,11 +138,14 @@ class RegistryTests(unittest.TestCase):
         reg.set_user(5, exclude_from_all=False)              # False re-includes (an explicit write, not None)
         self.assertIs(reg.nodes["5"]["exclude_from_all"], False)
 
-    def test_set_user_exclude_from_all_with_ep_no_name(self):
+    def test_set_user_exclude_from_all_with_ep_targets_one_gang(self):
         reg = Registry(self.path)
-        reg.set_user(5, ep=1, exclude_from_all=True)         # ep+flag, no name → node-level flag, no ep label
-        self.assertIs(reg.nodes["5"]["exclude_from_all"], True)
+        reg.set_user(5, ep=2, exclude_from_all=True)         # ep+flag → per-GANG opt-out, no ep label
+        self.assertEqual(reg.nodes["5"]["endpoint_exclude"], {"2": True})
+        self.assertNotIn("exclude_from_all", reg.nodes["5"])  # node-level flag untouched
         self.assertNotIn("endpoint_names", reg.nodes["5"])
+        reg.set_user(5, ep=2, exclude_from_all=False)        # re-include just that gang
+        self.assertEqual(reg.nodes["5"]["endpoint_exclude"], {"2": False})
 
     def test_snapshot_is_a_copy(self):
         reg = Registry(self.path)

@@ -38,6 +38,7 @@ const messages: Partial<Messages> = {
   "wholeHome.lights": "Φώτα",
   "wholeHome.blinds": "Στόρια",
   "wholeHome.include": "Συμπερίληψη στο «όλα»",
+  "wholeHome.gang": "Πλήκτρο {n}",
   "wholeHome.empty": "Δεν υπάρχουν φώτα ή στόρια για διαμόρφωση",
   "wholeHome.saved": "✓ Αποθηκεύτηκε",
   "wholeHome.saveError": "✗ Δεν ήταν δυνατή η αποθήκευση — δοκιμάστε ξανά",

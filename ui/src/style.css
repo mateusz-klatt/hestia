@@ -962,6 +962,16 @@ td.seen.fresh {
   flex: none;
 }
 
+.wholehome-device {
+  margin: 0.3rem 0 0;
+  font-size: 0.92rem;
+  color: var(--fg);
+}
+
+.wholehome-gang {
+  margin-left: 1.5rem; /* indent the per-gang toggles under their device heading */
+}
+
 /* Users panel */
 .users-head {
   display: flex;

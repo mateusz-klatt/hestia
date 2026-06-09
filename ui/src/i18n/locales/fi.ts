@@ -38,6 +38,7 @@ const messages: Partial<Messages> = {
   "wholeHome.lights": "Valot",
   "wholeHome.blinds": "Kaihtimet",
   "wholeHome.include": "Sisällytä ”kaikki”-toimintoon",
+  "wholeHome.gang": "Painike {n}",
   "wholeHome.empty": "Ei määritettäviä valoja tai kaihtimia",
   "wholeHome.saved": "✓ Tallennettu",
   "wholeHome.saveError": "✗ Tallennus epäonnistui — yritä uudelleen",

@@ -38,6 +38,7 @@ const messages: Partial<Messages> = {
   "wholeHome.lights": "Світло",
   "wholeHome.blinds": "Ролети",
   "wholeHome.include": "Додати до «усе»",
+  "wholeHome.gang": "Клавіша {n}",
   "wholeHome.empty": "Немає світла або ролет для налаштування",
   "wholeHome.saved": "✓ Збережено",
   "wholeHome.saveError": "✗ Не вдалося зберегти — спробуйте ще раз",

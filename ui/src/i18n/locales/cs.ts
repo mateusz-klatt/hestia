@@ -38,6 +38,7 @@ const messages: Partial<Messages> = {
   "wholeHome.lights": "Světla",
   "wholeHome.blinds": "Žaluzie",
   "wholeHome.include": "Zahrnout do „vše“",
+  "wholeHome.gang": "Tlačítko {n}",
   "wholeHome.empty": "Žádná světla ani žaluzie ke konfiguraci",
   "wholeHome.saved": "✓ Uloženo",
   "wholeHome.saveError": "✗ Nepodařilo se uložit — zkuste to znovu",

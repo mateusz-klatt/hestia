@@ -143,10 +143,10 @@ class Registry:
         """Apply a user edit. Confirming a *type* freezes it against auto-discovery;
         a name or room does not (a named-but-unclassified node can still be typed).
         When ``ep`` is given, a ``name`` labels that endpoint of a multi-gang switch
-        (stored under ``endpoint_names[str(ep)]``) instead of the node itself.
-        ``exclude_from_all`` is a node-level boolean (independent of ``ep``) that drops
-        the device from the house-wide "all lights / all blinds" scene sweeps; ``False``
-        re-includes it. ``None`` leaves it unchanged.
+        (stored under ``endpoint_names[str(ep)]``) and ``exclude_from_all`` opts that
+        single GANG out of the house-wide scene sweeps (``endpoint_exclude[str(ep)]``,
+        mirroring ``endpoint_names``). Without ``ep``, ``exclude_from_all`` is the
+        node-level opt-out. ``False`` re-includes; ``None`` leaves it unchanged.
 
         A call with nothing to write (an ``ep`` with no ``name`` and no flag, or all
         fields ``None``) is a no-op — it neither creates a stub entry nor dirties the file."""
@@ -168,7 +168,10 @@ class Registry:
             entry["confidence"] = "confirmed"
             entry["type_confirmed"] = True
         if exclude_from_all is not None:
-            entry["exclude_from_all"] = exclude_from_all   # node-level scene-sweep opt-out (bool)
+            if ep is not None:                        # per-gang scene-sweep opt-out (bool)
+                entry.setdefault("endpoint_exclude", {})[str(ep)] = exclude_from_all
+            else:
+                entry["exclude_from_all"] = exclude_from_all   # node-level scene-sweep opt-out (bool)
         self.dirty = True
 
     def record_scene(self, node, scene_id, batch_hex) -> bool:

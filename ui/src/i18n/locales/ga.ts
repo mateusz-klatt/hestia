@@ -38,6 +38,7 @@ const messages: Partial<Messages> = {
   "wholeHome.lights": "Soilse",
   "wholeHome.blinds": "Dallóga",
   "wholeHome.include": "Cuir san áireamh i “gach rud”",
+  "wholeHome.gang": "Cnaipe {n}",
   "wholeHome.empty": "Níl aon soilse ná dallóga le cumrú",
   "wholeHome.saved": "✓ Sábháladh",
   "wholeHome.saveError": "✗ Níorbh fhéidir sábháil — bain triail eile as",

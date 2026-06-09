@@ -38,6 +38,7 @@ const messages: Partial<Messages> = {
   "wholeHome.lights": "Լույսեր",
   "wholeHome.blinds": "Շերտավարագույրներ",
   "wholeHome.include": "Ներառել «բոլորը»-ում",
+  "wholeHome.gang": "Կոճակ {n}",
   "wholeHome.empty": "Կարգավորելու լույսեր կամ շերտավարագույրներ չկան",
   "wholeHome.saved": "✓ Պահված է",
   "wholeHome.saveError": "✗ Չհաջողվեց պահել — փորձեք կրկին",

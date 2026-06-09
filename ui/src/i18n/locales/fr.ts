@@ -38,6 +38,7 @@ const messages: Partial<Messages> = {
   "wholeHome.lights": "Lumières",
   "wholeHome.blinds": "Stores",
   "wholeHome.include": "Inclure dans « tout »",
+  "wholeHome.gang": "Bouton {n}",
   "wholeHome.empty": "Aucune lumière ni aucun store à configurer",
   "wholeHome.saved": "✓ Enregistré",
   "wholeHome.saveError": "✗ Impossible d’enregistrer — réessayez",
