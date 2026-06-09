@@ -514,7 +514,7 @@
       },
       "DeviceInfo": {
         "additionalProperties": false,
-        "description": "One device, merged from the classifier + the user registry (``proxy._discovery_entry``). The base\n+ live-state fields are ALWAYS present (required), null when unseen \u2014 so `0`/`false` are never lost.\nThe registry labels (``name``/``room``/``endpoint_names``/``exclude_from_all``) are OPTIONAL \u2014 absent\nuntil set, never null. ``exclude_from_all`` true means the device is opted out of the house-wide\n\"all lights / all blinds\" scene sweeps. ``confidence`` is usually a string but a legacy/hand-edited\nregistry node (a ``type`` without a ``confidence``) can surface null, so the contract admits it.",
+        "description": "One device, merged from the classifier + the user registry (``proxy._discovery_entry``). The base\n+ live-state fields are ALWAYS present (required), null when unseen \u2014 so `0`/`false` are never lost.\nThe registry labels (``name``/``room``/``endpoint_names``) are OPTIONAL \u2014 absent until set, never null.\n``confidence`` is usually a string but a legacy/hand-edited registry node (a ``type`` without a\n``confidence``) can surface null, so the contract admits it. NOTE: the whole-home scene opt-out\n(``exclude_from_all``) is deliberately NOT exposed here \u2014 it lives only on the dedicated\n``/api/whole-home`` surface, so adding it never changes this (client-decoded) response shape.",
         "properties": {
           "battery": {
             "anyOf": [
@@ -580,10 +580,6 @@
               }
             ],
             "title": "Energy Kwh"
-          },
-          "exclude_from_all": {
-            "title": "Exclude From All",
-            "type": "boolean"
           },
           "last_seen": {
             "anyOf": [

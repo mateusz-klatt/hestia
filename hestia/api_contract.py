@@ -407,10 +407,11 @@ class Summary(BaseModel):
 class DeviceInfo(BaseModel):
     """One device, merged from the classifier + the user registry (``proxy._discovery_entry``). The base
     + live-state fields are ALWAYS present (required), null when unseen — so `0`/`false` are never lost.
-    The registry labels (``name``/``room``/``endpoint_names``/``exclude_from_all``) are OPTIONAL — absent
-    until set, never null. ``exclude_from_all`` true means the device is opted out of the house-wide
-    "all lights / all blinds" scene sweeps. ``confidence`` is usually a string but a legacy/hand-edited
-    registry node (a ``type`` without a ``confidence``) can surface null, so the contract admits it."""
+    The registry labels (``name``/``room``/``endpoint_names``) are OPTIONAL — absent until set, never null.
+    ``confidence`` is usually a string but a legacy/hand-edited registry node (a ``type`` without a
+    ``confidence``) can surface null, so the contract admits it. NOTE: the whole-home scene opt-out
+    (``exclude_from_all``) is deliberately NOT exposed here — it lives only on the dedicated
+    ``/api/whole-home`` surface, so adding it never changes this (client-decoded) response shape."""
 
     model_config = _READ
     power: str | None
@@ -433,7 +434,6 @@ class DeviceInfo(BaseModel):
     name: Annotated[str, Field(default=None, json_schema_extra=_OMIT)] = None
     room: Annotated[str, Field(default=None, json_schema_extra=_OMIT)] = None
     endpoint_names: Annotated[dict[str, str], Field(default=None, json_schema_extra=_OMIT)] = None
-    exclude_from_all: Annotated[bool, Field(default=None, json_schema_extra=_OMIT)] = None
 
 
 class RuleVocab(BaseModel):

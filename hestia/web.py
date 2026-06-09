@@ -616,11 +616,13 @@ def _scene_device_op(target_type: str, node_id: int, info: dict, active: bool) -
 def _scene_ops(rt, scene: str) -> list[dict]:
     """Expand a house-wide scene into ordinary per-device control ops."""
     target_type, active = _SCENE_TARGETS[scene]
-    # The house-wide sweep skips any device an admin opted out of "all" (e.g. a nightlight),
-    # so SceneResult.total reflects only the devices the scene actually targets.
+    # The house-wide sweep skips any device an admin opted out of "all" (e.g. a nightlight), so
+    # SceneResult.total reflects only the devices the scene targets. The opt-out is read straight from
+    # the registry (NOT from discovery) so the DeviceInfo wire shape stays stable for native clients.
+    reg = rt.registry.nodes
     return [_scene_device_op(target_type, int(node), info, active)
             for node, info in _merged_discovery(rt).items()
-            if info.get("type") == target_type and not info.get("exclude_from_all")]
+            if info.get("type") == target_type and not reg.get(node, {}).get("exclude_from_all")]
 
 
 async def _scene(request):

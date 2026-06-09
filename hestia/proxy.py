@@ -925,8 +925,9 @@ def _add_registry_labels(entry: dict, reg: dict) -> None:
         entry["room"] = reg["room"]
     if "endpoint_names" in reg:                           # per-endpoint labels for a 2-gang switch
         entry["endpoint_names"] = dict(reg["endpoint_names"])   # copy — detach from registry state
-    if "exclude_from_all" in reg:                         # opted out of the house-wide scene sweeps
-        entry["exclude_from_all"] = reg["exclude_from_all"]
+    # NOTE: the whole-home opt-out (`exclude_from_all`) is intentionally NOT surfaced in discovery —
+    # adding it to DeviceInfo would change the (client-decoded) wire shape and break a strictly-decoding
+    # pinned native client. The scene sweep reads the flag straight from the registry instead.
 
 
 def _discovery_entry(rt, node: int, cls: dict, reg: dict) -> dict:

@@ -474,9 +474,12 @@ class SceneOpsTests(unittest.TestCase):
         "4": {"type": "plug", "level": None},
     }
 
-    def _ops(self, scene):
+    def _ops(self, scene, nodes=None):
+        # The scene reads opt-outs from the REGISTRY (not from discovery — keeps the DeviceInfo wire
+        # shape stable for native clients), so give rt a registry.nodes map.
+        rt = SimpleNamespace(registry=SimpleNamespace(nodes=nodes or {}))
         with mock.patch("hestia.web._merged_discovery", return_value=self.DEVICES):
-            return web._scene_ops(SimpleNamespace(), scene)
+            return web._scene_ops(rt, scene)
 
     def test_lights_off_switches_plain_lights_and_dimmable_lights_off(self):
         self.assertEqual(self._ops("lights_off"), [
@@ -495,16 +498,12 @@ class SceneOpsTests(unittest.TestCase):
         self.assertEqual(self._ops("blinds_up"), [{"op": "cover", "node": 3, "value": 99}])
 
     def test_devices_opted_out_of_all_are_skipped(self):
-        devices = {
-            "1": {"type": "light", "level": None},
-            "2": {"type": "light", "level": 42, "exclude_from_all": True},    # nightlight opted out
-            "3": {"type": "blind", "level": None, "exclude_from_all": False},  # explicit re-include
-        }
-        with mock.patch("hestia.web._merged_discovery", return_value=devices):
-            self.assertEqual(web._scene_ops(SimpleNamespace(), "lights_off"),
-                             [{"op": "switch", "node": 1, "on": False}])       # node 2 dropped
-            self.assertEqual(web._scene_ops(SimpleNamespace(), "blinds_up"),
-                             [{"op": "cover", "node": 3, "value": 99}])        # exclude=False stays in
+        # Opt-outs live in the registry, NOT in discovery — node 2 excluded, node 3 explicitly re-included.
+        nodes = {"2": {"exclude_from_all": True}, "3": {"exclude_from_all": False}}
+        self.assertEqual(self._ops("lights_off", nodes),
+                         [{"op": "switch", "node": 1, "on": False}])           # node 2 dropped
+        self.assertEqual(self._ops("blinds_up", nodes),
+                         [{"op": "cover", "node": 3, "value": 99}])            # exclude=False stays in
 
 
 class SceneEndpointTests(_WebTestBase):

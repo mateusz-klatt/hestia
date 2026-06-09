@@ -1730,14 +1730,14 @@ class MergedDiscoveryTests(unittest.TestCase):
         out["7"]["endpoint_names"]["1"] = "mutated"           # discovery output is a copy…
         self.assertEqual(rt.registry.nodes["7"]["endpoint_names"]["1"], "top")   # …registry untouched
 
-    def test_exclude_from_all_in_discovery(self):
-        """The scene-sweep opt-out (registry) surfaces in the merged device info."""
+    def test_exclude_from_all_not_surfaced_in_discovery(self):
+        """The scene-sweep opt-out is registry-only — it must NOT appear in the DeviceInfo wire shape
+        (adding a field there would break strictly-decoding native clients). It stays in the registry."""
         rt = proxy.ProxyRuntime()
         rt.registry.observe(7, "light", "inferred")
         rt.registry.set_user(7, exclude_from_all=True)
-        self.assertIs(proxy._merged_discovery(rt)["7"]["exclude_from_all"], True)
-        rt.registry.observe(8, "light", "inferred")           # a node that never opted out → key absent
-        self.assertNotIn("exclude_from_all", proxy._merged_discovery(rt)["8"])
+        self.assertIs(rt.registry.nodes["7"]["exclude_from_all"], True)        # stored in the registry…
+        self.assertNotIn("exclude_from_all", proxy._merged_discovery(rt)["7"])  # …but NOT in discovery
 
     def test_scene_never_leaks_into_discovery(self):
         """A function-button press is a transient event — `scene`/`scene_seq` must
