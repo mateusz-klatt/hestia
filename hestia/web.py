@@ -54,7 +54,7 @@ SSE_IDLE_TIMEOUT = _num_env("HESTIA_SSE_KEEPALIVE", 5.0, 1.0, 3600.0)  # idle→
 SSE_MAX_LIFETIME = float(os.environ.get("HESTIA_SSE_LIFETIME", "3600"))
 _TYPES = {t.value for t in DeviceType}
 _clock = time.monotonic                              # module-level rebindable for tests
-_NAME_FIELDS = {"op", "node", "name", "room", "type", "ep"}   # allowlist for /api/name (ep = endpoint label)
+_NAME_FIELDS = {"op", "node", "name", "room", "type", "ep", "exclude_from_all"}   # allowlist for /api/name (ep = endpoint label)
 _BODY_NOT_OBJECT = "body must be a JSON object"   # shared 4xx message (/api/ir, /api/name, /api/control)
 _CONTROL_OPS = {"switch", "level", "cover", "thermostat", "thermostat_power"}
 _CONTROL_FIELDS = {
@@ -616,9 +616,11 @@ def _scene_device_op(target_type: str, node_id: int, info: dict, active: bool) -
 def _scene_ops(rt, scene: str) -> list[dict]:
     """Expand a house-wide scene into ordinary per-device control ops."""
     target_type, active = _SCENE_TARGETS[scene]
+    # The house-wide sweep skips any device an admin opted out of "all" (e.g. a nightlight),
+    # so SceneResult.total reflects only the devices the scene actually targets.
     return [_scene_device_op(target_type, int(node), info, active)
             for node, info in _merged_discovery(rt).items()
-            if info.get("type") == target_type]
+            if info.get("type") == target_type and not info.get("exclude_from_all")]
 
 
 async def _scene(request):
@@ -879,9 +881,9 @@ def _validate_name_payload(op) -> "str | None":
         return "/api/name only accepts op=name"
     if "node" not in op:
         return "'node' field is required"
-    fields_present = [k for k in ("name", "room", "type") if k in op]
+    fields_present = [k for k in ("name", "room", "type", "exclude_from_all") if k in op]
     if not fields_present:
-        return "at least one of name, room, type is required"
+        return "at least one of name, room, type, exclude_from_all is required"
     error = _validate_name_strings(op)
     if error is not None:
         return error
@@ -891,6 +893,9 @@ def _validate_name_payload(op) -> "str | None":
     ep = op.get("ep")
     if ep is not None and (not isinstance(ep, int) or isinstance(ep, bool) or ep < 0):
         return "ep must be a non-negative integer"
+    excl = op.get("exclude_from_all")
+    if excl is not None and not isinstance(excl, bool):
+        return "exclude_from_all must be a boolean"
     return None
 
 

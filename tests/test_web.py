@@ -204,7 +204,16 @@ class ValidateNamePayloadTests(unittest.TestCase):
 
     def test_empty(self):
         self.assertEqual(self._validate({"node": 5}),
-                         "at least one of name, room, type is required")
+                         "at least one of name, room, type, exclude_from_all is required")
+
+    def test_exclude_from_all_accepted(self):
+        # the scene-sweep opt-out is a valid sole field, and accepts both booleans
+        self.assertIsNone(self._validate({"node": 5, "exclude_from_all": True}))
+        self.assertIsNone(self._validate({"node": 5, "exclude_from_all": False}))
+
+    def test_exclude_from_all_must_be_bool(self):
+        self.assertEqual(self._validate({"node": 5, "exclude_from_all": 1}),
+                         "exclude_from_all must be a boolean")
 
     def test_missing_node(self):
         self.assertEqual(self._validate({"name": "x"}), "'node' field is required")
@@ -484,6 +493,18 @@ class SceneOpsTests(unittest.TestCase):
     def test_blinds_down_and_up_use_cover_values(self):
         self.assertEqual(self._ops("blinds_down"), [{"op": "cover", "node": 3, "value": 0}])
         self.assertEqual(self._ops("blinds_up"), [{"op": "cover", "node": 3, "value": 99}])
+
+    def test_devices_opted_out_of_all_are_skipped(self):
+        devices = {
+            "1": {"type": "light", "level": None},
+            "2": {"type": "light", "level": 42, "exclude_from_all": True},    # nightlight opted out
+            "3": {"type": "blind", "level": None, "exclude_from_all": False},  # explicit re-include
+        }
+        with mock.patch("hestia.web._merged_discovery", return_value=devices):
+            self.assertEqual(web._scene_ops(SimpleNamespace(), "lights_off"),
+                             [{"op": "switch", "node": 1, "on": False}])       # node 2 dropped
+            self.assertEqual(web._scene_ops(SimpleNamespace(), "blinds_up"),
+                             [{"op": "cover", "node": 3, "value": 99}])        # exclude=False stays in
 
 
 class SceneEndpointTests(_WebTestBase):

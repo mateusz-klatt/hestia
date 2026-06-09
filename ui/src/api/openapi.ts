@@ -693,9 +693,10 @@ export interface components {
          * DeviceInfo
          * @description One device, merged from the classifier + the user registry (``proxy._discovery_entry``). The base
          *     + live-state fields are ALWAYS present (required), null when unseen — so `0`/`false` are never lost.
-         *     The registry labels (``name``/``room``/``endpoint_names``) are OPTIONAL — absent until set, never null.
-         *     ``confidence`` is usually a string but a legacy/hand-edited registry node (a ``type`` without a
-         *     ``confidence``) can surface null, so the contract admits it.
+         *     The registry labels (``name``/``room``/``endpoint_names``/``exclude_from_all``) are OPTIONAL — absent
+         *     until set, never null. ``exclude_from_all`` true means the device is opted out of the house-wide
+         *     "all lights / all blinds" scene sweeps. ``confidence`` is usually a string but a legacy/hand-edited
+         *     registry node (a ``type`` without a ``confidence``) can surface null, so the contract admits it.
          */
         DeviceInfo: {
             /** Battery */
@@ -714,6 +715,8 @@ export interface components {
             } | null;
             /** Energy Kwh */
             energy_kwh: number | null;
+            /** Exclude From All */
+            exclude_from_all?: boolean;
             /** Last Seen */
             last_seen: string | null;
             /** Level */
@@ -937,12 +940,16 @@ export interface components {
         /**
          * NameRequest
          * @description POST /api/name — set a device's registry labels. ``node`` is required; at least one of
-         *     name/room/type must be present (server-enforced cross-field, not expressible here). name/room
-         *     accept null (clear); type is a DeviceType; ep is a multi-gang channel label. Unknown keys → 400.
+         *     name/room/type/exclude_from_all must be present (server-enforced cross-field, not expressible here).
+         *     name/room accept null (clear); type is a DeviceType; ep is a multi-gang channel label;
+         *     ``exclude_from_all`` opts the device out of the house-wide "all lights / all blinds" scene sweeps
+         *     (true = excluded, false = re-include). Unknown keys → 400.
          */
         NameRequest: {
             /** Ep */
             ep?: number | null;
+            /** Exclude From All */
+            exclude_from_all?: boolean | null;
             /** Name */
             name?: string | null;
             /** Node */

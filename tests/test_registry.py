@@ -130,6 +130,20 @@ class RegistryTests(unittest.TestCase):
         self.assertNotIn("9", reg.nodes)
         self.assertFalse(reg.dirty)
 
+    def test_set_user_exclude_from_all(self):
+        reg = Registry(self.path)
+        reg.set_user(5, exclude_from_all=True)               # sole field → still writes (not a no-op)
+        self.assertIs(reg.nodes["5"]["exclude_from_all"], True)
+        self.assertTrue(reg.dirty)
+        reg.set_user(5, exclude_from_all=False)              # False re-includes (an explicit write, not None)
+        self.assertIs(reg.nodes["5"]["exclude_from_all"], False)
+
+    def test_set_user_exclude_from_all_with_ep_no_name(self):
+        reg = Registry(self.path)
+        reg.set_user(5, ep=1, exclude_from_all=True)         # ep+flag, no name → node-level flag, no ep label
+        self.assertIs(reg.nodes["5"]["exclude_from_all"], True)
+        self.assertNotIn("endpoint_names", reg.nodes["5"])
+
     def test_snapshot_is_a_copy(self):
         reg = Registry(self.path)
         reg.observe(5, "blind", "inferred")

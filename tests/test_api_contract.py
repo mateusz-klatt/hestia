@@ -338,7 +338,10 @@ class RegistrySettingsContractTests(unittest.TestCase):
         api_contract.NameRequest.model_validate({"node": 14, "name": "Lamp", "room": "Hall"})
         api_contract.NameRequest.model_validate({"node": 1, "room": None})    # null clears
         api_contract.NameRequest.model_validate({"node": 1, "type": "thermostat"})
-        for bad in ({"node": 1, "type": "nope"}, {"node": 1, "name": "x", "zzz": 1}, {"name": "x"}):
+        api_contract.NameRequest.model_validate({"node": 1, "exclude_from_all": True})   # scene-sweep opt-out
+        api_contract.NameRequest.model_validate({"node": 1, "exclude_from_all": False})  # re-include
+        for bad in ({"node": 1, "type": "nope"}, {"node": 1, "name": "x", "zzz": 1}, {"name": "x"},
+                    {"node": 1, "exclude_from_all": 1}):                       # strict: int is not a bool
             with self.assertRaises(ValueError):
                 api_contract.NameRequest.model_validate(bad)                  # bad type / unknown field / node missing
 
@@ -405,6 +408,19 @@ class RoleAndBindingContractTests(unittest.TestCase):
             api_contract.NameRequest.model_validate({"node": 1, "type": t})
         with self.assertRaises(ValueError):
             api_contract.NameRequest.model_validate({"node": 1, "type": "bogus"})
+
+    def test_name_exclude_from_all_agrees_with_validator(self):
+        from hestia.web import _validate_name_payload
+        for body in ({"node": 1, "exclude_from_all": True}, {"node": 1, "exclude_from_all": False},
+                     {"node": 1, "exclude_from_all": None}, {"node": 1, "exclude_from_all": 1},
+                     {"node": 1, "exclude_from_all": "x"}):
+            backend_ok = _validate_name_payload(body) is None
+            try:
+                api_contract.NameRequest.model_validate(body)
+                dto_ok = True
+            except ValueError:
+                dto_ok = False
+            self.assertEqual(backend_ok, dto_ok, f"exclude_from_all disagree on {body}")
 
 
 class AutomationsContractTests(unittest.TestCase):

@@ -1730,6 +1730,15 @@ class MergedDiscoveryTests(unittest.TestCase):
         out["7"]["endpoint_names"]["1"] = "mutated"           # discovery output is a copy…
         self.assertEqual(rt.registry.nodes["7"]["endpoint_names"]["1"], "top")   # …registry untouched
 
+    def test_exclude_from_all_in_discovery(self):
+        """The scene-sweep opt-out (registry) surfaces in the merged device info."""
+        rt = proxy.ProxyRuntime()
+        rt.registry.observe(7, "light", "inferred")
+        rt.registry.set_user(7, exclude_from_all=True)
+        self.assertIs(proxy._merged_discovery(rt)["7"]["exclude_from_all"], True)
+        rt.registry.observe(8, "light", "inferred")           # a node that never opted out → key absent
+        self.assertNotIn("exclude_from_all", proxy._merged_discovery(rt)["8"])
+
     def test_scene_never_leaks_into_discovery(self):
         """A function-button press is a transient event — `scene`/`scene_seq` must
         never appear on a discovery entry (the dashboard treats it as a flash)."""
@@ -2458,6 +2467,21 @@ class DiscoveryChangedHookTests(unittest.IsolatedAsyncioTestCase):
         rt = proxy.ProxyRuntime()
         with self.assertRaises(ValueError):
             await proxy.process_control_op(rt, {"op": "name", "node": 7, "ep": -1, "name": "x"})
+
+    async def test_name_op_sets_exclude_from_all(self):
+        tmp = Path(tempfile.mkdtemp())
+        try:
+            rt = proxy.ProxyRuntime(registry=proxy.Registry(tmp / "r.json"))
+            resp = await proxy.process_control_op(rt, {"op": "name", "node": 7, "exclude_from_all": True})
+            self.assertTrue(resp["ok"])
+            self.assertIs(rt.registry.nodes["7"]["exclude_from_all"], True)
+        finally:
+            shutil.rmtree(tmp)
+
+    async def test_name_op_bad_exclude_from_all_raises(self):
+        rt = proxy.ProxyRuntime()
+        with self.assertRaises(ValueError):
+            await proxy.process_control_op(rt, {"op": "name", "node": 7, "exclude_from_all": "yes"})
 
 
 class ActivityHookTests(unittest.IsolatedAsyncioTestCase):

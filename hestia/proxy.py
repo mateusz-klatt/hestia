@@ -925,6 +925,8 @@ def _add_registry_labels(entry: dict, reg: dict) -> None:
         entry["room"] = reg["room"]
     if "endpoint_names" in reg:                           # per-endpoint labels for a 2-gang switch
         entry["endpoint_names"] = dict(reg["endpoint_names"])   # copy — detach from registry state
+    if "exclude_from_all" in reg:                         # opted out of the house-wide scene sweeps
+        entry["exclude_from_all"] = reg["exclude_from_all"]
 
 
 def _discovery_entry(rt, node: int, cls: dict, reg: dict) -> dict:
@@ -1476,8 +1478,11 @@ async def _control_name(rt, op):
     ep = op.get("ep")
     if ep is not None and (not isinstance(ep, int) or isinstance(ep, bool) or ep < 0):
         raise ValueError(f"invalid endpoint {ep!r}")
+    excl = op.get("exclude_from_all")
+    if excl is not None and not isinstance(excl, bool):
+        raise ValueError(f"invalid exclude_from_all {excl!r}")
     rt.registry.set_user(op["node"], name=op.get("name"), room=op.get("room"),
-                         dtype=dtype, ep=ep)
+                         dtype=dtype, ep=ep, exclude_from_all=excl)
     try:
         await _persist(rt)                       # share the autosave lock — no
     except OSError as exc:                       # racing os.replace with autosave
