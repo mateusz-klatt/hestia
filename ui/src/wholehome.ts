@@ -9,7 +9,10 @@ const SWEEP_TYPES = ["light", "blind"] as const;
 export interface WholeHomeConfigDeps {
   /** Snapshot of the current devices (taken when the panel opens). */
   devices: Record<string, DeviceInfo>;
-  /** POST /api/name {node, exclude_from_all}. Resolves true on success. */
+  /** The node ids currently opted out of "all" (from GET /api/whole-home — kept off DeviceInfo so the
+   *  device snapshot stays wire-stable for native clients). */
+  excluded: ReadonlySet<number>;
+  /** POST /api/whole-home {node, exclude}. Resolves true on success. */
   setExcluded: (node: number, excluded: boolean) => Promise<boolean>;
   onClosed?: () => void;
 }
@@ -33,7 +36,7 @@ function buildRow(node: string, info: DeviceInfo, deps: WholeHomeConfigDeps, sta
 
   const checkbox = document.createElement("input");
   checkbox.type = "checkbox";
-  checkbox.checked = info.exclude_from_all !== true; // absent / false → included
+  checkbox.checked = !deps.excluded.has(Number(node)); // not opted out → included (checked)
   const labelText = deviceName(node, info);
   checkbox.setAttribute("aria-label", `${t("wholeHome.include")}: ${labelText}`);
 

@@ -2468,20 +2468,31 @@ class DiscoveryChangedHookTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ValueError):
             await proxy.process_control_op(rt, {"op": "name", "node": 7, "ep": -1, "name": "x"})
 
-    async def test_name_op_sets_exclude_from_all(self):
+    async def test_whole_home_set_op_persists_the_opt_out(self):
         tmp = Path(tempfile.mkdtemp())
         try:
             rt = proxy.ProxyRuntime(registry=proxy.Registry(tmp / "r.json"))
-            resp = await proxy.process_control_op(rt, {"op": "name", "node": 7, "exclude_from_all": True})
+            resp = await proxy.process_control_op(rt, {"op": "whole_home_set", "node": 7, "exclude": True})
             self.assertTrue(resp["ok"])
             self.assertIs(rt.registry.nodes["7"]["exclude_from_all"], True)
+            await proxy.process_control_op(rt, {"op": "whole_home_set", "node": 7, "exclude": False})
+            self.assertIs(rt.registry.nodes["7"]["exclude_from_all"], False)   # re-include
         finally:
             shutil.rmtree(tmp)
 
-    async def test_name_op_bad_exclude_from_all_raises(self):
+    async def test_whole_home_set_op_bad_node_or_exclude_raises(self):
         rt = proxy.ProxyRuntime()
         with self.assertRaises(ValueError):
-            await proxy.process_control_op(rt, {"op": "name", "node": 7, "exclude_from_all": "yes"})
+            await proxy.process_control_op(rt, {"op": "whole_home_set", "node": "x", "exclude": True})
+        with self.assertRaises(ValueError):
+            await proxy.process_control_op(rt, {"op": "whole_home_set", "node": 7, "exclude": "yes"})
+
+    async def test_whole_home_set_op_reports_save_failure(self):
+        rt = proxy.ProxyRuntime()
+        with mock.patch.object(rt.registry, "write_payload", side_effect=OSError("disk")):
+            resp = await proxy.process_control_op(rt, {"op": "whole_home_set", "node": 5, "exclude": True})
+        self.assertFalse(resp["ok"])
+        self.assertIn("registry save failed", resp["error"])
 
 
 class ActivityHookTests(unittest.IsolatedAsyncioTestCase):

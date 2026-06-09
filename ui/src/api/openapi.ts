@@ -440,6 +440,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/whole-home": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Which devices are opted out of the house-wide "all" sweeps
+         * @description Requires the admin role. Registry-only config — kept off DeviceInfo so the device snapshot stays wire-stable for pinned native clients.
+         */
+        get: operations["getWholeHome"];
+        put?: never;
+        /**
+         * Opt one device in/out of the house-wide "all" sweeps
+         * @description Requires the admin role.
+         */
+        post: operations["setWholeHome"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -693,10 +717,11 @@ export interface components {
          * DeviceInfo
          * @description One device, merged from the classifier + the user registry (``proxy._discovery_entry``). The base
          *     + live-state fields are ALWAYS present (required), null when unseen — so `0`/`false` are never lost.
-         *     The registry labels (``name``/``room``/``endpoint_names``/``exclude_from_all``) are OPTIONAL — absent
-         *     until set, never null. ``exclude_from_all`` true means the device is opted out of the house-wide
-         *     "all lights / all blinds" scene sweeps. ``confidence`` is usually a string but a legacy/hand-edited
-         *     registry node (a ``type`` without a ``confidence``) can surface null, so the contract admits it.
+         *     The registry labels (``name``/``room``/``endpoint_names``) are OPTIONAL — absent until set, never null.
+         *     ``confidence`` is usually a string but a legacy/hand-edited registry node (a ``type`` without a
+         *     ``confidence``) can surface null, so the contract admits it. NOTE: the whole-home scene opt-out
+         *     (``exclude_from_all``) is deliberately NOT exposed here — it lives only on the dedicated
+         *     ``/api/whole-home`` surface, so adding it never changes this (client-decoded) response shape.
          */
         DeviceInfo: {
             /** Battery */
@@ -715,8 +740,6 @@ export interface components {
             } | null;
             /** Energy Kwh */
             energy_kwh: number | null;
-            /** Exclude From All */
-            exclude_from_all?: boolean;
             /** Last Seen */
             last_seen: string | null;
             /** Level */
@@ -940,16 +963,12 @@ export interface components {
         /**
          * NameRequest
          * @description POST /api/name — set a device's registry labels. ``node`` is required; at least one of
-         *     name/room/type/exclude_from_all must be present (server-enforced cross-field, not expressible here).
-         *     name/room accept null (clear); type is a DeviceType; ep is a multi-gang channel label;
-         *     ``exclude_from_all`` opts the device out of the house-wide "all lights / all blinds" scene sweeps
-         *     (true = excluded, false = re-include). Unknown keys → 400.
+         *     name/room/type must be present (server-enforced cross-field, not expressible here). name/room
+         *     accept null (clear); type is a DeviceType; ep is a multi-gang channel label. Unknown keys → 400.
          */
         NameRequest: {
             /** Ep */
             ep?: number | null;
-            /** Exclude From All */
-            exclude_from_all?: boolean | null;
             /** Name */
             name?: string | null;
             /** Node */
@@ -1370,6 +1389,31 @@ export interface components {
             role: string | null;
             /** User */
             user: string | null;
+        };
+        /**
+         * WholeHomeConfig
+         * @description GET /api/whole-home — which devices are opted out of the house-wide "all lights / all blinds"
+         *     sweeps. Registry-only config (deliberately NOT in DeviceInfo, so adding the opt-out never changes
+         *     the device-snapshot wire shape a pinned native client decodes). ``excluded_nodes`` = the node ids
+         *     a device is fully opted out by.
+         */
+        WholeHomeConfig: {
+            /** Excluded Nodes */
+            excluded_nodes: number[];
+        };
+        /**
+         * WholeHomeRequest
+         * @description POST /api/whole-home — opt one device in (``exclude``=false) / out (true) of the house-wide
+         *     "all" sweeps.
+         */
+        WholeHomeRequest: {
+            /** Exclude */
+            exclude: boolean;
+            /**
+             * Node
+             * @description device node id
+             */
+            node: number;
         };
     };
     responses: never;
@@ -2233,6 +2277,59 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["WhoAmI"];
+                };
+            };
+        };
+    };
+    getWholeHome: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description the opt-out config */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WholeHomeConfig"];
+                };
+            };
+        };
+    };
+    setWholeHome: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WholeHomeRequest"];
+            };
+        };
+        responses: {
+            /** @description saved */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OkResult"];
+                };
+            };
+            /** @description malformed */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ControlError"];
                 };
             };
         };

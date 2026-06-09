@@ -38,6 +38,7 @@ _P_SETTINGS = "/api/settings"
 _P_ROOM_ICONS = "/api/rooms/icons"
 _P_AUTOMATIONS = "/api/automations"
 _P_USERS = "/api/users"
+_P_WHOLE_HOME = "/api/whole-home"
 _ADMIN_ROLE_DESC = "Requires the admin role."
 _NO_SUCH_USER = "no such user"
 
@@ -168,10 +169,8 @@ class SceneResult(BaseModel):
 
 class NameRequest(BaseModel):
     """POST /api/name — set a device's registry labels. ``node`` is required; at least one of
-    name/room/type/exclude_from_all must be present (server-enforced cross-field, not expressible here).
-    name/room accept null (clear); type is a DeviceType; ep is a multi-gang channel label;
-    ``exclude_from_all`` opts the device out of the house-wide "all lights / all blinds" scene sweeps
-    (true = excluded, false = re-include). Unknown keys → 400."""
+    name/room/type must be present (server-enforced cross-field, not expressible here). name/room
+    accept null (clear); type is a DeviceType; ep is a multi-gang channel label. Unknown keys → 400."""
 
     model_config = ConfigDict(extra="forbid", strict=True)
     node: int
@@ -183,7 +182,6 @@ class NameRequest(BaseModel):
         Field(default=None, json_schema_extra=_OMIT),
     ] = None
     ep: Annotated[int | None, Field(default=None, ge=0, json_schema_extra=_OMIT)] = None
-    exclude_from_all: Annotated[bool | None, Field(default=None, json_schema_extra=_OMIT)] = None
 
 
 class Settings(BaseModel):
@@ -216,8 +214,27 @@ class RoomIconRequest(BaseModel):
     icon: Annotated[str, Field(max_length=16)]
 
 
-_COMMAND_MODELS = (IrRequest, SceneRequest, SceneResult,
-                   NameRequest, Settings, SettingsUpdate, RoomIconRequest)
+class WholeHomeConfig(BaseModel):
+    """GET /api/whole-home — which devices are opted out of the house-wide "all lights / all blinds"
+    sweeps. Registry-only config (deliberately NOT in DeviceInfo, so adding the opt-out never changes
+    the device-snapshot wire shape a pinned native client decodes). ``excluded_nodes`` = the node ids
+    a device is fully opted out by."""
+
+    model_config = _READ
+    excluded_nodes: list[int]
+
+
+class WholeHomeRequest(BaseModel):
+    """POST /api/whole-home — opt one device in (``exclude``=false) / out (true) of the house-wide
+    "all" sweeps."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+    node: NodeId
+    exclude: bool
+
+
+_COMMAND_MODELS = (IrRequest, SceneRequest, SceneResult, NameRequest, Settings, SettingsUpdate,
+                   RoomIconRequest, WholeHomeConfig, WholeHomeRequest)
 
 
 # ---- automation rules (the Rule.to_dict wire shape) ------------------------
@@ -767,6 +784,8 @@ _PATH_ROLES = {
     ("POST", "/api/ir"): "operator",
     ("POST", "/api/scene"): "operator",
     ("POST", "/api/name"): "admin",
+    ("GET", _P_WHOLE_HOME): "admin",
+    ("POST", _P_WHOLE_HOME): "admin",
     ("GET", _P_SETTINGS): "viewer",
     ("POST", _P_SETTINGS): "viewer",
     ("GET", _P_ROOM_ICONS): "viewer",
@@ -947,6 +966,30 @@ def build_openapi() -> dict:
                     "description": _ADMIN_ROLE_DESC,
                     "requestBody": {"required": True,
                                     "content": {_APP_JSON: {"schema": _ref("RoomIconRequest")}}},
+                    "responses": {
+                        "200": {"description": "saved",
+                                "content": {_APP_JSON: {"schema": _ref("OkResult")}}},
+                        "400": {"description": "malformed", **err},
+                    },
+                },
+            },
+            _P_WHOLE_HOME: {
+                "get": {
+                    "operationId": "getWholeHome",
+                    "summary": "Which devices are opted out of the house-wide \"all\" sweeps",
+                    "description": f"{_ADMIN_ROLE_DESC} Registry-only config — kept off DeviceInfo so the "
+                                   "device snapshot stays wire-stable for pinned native clients.",
+                    "responses": {
+                        "200": {"description": "the opt-out config",
+                                "content": {_APP_JSON: {"schema": _ref("WholeHomeConfig")}}},
+                    },
+                },
+                "post": {
+                    "operationId": "setWholeHome",
+                    "summary": "Opt one device in/out of the house-wide \"all\" sweeps",
+                    "description": _ADMIN_ROLE_DESC,
+                    "requestBody": {"required": True,
+                                    "content": {_APP_JSON: {"schema": _ref("WholeHomeRequest")}}},
                     "responses": {
                         "200": {"description": "saved",
                                 "content": {_APP_JSON: {"schema": _ref("OkResult")}}},

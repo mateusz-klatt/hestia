@@ -1479,16 +1479,31 @@ async def _control_name(rt, op):
     ep = op.get("ep")
     if ep is not None and (not isinstance(ep, int) or isinstance(ep, bool) or ep < 0):
         raise ValueError(f"invalid endpoint {ep!r}")
-    excl = op.get("exclude_from_all")
-    if excl is not None and not isinstance(excl, bool):
-        raise ValueError(f"invalid exclude_from_all {excl!r}")
     rt.registry.set_user(op["node"], name=op.get("name"), room=op.get("room"),
-                         dtype=dtype, ep=ep, exclude_from_all=excl)
+                         dtype=dtype, ep=ep)
     try:
         await _persist(rt)                       # share the autosave lock — no
     except OSError as exc:                       # racing os.replace with autosave
         return {"ok": False, "error": f"registry save failed: {exc!r}"}
     rt.event_bus.publish({"type": "discovery_changed"})  # UI re-fetches new state
+    return {"ok": True}
+
+
+async def _control_whole_home(rt, op):
+    """Set a device's whole-home "all" opt-out (registry-only; NOT surfaced in discovery so the
+    DeviceInfo wire shape stays stable for native clients). The web validator pins the shape; this
+    re-checks defensively and persists like the name op."""
+    node = op.get("node")
+    if not isinstance(node, int) or isinstance(node, bool):
+        raise ValueError(f"whole_home_set requires an integer 'node', got {node!r}")
+    exclude = op.get("exclude")
+    if not isinstance(exclude, bool):
+        raise ValueError(f"whole_home_set requires a boolean 'exclude', got {exclude!r}")
+    rt.registry.set_user(node, exclude_from_all=exclude)
+    try:
+        await _persist(rt)                       # share the autosave lock (same as the name op)
+    except OSError as exc:
+        return {"ok": False, "error": f"registry save failed: {exc!r}"}
     return {"ok": True}
 
 
@@ -1535,6 +1550,7 @@ _CONTROL_OP_HANDLERS = {
     "automation_set": _control_automation_set,
     "automation_delete": _control_automation_delete,
     "name": _control_name,
+    "whole_home_set": _control_whole_home,
     "ir": _control_ir,
     "graduate": _control_graduate,
 }

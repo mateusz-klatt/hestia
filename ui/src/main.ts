@@ -13,6 +13,7 @@ import {
   fetchRoomIcons,
   fetchSettings,
   fetchUsers,
+  fetchWholeHome,
   postControl,
   postIr,
   postName,
@@ -23,6 +24,7 @@ import {
   saveSettings as saveUserSettings,
   setUserDisabled,
   setUserRole,
+  setWholeHomeExclude,
   whoami,
 } from "./api/client";
 import type { DeviceInfo } from "./api/types";
@@ -359,11 +361,12 @@ void (async () => {
       ? {
           onEditIcons: (): void => { triggerIconEdit(); },
           onConfigureWholeHome: (): void => {
-            openWholeHomeConfig({
-              devices: latestDevices,
-              setExcluded: async (node, excluded): Promise<boolean> =>
-                (await postName({ node, exclude_from_all: excluded })).ok,
-            });
+            // Membership lives on its own endpoint (NOT on DeviceInfo — keeps the device snapshot
+            // wire-stable for native clients), so fetch the current opt-outs before opening the panel.
+            void (async () => {
+              const excluded = new Set((await fetchWholeHome()) ?? []);
+              openWholeHomeConfig({ devices: latestDevices, excluded, setExcluded: setWholeHomeExclude });
+            })();
           },
         }
       : {}),

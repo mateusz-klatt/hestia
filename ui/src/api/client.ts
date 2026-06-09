@@ -210,6 +210,32 @@ export async function saveRoomIcon(room: string, icon: string): Promise<boolean>
   }
 }
 
+/** GET `/api/whole-home`; the node ids opted out of the house-wide "all" sweeps, or `null` on failure. */
+export async function fetchWholeHome(): Promise<number[] | null> {
+  try {
+    const response = await fetch(apiUrl("whole-home"));
+    if (!response.ok) return null;
+    const data = (await response.json()) as { excluded_nodes?: number[] };
+    return data.excluded_nodes ?? [];
+  } catch {
+    return null;
+  }
+}
+
+/** POST `/api/whole-home` to opt one device in (`exclude=false`) / out (`true`) of the "all" sweeps. */
+export async function setWholeHomeExclude(node: number, exclude: boolean): Promise<boolean> {
+  try {
+    const response = await fetch(apiUrl("whole-home"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ node, exclude }),
+    });
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
 /** POST `/api/scene` to run a house-wide scene; `null` on any load/send failure. */
 export async function postScene(op: SceneOp): Promise<SceneResult | null> {
   try {
