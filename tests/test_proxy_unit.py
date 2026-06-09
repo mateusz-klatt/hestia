@@ -2487,6 +2487,58 @@ class DiscoveryChangedHookTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ValueError):
             await proxy.process_control_op(rt, {"op": "whole_home_set", "node": 7, "exclude": "yes"})
 
+    async def test_whole_home_set_op_per_gang(self):
+        tmp = Path(tempfile.mkdtemp())
+        try:
+            rt = proxy.ProxyRuntime(registry=proxy.Registry(tmp / "r.json"))
+            resp = await proxy.process_control_op(rt, {"op": "whole_home_set", "node": 7, "ep": 2, "exclude": True})
+            self.assertTrue(resp["ok"])
+            self.assertEqual(rt.registry.nodes["7"]["endpoint_exclude"], {"2": True})
+            self.assertNotIn("exclude_from_all", rt.registry.nodes["7"])   # node-level flag untouched
+            await proxy.process_control_op(rt, {"op": "whole_home_set", "node": 7, "ep": 2, "exclude": False})
+            self.assertEqual(rt.registry.nodes["7"]["endpoint_exclude"], {"2": False})
+        finally:
+            shutil.rmtree(tmp)
+
+    async def test_whole_home_set_op_bad_ep_raises(self):
+        rt = proxy.ProxyRuntime()
+        for ep in ("x", 0, True):
+            with self.assertRaises(ValueError):
+                await proxy.process_control_op(rt, {"op": "whole_home_set", "node": 7, "ep": ep, "exclude": True})
+
+    async def test_demote_preserves_a_gang_known_only_from_its_opt_out_record(self):
+        """A gang with no live state and no label, known only from a historic endpoint_exclude
+        record, must still be re-excluded by the demote — same gang universe as the scene sweep."""
+        tmp = Path(tempfile.mkdtemp())
+        try:
+            rt = proxy.ProxyRuntime(registry=proxy.Registry(tmp / "r.json"))
+            rt.registry.set_user(7, ep=2, exclude_from_all=False)           # historic per-gang record
+            rt.registry.set_user(7, exclude_from_all=True)                  # then a node-level opt-out
+            await proxy.process_control_op(rt, {"op": "whole_home_set", "node": 7, "ep": 1, "exclude": False})
+            entry = rt.registry.nodes["7"]
+            self.assertIs(entry["exclude_from_all"], False)
+            self.assertEqual(entry["endpoint_exclude"], {"1": False, "2": True})   # gang 2 NOT lost
+        finally:
+            shutil.rmtree(tmp)
+
+    async def test_whole_home_per_gang_write_demotes_node_exclusion(self):
+        """A per-gang write on a node the OLD panel opted out node-level: the node flag demotes to
+        per-gang flags — every other known gang (live state ∪ labels) stays excluded, the addressed
+        gang follows the request. So the user's earlier intent survives the granularity upgrade."""
+        tmp = Path(tempfile.mkdtemp())
+        try:
+            rt = proxy.ProxyRuntime(registry=proxy.Registry(tmp / "r.json"))
+            rt.registry.set_user(7, exclude_from_all=True)                  # old node-level opt-out
+            rt.registry.set_user(7, ep=1, name="hol")                       # gang 1 known via its label
+            rt.state.gang[7] = {2: False}                                   # gang 2 known via live state
+            resp = await proxy.process_control_op(rt, {"op": "whole_home_set", "node": 7, "ep": 2, "exclude": False})
+            self.assertTrue(resp["ok"])
+            entry = rt.registry.nodes["7"]
+            self.assertIs(entry["exclude_from_all"], False)                 # node flag demoted
+            self.assertEqual(entry["endpoint_exclude"], {"1": True, "2": False})
+        finally:
+            shutil.rmtree(tmp)
+
     async def test_whole_home_set_op_reports_save_failure(self):
         rt = proxy.ProxyRuntime()
         with mock.patch.object(rt.registry, "write_payload", side_effect=OSError("disk")):

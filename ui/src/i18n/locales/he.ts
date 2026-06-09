@@ -38,6 +38,7 @@ const messages: Partial<Messages> = {
   "wholeHome.lights": "אורות",
   "wholeHome.blinds": "תריסים",
   "wholeHome.include": "כלול ב״הכול״",
+  "wholeHome.gang": "לחצן {n}",
   "wholeHome.empty": "אין אורות או תריסים להגדרה",
   "wholeHome.saved": "✓ נשמר",
   "wholeHome.saveError": "✗ לא ניתן לשמור — נסו שוב",

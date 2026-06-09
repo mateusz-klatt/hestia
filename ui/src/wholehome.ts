@@ -12,8 +12,10 @@ export interface WholeHomeConfigDeps {
   /** The node ids currently opted out of "all" (from GET /api/whole-home — kept off DeviceInfo so the
    *  device snapshot stays wire-stable for native clients). */
   excluded: ReadonlySet<number>;
-  /** POST /api/whole-home {node, exclude}. Resolves true on success. */
-  setExcluded: (node: number, excluded: boolean) => Promise<boolean>;
+  /** Per-gang opt-outs of multi-gang switches: node id → the gang numbers opted out. */
+  excludedEndpoints: ReadonlyMap<number, ReadonlySet<number>>;
+  /** POST /api/whole-home {node, exclude} — or {node, exclude, ep} for one gang. Resolves true on success. */
+  setExcluded: (node: number, excluded: boolean, ep?: number) => Promise<boolean>;
   onClosed?: () => void;
 }
 
@@ -28,39 +30,55 @@ function byNode(a: [string, DeviceInfo], b: [string, DeviceInfo]): number {
   return Number(a[0]) - Number(b[0]);
 }
 
-/** One device row: a checkbox (checked = INCLUDED in "all") + the device name. Toggling persists the
- *  opt-out immediately via `setExcluded`; on failure the checkbox reverts and the status reports it. */
-function buildRow(node: string, info: DeviceInfo, deps: WholeHomeConfigDeps, status: HTMLElement): HTMLElement {
+/** The gang numbers of a multi-gang switch, ascending; [] for single-gang. Mirrors the backend's
+ *  gang universe (live endpoints ∪ labels ∪ flagged) so an existing per-gang opt-out stays visible
+ *  and editable even when the live gang map is sparse (e.g. right after a restart). */
+function gangsOf(info: DeviceInfo, flagged: ReadonlySet<number> | undefined): number[] {
+  const eps = new Set(Object.keys(info.endpoints ?? {}).map(Number));
+  for (const k of Object.keys(info.endpoint_names ?? {})) eps.add(Number(k));
+  for (const ep of flagged ?? []) eps.add(ep);
+  return eps.size > 1 ? [...eps].sort((a, b) => a - b) : [];
+}
+
+/** One toggle row: a checkbox (checked = INCLUDED in "all") + a label. Toggling persists immediately
+ *  via `save`; on failure (or rejection) the checkbox reverts and the shared status reports it. */
+function toggleRow(opts: {
+  label: string;
+  aria: string;
+  included: boolean;
+  gang?: boolean; // an indented per-gang row under its device heading
+  save: (excluded: boolean) => Promise<boolean>;
+  status: HTMLElement;
+}): HTMLElement {
   const row = document.createElement("label");
-  row.className = "wholehome-row";
+  row.className = opts.gang === true ? "wholehome-row wholehome-gang" : "wholehome-row";
 
   const checkbox = document.createElement("input");
   checkbox.type = "checkbox";
-  checkbox.checked = !deps.excluded.has(Number(node)); // not opted out → included (checked)
-  const labelText = deviceName(node, info);
-  checkbox.setAttribute("aria-label", `${t("wholeHome.include")}: ${labelText}`);
+  checkbox.checked = opts.included;
+  checkbox.setAttribute("aria-label", `${t("wholeHome.include")}: ${opts.aria}`);
 
   const name = document.createElement("span");
   name.className = "wholehome-name";
-  name.textContent = labelText;
+  name.textContent = opts.label;
 
   row.append(checkbox, name);
   checkbox.addEventListener("change", () => {
     const excluded = !checkbox.checked; // unchecked = opted OUT of the sweeps
     checkbox.disabled = true;
-    status.textContent = "…";
-    status.className = "status";
+    opts.status.textContent = "…";
+    opts.status.className = "status";
     void (async () => {
-      // A rejection (a future setExcluded that throws) is treated as failure, so the row never
-      // gets stuck disabled at "…" — the wired postName resolves {ok:false} rather than rejecting.
-      const ok = await deps.setExcluded(Number(node), excluded).catch(() => false);
+      // A rejection (a future save that throws) is treated as failure, so the row never gets stuck
+      // disabled at "…" — the wired client call resolves {ok:false} rather than rejecting.
+      const ok = await opts.save(excluded).catch(() => false);
       if (ok) {
-        status.textContent = t("wholeHome.saved");
-        status.className = "status ok";
+        opts.status.textContent = t("wholeHome.saved");
+        opts.status.className = "status ok";
       } else {
         checkbox.checked = !checkbox.checked; // revert the optimistic toggle
-        status.textContent = t("wholeHome.saveError");
-        status.className = "status err";
+        opts.status.textContent = t("wholeHome.saveError");
+        opts.status.className = "status err";
       }
       checkbox.disabled = false;
     })();
@@ -68,11 +86,46 @@ function buildRow(node: string, info: DeviceInfo, deps: WholeHomeConfigDeps, sta
   return row;
 }
 
+/** The rows for one device: a single toggle, or — for a multi-gang switch — a heading plus one
+ *  toggle per gang (labelled from endpoint_names, falling back to a numbered gang), each gang
+ *  independently in/out of "all". A node-level opt-out shows every gang unchecked; re-checking a
+ *  gang then writes per-gang flags (the server demotes the node flag, preserving the other gangs). */
+function deviceRows(node: string, info: DeviceInfo, deps: WholeHomeConfigDeps, status: HTMLElement): HTMLElement[] {
+  const nodeNum = Number(node);
+  const label = deviceName(node, info);
+  const epsOut = deps.excludedEndpoints.get(nodeNum);
+  const gangs = gangsOf(info, epsOut);
+  if (gangs.length === 0) {
+    return [toggleRow({
+      label,
+      aria: label,
+      included: !deps.excluded.has(nodeNum),
+      save: (excluded) => deps.setExcluded(nodeNum, excluded),
+      status,
+    })];
+  }
+  const heading = document.createElement("div");
+  heading.className = "wholehome-device";
+  heading.textContent = label;
+  return [heading, ...gangs.map((ep) => {
+    const gangLabel = info.endpoint_names?.[String(ep)] ?? t("wholeHome.gang", { n: ep });
+    return toggleRow({
+      label: gangLabel,
+      aria: `${label} – ${gangLabel}`,
+      included: !(deps.excluded.has(nodeNum) || epsOut?.has(ep) === true),
+      gang: true,
+      save: (excluded) => deps.setExcluded(nodeNum, excluded, ep),
+      status,
+    });
+  })];
+}
+
 /**
- * Open the admin-only "whole-home" configuration panel: which lights / blinds the house-wide
- * "all" buttons act on. A centred modal (reusing the .modal-* chrome) grouped by device type, each
- * row a checkbox that persists immediately. XSS-safe (textContent + DOM, no innerHTML). Returns a
- * `close()` handle (used by tests); closes on the Done button, a backdrop click, or Escape.
+ * Open the admin-only "whole-home" configuration panel: which lights / blinds (and which single
+ * gangs of a multi-gang switch) the house-wide "all" buttons act on. A centred modal (reusing the
+ * .modal-* chrome) grouped by device type, each row a checkbox that persists immediately. XSS-safe
+ * (textContent + DOM, no innerHTML). Returns a `close()` handle (used by tests); closes on the Done
+ * button, a backdrop click, or Escape.
  */
 export function openWholeHomeConfig(deps: WholeHomeConfigDeps): () => void {
   const previousFocus = document.activeElement; // restored on close so focus returns to the trigger
@@ -108,7 +161,7 @@ export function openWholeHomeConfig(deps: WholeHomeConfigDeps): () => void {
     groupHeading.className = "wholehome-group";
     groupHeading.textContent = t(type === "light" ? "wholeHome.lights" : "wholeHome.blinds");
     list.appendChild(groupHeading);
-    for (const [node, info] of group) list.appendChild(buildRow(node, info, deps, status));
+    for (const [node, info] of group) list.append(...deviceRows(node, info, deps, status));
   }
   if (!any) {
     const empty = document.createElement("p");

@@ -41,6 +41,7 @@ const en = {
   "wholeHome.lights": "Lights",
   "wholeHome.blinds": "Blinds",
   "wholeHome.include": "Include in “all”",
+  "wholeHome.gang": "Gang {n}",
   "wholeHome.empty": "No lights or blinds to configure",
   "wholeHome.saved": "✓ Saved",
   "wholeHome.saveError": "✗ Couldn’t save — try again",

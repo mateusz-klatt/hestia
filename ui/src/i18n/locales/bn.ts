@@ -38,6 +38,7 @@ const messages: Partial<Messages> = {
   "wholeHome.lights": "আলো",
   "wholeHome.blinds": "ব্লাইন্ড",
   "wholeHome.include": "“সব”-এর মধ্যে অন্তর্ভুক্ত করুন",
+  "wholeHome.gang": "বোতাম {n}",
   "wholeHome.empty": "কনফিগার করার মতো কোনো আলো বা ব্লাইন্ড নেই",
   "wholeHome.saved": "✓ সংরক্ষিত",
   "wholeHome.saveError": "✗ সংরক্ষণ করা যায়নি — আবার চেষ্টা করুন",

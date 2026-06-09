@@ -38,6 +38,7 @@ const messages: Partial<Messages> = {
   "wholeHome.lights": "မီးများ",
   "wholeHome.blinds": "ဘလိုင်းများ",
   "wholeHome.include": "“အားလုံး” တွင် ထည့်သွင်းရန်",
+  "wholeHome.gang": "ခလုတ် {n}",
   "wholeHome.empty": "ပြင်ဆင်ရန် မီး သို့မဟုတ် ဘလိုင်း မရှိပါ",
   "wholeHome.saved": "✓ သိမ်းဆည်းပြီး",
   "wholeHome.saveError": "✗ မသိမ်းနိုင်ပါ — ထပ်စမ်းကြည့်ပါ",

@@ -38,6 +38,7 @@ const messages: Partial<Messages> = {
   "wholeHome.lights": "Işıklar",
   "wholeHome.blinds": "Panjurlar",
   "wholeHome.include": "“Hepsi”ne dahil et",
+  "wholeHome.gang": "Tuş {n}",
   "wholeHome.empty": "Yapılandırılacak ışık veya panjur yok",
   "wholeHome.saved": "✓ Kaydedildi",
   "wholeHome.saveError": "✗ Kaydedilemedi — tekrar deneyin",

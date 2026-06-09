@@ -38,6 +38,7 @@ const messages: Partial<Messages> = {
   "wholeHome.lights": "چراغ‌ها",
   "wholeHome.blinds": "پرده‌ها",
   "wholeHome.include": "در «همه» لحاظ شود",
+  "wholeHome.gang": "کلید {n}",
   "wholeHome.empty": "چراغ یا پرده‌ای برای پیکربندی وجود ندارد",
   "wholeHome.saved": "✓ ذخیره شد",
   "wholeHome.saveError": "✗ ذخیره نشد — دوباره تلاش کنید",

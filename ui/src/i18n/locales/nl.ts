@@ -38,6 +38,7 @@ const messages: Partial<Messages> = {
   "wholeHome.lights": "Lampen",
   "wholeHome.blinds": "Jaloezieën",
   "wholeHome.include": "Opnemen in ‘alles’",
+  "wholeHome.gang": "Knop {n}",
   "wholeHome.empty": "Geen lampen of jaloezieën om te configureren",
   "wholeHome.saved": "✓ Opgeslagen",
   "wholeHome.saveError": "✗ Kon niet opslaan — probeer opnieuw",

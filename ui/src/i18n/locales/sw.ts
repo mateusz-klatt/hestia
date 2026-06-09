@@ -38,6 +38,7 @@ const messages: Partial<Messages> = {
   "wholeHome.lights": "Taa",
   "wholeHome.blinds": "Mapazia",
   "wholeHome.include": "Jumuisha katika “zote”",
+  "wholeHome.gang": "Kitufe {n}",
   "wholeHome.empty": "Hakuna taa au mapazia ya kusanidi",
   "wholeHome.saved": "✓ Imehifadhiwa",
   "wholeHome.saveError": "✗ Haikuweza kuhifadhi — jaribu tena",

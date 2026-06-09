@@ -38,6 +38,7 @@ const messages: Partial<Messages> = {
   "wholeHome.lights": "Đèn",
   "wholeHome.blinds": "Rèm",
   "wholeHome.include": "Bao gồm trong “tất cả”",
+  "wholeHome.gang": "Nút {n}",
   "wholeHome.empty": "Không có đèn hoặc rèm để cấu hình",
   "wholeHome.saved": "✓ Đã lưu",
   "wholeHome.saveError": "✗ Không thể lưu — hãy thử lại",

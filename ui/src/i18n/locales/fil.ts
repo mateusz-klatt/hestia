@@ -38,6 +38,7 @@ const messages: Partial<Messages> = {
   "wholeHome.lights": "Mga ilaw",
   "wholeHome.blinds": "Mga blind",
   "wholeHome.include": "Isama sa “lahat”",
+  "wholeHome.gang": "Pindutan {n}",
   "wholeHome.empty": "Walang ilaw o blind na iko-configure",
   "wholeHome.saved": "✓ Nai-save",
   "wholeHome.saveError": "✗ Hindi ma-save — subukan ulit",

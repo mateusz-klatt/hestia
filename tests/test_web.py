@@ -496,6 +496,55 @@ class SceneOpsTests(unittest.TestCase):
         self.assertEqual(self._ops("blinds_up", nodes),
                          [{"op": "cover", "node": 3, "value": 99}])            # exclude=False stays in
 
+    def _gang_ops(self, devices, nodes, scene="lights_on"):
+        rt = SimpleNamespace(registry=SimpleNamespace(nodes=nodes))
+        with mock.patch("hestia.web._merged_discovery", return_value=devices):
+            return web._scene_ops(rt, scene)
+
+    def test_gang_excluded_light_expands_to_per_endpoint_ops(self):
+        # 2-gang hall/nightlight: gang 2 opted out → ONE endpoint-addressed op for gang 1 only.
+        devices = {"7": {"type": "light", "level": None, "endpoints": {1: True, 2: False}}}
+        nodes = {"7": {"endpoint_exclude": {"2": True}}}
+        self.assertEqual(self._gang_ops(devices, nodes),
+                         [{"op": "switch", "node": 7, "on": True, "endpoint": 1}])
+
+    def test_all_gangs_excluded_emits_nothing(self):
+        devices = {"7": {"type": "light", "level": None, "endpoints": {1: True, 2: False}}}
+        nodes = {"7": {"endpoint_exclude": {"1": True, "2": True}}}
+        self.assertEqual(self._gang_ops(devices, nodes), [])
+
+    def test_all_false_endpoint_exclude_keeps_the_node_level_op(self):
+        # Re-included gangs (explicit False) are NOT an exclusion → one node-level frame as before.
+        devices = {"7": {"type": "light", "level": None, "endpoints": {1: True, 2: False}}}
+        nodes = {"7": {"endpoint_exclude": {"2": False}}}
+        self.assertEqual(self._gang_ops(devices, nodes), [{"op": "switch", "node": 7, "on": True}])
+
+    def test_gang_set_falls_back_to_labels_when_live_state_is_missing(self):
+        # No live gang map yet → the labelled gangs (endpoint_names) still drive the expansion.
+        devices = {"7": {"type": "light", "level": None, "endpoints": None}}
+        nodes = {"7": {"endpoint_exclude": {"2": True}, "endpoint_names": {"1": "hol", "2": "kaganek"}}}
+        self.assertEqual(self._gang_ops(devices, nodes),
+                         [{"op": "switch", "node": 7, "on": True, "endpoint": 1}])
+
+    def test_unenumerable_gang_set_is_skipped_fail_safe(self):
+        # The only knowledge of this node's gangs is the opt-out itself (no live state, no labels):
+        # the sweep must emit NOTHING — never a node-level frame that would drive the excluded gang.
+        devices = {"7": {"type": "light", "level": None, "endpoints": None}}
+        nodes = {"7": {"endpoint_exclude": {"2": True}}}
+        self.assertEqual(self._gang_ops(devices, nodes), [])
+
+    def test_dimmable_light_ignores_endpoint_exclude(self):
+        # A dimmer is driven by a node-level `level` op (no endpoint concept) — per-gang flags don't apply.
+        devices = {"7": {"type": "light", "level": 42, "endpoints": None}}
+        nodes = {"7": {"endpoint_exclude": {"2": True}}}
+        self.assertEqual(self._gang_ops(devices, nodes), [{"op": "level", "node": 7, "value": 99}])
+
+    def test_node_exclusion_beats_per_gang_state(self):
+        # A node-level opt-out drops the whole device even if per-gang flags also exist.
+        devices = {"7": {"type": "light", "level": None, "endpoints": {1: True, 2: False}}}
+        nodes = {"7": {"exclude_from_all": True, "endpoint_exclude": {"2": False}}}
+        self.assertEqual(self._gang_ops(devices, nodes), [])
+
 
 class SceneEndpointTests(_WebTestBase):
     """POST /api/scene — fan-out endpoint for house-wide actions."""
@@ -1136,9 +1185,28 @@ class WholeHomeEndpointTests(_WebTestBase):
             _post(self.web.address, "/api/whole-home", {"node": n, "exclude": True})
         self.assertEqual(self._excluded(), [2, 7, 10])
 
+    def test_per_gang_post_round_trips_via_excluded_endpoints(self):
+        status, _, body = _post(self.web.address, "/api/whole-home", {"node": 7, "ep": 2, "exclude": True})
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body), {"ok": True})
+        _, _, got = _get(self.web.address, "/api/whole-home")
+        self.assertEqual(json.loads(got)["excluded_endpoints"], {"7": [2]})
+        self.assertEqual(json.loads(got)["excluded_nodes"], [])              # node-level untouched
+        # re-include the gang → drops out of the map entirely (no empty lists)
+        _post(self.web.address, "/api/whole-home", {"node": 7, "ep": 2, "exclude": False})
+        _, _, got = _get(self.web.address, "/api/whole-home")
+        self.assertEqual(json.loads(got)["excluded_endpoints"], {})
+
+    def test_explicit_null_ep_is_node_level(self):
+        status, _, _ = _post(self.web.address, "/api/whole-home", {"node": 5, "ep": None, "exclude": True})
+        self.assertEqual(status, 200)
+        self.assertEqual(self._excluded(), [5])
+
     def test_bad_payloads_are_400(self):
         for body in ({"node": "x", "exclude": True}, {"node": 5, "exclude": "yes"},
                      {"node": 300, "exclude": True}, {"node": 5}, {"node": 5, "exclude": True, "zzz": 1},
+                     {"node": 5, "exclude": True, "ep": 0}, {"node": 5, "exclude": True, "ep": 3},
+                     {"node": 5, "exclude": True, "ep": "x"}, {"node": 5, "exclude": True, "ep": True},
                      [1, 2]):                                   # a non-object JSON body → 400
             with self.subTest(body=body):
                 status, _, _ = _post(self.web.address, "/api/whole-home", body)

@@ -38,6 +38,7 @@ const messages: Partial<Messages> = {
   "wholeHome.lights": "燈光",
   "wholeHome.blinds": "百葉窗",
   "wholeHome.include": "納入「全部」",
+  "wholeHome.gang": "按鍵 {n}",
   "wholeHome.empty": "沒有可設定的燈光或百葉窗",
   "wholeHome.saved": "✓ 已儲存",
   "wholeHome.saveError": "✗ 無法儲存 — 請再試一次",

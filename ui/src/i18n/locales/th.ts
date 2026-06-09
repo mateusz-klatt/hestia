@@ -38,6 +38,7 @@ const messages: Partial<Messages> = {
   "wholeHome.lights": "ไฟ",
   "wholeHome.blinds": "มู่ลี่",
   "wholeHome.include": "รวมใน “ทั้งหมด”",
+  "wholeHome.gang": "ปุ่ม {n}",
   "wholeHome.empty": "ไม่มีไฟหรือมู่ลี่ให้กำหนดค่า",
   "wholeHome.saved": "✓ บันทึกแล้ว",
   "wholeHome.saveError": "✗ บันทึกไม่ได้ — ลองอีกครั้ง",

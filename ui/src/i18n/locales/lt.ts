@@ -38,6 +38,7 @@ const messages: Partial<Messages> = {
   "wholeHome.lights": "Šviestuvai",
   "wholeHome.blinds": "Žaliuzės",
   "wholeHome.include": "Įtraukti į „visi“",
+  "wholeHome.gang": "Mygtukas {n}",
   "wholeHome.empty": "Nėra konfigūruojamų šviestuvų ar žaliuzių",
   "wholeHome.saved": "✓ Išsaugota",
   "wholeHome.saveError": "✗ Nepavyko išsaugoti — bandykite dar kartą",

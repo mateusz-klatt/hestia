@@ -38,6 +38,7 @@ const messages: Partial<Messages> = {
   "wholeHome.lights": "Luzes",
   "wholeHome.blinds": "Persianas",
   "wholeHome.include": "Incluir em «tudo»",
+  "wholeHome.gang": "Tecla {n}",
   "wholeHome.empty": "Nenhuma luz ou persiana para configurar",
   "wholeHome.saved": "✓ Salvo",
   "wholeHome.saveError": "✗ Não foi possível salvar — tente novamente",

@@ -1392,21 +1392,28 @@ export interface components {
         };
         /**
          * WholeHomeConfig
-         * @description GET /api/whole-home — which devices are opted out of the house-wide "all lights / all blinds"
-         *     sweeps. Registry-only config (deliberately NOT in DeviceInfo, so adding the opt-out never changes
-         *     the device-snapshot wire shape a pinned native client decodes). ``excluded_nodes`` = the node ids
-         *     a device is fully opted out by.
+         * @description GET /api/whole-home — what is opted out of the house-wide "all lights / all blinds" sweeps.
+         *     Registry-only config (deliberately NOT in DeviceInfo, so adding the opt-out never changes the
+         *     device-snapshot wire shape a pinned native client decodes). ``excluded_nodes`` = whole devices;
+         *     ``excluded_endpoints`` = single gangs of a multi-gang switch (node id → sorted gang numbers).
          */
         WholeHomeConfig: {
+            /** Excluded Endpoints */
+            excluded_endpoints: {
+                [key: string]: number[];
+            };
             /** Excluded Nodes */
             excluded_nodes: number[];
         };
         /**
          * WholeHomeRequest
          * @description POST /api/whole-home — opt one device in (``exclude``=false) / out (true) of the house-wide
-         *     "all" sweeps.
+         *     "all" sweeps. With ``ep`` (gang 1 or 2, like the control op's ``endpoint``) the opt-out targets
+         *     that single gang of a multi-gang switch instead of the whole node.
          */
         WholeHomeRequest: {
+            /** Ep */
+            ep?: number | null;
             /** Exclude */
             exclude: boolean;
             /**

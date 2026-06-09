@@ -410,7 +410,12 @@ class RoleAndBindingContractTests(unittest.TestCase):
         from hestia.web import _whole_home_error
         for body in ({"node": 1, "exclude": True}, {"node": 1, "exclude": False},
                      {"node": 1, "exclude": 1}, {"node": 1}, {"exclude": True},
-                     {"node": 300, "exclude": True}, {"node": 1, "exclude": True, "zzz": 1}):
+                     {"node": 300, "exclude": True}, {"node": 1, "exclude": True, "zzz": 1},
+                     # per-gang: ep 1/2 (or explicit null) ok; 0/3/str/bool rejected
+                     {"node": 1, "exclude": True, "ep": 1}, {"node": 1, "exclude": True, "ep": 2},
+                     {"node": 1, "exclude": True, "ep": None}, {"node": 1, "exclude": True, "ep": 0},
+                     {"node": 1, "exclude": True, "ep": 3}, {"node": 1, "exclude": True, "ep": "x"},
+                     {"node": 1, "exclude": True, "ep": True}):
             backend_ok = _whole_home_error(body) is None
             try:
                 api_contract.WholeHomeRequest.model_validate(body)
@@ -420,10 +425,13 @@ class RoleAndBindingContractTests(unittest.TestCase):
             self.assertEqual(backend_ok, dto_ok, f"whole-home disagree on {body}")
 
     def test_whole_home_config_shape(self):
-        api_contract.WholeHomeConfig.model_validate({"excluded_nodes": []})
-        api_contract.WholeHomeConfig.model_validate({"excluded_nodes": [2, 14]})
-        with self.assertRaises(ValueError):
-            api_contract.WholeHomeConfig.model_validate({"excluded_nodes": [2], "extra": 1})
+        api_contract.WholeHomeConfig.model_validate({"excluded_nodes": [], "excluded_endpoints": {}})
+        api_contract.WholeHomeConfig.model_validate(
+            {"excluded_nodes": [2, 14], "excluded_endpoints": {"7": [2]}})
+        for bad in ({"excluded_nodes": [2]},                                   # endpoints key required
+                    {"excluded_nodes": [2], "excluded_endpoints": {}, "extra": 1}):
+            with self.assertRaises(ValueError):
+                api_contract.WholeHomeConfig.model_validate(bad)
 
 
 class AutomationsContractTests(unittest.TestCase):

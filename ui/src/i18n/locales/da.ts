@@ -38,6 +38,7 @@ const messages: Partial<Messages> = {
   "wholeHome.lights": "Lys",
   "wholeHome.blinds": "Persienner",
   "wholeHome.include": "Medtag i „alle”",
+  "wholeHome.gang": "Tangent {n}",
   "wholeHome.empty": "Ingen lys eller persienner at konfigurere",
   "wholeHome.saved": "✓ Gemt",
   "wholeHome.saveError": "✗ Kunne ikke gemme — prøv igen",

@@ -38,6 +38,7 @@ const messages: Partial<Messages> = {
   "wholeHome.lights": "Lámpák",
   "wholeHome.blinds": "Redőnyök",
   "wholeHome.include": "Bekerüljön az „összes” közé",
+  "wholeHome.gang": "Gomb {n}",
   "wholeHome.empty": "Nincs konfigurálható lámpa vagy redőny",
   "wholeHome.saved": "✓ Mentve",
   "wholeHome.saveError": "✗ Nem sikerült menteni — próbálja újra",
