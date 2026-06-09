@@ -261,7 +261,9 @@ class ReadShapeContractTests(unittest.TestCase):
         schemas = api_contract.build_openapi()["components"]["schemas"]
         for name in ("DeviceInfo", "Globals", "Summary", "RuleVocab", "KlimaState"):
             self.assertIn(name, schemas)
-            self.assertIs(schemas[name].get("additionalProperties"), False)  # forbids unknowns
+            # Tolerant reader (#89): no additionalProperties:false on anything a client DECODES —
+            # the PYTHON models still forbid unknowns, which is what the binding tests lean on.
+            self.assertNotIn("additionalProperties", schemas[name])
 
 
 class AuthContractTests(unittest.TestCase):
@@ -432,6 +434,56 @@ class RoleAndBindingContractTests(unittest.TestCase):
                     {"excluded_nodes": [2], "excluded_endpoints": {}, "extra": 1}):
             with self.assertRaises(ValueError):
                 api_contract.WholeHomeConfig.model_validate(bad)
+
+
+class TolerantResponseContractTests(unittest.TestCase):
+    """Response schemas must be TOLERANT READERS (the #122 Vesta lesson: a strict generated decoder
+    turns an additive response field into a client crash). additionalProperties:false may appear in
+    the emitted artifact ONLY on request-side schemas, never on anything a client decodes."""
+
+    REQUEST_ONLY = {
+        "AddUserRequest", "ChangePasswordRequest", "ControlCover", "ControlLevel", "ControlRequest",
+        "ControlSwitch", "ControlThermostat", "ControlThermostatPower", "IrRequest", "LoginRequest",
+        "NameRequest", "ResetPasswordRequest", "RoomIconRequest", "RuleInput", "SceneRequest",
+        "SetDisabledRequest", "SetRoleRequest", "SettingsUpdate", "WholeHomeRequest",
+    }
+
+    def test_strictness_lives_only_on_request_schemas(self):
+        schemas = api_contract.build_openapi()["components"]["schemas"]
+        strict = {name for name, schema in schemas.items()
+                  if '"additionalProperties": false' in json.dumps(schema)}
+        self.assertEqual(strict - self.REQUEST_ONLY, set(),
+                         "a response-reachable schema with additionalProperties:false would crash a "
+                         "strict generated decoder on the next additive field")
+        for canary in ("ControlSwitch", "NameRequest", "LoginRequest", "WholeHomeRequest"):
+            self.assertIs(schemas[canary].get("additionalProperties"), False, canary)
+
+    def test_no_strict_schema_is_response_reachable(self):
+        # Closure-derived (not allowlist-derived): even after future endpoint/schema moves, nothing a
+        # client can ever DECODE may carry additionalProperties:false. If a request DTO starts being
+        # echoed in a response, this fails until that schema goes tolerant.
+        doc = api_contract.build_openapi()
+        schemas = doc["components"]["schemas"]
+        response_roots = set()
+        for ops in doc["paths"].values():
+            for op in ops.values():
+                response_roots |= api_contract._schema_refs(op.get("responses", {}))
+        reachable = api_contract._ref_closure(schemas, response_roots)
+        strict = {name for name, schema in schemas.items()
+                  if '"additionalProperties": false' in json.dumps(schema)}
+        self.assertEqual(strict & reachable, set())
+
+    def test_decoded_shapes_are_tolerant(self):
+        # The shapes a pinned native client decodes: the snapshot, live events, command results.
+        schemas = api_contract.build_openapi()["components"]["schemas"]
+        for name in ("DeviceInfo", "Discovery", "Globals", "Summary", "WhoAmI", "LoginSuccess",
+                     "ControlSuccess", "ControlError", "SceneResult", "OkResult", "Settings",
+                     "WholeHomeConfig", "StateEvent", "DeviceStatePatch", "GlobalsEvent",
+                     "GlobalsPatch", "ActivityEvent", "KlimaEvent", "DiscoveryChangedEvent",
+                     "AuditFeed", "AuditEvent", "Rule", "AutomationsList", "UsersList", "UserRow",
+                     "Rf433Feed", "Rf433Device", "DbStats", "Klima", "KlimaState", "RuleVocab",
+                     "IrButton"):
+            self.assertNotIn('"additionalProperties": false', json.dumps(schemas[name]), name)
 
 
 class AutomationsContractTests(unittest.TestCase):

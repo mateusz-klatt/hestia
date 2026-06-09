@@ -2,7 +2,6 @@
   "components": {
     "schemas": {
       "ActivityEvent": {
-        "additionalProperties": false,
         "description": "Heatmap row-flash on every decoded frame with a node; `scene` rides only a function-button frame.",
         "properties": {
           "node": {
@@ -66,7 +65,6 @@
         "type": "object"
       },
       "AuditEvent": {
-        "additionalProperties": false,
         "description": "One audit-log row (store_sql.recent_audit). id/ts are non-null; the five string fields are\nnullable at the DB layer (model defensively as str|null), null when the action has no such field.",
         "properties": {
           "action": {
@@ -146,7 +144,6 @@
         "type": "object"
       },
       "AuditFeed": {
-        "additionalProperties": false,
         "description": "GET /api/audit \u2014 newest-first rows (capped 200); `events` always present ([] when audit off).",
         "properties": {
           "events": {
@@ -164,7 +161,6 @@
         "type": "object"
       },
       "AutomationDeleted": {
-        "additionalProperties": false,
         "description": "200 from POST /api/automations/delete: `deleted` is false (200, not 404) for an absent id.",
         "properties": {
           "deleted": {
@@ -184,7 +180,6 @@
         "type": "object"
       },
       "AutomationSaved": {
-        "additionalProperties": false,
         "description": "200 from POST /api/automations: the saved rule's id (NOT the rule object).",
         "properties": {
           "id": {
@@ -204,7 +199,6 @@
         "type": "object"
       },
       "AutomationsList": {
-        "additionalProperties": false,
         "description": "GET /api/automations \u2014 every saved rule. `automations` (NOT `rules`) is always present.",
         "properties": {
           "automations": {
@@ -281,7 +275,6 @@
         "type": "object"
       },
       "ControlError": {
-        "additionalProperties": false,
         "description": "The 400 (malformed) / 503 (device unavailable) body: ``ok`` false + a human error string.",
         "properties": {
           "error": {
@@ -363,7 +356,6 @@
         ]
       },
       "ControlSuccess": {
-        "additionalProperties": false,
         "description": "The 200 body when a control command reaches the device: ``ok`` true + the ``sent`` wire frame.",
         "properties": {
           "ok": {
@@ -490,7 +482,6 @@
         "type": "object"
       },
       "DbStats": {
-        "additionalProperties": false,
         "description": "GET /api/db/stats \u2014 SQLite on-disk size + per-table row counts (admin). ``tables`` maps each\ntracked table name to its current row count.",
         "properties": {
           "file_bytes": {
@@ -513,7 +504,6 @@
         "type": "object"
       },
       "DeviceInfo": {
-        "additionalProperties": false,
         "description": "One device, merged from the classifier + the user registry (``proxy._discovery_entry``). The base\n+ live-state fields are ALWAYS present (required), null when unseen \u2014 so `0`/`false` are never lost.\nThe registry labels (``name``/``room``/``endpoint_names``) are OPTIONAL \u2014 absent until set, never null.\n``confidence`` is usually a string but a legacy/hand-edited registry node (a ``type`` without a\n``confidence``) can surface null, so the contract admits it. NOTE: the whole-home scene opt-out\n(``exclude_from_all``) is deliberately NOT exposed here \u2014 it lives only on the dedicated\n``/api/whole-home`` surface, so adding it never changes this (client-decoded) response shape.",
         "properties": {
           "battery": {
@@ -738,7 +728,6 @@
         "type": "object"
       },
       "DeviceStatePatch": {
-        "additionalProperties": false,
         "description": "A partial of DeviceInfo \u2014 exactly the live-state keys a frame can change (State.apply's `changed`\nmap, after `scene` is popped). Discovery-side fields (power/type/confidence/battery/last_seen) never\nride a `state` event \u2014 they arrive via a discovery_changed refetch.",
         "properties": {
           "door": {
@@ -870,7 +859,6 @@
         "type": "object"
       },
       "Discovery": {
-        "additionalProperties": false,
         "description": "``GET /api/discovery`` \u2014 the whole dashboard snapshot. Every key is always present; ``klima_state``\nis null until an A/C IR command is seen, ``env_override`` is null unless ``HESTIA_MODE`` pins the mode.",
         "properties": {
           "devices": {
@@ -945,7 +933,6 @@
         "type": "object"
       },
       "DiscoveryChangedEvent": {
-        "additionalProperties": false,
         "description": "Re-fetch GET /api/discovery (identity/name/classifier change). No payload.",
         "properties": {
           "type": {
@@ -961,7 +948,6 @@
         "type": "object"
       },
       "Globals": {
-        "additionalProperties": false,
         "description": "Node-less global fields (``proxy.globals_snapshot``). Every key is ALWAYS present (required),\nnull when its poller is off.",
         "properties": {
           "crib_temp": {
@@ -1007,7 +993,6 @@
         "type": "object"
       },
       "GlobalsEvent": {
-        "additionalProperties": false,
         "properties": {
           "fields": {
             "$ref": "#/components/schemas/GlobalsPatch"
@@ -1026,7 +1011,6 @@
         "type": "object"
       },
       "GlobalsPatch": {
-        "additionalProperties": false,
         "description": "A partial of Globals \u2014 the changed global field(s) in a `globals` event (1 key, or 2 for 433).",
         "properties": {
           "crib_temp": {
@@ -1067,7 +1051,6 @@
         "type": "object"
       },
       "IrButton": {
-        "additionalProperties": false,
         "description": "A configured one-tap IR button (``HESTIA_IR_BUTTONS``) \u2192 transmits a saved Flipper signal.",
         "properties": {
           "button": {
@@ -1114,7 +1097,6 @@
         "type": "object"
       },
       "Klima": {
-        "additionalProperties": false,
         "description": "The A/C control map parsed from the klima.ir signal names \u2014 an empty ``{}`` when no klima.ir is\npresent, so every field is OPTIONAL (absent, never null). ``modes``/``power_on`` map each mode to its\nsorted temps; ``presets`` carries ``off`` + any non-temp signal.",
         "properties": {
           "file": {
@@ -1153,7 +1135,6 @@
         "type": "object"
       },
       "KlimaEvent": {
-        "additionalProperties": false,
         "properties": {
           "klima": {
             "$ref": "#/components/schemas/KlimaState"
@@ -1172,7 +1153,6 @@
         "type": "object"
       },
       "KlimaState": {
-        "additionalProperties": false,
         "description": "The A/C state derived from IR traffic (``state``): power + optional mode/target.",
         "properties": {
           "mode": {
@@ -1265,7 +1245,6 @@
         "type": "object"
       },
       "LoginSuccess": {
-        "additionalProperties": false,
         "description": "200 from /api/login. ``token`` is present ONLY when the request set ``bearer: true``.",
         "properties": {
           "ok": {
@@ -1367,7 +1346,6 @@
         "type": "object"
       },
       "OkResult": {
-        "additionalProperties": false,
         "description": "A bare ``{ok: true}`` acknowledgement (e.g. /api/logout).",
         "properties": {
           "ok": {
@@ -1405,7 +1383,6 @@
         "type": "object"
       },
       "Rf433Device": {
-        "additionalProperties": false,
         "description": "One discovered 433 MHz device (``rf433.Rf433Registry.snapshot``). ``fields`` is the last decoded\npacket's JSON-safe scalars (rtl_433 ``time``/``mic`` noise stripped). All five keys are always present.",
         "properties": {
           "count": {
@@ -1456,7 +1433,6 @@
         "type": "object"
       },
       "Rf433Feed": {
-        "additionalProperties": false,
         "description": "GET /api/rf433 \u2014 every decoded 433 device, newest-seen first (admin observability). ``devices`` is\n``[]`` until the local-433 feeder is running.",
         "properties": {
           "devices": {
@@ -1496,7 +1472,6 @@
         "type": "object"
       },
       "Rule": {
-        "additionalProperties": false,
         "description": "A saved automation rule (automations.Rule.to_dict) \u2014 all 7 keys ALWAYS present in the output.",
         "properties": {
           "actions": {
@@ -1699,7 +1674,6 @@
         "type": "object"
       },
       "RuleVocab": {
-        "additionalProperties": false,
         "description": "The automation-rule grammar the guided form builds from (``automations.rule_vocab``).",
         "properties": {
           "cmp_ops": {
@@ -1773,7 +1747,6 @@
         "type": "object"
       },
       "Scene": {
-        "additionalProperties": false,
         "description": "A function-button press riding an `activity` event. `kind` distinguishes the two frame types.",
         "properties": {
           "id": {
@@ -1818,7 +1791,6 @@
         "type": "object"
       },
       "SceneResult": {
-        "additionalProperties": false,
         "description": "200 from /api/scene: how many of the scene's per-device commands the gateway accepted.",
         "properties": {
           "ok": {
@@ -1890,7 +1862,6 @@
         "type": "object"
       },
       "Settings": {
-        "additionalProperties": false,
         "description": "GET /api/settings \u2014 the logged-in user's UI prefs. All three keys are ALWAYS present, null when\nunset (an unauthenticated / no-row request returns all-null, never an error).",
         "properties": {
           "locale": {
@@ -1983,7 +1954,6 @@
         "type": "object"
       },
       "StateEvent": {
-        "additionalProperties": false,
         "properties": {
           "fields": {
             "$ref": "#/components/schemas/DeviceStatePatch"
@@ -2007,7 +1977,6 @@
         "type": "object"
       },
       "StatePredicate": {
-        "additionalProperties": false,
         "description": "A condition with NO `type` key (the absence IS the discriminant vs time_window).",
         "properties": {
           "field": {
@@ -2070,7 +2039,6 @@
         "type": "object"
       },
       "Summary": {
-        "additionalProperties": false,
         "description": "Discovery roster counters (``web._summary``).",
         "properties": {
           "confirmed": {
@@ -2095,7 +2063,6 @@
         "type": "object"
       },
       "TimeWindowCondition": {
-        "additionalProperties": false,
         "description": "A time-of-day guard condition. `days` is OMITTED entirely when unset (unlike time/sun triggers).",
         "properties": {
           "days": {
@@ -2130,7 +2097,6 @@
         "type": "object"
       },
       "TriggerCron": {
-        "additionalProperties": false,
         "properties": {
           "expr": {
             "title": "Expr",
@@ -2150,7 +2116,6 @@
         "type": "object"
       },
       "TriggerPresence": {
-        "additionalProperties": false,
         "properties": {
           "event": {
             "enum": [
@@ -2179,7 +2144,6 @@
         "type": "object"
       },
       "TriggerScene": {
-        "additionalProperties": false,
         "properties": {
           "node": {
             "title": "Node",
@@ -2204,7 +2168,6 @@
         "type": "object"
       },
       "TriggerState": {
-        "additionalProperties": false,
         "properties": {
           "field": {
             "enum": [
@@ -2272,7 +2235,6 @@
         "type": "object"
       },
       "TriggerSun": {
-        "additionalProperties": false,
         "properties": {
           "days": {
             "anyOf": [
@@ -2318,7 +2280,6 @@
         "type": "object"
       },
       "TriggerTime": {
-        "additionalProperties": false,
         "properties": {
           "at": {
             "title": "At",
@@ -2355,7 +2316,6 @@
         "type": "object"
       },
       "UserRow": {
-        "additionalProperties": false,
         "description": "One account in the admin user list (``store_sql.list_users``) \u2014 username / role / disabled,\nNEVER the password hash.",
         "properties": {
           "disabled": {
@@ -2385,7 +2345,6 @@
         "type": "object"
       },
       "UsersList": {
-        "additionalProperties": false,
         "description": "GET /api/users \u2014 every account (admin). ``users`` is always present; there is NO top-level ``ok``.",
         "properties": {
           "users": {
@@ -2403,7 +2362,6 @@
         "type": "object"
       },
       "WhoAmI": {
-        "additionalProperties": false,
         "description": "GET /api/whoami \u2014 the caller's identity + RBAC role; both null when auth is off (loopback/dev).",
         "properties": {
           "role": {
@@ -2437,7 +2395,6 @@
         "type": "object"
       },
       "WholeHomeConfig": {
-        "additionalProperties": false,
         "description": "GET /api/whole-home \u2014 what is opted out of the house-wide \"all lights / all blinds\" sweeps.\nRegistry-only config (deliberately NOT in DeviceInfo, so adding the opt-out never changes the\ndevice-snapshot wire shape a pinned native client decodes). ``excluded_nodes`` = whole devices;\n``excluded_endpoints`` = single gangs of a multi-gang switch (node id \u2192 sorted gang numbers).",
         "properties": {
           "excluded_endpoints": {
@@ -2506,7 +2463,7 @@
   "info": {
     "description": "Local cloud-free smart-home control API. Generated from hestia/api_contract.py \u2014 do not edit by hand; run `python -m hestia.api_contract`.",
     "title": "hestia API",
-    "version": "0.3.0"
+    "version": "0.4.0"
   },
   "openapi": "3.1.0",
   "paths": {
