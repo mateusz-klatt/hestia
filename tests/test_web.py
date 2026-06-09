@@ -204,16 +204,7 @@ class ValidateNamePayloadTests(unittest.TestCase):
 
     def test_empty(self):
         self.assertEqual(self._validate({"node": 5}),
-                         "at least one of name, room, type, exclude_from_all is required")
-
-    def test_exclude_from_all_accepted(self):
-        # the scene-sweep opt-out is a valid sole field, and accepts both booleans
-        self.assertIsNone(self._validate({"node": 5, "exclude_from_all": True}))
-        self.assertIsNone(self._validate({"node": 5, "exclude_from_all": False}))
-
-    def test_exclude_from_all_must_be_bool(self):
-        self.assertEqual(self._validate({"node": 5, "exclude_from_all": 1}),
-                         "exclude_from_all must be a boolean")
+                         "at least one of name, room, type is required")
 
     def test_missing_node(self):
         self.assertEqual(self._validate({"name": "x"}), "'node' field is required")
@@ -474,9 +465,12 @@ class SceneOpsTests(unittest.TestCase):
         "4": {"type": "plug", "level": None},
     }
 
-    def _ops(self, scene):
+    def _ops(self, scene, nodes=None):
+        # The scene reads opt-outs from the REGISTRY (not from discovery — keeps the DeviceInfo wire
+        # shape stable for native clients), so give rt a registry.nodes map.
+        rt = SimpleNamespace(registry=SimpleNamespace(nodes=nodes or {}))
         with mock.patch("hestia.web._merged_discovery", return_value=self.DEVICES):
-            return web._scene_ops(SimpleNamespace(), scene)
+            return web._scene_ops(rt, scene)
 
     def test_lights_off_switches_plain_lights_and_dimmable_lights_off(self):
         self.assertEqual(self._ops("lights_off"), [
@@ -495,16 +489,12 @@ class SceneOpsTests(unittest.TestCase):
         self.assertEqual(self._ops("blinds_up"), [{"op": "cover", "node": 3, "value": 99}])
 
     def test_devices_opted_out_of_all_are_skipped(self):
-        devices = {
-            "1": {"type": "light", "level": None},
-            "2": {"type": "light", "level": 42, "exclude_from_all": True},    # nightlight opted out
-            "3": {"type": "blind", "level": None, "exclude_from_all": False},  # explicit re-include
-        }
-        with mock.patch("hestia.web._merged_discovery", return_value=devices):
-            self.assertEqual(web._scene_ops(SimpleNamespace(), "lights_off"),
-                             [{"op": "switch", "node": 1, "on": False}])       # node 2 dropped
-            self.assertEqual(web._scene_ops(SimpleNamespace(), "blinds_up"),
-                             [{"op": "cover", "node": 3, "value": 99}])        # exclude=False stays in
+        # Opt-outs live in the registry, NOT in discovery — node 2 excluded, node 3 explicitly re-included.
+        nodes = {"2": {"exclude_from_all": True}, "3": {"exclude_from_all": False}}
+        self.assertEqual(self._ops("lights_off", nodes),
+                         [{"op": "switch", "node": 1, "on": False}])           # node 2 dropped
+        self.assertEqual(self._ops("blinds_up", nodes),
+                         [{"op": "cover", "node": 3, "value": 99}])            # exclude=False stays in
 
 
 class SceneEndpointTests(_WebTestBase):
@@ -1112,6 +1102,51 @@ class NamePersistTests(_WebTestBase):
         _, _, body = _get(self.web.address, "/api/discovery")
         entry = json.loads(body)["devices"]["18"]
         self.assertNotEqual(entry["confidence"], "confirmed")
+
+
+class WholeHomeEndpointTests(_WebTestBase):
+    """The dedicated /api/whole-home read+write surface — the opt-out lives here, NOT in DeviceInfo, so
+    /api/discovery stays wire-stable for pinned native clients."""
+
+    def _excluded(self):
+        _, _, body = _get(self.web.address, "/api/whole-home")
+        return json.loads(body)["excluded_nodes"]
+
+    def test_get_empty_by_default(self):
+        self.assertEqual(self._excluded(), [])
+
+    def test_post_sets_and_get_reflects_then_reincludes(self):
+        status, _, body = _post(self.web.address, "/api/whole-home", {"node": 5, "exclude": True})
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body), {"ok": True})
+        self.assertEqual(self._excluded(), [5])
+        # exclude=false re-includes → drops out of the list
+        _post(self.web.address, "/api/whole-home", {"node": 5, "exclude": False})
+        self.assertEqual(self._excluded(), [])
+
+    def test_opt_out_is_not_surfaced_in_discovery(self):
+        _post(self.web.address, "/api/whole-home", {"node": 5, "exclude": True})
+        _, _, disco = _get(self.web.address, "/api/discovery")
+        devices = json.loads(disco)["devices"]
+        if "5" in devices:                                    # registry-only → never on the device snapshot
+            self.assertNotIn("exclude_from_all", devices["5"])
+
+    def test_excluded_nodes_are_sorted_numerically(self):
+        for n in (10, 2, 7):
+            _post(self.web.address, "/api/whole-home", {"node": n, "exclude": True})
+        self.assertEqual(self._excluded(), [2, 7, 10])
+
+    def test_bad_payloads_are_400(self):
+        for body in ({"node": "x", "exclude": True}, {"node": 5, "exclude": "yes"},
+                     {"node": 300, "exclude": True}, {"node": 5}, {"node": 5, "exclude": True, "zzz": 1},
+                     [1, 2]):                                   # a non-object JSON body → 400
+            with self.subTest(body=body):
+                status, _, _ = _post(self.web.address, "/api/whole-home", body)
+                self.assertEqual(status, 400)
+
+    def test_bad_content_type_is_415(self):
+        status, _, _ = _post(self.web.address, "/api/whole-home", b"{}", headers={"Content-Type": "text/plain"})
+        self.assertEqual(status, 415)
 
 
 class NameValidationTests(_WebTestBase):
@@ -1857,6 +1892,8 @@ class AuthzTests(_WebTestBase):
         self.assertEqual(self._get("/api/automations", "viewer"), 403)   # admin-only read (leaks MACs)
         self.assertEqual(self._get("/api/db/stats", "viewer"), 403)
         self.assertEqual(self._get("/api/rf433", "viewer"), 403)
+        self.assertEqual(self._get("/api/whole-home", "viewer"), 403)    # whole-home config is admin-only
+        self.assertEqual(self._post("/api/whole-home", "viewer", {"node": 5, "exclude": True}), 403)
 
     def test_operator_controls_but_not_the_admin_surface(self):
         self.assertEqual(self._post("/api/control", "operator", {"op": "switch", "node": 5, "on": True}), 503)
@@ -1864,6 +1901,7 @@ class AuthzTests(_WebTestBase):
         self.assertEqual(self._post("/api/automations", "operator", {}), 403)   # rule editing is admin-only
         self.assertEqual(self._post("/api/automations/delete", "operator", {"id": "x"}), 403)
         self.assertEqual(self._post("/api/name", "operator", {"node": 5, "name": "x"}), 403)
+        self.assertEqual(self._post("/api/whole-home", "operator", {"node": 5, "exclude": True}), 403)
         self.assertEqual(self._post("/api/graduate", "operator"), 403)
         self.assertEqual(self._post("/api/rooms/icons", "operator", {"room": "x", "icon": "🚪"}), 403)
         self.assertEqual(self._get("/api/automations", "operator"), 403)
@@ -1872,6 +1910,8 @@ class AuthzTests(_WebTestBase):
         self.assertEqual(self._get("/api/automations", "admin"), 200)
         self.assertEqual(self._get("/api/db/stats", "admin"), 200)
         self.assertNotEqual(self._post("/api/name", "admin", {"node": 5, "name": "x"}), 403)
+        self.assertEqual(self._get("/api/whole-home", "admin"), 200)
+        self.assertEqual(self._post("/api/whole-home", "admin", {"node": 5, "exclude": True}), 200)
 
     def test_removed_account_is_401_everywhere(self):
         self.assertEqual(self._get("/api/discovery", None), 401)   # current_user_role → None → cookie moot

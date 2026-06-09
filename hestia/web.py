@@ -54,7 +54,7 @@ SSE_IDLE_TIMEOUT = _num_env("HESTIA_SSE_KEEPALIVE", 5.0, 1.0, 3600.0)  # idle→
 SSE_MAX_LIFETIME = float(os.environ.get("HESTIA_SSE_LIFETIME", "3600"))
 _TYPES = {t.value for t in DeviceType}
 _clock = time.monotonic                              # module-level rebindable for tests
-_NAME_FIELDS = {"op", "node", "name", "room", "type", "ep", "exclude_from_all"}   # allowlist for /api/name (ep = endpoint label)
+_NAME_FIELDS = {"op", "node", "name", "room", "type", "ep"}   # allowlist for /api/name (ep = endpoint label)
 _BODY_NOT_OBJECT = "body must be a JSON object"   # shared 4xx message (/api/ir, /api/name, /api/control)
 _CONTROL_OPS = {"switch", "level", "cover", "thermostat", "thermostat_power"}
 _CONTROL_FIELDS = {
@@ -151,6 +151,7 @@ _PATH_SETTINGS = "/api/settings"
 _PATH_ROOM_ICONS = "/api/rooms/icons"
 _PATH_AUTOMATIONS = "/api/automations"
 _PATH_USERS = "/api/users"
+_PATH_WHOLE_HOME = "/api/whole-home"
 _USERNAME_REQUIRED = "username is required"   # shared 400 message across the admin user verbs
 _ROUTE_MIN_ROLE = {
     # reads every signed-in user (incl. a read-only viewer) needs — the room / event-log / temps / own-prefs surface
@@ -169,6 +170,8 @@ _ROUTE_MIN_ROLE = {
     # config / engineering surface: admin only — incl. the reads that would leak it (automation rules carry
     # presence-trigger MAC addresses; db-stats / rf433 are engineering observability the operator hides)
     ("POST", "/api/name"): _ADMIN,
+    ("GET", _PATH_WHOLE_HOME): _ADMIN,             # which devices are in "all" — admin config (registry-only)
+    ("POST", _PATH_WHOLE_HOME): _ADMIN,
     ("GET", _PATH_AUTOMATIONS): _ADMIN,
     ("POST", _PATH_AUTOMATIONS): _ADMIN,
     ("POST", "/api/automations/delete"): _ADMIN,
@@ -368,6 +371,45 @@ async def _settings_set(request):
     if user is not None:
         await _persist_user_settings(request, user, body)
     return _json(HTTPStatus.OK, {"ok": True})
+
+
+_WHOLE_HOME_FIELDS = {"node", "exclude"}   # allowlist for POST /api/whole-home
+
+
+async def _whole_home(request):
+    """GET /api/whole-home — the node ids opted out of the house-wide "all lights / all blinds" sweeps.
+    Registry-only: deliberately kept OFF the DeviceInfo wire shape (so adding it never breaks a strictly-
+    decoding pinned native client); the admin panel reads it from here instead. Admin."""
+    nodes = _rt(request).registry.nodes
+    excluded = sorted(int(n) for n, e in nodes.items() if n.isdigit() and e.get("exclude_from_all"))
+    return _json(HTTPStatus.OK, {"excluded_nodes": excluded})
+
+
+def _whole_home_error(body) -> "str | None":
+    if not isinstance(body, dict):
+        return _BODY_NOT_OBJECT
+    unknown = set(body) - _WHOLE_HOME_FIELDS
+    if unknown:
+        return f"unknown field(s): {sorted(unknown)}"
+    node = body.get("node")
+    if not isinstance(node, int) or isinstance(node, bool) or not 0 <= node <= 255:
+        return "node must be an integer 0..255"
+    if not isinstance(body.get("exclude"), bool):
+        return "exclude must be a boolean"
+    return None
+
+
+async def _whole_home_set(request):
+    """POST /api/whole-home — opt one device in (exclude=false) / out (exclude=true) of the house-wide
+    "all" sweeps. Admin. Registry-only, so it never changes the DeviceInfo wire shape."""
+    body, err = await _read_json_body(request)
+    if err:
+        return body
+    error = _whole_home_error(body)
+    if error is not None:
+        return _json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": error})
+    op = {"op": "whole_home_set", "node": body["node"], "exclude": body["exclude"]}
+    return await _dispatch_op(_rt(request), op, actor=_actor(request))
 
 
 async def _room_icons(_request):
@@ -616,11 +658,13 @@ def _scene_device_op(target_type: str, node_id: int, info: dict, active: bool) -
 def _scene_ops(rt, scene: str) -> list[dict]:
     """Expand a house-wide scene into ordinary per-device control ops."""
     target_type, active = _SCENE_TARGETS[scene]
-    # The house-wide sweep skips any device an admin opted out of "all" (e.g. a nightlight),
-    # so SceneResult.total reflects only the devices the scene actually targets.
+    # The house-wide sweep skips any device an admin opted out of "all" (e.g. a nightlight), so
+    # SceneResult.total reflects only the devices the scene targets. The opt-out is read straight from
+    # the registry (NOT from discovery) so the DeviceInfo wire shape stays stable for native clients.
+    reg = rt.registry.nodes
     return [_scene_device_op(target_type, int(node), info, active)
             for node, info in _merged_discovery(rt).items()
-            if info.get("type") == target_type and not info.get("exclude_from_all")]
+            if info.get("type") == target_type and not reg.get(node, {}).get("exclude_from_all")]
 
 
 async def _scene(request):
@@ -881,9 +925,9 @@ def _validate_name_payload(op) -> "str | None":
         return "/api/name only accepts op=name"
     if "node" not in op:
         return "'node' field is required"
-    fields_present = [k for k in ("name", "room", "type", "exclude_from_all") if k in op]
+    fields_present = [k for k in ("name", "room", "type") if k in op]
     if not fields_present:
-        return "at least one of name, room, type, exclude_from_all is required"
+        return "at least one of name, room, type is required"
     error = _validate_name_strings(op)
     if error is not None:
         return error
@@ -893,9 +937,6 @@ def _validate_name_payload(op) -> "str | None":
     ep = op.get("ep")
     if ep is not None and (not isinstance(ep, int) or isinstance(ep, bool) or ep < 0):
         return "ep must be a non-negative integer"
-    excl = op.get("exclude_from_all")
-    if excl is not None and not isinstance(excl, bool):
-        return "exclude_from_all must be a boolean"
     return None
 
 
@@ -997,6 +1038,8 @@ def make_app(rt):
     app.router.add_post(_PATH_SETTINGS, _settings_set)
     app.router.add_get(_PATH_ROOM_ICONS, _room_icons, allow_head=False)
     app.router.add_post(_PATH_ROOM_ICONS, _room_icon_set)
+    app.router.add_get(_PATH_WHOLE_HOME, _whole_home, allow_head=False)
+    app.router.add_post(_PATH_WHOLE_HOME, _whole_home_set)
     app.router.add_post("/api/name", _name)
     app.router.add_post("/api/ir", _ir)
     app.router.add_post("/api/control", _control)

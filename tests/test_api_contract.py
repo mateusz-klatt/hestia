@@ -338,10 +338,7 @@ class RegistrySettingsContractTests(unittest.TestCase):
         api_contract.NameRequest.model_validate({"node": 14, "name": "Lamp", "room": "Hall"})
         api_contract.NameRequest.model_validate({"node": 1, "room": None})    # null clears
         api_contract.NameRequest.model_validate({"node": 1, "type": "thermostat"})
-        api_contract.NameRequest.model_validate({"node": 1, "exclude_from_all": True})   # scene-sweep opt-out
-        api_contract.NameRequest.model_validate({"node": 1, "exclude_from_all": False})  # re-include
-        for bad in ({"node": 1, "type": "nope"}, {"node": 1, "name": "x", "zzz": 1}, {"name": "x"},
-                    {"node": 1, "exclude_from_all": 1}):                       # strict: int is not a bool
+        for bad in ({"node": 1, "type": "nope"}, {"node": 1, "name": "x", "zzz": 1}, {"name": "x"}):
             with self.assertRaises(ValueError):
                 api_contract.NameRequest.model_validate(bad)                  # bad type / unknown field / node missing
 
@@ -409,18 +406,24 @@ class RoleAndBindingContractTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             api_contract.NameRequest.model_validate({"node": 1, "type": "bogus"})
 
-    def test_name_exclude_from_all_agrees_with_validator(self):
-        from hestia.web import _validate_name_payload
-        for body in ({"node": 1, "exclude_from_all": True}, {"node": 1, "exclude_from_all": False},
-                     {"node": 1, "exclude_from_all": None}, {"node": 1, "exclude_from_all": 1},
-                     {"node": 1, "exclude_from_all": "x"}):
-            backend_ok = _validate_name_payload(body) is None
+    def test_whole_home_request_agrees_with_validator(self):
+        from hestia.web import _whole_home_error
+        for body in ({"node": 1, "exclude": True}, {"node": 1, "exclude": False},
+                     {"node": 1, "exclude": 1}, {"node": 1}, {"exclude": True},
+                     {"node": 300, "exclude": True}, {"node": 1, "exclude": True, "zzz": 1}):
+            backend_ok = _whole_home_error(body) is None
             try:
-                api_contract.NameRequest.model_validate(body)
+                api_contract.WholeHomeRequest.model_validate(body)
                 dto_ok = True
             except ValueError:
                 dto_ok = False
-            self.assertEqual(backend_ok, dto_ok, f"exclude_from_all disagree on {body}")
+            self.assertEqual(backend_ok, dto_ok, f"whole-home disagree on {body}")
+
+    def test_whole_home_config_shape(self):
+        api_contract.WholeHomeConfig.model_validate({"excluded_nodes": []})
+        api_contract.WholeHomeConfig.model_validate({"excluded_nodes": [2, 14]})
+        with self.assertRaises(ValueError):
+            api_contract.WholeHomeConfig.model_validate({"excluded_nodes": [2], "extra": 1})
 
 
 class AutomationsContractTests(unittest.TestCase):

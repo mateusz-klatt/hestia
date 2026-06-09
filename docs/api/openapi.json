@@ -514,7 +514,7 @@
       },
       "DeviceInfo": {
         "additionalProperties": false,
-        "description": "One device, merged from the classifier + the user registry (``proxy._discovery_entry``). The base\n+ live-state fields are ALWAYS present (required), null when unseen \u2014 so `0`/`false` are never lost.\nThe registry labels (``name``/``room``/``endpoint_names``/``exclude_from_all``) are OPTIONAL \u2014 absent\nuntil set, never null. ``exclude_from_all`` true means the device is opted out of the house-wide\n\"all lights / all blinds\" scene sweeps. ``confidence`` is usually a string but a legacy/hand-edited\nregistry node (a ``type`` without a ``confidence``) can surface null, so the contract admits it.",
+        "description": "One device, merged from the classifier + the user registry (``proxy._discovery_entry``). The base\n+ live-state fields are ALWAYS present (required), null when unseen \u2014 so `0`/`false` are never lost.\nThe registry labels (``name``/``room``/``endpoint_names``) are OPTIONAL \u2014 absent until set, never null.\n``confidence`` is usually a string but a legacy/hand-edited registry node (a ``type`` without a\n``confidence``) can surface null, so the contract admits it. NOTE: the whole-home scene opt-out\n(``exclude_from_all``) is deliberately NOT exposed here \u2014 it lives only on the dedicated\n``/api/whole-home`` surface, so adding it never changes this (client-decoded) response shape.",
         "properties": {
           "battery": {
             "anyOf": [
@@ -580,10 +580,6 @@
               }
             ],
             "title": "Energy Kwh"
-          },
-          "exclude_from_all": {
-            "title": "Exclude From All",
-            "type": "boolean"
           },
           "last_seen": {
             "anyOf": [
@@ -1294,7 +1290,7 @@
       },
       "NameRequest": {
         "additionalProperties": false,
-        "description": "POST /api/name \u2014 set a device's registry labels. ``node`` is required; at least one of\nname/room/type/exclude_from_all must be present (server-enforced cross-field, not expressible here).\nname/room accept null (clear); type is a DeviceType; ep is a multi-gang channel label;\n``exclude_from_all`` opts the device out of the house-wide \"all lights / all blinds\" scene sweeps\n(true = excluded, false = re-include). Unknown keys \u2192 400.",
+        "description": "POST /api/name \u2014 set a device's registry labels. ``node`` is required; at least one of\nname/room/type must be present (server-enforced cross-field, not expressible here). name/room\naccept null (clear); type is a DeviceType; ep is a multi-gang channel label. Unknown keys \u2192 400.",
         "properties": {
           "ep": {
             "anyOf": [
@@ -1307,17 +1303,6 @@
               }
             ],
             "title": "Ep"
-          },
-          "exclude_from_all": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Exclude From All"
           },
           "name": {
             "anyOf": [
@@ -2450,6 +2435,47 @@
         ],
         "title": "WhoAmI",
         "type": "object"
+      },
+      "WholeHomeConfig": {
+        "additionalProperties": false,
+        "description": "GET /api/whole-home \u2014 which devices are opted out of the house-wide \"all lights / all blinds\"\nsweeps. Registry-only config (deliberately NOT in DeviceInfo, so adding the opt-out never changes\nthe device-snapshot wire shape a pinned native client decodes). ``excluded_nodes`` = the node ids\na device is fully opted out by.",
+        "properties": {
+          "excluded_nodes": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Excluded Nodes",
+            "type": "array"
+          }
+        },
+        "required": [
+          "excluded_nodes"
+        ],
+        "title": "WholeHomeConfig",
+        "type": "object"
+      },
+      "WholeHomeRequest": {
+        "additionalProperties": false,
+        "description": "POST /api/whole-home \u2014 opt one device in (``exclude``=false) / out (true) of the house-wide\n\"all\" sweeps.",
+        "properties": {
+          "exclude": {
+            "title": "Exclude",
+            "type": "boolean"
+          },
+          "node": {
+            "description": "device node id",
+            "maximum": 255,
+            "minimum": 0,
+            "title": "Node",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "node",
+          "exclude"
+        ],
+        "title": "WholeHomeRequest",
+        "type": "object"
       }
     }
   },
@@ -3432,6 +3458,74 @@
         },
         "summary": "The caller's identity + RBAC role",
         "x-required-role": "viewer"
+      }
+    },
+    "/api/whole-home": {
+      "get": {
+        "description": "Requires the admin role. Registry-only config \u2014 kept off DeviceInfo so the device snapshot stays wire-stable for pinned native clients.",
+        "operationId": "getWholeHome",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WholeHomeConfig"
+                }
+              }
+            },
+            "description": "the opt-out config"
+          }
+        },
+        "summary": "Which devices are opted out of the house-wide \"all\" sweeps",
+        "x-required-role": "admin"
+      },
+      "post": {
+        "description": "Requires the admin role.",
+        "operationId": "setWholeHome",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WholeHomeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OkResult"
+                }
+              }
+            },
+            "description": "saved"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ControlError"
+                }
+              }
+            },
+            "description": "malformed"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ControlError"
+                }
+              }
+            },
+            "description": "registry save failed"
+          }
+        },
+        "summary": "Opt one device in/out of the house-wide \"all\" sweeps",
+        "x-required-role": "admin"
       }
     }
   }
