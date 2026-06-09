@@ -115,6 +115,7 @@ export function renderUser(
     reload?: () => void;
     saveSettings?: (settings: Partial<UserSettings>) => Promise<void>;
     onEditIcons?: () => void;
+    onConfigureWholeHome?: () => void;
     changePassword?: (current: string, newPassword: string) => Promise<MutationResult>;
   },
 ): void {
@@ -209,6 +210,22 @@ export function renderUser(
       onEditIcons();
     });
     menu.append(iconsBtn);
+  }
+
+  // Whole-home "all" setup — admin-only (it edits the shared registry via POST /api/name). Picks which
+  // lights / blinds the house-wide "all" buttons act on. Closes the menu, then opens the config panel.
+  const onConfigureWholeHome = opts.onConfigureWholeHome;
+  if (onConfigureWholeHome !== undefined) {
+    const wholeHomeBtn = document.createElement("button");
+    wholeHomeBtn.id = "configure-whole-home";
+    wholeHomeBtn.type = "button";
+    wholeHomeBtn.className = "menu-action";
+    wholeHomeBtn.textContent = `🏠 ${t("wholeHome.menu")}`;
+    wholeHomeBtn.addEventListener("click", () => {
+      setOpen(false);
+      onConfigureWholeHome();
+    });
+    menu.append(wholeHomeBtn);
   }
 
   // Change password — any signed-in user (a real session, not auth-off). Opens a modal that verifies

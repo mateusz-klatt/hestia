@@ -924,6 +924,44 @@ td.seen.fresh {
   background: transparent;
 }
 
+/* Whole-home "all" config panel (a wider modal listing lights/blinds with include toggles) */
+.wholehome-card {
+  max-width: 26rem;
+}
+
+.wholehome-desc {
+  margin: 0 0 0.8rem;
+  font-size: 0.85rem;
+  color: var(--fg-soft);
+}
+
+.wholehome-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  max-height: 60vh;
+  overflow-y: auto;
+}
+
+.wholehome-group {
+  margin: 0.6rem 0 0.1rem;
+  font-size: 0.8rem;
+  color: var(--accent);
+}
+
+.wholehome-row {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  font-size: 0.92rem;
+  color: var(--fg);
+  cursor: pointer;
+}
+
+.wholehome-row input {
+  flex: none;
+}
+
 /* Users panel */
 .users-head {
   display: flex;

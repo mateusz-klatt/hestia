@@ -224,6 +224,27 @@ describe("renderUser", () => {
     expect(box.querySelector<HTMLElement>("#user-menu")?.hidden).toBe(true); // menu closed
   });
 
+  it("shows the whole-home setup entry only when onConfigureWholeHome is provided", () => {
+    const without = document.createElement("div");
+    renderUser(without, "tata", { onLogout: vi.fn() });
+    expect(without.querySelector("#configure-whole-home")).toBeNull();
+
+    const withCb = document.createElement("div");
+    renderUser(withCb, "tata", { onLogout: vi.fn(), onConfigureWholeHome: vi.fn() });
+    expect(withCb.querySelector("#configure-whole-home")).not.toBeNull();
+  });
+
+  it("whole-home setup fires the callback and closes the menu", () => {
+    const box = document.createElement("div");
+    const onConfigureWholeHome = vi.fn();
+    renderUser(box, "tata", { onLogout: vi.fn(), onConfigureWholeHome });
+    box.querySelector<HTMLButtonElement>("#user-menu-btn")?.click(); // open the menu
+    expect(box.querySelector<HTMLElement>("#user-menu")?.hidden).toBe(false);
+    box.querySelector<HTMLButtonElement>("#configure-whole-home")?.click();
+    expect(onConfigureWholeHome).toHaveBeenCalledOnce();
+    expect(box.querySelector<HTMLElement>("#user-menu")?.hidden).toBe(true); // menu closed
+  });
+
   it("shows the change-password entry only for a signed-in user with the callback", () => {
     const noCb = document.createElement("div");
     renderUser(noCb, "tata", { onLogout: vi.fn() });
