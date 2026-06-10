@@ -381,7 +381,7 @@ def _excluded_endpoints(entry: dict) -> "list[int]":
     return sorted(int(k) for k, v in (entry.get("endpoint_exclude") or {}).items() if v)
 
 
-async def _whole_home(request):
+async def _whole_home(request):  # NOSONAR S7503: aiohttp route handlers must be coroutines (the framework awaits them)
     """GET /api/whole-home — what is opted out of the house-wide "all lights / all blinds" sweeps:
     whole nodes (``excluded_nodes``) and single gangs of multi-gang switches (``excluded_endpoints``,
     node → gang numbers). Registry-only: deliberately kept OFF the DeviceInfo wire shape (so adding
