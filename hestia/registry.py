@@ -31,6 +31,15 @@ def _key(node) -> str:
     return str(int(node, 0) if isinstance(node, str) else int(node))
 
 
+def _user_edit_is_noop(*, name, room, dtype, exclude_from_all, ep) -> bool:
+    """True when :meth:`Registry.set_user` has nothing to write: an ``ep`` edit
+    carrying neither a ``name`` nor a flag, or a node edit with every field ``None``.
+    Such calls must not create a stub entry or dirty the file."""
+    if ep is not None:
+        return name is None and exclude_from_all is None
+    return name is None and room is None and dtype is None and exclude_from_all is None
+
+
 class Registry:
     SCHEMA = 2
     MODES = ("proxy", "standalone")          # persisted runtime mode (Phase-3 graduation target)
@@ -150,11 +159,9 @@ class Registry:
 
         A call with nothing to write (an ``ep`` with no ``name`` and no flag, or all
         fields ``None``) is a no-op — it neither creates a stub entry nor dirties the file."""
-        if ep is not None:
-            if name is None and exclude_from_all is None:
-                return                                # endpoint label with no name (no flag) → nothing to do
-        elif name is None and room is None and dtype is None and exclude_from_all is None:
-            return                                    # pure no-op → don't create a ghost / dirty
+        if _user_edit_is_noop(name=name, room=room, dtype=dtype,
+                              exclude_from_all=exclude_from_all, ep=ep):
+            return
         entry = self.nodes.setdefault(_key(node), {"first_seen": _now()})
         if ep is not None:
             if name is not None:
