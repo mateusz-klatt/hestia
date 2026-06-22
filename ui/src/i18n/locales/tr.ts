@@ -204,6 +204,7 @@ const messages: Partial<Messages> = {
   "rule.windowFrom": "etkin",
   "rule.phNode": "düğüm",
   "rule.phValue": "değer",
+  "rule.gang": "tuş",
   "rule.phRuleId": "kural-id",
   "rule.phButton": "düğme",
   "rule.phOffset": "offset min",

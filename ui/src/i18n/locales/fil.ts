@@ -204,6 +204,7 @@ const messages: Partial<Messages> = {
   "rule.windowFrom": "aktibo",
   "rule.phNode": "node",
   "rule.phValue": "value",
+  "rule.gang": "pindutan",
   "rule.phRuleId": "rule-id",
   "rule.phButton": "button",
   "rule.phOffset": "offset min",

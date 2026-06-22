@@ -35,7 +35,11 @@ from pydantic.json_schema import models_json_schema
 # 0.4.0: response schemas become TOLERANT READERS (additionalProperties:false stripped from every
 #        non-request-only schema in the emitted doc) — so a client built from this contract never
 #        breaks on a future additive response field. Wire DATA unchanged; requests stay strict.
-CONTRACT_VERSION = "0.4.0"
+# 0.5.0: automation grammar grows two additive options — a `motion` state field (PIR triggers) and an
+#        optional `endpoint` (1|2) on a state predicate/trigger to target ONE gang of a multi-gang
+#        switch. Confined to the Rule/Trigger/StatePredicate/RuleVocab schemas (automations surface);
+#        no control/device shape changes, and the iOS client doesn't consume automations.
+CONTRACT_VERSION = "0.5.0"
 OPENAPI_PATH = Path(__file__).resolve().parent.parent / "docs" / "api" / "openapi.json"
 
 # De-duplicated string literals (SonarPython S1192): the OpenAPI content-type, the paths reused
@@ -254,9 +258,10 @@ _COMMAND_MODELS = (IrRequest, SceneRequest, SceneResult, NameRequest, Settings, 
 # Output (Rule.to_dict) always emits all 7 keys; trigger/condition dicts carry only known keys (extra
 # forbid), but ACTIONS pass author fields through verbatim (extra allow). Conditions discriminate by the
 # ABSENCE of `type` (state predicate) vs type="time_window". Mirrors hestia/automations.py.
-_RULE_FIELDS = frozenset({"door", "level", "switch", "setpoint", "thermostat_on", "temperature",
-                          "power_w", "energy_kwh", "voltage_v", "crib_temp", "outdoor_temp"})
-RuleField = Literal["door", "level", "switch", "setpoint", "thermostat_on", "temperature",
+_RULE_FIELDS = frozenset({"door", "motion", "level", "switch", "setpoint", "thermostat_on",
+                          "temperature", "power_w", "energy_kwh", "voltage_v", "crib_temp",
+                          "outdoor_temp"})
+RuleField = Literal["door", "motion", "level", "switch", "setpoint", "thermostat_on", "temperature",
                     "power_w", "energy_kwh", "voltage_v", "crib_temp", "outdoor_temp"]
 CmpOp = Literal["eq", "ne", "lt", "le", "gt", "ge"]
 RuleValue = bool | int | float | str  # a predicate target — never null/list/dict
@@ -277,6 +282,8 @@ class TriggerState(BaseModel):
     op: CmpOp
     value: RuleValue
     node: Annotated[int, Field(default=None, json_schema_extra=_OMIT)] = None  # omitted for GLOBAL fields
+    # one gang (1|2) of a multi-gang `switch`; omitted otherwise. Mirrors the control op's `endpoint`.
+    endpoint: Annotated[int, Field(default=None, ge=1, le=2, json_schema_extra=_OMIT)] = None
 
 
 class TriggerTime(BaseModel):
@@ -321,6 +328,8 @@ class StatePredicate(BaseModel):
     op: CmpOp
     value: RuleValue
     node: Annotated[int, Field(default=None, json_schema_extra=_OMIT)] = None
+    # one gang (1|2) of a multi-gang `switch`; omitted otherwise. Mirrors the control op's `endpoint`.
+    endpoint: Annotated[int, Field(default=None, ge=1, le=2, json_schema_extra=_OMIT)] = None
 
 
 class TimeWindowCondition(BaseModel):

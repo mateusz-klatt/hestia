@@ -203,6 +203,7 @@ const messages: Partial<Messages> = {
   "rule.windowFrom": "ใช้งาน",
   "rule.phNode": "โหนด",
   "rule.phValue": "ค่า",
+  "rule.gang": "ปุ่ม",
   "rule.phRuleId": "id-กฎ",
   "rule.phButton": "ปุ่ม",
   "rule.phOffset": "offset min",

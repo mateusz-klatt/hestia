@@ -149,12 +149,14 @@ function daysPicker(initial?: readonly number[] | null): { el: HTMLElement; read
   };
 }
 
-/** A state predicate (`{field, op, value [, node]}`) — `node` only when the field isn't GLOBAL. */
+/** A state predicate (`{field, op, value [, node] [, endpoint]}`) — `node` only when the field isn't
+ *  GLOBAL; `endpoint` (gang 1|2) only for a `switch` to target one gang of a multi-gang switch. */
 export type Predicate = {
   field: string;
   op: string;
   value: number | boolean | string;
   node?: number;
+  endpoint?: number;
 };
 
 /**
@@ -164,23 +166,35 @@ export type Predicate = {
  */
 function predicateEditor(
   vocab: RuleVocab,
-  seed?: { node?: number; field: string; op: string; value: unknown },
+  seed?: { node?: number; field: string; op: string; value: unknown; endpoint?: number },
 ): { el: HTMLElement; read: () => Predicate } {
   const wrap = document.createElement("span");
   const field = sel(Object.keys(vocab.state_fields));
   const op = sel(vocab.cmp_ops);
   const val = finp(t("rule.phValue"), 7);
   const node = nodeInput();
+  // Optional gang selector: "" = the whole device, "1"/"2" = one gang of a multi-gang `switch`. Shown
+  // only for the `switch` field (the only place a per-endpoint on/off exists).
+  const endpoint = document.createElement("select");
+  endpoint.setAttribute("aria-label", t("rule.gang"));
+  for (const [v, label] of [["", "—"], ["1", "1"], ["2", "2"]] as const) {
+    const o = document.createElement("option");
+    o.value = v;
+    o.textContent = label;
+    endpoint.appendChild(o);
+  }
   const syncNode = (): void => {
     node.style.display = vocab.state_fields[field.value] === true ? "none" : "";
+    endpoint.style.display = field.value === "switch" ? "" : "none"; // a gang only applies to a switch
   };
   field.addEventListener("change", syncNode);
-  wrap.append(field, op, val, node);
+  wrap.append(field, op, val, node, endpoint);
   if (seed !== undefined) {
     field.value = seed.field;
     op.value = seed.op;
     val.value = scalarToInput(seed.value);
     if (seed.node !== undefined) node.value = String(seed.node);
+    if (seed.endpoint !== undefined) endpoint.value = String(seed.endpoint);
   }
   syncNode();
   return {
@@ -195,6 +209,7 @@ function predicateEditor(
         if (n === null) throw new Error(t("rule.errNoNode", { field: f }));
         p.node = n;
       }
+      if (f === "switch" && endpoint.value !== "") p.endpoint = Number(endpoint.value); // one gang
       return p;
     },
   };
@@ -302,7 +317,11 @@ function predicateRepresentable(o: Record<string, unknown>, vocab: RuleVocab): b
   // so those load raw-only; `door eq "open"`, 18, 21.5, true all survive.
   if (coerce(scalarToInput(o.value)) !== o.value) return false;
   if (vocab.state_fields[o.field] !== true && typeof o.node !== "number") return false;
-  return onlyKeys(o, ["type", "node", "field", "op", "value"]);
+  // A gang `endpoint` is wizard-representable only for a `switch` and only as 1 or 2 (else → raw-only).
+  if (o.endpoint !== undefined && (o.field !== "switch" || (o.endpoint !== 1 && o.endpoint !== 2))) {
+    return false;
+  }
+  return onlyKeys(o, ["type", "node", "field", "op", "value", "endpoint"]);
 }
 
 function timeWindowRepresentable(o: Record<string, unknown>): boolean {
@@ -481,7 +500,9 @@ export function renderRuleForm(
     } else if (tt === "state") {
       const pe = predicateEditor(
         vocab,
-        seed === undefined ? undefined : (seed as { node?: number; field: string; op: string; value: unknown }),
+        seed === undefined
+          ? undefined
+          : (seed as { node?: number; field: string; op: string; value: unknown; endpoint?: number }),
       );
       tFields.append(pe.el);
       tRead = () => pe.read();
@@ -804,7 +825,10 @@ export function renderRuleForm(
       if (o.type === "time_window") {
         addCondRow(timeWindowEditor(o as unknown as TimeWindow));
       } else {
-        addCondRow(predicateEditor(vocab, o as { node?: number; field: string; op: string; value: unknown }));
+        addCondRow(predicateEditor(
+          vocab,
+          o as { node?: number; field: string; op: string; value: unknown; endpoint?: number },
+        ));
       }
     }
     clearActs();

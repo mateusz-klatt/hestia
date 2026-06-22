@@ -1224,11 +1224,13 @@ export interface components {
          * @description A condition with NO `type` key (the absence IS the discriminant vs time_window).
          */
         StatePredicate: {
+            /** Endpoint */
+            endpoint?: number;
             /**
              * Field
              * @enum {string}
              */
-            field: "door" | "level" | "switch" | "setpoint" | "thermostat_on" | "temperature" | "power_w" | "energy_kwh" | "voltage_v" | "crib_temp" | "outdoor_temp";
+            field: "door" | "motion" | "level" | "switch" | "setpoint" | "thermostat_on" | "temperature" | "power_w" | "energy_kwh" | "voltage_v" | "crib_temp" | "outdoor_temp";
             /** Node */
             node?: number;
             /**
@@ -1307,11 +1309,13 @@ export interface components {
         };
         /** TriggerState */
         TriggerState: {
+            /** Endpoint */
+            endpoint?: number;
             /**
              * Field
              * @enum {string}
              */
-            field: "door" | "level" | "switch" | "setpoint" | "thermostat_on" | "temperature" | "power_w" | "energy_kwh" | "voltage_v" | "crib_temp" | "outdoor_temp";
+            field: "door" | "motion" | "level" | "switch" | "setpoint" | "thermostat_on" | "temperature" | "power_w" | "energy_kwh" | "voltage_v" | "crib_temp" | "outdoor_temp";
             /** Node */
             node?: number;
             /**

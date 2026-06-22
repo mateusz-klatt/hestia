@@ -206,6 +206,7 @@ const messages: Partial<Messages> = {
   "rule.windowFrom": "aktívne",
   "rule.phNode": "uzol",
   "rule.phValue": "hodnota",
+  "rule.gang": "klávesa",
   "rule.phRuleId": "id-pravidla",
   "rule.phButton": "tlačidlo",
   "rule.phOffset": "offset min",

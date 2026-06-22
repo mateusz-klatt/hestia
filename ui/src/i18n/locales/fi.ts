@@ -204,6 +204,7 @@ const messages: Partial<Messages> = {
   "rule.windowFrom": "aktiivinen",
   "rule.phNode": "solmu",
   "rule.phValue": "arvo",
+  "rule.gang": "painike",
   "rule.phRuleId": "sääntö-id",
   "rule.phButton": "painike",
   "rule.phOffset": "offset min",

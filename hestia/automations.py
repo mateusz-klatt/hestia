@@ -65,8 +65,10 @@ _VALID_ACTION_OPS = _FRAME_ACTION_OPS | _EFFECT_ACTION_OPS
 # fed by a poller rather than device events. ``crib_temp`` (the Tuya baby-monitor) is the first; predicates
 # on a global field omit ``node`` and are driven by ``AutomationEngine.on_global`` / read by conditions.
 _GLOBAL = object()
+_UNSET = object()                    # "no value seen yet" sentinel for per-rule gang-edge baselining
 _STATE_FIELD_ATTRS = {
     "door": "doors",
+    "motion": "motion",              # PIR / occupancy bool (State.motion) — fed by _apply_motion's `changed`
     "level": "levels",
     "switch": "switches",
     "setpoint": "thermostat_setpoint",
@@ -135,14 +137,18 @@ def _eval_predicate(value_now, op, target) -> bool:
     return value_now >= target          # "ge"
 
 
-def current_value(state, node, field):
+def current_value(state, node, field, endpoint=None):
     """The live value of a node's scalar field from ``State``, or None when the field
-    is unknown or the node has not reported it yet."""
+    is unknown or the node has not reported it yet. With ``endpoint`` (a multi-gang
+    switch's gang, 1 or 2) the on/off comes from ``State.gang[node][endpoint]`` rather
+    than the whole-node ``switches`` map — so a predicate can target a single gang."""
     attr = _STATE_FIELD_ATTRS.get(field)
     if attr is None:
         return None
     if attr is _GLOBAL:                  # node-less scalar (e.g. crib_temp): ignore node
         return getattr(state, field)
+    if endpoint is not None:             # one gang of a multi-gang switch
+        return state.gang.get(node, {}).get(endpoint)
     return getattr(state, attr).get(node)
 
 
@@ -172,10 +178,22 @@ def _validate_predicate(spec, where):
         raise ValueError(f"{where}.value must be a scalar (bool/number/string), got {value!r}")
     if isinstance(value, float) and not math.isfinite(value):   # NaN/Infinity (json accepts them)
         raise ValueError(f"{where}.value must be a finite number, got {value!r}")
+    # An `endpoint` targets ONE gang of a multi-gang switch — only meaningful for the per-node `switch`
+    # bool (the gang's on/off lands in State.gang[node][ep], emitted as the `endpoints` change map).
+    # Validate it BEFORE the global-field fast path so a gang on a global / non-switch field is REJECTED,
+    # not silently dropped.
+    endpoint = spec.get("endpoint")
+    if endpoint is not None:
+        if field != "switch":
+            raise ValueError(f"{where}.endpoint is only valid with field 'switch', got field {field!r}")
+        if isinstance(endpoint, bool) or not isinstance(endpoint, int) or endpoint not in (1, 2):
+            raise ValueError(f"{where}.endpoint must be the integer 1 or 2, got {endpoint!r}")
     if _STATE_FIELD_ATTRS[field] is _GLOBAL:   # global field: node-less (a supplied node is ignored)
         return {"field": field, "op": op, "value": value}
     node = _validate_node(spec.get("node"), f"{where}.node")
-    return {"node": node, "field": field, "op": op, "value": value}
+    if endpoint is None:
+        return {"node": node, "field": field, "op": op, "value": value}
+    return {"node": node, "field": field, "op": op, "value": value, "endpoint": endpoint}
 
 
 def _validate_days(days, where="trigger.days"):
@@ -691,6 +709,7 @@ class AutomationEngine:
         self._last_fired: "dict[str, float]" = {}       # debounce (monotonic)
         self._last_time_fire: "dict[str, tuple]" = {}   # time-trigger minute-slot dedup
         self._last_presence: "dict[str, bool]" = {}     # presence-trigger edge (per rule)
+        self._last_gang: "dict[str, bool]" = {}         # per-gang switch-trigger edge: last value of the watched gang
 
     def reset_runtime(self, rule_id) -> None:
         """Drop a rule's loop-guard state so a re-authored/replaced id starts clean: the next true
@@ -699,6 +718,7 @@ class AutomationEngine:
         self._last_fired.pop(rule_id, None)
         self._last_time_fire.pop(rule_id, None)
         self._last_presence.pop(rule_id, None)
+        self._last_gang.pop(rule_id, None)
 
     def set_rule(self, rule: "Rule") -> None:
         """In-memory create/replace (used by tests and any non-durable caller). The
@@ -912,12 +932,34 @@ class AutomationEngine:
         if tg["type"] == "scene":
             return scene is not None and node == tg["node"] and scene["id"] == tg["scene_id"]
         # state trigger: edge-detected on the predicate's false->true transition.
-        if node != tg["node"] or tg["field"] not in changed:
+        if node != tg["node"]:
+            return False
+        if tg.get("endpoint") is not None:
+            return self._gang_triggered(rule, tg, changed)
+        if tg["field"] not in changed:
             return False
         now_true = _eval_predicate(changed[tg["field"]], tg["op"], tg["value"])
         prev = self._last_match.get(rule.id, False)
         self._last_match[rule.id] = now_true     # always track, even if conditions/debounce
         return now_true and not prev             # later suppress the action (the edge is real)
+
+    def _gang_triggered(self, rule, tg, changed) -> bool:
+        """Edge for a per-gang `switch` trigger. ``changed["endpoints"]`` is the FULL per-node {ep: on}
+        roll-up (emitted on ANY gang change), so its presence does NOT prove the WATCHED gang moved.
+        Track the watched gang's last value per rule and fire only on a real transition into a
+        predicate-true value. First sight is a baseline (no fire) — like a presence trigger — because the
+        prior gang state can't be known from a roll-up; this also stops a sibling-gang change from firing
+        a freshly-(re)loaded rule whose gang already matches."""
+        ep = tg["endpoint"]
+        endpoints = changed.get("endpoints")
+        if endpoints is None or ep not in endpoints:
+            return False
+        value_now = endpoints[ep]
+        prev_value = self._last_gang.get(rule.id, _UNSET)
+        self._last_gang[rule.id] = value_now
+        if prev_value is _UNSET or value_now == prev_value:
+            return False                         # baseline, or a sibling gang moved (this one didn't)
+        return _eval_predicate(value_now, tg["op"], tg["value"])  # a real flip → fire iff now predicate-true
 
     @staticmethod
     def _condition_ok(state, cond, now_local) -> bool:
@@ -925,5 +967,7 @@ class AutomationEngine:
         if cond.get("type") == "time_window":
             return _eval_time_window(cond, now_local)
         # cond.get("node"): a global-field condition has no `node` (current_value ignores it anyway).
-        return _eval_predicate(current_value(state, cond.get("node"), cond["field"]),
-                               cond["op"], cond["value"])
+        # cond.get("endpoint"): present only for a per-gang switch predicate (reads State.gang[node][ep]).
+        return _eval_predicate(
+            current_value(state, cond.get("node"), cond["field"], cond.get("endpoint")),
+            cond["op"], cond["value"])

@@ -205,6 +205,7 @@ const messages: Partial<Messages> = {
   "rule.windowFrom": "פעיל",
   "rule.phNode": "צומת",
   "rule.phValue": "ערך",
+  "rule.gang": "מקש",
   "rule.phRuleId": "מזהה-כלל",
   "rule.phButton": "כפתור",
   "rule.phOffset": "offset min",

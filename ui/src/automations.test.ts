@@ -43,6 +43,8 @@ describe("trigSummary", () => {
   const cases: [Trigger, string][] = [
     [{ type: "scene", node: 5, scene_id: 2 }, "scene 2 @node 5"],
     [{ type: "state", node: 7, field: "temperature", op: "gt", value: 22 }, "node 7 temperature gt 22"],
+    [{ type: "state", node: 16, field: "motion", op: "eq", value: true }, "node 16 motion eq true"], // PIR
+    [{ type: "state", node: 2, endpoint: 1, field: "switch", op: "eq", value: false }, "node 2 gang 1 switch eq false"],
     [{ type: "state", field: "crib_temp", op: "lt", value: 18 }, "crib_temp lt 18"], // global, no node
     [{ type: "time", at: "07:30", days: null }, "at 07:30"],
     [{ type: "time", at: "07:30", days: [0, 4] }, "at 07:30 [0,4]"],

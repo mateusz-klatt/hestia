@@ -207,6 +207,7 @@ const messages: Partial<Messages> = {
   "rule.windowFrom": "gníomhach",
   "rule.phNode": "nód",
   "rule.phValue": "luach",
+  "rule.gang": "cnaipe",
   "rule.phRuleId": "id-riail",
   "rule.phButton": "cnaipe",
   "rule.phOffset": "offset min",

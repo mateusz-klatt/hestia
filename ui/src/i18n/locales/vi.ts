@@ -203,6 +203,7 @@ const messages: Partial<Messages> = {
   "rule.windowFrom": "hoạt động",
   "rule.phNode": "nút",
   "rule.phValue": "giá trị",
+  "rule.gang": "phím",
   "rule.phRuleId": "id-quy-tắc",
   "rule.phButton": "nút",
   "rule.phOffset": "offset min",

@@ -205,6 +205,7 @@ const messages: Partial<Messages> = {
   "rule.windowFrom": "aktīvs",
   "rule.phNode": "mezgls",
   "rule.phValue": "vērtība",
+  "rule.gang": "taustiņš",
   "rule.phRuleId": "kārtulas-id",
   "rule.phButton": "poga",
   "rule.phOffset": "offset min",

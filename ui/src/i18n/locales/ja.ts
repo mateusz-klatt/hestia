@@ -203,6 +203,7 @@ const messages: Partial<Messages> = {
   "rule.windowFrom": "有効",
   "rule.phNode": "ノード",
   "rule.phValue": "値",
+  "rule.gang": "ボタン",
   "rule.phRuleId": "ルール-id",
   "rule.phButton": "ボタン",
   "rule.phOffset": "offset min",
