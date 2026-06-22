@@ -74,6 +74,21 @@ function finp(placeholder: string, size = 7): HTMLInputElement {
   return i;
 }
 
+/** A gang selector for a multi-gang `switch`: "" = the whole device, "1"/"2" = one gang. Shared by the
+ *  state-predicate editor and the `switch` action editor so they can't drift. */
+function gangSelect(): HTMLSelectElement {
+  const s = document.createElement("select");
+  s.style.marginRight = "0.25rem";
+  s.setAttribute("aria-label", t("rule.gang"));
+  for (const [v, label] of [["", "—"], ["1", "1"], ["2", "2"]] as const) {
+    const o = document.createElement("option");
+    o.value = v;
+    o.textContent = label;
+    s.appendChild(o);
+  }
+  return s;
+}
+
 // The shared <datalist> id every `node` input points at, so picking a device name inserts its node id.
 const NODE_LIST_ID = "rule-node-options";
 
@@ -175,14 +190,7 @@ function predicateEditor(
   const node = nodeInput();
   // Optional gang selector: "" = the whole device, "1"/"2" = one gang of a multi-gang `switch`. Shown
   // only for the `switch` field (the only place a per-endpoint on/off exists).
-  const endpoint = document.createElement("select");
-  endpoint.setAttribute("aria-label", t("rule.gang"));
-  for (const [v, label] of [["", "—"], ["1", "1"], ["2", "2"]] as const) {
-    const o = document.createElement("option");
-    o.value = v;
-    o.textContent = label;
-    endpoint.appendChild(o);
-  }
+  const endpoint = gangSelect();
   const syncNode = (): void => {
     node.style.display = vocab.state_fields[field.value] === true ? "none" : "";
     endpoint.style.display = field.value === "switch" ? "" : "none"; // a gang only applies to a switch
@@ -371,8 +379,11 @@ function actionRepresentable(a: unknown): boolean {
   if (typeof o.op !== "string") return false;
   const keys = WIZARD_ACTION_KEYS[o.op];
   if (keys === undefined) return false; // raw / lights / unknown op
-  if (!onlyKeys(o, ["op", ...keys])) return false; // no extra keys (e.g. a per-endpoint switch)
-  if (!keys.every((k) => k in o)) return false; // every expected field present
+  // `switch` may ALSO carry an optional gang `endpoint` (1|2) — one gang of a multi-gang switch.
+  const allowed = o.op === "switch" ? [...keys, "endpoint"] : keys;
+  if (!onlyKeys(o, ["op", ...allowed])) return false; // no OTHER surprise keys
+  if (!keys.every((k) => k in o)) return false; // every required field present (endpoint stays optional)
+  if ("endpoint" in o && o.endpoint !== 1 && o.endpoint !== 2) return false; // gang must be 1 or 2
   if ("node" in o && typeof o.node !== "number") return false;
   if ("on" in o && typeof o.on !== "boolean") return false;
   if ("value" in o && typeof o.value !== "number") return false;
@@ -671,15 +682,21 @@ export function renderRuleForm(
       } else if (k === "switch" || k === "thermostat_power") {
         const node = nodeInput();
         const on = sel(["on", "off"]);
+        // `switch` can act on ONE gang of a multi-gang switch; thermostat_power is always whole-node.
+        const endpoint = k === "switch" ? gangSelect() : null;
         fields.append(node, on);
+        if (endpoint !== null) fields.append(endpoint);
         if (s !== undefined) {
           node.value = scalarToInput(s.node);
           on.value = s.on === false ? "off" : "on";
+          if (endpoint !== null && s.endpoint !== undefined) endpoint.value = scalarToInput(s.endpoint);
         }
         aRead = () => {
           const n = parseNode(node.value);
           if (n === null) throw new Error(t("rule.errRequired", { field: "node" }));
-          return { op: k, node: n, on: on.value === "on" };
+          const act: ReadObj = { op: k, node: n, on: on.value === "on" };
+          if (endpoint !== null && endpoint.value !== "") act.endpoint = Number(endpoint.value); // one gang
+          return act;
         };
       } else if (k === "level" || k === "cover") {
         const node = nodeInput();
