@@ -127,6 +127,7 @@ const messages: Partial<Messages> = {
 
   "ctl.mode": "Λειτουργία",
   "ctl.brightness": "Φωτεινότητα",
+  "ctl.position": "Θέση",
   "klima.cool": "Ψύξη",
   "klima.heat": "Θέρμανση",
   "klima.auto": "Αυτόματο",

@@ -127,6 +127,7 @@ const messages: Partial<Messages> = {
 
   "ctl.mode": "Tila",
   "ctl.brightness": "Kirkkaus",
+  "ctl.position": "Asento",
   "klima.cool": "Jäähdytys",
   "klima.heat": "Lämmitys",
   "klima.auto": "Auto",

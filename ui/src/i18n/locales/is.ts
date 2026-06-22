@@ -127,6 +127,7 @@ const messages: Partial<Messages> = {
 
   "ctl.mode": "Hamur",
   "ctl.brightness": "Birtustig",
+  "ctl.position": "Staða",
   "klima.cool": "Kæling",
   "klima.heat": "Hitun",
   "klima.auto": "Sjálfvirkt",

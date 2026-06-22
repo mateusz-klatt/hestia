@@ -128,6 +128,7 @@ const messages: Partial<Messages> = {
 
   "ctl.mode": "מצב",
   "ctl.brightness": "בהירות",
+  "ctl.position": "מיקום",
   "klima.cool": "קירור",
   "klima.heat": "חימום",
   "klima.auto": "אוטומטי",

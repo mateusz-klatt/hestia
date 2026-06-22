@@ -127,6 +127,7 @@ const messages: Partial<Messages> = {
 
   "ctl.mode": "Ռեժիմ",
   "ctl.brightness": "Պայծառություն",
+  "ctl.position": "Դիրք",
   "klima.cool": "Սառեցում",
   "klima.heat": "Ջեռուցում",
   "klima.auto": "Ավտոմատ",

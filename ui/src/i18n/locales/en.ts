@@ -137,9 +137,10 @@ const en = {
   "state.raised": "raised",
   "state.lowered": "lowered",
 
-  // Accessible names for the icon-only control <select> dropdowns (screen-reader only).
+  // Accessible names for the icon-only control <select> dropdowns + range sliders (screen-reader only).
   "ctl.mode": "Mode",
   "ctl.brightness": "Brightness",
+  "ctl.position": "Position",
 
   // A/C (klima) mode option labels — the dropdown VALUE stays the raw mode (it keys the IR signal
   // on_<mode>_<temp>); only the visible label is localised. Unknown modes fall back to the raw name.

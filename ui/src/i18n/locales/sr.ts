@@ -128,6 +128,7 @@ const messages: Partial<Messages> = {
 
   "ctl.mode": "Режим",
   "ctl.brightness": "Осветљеност",
+  "ctl.position": "Положај",
   "klima.cool": "Хлађење",
   "klima.heat": "Грејање",
   "klima.auto": "Аутоматски",

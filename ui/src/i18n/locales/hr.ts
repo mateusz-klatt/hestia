@@ -128,6 +128,7 @@ const messages: Partial<Messages> = {
 
   "ctl.mode": "Način rada",
   "ctl.brightness": "Svjetlina",
+  "ctl.position": "Položaj",
   "klima.cool": "Hlađenje",
   "klima.heat": "Grijanje",
   "klima.auto": "Automatski",

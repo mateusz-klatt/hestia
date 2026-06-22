@@ -128,6 +128,7 @@ const messages: Partial<Messages> = {
 
   "ctl.mode": "Mode",
   "ctl.brightness": "Luminosité",
+  "ctl.position": "Position",
   "klima.cool": "Froid",
   "klima.heat": "Chaud",
   "klima.auto": "Auto",

@@ -131,6 +131,7 @@ const pl: Partial<Messages> = {
 
   "ctl.mode": "Tryb",
   "ctl.brightness": "Jasność",
+  "ctl.position": "Pozycja",
   "klima.cool": "Chłodzenie",
   "klima.heat": "Grzanie",
   "klima.auto": "Auto",
