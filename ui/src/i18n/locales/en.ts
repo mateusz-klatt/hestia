@@ -228,6 +228,7 @@ const en = {
   "rule.windowFrom": "active",
   "rule.phNode": "node",
   "rule.phValue": "value",
+  "rule.gang": "gang", // a11y name for the per-gang selector on a `switch` predicate (— / 1 / 2)
   "rule.phRuleId": "rule-id",
   "rule.phButton": "button",
   "rule.phOffset": "offset min",

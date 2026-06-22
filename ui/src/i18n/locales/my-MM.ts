@@ -203,6 +203,7 @@ const messages: Partial<Messages> = {
   "rule.windowFrom": "အသက်ဝင်",
   "rule.phNode": "နိုဒ်",
   "rule.phValue": "တန်ဖိုး",
+  "rule.gang": "ခလုတ်",
   "rule.phRuleId": "စည်းမျဉ်း-id",
   "rule.phButton": "ခလုတ်",
   "rule.phOffset": "offset min",

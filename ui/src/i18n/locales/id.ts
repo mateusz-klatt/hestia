@@ -203,6 +203,7 @@ const messages: Partial<Messages> = {
   "rule.windowFrom": "aktif",
   "rule.phNode": "simpul",
   "rule.phValue": "nilai",
+  "rule.gang": "tombol",
   "rule.phRuleId": "id-aturan",
   "rule.phButton": "tombol",
   "rule.phOffset": "offset min",

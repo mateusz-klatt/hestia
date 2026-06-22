@@ -1979,9 +1979,16 @@
       "StatePredicate": {
         "description": "A condition with NO `type` key (the absence IS the discriminant vs time_window).",
         "properties": {
+          "endpoint": {
+            "maximum": 2,
+            "minimum": 1,
+            "title": "Endpoint",
+            "type": "integer"
+          },
           "field": {
             "enum": [
               "door",
+              "motion",
               "level",
               "switch",
               "setpoint",
@@ -2169,9 +2176,16 @@
       },
       "TriggerState": {
         "properties": {
+          "endpoint": {
+            "maximum": 2,
+            "minimum": 1,
+            "title": "Endpoint",
+            "type": "integer"
+          },
           "field": {
             "enum": [
               "door",
+              "motion",
               "level",
               "switch",
               "setpoint",
@@ -2463,7 +2477,7 @@
   "info": {
     "description": "Local cloud-free smart-home control API. Generated from hestia/api_contract.py \u2014 do not edit by hand; run `python -m hestia.api_contract`.",
     "title": "hestia API",
-    "version": "0.4.0"
+    "version": "0.5.0"
   },
   "openapi": "3.1.0",
   "paths": {

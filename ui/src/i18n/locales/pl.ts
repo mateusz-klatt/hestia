@@ -209,6 +209,7 @@ const pl: Partial<Messages> = {
   "rule.windowFrom": "aktywne",
   "rule.phNode": "węzeł",
   "rule.phValue": "wartość",
+  "rule.gang": "klawisz",
   "rule.phRuleId": "id-reguły",
   "rule.phButton": "przycisk",
   "rule.phOffset": "offset min",

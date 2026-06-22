@@ -6,10 +6,11 @@ export function trigSummary(t: Trigger): string {
   switch (t.type) {
     case "scene":
       return `scene ${String(t.scene_id)} @node ${String(t.node)}`;
-    case "state":
-      return t.node === undefined
-        ? `${t.field} ${t.op} ${String(t.value)}` // global (node-less) field
-        : `node ${String(t.node)} ${t.field} ${t.op} ${String(t.value)}`;
+    case "state": {
+      if (t.node === undefined) return `${t.field} ${t.op} ${String(t.value)}`; // global (node-less) field
+      const gang = t.endpoint !== undefined ? ` gang ${String(t.endpoint)}` : ""; // one gang of a multi-gang switch
+      return `node ${String(t.node)}${gang} ${t.field} ${t.op} ${String(t.value)}`;
+    }
     case "time":
       // The server serialises an unscheduled-days trigger as `days: null` (not omitted), so guard with
       // Array.isArray — a bare `=== undefined` check let `null.join()` throw and killed the row loop.

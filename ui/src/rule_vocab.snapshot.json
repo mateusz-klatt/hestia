@@ -5,6 +5,7 @@
     "door": false,
     "energy_kwh": false,
     "level": false,
+    "motion": false,
     "outdoor_temp": true,
     "power_w": false,
     "setpoint": false,

@@ -204,6 +204,7 @@ const messages: Partial<Messages> = {
   "rule.windowFrom": "aktív",
   "rule.phNode": "csomópont",
   "rule.phValue": "érték",
+  "rule.gang": "billentyű",
   "rule.phRuleId": "szabály-id",
   "rule.phButton": "gomb",
   "rule.phOffset": "offset min",

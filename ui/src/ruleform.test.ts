@@ -811,6 +811,9 @@ describe("renderRuleForm — Edit round-trip (loadRule)", () => {
   const triggers: Record<string, unknown>[] = [
     { type: "scene", node: 14, scene_id: 3 },
     { type: "state", node: 7, field: "temperature", op: "lt", value: 18 },
+    { type: "state", node: 16, field: "motion", op: "eq", value: true }, // PIR motion edge
+    { type: "state", node: 1, field: "switch", op: "eq", value: true }, // switch, no gang → endpoint stays absent
+    { type: "state", node: 2, endpoint: 1, field: "switch", op: "eq", value: false }, // one gang of a 2-gang switch
     { type: "state", field: "crib_temp", op: "gt", value: 24 }, // GLOBAL → no node
     { type: "time", at: "07:30", days: [0, 4] },
     { type: "time", at: "07:30" }, // no days
@@ -873,6 +876,8 @@ describe("renderRuleForm — Edit raw-only fallback", () => {
     ["a raw action op", { actions: [{ op: "raw", frame: "ab" }] }, "raw"],
     ["a lights action op", { actions: [{ op: "lights", node: 1, on: true }] }, "lights"],
     ["an action with an extra key", { actions: [{ op: "switch", node: 1, on: true, endpoint: 2 }] }, "switch"],
+    ["a state trigger with an out-of-range gang", { trigger: { type: "state", node: 2, endpoint: 3, field: "switch", op: "eq", value: true } }, "state"],
+    ["a gang on a non-switch condition", { conditions: [{ node: 7, endpoint: 1, field: "temperature", op: "lt", value: 18 }] }, "#1"],
     ["an unknown trigger type", { trigger: { type: "webhook", url: "x" } }, "webhook"],
     ["a malformed condition", { conditions: [{ foo: "bar" }] }, "#1"],
   ];

@@ -204,6 +204,7 @@ const messages: Partial<Messages> = {
   "rule.windowFrom": "ակտիվ",
   "rule.phNode": "հանգույց",
   "rule.phValue": "արժեք",
+  "rule.gang": "ստեղն",
   "rule.phRuleId": "կանոնի-id",
   "rule.phButton": "կոճակ",
   "rule.phOffset": "offset min",

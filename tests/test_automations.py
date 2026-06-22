@@ -116,6 +116,19 @@ class CurrentValueTests(unittest.TestCase):
     def test_global_field_default_none(self):
         self.assertIsNone(automations.current_value(_rt().state, None, "crib_temp"))
 
+    def test_motion_field(self):
+        rt = _rt()
+        rt.state.motion[16] = True
+        self.assertIs(automations.current_value(rt.state, 16, "motion"), True)
+
+    def test_endpoint_reads_one_gang(self):
+        rt = _rt()
+        rt.state.gang[2] = {1: True, 2: False}                                # a 2-gang switch
+        self.assertIs(automations.current_value(rt.state, 2, "switch", 1), True)
+        self.assertIs(automations.current_value(rt.state, 2, "switch", 2), False)
+        self.assertIsNone(automations.current_value(rt.state, 2, "switch", 9))    # unseen gang
+        self.assertIsNone(automations.current_value(_rt().state, 2, "switch", 1))  # unseen node
+
 
 class DriftTests(unittest.TestCase):
     """Hardcoded sets must track their real sources (no module-level proxy import)."""
@@ -202,6 +215,36 @@ class RuleValidationTests(unittest.TestCase):
     def test_bad_state_field(self):
         self._bad(dict(STATE_RULE, trigger={"type": "state", "node": 7, "field": "endpoints",
                                             "op": "eq", "value": 1}))   # non-scalar rejected
+
+    def test_valid_motion_trigger(self):
+        spec = dict(STATE_RULE, trigger={"type": "state", "node": 16, "field": "motion",
+                                         "op": "eq", "value": True})
+        rule = Rule.from_dict(spec)
+        self.assertEqual(rule.trigger["field"], "motion")
+        self.assertEqual(Rule.from_dict(rule.to_dict()).to_dict(), rule.to_dict())   # round-trips
+
+    def test_valid_endpoint_predicate(self):
+        # The door "żaluzje" button = gang 1 of a 2-gang switch (node 2); trigger AND condition on a gang.
+        spec = dict(STATE_RULE,
+                    trigger={"type": "state", "node": 2, "endpoint": 1, "field": "switch",
+                             "op": "eq", "value": False},
+                    conditions=[{"node": 2, "endpoint": 2, "field": "switch", "op": "eq", "value": True}])
+        rule = Rule.from_dict(spec)
+        self.assertEqual(rule.trigger["endpoint"], 1)
+        self.assertEqual(rule.conditions[0]["endpoint"], 2)
+        self.assertEqual(Rule.from_dict(rule.to_dict()).to_dict(), rule.to_dict())   # round-trips
+
+    def test_endpoint_only_valid_with_switch(self):
+        self._bad(dict(STATE_RULE, trigger={"type": "state", "node": 2, "endpoint": 1,
+                                            "field": "temperature", "op": "lt", "value": 18}))
+        # a gang on a GLOBAL field is rejected too (not silently dropped before the node check)
+        self._bad(dict(STATE_RULE, trigger={"type": "state", "field": "crib_temp", "endpoint": 1,
+                                            "op": "gt", "value": 24}))
+
+    def test_bad_endpoint_value(self):
+        for ep in (0, 3, True, "1"):                         # only the ints 1 or 2 are valid gangs
+            self._bad(dict(STATE_RULE, trigger={"type": "state", "node": 2, "endpoint": ep,
+                                                "field": "switch", "op": "eq", "value": True}))
         self._bad(dict(STATE_RULE, trigger={"type": "state", "node": 7, "field": "nope",
                                             "op": "eq", "value": 1}))   # typo rejected
 
@@ -461,6 +504,47 @@ class EngineTriggerTests(unittest.TestCase):
         rt = _rt()
         self.assertEqual(eng.on_event(rt, 9, {"temperature": 17}, None), [])        # wrong node
         self.assertEqual(eng.on_event(rt, 7, {"level": 5}, None), [])               # field not in changed
+
+    def test_motion_trigger_fires_on_edge(self):
+        rule = dict(STATE_RULE, id="bath-on",
+                    trigger={"type": "state", "node": 16, "field": "motion", "op": "eq", "value": True},
+                    actions=[{"op": "switch", "node": 14, "on": True}])
+        eng = _engine(rule)
+        rt = _rt()
+        self.assertEqual(len(eng.on_event(rt, 16, {"motion": True}, None)), 1)   # motion detected: false→true edge
+        self.assertEqual(eng.on_event(rt, 16, {"motion": True}, None), [])       # still motion: no fresh edge
+        self.assertEqual(eng.on_event(rt, 16, {"motion": False}, None), [])      # cleared: predicate back to false
+
+    def test_endpoint_first_sibling_change_does_not_spuriously_fire(self):
+        # Regression: `changed["endpoints"]` is a full roll-up, so a FRESH rule watching ep1 must NOT fire
+        # when the first event it sees is an ep2-only change that leaves ep1 already matching. First sight
+        # baselines; only a real ep1 transition fires.
+        rule = dict(STATE_RULE, id="blinds-down",
+                    trigger={"type": "state", "node": 2, "endpoint": 1, "field": "switch",
+                             "op": "eq", "value": False},
+                    actions=[{"op": "cover", "node": 5, "value": 0}])
+        eng = _engine(rule)
+        rt = _rt()
+        self.assertEqual(eng.on_event(rt, 2, {"endpoints": {1: False, 2: True}}, None), [])    # baseline (ep1 already false)
+        self.assertEqual(eng.on_event(rt, 2, {"endpoints": {1: False, 2: False}}, None), [])   # only ep2 moved → ep1 unchanged
+        self.assertEqual(eng.on_event(rt, 2, {"endpoints": {1: True, 2: False}}, None), [])    # ep1 false→true: predicate false
+        self.assertEqual(len(eng.on_event(rt, 2, {"endpoints": {1: False, 2: False}}, None)), 1)  # ep1 true→false: real edge
+
+    def test_endpoint_edge_fires_on_the_watched_gang_only(self):
+        # The door "żaluzje" gang (node 2, ep 1) going OFF fires "blinds down"; a change to ONLY ep 2 must not.
+        rule = dict(STATE_RULE, id="blinds-down",
+                    trigger={"type": "state", "node": 2, "endpoint": 1, "field": "switch",
+                             "op": "eq", "value": False},
+                    actions=[{"op": "cover", "node": 5, "value": 0}])
+        eng = _engine(rule)
+        rt = _rt()
+        self.assertEqual(eng.on_event(rt, 2, {"endpoints": {1: True, 2: True}}, None), [])   # ep1 ON → predicate false
+        self.assertEqual(eng.on_event(rt, 2, {"endpoints": {1: True, 2: False}}, None), [])  # only ep2 moved: ep1 still on
+        self.assertEqual(len(eng.on_event(rt, 2, {"endpoints": {1: False, 2: False}}, None)), 1)  # ep1 OFF: edge → fire
+        self.assertEqual(eng.on_event(rt, 2, {"endpoints": {1: False}}, None), [])        # still off: no fresh edge
+        self.assertEqual(eng.on_event(rt, 2, {"endpoints": {2: True}}, None), [])          # ep1 absent from the map
+        self.assertEqual(eng.on_event(rt, 2, {"switch": False}, None), [])                 # no endpoints map at all
+        self.assertEqual(eng.on_event(rt, 9, {"endpoints": {1: False}}, None), [])         # wrong node
 
     def test_no_rules_no_node(self):
         self.assertEqual(_engine().on_event(_rt(), None, {}, None), [])

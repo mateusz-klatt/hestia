@@ -204,6 +204,7 @@ const messages: Partial<Messages> = {
   "rule.windowFrom": "ενεργό",
   "rule.phNode": "κόμβος",
   "rule.phValue": "τιμή",
+  "rule.gang": "πλήκτρο",
   "rule.phRuleId": "id-κανόνα",
   "rule.phButton": "κουμπί",
   "rule.phOffset": "offset min",

@@ -206,6 +206,7 @@ const messages: Partial<Messages> = {
   "rule.windowFrom": "активно",
   "rule.phNode": "узел",
   "rule.phValue": "значение",
+  "rule.gang": "клавиша",
   "rule.phRuleId": "id-правила",
   "rule.phButton": "кнопка",
   "rule.phOffset": "offset min",

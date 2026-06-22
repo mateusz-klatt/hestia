@@ -204,6 +204,7 @@ const messages: Partial<Messages> = {
   "rule.windowFrom": "सक्रिय",
   "rule.phNode": "नोड",
   "rule.phValue": "मान",
+  "rule.gang": "बटन",
   "rule.phRuleId": "नियम-id",
   "rule.phButton": "बटन",
   "rule.phOffset": "offset min",

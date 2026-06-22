@@ -206,6 +206,7 @@ const messages: Partial<Messages> = {
   "rule.windowFrom": "aktyvu",
   "rule.phNode": "mazgas",
   "rule.phValue": "reikšmė",
+  "rule.gang": "klavišas",
   "rule.phRuleId": "taisyklės-id",
   "rule.phButton": "mygtukas",
   "rule.phOffset": "offset min",

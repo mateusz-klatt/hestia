@@ -204,6 +204,7 @@ const messages: Partial<Messages> = {
   "rule.windowFrom": "aktiv",
   "rule.phNode": "Knoten",
   "rule.phValue": "Wert",
+  "rule.gang": "Taste",
   "rule.phRuleId": "regel-id",
   "rule.phButton": "Taste",
   "rule.phOffset": "offset min",

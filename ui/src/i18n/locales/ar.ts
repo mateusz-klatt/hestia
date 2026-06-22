@@ -208,6 +208,7 @@ const messages: Partial<Messages> = {
   "rule.windowFrom": "نشط",
   "rule.phNode": "عقدة",
   "rule.phValue": "قيمة",
+  "rule.gang": "مفتاح",
   "rule.phRuleId": "معرّف-القاعدة",
   "rule.phButton": "زر",
   "rule.phOffset": "offset min",
