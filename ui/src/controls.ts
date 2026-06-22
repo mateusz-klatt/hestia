@@ -17,9 +17,31 @@ const THERMOSTAT_MAX_C = 28;
  */
 const thermostatPick = new Map<number, string>();
 
+/**
+ * Same freeze contract for the blind-position slider, in whole percent 0–100 (display units; the wire
+ * `cover` value is 0–99). A blind reports its OWN position, so a device report / refresh updates only the
+ * "stan" text — it must never yank the slider. Seed once from the live level, freeze, only the user moves it.
+ */
+const blindPick = new Map<number, string>();
+
 /** Exposed for tests to reset the cross-render pick memory between cases. */
 export function __resetThermostatPicks(): void {
   thermostatPick.clear();
+}
+
+/** Exposed for tests to reset the blind-slider pick memory between cases. */
+export function __resetBlindPicks(): void {
+  blindPick.clear();
+}
+
+/** Wire 0–99 cover value → display 0–100 %. */
+function coverPercent(value: number): number {
+  return Math.round((Math.min(99, Math.max(0, value)) / 99) * 100);
+}
+
+/** Display 0–100 % → wire 0–99 cover value. */
+function coverValue(percent: number): number {
+  return Math.round((Math.min(100, Math.max(0, percent)) / 100) * 99);
 }
 
 /** Sends one control op; returns a normalised result (never rejects). */
@@ -42,12 +64,16 @@ export function renderActions(
   cell.replaceChildren();
 
   const buttons: HTMLButtonElement[] = [];
+  // Range sliders that commit through `send` (blind) or feed it (thermostat) join the in-flight lock too,
+  // so a second release while a POST is pending can't fire a dropped `send` and strand the frozen pick.
+  const sliders: HTMLInputElement[] = [];
   const status = document.createElement("span");
   status.className = "status";
   let busy = false;
 
   const setDisabled = (disabled: boolean): void => {
     for (const b of buttons) b.disabled = disabled;
+    for (const s of sliders) s.disabled = disabled;
   };
 
   // Sends one OR a sequence of ops under a single in-flight lock (a multi-command action like the
@@ -113,6 +139,44 @@ export function renderActions(
     addButton(t("ctl.set"), () => ({ op: "level", node, value: Number(sel.value) }));
   };
 
+  // A position slider for a blind: drag to any %, commit ON RELEASE (the `change` event — NOT `input`, so
+  // dragging doesn't spam /api/control) as one absolute `cover` value 0–99. Seeded once from the live level
+  // and FROZEN per node via `blindPick` (mirrors the thermostat): the table's 45 s full rebuild and device
+  // reports update only the "stan" text, never the slider. The live position stays visible in that text; the
+  // Raise/Lower buttons remain for the two extremes. A value readout tracks the drag.
+  const addBlindSlider = (): void => {
+    const slider = document.createElement("input");
+    slider.type = "range";
+    slider.min = "0";
+    slider.max = "100";
+    slider.step = "1";
+    slider.setAttribute("aria-label", t("ctl.position"));
+    slider.style.marginRight = "0.3rem";
+    const level = info.level;
+    const startPct = level !== null && Number.isFinite(level) ? coverPercent(level) : 50;
+    let pick = blindPick.get(node);
+    if (pick === undefined) {
+      pick = String(startPct);
+      blindPick.set(node, pick);
+    }
+    slider.value = pick;
+    const readout = document.createElement("span");
+    readout.className = "slider-val";
+    readout.style.marginRight = "0.3rem";
+    readout.textContent = `${pick}%`;
+    slider.addEventListener("input", () => {
+      readout.textContent = `${slider.value}%`;
+    });
+    slider.addEventListener("change", () => {
+      if (busy) return; // a send is in flight; ignore this release so blindPick can't drift past what was sent
+      blindPick.set(node, slider.value); // the user's release wins, kept across the table's full rebuilds
+      void send({ op: "cover", node, value: coverValue(Number(slider.value)) }, "");
+    });
+    sliders.push(slider); // share the in-flight disable with the buttons
+    cell.appendChild(slider);
+    cell.appendChild(readout);
+  };
+
   const endpointLabel = (ep: string): string => {
     const name = info.endpoint_names?.[ep]?.trim();
     return name !== undefined && name !== "" ? name : `#${ep}`;
@@ -150,45 +214,53 @@ export function renderActions(
   } else if (info.type === "blind") {
     addButton(t("ctl.raise"), () => ({ op: "cover", node, value: 99 }));
     addButton(t("ctl.lower"), () => ({ op: "cover", node, value: 0 }));
+    addBlindSlider();
   } else if (info.type === "thermostat") {
-    // Mirrors the klima panel: a target-temperature DROPDOWN (4–28 °C, shown in the user's C/F/K scale) +
-    // ✓ Set + ⏻ Off. A setpoint SET while the thermostat is OFF doesn't take, so Set is power-ON then the
-    // setpoint (two commands, in that order — like the Keemple app) so the user just picks a temperature
-    // and taps Set; there is no separate On. The option VALUE stays Celsius (device/backend speak Celsius);
-    // only the label is C/F/K-converted. One Set command per change — no per-degree − / + SET burst that
-    // spammed and hung the TRV.
+    // Mirrors the klima panel: a target-temperature SLIDER (4–28 °C, whole degrees; the readout shows the
+    // user's C/F/K scale) + ✓ Set + ⏻ Off. A setpoint SET while the thermostat is OFF doesn't take, so Set is
+    // power-ON then the setpoint (two commands, in that order — like the Keemple app) so the user just drags to
+    // a temperature and taps Set; there is no separate On. The slider VALUE stays Celsius (device/backend speak
+    // Celsius); only the readout label is C/F/K-converted. One Set command per tap — no per-degree − / + SET
+    // burst that spammed and hung the TRV; the slider does not send while dragging.
     // Partial failure (power-on ok, setpoint fails) deliberately leaves the device ON at its old setpoint
     // and surfaces the ✗ error — we do NOT auto-revert to OFF: that would countermand the user's "on"
     // intent and add a third TRV command. The optimistic echo only fires per successful inject, so the UI
     // stays consistent with the device; the user just re-taps Set.
-    const sel = document.createElement("select");
-    sel.setAttribute("aria-label", t("user.temperature")); // name the setpoint dropdown for screen readers
-    sel.style.marginRight = "0.3rem";
-    for (let c = THERMOSTAT_MIN_C; c <= THERMOSTAT_MAX_C; c++) {
-      const o = document.createElement("option");
-      o.value = String(c);
-      o.textContent = fmtTemp(c);
-      sel.appendChild(o);
-    }
+    const slider = document.createElement("input");
+    slider.type = "range";
+    slider.min = String(THERMOSTAT_MIN_C);
+    slider.max = String(THERMOSTAT_MAX_C);
+    slider.step = "1";
+    slider.setAttribute("aria-label", t("user.temperature")); // name the setpoint slider for screen readers
+    slider.style.marginRight = "0.3rem";
     const current = info.setpoint;
     const start = current !== null && Number.isFinite(current)
       ? Math.min(THERMOSTAT_MAX_C, Math.max(THERMOSTAT_MIN_C, Math.round(current)))
       : 21;
     // Seed from the live setpoint exactly ONCE per node, then FREEZE: a device report / 45 s refresh
-    // updates the "stan" text but never moves the dropdown — touched or not. Only the user moves it.
+    // updates the "stan" text but never moves the slider — touched or not. Only the user moves it.
     let pick = thermostatPick.get(node);
     if (pick === undefined) {
       pick = String(start);
       thermostatPick.set(node, pick);
     }
-    sel.value = pick;
-    sel.addEventListener("change", () => {
-      thermostatPick.set(node, sel.value); // the user's choice wins, kept across the table's full rebuilds
+    slider.value = pick;
+    const readout = document.createElement("span");
+    readout.className = "slider-val";
+    readout.style.marginRight = "0.3rem";
+    readout.textContent = fmtTemp(Number(slider.value));
+    slider.addEventListener("input", () => {
+      readout.textContent = fmtTemp(Number(slider.value)); // live label while dragging — no API call
     });
-    cell.appendChild(sel);
+    slider.addEventListener("change", () => {
+      thermostatPick.set(node, slider.value); // the user's choice wins, kept across the table's full rebuilds
+    });
+    sliders.push(slider); // share the in-flight disable with the ✓/⏻ buttons
+    cell.appendChild(slider);
+    cell.appendChild(readout);
     addButton("✓", () => [
       { op: "thermostat_power", node, on: true }, // turn on, THEN set — a setpoint alone is ignored while off
-      { op: "thermostat", node, celsius: Number(sel.value) },
+      { op: "thermostat", node, celsius: Number(slider.value) },
     ], () => "", t("ctl.set"));
     // Off = drop to the frost-protection minimum FIRST, then power off. Sending 4 °C before the off means
     // that even if the power-off frame is lost, the TRV is left at its lowest setpoint (won't heat) rather

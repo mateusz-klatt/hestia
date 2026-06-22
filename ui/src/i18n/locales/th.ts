@@ -126,6 +126,7 @@ const messages: Partial<Messages> = {
 
   "ctl.mode": "โหมด",
   "ctl.brightness": "ความสว่าง",
+  "ctl.position": "ตำแหน่ง",
   "klima.cool": "เย็น",
   "klima.heat": "ทำความร้อน",
   "klima.auto": "อัตโนมัติ",

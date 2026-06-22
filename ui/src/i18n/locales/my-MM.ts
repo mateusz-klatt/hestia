@@ -126,6 +126,7 @@ const messages: Partial<Messages> = {
 
   "ctl.mode": "မုဒ်",
   "ctl.brightness": "တောက်ပမှု",
+  "ctl.position": "အနေအထား",
   "klima.cool": "အအေး",
   "klima.heat": "အပူ",
   "klima.auto": "အလိုအလျောက်",

@@ -130,6 +130,7 @@ const messages: Partial<Messages> = {
 
   "ctl.mode": "Mód",
   "ctl.brightness": "Gile",
+  "ctl.position": "Suíomh",
   "klima.cool": "Fuarú",
   "klima.heat": "Téamh",
   "klima.auto": "Uathoibríoch",

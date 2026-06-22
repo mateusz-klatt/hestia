@@ -165,6 +165,25 @@ describe("createRoomsView — room detail", () => {
     expect(sent).toEqual([{ op: "switch", node: 5, on: true }]);
   });
 
+  it("a focused range slider mid-drag suppresses the rooms rebuild so the slider survives a refresh", () => {
+    const { container, view } = mk();
+    document.body.appendChild(container); // focus + document.activeElement need the node in the document
+    try {
+      view.update(discovery({ "5": device({ type: "blind", room: "Salon", level: 0 }) }));
+      openFirstRoom(container);
+      const slider = container.querySelector<HTMLInputElement>('.room-device-actions input[type="range"]');
+      expect(slider).not.toBeNull();
+      slider?.focus();
+      expect(document.activeElement).toBe(slider); // it's focused, mid-interaction
+      // A refresh arrives with a different level: the focus-guard must NOT rebuild the cards out from under it.
+      view.update(discovery({ "5": device({ type: "blind", room: "Salon", level: 99 }) }));
+      expect(slider?.isConnected).toBe(true); // same element instance — the rebuild was skipped
+      expect(container.querySelector('.room-device-actions input[type="range"]')).toBe(slider);
+    } finally {
+      container.remove();
+    }
+  });
+
   it("goToLanding returns to the room list (the 🏠 Pokoje tab calls it — no in-detail back button)", () => {
     const { container, view } = mk();
     view.update(discovery({ "5": device({ type: "light", room: "Salon" }) }));

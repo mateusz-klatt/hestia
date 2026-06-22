@@ -357,7 +357,9 @@ export function createRoomsView(container: HTMLElement, deps: RoomsDeps): RoomsV
       // focus leaves the control.
       const active = document.activeElement;
       if (
-        (active instanceof HTMLButtonElement || active instanceof HTMLSelectElement) &&
+        (active instanceof HTMLButtonElement ||
+          active instanceof HTMLSelectElement ||
+          active instanceof HTMLInputElement) && // a thermostat/blind range slider mid-drag must survive a refresh
         container.contains(active)
       ) {
         return;

@@ -129,6 +129,7 @@ const messages: Partial<Messages> = {
 
   "ctl.mode": "Režimas",
   "ctl.brightness": "Ryškumas",
+  "ctl.position": "Padėtis",
   "klima.cool": "Vėsinimas",
   "klima.heat": "Šildymas",
   "klima.auto": "Automatinis",

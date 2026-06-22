@@ -131,6 +131,7 @@ const messages: Partial<Messages> = {
 
   "ctl.mode": "الوضع",
   "ctl.brightness": "السطوع",
+  "ctl.position": "الموضع",
   "klima.cool": "تبريد",
   "klima.heat": "تدفئة",
   "klima.auto": "تلقائي",
