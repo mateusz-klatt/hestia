@@ -833,6 +833,7 @@ describe("renderRuleForm — Edit round-trip (loadRule)", () => {
 
   const actions: Record<string, unknown>[] = [
     { op: "switch", node: 14, on: true },
+    { op: "switch", node: 10, on: true, endpoint: 1 }, // one gang of a multi-gang switch
     { op: "thermostat_power", node: 9, on: false },
     { op: "level", node: 5, value: 50 },
     { op: "cover", node: 4, value: 0 },
@@ -875,7 +876,8 @@ describe("renderRuleForm — Edit raw-only fallback", () => {
   const cases: [string, Record<string, unknown>, string][] = [
     ["a raw action op", { actions: [{ op: "raw", frame: "ab" }] }, "raw"],
     ["a lights action op", { actions: [{ op: "lights", node: 1, on: true }] }, "lights"],
-    ["an action with an extra key", { actions: [{ op: "switch", node: 1, on: true, endpoint: 2 }] }, "switch"],
+    ["a switch action with an out-of-range gang", { actions: [{ op: "switch", node: 1, on: true, endpoint: 3 }] }, "switch"],
+    ["a thermostat_power action with a gang", { actions: [{ op: "thermostat_power", node: 1, on: true, endpoint: 1 }] }, "thermostat_power"],
     ["a state trigger with an out-of-range gang", { trigger: { type: "state", node: 2, endpoint: 3, field: "switch", op: "eq", value: true } }, "state"],
     ["a gang on a non-switch condition", { conditions: [{ node: 7, endpoint: 1, field: "temperature", op: "lt", value: 18 }] }, "#1"],
     ["an unknown trigger type", { trigger: { type: "webhook", url: "x" } }, "webhook"],
