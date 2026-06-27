@@ -194,61 +194,84 @@ describe("renderDeviceRows", () => {
 });
 
 describe("renderGlobals", () => {
-  const els = (): { crib: HTMLElement; outdoor: HTMLElement; humidity: HTMLElement; meta: HTMLElement } => ({
+  const view = (): import("./devices").GlobalsView => ({
     crib: document.createElement("span"),
+    cribMeta: document.createElement("span"),
     outdoor: document.createElement("span"),
-    humidity: document.createElement("span"),
-    meta: document.createElement("span"),
+    outdoorHumidity: document.createElement("span"),
+    outdoorMeta: document.createElement("span"),
   });
   const NOW = Date.parse("2026-06-22T08:05:00Z");
 
   it("writes temp + humidity into each cell, including null → em dash", () => {
-    const { crib, outdoor, humidity, meta } = els();
+    const v = view();
     // Always writes every cell (the contract guarantees the keys, null when a
     // poller is off) — unlike the legacy `if ('crib_temp' in g)` guard.
-    renderGlobals(crib, outdoor, humidity, meta, {
-      crib_temp: 25.2, outdoor_temp: 19.8, outdoor_humidity: 56,
+    renderGlobals(v, {
+      crib_temp: 25.2, crib_temp_ts: null, outdoor_temp: 19.8, outdoor_humidity: 56,
       outdoor_temp_ts: null, outdoor_battery_ok: null,
     });
-    expect(crib.textContent).toBe("25.2°");
-    expect(outdoor.textContent).toBe("19.8°");
-    expect(humidity.textContent).toBe("56%");
-    expect(meta.textContent).toBe(""); // no sample ts → no freshness line
-    expect(meta.title).toBe("");
+    expect(v.crib.textContent).toBe("25.2°");
+    expect(v.outdoor.textContent).toBe("19.8°");
+    expect(v.outdoorHumidity.textContent).toBe("56%");
+    expect(v.outdoorMeta.textContent).toBe(""); // no sample ts → no freshness line
+    expect(v.cribMeta.textContent).toBe("");
+    expect(v.outdoorMeta.title).toBe("");
   });
 
   it("renders em dashes when pollers are off / humidity absent", () => {
-    const { crib, outdoor, humidity, meta } = els();
+    const v = view();
     // outdoor_temp present but humidity null (e.g. the open-meteo source) → temp shown, humidity em dash.
-    renderGlobals(crib, outdoor, humidity, meta, {
-      crib_temp: null, outdoor_temp: 12.3, outdoor_humidity: null,
+    renderGlobals(v, {
+      crib_temp: null, crib_temp_ts: null, outdoor_temp: 12.3, outdoor_humidity: null,
       outdoor_temp_ts: null, outdoor_battery_ok: null,
     });
-    expect(crib.textContent).toBe("—");
-    expect(outdoor.textContent).toBe("12.3°");
-    expect(humidity.textContent).toBe("—");
+    expect(v.crib.textContent).toBe("—");
+    expect(v.outdoor.textContent).toBe("12.3°");
+    expect(v.outdoorHumidity.textContent).toBe("—");
   });
 
   it("shows a fresh freshness badge with a title, no warn class", () => {
-    const { crib, outdoor, humidity, meta } = els();
-    renderGlobals(crib, outdoor, humidity, meta, {
-      crib_temp: null, outdoor_temp: 21, outdoor_humidity: 40,
+    const v = view();
+    renderGlobals(v, {
+      crib_temp: null, crib_temp_ts: null, outdoor_temp: 21, outdoor_humidity: 40,
       outdoor_temp_ts: "2026-06-22T08:02:00Z", outdoor_battery_ok: true,
     }, NOW);
-    expect(meta.textContent).toBe("3m ago");
-    expect(meta.classList.contains("warn")).toBe(false);
-    expect(meta.title).not.toBe(""); // a sample → a "last seen" tooltip
+    expect(v.outdoorMeta.textContent).toBe("3m ago");
+    expect(v.outdoorMeta.classList.contains("warn")).toBe(false);
+    expect(v.outdoorMeta.title).not.toBe(""); // a sample → a "last seen" tooltip
   });
 
   it("flags a stale and/or low-battery reading with the warn class", () => {
-    const { crib, outdoor, humidity, meta } = els();
-    renderGlobals(crib, outdoor, humidity, meta, {
-      crib_temp: null, outdoor_temp: 17.3, outdoor_humidity: 81,
+    const v = view();
+    renderGlobals(v, {
+      crib_temp: null, crib_temp_ts: null, outdoor_temp: 17.3, outdoor_humidity: 81,
       outdoor_temp_ts: "2026-06-22T07:30:00Z", outdoor_battery_ok: false, // 35m old + low battery
     }, NOW);
-    expect(meta.textContent).toContain("35m ago");
-    expect(meta.textContent).toContain("🪫");
-    expect(meta.classList.contains("warn")).toBe(true);
+    expect(v.outdoorMeta.textContent).toContain("35m ago");
+    expect(v.outdoorMeta.textContent).toContain("🪫");
+    expect(v.outdoorMeta.classList.contains("warn")).toBe(true);
+  });
+
+  it("renders the crib freshness badge (no battery part) from crib_temp_ts", () => {
+    const v = view();
+    renderGlobals(v, {
+      crib_temp: 22.6, crib_temp_ts: "2026-06-22T07:48:00Z", outdoor_temp: null, outdoor_humidity: null,
+      outdoor_temp_ts: null, outdoor_battery_ok: null,
+    }, NOW);
+    expect(v.cribMeta.textContent).toBe("17m ago"); // 17 min old → stale, no 🪫 (mains, no battery)
+    expect(v.cribMeta.classList.contains("warn")).toBe(true);
+    expect(v.outdoorMeta.textContent).toBe(""); // outdoor unsampled → empty
+  });
+
+  it("leaves the crib badge empty for an unparseable crib_temp_ts", () => {
+    const v = view();
+    renderGlobals(v, {
+      crib_temp: 22, crib_temp_ts: "not-a-date", outdoor_temp: null, outdoor_humidity: null,
+      outdoor_temp_ts: null, outdoor_battery_ok: null,
+    }, NOW);
+    expect(v.cribMeta.textContent).toBe("");
+    expect(v.cribMeta.classList.contains("warn")).toBe(false);
   });
 });
 
@@ -257,6 +280,7 @@ describe("renderDiscovery", () => {
     const view = {
       hdrText: document.createElement("span"),
       crib: document.createElement("span"),
+      cribMeta: document.createElement("span"),
       outdoor: document.createElement("span"),
       outdoorHumidity: document.createElement("span"),
       outdoorMeta: document.createElement("span"),

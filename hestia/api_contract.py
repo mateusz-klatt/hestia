@@ -43,7 +43,11 @@ from pydantic.json_schema import models_json_schema
 #        (ISO ts of the last outdoor sample) and `outdoor_battery_ok` — for the dashboard freshness /
 #        low-battery badge. Additive response/event fields only; tolerant readers (0.4.0) keep pinned
 #        clients safe, and no request/control shape changes.
-CONTRACT_VERSION = "0.6.0"
+# 0.7.0: Globals (+ SSE patch) grow one more additive READ-ONLY field — `crib_temp_ts` — extending the
+#        freshness badge to the baby-monitor temperature (the same "N ago" as outdoor). Still additive /
+#        tolerant-reader-safe; no request/control changes. (`outdoor_battery_ok` is now opt-in via
+#        HESTIA_RTL433_BATTERY_WARN, so it reads null by default — a behaviour/default change, not a wire change.)
+CONTRACT_VERSION = "0.7.0"
 OPENAPI_PATH = Path(__file__).resolve().parent.parent / "docs" / "api" / "openapi.json"
 
 # De-duplicated string literals (SonarPython S1192): the OpenAPI content-type, the paths reused
@@ -430,11 +434,13 @@ _OMIT = lambda s: s.pop("default", None)  # noqa: E731 — tiny schema post-proc
 
 class Globals(BaseModel):
     """Node-less global fields (``proxy.globals_snapshot``). Every key is ALWAYS present (required),
-    null when its poller is off. ``outdoor_temp_ts`` is the ISO ts of the last outdoor sample (freshness
-    badge); ``outdoor_battery_ok`` is the local 433 sensor's battery flag (false = low)."""
+    null when its poller is off. ``crib_temp_ts`` / ``outdoor_temp_ts`` are the ISO ts of the last
+    crib / outdoor sample (the "N ago" freshness badge); ``outdoor_battery_ok`` is the local 433 sensor's
+    battery flag (false = low) — null when HESTIA_RTL433_BATTERY_WARN is off (the default)."""
 
     model_config = _READ
     crib_temp: float | None
+    crib_temp_ts: str | None
     outdoor_temp: float | None
     outdoor_humidity: float | None
     outdoor_temp_ts: str | None
@@ -600,11 +606,12 @@ class DeviceStatePatch(BaseModel):
 
 
 class GlobalsPatch(BaseModel):
-    """A partial of Globals — the changed global field(s) in a `globals` event (1 key for the niania /
-    Open-Meteo poll + its ts, up to 4 for a 433 reading: temp, humidity, ts, battery)."""
+    """A partial of Globals — the changed global field(s) in a `globals` event (2 keys for the niania /
+    Open-Meteo poll: value + its `*_ts`; up to 4 for a 433 reading: temp, humidity, ts, battery)."""
 
     model_config = _READ
     crib_temp: Annotated[float | None, Field(default=None, json_schema_extra=_OMIT)] = None
+    crib_temp_ts: Annotated[str | None, Field(default=None, json_schema_extra=_OMIT)] = None
     outdoor_temp: Annotated[float | None, Field(default=None, json_schema_extra=_OMIT)] = None
     outdoor_humidity: Annotated[float | None, Field(default=None, json_schema_extra=_OMIT)] = None
     outdoor_temp_ts: Annotated[str | None, Field(default=None, json_schema_extra=_OMIT)] = None

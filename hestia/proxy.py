@@ -214,6 +214,14 @@ RTL433_DEVICE = os.environ.get("HESTIA_RTL433_DEVICE", sensor433.DEFAULT_DEVICE)
 RTL433_MODEL = os.environ.get("HESTIA_RTL433_MODEL")        # None/"" -> no model filter
 RTL433_ID = os.environ.get("HESTIA_RTL433_ID")              # None/"" -> no id filter
 RTL433_PROTOCOL = os.environ.get("HESTIA_RTL433_PROTOCOL")  # None/"" -> all default decoders
+# Channel (rtl_433's `channel`, a physical DIP switch) to match — STABLE across battery changes, unlike
+# `id` which a Prologue-TH-class sensor RANDOMISES on every power-cycle. None/"" -> any channel. Pair with
+# HESTIA_RTL433_ID=* to track one sensor across battery swaps while still excluding a neighbour on another channel.
+RTL433_CHANNEL = os.environ.get("HESTIA_RTL433_CHANNEL")    # None/"" -> no channel filter
+# Show the sensor's battery flag on the dashboard. OFF by default (opt-in): some sensors (e.g. a Prologue-TH on
+# a rechargeable cell, ~1.2 V < the alkaline threshold) report battery_ok=low PERMANENTLY, so a default-on badge
+# would be constant false-alarm noise. The freshness "N ago" badge is the reliable dead-sensor signal regardless.
+RTL433_BATTERY_WARN = _truthy_env(os.environ.get("HESTIA_RTL433_BATTERY_WARN"))
 # Delay before relaunching rtl_433 after it exits (rtl_tcp restart / SDR hiccup) — avoids a tight respawn
 # loop when the SDR is unreachable, while staying responsive once it returns.
 RTL433_RESTART_SECS = _clamp_secs(os.environ.get("HESTIA_RTL433_RESTART_SECS"), 30.0, 1.0, 600.0)
@@ -827,7 +835,8 @@ def globals_snapshot(state: State) -> dict:
     display-only %RH companion from the local 433 feeder (no rule trigger). ``outdoor_temp_ts`` (ISO ts of
     the last outdoor sample) + ``outdoor_battery_ok`` (433 battery flag) drive the freshness / low-battery
     badge. ``None`` when the relevant poller is off / has no sample → JSON ``null``; the UI renders "—"."""
-    return {"crib_temp": state.crib_temp, "outdoor_temp": state.outdoor_temp,
+    return {"crib_temp": state.crib_temp, "crib_temp_ts": _iso(state.crib_temp_ts),
+            "outdoor_temp": state.outdoor_temp,
             "outdoor_humidity": state.outdoor_humidity,
             "outdoor_temp_ts": _iso(state.outdoor_temp_ts),
             "outdoor_battery_ok": state.outdoor_battery_ok}
@@ -1282,7 +1291,7 @@ async def _niania_poller(rt, make_device=_niania_device, interval: float = NIANI
     dev = make_device()
     if dev is None:                                  # not configured -> nothing to poll
         return
-    await _poll_global_field(rt, "crib_temp", _niania_read(dev), interval, "niania")
+    await _poll_global_field(rt, "crib_temp", _niania_read(dev), interval, "niania", with_timestamp=True)
 
 
 async def _weather_poller(rt, fetch=weather.fetch_outdoor_temp, lat=HESTIA_LAT, lon=HESTIA_LON,
@@ -1301,7 +1310,8 @@ async def _weather_poller(rt, fetch=weather.fetch_outdoor_temp, lat=HESTIA_LAT, 
 
 async def _sensor433_poller(rt, stream=sensor433.stream_readings, enabled: bool = OUTDOOR_TEMP_ENABLED,
                             source: str = OUTDOOR_TEMP_SOURCE, device: str = RTL433_DEVICE,
-                            model=RTL433_MODEL, sensor_id=RTL433_ID, protocol=RTL433_PROTOCOL,
+                            model=RTL433_MODEL, sensor_id=RTL433_ID, channel=RTL433_CHANNEL,
+                            protocol=RTL433_PROTOCOL, battery_warn: bool = RTL433_BATTERY_WARN,
                             backoff: float = RTL433_RESTART_SECS) -> None:
     """Stream a local 433 MHz weather sensor (rtl_433) into ``State.outdoor_temp`` (the `outdoor_temp`
     global field) + ``State.outdoor_humidity`` (display-only). OPT-IN: returns immediately (zero work,
@@ -1323,7 +1333,9 @@ async def _sensor433_poller(rt, stream=sensor433.stream_readings, enabled: bool 
             rt.state.outdoor_humidity = reading.humidity
             now = time.time()                                         # sample time -> freshness badge
             rt.state.outdoor_temp_ts = now
-            battery_ok = None if reading.battery_ok is None else bool(reading.battery_ok)
+            # Battery flag is opt-in (battery_warn): suppressed to None when off, so a sensor that always
+            # reports "low" (rechargeable Prologue-TH) doesn't pin a permanent false-alarm badge.
+            battery_ok = (None if reading.battery_ok is None else bool(reading.battery_ok)) if battery_warn else None
             rt.state.outdoor_battery_ok = battery_ok                  # runtime-only low-battery flag
             log.debug("sensor433: outdoor_temp=%r humidity=%r battery_ok=%r",
                       reading.temperature_C, reading.humidity, battery_ok)
@@ -1341,7 +1353,7 @@ async def _sensor433_poller(rt, stream=sensor433.stream_readings, enabled: bool 
     while True:
         try:
             await stream(on_reading, device=device, model=model, sensor_id=sensor_id,
-                         protocol=protocol, on_packet=on_packet)
+                         channel=channel, protocol=protocol, on_packet=on_packet)
         except asyncio.CancelledError:
             raise                                    # shutdown -> stream already reaped rtl_433; propagate
         except Exception:                            # spawn/stream blew up -> log, then back off and relaunch

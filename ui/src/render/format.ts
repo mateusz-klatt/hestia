@@ -53,18 +53,19 @@ export function relAgo(ms: number, now: number = Date.now()): string {
   return `${String(Math.floor(m / 60))}h ago`;
 }
 
-/** No outdoor sample for this long → flag the reading as stale. Generous enough to clear both feeders'
- *  cadences (local 433 ~per-minute, Open-Meteo ~per-10-min) without false alarms, while still catching a
- *  sensor that has gone silent (dead battery / out of range). */
-const OUTDOOR_STALE_MS = 15 * 60_000;
+/** No sample for this long → flag the reading as stale. Generous enough to clear every feeder's cadence
+ *  (local 433 ~per-minute, Open-Meteo ~per-10-min, niania ~per-90s) without false alarms, while still
+ *  catching a sensor that has gone silent (dead battery / out of range / camera offline). */
+const STALE_MS = 15 * 60_000;
 
 /**
- * The freshness + battery line under the outdoor temperature: e.g. `2m ago` (· `🪫 low` when the 433
- * sensor reports a low battery). `warn` is true when the reading is stale OR the battery is low, so the
- * tile can be visually flagged. A sensor that has never sampled (no ts) yields an empty line — the "—"
- * temperature already says "no reading". `now` is injectable for deterministic tests.
+ * The freshness (+ optional battery) line under a sensor reading: e.g. `2m ago` (· `🪫 low` when a 433
+ * sensor reports a low battery; pass `batteryOk = null` for sensors without a battery flag, e.g. the
+ * mains baby-monitor). `warn` is true when the reading is stale OR the battery is low, so the tile can be
+ * visually flagged. A sensor that has never sampled (no ts) yields an empty line — the "—" value already
+ * says "no reading". `now` is injectable for deterministic tests.
  */
-export function outdoorMeta(
+export function freshnessMeta(
   tsIso: string | null,
   batteryOk: boolean | null,
   now: number = Date.now(),
@@ -75,7 +76,7 @@ export function outdoorMeta(
     const ms = Date.parse(tsIso);
     if (!Number.isNaN(ms)) {
       parts.push(relAgo(ms, now));
-      stale = now - ms > OUTDOOR_STALE_MS;
+      stale = now - ms > STALE_MS;
     }
   }
   const low = batteryOk === false;

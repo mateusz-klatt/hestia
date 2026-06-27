@@ -108,6 +108,7 @@ const live = new LiveController(
     hdrText: el("hdr-text"),
     mode: el("mode"),
     crib: el("g-crib"),
+    cribMeta: el("g-crib-meta"),
     outdoor: el("g-outdoor"),
     outdoorHumidity: el("g-outdoor-humidity"),
     outdoorMeta: el("g-outdoor-meta"),

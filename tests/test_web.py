@@ -1023,19 +1023,21 @@ class DiscoveryTests(_WebTestBase):
         self.assertEqual(data["devices"]["18"]["type"], "door")
         self.assertEqual(data["summary"], {"total": 1, "confirmed": 0, "unknown": 0})
         self.assertEqual(data["globals"],                   # pollers off → null
-                         {"crib_temp": None, "outdoor_temp": None, "outdoor_humidity": None,
-                          "outdoor_temp_ts": None, "outdoor_battery_ok": None})
+                         {"crib_temp": None, "crib_temp_ts": None, "outdoor_temp": None,
+                          "outdoor_humidity": None, "outdoor_temp_ts": None, "outdoor_battery_ok": None})
 
     def test_discovery_reflects_global_fields(self):
         self.rt.state.crib_temp = 22.5
+        self.rt.state.crib_temp_ts = 1_699_900_000.0
         self.rt.state.outdoor_temp = -1.0
         self.rt.state.outdoor_humidity = 44.0
         self.rt.state.outdoor_temp_ts = 1_700_000_000.0
         self.rt.state.outdoor_battery_ok = True
         _, _, body = _get(self.web.address, "/api/discovery")
         self.assertEqual(json.loads(body)["globals"],
-                         {"crib_temp": 22.5, "outdoor_temp": -1.0, "outdoor_humidity": 44.0,
-                          "outdoor_temp_ts": "2023-11-14T22:13:20Z", "outdoor_battery_ok": True})
+                         {"crib_temp": 22.5, "crib_temp_ts": "2023-11-13T18:26:40Z", "outdoor_temp": -1.0,
+                          "outdoor_humidity": 44.0, "outdoor_temp_ts": "2023-11-14T22:13:20Z",
+                          "outdoor_battery_ok": True})
 
     def test_discovery_includes_klima(self):
         sentinel = {"file": "/ext/infrared/klima.ir", "modes": {"cool": [22]},

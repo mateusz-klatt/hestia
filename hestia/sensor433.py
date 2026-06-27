@@ -75,13 +75,23 @@ def _battery_ok(value):
     return None if n is None else int(n != 0)
 
 
-def _matching_reading(obj: dict, model: "str | None", sensor_id: "str | None"):
-    """A :class:`Reading` if ``obj`` matches the optional ``model`` / ``sensor_id`` filters AND carries a
-    finite ``temperature_C`` — else ``None`` (so a same-id non-TH packet, e.g. a keyfob, is ignored)."""
+def _matching_reading(obj: dict, model: "str | None", sensor_id: "str | None",
+                      channel: "str | None" = None):
+    """A :class:`Reading` if ``obj`` matches the optional ``model`` / ``sensor_id`` / ``channel`` filters
+    AND carries a finite ``temperature_C`` — else ``None`` (so a same-id non-TH packet, e.g. a keyfob, is
+    ignored). Each filter is an EXACT, case-sensitive string match (``id`` / ``channel`` are ``str()``-ed
+    first, so int ``1`` matches ``"1"``), skipped when its value is unset/empty. ``sensor_id == "*"`` is a
+    WILDCARD (match any id) — for a sensor whose id randomises on each battery change. ``channel`` is the
+    physical DIP switch, stable across battery changes; when a channel filter is set, a packet that omits
+    ``channel`` is REJECTED (it is a different device)."""
     if model and obj.get("model") != model:
         return None
-    if sensor_id and str(obj.get("id")) != sensor_id:
+    if sensor_id and sensor_id != "*" and str(obj.get("id")) != sensor_id:
         return None
+    if channel:
+        ch = obj.get("channel")
+        if ch is None or str(ch) != channel:
+            return None
     temp = _finite_number(obj.get("temperature_C"))
     if temp is None:
         return None
@@ -135,6 +145,7 @@ async def stream_readings(
     device: str = DEFAULT_DEVICE,
     model: "str | None" = None,
     sensor_id: "str | None" = None,
+    channel: "str | None" = None,
     protocol: "str | None" = None,
     on_packet: "Callable[[dict], None] | None" = None,
     binary: str = RTL_433_BIN,
@@ -164,7 +175,7 @@ async def stream_readings(
                 if obj is not None:
                     if on_packet is not None:
                         on_packet(obj)                             # discovery: EVERY decoded packet, pre-filter
-                    reading = _matching_reading(obj, model, sensor_id)
+                    reading = _matching_reading(obj, model, sensor_id, channel)
                     if reading is not None:
                         await on_reading(reading)
     finally:
