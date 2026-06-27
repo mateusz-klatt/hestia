@@ -33,9 +33,11 @@ DEFAULT_DEVICE = "rtl_tcp:127.0.0.1:1234"
 
 
 class Reading(NamedTuple):
-    """One decoded 433 MHz weather reading. ``humidity`` is ``None`` when the packet omits it."""
+    """One decoded 433 MHz weather reading. ``humidity`` / ``battery_ok`` are ``None`` when the packet
+    omits them. ``battery_ok`` mirrors rtl_433's flag: ``1`` = battery OK, ``0`` = low."""
     temperature_C: float
     humidity: "float | None"
+    battery_ok: "int | None" = None
 
 
 def _rtl433_command(binary: str, device: str, protocol: "str | None") -> list:
@@ -65,6 +67,14 @@ def _finite_number(value):
     return float(value) if math.isfinite(value) else None
 
 
+def _battery_ok(value):
+    """rtl_433's ``battery_ok`` flag normalised to ``1`` (ok) / ``0`` (low), or ``None`` when the packet
+    omits it. Reuses :func:`_finite_number` (rejects bool / NaN / non-numbers) then collapses to 0/1 so a
+    stray ``2.0`` can't render as a bogus level — any non-zero reading counts as "ok"."""
+    n = _finite_number(value)
+    return None if n is None else int(n != 0)
+
+
 def _matching_reading(obj: dict, model: "str | None", sensor_id: "str | None"):
     """A :class:`Reading` if ``obj`` matches the optional ``model`` / ``sensor_id`` filters AND carries a
     finite ``temperature_C`` — else ``None`` (so a same-id non-TH packet, e.g. a keyfob, is ignored)."""
@@ -75,7 +85,7 @@ def _matching_reading(obj: dict, model: "str | None", sensor_id: "str | None"):
     temp = _finite_number(obj.get("temperature_C"))
     if temp is None:
         return None
-    return Reading(temp, _finite_number(obj.get("humidity")))
+    return Reading(temp, _finite_number(obj.get("humidity")), _battery_ok(obj.get("battery_ok")))
 
 
 _TERMINATE_GRACE = 5.0   # seconds to let rtl_433 exit on SIGTERM before escalating to SIGKILL

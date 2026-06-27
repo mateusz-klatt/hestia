@@ -110,6 +110,7 @@ const live = new LiveController(
     crib: el("g-crib"),
     outdoor: el("g-outdoor"),
     outdoorHumidity: el("g-outdoor-humidity"),
+    outdoorMeta: el("g-outdoor-meta"),
     rows: el("rows"),
     conn: el("conn"),
     status: el("status"),

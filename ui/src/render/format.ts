@@ -42,6 +42,47 @@ export function fmtHumidity(value: number | null): string {
   return value === null ? "—" : `${String(Math.round(value))}%`;
 }
 
+/** A relative "now / Ns / Nm / Nh ago" age for an epoch-ms instant — shared by the heatmap rows'
+ *  "last seen" and the outdoor-sensor freshness badge so both read identically. */
+export function relAgo(ms: number, now: number = Date.now()): string {
+  const s = Math.floor((now - ms) / 1000);
+  if (s < 2) return "now";
+  if (s < 60) return `${String(s)}s ago`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${String(m)}m ago`;
+  return `${String(Math.floor(m / 60))}h ago`;
+}
+
+/** No outdoor sample for this long → flag the reading as stale. Generous enough to clear both feeders'
+ *  cadences (local 433 ~per-minute, Open-Meteo ~per-10-min) without false alarms, while still catching a
+ *  sensor that has gone silent (dead battery / out of range). */
+const OUTDOOR_STALE_MS = 15 * 60_000;
+
+/**
+ * The freshness + battery line under the outdoor temperature: e.g. `2m ago` (· `🪫 low` when the 433
+ * sensor reports a low battery). `warn` is true when the reading is stale OR the battery is low, so the
+ * tile can be visually flagged. A sensor that has never sampled (no ts) yields an empty line — the "—"
+ * temperature already says "no reading". `now` is injectable for deterministic tests.
+ */
+export function outdoorMeta(
+  tsIso: string | null,
+  batteryOk: boolean | null,
+  now: number = Date.now(),
+): { text: string; warn: boolean } {
+  const parts: string[] = [];
+  let stale = false;
+  if (tsIso !== null) {
+    const ms = Date.parse(tsIso);
+    if (!Number.isNaN(ms)) {
+      parts.push(relAgo(ms, now));
+      stale = now - ms > OUTDOOR_STALE_MS;
+    }
+  }
+  const low = batteryOk === false;
+  if (low) parts.push(`🪫 ${t("dev.battLow")}`);
+  return { text: parts.join(" · "), warn: stale || low };
+}
+
 /**
  * Battery level (%) for nodes that report one; `—` for mains (no report).
  * A value above 100 is the Z-Wave low-battery sentinel (e.g. 0xff) — show

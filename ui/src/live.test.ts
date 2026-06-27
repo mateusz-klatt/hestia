@@ -12,6 +12,7 @@ function harness(): LiveView {
     crib: mk("span"),
     outdoor: mk("span"),
     outdoorHumidity: mk("span"),
+    outdoorMeta: mk("span"),
     rows: mk("tbody"),
     conn: mk("span"),
     status: mk("p"),
@@ -648,6 +649,35 @@ describe("LiveController heatmap (flash / scene / last-seen)", () => {
     live.tick();
     expect(seen()).toBe("2h ago");
     expect(row?.classList.contains("recent")).toBe(false); // older than RECENT_MS
+  });
+
+  it("renders + advances the outdoor freshness / low-battery badge", async () => {
+    const view = harness();
+    // Snapshot: sampled 2 min ago, battery healthy.
+    const live = new LiveController(view, () =>
+      Promise.resolve(discovery({}, {
+        globals: {
+          crib_temp: null, outdoor_temp: 21, outdoor_humidity: 40,
+          outdoor_temp_ts: new Date(-120_000).toISOString(), outdoor_battery_ok: true,
+        },
+      })),
+    );
+    vi.setSystemTime(0);
+    await live.refresh();
+    const meta = view.outdoorMeta;
+    expect(meta.textContent).toBe("2m ago");
+    expect(meta.classList.contains("warn")).toBe(false);
+
+    // A 433 push delta: fresh sample, but the battery now reads low → low marker + warn.
+    live.applyGlobals({ outdoor_temp_ts: new Date(0).toISOString(), outdoor_battery_ok: false });
+    expect(meta.textContent).toBe("now · 🪫 low");
+    expect(meta.classList.contains("warn")).toBe(true);
+
+    // No new delta, but 20 min pass: the tick alone re-evaluates → stale (still low).
+    vi.setSystemTime(20 * 60_000);
+    live.tick();
+    expect(meta.textContent).toBe("20m ago · 🪫 low");
+    expect(meta.classList.contains("warn")).toBe(true);
   });
 
   it("does not re-highlight a row whose flash already expired before a rebuild", async () => {

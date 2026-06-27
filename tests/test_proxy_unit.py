@@ -286,22 +286,27 @@ class StateSnapshotTests(unittest.TestCase):
         self.assertEqual(snap["switches"], {"0x0e": True})
         self.assertIn("temperature", snap)
         self.assertEqual(snap["gang"], {"0x07": {"1": True, "2": False}})   # both key levels stringified
-        self.assertEqual(snap["globals"],
-                         {"crib_temp": None, "outdoor_temp": None, "outdoor_humidity": None})   # node-less globals
+        self.assertEqual(snap["globals"],                  # node-less globals (+ freshness ts / battery flag)
+                         {"crib_temp": None, "outdoor_temp": None, "outdoor_humidity": None,
+                          "outdoor_temp_ts": None, "outdoor_battery_ok": None})
 
     def test_snapshot_reflects_global_temps(self):
         rt = proxy.ProxyRuntime()
         rt.state.crib_temp = 22.0
         snap = proxy.state_snapshot(rt.state)
-        self.assertEqual(snap["globals"], {"crib_temp": 22.0, "outdoor_temp": None, "outdoor_humidity": None})
+        self.assertEqual(snap["globals"], {"crib_temp": 22.0, "outdoor_temp": None, "outdoor_humidity": None,
+                                           "outdoor_temp_ts": None, "outdoor_battery_ok": None})
 
     def test_globals_snapshot_set_and_none(self):
         st = proxy.State()
         self.assertEqual(proxy.globals_snapshot(st),
-                         {"crib_temp": None, "outdoor_temp": None, "outdoor_humidity": None})
+                         {"crib_temp": None, "outdoor_temp": None, "outdoor_humidity": None,
+                          "outdoor_temp_ts": None, "outdoor_battery_ok": None})
         st.crib_temp, st.outdoor_temp, st.outdoor_humidity = 21.5, -3.0, 44.0
+        st.outdoor_temp_ts, st.outdoor_battery_ok = 1_700_000_000.0, False
         self.assertEqual(proxy.globals_snapshot(st),
-                         {"crib_temp": 21.5, "outdoor_temp": -3.0, "outdoor_humidity": 44.0})
+                         {"crib_temp": 21.5, "outdoor_temp": -3.0, "outdoor_humidity": 44.0,
+                          "outdoor_temp_ts": "2023-11-14T22:13:20Z", "outdoor_battery_ok": False})
 
 
 class ObserveTests(unittest.TestCase):
@@ -1329,6 +1334,29 @@ class PollGlobalFieldTests(unittest.IsolatedAsyncioTestCase):
         await self._run(rt, read=lambda: -5.0)                     # poll keeps reading the same value
         self.assertFalse(rt.state.dirty)                          # no change → not re-dirtied
 
+    async def test_with_timestamp_stamps_state_and_delta_without_dirtying_steady_value(self):
+        # Open-Meteo path (with_timestamp=True): each success stamps outdoor_temp_ts (state + live delta)
+        # for the freshness badge — yet a STEADY value must STILL not re-dirty (the ts is intentionally
+        # not persisted-on-tick, so it never forces a re-flush).
+        rt, _ = self._rt()
+        rt.state.outdoor_temp = -5.0                               # already at the value
+        rt.state.dirty = False
+        sub = await rt.event_bus.try_subscribe()
+        task = asyncio.create_task(proxy._poll_global_field(
+            rt, "outdoor_temp", lambda: -5.0, 0.01, "weather", with_timestamp=True))
+        await asyncio.sleep(0.06)
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        self.assertFalse(rt.state.dirty)                           # unchanged value → not re-dirtied
+        self.assertIsNotNone(rt.state.outdoor_temp_ts)             # but the sample time WAS stamped
+        events = []
+        while not sub.queue.empty():
+            events.append(sub.queue.get_nowait())
+        gl = [e for e in events if e.get("type") == "globals"]
+        self.assertTrue(gl)
+        self.assertEqual(gl[0]["fields"]["outdoor_temp"], -5.0)
+        self.assertRegex(gl[0]["fields"]["outdoor_temp_ts"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
+
     async def test_tick_error_survives(self):
         rt, sess = self._rt()
         with mock.patch.object(rt.engine, "on_global", side_effect=ValueError("boom")):
@@ -1516,8 +1544,30 @@ class Sensor433PollerTests(unittest.IsolatedAsyncioTestCase):
             events.append(sub.queue.get_nowait())
         gl = [e for e in events if e.get("type") == "globals"]
         self.assertTrue(gl)                                        # live dashboard delta published
-        self.assertEqual(gl[0], {"type": "globals",
-                                 "fields": {"outdoor_temp": -5.0, "outdoor_humidity": 44.0}})
+        self.assertEqual(gl[0]["type"], "globals")
+        f = gl[0]["fields"]
+        self.assertEqual(f["outdoor_temp"], -5.0)
+        self.assertEqual(f["outdoor_humidity"], 44.0)
+        self.assertIsNone(f["outdoor_battery_ok"])                 # this reading carried no battery flag
+        self.assertRegex(f["outdoor_temp_ts"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")  # ISO sample time for freshness
+
+    async def test_low_battery_flag_propagates_to_state_and_delta(self):
+        rt = proxy.ProxyRuntime()
+        rt.engine.set_rule(Rule.from_dict(OUTDOOR_RULE))
+        sub = await rt.event_bus.try_subscribe()
+        task = asyncio.create_task(proxy._sensor433_poller(
+            rt, stream=_FakeStream([sensor433.Reading(33.4, 25.0, battery_ok=0)]),  # rtl_433 0 = low
+            enabled=True, source="local",
+            device="d", model=None, sensor_id=None, protocol=None, backoff=0.0))
+        await asyncio.sleep(0.06)
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        self.assertIs(rt.state.outdoor_battery_ok, False)          # 0 -> a real bool False (low)
+        events = []
+        while not sub.queue.empty():
+            events.append(sub.queue.get_nowait())
+        gl = [e for e in events if e.get("type") == "globals"]
+        self.assertIs(gl[0]["fields"]["outdoor_battery_ok"], False)
 
     async def test_reading_error_does_not_drop_stream(self):
         rt = proxy.ProxyRuntime()
@@ -2006,7 +2056,7 @@ class AutosaveTests(unittest.IsolatedAsyncioTestCase):
                                   "temperature": {}, "plug_w": {}, "plug_kwh": {},
                                   "plug_v": {}, "gang": {},
                                   "globals": {"crib_temp": None, "outdoor_temp": None,
-                                              "outdoor_humidity": None},
+                                              "outdoor_humidity": None, "outdoor_temp_ts": None},
                                   "klima": None}])
 
     async def test_persist_state_dirty_false_is_noop(self):

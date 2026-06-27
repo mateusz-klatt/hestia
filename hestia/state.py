@@ -27,7 +27,9 @@ _SNAPSHOT_MAPS = (
 # Node-less GLOBAL scalars worth caching across a restart so the dashboard shows
 # the last crib/outdoor temps immediately instead of "—" until the next poll
 # (the niania poller is ~per-minute, the weather poller ~per-10-min).
-_SNAPSHOT_GLOBALS = ("crib_temp", "outdoor_temp", "outdoor_humidity")
+# ``outdoor_temp_ts`` (the epoch of the last outdoor sample) is cached too so the
+# "last sampled N ago" freshness survives a restart — a dead sensor still reads stale.
+_SNAPSHOT_GLOBALS = ("crib_temp", "outdoor_temp", "outdoor_humidity", "outdoor_temp_ts")
 
 
 def tlv_value(frame: Frame, tag: int) -> "bytes | None":
@@ -324,6 +326,8 @@ class State:
     crib_temp: "float | None" = None                         # GLOBAL (node-less) °C from the Tuya baby-monitor poller
     outdoor_temp: "float | None" = None                      # GLOBAL (node-less) °C from the Open-Meteo / local-433 feeder
     outdoor_humidity: "float | None" = None                  # GLOBAL (node-less) %RH companion from the local-433 feeder (display-only)
+    outdoor_temp_ts: "float | None" = None                   # GLOBAL epoch secs of the last outdoor_temp sample (for the "last sampled N ago" freshness badge); snapshot-cached
+    outdoor_battery_ok: "bool | None" = None                 # GLOBAL last 433 sensor battery flag (True=ok, False=low); runtime-only — refreshed each reading, never snapshotted
     klima: "dict | None" = None                              # GLOBAL (node-less) optimistic A/C state {power,mode,temp} — last one-way IR command (None=never commanded)
     thermostat_last_cmd: dict = field(default_factory=dict)  # node -> wall-clock ts of the last thermostat SET (for the "not responding" badge; runtime-only, not snapshotted)
     dirty: bool = field(default=False)                       # best-effort SQLite telemetry-cache needs flushing

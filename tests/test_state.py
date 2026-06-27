@@ -51,14 +51,17 @@ class SnapshotTests(unittest.TestCase):
         st.crib_temp = 22.0
         st.outdoor_temp = -3.0
         st.outdoor_humidity = 44.0
+        st.outdoor_temp_ts = 1_700_000_000.0               # sample time IS cached (freshness survives a restart)
+        st.outdoor_battery_ok = False                      # battery flag is runtime-only → NOT cached
         st.klima = {"power": True, "mode": "cool", "temp": 22}
 
         snap = st.to_snapshot()
         self.assertEqual(snap["doors"], {"18": "open"})
         self.assertEqual(snap["gang"], {"7": {"1": True, "2": False}})
         self.assertNotIn("scene_seq", snap)                # dedup bookkeeping stays runtime-only
-        self.assertEqual(snap["globals"],                  # global temps ARE cached now (survive a restart)
-                         {"crib_temp": 22.0, "outdoor_temp": -3.0, "outdoor_humidity": 44.0})
+        self.assertEqual(snap["globals"],                  # global temps + ts ARE cached (survive a restart)
+                         {"crib_temp": 22.0, "outdoor_temp": -3.0, "outdoor_humidity": 44.0,
+                          "outdoor_temp_ts": 1_700_000_000.0})  # outdoor_battery_ok omitted — runtime-only
         self.assertEqual(snap["klima"], {"power": True, "mode": "cool", "temp": 22})
 
         restored = State()
@@ -75,6 +78,8 @@ class SnapshotTests(unittest.TestCase):
         self.assertEqual(restored.gang, {0x07: {1: True, 2: False}})
         self.assertEqual((restored.crib_temp, restored.outdoor_temp, restored.outdoor_humidity),
                          (22.0, -3.0, 44.0))               # globals restored → no "—" after a restart
+        self.assertEqual(restored.outdoor_temp_ts, 1_700_000_000.0)  # freshness ts restored
+        self.assertIsNone(restored.outdoor_battery_ok)     # runtime-only flag NOT restored (re-read next sample)
         self.assertEqual(restored.klima, {"power": True, "mode": "cool", "temp": 22})  # A/C state survives
         self.assertFalse(restored.dirty)
 

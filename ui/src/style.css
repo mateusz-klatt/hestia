@@ -243,6 +243,22 @@ td.sub-label {
   font-size: 0.95rem;
 }
 
+/* Outdoor freshness / low-battery badge: muted "N ago", turning red+bold when the reading is stale or
+   the 433 sensor reports a low battery. Empty (no margin) until a sample lands. */
+.g-meta {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.g-meta:not(:empty) {
+  margin-left: 0.4rem;
+}
+
+.g-meta.warn {
+  color: var(--err);
+  font-weight: bold;
+}
+
 .panel {
   margin: 0 0 0.9rem;
 }

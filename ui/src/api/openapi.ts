@@ -839,15 +839,20 @@ export interface components {
         /**
          * Globals
          * @description Node-less global fields (``proxy.globals_snapshot``). Every key is ALWAYS present (required),
-         *     null when its poller is off.
+         *     null when its poller is off. ``outdoor_temp_ts`` is the ISO ts of the last outdoor sample (freshness
+         *     badge); ``outdoor_battery_ok`` is the local 433 sensor's battery flag (false = low).
          */
         Globals: {
             /** Crib Temp */
             crib_temp: number | null;
+            /** Outdoor Battery Ok */
+            outdoor_battery_ok: boolean | null;
             /** Outdoor Humidity */
             outdoor_humidity: number | null;
             /** Outdoor Temp */
             outdoor_temp: number | null;
+            /** Outdoor Temp Ts */
+            outdoor_temp_ts: string | null;
         };
         /** GlobalsEvent */
         GlobalsEvent: {
@@ -860,15 +865,20 @@ export interface components {
         };
         /**
          * GlobalsPatch
-         * @description A partial of Globals — the changed global field(s) in a `globals` event (1 key, or 2 for 433).
+         * @description A partial of Globals — the changed global field(s) in a `globals` event (1 key for the niania /
+         *     Open-Meteo poll + its ts, up to 4 for a 433 reading: temp, humidity, ts, battery).
          */
         GlobalsPatch: {
             /** Crib Temp */
             crib_temp?: number | null;
+            /** Outdoor Battery Ok */
+            outdoor_battery_ok?: boolean | null;
             /** Outdoor Humidity */
             outdoor_humidity?: number | null;
             /** Outdoor Temp */
             outdoor_temp?: number | null;
+            /** Outdoor Temp Ts */
+            outdoor_temp_ts?: string | null;
         };
         /**
          * IrButton

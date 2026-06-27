@@ -25,7 +25,10 @@ const RICH: Discovery = discovery(
     }),
   },
   {
-    globals: { crib_temp: 22.6, outdoor_temp: 27.2, outdoor_humidity: 42 },
+    globals: {
+      crib_temp: 22.6, outdoor_temp: 27.2, outdoor_humidity: 42,
+      outdoor_temp_ts: "2026-06-22T08:00:00Z", outdoor_battery_ok: true,
+    },
     klima: {
       file: "/ext/infrared/klima.ir",
       power_on: { cool: [18, 20, 22, 24], heat: [20, 22, 24], auto: [22], dry: [20], fan: [22] },
