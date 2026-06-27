@@ -342,9 +342,15 @@ If `rtl_433` exits (e.g. `rtl_tcp` restart), the stream is relaunched after `HES
 |---|---|---|
 | `HESTIA_RTL433_DEVICE` | rtl_433 `-d` source — e.g. `rtl_tcp:127.0.0.1:1234` or `0` for a direct dongle | `rtl_tcp:127.0.0.1:1234` |
 | `HESTIA_RTL433_MODEL` | only accept readings whose `model` matches (recommended) | — (any) |
-| `HESTIA_RTL433_ID` | only accept readings whose sensor `id` matches | — (any) |
+| `HESTIA_RTL433_ID` | only accept readings whose sensor `id` matches; **`*` = any id** (for a sensor whose id randomises on each battery change) | — (any) |
+| `HESTIA_RTL433_CHANNEL` | only accept readings on this `channel` (a physical DIP switch, **stable** across battery changes); pair with `HESTIA_RTL433_ID=*` to track one sensor across battery swaps yet still exclude a neighbour on another channel | — (any) |
+| `HESTIA_RTL433_BATTERY_WARN` | show the sensor's `battery_ok` flag on the dashboard (a low battery turns the badge red). **Opt-in** — off by default because some sensors (e.g. a rechargeable `Prologue-TH`) report low *permanently* | off |
 | `HESTIA_RTL433_PROTOCOL` | restrict decoding to one rtl_433 protocol number (`-R`) | — (all) |
 | `HESTIA_RTL433_RESTART_SECS` | delay before relaunching `rtl_433` after it exits, clamped to `[1, 600]` | `30` |
+
+> Filters (`MODEL` / `ID` / `CHANNEL`) are **exact, case-sensitive** string matches (`id` / `channel` are
+> `str()`-ed first, so int `1` matches `"1"`), each skipped when unset/empty. When a `CHANNEL` filter is set,
+> a packet that **omits** `channel` is rejected (it is a different device).
 
 > **Hardware requirement:** `local` needs a **433-tuned antenna near the sensor** and a **dedicated**
 > SDR/`rtl_tcp` endpoint. Do **not** point `HESTIA_RTL433_DEVICE` at an `rtl_tcp` shared with another
@@ -353,15 +359,32 @@ If `rtl_433` exits (e.g. `rtl_tcp` restart), the stream is relaunched after `HES
 > long-lived stream, takes each matching finite `temperature_C` (+ `humidity` and `battery_ok` if present),
 > and **terminates and reaps** its `rtl_433` child on shutdown so a leaked process can never block the SDR.
 
-> **Freshness + battery (dashboard):** each sample stamps the time it landed (`outdoor_temp_ts`) and the
-> sensor's `battery_ok` flag (`outdoor_battery_ok`), surfaced under the outdoor reading as a muted
-> "**N ago**" badge that turns **red** once the reading is stale (no sample for >15 min) **or** the battery
-> reports low. A silent sensor therefore shows visibly stale instead of freezing a believable-but-old number.
+> **Freshness badge (dashboard):** each sample stamps the time it landed (`outdoor_temp_ts`, and
+> `crib_temp_ts` for the baby-monitor temperature), surfaced under the reading as a muted "**N ago**" badge
+> that turns **red** once the reading is stale (no sample for >15 min). A silent sensor therefore shows
+> visibly stale instead of freezing a believable-but-old number — this is the canonical dead-sensor signal,
+> independent of battery chemistry. The optional low-battery flag (`outdoor_battery_ok`, see
+> `HESTIA_RTL433_BATTERY_WARN`) adds a red "🪫 low" to the badge; it stays `null` (no badge) while that
+> opt-in is off (the default).
 
 > **⚠ `id` changes when the battery dies:** a `Prologue-TH`-class sensor picks a **new random `id`** each
 > time it loses power (flat/replaced battery). If you pinned `HESTIA_RTL433_ID`, the feeder then matches
-> nothing and `outdoor_temp` freezes — watch `GET /api/rf433` for the new `id`, update `HESTIA_RTL433_ID`,
-> and recreate the container. The freshness badge above is the early warning that this has happened. NB
-> some sensors report `battery_ok=0` even on a freshly-charged **rechargeable** (its ~1.2 V sits below the
-> alkaline threshold), so a permanent low-battery flag with a rechargeable cell is expected — use an
-> alkaline if you want the flag to be a meaningful "replace me soon".
+> nothing and `outdoor_temp` freezes. The robust fix is to **not pin the volatile id** — match the stable
+> identity instead:
+>
+> ```
+> HESTIA_RTL433_MODEL=Prologue-TH
+> HESTIA_RTL433_ID=*            # any id — survives the random renumber on each battery swap
+> HESTIA_RTL433_CHANNEL=1       # the physical DIP switch — stable, and excludes a neighbour on another channel
+> # HESTIA_RTL433_BATTERY_WARN  # leave off: this sensor reports battery_ok=low permanently on a rechargeable cell
+> ```
+>
+> Why this happens (per rtl_433's `Prologue-TH` decoder): the `id` is *"a random id generated when the
+> sensor starts"* (the **same** battery often yields the same id, a **new/replaced** one a different id), and
+> `channel` is a separate sensor-set field — so `id` is the volatile part and `channel` the stable one.
+>
+> The `battery_ok` flag is genuine (`0` = low, `1` = ok), but two quirks make the badge opt-in: the decoder
+> notes *"the first reading always says low"* (so even a fresh alkaline shows a transient low on power-up),
+> and a **rechargeable** cell reads `battery_ok=0` **persistently** (its ~1.2 V sits below the sensor's
+> threshold). So the low-battery flag is only meaningful with an alkaline cell, settled after the first
+> reading — and the freshness badge above is the chemistry-independent "sensor went silent" signal.

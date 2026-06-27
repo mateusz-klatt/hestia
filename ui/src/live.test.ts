@@ -10,6 +10,7 @@ function harness(): LiveView {
     hdrText: mk("span"),
     mode: mk("span"),
     crib: mk("span"),
+    cribMeta: mk("span"),
     outdoor: mk("span"),
     outdoorHumidity: mk("span"),
     outdoorMeta: mk("span"),
@@ -678,6 +679,28 @@ describe("LiveController heatmap (flash / scene / last-seen)", () => {
     live.tick();
     expect(meta.textContent).toBe("20m ago · 🪫 low");
     expect(meta.classList.contains("warn")).toBe(true);
+  });
+
+  it("renders + advances the crib freshness badge (no battery part)", async () => {
+    const view = harness();
+    const live = new LiveController(view, () =>
+      Promise.resolve(discovery({}, {
+        globals: { crib_temp: 22.6, crib_temp_ts: new Date(-60_000).toISOString() },
+      })),
+    );
+    vi.setSystemTime(0);
+    await live.refresh();
+    expect(view.cribMeta.textContent).toBe("1m ago");
+    expect(view.cribMeta.classList.contains("warn")).toBe(false);
+
+    // A niania poll delta carries crib_temp + its ts; 20 min later the tick flags it stale (never a 🪫).
+    live.applyGlobals({ crib_temp: 22.7, crib_temp_ts: new Date(0).toISOString() });
+    expect(view.cribMeta.textContent).toBe("now");
+    vi.setSystemTime(20 * 60_000);
+    live.tick();
+    expect(view.cribMeta.textContent).toBe("20m ago");
+    expect(view.cribMeta.textContent).not.toContain("🪫");
+    expect(view.cribMeta.classList.contains("warn")).toBe(true);
   });
 
   it("does not re-highlight a row whose flash already expired before a rebuild", async () => {

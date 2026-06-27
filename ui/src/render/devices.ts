@@ -1,15 +1,36 @@
 import type { DeviceInfo, Discovery, Globals, Summary } from "../api/types";
 import { t } from "../i18n";
-import { battFmt, battLow, fmtHumidity, fmtTemp, onOff, outdoorMeta, stateStr, typeLabel } from "./format";
+import { battFmt, battLow, fmtHumidity, fmtTemp, freshnessMeta, onOff, stateStr, typeLabel } from "./format";
 
-/** The DOM nodes the discovery view writes into (queried once in `main.ts`). */
-export interface DeviceView {
-  hdrText: HTMLElement;
+/** The globals-header DOM the crib/outdoor tiles write into — a subset shared by `DeviceView` (read-only
+ *  render) and `LiveView` (live controller), so either can be passed to `renderGlobals` structurally. */
+export interface GlobalsView {
   crib: HTMLElement;
+  cribMeta: HTMLElement;
   outdoor: HTMLElement;
   outdoorHumidity: HTMLElement;
   outdoorMeta: HTMLElement;
+}
+
+/** The DOM nodes the discovery view writes into (queried once in `main.ts`). */
+export interface DeviceView extends GlobalsView {
+  hdrText: HTMLElement;
   rows: HTMLElement;
+}
+
+/** Paint one freshness/battery badge from a sample ts (+ optional battery flag): muted "N ago", red+bold
+ *  (`warn`) when stale or low; empty + no tooltip until the sensor has sampled. Shared by the snapshot
+ *  render and the live controller's 1 Hz tick. */
+export function paintMeta(
+  el: HTMLElement,
+  tsIso: string | null,
+  batteryOk: boolean | null,
+  now: number = Date.now(),
+): void {
+  const meta = freshnessMeta(tsIso, batteryOk, now);
+  el.textContent = meta.text;
+  el.classList.toggle("warn", meta.warn);
+  el.title = meta.text === "" ? "" : t("tbl.lastSeen");
 }
 
 /**
@@ -155,21 +176,12 @@ export function renderDeviceRows(tbody: HTMLElement, devices: Record<string, Dev
   }
 }
 
-export function renderGlobals(
-  cribEl: HTMLElement,
-  outdoorEl: HTMLElement,
-  outdoorHumidityEl: HTMLElement,
-  outdoorMetaEl: HTMLElement,
-  g: Globals,
-  now: number = Date.now(),
-): void {
-  cribEl.textContent = fmtTemp(g.crib_temp);
-  outdoorEl.textContent = fmtTemp(g.outdoor_temp);
-  outdoorHumidityEl.textContent = fmtHumidity(g.outdoor_humidity);
-  const meta = outdoorMeta(g.outdoor_temp_ts, g.outdoor_battery_ok, now);
-  outdoorMetaEl.textContent = meta.text;
-  outdoorMetaEl.classList.toggle("warn", meta.warn);
-  outdoorMetaEl.title = meta.text === "" ? "" : t("tbl.lastSeen");
+export function renderGlobals(v: GlobalsView, g: Globals, now: number = Date.now()): void {
+  v.crib.textContent = fmtTemp(g.crib_temp);
+  v.outdoor.textContent = fmtTemp(g.outdoor_temp);
+  v.outdoorHumidity.textContent = fmtHumidity(g.outdoor_humidity);
+  paintMeta(v.cribMeta, g.crib_temp_ts, null, now);                      // crib (mains baby-monitor): no battery
+  paintMeta(v.outdoorMeta, g.outdoor_temp_ts, g.outdoor_battery_ok, now);
 }
 
 /**
@@ -210,6 +222,6 @@ export function renderMode(el: HTMLElement, d: Pick<Discovery, "mode" | "target_
 /** Render the whole read-only discovery view (summary header, globals, table). */
 export function renderDiscovery(view: DeviceView, data: Discovery): void {
   view.hdrText.textContent = summaryText(data.summary);
-  renderGlobals(view.crib, view.outdoor, view.outdoorHumidity, view.outdoorMeta, data.globals);
+  renderGlobals(view, data.globals);
   renderDeviceRows(view.rows, data.devices);
 }

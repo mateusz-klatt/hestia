@@ -28,7 +28,9 @@ services:
       #   HESTIA_OUTDOOR_TEMP_SOURCE: local
       #   HESTIA_RTL433_DEVICE: rtl_tcp:127.0.0.1:1234
       #   HESTIA_RTL433_MODEL: <rtl_433 model name>
-      #   HESTIA_RTL433_ID: <sensor id>
+      #   HESTIA_RTL433_ID: <sensor id, or * for any — a Prologue-TH randomises its id on each battery swap>
+      #   HESTIA_RTL433_CHANNEL: <DIP-switch channel — stable across battery swaps; pair with ID=*>
+      #   HESTIA_RTL433_BATTERY_WARN: "1"   # opt-in low-battery badge (off by default; noisy on a rechargeable)
       #
       # Optional: app-level per-user login (gates /api/*). OFF unless HESTIA_SESSION_SECRET is set (an
       # empty secret means auth off — fail closed). Create accounts with

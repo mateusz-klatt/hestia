@@ -26,7 +26,7 @@ const RICH: Discovery = discovery(
   },
   {
     globals: {
-      crib_temp: 22.6, outdoor_temp: 27.2, outdoor_humidity: 42,
+      crib_temp: 22.6, crib_temp_ts: "2026-06-22T08:00:00Z", outdoor_temp: 27.2, outdoor_humidity: 42,
       outdoor_temp_ts: "2026-06-22T08:00:00Z", outdoor_battery_ok: true,
     },
     klima: {

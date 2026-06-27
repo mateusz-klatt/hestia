@@ -1,7 +1,7 @@
 import type { DeviceInfo, Discovery, Globals, KlimaState, LiveEvent, Scene } from "./api/types";
 import { t } from "./i18n";
-import { renderDeviceRows, renderGlobals, renderMode, summaryText } from "./render/devices";
-import { fmtHumidity, fmtTemp, onOff, outdoorMeta, relAgo, stateStr } from "./render/format";
+import { paintMeta, renderDeviceRows, renderGlobals, renderMode, summaryText } from "./render/devices";
+import { fmtHumidity, fmtTemp, onOff, relAgo, stateStr } from "./render/format";
 
 /** How long a row stays brightly highlighted after activity. */
 const HIGHLIGHT_MS = 2200;
@@ -15,6 +15,7 @@ export interface LiveView {
   hdrText: HTMLElement;
   mode: HTMLElement;
   crib: HTMLElement;
+  cribMeta: HTMLElement;
   outdoor: HTMLElement;
   outdoorHumidity: HTMLElement;
   outdoorMeta: HTMLElement;
@@ -70,8 +71,9 @@ export class LiveController {
   private refreshAgain = false;
   private readonly pendingState = new Map<number, Partial<DeviceInfo>>();
   private pendingGlobals: Partial<Globals> | null = null;
-  // Last outdoor sample ts / battery flag, cached so the 1 Hz tick can keep the "N ago" badge advancing
-  // between deltas (the snapshot + every `globals` delta refresh these).
+  // Last crib / outdoor sample ts (+ outdoor battery flag), cached so the 1 Hz tick can keep the "N ago"
+  // badges advancing between deltas (the snapshot + every `globals` delta refresh these).
+  private cribTs: string | null = null;
   private outdoorTs: string | null = null;
   private outdoorBatteryOk: boolean | null = null;
   private pendingKlima: { state: KlimaState | null } | null = null;
@@ -178,10 +180,10 @@ export class LiveController {
   private render(data: Discovery): void {
     this.view.hdrText.textContent = summaryText(data.summary);
     renderMode(this.view.mode, data);
+    this.cribTs = data.globals.crib_temp_ts;
     this.outdoorTs = data.globals.outdoor_temp_ts;
     this.outdoorBatteryOk = data.globals.outdoor_battery_ok;
-    renderGlobals(this.view.crib, this.view.outdoor, this.view.outdoorHumidity, this.view.outdoorMeta,
-      data.globals);
+    renderGlobals(this.view, data.globals);
     renderDeviceRows(this.view.rows, data.devices);
     this.infoByNode.clear();
     for (const [node, info] of Object.entries(data.devices)) {
@@ -292,18 +294,17 @@ export class LiveController {
     if ("outdoor_humidity" in fields) {
       this.view.outdoorHumidity.textContent = fmtHumidity(fields.outdoor_humidity ?? null);
     }
+    if ("crib_temp_ts" in fields) this.cribTs = fields.crib_temp_ts ?? null;
     if ("outdoor_temp_ts" in fields) this.outdoorTs = fields.outdoor_temp_ts ?? null;
     if ("outdoor_battery_ok" in fields) this.outdoorBatteryOk = fields.outdoor_battery_ok ?? null;
-    this.renderOutdoorMeta();
+    this.renderMeta();
   }
 
-  /** Repaint the outdoor freshness + low-battery badge from the cached sample ts / flag. Called on every
-   *  `globals` delta and once a second by the tick so the "N ago" age keeps advancing between readings. */
-  private renderOutdoorMeta(): void {
-    const meta = outdoorMeta(this.outdoorTs, this.outdoorBatteryOk);
-    this.view.outdoorMeta.textContent = meta.text;
-    this.view.outdoorMeta.classList.toggle("warn", meta.warn);
-    this.view.outdoorMeta.title = meta.text === "" ? "" : t("tbl.lastSeen");
+  /** Repaint the crib + outdoor freshness/battery badges from the cached sample ts / flag. Called on every
+   *  `globals` delta and once a second by the tick so each "N ago" age keeps advancing between readings. */
+  private renderMeta(): void {
+    paintMeta(this.view.cribMeta, this.cribTs, null);            // crib (mains baby-monitor): no battery
+    paintMeta(this.view.outdoorMeta, this.outdoorTs, this.outdoorBatteryOk);
   }
 
   /** Apply a klima (A/C) state delta — queued during a rebuild, then replayed after it. */
@@ -420,6 +421,6 @@ export class LiveController {
       tr.classList.toggle("recent", recent);
       if (cell !== null) cell.classList.toggle("fresh", recent);
     }
-    this.renderOutdoorMeta(); // advance the outdoor "N ago" / re-evaluate stale even with no new delta
+    this.renderMeta(); // advance the crib/outdoor "N ago" / re-evaluate stale even with no new delta
   }
 }

@@ -839,12 +839,15 @@ export interface components {
         /**
          * Globals
          * @description Node-less global fields (``proxy.globals_snapshot``). Every key is ALWAYS present (required),
-         *     null when its poller is off. ``outdoor_temp_ts`` is the ISO ts of the last outdoor sample (freshness
-         *     badge); ``outdoor_battery_ok`` is the local 433 sensor's battery flag (false = low).
+         *     null when its poller is off. ``crib_temp_ts`` / ``outdoor_temp_ts`` are the ISO ts of the last
+         *     crib / outdoor sample (the "N ago" freshness badge); ``outdoor_battery_ok`` is the local 433 sensor's
+         *     battery flag (false = low) — null when HESTIA_RTL433_BATTERY_WARN is off (the default).
          */
         Globals: {
             /** Crib Temp */
             crib_temp: number | null;
+            /** Crib Temp Ts */
+            crib_temp_ts: string | null;
             /** Outdoor Battery Ok */
             outdoor_battery_ok: boolean | null;
             /** Outdoor Humidity */
@@ -865,12 +868,14 @@ export interface components {
         };
         /**
          * GlobalsPatch
-         * @description A partial of Globals — the changed global field(s) in a `globals` event (1 key for the niania /
-         *     Open-Meteo poll + its ts, up to 4 for a 433 reading: temp, humidity, ts, battery).
+         * @description A partial of Globals — the changed global field(s) in a `globals` event (2 keys for the niania /
+         *     Open-Meteo poll: value + its `*_ts`; up to 4 for a 433 reading: temp, humidity, ts, battery).
          */
         GlobalsPatch: {
             /** Crib Temp */
             crib_temp?: number | null;
+            /** Crib Temp Ts */
+            crib_temp_ts?: string | null;
             /** Outdoor Battery Ok */
             outdoor_battery_ok?: boolean | null;
             /** Outdoor Humidity */

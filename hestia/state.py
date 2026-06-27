@@ -27,9 +27,9 @@ _SNAPSHOT_MAPS = (
 # Node-less GLOBAL scalars worth caching across a restart so the dashboard shows
 # the last crib/outdoor temps immediately instead of "—" until the next poll
 # (the niania poller is ~per-minute, the weather poller ~per-10-min).
-# ``outdoor_temp_ts`` (the epoch of the last outdoor sample) is cached too so the
-# "last sampled N ago" freshness survives a restart — a dead sensor still reads stale.
-_SNAPSHOT_GLOBALS = ("crib_temp", "outdoor_temp", "outdoor_humidity", "outdoor_temp_ts")
+# The crib/outdoor sample epochs (``*_temp_ts``) are cached too so the "last sampled N ago"
+# freshness survives a restart — a dead/silent sensor still reads stale instead of believable.
+_SNAPSHOT_GLOBALS = ("crib_temp", "crib_temp_ts", "outdoor_temp", "outdoor_humidity", "outdoor_temp_ts")
 
 
 def tlv_value(frame: Frame, tag: int) -> "bytes | None":
@@ -324,6 +324,7 @@ class State:
     gang: dict = field(default_factory=dict)                 # node -> {endpoint: on} (multi-gang switch)
     scene_seq: dict = field(default_factory=dict)            # node -> last Central-Scene seq (dedup only; not state)
     crib_temp: "float | None" = None                         # GLOBAL (node-less) °C from the Tuya baby-monitor poller
+    crib_temp_ts: "float | None" = None                      # GLOBAL epoch secs of the last crib_temp sample (freshness badge); snapshot-cached
     outdoor_temp: "float | None" = None                      # GLOBAL (node-less) °C from the Open-Meteo / local-433 feeder
     outdoor_humidity: "float | None" = None                  # GLOBAL (node-less) %RH companion from the local-433 feeder (display-only)
     outdoor_temp_ts: "float | None" = None                   # GLOBAL epoch secs of the last outdoor_temp sample (for the "last sampled N ago" freshness badge); snapshot-cached

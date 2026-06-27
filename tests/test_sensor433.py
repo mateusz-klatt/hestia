@@ -130,9 +130,10 @@ class StreamReadingsTests(unittest.IsolatedAsyncioTestCase):
             _line(temperature_C=4.0, battery_ok=True),   # bool rejected -> None
             _line(temperature_C=5.0, battery_ok="low"),  # str rejected -> None
             _line(temperature_C=6.0),                    # absent -> None
+            _line(temperature_C=7.0, battery_ok=255),    # any non-zero -> ok (1), never a bogus level
         ])
         out = await _drain(_make_create(proc))
-        self.assertEqual([r.battery_ok for r in out], [0, 1, 1, None, None, None])
+        self.assertEqual([r.battery_ok for r in out], [0, 1, 1, None, None, None, 1])
 
     async def test_command_no_T_and_pipes(self):
         create = _make_create(_FakeProc([_line(temperature_C=1.0)]))
@@ -179,6 +180,44 @@ class StreamReadingsTests(unittest.IsolatedAsyncioTestCase):
         # a keyfob press on the same id has no temperature_C -> ignored (not a weather reading)
         proc = _FakeProc([_line(model="Microchip-HCS200", id=42, button=1)])
         self.assertEqual(await _drain(_make_create(proc), sensor_id="42"), [])
+
+    async def test_id_wildcard_matches_any(self):
+        # '*' = match any id — for a sensor (e.g. Prologue-TH) whose id randomises on each battery change.
+        proc = _FakeProc([_line(id=204, temperature_C=1.0),
+                          _line(id=85, temperature_C=2.0),
+                          _line(id=227, temperature_C=3.0)])
+        out = await _drain(_make_create(proc), sensor_id="*")
+        self.assertEqual(out, [sensor433.Reading(1.0, None), sensor433.Reading(2.0, None),
+                               sensor433.Reading(3.0, None)])
+
+    async def test_channel_filter_matches_int_and_str(self):
+        # channel is str()-compared, so int 1 and str "1" both match a filter of "1".
+        proc = _FakeProc([_line(channel=1, temperature_C=1.0), _line(channel="1", temperature_C=2.0)])
+        out = await _drain(_make_create(proc), channel="1")
+        self.assertEqual(out, [sensor433.Reading(1.0, None), sensor433.Reading(2.0, None)])
+
+    async def test_channel_filter_skips_other(self):
+        proc = _FakeProc([_line(channel=2, temperature_C=7.0)])
+        self.assertEqual(await _drain(_make_create(proc), channel="1"), [])
+
+    async def test_channel_filter_zero_is_a_real_channel(self):
+        # channel "0" is truthy as a filter string and str(0)=="0" matches — a 0 channel is not "unset".
+        proc = _FakeProc([_line(channel=0, temperature_C=1.0), _line(channel=1, temperature_C=2.0)])
+        self.assertEqual(await _drain(_make_create(proc), channel="0"), [sensor433.Reading(1.0, None)])
+
+    async def test_channel_filter_rejects_packet_missing_channel(self):
+        # a filter is set but the packet omits channel -> a different device -> rejected
+        proc = _FakeProc([_line(temperature_C=7.0)])
+        self.assertEqual(await _drain(_make_create(proc), channel="1"), [])
+
+    async def test_wildcard_id_and_channel_combined(self):
+        # The robust cross-battery-change config: any id, pinned to a stable DIP-switch channel + model.
+        proc = _FakeProc([_line(model="Prologue-TH", id=85, channel=1, temperature_C=1.0),
+                          _line(model="Prologue-TH", id=227, channel=1, temperature_C=2.0),
+                          _line(model="Prologue-TH", id=227, channel=2, temperature_C=3.0),   # wrong channel
+                          _line(model="Other", id=227, channel=1, temperature_C=4.0)])         # wrong model
+        out = await _drain(_make_create(proc), model="Prologue-TH", sensor_id="*", channel="1")
+        self.assertEqual(out, [sensor433.Reading(1.0, None), sensor433.Reading(2.0, None)])
 
     async def test_temp_non_finite_rejected(self):
         for bad in (float("nan"), float("inf"), float("-inf")):
