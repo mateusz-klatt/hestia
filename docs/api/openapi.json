@@ -948,7 +948,7 @@
         "type": "object"
       },
       "Globals": {
-        "description": "Node-less global fields (``proxy.globals_snapshot``). Every key is ALWAYS present (required),\nnull when its poller is off.",
+        "description": "Node-less global fields (``proxy.globals_snapshot``). Every key is ALWAYS present (required),\nnull when its poller is off. ``outdoor_temp_ts`` is the ISO ts of the last outdoor sample (freshness\nbadge); ``outdoor_battery_ok`` is the local 433 sensor's battery flag (false = low).",
         "properties": {
           "crib_temp": {
             "anyOf": [
@@ -960,6 +960,17 @@
               }
             ],
             "title": "Crib Temp"
+          },
+          "outdoor_battery_ok": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Outdoor Battery Ok"
           },
           "outdoor_humidity": {
             "anyOf": [
@@ -982,12 +993,25 @@
               }
             ],
             "title": "Outdoor Temp"
+          },
+          "outdoor_temp_ts": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Outdoor Temp Ts"
           }
         },
         "required": [
           "crib_temp",
           "outdoor_temp",
-          "outdoor_humidity"
+          "outdoor_humidity",
+          "outdoor_temp_ts",
+          "outdoor_battery_ok"
         ],
         "title": "Globals",
         "type": "object"
@@ -1011,7 +1035,7 @@
         "type": "object"
       },
       "GlobalsPatch": {
-        "description": "A partial of Globals \u2014 the changed global field(s) in a `globals` event (1 key, or 2 for 433).",
+        "description": "A partial of Globals \u2014 the changed global field(s) in a `globals` event (1 key for the niania /\nOpen-Meteo poll + its ts, up to 4 for a 433 reading: temp, humidity, ts, battery).",
         "properties": {
           "crib_temp": {
             "anyOf": [
@@ -1023,6 +1047,17 @@
               }
             ],
             "title": "Crib Temp"
+          },
+          "outdoor_battery_ok": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Outdoor Battery Ok"
           },
           "outdoor_humidity": {
             "anyOf": [
@@ -1045,6 +1080,17 @@
               }
             ],
             "title": "Outdoor Temp"
+          },
+          "outdoor_temp_ts": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Outdoor Temp Ts"
           }
         },
         "title": "GlobalsPatch",
@@ -2477,7 +2523,7 @@
   "info": {
     "description": "Local cloud-free smart-home control API. Generated from hestia/api_contract.py \u2014 do not edit by hand; run `python -m hestia.api_contract`.",
     "title": "hestia API",
-    "version": "0.5.0"
+    "version": "0.6.0"
   },
   "openapi": "3.1.0",
   "paths": {

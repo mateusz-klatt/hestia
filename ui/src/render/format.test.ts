@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { device } from "../fixtures";
-import { battFmt, battLow, fmtHumidity, fmtTemp, stateStr, thermostatNotResponding } from "./format";
+import {
+  battFmt, battLow, fmtHumidity, fmtTemp, outdoorMeta, relAgo, stateStr, thermostatNotResponding,
+} from "./format";
 
 describe("fmtTemp", () => {
   it("formats one decimal with a degree sign (Celsius default)", () => {
@@ -150,5 +152,42 @@ describe("thermostatNotResponding", () => {
     const after = new Date((t(60) + 5) * 1000).toISOString();
     expect(thermostatNotResponding(
       device({ type: "thermostat", thermostat_last_cmd: t(60), last_seen: after }), now)).toBe(false);
+  });
+});
+
+describe("relAgo", () => {
+  const now = Date.parse("2026-06-22T08:00:00Z");
+  const ago = (ms: number): number => now - ms;
+  it("renders the sub-minute / minute / hour buckets", () => {
+    expect(relAgo(ago(500), now)).toBe("now"); // < 2 s
+    expect(relAgo(ago(5_000), now)).toBe("5s ago");
+    expect(relAgo(ago(120_000), now)).toBe("2m ago");
+    expect(relAgo(ago(3 * 3_600_000), now)).toBe("3h ago");
+  });
+});
+
+describe("outdoorMeta", () => {
+  const now = Date.parse("2026-06-22T08:30:00Z");
+  it("is empty (no warn) when the sensor has never sampled", () => {
+    expect(outdoorMeta(null, null, now)).toEqual({ text: "", warn: false });
+  });
+  it("is empty when the timestamp is unparseable", () => {
+    expect(outdoorMeta("not-a-date", null, now)).toEqual({ text: "", warn: false });
+  });
+  it("shows a fresh age with no warn", () => {
+    expect(outdoorMeta("2026-06-22T08:28:00Z", true, now)).toEqual({ text: "2m ago", warn: false });
+  });
+  it("warns once the reading is stale (> 15 min)", () => {
+    const r = outdoorMeta("2026-06-22T08:10:00Z", true, now); // 20 min old
+    expect(r.text).toBe("20m ago");
+    expect(r.warn).toBe(true);
+  });
+  it("appends a low-battery marker and warns even when fresh", () => {
+    const r = outdoorMeta("2026-06-22T08:29:00Z", false, now); // 1 min old, battery low
+    expect(r.text).toBe("1m ago · 🪫 low");
+    expect(r.warn).toBe(true);
+  });
+  it("does not warn for a healthy battery flag", () => {
+    expect(outdoorMeta("2026-06-22T08:29:30Z", true, now).warn).toBe(false);
   });
 });

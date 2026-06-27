@@ -39,7 +39,11 @@ from pydantic.json_schema import models_json_schema
 #        optional `endpoint` (1|2) on a state predicate/trigger to target ONE gang of a multi-gang
 #        switch. Confined to the Rule/Trigger/StatePredicate/RuleVocab schemas (automations surface);
 #        no control/device shape changes, and the iOS client doesn't consume automations.
-CONTRACT_VERSION = "0.5.0"
+# 0.6.0: Globals (+ the `globals` SSE patch) grow two additive READ-ONLY fields — `outdoor_temp_ts`
+#        (ISO ts of the last outdoor sample) and `outdoor_battery_ok` — for the dashboard freshness /
+#        low-battery badge. Additive response/event fields only; tolerant readers (0.4.0) keep pinned
+#        clients safe, and no request/control shape changes.
+CONTRACT_VERSION = "0.6.0"
 OPENAPI_PATH = Path(__file__).resolve().parent.parent / "docs" / "api" / "openapi.json"
 
 # De-duplicated string literals (SonarPython S1192): the OpenAPI content-type, the paths reused
@@ -426,12 +430,15 @@ _OMIT = lambda s: s.pop("default", None)  # noqa: E731 — tiny schema post-proc
 
 class Globals(BaseModel):
     """Node-less global fields (``proxy.globals_snapshot``). Every key is ALWAYS present (required),
-    null when its poller is off."""
+    null when its poller is off. ``outdoor_temp_ts`` is the ISO ts of the last outdoor sample (freshness
+    badge); ``outdoor_battery_ok`` is the local 433 sensor's battery flag (false = low)."""
 
     model_config = _READ
     crib_temp: float | None
     outdoor_temp: float | None
     outdoor_humidity: float | None
+    outdoor_temp_ts: str | None
+    outdoor_battery_ok: bool | None
 
 
 class Summary(BaseModel):
@@ -593,12 +600,15 @@ class DeviceStatePatch(BaseModel):
 
 
 class GlobalsPatch(BaseModel):
-    """A partial of Globals — the changed global field(s) in a `globals` event (1 key, or 2 for 433)."""
+    """A partial of Globals — the changed global field(s) in a `globals` event (1 key for the niania /
+    Open-Meteo poll + its ts, up to 4 for a 433 reading: temp, humidity, ts, battery)."""
 
     model_config = _READ
     crib_temp: Annotated[float | None, Field(default=None, json_schema_extra=_OMIT)] = None
     outdoor_temp: Annotated[float | None, Field(default=None, json_schema_extra=_OMIT)] = None
     outdoor_humidity: Annotated[float | None, Field(default=None, json_schema_extra=_OMIT)] = None
+    outdoor_temp_ts: Annotated[str | None, Field(default=None, json_schema_extra=_OMIT)] = None
+    outdoor_battery_ok: Annotated[bool | None, Field(default=None, json_schema_extra=_OMIT)] = None
 
 
 class DiscoveryChangedEvent(BaseModel):

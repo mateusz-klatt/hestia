@@ -120,6 +120,20 @@ class StreamReadingsTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(out[0].temperature_C, float)
         self.assertIsInstance(out[0].humidity, float)
 
+    async def test_battery_ok_flag_normalised_to_0_or_1(self):
+        # rtl_433's battery_ok: 0 = low, 1 = ok; any other finite non-zero collapses to 1; bool/str/NaN
+        # and an absent field -> None (so a garbled flag never reads as a bogus level / false "low").
+        proc = _FakeProc([
+            _line(temperature_C=1.0, battery_ok=0),      # low
+            _line(temperature_C=2.0, battery_ok=1),      # ok
+            _line(temperature_C=3.0, battery_ok=5),      # non-zero -> ok
+            _line(temperature_C=4.0, battery_ok=True),   # bool rejected -> None
+            _line(temperature_C=5.0, battery_ok="low"),  # str rejected -> None
+            _line(temperature_C=6.0),                    # absent -> None
+        ])
+        out = await _drain(_make_create(proc))
+        self.assertEqual([r.battery_ok for r in out], [0, 1, 1, None, None, None])
+
     async def test_command_no_T_and_pipes(self):
         create = _make_create(_FakeProc([_line(temperature_C=1.0)]))
         await _drain(create, device="rtl_tcp:127.0.0.1:5555")

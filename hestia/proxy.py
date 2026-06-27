@@ -815,13 +815,22 @@ _OPS = {
 }
 
 
+def _iso(ts: "float | None") -> "str | None":
+    """An epoch (secs) as a UTC ISO-8601 ``...Z`` string — the same shape as a registry ``last_seen`` so
+    the web client can diff it against the wall clock. ``None`` passes through (no sample yet)."""
+    return None if ts is None else time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(ts))
+
+
 def globals_snapshot(state: State) -> dict:
     """The node-less GLOBAL fields — surfaced to the dashboard (``/api/discovery``) and the ``state``
     control op. ``crib_temp`` / ``outdoor_temp`` are °C automation fields; ``outdoor_humidity`` is a
-    display-only %RH companion from the local 433 feeder (no rule trigger). ``None`` when the relevant
-    poller is off → JSON ``null``; the UI renders "—"."""
+    display-only %RH companion from the local 433 feeder (no rule trigger). ``outdoor_temp_ts`` (ISO ts of
+    the last outdoor sample) + ``outdoor_battery_ok`` (433 battery flag) drive the freshness / low-battery
+    badge. ``None`` when the relevant poller is off / has no sample → JSON ``null``; the UI renders "—"."""
     return {"crib_temp": state.crib_temp, "outdoor_temp": state.outdoor_temp,
-            "outdoor_humidity": state.outdoor_humidity}
+            "outdoor_humidity": state.outdoor_humidity,
+            "outdoor_temp_ts": _iso(state.outdoor_temp_ts),
+            "outdoor_battery_ok": state.outdoor_battery_ok}
 
 
 def state_snapshot(state: State) -> dict:
@@ -1215,13 +1224,16 @@ async def _scheduler(rt, now=datetime.datetime.now, interval: float = SCHEDULER_
         await _inject(rt, frames)
 
 
-async def _poll_global_field(rt, field, read, interval, source) -> None:
+async def _poll_global_field(rt, field, read, interval, source, *, with_timestamp=False) -> None:
     """Generic poller for a GLOBAL automation field. Every ``interval`` seconds, call the BLOCKING
     ``read()`` OFF the event loop (a worker thread, so the loop stays free); a non-``None`` return sets
     ``State.<field>``, fires ``on_global``, and injects the resulting frames (log-tagged ``source``). A
-    ``None`` read keeps the last value (retry next tick). The whole tick is wrapped so a daemon loop
-    never dies on an error — ``CancelledError`` is a ``BaseException``, so cancellation still propagates
-    and the task ends cleanly. Caller gates configuration (don't start the task when the feature is off)."""
+    ``None`` read keeps the last value (retry next tick). ``with_timestamp`` also stamps ``State.<field>_ts``
+    + the live delta with the sample time (for the freshness badge) — NOT marked dirty, so a steady value
+    doesn't re-flush every tick (the stamp is refreshed within a poll of any restart anyway). The whole
+    tick is wrapped so a daemon loop never dies on an error — ``CancelledError`` is a ``BaseException``, so
+    cancellation still propagates and the task ends cleanly. Caller gates configuration (don't start the
+    task when the feature is off)."""
     loop = asyncio.get_running_loop()
     while True:
         await asyncio.sleep(interval)
@@ -1233,7 +1245,12 @@ async def _poll_global_field(rt, field, read, interval, source) -> None:
             if getattr(rt.state, field) != value:                                # only a REAL change needs persisting —
                 rt.state.dirty = True                                            # else a steady poll re-flushes (+ re-runs
             setattr(rt.state, field, value)                                      # Alembic) the device-state cache every tick
-            rt.event_bus.publish({"type": "globals", "fields": {field: value}})   # live dashboard update (every tick)
+            fields = {field: value}
+            if with_timestamp:                                                   # freshness: stamp the sample time
+                now = time.time()
+                setattr(rt.state, f"{field}_ts", now)
+                fields[f"{field}_ts"] = _iso(now)
+            rt.event_bus.publish({"type": "globals", "fields": fields})           # live dashboard update (every tick)
             await _inject(rt, rt.engine.on_global(rt, field, value), source=source)
         except Exception:                            # a daemon loop must never die on a tick error
             log.exception("%s poller tick failed", source)
@@ -1278,7 +1295,8 @@ async def _weather_poller(rt, fetch=weather.fetch_outdoor_temp, lat=HESTIA_LAT, 
     fetch keeps the last value. See ``_poll_global_field`` / ``_sensor433_poller``."""
     if not (enabled and source == "open-meteo" and lat is not None and lon is not None):
         return                                       # off / not selected / no location -> no poll, zero egress
-    await _poll_global_field(rt, "outdoor_temp", lambda: fetch(lat, lon), interval, "weather")
+    await _poll_global_field(rt, "outdoor_temp", lambda: fetch(lat, lon), interval, "weather",
+                             with_timestamp=True)
 
 
 async def _sensor433_poller(rt, stream=sensor433.stream_readings, enabled: bool = OUTDOOR_TEMP_ENABLED,
@@ -1303,9 +1321,15 @@ async def _sensor433_poller(rt, stream=sensor433.stream_readings, enabled: bool 
                 rt.state.dirty = True
             rt.state.outdoor_temp = reading.temperature_C
             rt.state.outdoor_humidity = reading.humidity
-            log.debug("sensor433: outdoor_temp=%r humidity=%r", reading.temperature_C, reading.humidity)
+            now = time.time()                                         # sample time -> freshness badge
+            rt.state.outdoor_temp_ts = now
+            battery_ok = None if reading.battery_ok is None else bool(reading.battery_ok)
+            rt.state.outdoor_battery_ok = battery_ok                  # runtime-only low-battery flag
+            log.debug("sensor433: outdoor_temp=%r humidity=%r battery_ok=%r",
+                      reading.temperature_C, reading.humidity, battery_ok)
             rt.event_bus.publish({"type": "globals", "fields": {                  # live dashboard delta
-                "outdoor_temp": reading.temperature_C, "outdoor_humidity": reading.humidity}})
+                "outdoor_temp": reading.temperature_C, "outdoor_humidity": reading.humidity,
+                "outdoor_temp_ts": _iso(now), "outdoor_battery_ok": battery_ok}})
             await _inject(rt, rt.engine.on_global(rt, "outdoor_temp", reading.temperature_C),
                           source="sensor433")
         except Exception:                            # one bad reading/rule-eval must NOT drop the SDR stream

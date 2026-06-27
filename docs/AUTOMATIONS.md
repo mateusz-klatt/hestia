@@ -350,5 +350,18 @@ If `rtl_433` exits (e.g. `rtl_tcp` restart), the stream is relaunched after `HES
 > SDR/`rtl_tcp` endpoint. Do **not** point `HESTIA_RTL433_DEVICE` at an `rtl_tcp` shared with another
 > consumer — neither an FM/RDS receiver (a 433 retune **monopolises** the dongle) nor a second `rtl_433`
 > (`rtl_tcp` serves a **single client**, so the second reader silently gets nothing). hestia consumes the
-> long-lived stream, takes each matching finite `temperature_C` (+ `humidity` if present), and **terminates
-> and reaps** its `rtl_433` child on shutdown so a leaked process can never block the SDR.
+> long-lived stream, takes each matching finite `temperature_C` (+ `humidity` and `battery_ok` if present),
+> and **terminates and reaps** its `rtl_433` child on shutdown so a leaked process can never block the SDR.
+
+> **Freshness + battery (dashboard):** each sample stamps the time it landed (`outdoor_temp_ts`) and the
+> sensor's `battery_ok` flag (`outdoor_battery_ok`), surfaced under the outdoor reading as a muted
+> "**N ago**" badge that turns **red** once the reading is stale (no sample for >15 min) **or** the battery
+> reports low. A silent sensor therefore shows visibly stale instead of freezing a believable-but-old number.
+
+> **⚠ `id` changes when the battery dies:** a `Prologue-TH`-class sensor picks a **new random `id`** each
+> time it loses power (flat/replaced battery). If you pinned `HESTIA_RTL433_ID`, the feeder then matches
+> nothing and `outdoor_temp` freezes — watch `GET /api/rf433` for the new `id`, update `HESTIA_RTL433_ID`,
+> and recreate the container. The freshness badge above is the early warning that this has happened. NB
+> some sensors report `battery_ok=0` even on a freshly-charged **rechargeable** (its ~1.2 V sits below the
+> alkaline threshold), so a permanent low-battery flag with a rechargeable cell is expected — use an
+> alkaline if you want the flag to be a meaningful "replace me soon".
