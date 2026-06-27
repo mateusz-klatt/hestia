@@ -394,7 +394,7 @@ export class LiveController {
       this.pendingScene.set(node, scene); // row not built yet → replay after
       return;
     }
-    badge.textContent = `⏏ scena ${String(scene.id)}`;
+    badge.textContent = t("scene.badge", { id: scene.id });
     badge.classList.add("on");
     clearTimeout(this.sceneTimers.get(node));
     this.sceneTimers.set(node, setTimeout(() => {

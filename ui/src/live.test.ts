@@ -554,7 +554,7 @@ describe("LiveController heatmap (flash / scene / last-seen)", () => {
     const row = view.rows.querySelector('tr[data-node="7"]');
     expect(row?.classList.contains("active")).toBe(true);
     const badge = row?.querySelector(".scene-badge");
-    expect(badge?.textContent).toBe("⏏ scena 3");
+    expect(badge?.textContent).toBe("⏏ scene 3");
     expect(badge?.classList.contains("on")).toBe(true);
     vi.advanceTimersByTime(4000); // SCENE_MS
     expect(badge?.textContent).toBe("");
@@ -571,7 +571,7 @@ describe("LiveController heatmap (flash / scene / last-seen)", () => {
     gate.resolve(discovery({ "7": device({ type: "plug" }) }));
     await refreshing;
     const badge = view.rows.querySelector('tr[data-node="7"] .scene-badge');
-    expect(badge?.textContent).toBe("⏏ scena 9"); // drainPending replayed it
+    expect(badge?.textContent).toBe("⏏ scene 9"); // drainPending replayed it
     expect(badge?.classList.contains("on")).toBe(true);
   });
 
@@ -597,10 +597,10 @@ describe("LiveController heatmap (flash / scene / last-seen)", () => {
     await live.refresh();
     live.flashScene(7, { id: 5, kind: "scene" });
     const badge = view.rows.querySelector('tr[data-node="7"] .scene-badge');
-    expect(badge?.textContent).toBe("⏏ scena 5");
+    expect(badge?.textContent).toBe("⏏ scene 5");
     live.applyState(7, { switch: true }); // patches .stanval only
     expect(view.rows.querySelector('tr[data-node="7"] .stanval')?.textContent).toBe("🟢 On");
-    expect(badge?.textContent).toBe("⏏ scena 5"); // badge survives the state patch
+    expect(badge?.textContent).toBe("⏏ scene 5"); // badge survives the state patch
     expect(badge?.classList.contains("on")).toBe(true);
   });
 

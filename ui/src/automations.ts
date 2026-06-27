@@ -5,16 +5,17 @@ import { t as msg } from "./i18n"; // aliased: `trigSummary` already binds `t` t
 export function trigSummary(t: Trigger): string {
   switch (t.type) {
     case "scene":
-      return `scene ${String(t.scene_id)} @node ${String(t.node)}`;
+      return msg("auto.trig.scene", { id: t.scene_id, node: t.node });
     case "state": {
-      if (t.node === undefined) return `${t.field} ${t.op} ${String(t.value)}`; // global (node-less) field
-      const gang = t.endpoint !== undefined ? ` gang ${String(t.endpoint)}` : ""; // one gang of a multi-gang switch
-      return `node ${String(t.node)}${gang} ${t.field} ${t.op} ${String(t.value)}`;
+      // global (node-less) field
+      if (t.node === undefined) return msg("auto.trig.stateGlobal", { field: t.field, op: t.op, value: String(t.value) });
+      const gang = t.endpoint !== undefined ? msg("auto.trig.gang", { ep: t.endpoint }) : ""; // one gang of a multi-gang switch
+      return msg("auto.trig.state", { node: t.node, gang, field: t.field, op: t.op, value: String(t.value) });
     }
     case "time":
       // The server serialises an unscheduled-days trigger as `days: null` (not omitted), so guard with
       // Array.isArray — a bare `=== undefined` check let `null.join()` throw and killed the row loop.
-      return `at ${t.at}${Array.isArray(t.days) ? ` [${t.days.join(",")}]` : ""}`;
+      return msg("auto.trig.time", { time: t.at, days: Array.isArray(t.days) ? ` [${t.days.join(",")}]` : "" });
     case "sun": {
       // offset_min is always present in the contract (0 when unset), so no undefined guard needed.
       const off =
@@ -24,7 +25,7 @@ export function trigSummary(t: Trigger): string {
     case "presence":
       return `${t.mac} ${t.event}`;
     case "cron":
-      return `cron ${t.expr}`;
+      return msg("auto.trig.cron", { expr: t.expr });
     default:
       // The rule is cast from JSON (server-validated, but defensively): an
       // unknown future trigger type shows its raw `type` rather than "undefined".
@@ -42,7 +43,7 @@ export interface AutomationsDeps {
 }
 
 function ruleError(result: RuleResult): string {
-  return result.body?.error ?? `error ${String(result.status)}`;
+  return result.body?.error ?? msg("auto.error", { status: result.status });
 }
 
 /** `label` → `data-label`, the cell's heading in the mobile card layout (thead hidden — see style.css). */

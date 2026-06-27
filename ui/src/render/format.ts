@@ -42,15 +42,15 @@ export function fmtHumidity(value: number | null): string {
   return value === null ? "—" : `${String(Math.round(value))}%`;
 }
 
-/** A relative "now / Ns / Nm / Nh ago" age for an epoch-ms instant — shared by the heatmap rows'
- *  "last seen" and the outdoor-sensor freshness badge so both read identically. */
+/** A relative "now / Ns / Nm / Nh ago" age for an epoch-ms instant — localised, shared by the heatmap
+ *  rows' "last seen" and the crib/outdoor freshness badges so both read identically in any language. */
 export function relAgo(ms: number, now: number = Date.now()): string {
   const s = Math.floor((now - ms) / 1000);
-  if (s < 2) return "now";
-  if (s < 60) return `${String(s)}s ago`;
+  if (s < 2) return t("time.now");
+  if (s < 60) return t("time.secondsAgo", { n: s });
   const m = Math.floor(s / 60);
-  if (m < 60) return `${String(m)}m ago`;
-  return `${String(Math.floor(m / 60))}h ago`;
+  if (m < 60) return t("time.minutesAgo", { n: m });
+  return t("time.hoursAgo", { n: Math.floor(m / 60) });
 }
 
 /** No sample for this long → flag the reading as stale. Generous enough to clear every feeder's cadence

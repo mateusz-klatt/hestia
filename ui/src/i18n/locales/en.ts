@@ -108,6 +108,7 @@ const en = {
   "scene.lightsOn": "All lights on",
   "scene.blindsUp": "Raise all blinds",
   "scene.blindsDown": "Lower all blinds",
+  "scene.badge": "⏏ scene {id}", // transient badge on a row when a Central-Scene button is pressed
   "rooms.empty": "No devices",
   "rooms.other": "Other",
   "rooms.editIcons": "Edit icons",
@@ -164,6 +165,13 @@ const en = {
   "dev.battLow": "low",
   "dev.channel": "↳ channel {ep}",
 
+  // Relative time ("N ago" / "now") — the last-seen heatmap + the crib/outdoor freshness badge. Compact,
+  // abbreviated forms (they sit in tiny badges); each locale controls its own spacing/abbreviation.
+  "time.now": "now",
+  "time.secondsAgo": "{n}s ago",
+  "time.minutesAgo": "{n}m ago",
+  "time.hoursAgo": "{n}h ago",
+
   // Device type names (the classifier's values), shown in the "inferred type" cell + as a fallback label.
   "type.light": "light",
   "type.blind": "blind",
@@ -195,6 +203,15 @@ const en = {
   "auto.delete": "Delete",
   "auto.deleteConfirm": "Delete rule {id}?",
   "auto.unavailable": "(automations unavailable)",
+  // One-line trigger summaries in the rules table. Terse + technical: only the connective WORDS are
+  // localised — field names, ops (eq/lt/…), cron exprs, MACs, node ids + sun events stay verbatim.
+  "auto.error": "error {status}",
+  "auto.trig.scene": "scene {id} @node {node}",
+  "auto.trig.state": "node {node}{gang} {field} {op} {value}",
+  "auto.trig.stateGlobal": "{field} {op} {value}",
+  "auto.trig.gang": " gang {ep}",
+  "auto.trig.time": "at {time}{days}",
+  "auto.trig.cron": "cron {expr}",
   "rule.newTemplate": "New rule template",
   "rule.save": "Save rule",
   "rule.jsonLabel": "rule JSON",
