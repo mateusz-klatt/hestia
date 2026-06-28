@@ -465,12 +465,12 @@ class SceneOpsTests(unittest.TestCase):
         "4": {"type": "plug", "level": None},
     }
 
-    def _ops(self, scene, nodes=None):
+    def _ops(self, scene, nodes=None, value=None):
         # The scene reads opt-outs from the REGISTRY (not from discovery — keeps the DeviceInfo wire
         # shape stable for native clients), so give rt a registry.nodes map.
         rt = SimpleNamespace(registry=SimpleNamespace(nodes=nodes or {}))
         with mock.patch("hestia.web._merged_discovery", return_value=self.DEVICES):
-            return web._scene_ops(rt, scene)
+            return web._scene_ops(rt, scene, value)
 
     def test_lights_off_switches_plain_lights_and_dimmable_lights_off(self):
         self.assertEqual(self._ops("lights_off"), [
@@ -487,6 +487,20 @@ class SceneOpsTests(unittest.TestCase):
     def test_blinds_down_and_up_use_cover_values(self):
         self.assertEqual(self._ops("blinds_down"), [{"op": "cover", "node": 3, "value": 0}])
         self.assertEqual(self._ops("blinds_up"), [{"op": "cover", "node": 3, "value": 99}])
+
+    def test_blinds_set_drives_blinds_to_a_percent_position(self):
+        # The whole-home slider: every blind to a 0-100 % position → wire cover 0-99 (50 % ≈ half open).
+        self.assertEqual(self._ops("blinds_set", value=50), [{"op": "cover", "node": 3, "value": 50}])
+        self.assertEqual(self._ops("blinds_set", value=0), [{"op": "cover", "node": 3, "value": 0}])
+        self.assertEqual(self._ops("blinds_set", value=100), [{"op": "cover", "node": 3, "value": 99}])
+
+    def test_blinds_set_respects_the_whole_home_opt_out(self):
+        # An opted-out blind is skipped by blinds_set just like the up/down extremes.
+        self.assertEqual(self._ops("blinds_set", {"3": {"exclude_from_all": True}}, value=50), [])
+
+    def test_cover_from_pct_clamps_out_of_range(self):
+        self.assertEqual(web._cover_from_pct(-5), 0)
+        self.assertEqual(web._cover_from_pct(150), 99)
 
     def test_devices_opted_out_of_all_are_skipped(self):
         # Opt-outs live in the registry, NOT in discovery — node 2 excluded, node 3 explicitly re-included.
@@ -596,6 +610,32 @@ class SceneEndpointTests(_WebTestBase):
         self.assertEqual(status, 200)
         self.assertEqual(json.loads(body), {"ok": True, "sent": 1, "total": 2})
         self.assertEqual(audit.call_args.kwargs["result"], "1/2")
+
+    def test_blinds_set_drives_blinds_to_a_position(self):
+        devices = {"3": {"type": "blind", "level": None}}
+        sent = []
+
+        async def fake_control(_rt, op):
+            sent.append(op)
+            return {"ok": True}
+
+        with mock.patch("hestia.web._merged_discovery", return_value=devices):
+            with mock.patch("hestia.web.process_control_op", side_effect=fake_control):
+                with mock.patch("hestia.web._audit"):
+                    status, _, body = _post(self.web.address, "/api/scene", {"op": "blinds_set", "value": 50})
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body), {"ok": True, "sent": 1, "total": 1})
+        self.assertEqual(sent, [{"op": "cover", "node": 3, "value": 50}])
+
+    def test_blinds_set_rejects_missing_or_bad_value(self):
+        # bool is an int subclass — it must NOT pass as a position; missing / out-of-range / non-int → 400.
+        for payload in ({"op": "blinds_set"}, {"op": "blinds_set", "value": 150},
+                        {"op": "blinds_set", "value": -1}, {"op": "blinds_set", "value": True},
+                        {"op": "blinds_set", "value": "50"}):
+            with self.subTest(payload=payload):
+                status, _, body = _post(self.web.address, "/api/scene", payload)
+                self.assertEqual(status, 400)
+                self.assertIn("blinds_set requires", json.loads(body)["error"])
 
 
 class IndexTests(_WebTestBase):

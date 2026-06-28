@@ -205,6 +205,17 @@ td.sub-label {
   min-height: 1.2em;
 }
 
+/* The whole-home blind-position slider drops onto its OWN line under the Raise/Lower buttons (flex-basis
+   100% like the status), the range stretching to fill the row with its % readout pinned to the right. */
+.whole-home-detail .scene-slider {
+  flex-basis: 100%;
+  display: flex;
+  align-items: center;
+}
+.whole-home-detail .scene-slider input[type="range"] {
+  flex: 1;
+}
+
 /* Klima shows its live state as a leading pictogram, so its status span carries text ONLY on a failed
    transmit — full-width (its own line) but with NO reserved min-height, so a healthy panel keeps no
    empty status row (it collapses to zero height). */

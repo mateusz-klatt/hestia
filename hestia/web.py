@@ -70,6 +70,10 @@ _SCENE_TARGETS = {
     "blinds_down": ("blind", False),
     "blinds_up": ("blind", True),
 }
+# `blinds_set` drives every (non-excluded) blind to an explicit 0-100 % position (the whole-home
+# slider), unlike the on/off extremes above; it carries a `value` and is handled outside _SCENE_TARGETS.
+_BLINDS_SET = "blinds_set"
+_SCENE_NAMES = (*_SCENE_TARGETS, _BLINDS_SET)
 _TEMP_SCALES = {"C", "F", "K"}
 _EMPTY_SETTINGS = {"locale": None, "temp_scale": None, "theme": None}
 _RT_KEY = web.AppKey("rt", object)
@@ -659,23 +663,33 @@ async def _users_reset_password(request):
     return _json(HTTPStatus.OK, {"ok": True})
 
 
-def _scene_device_op(target_type: str, node_id: int, info: dict, active: bool) -> dict:
+def _cover_from_pct(pct: int) -> int:
+    """Whole-home blind position: clamp a 0-100 % position to the wire ``cover`` range 0-99 (mirrors the
+    per-blind slider's ``coverValue``), so e.g. 50 % → 50 (≈ half open)."""
+    return round(min(100, max(0, pct)) / 100 * 99)
+
+
+def _scene_device_op(target_type: str, node_id: int, info: dict, active: bool, cover: "int | None" = None) -> dict:
     """One per-device control op for a scene, mirroring the per-device UI buttons: a dimmable light
-    (has a level) → ``level`` 0/99; a plain light → ``switch`` off/on; a blind → ``cover`` 0/99."""
+    (has a level) → ``level`` 0/99; a plain light → ``switch`` off/on; a blind → ``cover`` 0/99. When
+    ``cover`` is given (``blinds_set``) it is the blind's explicit wire position instead of the extreme."""
     if target_type == "light" and info.get("level") is None:
         return {"op": "switch", "node": node_id, "on": active}
     op = "level" if target_type == "light" else "cover"
-    return {"op": op, "node": node_id, "value": 99 if active else 0}
+    value = cover if cover is not None else (99 if active else 0)
+    return {"op": op, "node": node_id, "value": value}
 
 
-def _scene_node_ops(target_type: str, node_id: int, info: dict, active: bool, entry: dict) -> "list[dict]":
+def _scene_node_ops(target_type: str, node_id: int, info: dict, active: bool, entry: dict,
+                    cover: "int | None" = None) -> "list[dict]":
     """The scene ops for ONE device. A plain switch light whose registry entry opts single GANGS out
     (``endpoint_exclude``) is driven per-gang — one endpoint-addressed switch op per NON-excluded gang
     (the same op the room UI's per-gang buttons post) — so e.g. a 2-gang hall/nightlight node keeps the
-    nightlight untouched. Every other device keeps today's single node-level op (one frame)."""
+    nightlight untouched. Every other device keeps today's single node-level op (one frame). ``cover``
+    (blinds_set position) only ever reaches the single-op path — blinds have no per-gang opt-out."""
     excluded = {int(k) for k, v in (entry.get("endpoint_exclude") or {}).items() if v}
     if target_type != "light" or info.get("level") is not None or not excluded:
-        return [_scene_device_op(target_type, node_id, info, active)]
+        return [_scene_device_op(target_type, node_id, info, active, cover)]
     # Any truthy opt-out takes THIS branch unconditionally — the node-level frame (which would drive
     # every gang at once) is never used for such a node. Gangs we can't enumerate (live gang state ∪
     # labels) are therefore deliberately skipped, not swept: fail-safe in the excluded gang's favour.
@@ -685,9 +699,14 @@ def _scene_node_ops(target_type: str, node_id: int, info: dict, active: bool, en
             for ep in sorted(eps - excluded)]
 
 
-def _scene_ops(rt, scene: str) -> list[dict]:
-    """Expand a house-wide scene into ordinary per-device control ops."""
-    target_type, active = _SCENE_TARGETS[scene]
+def _scene_ops(rt, scene: str, value: "int | None" = None) -> list[dict]:
+    """Expand a house-wide scene into ordinary per-device control ops. ``blinds_set`` drives every blind
+    to the explicit 0-100 % ``value``; the other scenes drive their device type to an on/off extreme."""
+    if scene == _BLINDS_SET:
+        target_type, active, cover = "blind", None, _cover_from_pct(value or 0)
+    else:
+        target_type, active = _SCENE_TARGETS[scene]
+        cover = None
     # The house-wide sweep skips any device an admin opted out of "all" (e.g. a nightlight), so
     # SceneResult.total reflects only the devices the scene targets. The opt-out is read straight from
     # the registry (NOT from discovery) so the DeviceInfo wire shape stays stable for native clients.
@@ -695,7 +714,7 @@ def _scene_ops(rt, scene: str) -> list[dict]:
     return [op
             for node, info in _merged_discovery(rt).items()
             if info.get("type") == target_type and not reg.get(node, {}).get("exclude_from_all")
-            for op in _scene_node_ops(target_type, int(node), info, active, reg.get(node, {}))]
+            for op in _scene_node_ops(target_type, int(node), info, active, reg.get(node, {}), cover)]
 
 
 async def _scene(request):
@@ -704,12 +723,20 @@ async def _scene(request):
     if err:
         return body
     scene = body.get("op") if isinstance(body, dict) else None
-    if scene not in _SCENE_TARGETS:
+    if scene not in _SCENE_NAMES:
         return _json(HTTPStatus.BAD_REQUEST,
-                     {"ok": False, "error": f"op must be one of {', '.join(_SCENE_TARGETS)}"})
+                     {"ok": False, "error": f"op must be one of {', '.join(_SCENE_NAMES)}"})
+
+    value = None
+    if scene == _BLINDS_SET:
+        value = body.get("value")
+        # bool is an int subclass — reject it so `true`/`false` can't masquerade as a position.
+        if not isinstance(value, int) or isinstance(value, bool) or not 0 <= value <= 100:
+            return _json(HTTPStatus.BAD_REQUEST,
+                         {"ok": False, "error": "blinds_set requires an integer value 0-100"})
 
     rt = _rt(request)
-    ops = _scene_ops(rt, scene)
+    ops = _scene_ops(rt, scene, value)
     sent = 0
     for op in ops:
         resp = await process_control_op(rt, op)

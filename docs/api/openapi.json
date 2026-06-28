@@ -1847,10 +1847,24 @@
               "lights_off",
               "lights_on",
               "blinds_down",
-              "blinds_up"
+              "blinds_up",
+              "blinds_set"
             ],
             "title": "Op",
             "type": "string"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "maximum": 100,
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value"
           }
         },
         "required": [
@@ -2546,7 +2560,7 @@
   "info": {
     "description": "Local cloud-free smart-home control API. Generated from hestia/api_contract.py \u2014 do not edit by hand; run `python -m hestia.api_contract`.",
     "title": "hestia API",
-    "version": "0.7.0"
+    "version": "0.8.0"
   },
   "openapi": "3.1.0",
   "paths": {
