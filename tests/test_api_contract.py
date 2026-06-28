@@ -299,14 +299,22 @@ class CommandContractTests(unittest.TestCase):
                 api_contract.IrRequest.model_validate(bad)
 
     def test_scene_request_literals_match_the_handler(self):
-        from hestia.web import _SCENE_TARGETS
+        from hestia.web import _SCENE_NAMES
         from typing import get_args
         lit = api_contract.SceneRequest.model_fields["op"].annotation
-        self.assertEqual(set(get_args(lit)), set(_SCENE_TARGETS))   # contract ≡ handler allowlist
-        for op in _SCENE_TARGETS:
+        self.assertEqual(set(get_args(lit)), set(_SCENE_NAMES))   # contract ≡ handler allowlist
+        for op in _SCENE_NAMES:
             api_contract.SceneRequest.model_validate({"op": op})
         with self.assertRaises(ValueError):
             api_contract.SceneRequest.model_validate({"op": "nope"})
+
+    def test_scene_request_blinds_set_value_bounds(self):
+        # `value` is the 0-100 % position for blinds_set; optional (absent for the on/off scenes).
+        api_contract.SceneRequest.model_validate({"op": "blinds_set", "value": 50})
+        api_contract.SceneRequest.model_validate({"op": "blinds_up"})            # no value → fine
+        for bad in (-1, 101):
+            with self.assertRaises(ValueError):
+                api_contract.SceneRequest.model_validate({"op": "blinds_set", "value": bad})
 
     def test_scene_result(self):
         api_contract.SceneResult.model_validate({"ok": True, "sent": 3, "total": 4})

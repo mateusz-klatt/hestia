@@ -1158,7 +1158,9 @@ export interface components {
              * Op
              * @enum {string}
              */
-            op: "lights_off" | "lights_on" | "blinds_down" | "blinds_up";
+            op: "lights_off" | "lights_on" | "blinds_down" | "blinds_up" | "blinds_set";
+            /** Value */
+            value?: number | null;
         };
         /**
          * SceneResult

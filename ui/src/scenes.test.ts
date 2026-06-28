@@ -75,6 +75,55 @@ describe("renderSceneControls", () => {
     expect(el.querySelector(".status")?.textContent).toBe("✓ 2/3");
   });
 
+  it("sends a blinds_set sweep on slider release, with the % readout tracking the drag", async () => {
+    const sent: Array<{ op: SceneOp; value: number | undefined }> = [];
+    const post: PostScene = (op, value) => {
+      sent.push({ op, value });
+      return Promise.resolve({ ok: true, sent: 3, total: 3 });
+    };
+    const el = box();
+    renderSceneControls(el, post);
+    const slider = el.querySelector<HTMLInputElement>('input[type="range"]');
+    const readout = el.querySelector<HTMLElement>(".slider-val");
+    if (slider === null) throw new Error("no slider rendered");
+    expect(readout?.textContent).toBe("▣ 50%"); // seeded at half open
+
+    slider.value = "30";
+    slider.dispatchEvent(new Event("input"));
+    expect(readout?.textContent).toBe("▣ 30%"); // drag updates the readout, no send yet
+    expect(sent).toEqual([]);
+
+    slider.dispatchEvent(new Event("change")); // release commits one sweep
+    await flush();
+    expect(sent).toEqual([{ op: "blinds_set", value: 30 }]);
+    expect(el.querySelector(".status")?.textContent).toBe("✓ 3/3");
+    expect(el.querySelectorAll("button")).toHaveLength(4); // buttons stay, slider is extra
+  });
+
+  it("disables the slider during an in-flight send and ignores a release mid-flight", async () => {
+    const gate = deferred<SceneResult | null>();
+    let calls = 0;
+    const post: PostScene = () => {
+      calls += 1;
+      return gate.promise;
+    };
+    const el = box();
+    renderSceneControls(el, post);
+    const slider = el.querySelector<HTMLInputElement>('input[type="range"]');
+    if (slider === null) throw new Error("no slider rendered");
+
+    click(el, "🌙 All lights off"); // a button send holds the lock
+    expect(calls).toBe(1);
+    expect(slider.disabled).toBe(true);
+    slider.value = "70";
+    slider.dispatchEvent(new Event("change")); // release while busy → ignored
+    expect(calls).toBe(1);
+
+    gate.resolve({ ok: true, sent: 1, total: 1 });
+    await flush();
+    expect(slider.disabled).toBe(false);
+  });
+
   it("shows a localised failure status for null, failed, or thrown sends", async () => {
     const el = box();
     const sends: PostScene[] = [
