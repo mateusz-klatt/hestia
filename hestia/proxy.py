@@ -107,6 +107,15 @@ def _thermostat_confirm_interval(raw: "str | None") -> float:
     return _env_seconds(raw, 40.0, 2.0, 120.0)
 
 
+def _env_int(raw: "str | None", default: int, lo: int, hi: int) -> int:
+    """Parse an integer env value: ``None`` / non-numeric → ``default``; otherwise clamp to ``[lo, hi]``."""
+    try:
+        value = int(raw) if raw is not None else default
+    except (TypeError, ValueError):
+        return default
+    return min(max(value, lo), hi)
+
+
 THERMOSTAT_CONFIRM_SECS = _thermostat_confirm_interval(os.environ.get("HESTIA_THERMOSTAT_CONFIRM_SECS"))
 
 # Blind cover confirm + retry (standalone): a blind reports its OWN position after it actually moves, so a
@@ -118,6 +127,11 @@ COVER_CONFIRM_SECS = _env_seconds(os.environ.get("HESTIA_COVER_CONFIRM_SECS"), 4
 COVER_CONFIRM_TICK = 2.0
 COVER_CONFIRM_TOL = 3
 COVER_CONFIRM_RETRIES = 2
+# Cover REDUNDANCY (standalone): send each blind cover command this many times (distinct seq each, spaced
+# by INJECT_GAP_SECS) so a single dropped frame is covered IMMEDIATELY rather than waiting for the confirm
+# retry. Validated live: the gateway/blind treats duplicate "go to position X" idempotently (no re-actuation
+# / stutter), so this is safe. ``1`` = no redundancy (single send); clamped to [1, 5].
+COVER_REPEAT = _env_int(os.environ.get("HESTIA_COVER_REPEAT"), 3, 1, 5)
 # Inter-frame pacing for hestia-originated bursts (the scene fan-out + the automation inject loop) so
 # back-to-back frames don't wedge the gateway. ``<= 0`` disables. NOT applied to the proxy relay
 # passthrough (which writes cloud→device frames verbatim) — only to hestia's own multi-frame sends.
@@ -1442,6 +1456,12 @@ async def _thermostat_poller(rt, confirm_delay: float = THERMOSTAT_CONFIRM_SECS,
             log.exception("thermostat confirm poll failed")
 
 
+def _cover_reps(rt, op_name) -> int:
+    """How many copies of a frame to send: ``COVER_REPEAT`` for a ``cover`` op in STANDALONE mode (idempotent
+    redundancy so a dropped frame lands immediately), else 1. Proxy stays single-send — the cloud commands."""
+    return COVER_REPEAT if op_name == "cover" and rt.mode == "standalone" else 1
+
+
 def _note_cover_command(rt, node: int, value: int, clock=time.monotonic) -> None:
     """A blind cover command was just dispatched → arm/refresh a confirm so a DROPPED command is re-sent
     if the blind doesn't report ~``value`` within the window. STANDALONE-only + opt-out (``<= 0``). A no-op
@@ -1465,9 +1485,11 @@ async def _cover_confirm_step(rt, node: int, c: dict, now: float,
     if actual is not None and abs(actual - c["value"]) <= tol:
         rt.cover_confirm.pop(node, None)                    # confirmed — the blind reported ~value
     elif c["tries"] < retries:
-        c["tries"] += 1
+        c["tries"] += 1                                     # counts retry WINDOWS, not frames
         c["due"] = now + confirm_delay                      # re-arm for another window
-        await _inject(rt, [commands.set_cover(rt.next_seq(), node, c["value"])], source="cover-confirm")
+        reps = _cover_reps(rt, "cover")                     # resend with the same redundancy as a fresh command
+        await _inject(rt, [commands.set_cover(rt.next_seq(), node, c["value"]) for _ in range(reps)],
+                      source="cover-confirm")
     else:
         rt.cover_confirm.pop(node, None)                    # give up after the retry budget
         _audit(rt, "system", "cover", target=str(node), detail=str(c["value"]), result="confirm-failed")
@@ -1725,12 +1747,17 @@ async def _control_device_command(rt, op):
     session = rt.sessions[-1] if rt.sessions else None
     if session is None:
         return {"ok": False, "error": "no device connected"}
-    raw = build_command(rt, op)
+    # A blind cover command is sent COVER_REPEAT× (distinct seq each → the gateway can't dedup them) so a
+    # dropped frame lands immediately; every other op is a single frame. build_command arms the confirm.
+    frames = [build_command(rt, op) for _ in range(_cover_reps(rt, op.get("op")))]
     try:
-        await session.inject_to_device(raw)          # echoes the commanded switch/2-gang state post-send
+        for i, raw in enumerate(frames):
+            if i and INJECT_GAP_SECS > 0:
+                await asyncio.sleep(INJECT_GAP_SECS)  # space the copies so a transient gap can't drop all of them
+            await session.inject_to_device(raw)       # echoes the commanded switch/2-gang state post-send
     except OSError as exc:
         return {"ok": False, "error": f"device write failed: {exc!r}"}
-    return {"ok": True, "sent": raw.hex()}
+    return {"ok": True, "sent": frames[-1].hex()}
 
 
 async def process_control_op(rt, op) -> dict:

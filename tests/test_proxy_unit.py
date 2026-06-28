@@ -1100,6 +1100,72 @@ class EnvSecondsTests(unittest.TestCase):
         self.assertEqual(proxy._env_seconds("nope", 45.0, 20.0, 120.0), 45.0) # non-numeric → default
         self.assertEqual(proxy._env_seconds("nan", 45.0, 20.0, 120.0), 45.0)  # non-finite → default
 
+    def test_env_int_parse_and_clamp(self):
+        self.assertEqual(proxy._env_int(None, 3, 1, 5), 3)    # default
+        self.assertEqual(proxy._env_int("4", 3, 1, 5), 4)     # in range
+        self.assertEqual(proxy._env_int("0", 3, 1, 5), 1)     # floor (1 = no redundancy)
+        self.assertEqual(proxy._env_int("99", 3, 1, 5), 5)    # ceiling
+        self.assertEqual(proxy._env_int("x", 3, 1, 5), 3)     # non-numeric → default
+
+
+class CoverRedundancyTests(unittest.IsolatedAsyncioTestCase):
+    """Each blind cover command is sent COVER_REPEAT× (distinct seq) — standalone only."""
+
+    def test_cover_reps_gating(self):
+        rt = proxy.ProxyRuntime()
+        rt.mode = "standalone"
+        with mock.patch.object(proxy, "COVER_REPEAT", 3):
+            self.assertEqual(proxy._cover_reps(rt, "cover"), 3)     # standalone cover → redundant
+            self.assertEqual(proxy._cover_reps(rt, "switch"), 1)    # non-cover → single
+            rt.mode = "proxy"
+            self.assertEqual(proxy._cover_reps(rt, "cover"), 1)     # proxy → single (the cloud commands)
+
+    async def test_control_sends_cover_n_distinct_frames(self):
+        rt = proxy.ProxyRuntime()
+        rt.mode = "standalone"
+        rt.sessions.append(sess := FakeSession())
+        with mock.patch.object(proxy, "COVER_REPEAT", 3), mock.patch.object(proxy, "INJECT_GAP_SECS", 0.001):
+            resp = await proxy._control_device_command(rt, {"op": "cover", "node": 4, "value": 0})
+        self.assertEqual(len(sess.sent), 3)                         # 3 copies, spaced by the inter-copy gap
+        self.assertEqual(len(set(sess.sent)), 3)                    # distinct seq each → the gateway can't dedup
+        self.assertEqual(resp, {"ok": True, "sent": sess.sent[-1].hex()})
+
+    async def test_control_non_cover_sends_once(self):
+        rt = proxy.ProxyRuntime()
+        rt.mode = "standalone"
+        rt.sessions.append(sess := FakeSession())
+        with mock.patch.object(proxy, "COVER_REPEAT", 3):
+            await proxy._control_device_command(rt, {"op": "switch", "node": 7, "on": True})
+        self.assertEqual(len(sess.sent), 1)
+
+    async def test_control_proxy_mode_single_cover(self):
+        rt = proxy.ProxyRuntime()                                   # proxy (default)
+        rt.sessions.append(sess := FakeSession())
+        with mock.patch.object(proxy, "COVER_REPEAT", 3):
+            await proxy._control_device_command(rt, {"op": "cover", "node": 4, "value": 0})
+        self.assertEqual(len(sess.sent), 1)
+
+    async def test_control_no_device(self):
+        rt = proxy.ProxyRuntime()
+        rt.mode = "standalone"
+        self.assertEqual(await proxy._control_device_command(rt, {"op": "cover", "node": 4, "value": 0}),
+                         {"ok": False, "error": "no device connected"})
+
+    async def test_confirm_retry_resends_n_copies_in_one_window(self):
+        rt = proxy.ProxyRuntime()
+        rt.mode = "standalone"
+        rt.sessions.append(sess := FakeSession())
+        rt.state.levels[4] = 0                                      # never matches 80 → resend
+        rt.cover_confirm[4] = {"value": 80, "due": 1000.0, "tries": 0}
+        with mock.patch.object(proxy, "COVER_REPEAT", 3), mock.patch.object(proxy, "INJECT_GAP_SECS", 0):
+            task = asyncio.create_task(proxy._cover_confirm_watcher(
+                rt, confirm_delay=1.0, tick=0.01, clock=lambda: 1000.0))
+            await asyncio.sleep(0.06)
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        self.assertEqual(rt.cover_confirm[4]["tries"], 1)           # ONE retry window…
+        self.assertEqual(len(sess.sent), 3)                         # …sent as 3 redundant copies
+
 
 class CoverConfirmNoteTests(unittest.TestCase):
     """_note_cover_command arms / re-arms / no-ops the per-node blind confirm."""
@@ -1143,11 +1209,14 @@ class CoverConfirmWatcherTests(unittest.IsolatedAsyncioTestCase):
     """_cover_confirm_watcher: confirm on match, re-send on mismatch, give up after the retry budget."""
 
     async def _run(self, rt, settle=0.05, confirm_delay=1.0, tick=0.01, clock=None):
-        task = asyncio.create_task(proxy._cover_confirm_watcher(
-            rt, confirm_delay=confirm_delay, tick=tick, clock=clock or (lambda: 1000.0)))
-        await asyncio.sleep(settle)
-        task.cancel()
-        await asyncio.gather(task, return_exceptions=True)
+        # These tests pin the CONFIRM logic (one frame per retry); the N-copy redundancy is tested
+        # separately, so disable it here so a paced multi-frame resend can't blow the tight settle window.
+        with mock.patch.object(proxy, "COVER_REPEAT", 1):
+            task = asyncio.create_task(proxy._cover_confirm_watcher(
+                rt, confirm_delay=confirm_delay, tick=tick, clock=clock or (lambda: 1000.0)))
+            await asyncio.sleep(settle)
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
 
     def _rt(self):
         rt = proxy.ProxyRuntime()

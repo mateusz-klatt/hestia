@@ -483,6 +483,26 @@ class EngineTriggerTests(unittest.TestCase):
         frames = eng.on_event(_rt(), 2, {}, {"id": 3, "kind": "scene"})
         self.assertEqual(len(frames), 1)
 
+    def test_cover_actions_are_sent_redundantly_in_standalone_audited_once(self):
+        rule = {"id": "blinds-down", "modes": ["standalone", "proxy"],
+                "trigger": {"type": "scene", "node": 2, "scene_id": 3},
+                "actions": [{"op": "cover", "node": 4, "value": 0}, {"op": "cover", "node": 5, "value": 0}]}
+        eng = _engine(rule)
+        with mock.patch.object(proxy, "COVER_REPEAT", 3), mock.patch.object(proxy, "_audit") as audit:
+            frames = eng.on_event(_rt("standalone"), 2, {}, {"id": 3, "kind": "scene"})
+        self.assertEqual(len(frames), 6)              # 2 cover actions × 3 copies
+        self.assertEqual(len(set(frames)), 6)         # distinct seq each (no gateway dedup)
+        self.assertEqual(audit.call_count, 2)         # one audit row PER ACTION, not per copy
+
+    def test_cover_actions_single_in_proxy(self):
+        rule = {"id": "blinds-down", "modes": ["standalone", "proxy"],
+                "trigger": {"type": "scene", "node": 2, "scene_id": 3},
+                "actions": [{"op": "cover", "node": 4, "value": 0}, {"op": "cover", "node": 5, "value": 0}]}
+        eng = _engine(rule)
+        with mock.patch.object(proxy, "COVER_REPEAT", 3):
+            frames = eng.on_event(_rt("proxy"), 2, {}, {"id": 3, "kind": "scene"})
+        self.assertEqual(len(frames), 2)              # proxy → single send each (the cloud commands)
+
     def test_scene_misses(self):
         eng = _engine(SCENE_RULE)
         rt = _rt()
