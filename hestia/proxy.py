@@ -80,6 +80,20 @@ def _scheduler_interval(raw: str) -> float:
 SCHEDULER_SECS = _scheduler_interval(os.environ.get("HESTIA_SCHEDULER_SECS", "20"))
 
 
+def _env_seconds(raw: "str | None", default: float, lo: float, hi: float) -> float:
+    """Parse a seconds env value: ``None`` / non-numeric / non-finite → ``default``; ``<= 0`` disables
+    (returns 0.0); otherwise clamp to ``[lo, hi]``. Shared by the confirm + pacing timing knobs."""
+    try:
+        value = float(raw) if raw is not None else default
+    except ValueError:
+        return default
+    if not math.isfinite(value):
+        return default
+    if value <= 0:
+        return 0.0
+    return min(max(value, lo), hi)
+
+
 def _thermostat_confirm_interval(raw: "str | None") -> float:
     """Parse HESTIA_THERMOSTAT_CONFIRM_SECS — the DEBOUNCE delay before a confirmation poll after a
     thermostat change (the optimistic on/off is shown instantly; this poll then confirms it against the
@@ -90,18 +104,24 @@ def _thermostat_confirm_interval(raw: "str | None") -> float:
     The 40 s default mirrors the Keemple app, measured live in proxy mode: after a SET/power command the
     app waits ~40 s before its confirming `40 02`/`31 04` GET poll. Polling much sooner just wakes the
     FLiRS TRV for nothing (the optimistic echo already shows the new state)."""
-    try:
-        value = float(raw) if raw is not None else 40.0
-    except ValueError:
-        return 40.0
-    if not math.isfinite(value):
-        return 40.0
-    if value <= 0:
-        return 0.0
-    return min(max(value, 2.0), 120.0)
+    return _env_seconds(raw, 40.0, 2.0, 120.0)
 
 
 THERMOSTAT_CONFIRM_SECS = _thermostat_confirm_interval(os.environ.get("HESTIA_THERMOSTAT_CONFIRM_SECS"))
+
+# Blind cover confirm + retry (standalone): a blind reports its OWN position after it actually moves, so a
+# MISSING report ≈ the command didn't land (measured: ~10-20 % of should-move commands drop under gateway
+# burst load). After a cover command, if the blind hasn't reported ~the commanded position within
+# COVER_CONFIRM_SECS, re-send it — up to COVER_CONFIRM_RETRIES, then give up (audit). ``<= 0`` disables.
+# COVER_CONFIRM_TOL (wire units) absorbs device/rounding granularity in the reported position.
+COVER_CONFIRM_SECS = _env_seconds(os.environ.get("HESTIA_COVER_CONFIRM_SECS"), 45.0, 20.0, 120.0)
+COVER_CONFIRM_TICK = 2.0
+COVER_CONFIRM_TOL = 3
+COVER_CONFIRM_RETRIES = 2
+# Inter-frame pacing for hestia-originated bursts (the scene fan-out + the automation inject loop) so
+# back-to-back frames don't wedge the gateway. ``<= 0`` disables. NOT applied to the proxy relay
+# passthrough (which writes cloud→device frames verbatim) — only to hestia's own multi-frame sends.
+INJECT_GAP_SECS = _env_seconds(os.environ.get("HESTIA_INJECT_GAP_SECS"), 0.15, 0.0, 2.0)
 # How often the confirm loop checks whether the debounce window has elapsed (cheap: no device I/O
 # unless a node is due). A fraction of the delay so the poll lands close to CONFIRM_SECS after the
 # last change; ≥1 s so a misconfigured tiny delay can't busy-loop.
@@ -517,6 +537,9 @@ class ProxyRuntime:
     # → ONE poll after the last one). The confirm poller drains these; there is no blind periodic poll.
     thermostat_confirm: set = field(default_factory=set)
     thermostat_confirm_at: float = 0.0
+    # Blind cover confirm + retry (standalone): node → {value, due (monotonic), tries}. A cover command
+    # arms/refreshes the entry; the confirm watcher re-sends if the blind doesn't report ~value in time.
+    cover_confirm: dict = field(default_factory=dict)
     # 433 MHz device discovery: in-memory roll-up of every decoded rtl_433 packet (the local-433
     # feeder filters to one sensor; this captures all of them). Display-only; reset on restart.
     rf433: Rf433Registry = field(default_factory=Rf433Registry)
@@ -795,13 +818,17 @@ class ProxySession:
 # --- Control: newline-JSON op -> forged command injected to the device --------
 
 def build_command(rt, op) -> bytes:
-    """Translate one control op into a complete device-command frame."""
+    """Translate one control op into a complete device-command frame. A ``cover`` op (every path — control,
+    scene, automation — builds through here) also arms a confirm+retry so a dropped blind command re-sends."""
     if not isinstance(op, dict):
         raise ValueError("expected a JSON object")
     handler = _OPS.get(op.get("op"))
     if handler is None:
         raise ValueError(f"unknown op {op.get('op')!r}")
-    return handler(rt, op)
+    frame = handler(rt, op)                       # validates node/value (raises before we arm anything)
+    if op.get("op") == "cover":
+        _note_cover_command(rt, _int(op["node"]), _int(op["value"]))
+    return frame
 
 
 def _switch_command(rt, op) -> bytes:
@@ -1197,11 +1224,13 @@ async def _autosave(rt, interval: float = AUTOSAVE_SECS) -> None:
                 log.exception("autosave failed — will retry in %ss", interval)
 
 
-async def _inject(rt, frames, source: str = "scheduler") -> None:
+async def _inject(rt, frames, source: str = "scheduler", pace: bool = True) -> None:
     """Inject automation frames to the current device session: no device connected → drop + warn (not
     deferred); a per-frame OSError is logged and aborts the rest (the session is broken). Shared by the
     scheduler and the niania poller — ``source`` tags the log lines so an incident is traced to the
-    right producer (the scheduler tests pin the default ``"scheduler"`` wording)."""
+    right producer (the scheduler tests pin the default ``"scheduler"`` wording). ``pace`` spaces a
+    multi-frame burst so back-to-back frames don't wedge the gateway — left on for command bursts
+    (automations), turned OFF for GET-poll reads (the thermostat confirm), which don't need it."""
     if not frames:
         return
     session = rt.sessions[-1] if rt.sessions else None
@@ -1209,6 +1238,8 @@ async def _inject(rt, frames, source: str = "scheduler") -> None:
         log.warning("%s: dropping %d automation frame(s) — no device connected", source, len(frames))
         return
     for i, raw in enumerate(frames):
+        if pace and i > 0 and INJECT_GAP_SECS > 0:
+            await asyncio.sleep(INJECT_GAP_SECS)   # pace the burst so back-to-back frames don't wedge the gateway
         try:
             await session.inject_to_device(raw)
         except OSError as exc:
@@ -1406,9 +1437,61 @@ async def _thermostat_poller(rt, confirm_delay: float = THERMOSTAT_CONFIRM_SECS,
             for node in nodes:
                 frames.append(commands.get_thermostat_mode(rt.next_seq(), node))
                 frames.append(commands.get_temperature(rt.next_seq(), node))
-            await _inject(rt, frames, source="thermostat-confirm")
+            await _inject(rt, frames, source="thermostat-confirm", pace=False)  # GET reads: no pacing needed
         except Exception:                                # an inject hiccup must not drop the loop
             log.exception("thermostat confirm poll failed")
+
+
+def _note_cover_command(rt, node: int, value: int, clock=time.monotonic) -> None:
+    """A blind cover command was just dispatched → arm/refresh a confirm so a DROPPED command is re-sent
+    if the blind doesn't report ~``value`` within the window. STANDALONE-only + opt-out (``<= 0``). A no-op
+    when the blind is ALREADY at ~``value`` (nothing to confirm). A newer command for the node replaces the
+    pending entry (re-arm), so we always confirm the latest intent — never fight a superseding command."""
+    if rt.mode != "standalone" or COVER_CONFIRM_SECS <= 0:
+        return
+    cur = rt.state.levels.get(node)
+    if cur is not None and abs(cur - value) <= COVER_CONFIRM_TOL:
+        rt.cover_confirm.pop(node, None)             # already there → nothing to confirm
+        return
+    rt.cover_confirm[node] = {"value": value, "due": clock() + COVER_CONFIRM_SECS, "tries": 0}
+
+
+async def _cover_confirm_watcher(rt, confirm_delay: float = COVER_CONFIRM_SECS, tick: float = COVER_CONFIRM_TICK,
+                                 tol: int = COVER_CONFIRM_TOL, retries: int = COVER_CONFIRM_RETRIES,
+                                 clock=time.monotonic) -> None:
+    """Re-send blind cover commands the gateway dropped. A blind reports its OWN position after it moves, so
+    once a pending command's window elapses we compare the reported ``State.levels`` to the commanded value:
+    a match clears it (confirmed); a mismatch / no report RE-SENDS the cover frame (up to ``retries``, each
+    re-arming the window), then gives up with an audit row. STANDALONE-only / a no-op when disabled. The
+    tick loop is cheap (sleep + a dict check, zero device I/O until something is due) and one bad tick never
+    kills it. Mirrors ``_thermostat_poller``; injectable ``clock`` for tests."""
+    if rt.mode != "standalone" or confirm_delay <= 0:
+        return
+    while True:
+        await asyncio.sleep(tick)
+        try:
+            now = clock()
+            # Snapshot (node, entry) pairs, then re-validate each against the LIVE dict before acting: the
+            # `await _inject` below yields the loop, so a concurrent build_command (a control request) can
+            # delete or REPLACE an entry meanwhile. The identity check (`cur is c`) skips a node that was
+            # cleared or superseded by a newer command — never KeyError, never spend a newer command's budget.
+            for node, c in [(n, e) for n, e in rt.cover_confirm.items() if now >= e["due"]]:
+                if rt.cover_confirm.get(node) is not c:
+                    continue                                        # cleared / superseded during a prior await
+                actual = rt.state.levels.get(node)
+                if actual is not None and abs(actual - c["value"]) <= tol:
+                    rt.cover_confirm.pop(node, None)                # confirmed — the blind reported ~value
+                elif c["tries"] < retries:
+                    c["tries"] += 1
+                    c["due"] = now + confirm_delay                  # re-arm for another window
+                    await _inject(rt, [commands.set_cover(rt.next_seq(), node, c["value"])], source="cover-confirm")
+                else:
+                    rt.cover_confirm.pop(node, None)                # give up after the retry budget
+                    _audit(rt, "system", "cover", target=str(node), detail=str(c["value"]), result="confirm-failed")
+                    log.warning("cover confirm failed: node %d never reported ~%d after %d retries",
+                                node, c["value"], retries)
+        except Exception:                                            # an inject hiccup must not drop the loop
+            log.exception("cover confirm watcher failed")
 
 
 def _record_klima_state(rt, ir_file: str, button: str) -> None:
@@ -1769,6 +1852,7 @@ async def main() -> None:  # pragma: no cover
     sensor433_task = asyncio.create_task(_sensor433_poller(rt))  # no-op unless HESTIA_OUTDOOR_TEMP + source=local
     ir_worker = asyncio.create_task(_ir_worker(rt))    # no-op unless HESTIA_FLIPPER enabled
     thermostat_task = asyncio.create_task(_thermostat_poller(rt))  # no-op in proxy (the cloud polls)
+    cover_confirm_task = asyncio.create_task(_cover_confirm_watcher(rt))  # no-op in proxy (cloud retries)
     loop = asyncio.get_running_loop()
     _install_term_handler(loop, asyncio.current_task())   # SIGTERM -> graceful persist (docker/systemd stop)
     log.info("hestia proxy: device :%d -> cloud %s:%d | control %s:%d | web %s:%d | registry %s",
@@ -1791,8 +1875,9 @@ async def main() -> None:  # pragma: no cover
         sensor433_task.cancel()
         ir_worker.cancel()
         thermostat_task.cancel()
+        cover_confirm_task.cancel()
         await asyncio.gather(autosave, scheduler, niania, weather_task, sensor433_task, ir_worker,
-                             thermostat_task, return_exceptions=True)
+                             thermostat_task, cover_confirm_task, return_exceptions=True)
         try:
             await _persist(rt)                 # share save_lock — any in-flight
         except OSError:                        # control-op write finishes first
