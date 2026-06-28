@@ -117,7 +117,8 @@ export function renderActions(
       btn.setAttribute("aria-label", title);
     }
     btn.addEventListener("click", () => {
-      onClick?.();
+      if (busy) return; // in-flight lock: drop the whole click (snap + send + onDone) — `onDone` must signal
+      onClick?.();      // a STARTED send settled (clearing thermostat `dirty`), never a send dropped as busy
       void send(op(), pending()).then(() => onDone?.());
     });
     buttons.push(btn);

@@ -169,6 +169,14 @@ describe("renderActions button layout", () => {
     await flush();
   });
 
+  it("patchControls is a no-op after a cell is re-rendered without a slider (stale sync dropped)", () => {
+    const cell = td();
+    renderActions(cell, 5, device({ type: "blind", level: 0 }), okPost); // has a slider + sync hook
+    renderActions(cell, 5, device({ type: "plug" }), okPost); // re-render of the SAME cell: no slider
+    expect(cell.querySelector('input[type="range"]')).toBeNull();
+    expect(() => { patchControls(cell, device({ type: "blind", level: 99 })); }).not.toThrow();
+  });
+
   it("multi-gang switches get per-channel buttons and stateless types get no buttons", () => {
     const gang = td();
     renderActions(
@@ -374,6 +382,32 @@ describe("renderActions in-flight lock + status", () => {
     gate.resolve({ ok: true });
     await flush();
     expect(slider?.disabled).toBe(false); // released
+  });
+
+  it("a thermostat click dropped by the in-flight lock does NOT snap or clear the dirty edit", async () => {
+    const gate = deferred<ControlResult>();
+    const post: PostControl = () => gate.promise;
+    const cell = td();
+    renderActions(cell, 9, device({ type: "thermostat", setpoint: 21 }), post);
+    const slider = cell.querySelector<HTMLInputElement>('input[type="range"]');
+    if (slider !== null) {
+      slider.value = "26";
+      slider.dispatchEvent(new Event("input")); // the user edits → dirty
+    }
+    click(cell, "✓"); // Set → in flight (busy); every control is now disabled
+    // Force a real ⏻ click WHILE busy by re-enabling it (a disabled button never dispatches):
+    const off = [...cell.querySelectorAll("button")].find((b) => b.textContent === "⏻");
+    if (off !== undefined) {
+      off.disabled = false;
+      off.click(); // dropped by the busy guard — must NOT snap to 4° nor clear dirty
+    }
+    expect(slider?.value).toBe("26"); // not snapped to 4°
+    patchControls(cell, device({ type: "thermostat", setpoint: 23 })); // a report arrives mid-flight
+    expect(slider?.value).toBe("26"); // dirty still protects the in-progress edit
+    gate.resolve({ ok: true }); // the ✓ send settles → its onDone clears dirty
+    await flush();
+    patchControls(cell, device({ type: "thermostat", setpoint: 23 })); // tracking resumes
+    expect(slider?.value).toBe("23");
   });
 
   it("surfaces the error text on a failed send", async () => {
