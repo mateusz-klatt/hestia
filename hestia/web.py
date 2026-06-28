@@ -676,7 +676,9 @@ def _scene_device_op(target_type: str, node_id: int, info: dict, active: bool, c
     if target_type == "light" and info.get("level") is None:
         return {"op": "switch", "node": node_id, "on": active}
     op = "level" if target_type == "light" else "cover"
-    value = cover if cover is not None else (99 if active else 0)
+    value = cover                       # explicit blinds_set position, when given
+    if value is None:
+        value = 99 if active else 0     # else the on/off extreme
     return {"op": op, "node": node_id, "value": value}
 
 
