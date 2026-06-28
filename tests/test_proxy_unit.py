@@ -1089,6 +1089,167 @@ class ThermostatEchoSchedulesConfirmTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn({"type": "state", "node": 0x0c, "fields": {"setpoint": 18}}, events)
 
 
+class EnvSecondsTests(unittest.TestCase):
+    def test_parse_and_clamp(self):
+        self.assertEqual(proxy._env_seconds(None, 45.0, 20.0, 120.0), 45.0)   # default
+        self.assertEqual(proxy._env_seconds("30", 45.0, 20.0, 120.0), 30.0)   # in range
+        self.assertEqual(proxy._env_seconds("5", 45.0, 20.0, 120.0), 20.0)    # floor
+        self.assertEqual(proxy._env_seconds("999", 45.0, 20.0, 120.0), 120.0) # ceiling
+        self.assertEqual(proxy._env_seconds("0", 45.0, 20.0, 120.0), 0.0)     # disabled
+        self.assertEqual(proxy._env_seconds("-1", 45.0, 20.0, 120.0), 0.0)
+        self.assertEqual(proxy._env_seconds("nope", 45.0, 20.0, 120.0), 45.0) # non-numeric → default
+        self.assertEqual(proxy._env_seconds("nan", 45.0, 20.0, 120.0), 45.0)  # non-finite → default
+
+
+class CoverConfirmNoteTests(unittest.TestCase):
+    """_note_cover_command arms / re-arms / no-ops the per-node blind confirm."""
+
+    def _rt(self):
+        rt = proxy.ProxyRuntime()
+        rt.mode = "standalone"
+        return rt
+
+    def test_arms_confirm(self):
+        rt = self._rt()
+        proxy._note_cover_command(rt, 4, 80, clock=lambda: 100.0)
+        self.assertEqual(rt.cover_confirm[4], {"value": 80, "due": 100.0 + proxy.COVER_CONFIRM_SECS, "tries": 0})
+
+    def test_proxy_mode_is_noop(self):
+        rt = proxy.ProxyRuntime()  # default (proxy) — the cloud handles retries there
+        proxy._note_cover_command(rt, 4, 80)
+        self.assertEqual(rt.cover_confirm, {})
+
+    def test_disabled_is_noop(self):
+        rt = self._rt()
+        with mock.patch.object(proxy, "COVER_CONFIRM_SECS", 0):
+            proxy._note_cover_command(rt, 4, 80)
+        self.assertEqual(rt.cover_confirm, {})
+
+    def test_already_at_target_clears_pending(self):
+        rt = self._rt()
+        rt.state.levels[4] = 79                       # within TOL(3) of 80 → already there
+        rt.cover_confirm[4] = {"value": 1, "due": 0.0, "tries": 1}  # a stale entry
+        proxy._note_cover_command(rt, 4, 80)
+        self.assertNotIn(4, rt.cover_confirm)          # no-op + cleared
+
+    def test_newer_command_replaces(self):
+        rt = self._rt()
+        proxy._note_cover_command(rt, 4, 10, clock=lambda: 1.0)
+        proxy._note_cover_command(rt, 4, 90, clock=lambda: 2.0)   # supersede
+        self.assertEqual(rt.cover_confirm[4]["value"], 90)
+
+
+class CoverConfirmWatcherTests(unittest.IsolatedAsyncioTestCase):
+    """_cover_confirm_watcher: confirm on match, re-send on mismatch, give up after the retry budget."""
+
+    async def _run(self, rt, settle=0.05, confirm_delay=1.0, tick=0.01, clock=None):
+        task = asyncio.create_task(proxy._cover_confirm_watcher(
+            rt, confirm_delay=confirm_delay, tick=tick, clock=clock or (lambda: 1000.0)))
+        await asyncio.sleep(settle)
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+    def _rt(self):
+        rt = proxy.ProxyRuntime()
+        rt.mode = "standalone"
+        rt.sessions.append(FakeSession())
+        return rt
+
+    async def test_match_clears_without_resend(self):
+        rt = self._rt()
+        rt.state.levels[4] = 80
+        rt.cover_confirm[4] = {"value": 80, "due": 1000.0, "tries": 0}  # due reached (clock=1000)
+        await self._run(rt)
+        self.assertNotIn(4, rt.cover_confirm)              # confirmed
+        self.assertEqual(rt.sessions[-1].sent, [])         # no resend
+
+    async def test_mismatch_resends(self):
+        rt = self._rt()
+        rt.state.levels[4] = 0                              # never matches 80 → resend
+        rt.cover_confirm[4] = {"value": 80, "due": 1000.0, "tries": 0}
+        await self._run(rt)                                 # fixed clock 1000 → re-armed due 1001 → exactly one resend
+        self.assertEqual(rt.cover_confirm[4]["tries"], 1)
+        self.assertEqual(len(rt.sessions[-1].sent), 1)
+
+    async def test_not_due_is_skipped(self):
+        rt = self._rt()
+        rt.state.levels[4] = 0
+        rt.cover_confirm[4] = {"value": 80, "due": 2000.0, "tries": 0}  # due in the future
+        await self._run(rt)
+        self.assertEqual(rt.cover_confirm[4]["tries"], 0)
+        self.assertEqual(rt.sessions[-1].sent, [])
+
+    async def test_gives_up_after_retries_and_audits(self):
+        rt = self._rt()
+        rt.state.levels[4] = 0
+        rt.cover_confirm[4] = {"value": 80, "due": 0.0, "tries": 0}
+        with mock.patch.object(proxy, "_audit") as audit:
+            await self._run(rt, clock=lambda c=iter(range(1000, 4000, 50)): float(next(c)))  # advancing → re-due each tick
+        self.assertNotIn(4, rt.cover_confirm)               # given up + removed
+        self.assertEqual(len(rt.sessions[-1].sent), proxy.COVER_CONFIRM_RETRIES)  # 2 resends, then stop
+        audit.assert_called_once()
+        self.assertEqual(audit.call_args.kwargs["result"], "confirm-failed")
+
+    async def test_disabled_returns_immediately(self):
+        rt = self._rt()
+        rt.cover_confirm[4] = {"value": 80, "due": 0.0, "tries": 0}
+        await self._run(rt, confirm_delay=0)                # disabled → returns before any tick
+        self.assertIn(4, rt.cover_confirm)                  # untouched
+
+    async def test_proxy_mode_returns_immediately(self):
+        rt = proxy.ProxyRuntime()                           # proxy
+        rt.sessions.append(FakeSession())
+        rt.cover_confirm[4] = {"value": 80, "due": 0.0, "tries": 0}
+        await self._run(rt)
+        self.assertIn(4, rt.cover_confirm)
+
+    async def test_tick_error_is_logged_and_loop_survives(self):
+        rt = self._rt()
+        rt.state.levels[4] = 0
+        rt.cover_confirm[4] = {"value": 80, "due": 1000.0, "tries": 0}
+        with mock.patch.object(proxy, "_inject", side_effect=RuntimeError("boom")):
+            await self._run(rt)                             # the resend raises → caught, loop survives (no crash)
+
+
+class BuildCommandCoverArmsTests(unittest.TestCase):
+    def test_cover_op_arms_confirm(self):
+        rt = proxy.ProxyRuntime()
+        rt.mode = "standalone"
+        proxy.build_command(rt, {"op": "cover", "node": 4, "value": 80})
+        self.assertIn(4, rt.cover_confirm)
+
+    def test_level_op_does_not_arm(self):
+        rt = proxy.ProxyRuntime()
+        rt.mode = "standalone"
+        proxy.build_command(rt, {"op": "level", "node": 4, "value": 80})   # dimmer, identical bytes — must NOT arm
+        self.assertEqual(rt.cover_confirm, {})
+
+
+class InjectPacingTests(unittest.IsolatedAsyncioTestCase):
+    def _rt(self):
+        rt = proxy.ProxyRuntime()
+        rt.sessions.append(FakeSession())
+        return rt
+
+    async def test_paces_a_multiframe_burst(self):
+        rt = self._rt()
+        with mock.patch.object(proxy, "INJECT_GAP_SECS", 0.001):   # tiny gap → exercises the pace branch fast
+            await proxy._inject(rt, [b"\x01", b"\x02", b"\x03"])
+        self.assertEqual(len(rt.sessions[-1].sent), 3)
+
+    async def test_gap_zero_does_not_pace(self):
+        rt = self._rt()
+        with mock.patch.object(proxy, "INJECT_GAP_SECS", 0):       # disabled → no sleep branch
+            await proxy._inject(rt, [b"\x01", b"\x02"])
+        self.assertEqual(len(rt.sessions[-1].sent), 2)
+
+    async def test_pace_false_skips_the_gap(self):
+        rt = self._rt()
+        with mock.patch.object(proxy, "INJECT_GAP_SECS", 5.0):     # would hang if it slept
+            await asyncio.wait_for(proxy._inject(rt, [b"\x01", b"\x02"], pace=False), timeout=1.0)
+        self.assertEqual(len(rt.sessions[-1].sent), 2)
+
+
 class SchedulerPresenceTests(unittest.IsolatedAsyncioTestCase):
     """The scheduler folds presence edges in alongside time/sun, with the not-empty guard placed
     AFTER on_presence (so presence fires on ticks where no time rule is due)."""

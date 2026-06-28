@@ -41,8 +41,8 @@ from aiohttp import ClientConnectionError, web
 from . import auth, store_sql
 from .classifier import DeviceType
 from .automations import rule_vocab
-from .proxy import (IR_BUTTONS, KLIMA, _CLOSED_SENTINEL, _LOOPBACK, _audit, _merged_discovery,
-                    _num_env, _truthy_env, globals_snapshot, process_control_op)
+from .proxy import (INJECT_GAP_SECS, IR_BUTTONS, KLIMA, _CLOSED_SENTINEL, _LOOPBACK, _audit,
+                    _merged_discovery, _num_env, _truthy_env, globals_snapshot, process_control_op)
 
 log = logging.getLogger("hestia.web")
 
@@ -742,7 +742,9 @@ async def _scene(request):
     rt = _rt(request)
     ops = _scene_ops(rt, scene, value)
     sent = 0
-    for op in ops:
+    for i, op in enumerate(ops):
+        if i > 0 and INJECT_GAP_SECS > 0:
+            await asyncio.sleep(INJECT_GAP_SECS)   # pace the fan-out so a big sweep doesn't wedge the gateway
         resp = await process_control_op(rt, op)
         if resp.get("ok"):
             sent += 1

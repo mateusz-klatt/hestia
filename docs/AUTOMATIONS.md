@@ -220,6 +220,29 @@ Properties to know:
 
 Conditions and `debounce` apply to time rules exactly as to event rules.
 
+## Command reliability — blinds (confirm + retry + pacing)
+
+The Keemple gateway occasionally **drops a command** under burst load — sending all blinds up/down
+(a scene or a `door-blinds` rule fires one frame per blind, back-to-back) can leave one blind behind.
+Measured on the live log: ~10–20 % of should-move blind commands produced no position report, evenly
+across blinds (so it's the gateway under load, not one bad device). Two mitigations, **standalone only**
+(in proxy the cloud owns retries):
+
+- **Confirm + retry.** A blind reports its own position after it actually moves, so a *missing* report ≈ a
+  dropped command. After every `cover` command (control, scene, or automation — they all build through one
+  point) hestia arms a confirm: if the blind hasn't reported ~the commanded position within
+  `HESTIA_COVER_CONFIRM_SECS`, it **re-sends** the command, up to `2` times, then gives up with an audit
+  row (`actor=system, action=cover, result=confirm-failed`). A newer command for the same blind supersedes
+  the pending one; a command to a blind already at the target is a no-op (nothing to confirm).
+- **Pacing.** A small gap (`HESTIA_INJECT_GAP_SECS`) is inserted between the frames of a hestia-originated
+  burst (the scene fan-out and the scheduler's automation inject) so back-to-back frames don't wedge the
+  gateway. It does **not** pace the proxy's cloud→device passthrough or single commands.
+
+| env | meaning | default |
+|---|---|---|
+| `HESTIA_COVER_CONFIRM_SECS` | window to wait for a blind's confirming position report before re-sending; clamped to `[20, 120]`; `0` disables confirm+retry | `45` |
+| `HESTIA_INJECT_GAP_SECS` | inter-frame gap for a hestia burst, clamped to `[0, 2]`; `0` disables pacing | `0.15` |
+
 ## Modes
 
 Each rule's `modes` list says which session it runs in. The proxy runs with
