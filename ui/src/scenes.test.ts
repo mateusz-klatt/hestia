@@ -215,6 +215,17 @@ describe("renderSceneControls blind average", () => {
     el.remove();
   });
 
+  it("keeps the no-blinds slider disabled after a scene send releases the in-flight lock", async () => {
+    const el = mount();
+    renderSceneControls(el, okScene, () => ({ pct: null, included: 0, reported: 0 }));
+    const slider = el.querySelector<HTMLInputElement>('input[type="range"]');
+    expect(slider?.disabled).toBe(true);
+    click(el, "🌙 All lights off"); // a send → busy lock → finally re-enables the controls
+    await flush();
+    expect(slider?.disabled).toBe(true); // …but a slider with no blinds to drive stays disabled
+    el.remove();
+  });
+
   it("syncBlindAverage does NOT move the slider while the user is dragging it", () => {
     let stats = { pct: 40, included: 2, reported: 2 };
     const el = mount();

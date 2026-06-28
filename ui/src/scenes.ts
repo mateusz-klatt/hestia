@@ -67,6 +67,10 @@ export function renderSceneControls(
   const status = document.createElement("span");
   status.className = "status";
   let busy = false;
+  // The blind slider is disabled when EITHER a send is in flight (the shared lock) OR there are no blinds
+  // to drive (included === 0). Kept as its own flag so releasing the in-flight lock doesn't re-enable a
+  // slider that has nothing to control.
+  let noBlinds = false;
 
   const setDisabled = (disabled: boolean): void => {
     for (const button of buttons) button.disabled = disabled;
@@ -78,7 +82,7 @@ export function renderSceneControls(
 
   const setDisabledAll = (disabled: boolean): void => {
     setDisabled(disabled);
-    for (const s of sliders) s.disabled = disabled;
+    for (const s of sliders) s.disabled = disabled || noBlinds; // keep a no-blinds slider disabled
   };
 
   const send = async (op: SceneOp, value?: number): Promise<void> => {
@@ -141,12 +145,12 @@ export function renderSceneControls(
   // Paint the slider from a fresh average: the mean position when known; "—" when no included blind has
   // reported yet (never a fake 50 %); disabled when there are NO included blinds (nothing to drive).
   const paintAverage = (stats: BlindAverage | undefined): void => {
-    if (stats !== undefined && stats.included === 0) {
-      slider.disabled = true;
-      readout.textContent = "▣ —";
+    noBlinds = stats !== undefined && stats.included === 0;
+    slider.disabled = noBlinds || busy; // also stays disabled while a send holds the lock
+    if (noBlinds) {
+      readout.textContent = "▣ —"; // nothing to drive
       return;
     }
-    slider.disabled = false;
     if (stats === undefined || stats.pct === null) {
       slider.value = "50"; // neutral start — still usable to set a position before any report lands
       readout.textContent = "▣ —";
@@ -175,8 +179,10 @@ export function renderSceneControls(
   container.appendChild(status);
 
   const handle: SceneControls = {
-    // Re-sync the slider to the current average — unless the user is dragging it (focus) or a sweep is in
-    // flight (the slider is disabled then and the average is about to move to the swept value anyway).
+    // Re-sync the slider to the current average — unless the user is dragging it (focus), the panel is
+    // detached (navigated away — a fresh handle paints on re-entry), or a send is in flight. The `busy`
+    // skip is deliberate and needs no replay: repainting mid-sweep would flash the PRE-report average over
+    // the value the user just committed, and the blinds' own reports re-sync the slider once the sweep lands.
     syncBlindAverage(): void {
       if (busy || !slider.isConnected || document.activeElement === slider) return;
       paintAverage(getBlindAvg?.());
