@@ -1308,6 +1308,15 @@ async def _weather_poller(rt, fetch=weather.fetch_outdoor_temp, lat=HESTIA_LAT, 
                              with_timestamp=True)
 
 
+def _battery_flag(battery_ok, battery_warn: bool):
+    """The opt-in low-battery flag for a 433 reading: ``None`` when the warning is off (``battery_warn``)
+    OR the reading carries no battery state, else the bool. Off by default so a sensor that always reports
+    "low" (a rechargeable Prologue-TH at ~1.2 V) can't pin a permanent false-alarm badge."""
+    if not battery_warn or battery_ok is None:
+        return None
+    return bool(battery_ok)
+
+
 async def _sensor433_poller(rt, stream=sensor433.stream_readings, enabled: bool = OUTDOOR_TEMP_ENABLED,
                             source: str = OUTDOOR_TEMP_SOURCE, device: str = RTL433_DEVICE,
                             model=RTL433_MODEL, sensor_id=RTL433_ID, channel=RTL433_CHANNEL,
@@ -1333,10 +1342,8 @@ async def _sensor433_poller(rt, stream=sensor433.stream_readings, enabled: bool 
             rt.state.outdoor_humidity = reading.humidity
             now = time.time()                                         # sample time -> freshness badge
             rt.state.outdoor_temp_ts = now
-            # Battery flag is opt-in (battery_warn): suppressed to None when off, so a sensor that always
-            # reports "low" (rechargeable Prologue-TH) doesn't pin a permanent false-alarm badge.
-            battery_ok = (None if reading.battery_ok is None else bool(reading.battery_ok)) if battery_warn else None
-            rt.state.outdoor_battery_ok = battery_ok                  # runtime-only low-battery flag
+            battery_ok = _battery_flag(reading.battery_ok, battery_warn)
+            rt.state.outdoor_battery_ok = battery_ok                  # runtime-only, opt-in low-battery flag
             log.debug("sensor433: outdoor_temp=%r humidity=%r battery_ok=%r",
                       reading.temperature_C, reading.humidity, battery_ok)
             rt.event_bus.publish({"type": "globals", "fields": {                  # live dashboard delta
