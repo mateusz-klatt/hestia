@@ -40,7 +40,7 @@ import { bindRow, bindSubRow } from "./registry";
 import { renderRf433 } from "./rf433";
 import { createRoomsView } from "./rooms";
 import { renderRuleForm, type RuleFormHandle } from "./ruleform";
-import { renderSceneControls } from "./scenes";
+import { blindAverage, renderSceneControls, type SceneControls } from "./scenes";
 import { reconcileServerSettings } from "./settings";
 import { renderUsersPanel } from "./users";
 import { renderViewSwitch, type ViewName } from "./view";
@@ -82,6 +82,12 @@ let currentUsername: string | null = null; // the signed-in user (null when auth
 // UI-side — no DB change, so renames + locale changes also fix old rows). targets resolve to
 // "name · room"; 2-gang detail endpoints resolve to channel names.
 let latestDevices: Record<string, DeviceInfo> = {};
+// The "Cały dom" whole-home panel, captured when it's opened, so live reports can re-sync its blind
+// slider to the current average. `wholeHomeExcluded` = whole-node "all" opt-outs (admin-only to read;
+// empty for a non-admin → the displayed average widens to all blinds, but the sweep still honours them).
+let wholeHomeHandle: SceneControls | null = null;
+let wholeHomeExcluded = new Set<number>();
+const blindAvg = (): ReturnType<typeof blindAverage> => blindAverage(latestDevices, wholeHomeExcluded);
 const roomsView = createRoomsView(el("room-list"), {
   postControl,
   canControl: () => canControl, // a viewer's room cards render read-only (no buttons, no scene tile)
@@ -96,7 +102,8 @@ const roomsView = createRoomsView(el("room-list"), {
     }
   },
   renderWholeHome: (c) => {
-    renderSceneControls(c, postScene); // the "Cały dom" virtual room's detail body
+    // the "Cały dom" virtual room's detail body; the slider live-tracks the mean blind position
+    wholeHomeHandle = renderSceneControls(c, postScene, blindAvg);
   },
   onNav: (inRoom) => {
     onRoomsNav(inRoom);
@@ -157,9 +164,11 @@ const live = new LiveController(
     }
     latestDevices = data.devices; // feed the audit-target resolver with current names/rooms
     roomsView.update(data);
+    wholeHomeHandle?.syncBlindAverage(); // keep the "Cały dom" slider on the live mean blind position
   },
   (node, info) => {
     roomsView.patchState(node, info); // live state delta → patch the visible room card's state text
+    wholeHomeHandle?.syncBlindAverage(); // a blind report shifts the whole-home average
   },
   (klimaState) => {
     applyKlimaState([klimaBox, roomsKlimaBox], klimaState); // A/C status pictogram on both panels
@@ -319,6 +328,17 @@ function startApp(): void {
 
   void live.refresh();
   void loadAutomations();
+  // Prime the whole-home exclusion set so the "Cały dom" blind average is accurate when first opened.
+  // Admin-only to read; a non-admin keeps the empty set (the average widens to all blinds, the sweep
+  // still honours the opt-outs server-side).
+  if (isAdmin) {
+    void fetchWholeHome().then((state) => {
+      if (state !== null) {
+        wholeHomeExcluded = state.excludedNodes;
+        wholeHomeHandle?.syncBlindAverage();
+      }
+    });
+  }
 }
 
 // Auth gate: probe /api/whoami. 401 (null) → show the login form (auth is on, not logged in). Otherwise
@@ -367,11 +387,21 @@ void (async () => {
             // wire-stable for native clients), so fetch the current opt-outs before opening the panel.
             void (async () => {
               const state = await fetchWholeHome();
+              wholeHomeExcluded = state?.excludedNodes ?? new Set(); // refresh the average's exclusion set
+              wholeHomeHandle?.syncBlindAverage();
               openWholeHomeConfig({
                 devices: latestDevices,
                 excluded: state?.excludedNodes ?? new Set(),
                 excludedEndpoints: state?.excludedEndpoints ?? new Map(),
-                setExcluded: setWholeHomeExclude,
+                setExcluded: async (node, exclude, ep) => {
+                  const ok = await setWholeHomeExclude(node, exclude, ep);
+                  if (ok && ep === undefined) { // a whole-NODE opt-out toggle shifts the blind average
+                    if (exclude) wholeHomeExcluded.add(node);
+                    else wholeHomeExcluded.delete(node);
+                    wholeHomeHandle?.syncBlindAverage();
+                  }
+                  return ok;
+                },
               });
             })();
           },
