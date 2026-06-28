@@ -309,10 +309,11 @@ class CommandContractTests(unittest.TestCase):
             api_contract.SceneRequest.model_validate({"op": "nope"})
 
     def test_scene_request_blinds_set_value_bounds(self):
-        # `value` is the 0-100 % position for blinds_set; optional (absent for the on/off scenes).
-        api_contract.SceneRequest.model_validate({"op": "blinds_set", "value": 50})
+        # `value` is the wire `cover` position 0-99 for blinds_set; optional (absent for the on/off scenes).
+        api_contract.SceneRequest.model_validate({"op": "blinds_set", "value": 0})
+        api_contract.SceneRequest.model_validate({"op": "blinds_set", "value": 99})
         api_contract.SceneRequest.model_validate({"op": "blinds_up"})            # no value → fine
-        for bad in (-1, 101):
+        for bad in (-1, 100):                                                    # 100 is now out of range
             with self.assertRaises(ValueError):
                 api_contract.SceneRequest.model_validate({"op": "blinds_set", "value": bad})
 

@@ -96,7 +96,7 @@ describe("renderSceneControls", () => {
 
     slider.dispatchEvent(new Event("change")); // release commits one sweep
     await flush();
-    expect(sent).toEqual([{ op: "blinds_set", value: 30 }]);
+    expect(sent).toEqual([{ op: "blinds_set", value: 47 }]); // 30 % display → wire 47 (perceptual curve)
     expect(el.querySelector(".status")?.textContent).toBe("✓ 3/3");
     expect(el.querySelectorAll("button")).toHaveLength(4); // buttons stay, slider is extra
   });

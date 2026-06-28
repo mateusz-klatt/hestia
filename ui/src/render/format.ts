@@ -2,6 +2,7 @@ import type { DeviceInfo } from "../api/types";
 import { t } from "../i18n";
 import type { MessageKey } from "../i18n/locales/en";
 import { tempScale } from "../prefs";
+import { coverPercent } from "./cover";
 
 /** A binary on/off live state as an icon + the localised word (🟢 On / ⚪ Off) — language-neutral
  *  glyph for the wife-friendly view, plus the translated word so it reads in the chosen language. */
@@ -130,7 +131,7 @@ export function stateStr(info: DeviceInfo): string {
       if (info.level === null) return "—";
       if (info.level >= 99) return t("state.raised"); // fully open → a word, not "99 %"
       if (info.level <= 0) return t("state.lowered"); // fully closed → a word, not "0 %"
-      return `▣ ${String(info.level)}%`; // partially open → the percentage
+      return `▣ ${String(coverPercent(info.level))}%`; // partially open → the perceptual openness %
     case "thermostat": {
       // measured temp + setpoint in the user's scale (C/F/K) — the device/backend stay Celsius.
       let s = "";

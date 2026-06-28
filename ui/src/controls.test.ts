@@ -52,8 +52,8 @@ describe("renderActions button layout", () => {
     expect(slider?.getAttribute("aria-label")).toBe("Position"); // the position slider is named for screen readers
     expect(slider?.min).toBe("0");
     expect(slider?.max).toBe("100");
-    expect(slider?.value).toBe("51"); // level 50/99 → 51 % (coverPercent), shown in the readout
-    expect(cell.querySelector(".slider-val")?.textContent).toBe("51%");
+    expect(slider?.value).toBe("33"); // wire 50 → 33 % on the perceptual curve, shown in the readout
+    expect(cell.querySelector(".slider-val")?.textContent).toBe("33%");
     const unseen = td();
     renderActions(unseen, 8, device({ type: "blind" }), okPost); // a DIFFERENT node, no level → 50 % neutral default
     expect(unseen.querySelector<HTMLInputElement>('input[type="range"]')?.value).toBe("50");
@@ -238,7 +238,7 @@ describe("renderActions dispatch", () => {
     await fire(blind, "Lower");
     const bslider = blind.querySelector<HTMLInputElement>('input[type="range"]');
     if (bslider) {
-      bslider.value = "75"; // release at 75 % → coverValue = round(75/100*99) = 74
+      bslider.value = "75"; // release at 75 % → coverValue (curved) = wire 82
       bslider.dispatchEvent(new Event("change"));
     }
     await flush();
@@ -270,7 +270,7 @@ describe("renderActions dispatch", () => {
       { op: "level", node: 6, value: 50 },
       { op: "cover", node: 8, value: 99 },
       { op: "cover", node: 8, value: 0 },
-      { op: "cover", node: 8, value: 74 }, // slider release at 75 % → wire 74
+      { op: "cover", node: 8, value: 82 }, // slider release at 75 % → wire 82 (perceptual curve)
       { op: "thermostat_power", node: 9, on: true }, // ✓ Set = power on, then…
       { op: "thermostat", node: 9, celsius: 25 }, // …setpoint
       { op: "thermostat", node: 9, celsius: 4 }, // ⏻ Off = frost-safe 4° first…
@@ -309,8 +309,8 @@ describe("renderActions dispatch", () => {
     }
     await flush();
     expect(sent).toEqual([
-      { op: "cover", node: 8, value: 99 }, // 100 % → 99 wire (clamped — never sends 100)
-      { op: "cover", node: 8, value: 79 }, // 80 % → 79 wire
+      { op: "cover", node: 8, value: 99 }, // 100 % → 99 wire (the open extreme)
+      { op: "cover", node: 8, value: 86 }, // 80 % → 86 wire on the perceptual curve
     ]);
   });
 

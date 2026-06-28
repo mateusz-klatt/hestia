@@ -1,5 +1,6 @@
 import type { ControlOp, ControlResult, DeviceInfo } from "./api/types";
 import { t } from "./i18n";
+import { coverPercent, coverValue } from "./render/cover";
 import { fmtTemp } from "./render/format";
 
 /** The Keemple TRVs' setpoint range, in whole °C (the device reports/accepts integer Celsius). */
@@ -21,16 +22,6 @@ const syncByContainer = new WeakMap<HTMLElement, (info: DeviceInfo) => void>();
  *  skips while the user is dragging it (focus) or, for a thermostat, mid-edit (the two-step ✓ Set). */
 export function patchControls(container: HTMLElement, info: DeviceInfo): void {
   syncByContainer.get(container)?.(info);
-}
-
-/** Wire 0–99 cover value → display 0–100 %. */
-export function coverPercent(value: number): number {
-  return Math.round((Math.min(99, Math.max(0, value)) / 99) * 100);
-}
-
-/** Display 0–100 % → wire 0–99 cover value. */
-function coverValue(percent: number): number {
-  return Math.round((Math.min(100, Math.max(0, percent)) / 100) * 99);
 }
 
 /** Sends one control op; returns a normalised result (never rejects). */

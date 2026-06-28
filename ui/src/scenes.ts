@@ -1,6 +1,6 @@
 import type { DeviceInfo, SceneOp, SceneResult } from "./api/types";
-import { coverPercent } from "./controls";
 import { t } from "./i18n";
+import { coverPercent, coverValue } from "./render/cover";
 
 export type PostScene = (op: SceneOp, value?: number) => Promise<SceneResult | null>;
 
@@ -169,7 +169,7 @@ export function renderSceneControls(
   });
   slider.addEventListener("change", () => {
     if (busy) return; // a sweep is in flight; ignore this release
-    void send("blinds_set", Number(slider.value));
+    void send("blinds_set", coverValue(Number(slider.value))); // perceptual % → wire 0–99
   });
   sliders.push(slider);
   sliderRow.appendChild(slider);

@@ -70,7 +70,7 @@ _SCENE_TARGETS = {
     "blinds_down": ("blind", False),
     "blinds_up": ("blind", True),
 }
-# `blinds_set` drives every (non-excluded) blind to an explicit 0-100 % position (the whole-home
+# `blinds_set` drives every (non-excluded) blind to an explicit wire position 0-99 (the whole-home
 # slider), unlike the on/off extremes above; it carries a `value` and is handled outside _SCENE_TARGETS.
 _BLINDS_SET = "blinds_set"
 _SCENE_NAMES = (*_SCENE_TARGETS, _BLINDS_SET)
@@ -663,10 +663,11 @@ async def _users_reset_password(request):
     return _json(HTTPStatus.OK, {"ok": True})
 
 
-def _cover_from_pct(pct: int) -> int:
-    """Whole-home blind position: clamp a 0-100 % position to the wire ``cover`` range 0-99 (mirrors the
-    per-blind slider's ``coverValue``), so e.g. 50 % → 50 (≈ half open)."""
-    return round(min(100, max(0, pct)) / 100 * 99)
+def _clamp_cover(value: int) -> int:
+    """Clamp a whole-home blind position to the wire ``cover`` range 0-99. The perceptual %→wire mapping
+    lives in the UI (its blind-scale curve), so ``blinds_set`` already carries a wire value — here we only
+    guard the bounds before fanning it out as ``cover`` ops."""
+    return min(99, max(0, value))
 
 
 def _scene_device_op(target_type: str, node_id: int, info: dict, active: bool, cover: "int | None" = None) -> dict:
@@ -703,9 +704,9 @@ def _scene_node_ops(target_type: str, node_id: int, info: dict, active: bool, en
 
 def _scene_ops(rt, scene: str, value: "int | None" = None) -> list[dict]:
     """Expand a house-wide scene into ordinary per-device control ops. ``blinds_set`` drives every blind
-    to the explicit 0-100 % ``value``; the other scenes drive their device type to an on/off extreme."""
+    to the explicit wire ``value`` (0-99); the other scenes drive their device type to an on/off extreme."""
     if scene == _BLINDS_SET:
-        target_type, active, cover = "blind", None, _cover_from_pct(value or 0)
+        target_type, active, cover = "blind", None, _clamp_cover(value or 0)
     else:
         target_type, active = _SCENE_TARGETS[scene]
         cover = None
@@ -732,10 +733,11 @@ async def _scene(request):
     value = None
     if scene == _BLINDS_SET:
         value = body.get("value")
-        # bool is an int subclass — reject it so `true`/`false` can't masquerade as a position.
-        if not isinstance(value, int) or isinstance(value, bool) or not 0 <= value <= 100:
+        # bool is an int subclass — reject it so `true`/`false` can't masquerade as a position. The value
+        # is a wire `cover` position 0-99 (the UI applies the perceptual blind-scale curve before sending).
+        if not isinstance(value, int) or isinstance(value, bool) or not 0 <= value <= 99:
             return _json(HTTPStatus.BAD_REQUEST,
-                         {"ok": False, "error": "blinds_set requires an integer value 0-100"})
+                         {"ok": False, "error": "blinds_set requires an integer value 0-99"})
 
     rt = _rt(request)
     ops = _scene_ops(rt, scene, value)
