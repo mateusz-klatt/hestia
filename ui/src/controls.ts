@@ -24,7 +24,7 @@ export function patchControls(container: HTMLElement, info: DeviceInfo): void {
 }
 
 /** Wire 0–99 cover value → display 0–100 %. */
-function coverPercent(value: number): number {
+export function coverPercent(value: number): number {
   return Math.round((Math.min(99, Math.max(0, value)) / 99) * 100);
 }
 
