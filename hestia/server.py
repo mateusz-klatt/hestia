@@ -21,8 +21,8 @@ import uuid
 
 from . import commands
 from .protocol import Deframer, Frame, build_frame, tlv
-from .proxy import (ProxyConfig, ProxyRuntime, _close, _echo_command_frame, _feed_discovery,
-                    _start, summarize)
+from .proxy import (INJECT_GAP_SECS, ProxyConfig, ProxyRuntime, _close, _echo_command_frame,
+                    _feed_discovery, _start, summarize)
 from .state import tlv_value
 
 log = logging.getLogger("hestia.server")
@@ -163,13 +163,22 @@ class StandaloneSession:
             return True
         return False
 
-    async def _write_replies(self, replies: "list[bytes]") -> None:
-        for reply in replies:
-            self.writer.write(reply)
-        if replies:
+    async def _write_replies(self, acks: "list[bytes]", commands: "list[bytes]") -> None:
+        # ACK the device's event FIRST and immediately (the cloud's observed order — the device must never
+        # see an unsolicited command ahead of its event ACK), THEN emit the replayed / automation COMMAND
+        # frames spaced by INJECT_GAP_SECS so a burst (e.g. a door rule × COVER_REPEAT = many frames) doesn't
+        # wedge the gateway. Only the command tail is paced; the ACKs are never delayed.
+        if acks:
+            for ack in acks:
+                self.writer.write(ack)
             await self.writer.drain()
-            for reply in replies:                        # post-send: echo any switch/2-gang command we
-                _echo_command_frame(self.rt, reply)      # injected here (a fired automation) — relays don't report
+        for i, cmd in enumerate(commands):
+            if i and INJECT_GAP_SECS > 0:
+                await asyncio.sleep(INJECT_GAP_SECS)
+            self.writer.write(cmd)
+            await self.writer.drain()
+        for reply in acks + commands:                    # post-send: echo any switch/2-gang command we
+            _echo_command_frame(self.rt, reply)          # injected here (a fired automation) — relays don't report
 
     async def _finish_run(self, heartbeat) -> None:
         heartbeat.cancel()
@@ -193,10 +202,10 @@ class StandaloneSession:
                     replay = self._observe(frame)
                     if self._drop_duplicate_registration(frame):
                         return
-                    # ACK the event first (the cloud's observed order), then the
-                    # replayed scene batch — so the device never sees an unsolicited
-                    # command ahead of its event's acknowledgement.
-                    await self._write_replies(self.react(frame) + replay)
+                    # ACK the event first (the cloud's observed order), then the replayed scene batch /
+                    # automation command frames (paced) — so the device never sees an unsolicited command
+                    # ahead of its event's acknowledgement.
+                    await self._write_replies(self.react(frame), replay)
         except (ConnectionError, asyncio.IncompleteReadError):
             pass
         finally:

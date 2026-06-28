@@ -239,9 +239,10 @@ across blinds (so it's the gateway under load, not one bad device). Two mitigati
   `HESTIA_COVER_CONFIRM_SECS`, it **re-sends** (also `HESTIA_COVER_REPEAT`×), up to `2` times, then gives up
   with an audit row (`actor=system, action=cover, result=confirm-failed`). A newer command for the same
   blind supersedes the pending one; a command to a blind already at the target is a no-op.
-- **Pacing.** A small gap (`HESTIA_INJECT_GAP_SECS`) is inserted between the frames of a hestia-originated
-  burst (the scene fan-out, the scheduler's automation inject, and the redundant copies) so back-to-back
-  frames don't wedge the gateway. It does **not** pace the proxy's cloud→device passthrough.
+- **Pacing.** A small gap (`HESTIA_INJECT_GAP_SECS`) is inserted between the command frames of a
+  hestia-originated burst — the scene fan-out, the scheduler's automation inject, the redundant copies, and
+  the standalone event-automation tail (a door/PIR rule's commands, sent *after* the device's event ACK,
+  which is never delayed). It does **not** pace the proxy's cloud→device passthrough.
 
 All three are **standalone only** (in proxy the cloud owns delivery/retries).
 

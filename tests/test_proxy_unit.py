@@ -1164,7 +1164,8 @@ class CoverRedundancyTests(unittest.IsolatedAsyncioTestCase):
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
         self.assertEqual(rt.cover_confirm[4]["tries"], 1)           # ONE retry window…
-        self.assertEqual(len(sess.sent), 3)                         # …sent as 3 redundant copies
+        self.assertEqual(len(sess.sent), 3)                         # …sent as 3 redundant copies…
+        self.assertEqual(len(set(sess.sent)), 3)                    # …each a distinct frame (fresh seq)
 
 
 class CoverConfirmNoteTests(unittest.TestCase):
