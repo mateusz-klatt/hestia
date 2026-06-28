@@ -283,9 +283,16 @@ class StandaloneCommandEchoTests(unittest.IsolatedAsyncioTestCase):
         ack = build_frame(0x1E, 0x0A, tlv(0x001F, b"\x00\x01"))
         c1 = proxy.build_command(rt, {"op": "cover", "node": 4, "value": 0})
         c2 = proxy.build_command(rt, {"op": "cover", "node": 4, "value": 0})   # a redundant copy, distinct seq
-        with mock.patch.object(server, "INJECT_GAP_SECS", 0.001):             # tiny gap → exercises the pace branch
+        slept = []
+
+        async def fake_sleep(d):
+            slept.append(d)
+
+        with mock.patch.object(server, "INJECT_GAP_SECS", 0.15), \
+                mock.patch("hestia.server.asyncio.sleep", fake_sleep):
             await sess._write_replies([ack], [c1, c2])
         self.assertEqual(bytes(sess.writer.buf), ack + c1 + c2)               # ACK first, then both commands, in order
+        self.assertEqual(slept, [0.15])                                       # exactly one gap, BETWEEN the two commands
 
     async def test_write_replies_acks_only(self):
         rt = ProxyRuntime()
