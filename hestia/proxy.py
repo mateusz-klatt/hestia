@@ -1456,15 +1456,33 @@ def _note_cover_command(rt, node: int, value: int, clock=time.monotonic) -> None
     rt.cover_confirm[node] = {"value": value, "due": clock() + COVER_CONFIRM_SECS, "tries": 0}
 
 
+async def _cover_confirm_step(rt, node: int, c: dict, now: float,
+                              confirm_delay: float, tol: int, retries: int) -> None:
+    """Resolve ONE due cover-confirm entry: clear it when the blind has reported ~the commanded value;
+    else RE-SEND the cover frame (re-arming the window) until the retry budget is spent, then give up with
+    an audit row. The caller has already re-validated that ``c`` is still the live entry for ``node``."""
+    actual = rt.state.levels.get(node)
+    if actual is not None and abs(actual - c["value"]) <= tol:
+        rt.cover_confirm.pop(node, None)                    # confirmed — the blind reported ~value
+    elif c["tries"] < retries:
+        c["tries"] += 1
+        c["due"] = now + confirm_delay                      # re-arm for another window
+        await _inject(rt, [commands.set_cover(rt.next_seq(), node, c["value"])], source="cover-confirm")
+    else:
+        rt.cover_confirm.pop(node, None)                    # give up after the retry budget
+        _audit(rt, "system", "cover", target=str(node), detail=str(c["value"]), result="confirm-failed")
+        log.warning("cover confirm failed: node %d never reported ~%d after %d retries",
+                    node, c["value"], retries)
+
+
 async def _cover_confirm_watcher(rt, confirm_delay: float = COVER_CONFIRM_SECS, tick: float = COVER_CONFIRM_TICK,
                                  tol: int = COVER_CONFIRM_TOL, retries: int = COVER_CONFIRM_RETRIES,
                                  clock=time.monotonic) -> None:
     """Re-send blind cover commands the gateway dropped. A blind reports its OWN position after it moves, so
-    once a pending command's window elapses we compare the reported ``State.levels`` to the commanded value:
-    a match clears it (confirmed); a mismatch / no report RE-SENDS the cover frame (up to ``retries``, each
-    re-arming the window), then gives up with an audit row. STANDALONE-only / a no-op when disabled. The
-    tick loop is cheap (sleep + a dict check, zero device I/O until something is due) and one bad tick never
-    kills it. Mirrors ``_thermostat_poller``; injectable ``clock`` for tests."""
+    once a pending command's window elapses ``_cover_confirm_step`` compares the reported ``State.levels`` to
+    the commanded value and confirms / re-sends / gives up. STANDALONE-only / a no-op when disabled. The tick
+    loop is cheap (sleep + a dict check, zero device I/O until something is due) and one bad tick never kills
+    it. Mirrors ``_thermostat_poller``; injectable ``clock`` for tests."""
     if rt.mode != "standalone" or confirm_delay <= 0:
         return
     while True:
@@ -1472,24 +1490,12 @@ async def _cover_confirm_watcher(rt, confirm_delay: float = COVER_CONFIRM_SECS, 
         try:
             now = clock()
             # Snapshot (node, entry) pairs, then re-validate each against the LIVE dict before acting: the
-            # `await _inject` below yields the loop, so a concurrent build_command (a control request) can
-            # delete or REPLACE an entry meanwhile. The identity check (`cur is c`) skips a node that was
+            # `await _inject` inside the step yields the loop, so a concurrent build_command (a control
+            # request) can delete or REPLACE an entry meanwhile. The identity check (`is c`) skips a node
             # cleared or superseded by a newer command — never KeyError, never spend a newer command's budget.
             for node, c in [(n, e) for n, e in rt.cover_confirm.items() if now >= e["due"]]:
-                if rt.cover_confirm.get(node) is not c:
-                    continue                                        # cleared / superseded during a prior await
-                actual = rt.state.levels.get(node)
-                if actual is not None and abs(actual - c["value"]) <= tol:
-                    rt.cover_confirm.pop(node, None)                # confirmed — the blind reported ~value
-                elif c["tries"] < retries:
-                    c["tries"] += 1
-                    c["due"] = now + confirm_delay                  # re-arm for another window
-                    await _inject(rt, [commands.set_cover(rt.next_seq(), node, c["value"])], source="cover-confirm")
-                else:
-                    rt.cover_confirm.pop(node, None)                # give up after the retry budget
-                    _audit(rt, "system", "cover", target=str(node), detail=str(c["value"]), result="confirm-failed")
-                    log.warning("cover confirm failed: node %d never reported ~%d after %d retries",
-                                node, c["value"], retries)
+                if rt.cover_confirm.get(node) is c:
+                    await _cover_confirm_step(rt, node, c, now, confirm_delay, tol, retries)
         except Exception:                                            # an inject hiccup must not drop the loop
             log.exception("cover confirm watcher failed")
 
