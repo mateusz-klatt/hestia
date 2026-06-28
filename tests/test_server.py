@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import unittest
+from unittest import mock
 
 from hestia import __main__ as entry
 from hestia import proxy, server
@@ -271,10 +272,34 @@ class StandaloneCommandEchoTests(unittest.IsolatedAsyncioTestCase):
         sub = await rt.event_bus.try_subscribe()
         switch_cmd = proxy.build_command(rt, {"op": "switch", "node": 0x0E, "on": False})
         ack = build_frame(0x1E, 0x0A, tlv(0x001F, b"\x00\x01"))          # a react ACK — must NOT echo
-        await sess._write_replies([ack, switch_cmd])
+        await sess._write_replies([ack], [switch_cmd])
         states = [e for e in self._drain(sub) if e.get("type") == "state"]
         self.assertEqual(states, [{"type": "state", "node": 0x0E, "fields": {"switch": False}}])
         self.assertIs(rt.state.switches[0x0E], False)
+
+    async def test_write_replies_acks_first_then_paces_the_command_tail(self):
+        rt = ProxyRuntime()
+        sess = make_session(rt)
+        ack = build_frame(0x1E, 0x0A, tlv(0x001F, b"\x00\x01"))
+        c1 = proxy.build_command(rt, {"op": "cover", "node": 4, "value": 0})
+        c2 = proxy.build_command(rt, {"op": "cover", "node": 4, "value": 0})   # a redundant copy, distinct seq
+        slept = []
+
+        async def fake_sleep(d):
+            slept.append(d)
+
+        with mock.patch.object(server, "INJECT_GAP_SECS", 0.15), \
+                mock.patch("hestia.server.asyncio.sleep", fake_sleep):
+            await sess._write_replies([ack], [c1, c2])
+        self.assertEqual(bytes(sess.writer.buf), ack + c1 + c2)               # ACK first, then both commands, in order
+        self.assertEqual(slept, [0.15])                                       # exactly one gap, BETWEEN the two commands
+
+    async def test_write_replies_acks_only(self):
+        rt = ProxyRuntime()
+        sess = make_session(rt)
+        ack = build_frame(0x1E, 0x0A, tlv(0x001F, b"\x00\x01"))
+        await sess._write_replies([ack], [])                                 # no command frames
+        self.assertEqual(bytes(sess.writer.buf), ack)
 
 
 class StandaloneActivityHookTests(unittest.IsolatedAsyncioTestCase):

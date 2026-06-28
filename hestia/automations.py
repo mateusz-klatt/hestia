@@ -894,7 +894,7 @@ class AutomationEngine:
         if rule.debounce > 0 and now - self._last_fired.get(rule.id, -math.inf) < rule.debounce:
             return []
         self._last_fired[rule.id] = now
-        from .proxy import _audit, build_command   # lazy: avoid a proxy<->automations cycle
+        from .proxy import _audit, _cover_reps, build_command   # lazy: avoid a proxy<->automations cycle
         actor = f"automation:{rule.id}"            # #56: distinguishes a rule firing from a user action
         frames = []
         for action in rule.actions:
@@ -906,7 +906,9 @@ class AutomationEngine:
                 _audit(rt, actor, op, target=target, result="fired")
                 continue
             try:
-                frames.append(build_command(rt, action))
+                # A cover action is emitted COVER_REPEAT× (idempotent redundancy); one audit row per action.
+                for _ in range(_cover_reps(rt, op)):
+                    frames.append(build_command(rt, action))
                 _audit(rt, actor, op, target=target, result="fired")
             except (ValueError, KeyError, TypeError, OverflowError):
                 log.exception("automation %r: action %r failed — skipping", rule.id, action)

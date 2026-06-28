@@ -228,20 +228,29 @@ Measured on the live log: ~10–20 % of should-move blind commands produced no p
 across blinds (so it's the gateway under load, not one bad device). Two mitigations, **standalone only**
 (in proxy the cloud owns retries):
 
-- **Confirm + retry.** A blind reports its own position after it actually moves, so a *missing* report ≈ a
-  dropped command. After every `cover` command (control, scene, or automation — they all build through one
-  point) hestia arms a confirm: if the blind hasn't reported ~the commanded position within
-  `HESTIA_COVER_CONFIRM_SECS`, it **re-sends** the command, up to `2` times, then gives up with an audit
-  row (`actor=system, action=cover, result=confirm-failed`). A newer command for the same blind supersedes
-  the pending one; a command to a blind already at the target is a no-op (nothing to confirm).
-- **Pacing.** A small gap (`HESTIA_INJECT_GAP_SECS`) is inserted between the frames of a hestia-originated
-  burst (the scene fan-out and the scheduler's automation inject) so back-to-back frames don't wedge the
-  gateway. It does **not** pace the proxy's cloud→device passthrough or single commands.
+- **Redundancy (immediate).** Every `cover` command is sent `HESTIA_COVER_REPEAT` times (each with a fresh
+  sequence number — the gateway can't dedup them — spaced by `HESTIA_INJECT_GAP_SECS`). A single dropped
+  frame is covered by a sibling copy, so the blind moves **on the first attempt** instead of waiting for the
+  retry. Validated live: the gateway/blind treats a duplicate "go to position X" idempotently — no
+  re-actuation or stutter — so the redundant copies are harmless.
+- **Confirm + retry (backstop).** A blind reports its own position after it actually moves, so a *missing*
+  report ≈ a dropped command. After every `cover` command (control, scene, or automation — they all build
+  through one point) hestia arms a confirm: if the blind hasn't reported ~the commanded position within
+  `HESTIA_COVER_CONFIRM_SECS`, it **re-sends** (also `HESTIA_COVER_REPEAT`×), up to `2` times, then gives up
+  with an audit row (`actor=system, action=cover, result=confirm-failed`). A newer command for the same
+  blind supersedes the pending one; a command to a blind already at the target is a no-op.
+- **Pacing.** A small gap (`HESTIA_INJECT_GAP_SECS`) is inserted between the command frames of a
+  hestia-originated burst — the scene fan-out, the scheduler's automation inject, the redundant copies, and
+  the standalone event-automation tail (a door/PIR rule's commands, sent *after* the device's event ACK,
+  which is never delayed). It does **not** pace the proxy's cloud→device passthrough.
+
+All three are **standalone only** (in proxy the cloud owns delivery/retries).
 
 | env | meaning | default |
 |---|---|---|
+| `HESTIA_COVER_REPEAT` | how many times to send each blind cover command (immediate redundancy); clamped to `[1, 5]`; `1` = single send (off) | `3` |
 | `HESTIA_COVER_CONFIRM_SECS` | window to wait for a blind's confirming position report before re-sending; clamped to `[20, 120]`; `0` disables confirm+retry | `45` |
-| `HESTIA_INJECT_GAP_SECS` | inter-frame gap for a hestia burst, clamped to `[0, 2]`; `0` disables pacing | `0.15` |
+| `HESTIA_INJECT_GAP_SECS` | inter-frame / inter-copy gap for a hestia burst, clamped to `[0, 2]`; `0` disables pacing | `0.15` |
 
 > **Scope.** Confirm + retry covers `cover` commands dispatched through the normal command path —
 > per-device control, the `/api/scene` sweep, and automation `cover` actions (incl. the `door-blinds`
