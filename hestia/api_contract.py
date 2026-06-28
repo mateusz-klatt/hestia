@@ -50,7 +50,11 @@ from pydantic.json_schema import models_json_schema
 # 0.8.0: SceneRequest grows the additive `blinds_set` op + an optional `value` (0-100 %) — the whole-home
 #        blind-position slider (set every blind to a chosen position, not just the up/down extremes). A
 #        request-only change; old clients simply never send the new op/field, so it is backward-compatible.
-CONTRACT_VERSION = "0.8.0"
+# 0.9.0: SceneRequest.value for `blinds_set` is now a WIRE `cover` position 0-99 (was 0-100 %) — the UI's
+#        perceptual blind-scale curve (non-linear, to match how venetian blinds open) moved client-side, so
+#        the slider speaks raw wire and the backend just clamps. Request-only; only this web UI sends
+#        `blinds_set` (no native client does), so the tightened bound + changed unit is safe.
+CONTRACT_VERSION = "0.9.0"
 OPENAPI_PATH = Path(__file__).resolve().parent.parent / "docs" / "api" / "openapi.json"
 
 # De-duplicated string literals (SonarPython S1192): the OpenAPI content-type, the paths reused
@@ -181,9 +185,10 @@ class SceneRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid", strict=True)
     op: Literal["lights_off", "lights_on", "blinds_down", "blinds_up", "blinds_set"]
-    # `blinds_set` drives every blind to this 0-100 % position (the whole-home slider); ignored/absent
-    # for the on/off scenes. Required for `blinds_set` (server-enforced cross-field, not expressible here).
-    value: Annotated[int | None, Field(default=None, ge=0, le=100, json_schema_extra=_OMIT)] = None
+    # `blinds_set` drives every blind to this wire `cover` position 0-99 (the whole-home slider; the UI
+    # applies its perceptual blind-scale curve before sending). Ignored/absent for the on/off scenes;
+    # required for `blinds_set` (server-enforced cross-field, not expressible here).
+    value: Annotated[int | None, Field(default=None, ge=0, le=99, json_schema_extra=_OMIT)] = None
 
 
 class SceneResult(BaseModel):

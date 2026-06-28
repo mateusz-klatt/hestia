@@ -1,6 +1,7 @@
 import type { AuditEvent, DeviceInfo } from "./api/types";
 import { currentLocale, t } from "./i18n";
 import type { MessageKey } from "./i18n/locales/en";
+import { coverPercent } from "./render/cover";
 import { fmtTemp } from "./render/format";
 
 export type FetchAudit = () => Promise<AuditEvent[] | null>;
@@ -152,12 +153,15 @@ function endpointNamesFor(
 }
 
 /** Humanise a scalar detail value by the action it belongs to (setpoint → temperature, level/cover →
- *  percent, booleans → On/Off, door words → open/closed); unknown shapes return raw text. */
-function humanizeScalar(value: unknown, action: string): string {
+ *  percent, booleans → On/Off, door words → open/closed); unknown shapes return raw text. `coverScale`
+ *  routes a blind position (a `cover` op, or a `level` report on a blind node) through the perceptual
+ *  blind curve so the audit reads the same % the slider shows; a dimmer `level` stays linear. */
+function humanizeScalar(value: unknown, action: string, coverScale = false): string {
   if (typeof value === "boolean") return boolLabel(value);
   if (typeof value === "number") {
     if (action === "setpoint" || action === "thermostat") return fmtTemp(value);
-    if (action === "level" || action === "cover") return `${String(Math.round(value))}%`;
+    if (coverScale) return `${String(coverPercent(value))}%`; // blind: perceptual openness (curved)
+    if (action === "level" || action === "cover") return `${String(Math.round(value))}%`; // dimmer: linear
     return String(value);
   }
   if (value === "open") return t("state.open");
@@ -176,6 +180,7 @@ function humanizeObject(
   obj: Record<string, unknown>,
   action: string,
   epNames?: Record<string, string>,
+  coverScale = false,
 ): string | null {
   const keys = Object.keys(obj).filter((k) => k !== "node" && k !== "op");
   if (keys.length === 0) return null;
@@ -194,7 +199,7 @@ function humanizeObject(
     if (endpoint !== undefined) parts.push(channelLabel(scalarText(endpoint), epNames));
     if (obj["on"] !== undefined) parts.push(boolLabel(obj["on"]));
   }
-  if (obj["value"] !== undefined) parts.push(humanizeScalar(obj["value"], action));
+  if (obj["value"] !== undefined) parts.push(humanizeScalar(obj["value"], action, coverScale));
   if (obj["level"] !== undefined) parts.push(numericField(obj["level"], (n) => `${String(Math.round(n))}%`));
   if (obj["celsius"] !== undefined) parts.push(numericField(obj["celsius"], fmtTemp));
   if (obj["temp"] !== undefined) parts.push(numericField(obj["temp"], fmtTemp));
@@ -213,6 +218,10 @@ export function formatAuditDetail(
 ): string | null {
   if (detail === null || detail === "") return detail;
   const epNames = endpointNamesFor(target, devices);
+  // A blind position (a `cover` op, or a `level` report on a blind node) reads through the perceptual
+  // blind curve so the audit shows the same % as the slider; a dimmer's `level` stays linear.
+  const isBlind = target !== null && /^\d+$/.test(target) && devices[target]?.type === "blind";
+  const coverScale = action === "cover" || (action === "level" && isBlind);
   const value = decodeDetail(detail);
   if (value === UNPARSED) {
     if (detail === "open") return t("state.open");
@@ -221,9 +230,9 @@ export function formatAuditDetail(
   }
   if (value === null) return detail; // a literal None/null — show the raw text, not "null"
   if (typeof value === "object" && !Array.isArray(value)) {
-    return humanizeObject(value as Record<string, unknown>, action, epNames) ?? detail;
+    return humanizeObject(value as Record<string, unknown>, action, epNames, coverScale) ?? detail;
   }
-  return humanizeScalar(value, action);
+  return humanizeScalar(value, action, coverScale);
 }
 
 export interface AuditFeed {

@@ -488,19 +488,20 @@ class SceneOpsTests(unittest.TestCase):
         self.assertEqual(self._ops("blinds_down"), [{"op": "cover", "node": 3, "value": 0}])
         self.assertEqual(self._ops("blinds_up"), [{"op": "cover", "node": 3, "value": 99}])
 
-    def test_blinds_set_drives_blinds_to_a_percent_position(self):
-        # The whole-home slider: every blind to a 0-100 % position → wire cover 0-99 (50 % ≈ half open).
-        self.assertEqual(self._ops("blinds_set", value=50), [{"op": "cover", "node": 3, "value": 50}])
+    def test_blinds_set_drives_blinds_to_a_wire_position(self):
+        # The whole-home slider sends a WIRE cover value 0-99 (the UI applies the perceptual curve); the
+        # backend fans it out verbatim (a value of 64 → cover 64, not a linear %→wire conversion).
+        self.assertEqual(self._ops("blinds_set", value=64), [{"op": "cover", "node": 3, "value": 64}])
         self.assertEqual(self._ops("blinds_set", value=0), [{"op": "cover", "node": 3, "value": 0}])
-        self.assertEqual(self._ops("blinds_set", value=100), [{"op": "cover", "node": 3, "value": 99}])
+        self.assertEqual(self._ops("blinds_set", value=99), [{"op": "cover", "node": 3, "value": 99}])
 
     def test_blinds_set_respects_the_whole_home_opt_out(self):
         # An opted-out blind is skipped by blinds_set just like the up/down extremes.
         self.assertEqual(self._ops("blinds_set", {"3": {"exclude_from_all": True}}, value=50), [])
 
-    def test_cover_from_pct_clamps_out_of_range(self):
-        self.assertEqual(web._cover_from_pct(-5), 0)
-        self.assertEqual(web._cover_from_pct(150), 99)
+    def test_clamp_cover_clamps_out_of_range(self):
+        self.assertEqual(web._clamp_cover(-5), 0)
+        self.assertEqual(web._clamp_cover(150), 99)
 
     def test_devices_opted_out_of_all_are_skipped(self):
         # Opt-outs live in the registry, NOT in discovery — node 2 excluded, node 3 explicitly re-included.
@@ -629,7 +630,8 @@ class SceneEndpointTests(_WebTestBase):
 
     def test_blinds_set_rejects_missing_or_bad_value(self):
         # bool is an int subclass — it must NOT pass as a position; missing / out-of-range / non-int → 400.
-        for payload in ({"op": "blinds_set"}, {"op": "blinds_set", "value": 150},
+        # 100 is now out of range too (value is a wire 0-99, not a 0-100 %).
+        for payload in ({"op": "blinds_set"}, {"op": "blinds_set", "value": 100},
                         {"op": "blinds_set", "value": -1}, {"op": "blinds_set", "value": True},
                         {"op": "blinds_set", "value": "50"}):
             with self.subTest(payload=payload):
