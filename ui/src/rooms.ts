@@ -1,5 +1,5 @@
 import type { DeviceInfo, Discovery } from "./api/types";
-import { type PostControl, renderActions } from "./controls";
+import { patchControls, type PostControl, renderActions } from "./controls";
 import { currentLocale, t, tPlural } from "./i18n";
 import { onOff, stateStr, typeLabel } from "./render/format";
 
@@ -109,7 +109,7 @@ function deviceCard(
   node: string,
   info: DeviceInfo,
   deps: RoomsDeps,
-): { card: HTMLElement; stan: HTMLElement } {
+): { card: HTMLElement; stan: HTMLElement; actions: HTMLElement | undefined } {
   const card = document.createElement("div");
   card.className = "room-device";
   card.dataset.node = node;
@@ -131,10 +131,10 @@ function deviceCard(
     actions.className = "room-device-actions";
     renderActions(actions, Number(node), info, deps.postControl);
     card.append(head, actions);
-  } else {
-    card.append(head);
+    return { card, stan, actions };
   }
-  return { card, stan };
+  card.append(head);
+  return { card, stan, actions: undefined };
 }
 
 /**
@@ -149,6 +149,9 @@ export function createRoomsView(container: HTMLElement, deps: RoomsDeps): RoomsV
   let inWholeHome = false; // showing the "Cały dom" virtual room's scene detail
   let latest: Discovery | null = null;
   let stateSpans = new Map<number, HTMLElement>();
+  // The control cell per node, so a live report can re-sync its slider (blind position / thermostat
+  // setpoint) without rebuilding the buttons — the card analogue of the engineer table's slider patch.
+  let actionsByNode = new Map<number, HTMLElement>();
   let editIcons = false;
   const canControl = deps.canControl ?? ((): boolean => true); // viewer = read-only (no buttons, no scenes)
 
@@ -240,6 +243,7 @@ export function createRoomsView(container: HTMLElement, deps: RoomsDeps): RoomsV
 
   function renderWholeHomeDetail(): void {
     stateSpans = new Map();
+    actionsByNode = new Map();
     container.replaceChildren();
     const title = document.createElement("h2");
     title.className = "room-title";
@@ -253,6 +257,7 @@ export function createRoomsView(container: HTMLElement, deps: RoomsDeps): RoomsV
 
   function renderLanding(): void {
     stateSpans = new Map();
+    actionsByNode = new Map();
     container.replaceChildren();
     if (latest === null) {
       container.appendChild(placeholder(t("common.loading")));
@@ -296,6 +301,7 @@ export function createRoomsView(container: HTMLElement, deps: RoomsDeps): RoomsV
 
   function renderDetail(): void {
     stateSpans = new Map();
+    actionsByNode = new Map();
     container.replaceChildren();
     if (latest === null) {
       container.appendChild(placeholder(t("common.loading")));
@@ -312,8 +318,9 @@ export function createRoomsView(container: HTMLElement, deps: RoomsDeps): RoomsV
     title.textContent = roomDisplay(room);
     container.append(title); // no back button — the top 🏠 Pokoje tab returns to the list (goToLanding)
     for (const [node, info] of list) {
-      const { card, stan } = deviceCard(node, info, deps);
+      const { card, stan, actions } = deviceCard(node, info, deps);
       stateSpans.set(Number(node), stan);
+      if (actions !== undefined) actionsByNode.set(Number(node), actions);
       container.appendChild(card);
     }
   }
@@ -369,6 +376,8 @@ export function createRoomsView(container: HTMLElement, deps: RoomsDeps): RoomsV
     patchState(node: number, info: DeviceInfo): void {
       const span = stateSpans.get(node);
       if (span !== undefined) span.textContent = roomStateText(info);
+      const actions = actionsByNode.get(node);
+      if (actions !== undefined) patchControls(actions, info); // keep the card's slider in step with the report
     },
     enterIconEdit(): void {
       editIcons = true;

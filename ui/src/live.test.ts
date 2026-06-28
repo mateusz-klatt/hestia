@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { Discovery, KlimaState } from "./api/types";
+import { renderActions } from "./controls";
 import { device, discovery } from "./fixtures";
 import { LiveController, type LiveView } from "./live";
 
@@ -121,6 +122,25 @@ describe("LiveController.applyState", () => {
     expect(ep2()).toBe("⚪ Off");
     live.applyState(2, { endpoints: { "1": true, "2": true } });
     expect(ep2()).toBe("🟢 On");
+  });
+
+  it("moves a blind row's position slider to the reported level (live slider sync)", async () => {
+    const view = harness();
+    const data = discovery({ "8": device({ type: "blind", level: 0 }) });
+    const live = new LiveController(
+      view,
+      () => Promise.resolve(data),
+      (tr, node, info) => {
+        const cell = tr.querySelector<HTMLElement>(".actions");
+        if (cell !== null) renderActions(cell, node, info, () => Promise.resolve({ ok: true }));
+      },
+    );
+    await live.refresh();
+    const slider = (): HTMLInputElement | null =>
+      view.rows.querySelector<HTMLInputElement>('tr[data-node="8"] input[type="range"]');
+    expect(slider()?.value).toBe("0"); // seeded from the reported level 0
+    live.applyState(8, { level: 99 }); // a device report says fully open
+    expect(slider()?.value).toBe("100"); // the slider followed the report, no rebuild
   });
 
   it("patches the node stanval (not a sub-row) for a single-endpoint light", async () => {

@@ -1,4 +1,5 @@
 import type { DeviceInfo, Discovery, Globals, KlimaState, LiveEvent, Scene } from "./api/types";
+import { patchControls } from "./controls";
 import { t } from "./i18n";
 import { paintMeta, renderDeviceRows, renderGlobals, renderMode, summaryText } from "./render/devices";
 import { fmtHumidity, fmtTemp, onOff, relAgo, stateStr } from "./render/format";
@@ -263,10 +264,15 @@ export class LiveController {
       this.emitState(node, info);
       return;
     }
-    const val = this.view.rows.querySelector(
-      `tr[data-node="${attr(String(node))}"]:not([data-ep]) .stanval`,
+    const row = this.view.rows.querySelector(
+      `tr[data-node="${attr(String(node))}"]:not([data-ep])`,
     );
+    const val = row?.querySelector(".stanval") ?? null;
     if (val !== null) val.textContent = stateStr(info);
+    // Keep the row's slider (blind position / thermostat setpoint) in step with the report — no-op for a
+    // cell without a slider; the control itself ignores the update while the user is interacting with it.
+    const actions = row?.querySelector<HTMLElement>(".actions") ?? null;
+    if (actions !== null) patchControls(actions, info);
     this.emitState(node, info);
   }
 

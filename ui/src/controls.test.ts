@@ -1,14 +1,8 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import type { ControlOp, ControlResult } from "./api/types";
-import { __resetBlindPicks, __resetThermostatPicks, renderActions, type PostControl } from "./controls";
+import { patchControls, renderActions, type PostControl } from "./controls";
 import { device } from "./fixtures";
-
-beforeEach(() => {
-  // the thermostat + blind sliders' cross-render pick memory is module-level
-  __resetThermostatPicks();
-  __resetBlindPicks();
-});
 
 function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
   let resolve: (value: T) => void = () => undefined;
@@ -87,48 +81,100 @@ describe("renderActions button layout", () => {
     renderActions(hot, 7, device({ type: "thermostat", setpoint: 35 }), okPost);
     expect(hot.querySelector<HTMLInputElement>('input[type="range"]')?.value).toBe("28"); // clamped to the ceiling
     const unseen = td();
-    renderActions(unseen, 8, device({ type: "thermostat" }), okPost); // a DIFFERENT node (each freezes its own seed)
+    renderActions(unseen, 8, device({ type: "thermostat" }), okPost); // a DIFFERENT node, no setpoint
     expect(unseen.querySelector<HTMLInputElement>('input[type="range"]')?.value).toBe("21"); // null → 21 default
   });
 
-  it("freezes an UNTOUCHED slider after the first render — a later report never moves it", () => {
+  it("re-seeds an UNTOUCHED thermostat slider from a fresh report on rebuild (reflects state, not frozen)", () => {
     const first = td();
-    renderActions(first, 13, device({ type: "thermostat", setpoint: 22 }), okPost); // first render seeds + freezes 22
+    renderActions(first, 13, device({ type: "thermostat", setpoint: 22 }), okPost); // seeds 22
     const rebuilt = td();
     renderActions(rebuilt, 13, device({ type: "thermostat", setpoint: 28 }), okPost); // a report says 28
-    expect(rebuilt.querySelector<HTMLInputElement>('input[type="range"]')?.value).toBe("22"); // stays at the first-seen 22, not 28
+    expect(rebuilt.querySelector<HTMLInputElement>('input[type="range"]')?.value).toBe("28"); // tracks the device, not 22
   });
 
-  it("remembers the user's setpoint pick across a FULL rebuild (fresh cell) so a report can't reset the slider", () => {
-    const first = td();
-    renderActions(first, 9, device({ type: "thermostat", setpoint: 22 }), okPost);
-    const slider = first.querySelector<HTMLInputElement>('input[type="range"]');
-    if (slider !== null) {
-      slider.value = "18";
-      slider.dispatchEvent(new Event("change")); // the user drags to 18
-    }
-    // The 45 s refresh rebuilds the row in a BRAND-NEW cell carrying a (stale) setpoint of 28:
-    const rebuilt = td();
-    renderActions(rebuilt, 9, device({ type: "thermostat", setpoint: 28 }), okPost);
-    expect(rebuilt.querySelector<HTMLInputElement>('input[type="range"]')?.value).toBe("18"); // kept the user's pick, NOT reset to 28
-    // a DIFFERENT node is unaffected — it still seeds from its own setpoint
-    const other = td();
-    renderActions(other, 11, device({ type: "thermostat", setpoint: 24 }), okPost);
-    expect(other.querySelector<HTMLInputElement>('input[type="range"]')?.value).toBe("24");
+  it("patchControls re-syncs an untouched thermostat slider to the reported setpoint without a rebuild", () => {
+    const cell = td();
+    renderActions(cell, 9, device({ type: "thermostat", setpoint: 21 }), okPost);
+    patchControls(cell, device({ type: "thermostat", setpoint: 25 })); // a live report arrives
+    expect(cell.querySelector<HTMLInputElement>('input[type="range"]')?.value).toBe("25");
+    expect(cell.querySelector(".slider-val")?.textContent).toBe("25.0°");
   });
 
-  it("the blind slider freezes per node across rebuilds and remembers the user's release", () => {
-    const first = td();
-    renderActions(first, 5, device({ type: "blind", level: 0 }), okPost); // seeds 0 %
-    expect(first.querySelector<HTMLInputElement>('input[type="range"]')?.value).toBe("0");
-    const slider = first.querySelector<HTMLInputElement>('input[type="range"]');
+  it("a thermostat slider the user has touched is NOT moved by a report until Set/Off settles it", async () => {
+    const sent: ControlOp[] = [];
+    const post: PostControl = (op) => {
+      sent.push(op);
+      return Promise.resolve({ ok: true });
+    };
+    const cell = td();
+    renderActions(cell, 9, device({ type: "thermostat", setpoint: 21 }), post);
+    const slider = cell.querySelector<HTMLInputElement>('input[type="range"]');
     if (slider !== null) {
-      slider.value = "70";
-      slider.dispatchEvent(new Event("change")); // the user releases at 70 %
+      slider.value = "26";
+      slider.dispatchEvent(new Event("input")); // user is editing → dirty
     }
-    const rebuilt = td();
-    renderActions(rebuilt, 5, device({ type: "blind", level: 99 }), okPost); // a report says fully open
-    expect(rebuilt.querySelector<HTMLInputElement>('input[type="range"]')?.value).toBe("70"); // kept the user's 70 %, not 100
+    patchControls(cell, device({ type: "thermostat", setpoint: 21 })); // a report must NOT clobber the edit
+    expect(slider?.value).toBe("26");
+    click(cell, "✓"); // Set commits the user's value…
+    await flush();
+    expect(sent).toContainEqual({ op: "thermostat", node: 9, celsius: 26 });
+    patchControls(cell, device({ type: "thermostat", setpoint: 23 })); // …after which tracking resumes
+    expect(slider?.value).toBe("23");
+  });
+
+  it("⏻ Off snaps the thermostat slider to the 4° minimum (the value Off sets)", async () => {
+    const cell = td();
+    renderActions(cell, 9, device({ type: "thermostat", setpoint: 22 }), okPost);
+    click(cell, "⏻");
+    await flush();
+    const slider = cell.querySelector<HTMLInputElement>('input[type="range"]');
+    expect(slider?.value).toBe("4"); // snapped to the frost-protection minimum
+    expect(cell.querySelector(".slider-val")?.textContent).toBe("4.0°");
+  });
+
+  it("the blind slider tracks the reported position (a report moves it, no freeze)", () => {
+    const cell = td();
+    renderActions(cell, 5, device({ type: "blind", level: 0 }), okPost); // seeds 0 %
+    expect(cell.querySelector<HTMLInputElement>('input[type="range"]')?.value).toBe("0");
+    patchControls(cell, device({ type: "blind", level: 99 })); // a report says fully open
+    expect(cell.querySelector<HTMLInputElement>('input[type="range"]')?.value).toBe("100"); // follows the device
+    expect(cell.querySelector(".slider-val")?.textContent).toBe("100%");
+  });
+
+  it("a report does NOT move the blind slider while the user is dragging it (focus guard)", () => {
+    const cell = td();
+    document.body.appendChild(cell); // focus only works for a connected element
+    renderActions(cell, 5, device({ type: "blind", level: 0 }), okPost);
+    const slider = cell.querySelector<HTMLInputElement>('input[type="range"]');
+    slider?.focus();
+    if (slider !== null) {
+      slider.value = "60";
+      slider.dispatchEvent(new Event("input")); // dragging
+    }
+    patchControls(cell, device({ type: "blind", level: 10 })); // a report arrives mid-drag
+    expect(slider?.value).toBe("60"); // not yanked to 10 %
+    cell.remove();
+  });
+
+  it("Raise / Lower snap the blind slider to the extreme on press for instant feedback", async () => {
+    const cell = td();
+    renderActions(cell, 5, device({ type: "blind", level: 50 }), okPost);
+    const slider = cell.querySelector<HTMLInputElement>('input[type="range"]');
+    click(cell, "Raise");
+    expect(slider?.value).toBe("100"); // snapped immediately, before any report
+    await flush();
+    click(cell, "Lower");
+    expect(slider?.value).toBe("0");
+    await flush();
+  });
+
+  it("patchControls is a no-op after a cell is re-rendered without a slider (stale sync dropped)", () => {
+    const cell = td();
+    renderActions(cell, 5, device({ type: "blind", level: 0 }), okPost); // has a slider + sync hook
+    renderActions(cell, 5, device({ type: "plug" }), okPost); // re-render of the SAME cell: no slider
+    expect(cell.querySelector('input[type="range"]')).toBeNull();
+    expect(() => { patchControls(cell, device({ type: "blind", level: 99 })); }).not.toThrow();
   });
 
   it("multi-gang switches get per-channel buttons and stateless types get no buttons", () => {
@@ -336,6 +382,32 @@ describe("renderActions in-flight lock + status", () => {
     gate.resolve({ ok: true });
     await flush();
     expect(slider?.disabled).toBe(false); // released
+  });
+
+  it("a thermostat click dropped by the in-flight lock does NOT snap or clear the dirty edit", async () => {
+    const gate = deferred<ControlResult>();
+    const post: PostControl = () => gate.promise;
+    const cell = td();
+    renderActions(cell, 9, device({ type: "thermostat", setpoint: 21 }), post);
+    const slider = cell.querySelector<HTMLInputElement>('input[type="range"]');
+    if (slider !== null) {
+      slider.value = "26";
+      slider.dispatchEvent(new Event("input")); // the user edits → dirty
+    }
+    click(cell, "✓"); // Set → in flight (busy); every control is now disabled
+    // Force a real ⏻ click WHILE busy by re-enabling it (a disabled button never dispatches):
+    const off = [...cell.querySelectorAll("button")].find((b) => b.textContent === "⏻");
+    if (off !== undefined) {
+      off.disabled = false;
+      off.click(); // dropped by the busy guard — must NOT snap to 4° nor clear dirty
+    }
+    expect(slider?.value).toBe("26"); // not snapped to 4°
+    patchControls(cell, device({ type: "thermostat", setpoint: 23 })); // a report arrives mid-flight
+    expect(slider?.value).toBe("26"); // dirty still protects the in-progress edit
+    gate.resolve({ ok: true }); // the ✓ send settles → its onDone clears dirty
+    await flush();
+    patchControls(cell, device({ type: "thermostat", setpoint: 23 })); // tracking resumes
+    expect(slider?.value).toBe("23");
   });
 
   it("surfaces the error text on a failed send", async () => {
