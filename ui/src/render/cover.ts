@@ -29,7 +29,8 @@ export function coverPercent(wire: number): number {
   return Math.round(1 + 99 * t ** BLIND_EXP);
 }
 
-/** Displayed openness 0–100 % → wire 0–99 cover value (the inverse of {@link coverPercent}). */
+/** Displayed openness 0–100 % → wire 0–99 cover value. Inverts {@link coverPercent} to within a display
+ *  point for a normal position; a round-trip through the dead-zone (wire 1–9) collapses back to wire 10. */
 export function coverValue(percent: number): number {
   const p = Math.min(100, Math.max(0, percent));
   if (p <= 0) return 0; // fully closed

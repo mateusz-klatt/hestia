@@ -251,8 +251,9 @@ export async function setWholeHomeExclude(node: number, exclude: boolean, ep?: n
   }
 }
 
-/** POST `/api/scene` to run a house-wide scene; `null` on any load/send failure. `value` (0-100 %) is
- *  the blind position for the `blinds_set` op (the whole-home slider) and is omitted for the other scenes. */
+/** POST `/api/scene` to run a house-wide scene; `null` on any load/send failure. `value` is the wire
+ *  `cover` position 0-99 for the `blinds_set` op (the whole-home slider; the UI applies its perceptual
+ *  blind-scale curve before sending) and is omitted for the other scenes. */
 export async function postScene(op: SceneOp, value?: number): Promise<SceneResult | null> {
   try {
     const response = await fetch(apiUrl("scene"), {

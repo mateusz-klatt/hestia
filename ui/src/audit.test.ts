@@ -201,6 +201,8 @@ describe("formatAuditDetail", () => {
   const devices = {
     "12": device({ type: "switch", endpoint_names: { "1": "Lewy", "2": "Prawy" } }),
     "13": device({ type: "thermostat" }), // no endpoint names
+    "14": device({ type: "blind" }), // cover/level read through the perceptual curve
+    "15": device({ type: "light", level: 40 }), // dimmer: level stays linear
   };
 
   it("maps observed booleans (Python repr) to On/Off", () => {
@@ -232,6 +234,15 @@ describe("formatAuditDetail", () => {
     expect(formatAuditDetail("40", "level", "13", devices)).toBe("40%");
     expect(formatAuditDetail('{"node": 13, "value": 40}', "level", "13", devices)).toBe("40%");
     expect(formatAuditDetail('{"node": 13, "celsius": 22}', "thermostat", "13", devices)).toBe("22.0°");
+  });
+
+  it("reads a blind position through the perceptual curve, but keeps a dimmer level linear", () => {
+    // a `cover` command (object + scalar) and an observed `level` report on a blind → curved %
+    expect(formatAuditDetail('{"node": 14, "value": 64}', "cover", "14", devices)).toBe("50%");
+    expect(formatAuditDetail("64", "cover", "14", devices)).toBe("50%");
+    expect(formatAuditDetail("64", "level", "14", devices)).toBe("50%"); // blind level report → curved
+    // the same wire on a dimmer (node 15, a light) stays linear
+    expect(formatAuditDetail("64", "level", "15", devices)).toBe("64%");
   });
 
   it("shows unrecognized / unparseable / empty details raw, losing nothing", () => {
