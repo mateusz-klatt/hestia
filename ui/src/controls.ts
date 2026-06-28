@@ -7,31 +7,20 @@ const THERMOSTAT_MIN_C = 4;
 const THERMOSTAT_MAX_C = 28;
 
 /**
- * The thermostat setpoint dropdown's value, per node, kept OUTSIDE the DOM so it survives the device
- * table's periodic FULL rebuild (every refresh replaces the rows with fresh cells). The dropdown is the
- * user's input: a device report / refresh updates only the "stan" text — it must NEVER move the
- * dropdown. We seed it from the live setpoint exactly ONCE (the first render of that node this session)
- * and FREEZE it there; after that only the user moves it (and reports never do), whether or not they've
- * touched it. A hard page reload re-inits the module (empty map) so it re-seeds from the then-current
- * setpoint.
+ * Per-controls-cell "sync" hook: re-applies the live device state onto this cell's slider (blind position
+ * or thermostat setpoint) when a report arrives, so the slider REFLECTS the device instead of staying at
+ * the user's last pick. Registered by `renderActions` per cell; invoked by `patchControls` from the live
+ * patch path (the same path that updates the "stan" text). A cell without a slider registers nothing, so
+ * `patchControls` is a no-op for it. Keyed by the cell element (WeakMap → GC'd when the row is rebuilt).
+ * The hook itself guards against yanking the control mid-interaction (focus / an uncommitted edit).
  */
-const thermostatPick = new Map<number, string>();
+const syncByContainer = new WeakMap<HTMLElement, (info: DeviceInfo) => void>();
 
-/**
- * Same freeze contract for the blind-position slider, in whole percent 0–100 (display units; the wire
- * `cover` value is 0–99). A blind reports its OWN position, so a device report / refresh updates only the
- * "stan" text — it must never yank the slider. Seed once from the live level, freeze, only the user moves it.
- */
-const blindPick = new Map<number, string>();
-
-/** Exposed for tests to reset the cross-render pick memory between cases. */
-export function __resetThermostatPicks(): void {
-  thermostatPick.clear();
-}
-
-/** Exposed for tests to reset the blind-slider pick memory between cases. */
-export function __resetBlindPicks(): void {
-  blindPick.clear();
+/** Re-sync a controls cell's slider from a fresh DeviceInfo (a live state delta) — so the slider tracks
+ *  the device's reported position/setpoint. No-op if the cell has no slider; the registered hook itself
+ *  skips while the user is dragging it (focus) or, for a thermostat, mid-edit (the two-step ✓ Set). */
+export function patchControls(container: HTMLElement, info: DeviceInfo): void {
+  syncByContainer.get(container)?.(info);
 }
 
 /** Wire 0–99 cover value → display 0–100 %. */
@@ -62,6 +51,7 @@ export function renderActions(
   postControl: PostControl,
 ): void {
   cell.replaceChildren();
+  syncByContainer.delete(cell); // drop any slider sync from a prior render of this reused cell
 
   const buttons: HTMLButtonElement[] = [];
   // Range sliders that commit through `send` (blind) or feed it (thermostat) join the in-flight lock too,
@@ -78,8 +68,10 @@ export function renderActions(
 
   // Sends one OR a sequence of ops under a single in-flight lock (a multi-command action like the
   // thermostat "Set" = power-on then setpoint sends both before re-enabling; it stops on the first error).
-  const send = async (ops: ControlOp | ControlOp[], pending: string): Promise<void> => {
-    if (busy) return;
+  // Resolves to whether every op succeeded, so a caller can react to the outcome (e.g. the thermostat
+  // clears its "mid-edit" flag once the send settles, so the slider resumes tracking the device).
+  const send = async (ops: ControlOp | ControlOp[], pending: string): Promise<boolean> => {
+    if (busy) return false;
     busy = true;
     setDisabled(true);
     status.textContent = pending.length > 0 ? `… ${pending}` : "…";
@@ -95,20 +87,26 @@ export function renderActions(
       }
       status.textContent = failed === undefined ? t("ctl.sent") : `✗ ${failed}`;
       status.className = failed === undefined ? "status" : "status err";
+      return failed === undefined;
     } catch {
       status.textContent = t("ctl.error");
       status.className = "status err";
+      return false;
     } finally {
       busy = false;
       setDisabled(false);
     }
   };
 
+  // `onClick` runs synchronously on press (e.g. snap a slider to its extreme for instant feedback);
+  // `onDone` runs after the send settles (e.g. clear the thermostat mid-edit flag).
   const addButton = (
     label: string,
     op: () => ControlOp | ControlOp[],
     pending: () => string = () => "",
     title?: string,
+    onClick?: () => void,
+    onDone?: () => void,
   ): void => {
     const btn = document.createElement("button");
     btn.type = "button";
@@ -119,7 +117,8 @@ export function renderActions(
       btn.setAttribute("aria-label", title);
     }
     btn.addEventListener("click", () => {
-      void send(op(), pending());
+      onClick?.();
+      void send(op(), pending()).then(() => onDone?.());
     });
     buttons.push(btn);
     cell.appendChild(btn);
@@ -140,11 +139,11 @@ export function renderActions(
   };
 
   // A position slider for a blind: drag to any %, commit ON RELEASE (the `change` event — NOT `input`, so
-  // dragging doesn't spam /api/control) as one absolute `cover` value 0–99. Seeded once from the live level
-  // and FROZEN per node via `blindPick` (mirrors the thermostat): the table's 45 s full rebuild and device
-  // reports update only the "stan" text, never the slider. The live position stays visible in that text; the
-  // Raise/Lower buttons remain for the two extremes. A value readout tracks the drag.
-  const addBlindSlider = (): void => {
+  // dragging doesn't spam /api/control) as one absolute `cover` value 0–99. The slider REFLECTS the live
+  // position: seeded from the reported level and re-synced on every device report (via `patchControls`),
+  // EXCEPT while the user is actively dragging it (focus guard) so a report can't yank it mid-drag. The
+  // Raise/Lower buttons snap it to the extreme on press for instant feedback. Returns a snap setter for them.
+  const addBlindSlider = (): ((pct: number) => void) => {
     const slider = document.createElement("input");
     slider.type = "range";
     slider.min = "0";
@@ -152,29 +151,32 @@ export function renderActions(
     slider.step = "1";
     slider.setAttribute("aria-label", t("ctl.position"));
     slider.style.marginRight = "0.3rem";
-    const level = info.level;
-    const startPct = level !== null && Number.isFinite(level) ? coverPercent(level) : 50;
-    let pick = blindPick.get(node);
-    if (pick === undefined) {
-      pick = String(startPct);
-      blindPick.set(node, pick);
-    }
-    slider.value = pick;
     const readout = document.createElement("span");
     readout.className = "slider-val";
     readout.style.marginRight = "0.3rem";
-    readout.textContent = `${pick}%`;
+    const setPct = (pct: number): void => {
+      slider.value = String(pct);
+      readout.textContent = `${String(pct)}%`;
+    };
+    const level = info.level;
+    setPct(level !== null && Number.isFinite(level) ? coverPercent(level) : 50); // seed from the live level
     slider.addEventListener("input", () => {
       readout.textContent = `${slider.value}%`;
     });
     slider.addEventListener("change", () => {
-      if (busy) return; // a send is in flight; ignore this release so blindPick can't drift past what was sent
-      blindPick.set(node, slider.value); // the user's release wins, kept across the table's full rebuilds
+      if (busy) return; // a send is in flight; ignore this release so we can't post past the in-flight value
       void send({ op: "cover", node, value: coverValue(Number(slider.value)) }, "");
+    });
+    // Track the device: a report moves the slider to the new position — unless the user is dragging it now.
+    syncByContainer.set(cell, (fresh) => {
+      if (document.activeElement === slider) return; // mid-drag — don't yank it
+      const lvl = fresh.level;
+      if (lvl !== null && Number.isFinite(lvl)) setPct(coverPercent(lvl));
     });
     sliders.push(slider); // share the in-flight disable with the buttons
     cell.appendChild(slider);
     cell.appendChild(readout);
+    return setPct;
   };
 
   const endpointLabel = (ep: string): string => {
@@ -212,9 +214,12 @@ export function renderActions(
     addButton(t("ctl.on"), () => ({ op: "switch", node, on: true }));
     addButton(t("ctl.off"), () => ({ op: "switch", node, on: false }));
   } else if (info.type === "blind") {
-    addButton(t("ctl.raise"), () => ({ op: "cover", node, value: 99 }));
-    addButton(t("ctl.lower"), () => ({ op: "cover", node, value: 0 }));
-    addBlindSlider();
+    // Forward-declared so Raise/Lower can snap the slider to its extreme on press for instant feedback;
+    // the slider is appended AFTER the buttons (DOM order) but `snapBlind` is wired before any click fires.
+    let snapBlind: (pct: number) => void = () => undefined;
+    addButton(t("ctl.raise"), () => ({ op: "cover", node, value: 99 }), () => "", undefined, () => { snapBlind(100); });
+    addButton(t("ctl.lower"), () => ({ op: "cover", node, value: 0 }), () => "", undefined, () => { snapBlind(0); });
+    snapBlind = addBlindSlider();
   } else if (info.type === "thermostat") {
     // Mirrors the klima panel: a target-temperature SLIDER (4–28 °C, whole degrees; the readout shows the
     // user's C/F/K scale) + ✓ Set + ⏻ Off. A setpoint SET while the thermostat is OFF doesn't take, so Set is
@@ -226,6 +231,7 @@ export function renderActions(
     // and surfaces the ✗ error — we do NOT auto-revert to OFF: that would countermand the user's "on"
     // intent and add a third TRV command. The optimistic echo only fires per successful inject, so the UI
     // stays consistent with the device; the user just re-taps Set.
+    const clampC = (c: number): number => Math.min(THERMOSTAT_MAX_C, Math.max(THERMOSTAT_MIN_C, c));
     const slider = document.createElement("input");
     slider.type = "range";
     slider.min = String(THERMOSTAT_MIN_C);
@@ -233,43 +239,51 @@ export function renderActions(
     slider.step = "1";
     slider.setAttribute("aria-label", t("user.temperature")); // name the setpoint slider for screen readers
     slider.style.marginRight = "0.3rem";
-    const current = info.setpoint;
-    const start = current !== null && Number.isFinite(current)
-      ? Math.min(THERMOSTAT_MAX_C, Math.max(THERMOSTAT_MIN_C, Math.round(current)))
-      : 21;
-    // Seed from the live setpoint exactly ONCE per node, then FREEZE: a device report / 45 s refresh
-    // updates the "stan" text but never moves the slider — touched or not. Only the user moves it.
-    let pick = thermostatPick.get(node);
-    if (pick === undefined) {
-      pick = String(start);
-      thermostatPick.set(node, pick);
-    }
-    slider.value = pick;
     const readout = document.createElement("span");
     readout.className = "slider-val";
     readout.style.marginRight = "0.3rem";
-    readout.textContent = fmtTemp(Number(slider.value));
+    const setC = (c: number): void => {
+      slider.value = String(c);
+      readout.textContent = fmtTemp(c);
+    };
+    const current = info.setpoint;
+    setC(current !== null && Number.isFinite(current) ? clampC(Math.round(current)) : 21); // seed from the live setpoint
+    // The thermostat is a TWO-STEP commit (drag, THEN ✓ Set), so unlike the blind there's a window where a
+    // dragged-but-unsent target would be clobbered by a device report. `dirty` protects it: the slider tracks
+    // the reported setpoint by default, but once the user moves it we hold their value until the send settles
+    // (✓ Set / ⏻ Off) — then tracking resumes and the next report wins. A full rebuild (new cell) re-seeds
+    // from the then-current setpoint, so an abandoned drag self-corrects within the 45 s refresh.
+    let dirty = false;
     slider.addEventListener("input", () => {
+      dirty = true; // user is editing → don't let a report move it until they commit
       readout.textContent = fmtTemp(Number(slider.value)); // live label while dragging — no API call
     });
-    slider.addEventListener("change", () => {
-      thermostatPick.set(node, slider.value); // the user's choice wins, kept across the table's full rebuilds
+    syncByContainer.set(cell, (fresh) => {
+      if (dirty || document.activeElement === slider) return; // mid-edit / dragging — don't yank it
+      const sp = fresh.setpoint;
+      if (sp !== null && Number.isFinite(sp)) setC(clampC(Math.round(sp)));
     });
     sliders.push(slider); // share the in-flight disable with the ✓/⏻ buttons
     cell.appendChild(slider);
     cell.appendChild(readout);
+    // ✓ Set = power-ON then the setpoint (a setpoint alone is ignored while off — two commands, in that order,
+    // like the Keemple app). Once the send settles, clear `dirty` so the slider resumes tracking the device
+    // (the confirming report will read back the value we just set). One Set per tap — no per-degree SET burst
+    // that spammed and hung the TRV; the slider does not send while dragging.
     addButton("✓", () => [
-      { op: "thermostat_power", node, on: true }, // turn on, THEN set — a setpoint alone is ignored while off
+      { op: "thermostat_power", node, on: true },
       { op: "thermostat", node, celsius: Number(slider.value) },
-    ], () => "", t("ctl.set"));
+    ], () => "", t("ctl.set"), undefined, () => { dirty = false; });
     // Off = drop to the frost-protection minimum FIRST, then power off. Sending 4 °C before the off means
     // that even if the power-off frame is lost, the TRV is left at its lowest setpoint (won't heat) rather
-    // than stuck at the old high target — "on the safe side". We always supply a temperature on Set anyway,
-    // so losing the prior setpoint here costs nothing. (Keemple's own off keeps the setpoint; this is safer.)
+    // than stuck at the old high target — "on the safe side". The slider snaps to 4 °C on press (the value Off
+    // sets) for instant feedback; `dirty` clears once it settles so the device's report (4 °C on success, the
+    // old setpoint if the send failed) re-syncs the slider. Partial failure (power-on ok, setpoint fails on ✓)
+    // deliberately leaves the device ON at its old setpoint and surfaces ✗ — we never auto-revert to OFF.
     addButton("⏻", () => [
       { op: "thermostat", node, celsius: THERMOSTAT_MIN_C },
       { op: "thermostat_power", node, on: false },
-    ], () => "", t("ctl.turnOff"));
+    ], () => "", t("ctl.turnOff"), () => { setC(THERMOSTAT_MIN_C); }, () => { dirty = false; });
   }
 
   if (buttons.length > 0) cell.appendChild(status);
