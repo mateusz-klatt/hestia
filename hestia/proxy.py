@@ -1471,17 +1471,22 @@ async def _cover_confirm_watcher(rt, confirm_delay: float = COVER_CONFIRM_SECS, 
         await asyncio.sleep(tick)
         try:
             now = clock()
-            for node in [n for n, c in rt.cover_confirm.items() if now >= c["due"]]:
-                c = rt.cover_confirm[node]
+            # Snapshot (node, entry) pairs, then re-validate each against the LIVE dict before acting: the
+            # `await _inject` below yields the loop, so a concurrent build_command (a control request) can
+            # delete or REPLACE an entry meanwhile. The identity check (`cur is c`) skips a node that was
+            # cleared or superseded by a newer command — never KeyError, never spend a newer command's budget.
+            for node, c in [(n, e) for n, e in rt.cover_confirm.items() if now >= e["due"]]:
+                if rt.cover_confirm.get(node) is not c:
+                    continue                                        # cleared / superseded during a prior await
                 actual = rt.state.levels.get(node)
                 if actual is not None and abs(actual - c["value"]) <= tol:
-                    del rt.cover_confirm[node]                       # confirmed — the blind reported ~value
+                    rt.cover_confirm.pop(node, None)                # confirmed — the blind reported ~value
                 elif c["tries"] < retries:
                     c["tries"] += 1
                     c["due"] = now + confirm_delay                  # re-arm for another window
                     await _inject(rt, [commands.set_cover(rt.next_seq(), node, c["value"])], source="cover-confirm")
                 else:
-                    del rt.cover_confirm[node]                       # give up after the retry budget
+                    rt.cover_confirm.pop(node, None)                # give up after the retry budget
                     _audit(rt, "system", "cover", target=str(node), detail=str(c["value"]), result="confirm-failed")
                     log.warning("cover confirm failed: node %d never reported ~%d after %d retries",
                                 node, c["value"], retries)

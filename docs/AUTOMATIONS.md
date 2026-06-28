@@ -243,6 +243,12 @@ across blinds (so it's the gateway under load, not one bad device). Two mitigati
 | `HESTIA_COVER_CONFIRM_SECS` | window to wait for a blind's confirming position report before re-sending; clamped to `[20, 120]`; `0` disables confirm+retry | `45` |
 | `HESTIA_INJECT_GAP_SECS` | inter-frame gap for a hestia burst, clamped to `[0, 2]`; `0` disables pacing | `0.15` |
 
+> **Scope.** Confirm + retry covers `cover` commands dispatched through the normal command path —
+> per-device control, the `/api/scene` sweep, and automation `cover` actions (incl. the `door-blinds`
+> rules). A *replayed learned Keemple scene batch* (a captured `[1e 32]` multi-device scene button) is sent
+> verbatim and is **not** individually confirmed; use a `cover` automation action if you want a blind move
+> retried.
+
 ## Modes
 
 Each rule's `modes` list says which session it runs in. The proxy runs with

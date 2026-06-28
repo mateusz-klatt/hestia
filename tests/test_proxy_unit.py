@@ -1210,6 +1210,43 @@ class CoverConfirmWatcherTests(unittest.IsolatedAsyncioTestCase):
         with mock.patch.object(proxy, "_inject", side_effect=RuntimeError("boom")):
             await self._run(rt)                             # the resend raises → caught, loop survives (no crash)
 
+    async def test_concurrent_delete_during_inject_is_safe(self):
+        # A later due node is removed (a newer command for it lands) WHILE node 4's retry awaits _inject.
+        rt = self._rt()
+        rt.state.levels[4] = 0
+        rt.state.levels[5] = 0
+        rt.cover_confirm[4] = {"value": 80, "due": 1000.0, "tries": 0}
+        rt.cover_confirm[5] = {"value": 80, "due": 1000.0, "tries": 0}
+
+        async def evil_inject(_rt, frames, source=None, pace=True):
+            rt.cover_confirm.pop(5, None)                   # 5 cleared mid-tick (concurrent build_command)
+            rt.sessions[-1].sent.append(frames[0])
+
+        with mock.patch.object(proxy, "_inject", side_effect=evil_inject):
+            await self._run(rt)
+        self.assertEqual(rt.cover_confirm.get(4, {}).get("tries"), 1)  # 4 retried once, no KeyError abort
+        self.assertNotIn(5, rt.cover_confirm)
+        self.assertEqual(len(rt.sessions[-1].sent), 1)                 # only 4 was sent — 5 skipped, not crashed
+
+    async def test_superseding_command_during_inject_is_not_consumed(self):
+        # A later due node is REPLACED by a newer (future-due) command while node 4's retry awaits.
+        rt = self._rt()
+        rt.state.levels[4] = 0
+        rt.state.levels[5] = 0
+        rt.cover_confirm[4] = {"value": 80, "due": 1000.0, "tries": 0}
+        rt.cover_confirm[5] = {"value": 80, "due": 1000.0, "tries": 0}
+        new5 = {"value": 30, "due": 9999.0, "tries": 0}
+
+        async def evil_inject(_rt, frames, source=None, pace=True):
+            rt.cover_confirm[5] = new5                      # 5 superseded by a newer command (its own future window)
+            rt.sessions[-1].sent.append(frames[0])
+
+        with mock.patch.object(proxy, "_inject", side_effect=evil_inject):
+            await self._run(rt)
+        self.assertIs(rt.cover_confirm.get(5), new5)        # the new command is intact…
+        self.assertEqual(new5["tries"], 0)                  # …its retry budget NOT consumed by the stale snapshot
+        self.assertEqual(len(rt.sessions[-1].sent), 1)      # only node 4 was sent this tick
+
 
 class BuildCommandCoverArmsTests(unittest.TestCase):
     def test_cover_op_arms_confirm(self):
