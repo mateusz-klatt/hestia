@@ -242,6 +242,26 @@ describe("renderSceneControls blind average", () => {
     el.remove();
   });
 
+  it("does NOT repaint the slider mid-sweep (busy skip), then re-syncs after it settles", async () => {
+    const gate = deferred<SceneResult | null>();
+    let stats = { pct: 40, included: 2, reported: 2 };
+    const el = mount();
+    const handle = renderSceneControls(el, () => gate.promise, () => stats);
+    const slider = el.querySelector<HTMLInputElement>('input[type="range"]');
+    if (slider === null) throw new Error("no slider rendered");
+    slider.value = "30";
+    slider.dispatchEvent(new Event("change")); // user commits a sweep to 30 % → busy
+    expect(slider.value).toBe("30");
+    stats = { pct: 90, included: 2, reported: 2 }; // a stale pre-report average mid-sweep
+    handle.syncBlindAverage();
+    expect(slider.value).toBe("30"); // busy skip held the committed value (no flash to 90)
+    gate.resolve({ ok: true, sent: 2, total: 2 });
+    await flush();
+    handle.syncBlindAverage(); // once the sweep settled, a fresh report re-syncs
+    expect(slider.value).toBe("90");
+    el.remove();
+  });
+
   it("Raise all / Lower all snap the slider to the extreme on press", async () => {
     const el = mount();
     renderSceneControls(el, okScene, () => ({ pct: 40, included: 2, reported: 2 }));
