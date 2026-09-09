@@ -64,6 +64,12 @@ describe("num", () => {
     expect(() => num("abc", "scene_id")).toThrow("scene_id: invalid number");
     expect(() => num("1e999", "scene_id")).toThrow("scene_id: invalid number");
   });
+  it("normalises typographic minus lookalikes to ASCII", () => {
+    expect(num("−20", "offset")).toBe(-20); // U+2212 minus sign
+    expect(num("–20", "offset")).toBe(-20); // U+2013 en dash
+    expect(num("—20", "offset")).toBe(-20); // U+2014 em dash
+    expect(() => num("- 20", "offset")).toThrow("offset: invalid number"); // inner space stays invalid
+  });
 });
 
 // ---- renderRuleForm -------------------------------------------------------

@@ -36,13 +36,17 @@ export function coerce(s: string): number | boolean | string | undefined {
   return trimmed;
 }
 
+/** Typographic minus lookalikes (U+2212 minus, en/em dash) — autocorrect and mobile keyboards
+ *  substitute them for the ASCII `-`, and they are visually indistinguishable in the input. */
+const MINUS_LOOKALIKES = /[−–—]/g;
+
 /**
  * A required finite number; throws (with a localized, field-labelled message)
  * when blank, NaN or infinite. Action params like `scene_id` / `celsius` are
  * NOT re-checked by `Rule.from_dict`, so a bad number must fail here.
  */
 export function num(s: string, label: string): number {
-  const trimmed = s.trim();
+  const trimmed = s.trim().replace(MINUS_LOOKALIKES, "-");
   if (trimmed === "") throw new Error(t("rule.errNumberRequired", { label }));
   const n = Number(trimmed);
   if (!Number.isFinite(n)) throw new Error(t("rule.errInvalidNumber", { label }));
