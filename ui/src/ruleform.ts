@@ -22,23 +22,27 @@ export function parseNode(s: string): number | null {
   return null;
 }
 
+/** Typographic minus lookalikes (U+2212 minus, en/em dash) — autocorrect and mobile keyboards
+ *  substitute them for the ASCII `-`, and they are visually indistinguishable in the input. */
+const MINUS_LOOKALIKES = /[−–—]/g;
+
 /**
  * Coerce a predicate value the way the validator expects: a decimal (incl.
  * floats like `21.5`) → number, `true`/`false` → boolean, anything else →
  * the trimmed string. A blank field → `undefined` (the predicate has no value).
+ * Minus lookalikes count as `-` ONLY when the result is a decimal (`−3` → -3):
+ * without that, `−3` would silently become the STRING "−3" and an eq-against-a-number
+ * predicate would never fire. A non-decimal string keeps its dashes verbatim.
  */
 export function coerce(s: string): number | boolean | string | undefined {
   const trimmed = s.trim();
   if (trimmed === "") return undefined;
-  if (/^-?[0-9]+(\.[0-9]+)?$/.test(trimmed)) return Number(trimmed);
+  const numeric = trimmed.replace(MINUS_LOOKALIKES, "-");
+  if (/^-?[0-9]+(\.[0-9]+)?$/.test(numeric)) return Number(numeric);
   if (trimmed === "true") return true;
   if (trimmed === "false") return false;
   return trimmed;
 }
-
-/** Typographic minus lookalikes (U+2212 minus, en/em dash) — autocorrect and mobile keyboards
- *  substitute them for the ASCII `-`, and they are visually indistinguishable in the input. */
-const MINUS_LOOKALIKES = /[−–—]/g;
 
 /**
  * A required finite number; throws (with a localized, field-labelled message)
