@@ -41,6 +41,10 @@ describe("coerce", () => {
     ["hello", "hello"],
     ["  on  ", "on"], // trimmed string
     ["0x1a", "0x1a"], // hex is NOT a decimal → kept as a string
+    ["−3", -3], // U+2212 minus sign → number, not a silent string
+    ["–3", -3], // en dash
+    ["—21.5", -21.5], // em dash, float
+    ["2–3", "2–3"], // not a decimal after normalisation → original string, dashes verbatim
   ];
   for (const [input, expected] of cases) {
     it(`${JSON.stringify(input)} → ${String(expected)}`, () => {
