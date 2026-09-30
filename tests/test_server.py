@@ -351,8 +351,9 @@ class StandaloneActivityHookTests(unittest.IsolatedAsyncioTestCase):
             e = await asyncio.wait_for(sub.queue.get(), timeout=1.0)
             self.assertEqual(e["type"], "activity")
             self.assertEqual(e["scene"], {"id": 1, "kind": "central"})
+            next_event = sub.queue.get()
             with self.assertRaises(asyncio.TimeoutError):
-                await asyncio.wait_for(sub.queue.get(), timeout=0.05)
+                await asyncio.wait_for(next_event, timeout=0.05)
         finally:
             sub.close()
 
@@ -364,8 +365,9 @@ class StandaloneActivityHookTests(unittest.IsolatedAsyncioTestCase):
             from hestia.protocol import build_frame, tlv
             no_node = build_frame(0x1E, 0x09, tlv(0x0046, b"\x00"))
             make_session(rt)._observe(Frame(no_node[1:-1]))
+            next_event = sub.queue.get()
             with self.assertRaises(asyncio.TimeoutError):
-                await asyncio.wait_for(sub.queue.get(), timeout=0.05)
+                await asyncio.wait_for(next_event, timeout=0.05)
         finally:
             sub.close()
 

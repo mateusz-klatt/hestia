@@ -161,10 +161,17 @@ class SessionScopeTests(unittest.TestCase):
             self.assertEqual(s.get(db.AppMeta, "mode").value, "standalone")
 
     def test_rolls_back_on_error(self):
-        with self.assertRaises(ValueError):
+        failure = ValueError("boom")
+
+        def failed_transaction():
             with db.session_scope(self.Session) as s:
                 s.add(db.AppMeta(key="x", value="y"))
-                raise ValueError("boom")
+                s.flush()                         # rollback must undo a write already sent to the DB
+                raise failure
+
+        with self.assertRaisesRegex(ValueError, "^boom$") as raised:
+            failed_transaction()
+        self.assertIs(raised.exception, failure)
         with db.session_scope(self.Session) as s:
             self.assertIsNone(s.get(db.AppMeta, "x"))
 

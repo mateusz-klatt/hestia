@@ -70,8 +70,8 @@ class _FastTimeMixin:
 
     def setUp(self):
         counter = itertools.count(0.0, 0.05)
-        for patcher in (mock.patch.object(flipper.time, "monotonic", new=lambda: next(counter)),
-                        mock.patch.object(flipper.time, "sleep", new=lambda *_a: None)):
+        for patcher in (mock.patch.object(flipper.time, "monotonic", side_effect=counter),
+                        mock.patch.object(flipper.time, "sleep", return_value=None)):
             patcher.start()
             self.addCleanup(patcher.stop)
 

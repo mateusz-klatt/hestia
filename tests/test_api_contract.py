@@ -218,8 +218,9 @@ class ReadShapeContractTests(unittest.TestCase):
             self.assertNotIn(label, di.get("required", []))              # optional (absent ok)
             self.assertNotIn("default", di["properties"][label])         # no leaked default:null
         # present-but-null is rejected (the type is non-nullable when present → generated `name?: string`)
+        device = _min_device() | {"name": None}
         with self.assertRaises(ValueError):
-            api_contract.DeviceInfo.model_validate(_min_device() | {"name": None})
+            api_contract.DeviceInfo.model_validate(device)
 
     def test_klima_state_shape(self):
         _wire(api_contract.KlimaState, {"power": True, "mode": "cool", "temp": 22})
@@ -249,8 +250,9 @@ class ReadShapeContractTests(unittest.TestCase):
         d = _wire(api_contract.Discovery, payload)
         self.assertEqual(list(d.devices), ["5"])
         # a missing envelope key is drift → must fail (every key is required)
+        missing_mode = {k: v for k, v in payload.items() if k != "mode"}
         with self.assertRaises(ValueError):
-            api_contract.Discovery.model_validate({k: v for k, v in payload.items() if k != "mode"})
+            api_contract.Discovery.model_validate(missing_mode)
 
     def test_read_models_forbid_unknown_fields(self):
         # extra=forbid is the drift sentinel: a new backend field must fail until the DTO adds it

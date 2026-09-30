@@ -28,7 +28,10 @@ class PasswordTests(unittest.TestCase):
         self.assertFalse(auth.verify_password("nope", auth.hash_password("hunter2")))
 
     def test_salt_is_random(self):
-        self.assertNotEqual(auth.hash_password("x"), auth.hash_password("x"))  # fresh salt each time
+        first_hash = auth.hash_password("x")
+        second_hash = auth.hash_password("x")
+        self.assertNotEqual(first_hash, second_hash)
+        self.assertNotEqual(first_hash.split("$")[4], second_hash.split("$")[4])  # fresh salt each time
 
     def test_stored_format(self):
         stored = auth.hash_password("x")

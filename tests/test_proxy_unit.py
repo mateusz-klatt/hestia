@@ -455,8 +455,9 @@ class CloseTests(unittest.IsolatedAsyncioTestCase):
 
 class ProcessControlOpTests(unittest.IsolatedAsyncioTestCase):
     async def test_non_dict_raises(self):
+        rt = proxy.ProxyRuntime()
         with self.assertRaises(ValueError):
-            await proxy.process_control_op(proxy.ProxyRuntime(), 5)
+            await proxy.process_control_op(rt, 5)
 
     async def test_state_op(self):
         rt = proxy.ProxyRuntime()
@@ -602,8 +603,9 @@ class CommandEchoTests(unittest.IsolatedAsyncioTestCase):
         rt = proxy.ProxyRuntime()
         sess = proxy.ProxySession(rt, FakeReader(), _BoomWriter(), "cloud", 1)
         sub = await rt.event_bus.try_subscribe()
+        command = proxy.build_command(rt, {"op": "switch", "node": 0x0E, "on": True})
         with self.assertRaises(OSError):
-            await sess.inject_to_device(proxy.build_command(rt, {"op": "switch", "node": 0x0E, "on": True}))
+            await sess.inject_to_device(command)
         self.assertFalse([e for e in _drain_events(sub) if e.get("type") == "state"])
         self.assertEqual(rt.state.switches, {})                              # no fake state
 
@@ -2777,8 +2779,9 @@ class DiscoveryChangedHookTests(unittest.IsolatedAsyncioTestCase):
             sess._observe(_level_event(0x05, 0x30), "D->C")     # identical → only activity
             e = await asyncio.wait_for(sub.queue.get(), timeout=1.0)
             self.assertEqual(e["type"], "activity")
+            next_event = sub.queue.get()
             with self.assertRaises(asyncio.TimeoutError):
-                await asyncio.wait_for(sub.queue.get(), timeout=0.05)
+                await asyncio.wait_for(next_event, timeout=0.05)
         finally:
             sub.close()
 
@@ -2796,8 +2799,9 @@ class DiscoveryChangedHookTests(unittest.IsolatedAsyncioTestCase):
             e = await asyncio.wait_for(sub.queue.get(), timeout=1.0)
             self.assertEqual(e["type"], "activity")
             self.assertEqual(e["scene"], {"id": 2, "kind": "scene"})
+            next_event = sub.queue.get()
             with self.assertRaises(asyncio.TimeoutError):        # no state delta follows
-                await asyncio.wait_for(sub.queue.get(), timeout=0.05)
+                await asyncio.wait_for(next_event, timeout=0.05)
         finally:
             sub.close()
 
@@ -2935,8 +2939,9 @@ class ActivityHookTests(unittest.IsolatedAsyncioTestCase):
         try:
             sess = make_session(rt)
             sess._observe(Frame(NOISE[1:-1]), "C->D")     # [66 01] hello — no event
+            next_event = sub.queue.get()
             with self.assertRaises(asyncio.TimeoutError):
-                await asyncio.wait_for(sub.queue.get(), timeout=0.05)
+                await asyncio.wait_for(next_event, timeout=0.05)
         finally:
             sub.close()
 
@@ -2948,8 +2953,9 @@ class ActivityHookTests(unittest.IsolatedAsyncioTestCase):
         try:
             sess = make_session(rt)
             sess._observe(Frame(build_frame(0x1E, 0x09, tlv(0x0046, b"\x00"))[1:-1]), "D->C")
+            next_event = sub.queue.get()
             with self.assertRaises(asyncio.TimeoutError):
-                await asyncio.wait_for(sub.queue.get(), timeout=0.05)
+                await asyncio.wait_for(next_event, timeout=0.05)
         finally:
             sub.close()
 
