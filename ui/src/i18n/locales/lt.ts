@@ -110,8 +110,8 @@ const messages: Partial<Messages> = {
   "rooms.iconNone": "—",
   "rooms.deviceCount.one": "{n} įrenginys",
   "rooms.deviceCount.few": "{n} įrenginiai",
-  "rooms.deviceCount.many": "{n} įrenginių",
-  "rooms.deviceCount.other": "{n} įrenginio",
+  "rooms.deviceCount.many": "{n} įrenginio",
+  "rooms.deviceCount.other": "{n} įrenginių",
 
   "ctl.on": "Įjungta",
   "ctl.off": "Išjungta",

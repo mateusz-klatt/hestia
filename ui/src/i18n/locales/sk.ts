@@ -110,8 +110,8 @@ const messages: Partial<Messages> = {
   "rooms.iconNone": "—",
   "rooms.deviceCount.one": "{n} zariadenie",
   "rooms.deviceCount.few": "{n} zariadenia",
-  "rooms.deviceCount.many": "{n} zariadení",
-  "rooms.deviceCount.other": "{n} zariadenia",
+  "rooms.deviceCount.many": "{n} zariadenia",
+  "rooms.deviceCount.other": "{n} zariadení",
 
   "ctl.on": "Zapnuté",
   "ctl.off": "Vypnuté",
