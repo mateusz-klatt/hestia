@@ -112,8 +112,8 @@ const messages: Partial<Messages> = {
 
   "ctl.on": "เปิด",
   "ctl.off": "ปิด",
-  "ctl.raise": "เพิ่ม",
-  "ctl.lower": "ลด",
+  "ctl.raise": "ยกขึ้น",
+  "ctl.lower": "ลดลง",
   "ctl.set": "ตั้งค่า",
   "ctl.turnOff": "ปิด",
   "ctl.sent": "✓ ส่งแล้ว",

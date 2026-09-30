@@ -112,8 +112,8 @@ const messages: Partial<Messages> = {
 
   "ctl.on": "ဖွင့်",
   "ctl.off": "ပိတ်",
-  "ctl.raise": "မြှင့်",
-  "ctl.lower": "လျှော့",
+  "ctl.raise": "တင်ရန်",
+  "ctl.lower": "ချရန်",
   "ctl.set": "သတ်မှတ်",
   "ctl.turnOff": "ပိတ်",
   "ctl.sent": "✓ ပို့ပြီး",

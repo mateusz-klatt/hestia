@@ -113,8 +113,8 @@ const messages: Partial<Messages> = {
 
   "ctl.on": "Ενεργό",
   "ctl.off": "Ανενεργό",
-  "ctl.raise": "Αύξηση",
-  "ctl.lower": "Μείωση",
+  "ctl.raise": "Ανέβασμα",
+  "ctl.lower": "Κατέβασμα",
   "ctl.set": "Ρύθμιση",
   "ctl.turnOff": "Απενεργοποίηση",
   "ctl.sent": "✓ στάλθηκε",

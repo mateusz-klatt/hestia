@@ -113,8 +113,8 @@ const messages: Partial<Messages> = {
 
   "ctl.on": "Be",
   "ctl.off": "Ki",
-  "ctl.raise": "Emelés",
-  "ctl.lower": "Csökkentés",
+  "ctl.raise": "Felhúzás",
+  "ctl.lower": "Leengedés",
   "ctl.set": "Beállítás",
   "ctl.turnOff": "Kikapcsolás",
   "ctl.sent": "✓ elküldve",
