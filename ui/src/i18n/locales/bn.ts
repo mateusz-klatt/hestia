@@ -113,8 +113,8 @@ const messages: Partial<Messages> = {
 
   "ctl.on": "চালু",
   "ctl.off": "বন্ধ",
-  "ctl.raise": "বাড়ান",
-  "ctl.lower": "কমান",
+  "ctl.raise": "ওঠান",
+  "ctl.lower": "নামান",
   "ctl.set": "সেট করুন",
   "ctl.turnOff": "বন্ধ করুন",
   "ctl.sent": "✓ পাঠানো হয়েছে",

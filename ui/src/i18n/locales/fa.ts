@@ -113,8 +113,8 @@ const messages: Partial<Messages> = {
 
   "ctl.on": "روشن",
   "ctl.off": "خاموش",
-  "ctl.raise": "افزایش",
-  "ctl.lower": "کاهش",
+  "ctl.raise": "بالا بردن",
+  "ctl.lower": "پایین آوردن",
   "ctl.set": "تنظیم",
   "ctl.turnOff": "خاموش کردن",
   "ctl.sent": "✓ ارسال شد",

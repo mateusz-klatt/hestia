@@ -112,8 +112,8 @@ const messages: Partial<Messages> = {
 
   "ctl.on": "開啟",
   "ctl.off": "關閉",
-  "ctl.raise": "調高",
-  "ctl.lower": "調低",
+  "ctl.raise": "升起",
+  "ctl.lower": "降下",
   "ctl.set": "設定",
   "ctl.turnOff": "關閉",
   "ctl.sent": "✓ 已傳送",

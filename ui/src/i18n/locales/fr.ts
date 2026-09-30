@@ -114,8 +114,8 @@ const messages: Partial<Messages> = {
 
   "ctl.on": "Activé",
   "ctl.off": "Désactivé",
-  "ctl.raise": "Augmenter",
-  "ctl.lower": "Réduire",
+  "ctl.raise": "Monter",
+  "ctl.lower": "Descendre",
   "ctl.set": "Régler",
   "ctl.turnOff": "Éteindre",
   "ctl.sent": "✓ envoyé",

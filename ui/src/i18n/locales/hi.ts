@@ -113,8 +113,8 @@ const messages: Partial<Messages> = {
 
   "ctl.on": "चालू",
   "ctl.off": "बंद",
-  "ctl.raise": "बढ़ाएँ",
-  "ctl.lower": "घटाएँ",
+  "ctl.raise": "ऊपर करें",
+  "ctl.lower": "नीचे करें",
   "ctl.set": "सेट करें",
   "ctl.turnOff": "बंद करें",
   "ctl.sent": "✓ भेजा गया",

@@ -114,8 +114,8 @@ const messages: Partial<Messages> = {
 
   "ctl.on": "Ieslēgts",
   "ctl.off": "Izslēgts",
-  "ctl.raise": "Paaugstināt",
-  "ctl.lower": "Pazemināt",
+  "ctl.raise": "Pacelt",
+  "ctl.lower": "Nolaist",
   "ctl.set": "Iestatīt",
   "ctl.turnOff": "Izslēgt",
   "ctl.sent": "✓ nosūtīts",

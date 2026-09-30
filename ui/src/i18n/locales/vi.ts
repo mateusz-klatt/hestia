@@ -112,8 +112,8 @@ const messages: Partial<Messages> = {
 
   "ctl.on": "Bật",
   "ctl.off": "Tắt",
-  "ctl.raise": "Tăng",
-  "ctl.lower": "Giảm",
+  "ctl.raise": "Nâng lên",
+  "ctl.lower": "Hạ xuống",
   "ctl.set": "Đặt",
   "ctl.turnOff": "Tắt",
   "ctl.sent": "✓ đã gửi",

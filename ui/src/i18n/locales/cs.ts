@@ -115,8 +115,8 @@ const messages: Partial<Messages> = {
 
   "ctl.on": "Zapnuto",
   "ctl.off": "Vypnuto",
-  "ctl.raise": "Zvýšit",
-  "ctl.lower": "Snížit",
+  "ctl.raise": "Vytáhnout",
+  "ctl.lower": "Stáhnout",
   "ctl.set": "Nastavit",
   "ctl.turnOff": "Vypnout",
   "ctl.sent": "✓ odesláno",

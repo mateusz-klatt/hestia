@@ -113,8 +113,8 @@ const messages: Partial<Messages> = {
 
   "ctl.on": "Imewashwa",
   "ctl.off": "Imezimwa",
-  "ctl.raise": "Ongeza",
-  "ctl.lower": "Punguza",
+  "ctl.raise": "Inua",
+  "ctl.lower": "Shusha",
   "ctl.set": "Weka",
   "ctl.turnOff": "Zima",
   "ctl.sent": "✓ imetumwa",
