@@ -247,12 +247,14 @@ class RegistryModeTests(unittest.TestCase):
         self.assertEqual(Registry.load(self.path).mode, "standalone")
 
     def test_set_mode_rejects_unknown(self):
+        reg = Registry(self.path)
         with self.assertRaises(ValueError):
-            Registry(self.path).set_mode("nope")
+            reg.set_mode("nope")
 
     def test_payload_for_mode_rejects_unknown(self):
+        reg = Registry(self.path)
         with self.assertRaises(ValueError):
-            Registry(self.path).payload_for_mode("nope")
+            reg.payload_for_mode("nope")
 
     def test_load_schema1_defaults_proxy(self):
         self.path.write_text('{"schema": 1, "nodes": {}}', encoding="utf-8")   # legacy, no mode key

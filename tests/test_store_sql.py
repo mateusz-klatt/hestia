@@ -699,9 +699,14 @@ class AuditHelperTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_failure_is_logged_not_raised_to_caller(self):
         # fire-and-forget: the caller never awaits, so a failed write is swallowed by the done-callback.
-        fut = proxy._audit(SimpleNamespace(audit_engine=object()), "tata", "ir")   # bad engine → write fails
-        with self.assertRaises(Exception):
-            await fut                              # awaiting here only to deterministically complete it
+        failure = OSError("disk full")
+        with mock.patch.object(store_sql, "append_audit", side_effect=failure), \
+                mock.patch.object(proxy.log, "debug") as log:
+            fut = proxy._audit(SimpleNamespace(audit_engine=object()), "tata", "ir")
+            with self.assertRaisesRegex(OSError, "^disk full$"):
+                await fut                          # awaiting here only to deterministically complete it
+            await asyncio.sleep(0)                 # allow the scheduled done-callback to log the failure
+            log.assert_called_once_with("audit write failed", exc_info=failure)
 
 
 class DbPersistIntegrationTests(unittest.IsolatedAsyncioTestCase):
@@ -726,8 +731,9 @@ class DbPersistIntegrationTests(unittest.IsolatedAsyncioTestCase):
     async def test_persist_obj_rearms_dirty_on_db_failure(self):
         reg = Registry(self.dir / "r.json", writer=mock.Mock(side_effect=OSError("disk full")))
         reg.set_user(5, name="x")
+        lock = asyncio.Lock()
         with self.assertRaises(OSError):
-            await proxy._persist_obj(asyncio.Lock(), reg)
+            await proxy._persist_obj(lock, reg)
         self.assertTrue(reg.dirty)                     # failed write re-armed dirty for the next retry
 
 
