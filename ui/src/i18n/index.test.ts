@@ -74,6 +74,18 @@ describe("t / tPlural", () => {
     expect(tPlural("rooms.deviceCount", 2)).toBe("2 urządzenia"); // few
     expect(tPlural("rooms.deviceCount", 5)).toBe("5 urządzeń"); // many
   });
+
+  it.each([
+    ["lt", 10, "10 įrenginių"],
+    ["lt", 1.5, "1.5 įrenginio"],
+    ["sk", 5, "5 zariadení"],
+    ["sk", 1.5, "1.5 zariadenia"],
+    ["ro", 2, "2 dispozitive"],
+    ["ro", 20, "20 de dispozitive"],
+  ] as const)("uses the correct %s noun form for %s devices", async (locale, count, expected) => {
+    await loadLocale(locale);
+    expect(tPlural("rooms.deviceCount", count)).toBe(expected);
+  });
 });
 
 describe("loadLocale / initLocale", () => {

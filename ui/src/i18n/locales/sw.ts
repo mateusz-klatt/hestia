@@ -129,7 +129,7 @@ const messages: Partial<Messages> = {
   "ctl.mode": "Hali",
   "ctl.brightness": "Mwangaza",
   "ctl.position": "Nafasi",
-  "klima.cool": "Kupooza",
+  "klima.cool": "Kupoza",
   "klima.heat": "Kupasha",
   "klima.auto": "Otomatiki",
   "klima.dry": "Kausha",
