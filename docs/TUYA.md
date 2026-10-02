@@ -1,8 +1,9 @@
 # Tuya v3.3 local client (`hestia/tuya.py`)
 
-A **stdlib-only** reader for Tuya **protocol v3.3** devices on the LAN (TCP `6668`) — no cloud, no
-third-party dependency. The AES-128-ECB primitive the protocol needs is implemented in pure Python
-(`aes_ecb_encrypt`/`aes_ecb_decrypt`, S-box computed at import, pinned to FIPS-197 test vectors).
+A local reader for Tuya **protocol v3.3** devices on the LAN (TCP `6668`). The
+`cryptography` dependency supplies the AES-128-ECB primitive through
+`aes_ecb_encrypt`/`aes_ecb_decrypt`; protocol framing and padding remain first-party
+code. FIPS-197 test vectors and frozen full-frame vectors verify compatibility.
 Built for the Neno baby monitor (crib temperature); works for any Tuya v3.3 device.
 
 ## Wire format (v3.3, big-endian)
