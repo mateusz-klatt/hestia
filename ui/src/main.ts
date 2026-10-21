@@ -1,4 +1,5 @@
 import "./style.css";
+import { mountCalendar } from "./calendar";
 
 import {
   addUser,
@@ -177,6 +178,7 @@ const live = new LiveController(
 
 /** Wire up the live app (events, intervals, initial fetch). Called only once authenticated. */
 function startApp(): void {
+  const calendar = mountCalendar(el("calendar-root"), canControl);
   const audit = renderAuditFeed(el("audit-feed"), fetchAudit, () => latestDevices);
   const rf433 = renderRf433(el("rf433"), fetchRf433);
   const dbStats = renderDbStats(el("dbstats"), fetchDbStats);
@@ -202,14 +204,16 @@ function startApp(): void {
       roomsEl: el("rooms-view"),
       eventsEl: el("events-view"),
       adminEl: el("admin-view"),
+      calendarEl: el("calendar-view"),
     },
     (view) => {
       currentView = view;
+      calendar.setActive(view === "calendar");
       if (view === "rooms") {
         roomsView.goToLanding(); // tapping the rooms tab always returns to the list
       } else if (view === "events") {
         void audit.refresh(); // 📜 the event log is its own top-level view now
-      } else {
+      } else if (view === "admin") {
         void rf433.refresh();
         void dbStats.refresh();
         void users?.refresh();

@@ -220,6 +220,572 @@
         "title": "AutomationsList",
         "type": "object"
       },
+      "CalendarCancelledInstance": {
+        "properties": {
+          "originalStartTime": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CalendarDate"
+              },
+              {
+                "$ref": "#/components/schemas/CalendarDateTime"
+              }
+            ],
+            "title": "Originalstarttime"
+          },
+          "status": {
+            "const": "cancelled",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "originalStartTime",
+          "status"
+        ],
+        "title": "CalendarCancelledInstance",
+        "type": "object"
+      },
+      "CalendarCreateRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "group": {
+            "title": "Group",
+            "type": "string"
+          },
+          "payload": {
+            "$ref": "#/components/schemas/CalendarPayload"
+          }
+        },
+        "required": [
+          "group",
+          "payload"
+        ],
+        "title": "CalendarCreateRequest",
+        "type": "object"
+      },
+      "CalendarDate": {
+        "description": "All-day calendar date; an event's end date is exclusive.",
+        "properties": {
+          "date": {
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+            "title": "Date",
+            "type": "string"
+          }
+        },
+        "required": [
+          "date"
+        ],
+        "title": "CalendarDate",
+        "type": "object"
+      },
+      "CalendarDateTime": {
+        "description": "An RFC3339 instant, optionally expressed in an IANA time zone.",
+        "properties": {
+          "dateTime": {
+            "title": "Datetime",
+            "type": "string"
+          },
+          "timeZone": {
+            "title": "Timezone",
+            "type": "string"
+          }
+        },
+        "required": [
+          "dateTime"
+        ],
+        "title": "CalendarDateTime",
+        "type": "object"
+      },
+      "CalendarDeleteRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "group": {
+            "title": "Group",
+            "type": "string"
+          },
+          "id": {
+            "minLength": 1,
+            "title": "Id",
+            "type": "string"
+          },
+          "revision": {
+            "minimum": 1,
+            "title": "Revision",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "group",
+          "id",
+          "revision"
+        ],
+        "title": "CalendarDeleteRequest",
+        "type": "object"
+      },
+      "CalendarEndpointStatus": {
+        "properties": {
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "group_id": {
+            "title": "Group Id",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "last_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Error"
+          },
+          "last_success": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Success"
+          }
+        },
+        "required": [
+          "id",
+          "group_id",
+          "enabled",
+          "last_success",
+          "last_error"
+        ],
+        "title": "CalendarEndpointStatus",
+        "type": "object"
+      },
+      "CalendarError": {
+        "properties": {
+          "error": {
+            "title": "Error",
+            "type": "string"
+          }
+        },
+        "required": [
+          "error"
+        ],
+        "title": "CalendarError",
+        "type": "object"
+      },
+      "CalendarEvent": {
+        "properties": {
+          "deleted": {
+            "title": "Deleted",
+            "type": "boolean"
+          },
+          "group_id": {
+            "title": "Group Id",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "modified_at": {
+            "title": "Modified At",
+            "type": "number"
+          },
+          "payload": {
+            "$ref": "#/components/schemas/CalendarPayload"
+          },
+          "revision": {
+            "title": "Revision",
+            "type": "integer"
+          },
+          "uid": {
+            "title": "Uid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "group_id",
+          "uid",
+          "payload",
+          "revision",
+          "deleted",
+          "modified_at"
+        ],
+        "title": "CalendarEvent",
+        "type": "object"
+      },
+      "CalendarGroup": {
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "CalendarGroup",
+        "type": "object"
+      },
+      "CalendarInstance": {
+        "properties": {
+          "description": {
+            "default": "",
+            "title": "Description",
+            "type": "string"
+          },
+          "end": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CalendarDate"
+              },
+              {
+                "$ref": "#/components/schemas/CalendarDateTime"
+              }
+            ],
+            "title": "End"
+          },
+          "endTimeUnspecified": {
+            "default": false,
+            "title": "Endtimeunspecified",
+            "type": "boolean"
+          },
+          "location": {
+            "default": "",
+            "title": "Location",
+            "type": "string"
+          },
+          "originalStartTime": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CalendarDate"
+              },
+              {
+                "$ref": "#/components/schemas/CalendarDateTime"
+              }
+            ],
+            "title": "Originalstarttime"
+          },
+          "start": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CalendarDate"
+              },
+              {
+                "$ref": "#/components/schemas/CalendarDateTime"
+              }
+            ],
+            "title": "Start"
+          },
+          "status": {
+            "default": "confirmed",
+            "enum": [
+              "confirmed",
+              "tentative"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "summary": {
+            "default": "",
+            "title": "Summary",
+            "type": "string"
+          },
+          "transparency": {
+            "default": "opaque",
+            "enum": [
+              "opaque",
+              "transparent"
+            ],
+            "title": "Transparency",
+            "type": "string"
+          },
+          "visibility": {
+            "default": "default",
+            "enum": [
+              "default",
+              "public",
+              "private",
+              "confidential"
+            ],
+            "title": "Visibility",
+            "type": "string"
+          }
+        },
+        "required": [
+          "originalStartTime",
+          "start",
+          "end"
+        ],
+        "title": "CalendarInstance",
+        "type": "object"
+      },
+      "CalendarPayload": {
+        "description": "Portable core content; recurrence remains an unexpanded RFC5545 series.\n\nThe event codec validates dates, time zones, rule semantics and exceptions.\nInvitations, alarms and provider presentation fields are outside this contract.",
+        "properties": {
+          "description": {
+            "default": "",
+            "title": "Description",
+            "type": "string"
+          },
+          "end": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CalendarDate"
+              },
+              {
+                "$ref": "#/components/schemas/CalendarDateTime"
+              }
+            ],
+            "title": "End"
+          },
+          "endTimeUnspecified": {
+            "default": false,
+            "description": "The end is unknown; end holds a compatibility placeholder (same instant, or next day for all-day).",
+            "title": "Endtimeunspecified",
+            "type": "boolean"
+          },
+          "exceptions": {
+            "items": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/CalendarCancelledInstance"
+                },
+                {
+                  "$ref": "#/components/schemas/CalendarInstance"
+                }
+              ]
+            },
+            "title": "Exceptions",
+            "type": "array"
+          },
+          "location": {
+            "default": "",
+            "title": "Location",
+            "type": "string"
+          },
+          "recurrence": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Recurrence",
+            "type": "array"
+          },
+          "start": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CalendarDate"
+              },
+              {
+                "$ref": "#/components/schemas/CalendarDateTime"
+              }
+            ],
+            "title": "Start"
+          },
+          "status": {
+            "default": "confirmed",
+            "enum": [
+              "confirmed",
+              "tentative",
+              "cancelled"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "summary": {
+            "default": "",
+            "title": "Summary",
+            "type": "string"
+          },
+          "transparency": {
+            "default": "opaque",
+            "enum": [
+              "opaque",
+              "transparent"
+            ],
+            "title": "Transparency",
+            "type": "string"
+          },
+          "visibility": {
+            "default": "default",
+            "enum": [
+              "default",
+              "public",
+              "private",
+              "confidential"
+            ],
+            "title": "Visibility",
+            "type": "string"
+          }
+        },
+        "required": [
+          "start",
+          "end"
+        ],
+        "title": "CalendarPayload",
+        "type": "object"
+      },
+      "CalendarPendingOperation": {
+        "properties": {
+          "attempts": {
+            "title": "Attempts",
+            "type": "integer"
+          },
+          "endpoint_id": {
+            "title": "Endpoint Id",
+            "type": "string"
+          },
+          "event_id": {
+            "title": "Event Id",
+            "type": "string"
+          },
+          "last_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Error"
+          },
+          "next_attempt": {
+            "title": "Next Attempt",
+            "type": "number"
+          },
+          "revision": {
+            "title": "Revision",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "endpoint_id",
+          "event_id",
+          "revision",
+          "attempts",
+          "next_attempt",
+          "last_error"
+        ],
+        "title": "CalendarPendingOperation",
+        "type": "object"
+      },
+      "CalendarSaved": {
+        "properties": {
+          "event": {
+            "$ref": "#/components/schemas/CalendarEvent"
+          },
+          "ok": {
+            "const": true,
+            "title": "Ok",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "event"
+        ],
+        "title": "CalendarSaved",
+        "type": "object"
+      },
+      "CalendarSyncStatus": {
+        "properties": {
+          "endpoints": {
+            "items": {
+              "$ref": "#/components/schemas/CalendarEndpointStatus"
+            },
+            "title": "Endpoints",
+            "type": "array"
+          },
+          "pending": {
+            "items": {
+              "$ref": "#/components/schemas/CalendarPendingOperation"
+            },
+            "title": "Pending",
+            "type": "array"
+          }
+        },
+        "required": [
+          "endpoints",
+          "pending"
+        ],
+        "title": "CalendarSyncStatus",
+        "type": "object"
+      },
+      "CalendarUpdateRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "group": {
+            "title": "Group",
+            "type": "string"
+          },
+          "id": {
+            "minLength": 1,
+            "title": "Id",
+            "type": "string"
+          },
+          "payload": {
+            "$ref": "#/components/schemas/CalendarPayload"
+          },
+          "revision": {
+            "minimum": 1,
+            "title": "Revision",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "group",
+          "payload",
+          "id",
+          "revision"
+        ],
+        "title": "CalendarUpdateRequest",
+        "type": "object"
+      },
+      "Calendars": {
+        "properties": {
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "events": {
+            "items": {
+              "$ref": "#/components/schemas/CalendarEvent"
+            },
+            "title": "Events",
+            "type": "array"
+          },
+          "groups": {
+            "items": {
+              "$ref": "#/components/schemas/CalendarGroup"
+            },
+            "title": "Groups",
+            "type": "array"
+          },
+          "status": {
+            "$ref": "#/components/schemas/CalendarSyncStatus"
+          }
+        },
+        "required": [
+          "enabled",
+          "groups",
+          "events",
+          "status"
+        ],
+        "title": "Calendars",
+        "type": "object"
+      },
       "ChangePasswordRequest": {
         "additionalProperties": false,
         "description": "POST /api/me/password \u2014 the signed-in user changes their OWN password. ``current`` is verified\n(a stolen cookie alone can't rotate it) before the ``new`` hash is written. ``new`` is 8..1024.",
@@ -2560,7 +3126,7 @@
   "info": {
     "description": "Local cloud-free smart-home control API. Generated from hestia/api_contract.py \u2014 do not edit by hand; run `python -m hestia.api_contract`.",
     "title": "hestia API",
-    "version": "0.9.0"
+    "version": "0.11.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -2709,6 +3275,183 @@
         },
         "summary": "Delete a rule by id (deleted=false, still 200, for an absent id)",
         "x-required-role": "admin"
+      }
+    },
+    "/api/calendars": {
+      "get": {
+        "description": "Requires viewer. Account credentials and remote calendar URLs are never returned.",
+        "operationId": "getCalendars",
+        "parameters": [
+          {
+            "description": "Selected configured group; defaults to the first group.",
+            "in": "query",
+            "name": "group",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Calendars"
+                }
+              }
+            },
+            "description": "calendar state"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalendarError"
+                }
+              }
+            },
+            "description": "unknown group"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalendarError"
+                }
+              }
+            },
+            "description": "invalid configuration"
+          }
+        },
+        "summary": "Selected local calendar events and synchronization health",
+        "x-required-role": "viewer"
+      }
+    },
+    "/api/calendars/events": {
+      "post": {
+        "description": "Requires operator. Existing events require id and current revision; stale edits return 409.",
+        "operationId": "saveCalendarEvent",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/CalendarCreateRequest"
+                  },
+                  {
+                    "$ref": "#/components/schemas/CalendarUpdateRequest"
+                  }
+                ]
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalendarSaved"
+                }
+              }
+            },
+            "description": "saved"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalendarError"
+                }
+              }
+            },
+            "description": "invalid event"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalendarError"
+                }
+              }
+            },
+            "description": "revision conflict"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalendarError"
+                }
+              }
+            },
+            "description": "disabled or invalid configuration"
+          }
+        },
+        "summary": "Create or edit a local calendar event and enqueue synchronization",
+        "x-required-role": "operator"
+      }
+    },
+    "/api/calendars/events/delete": {
+      "post": {
+        "description": "Requires operator. The current revision is mandatory; stale deletes return 409.",
+        "operationId": "deleteCalendarEvent",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CalendarDeleteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalendarSaved"
+                }
+              }
+            },
+            "description": "tombstoned"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalendarError"
+                }
+              }
+            },
+            "description": "invalid request"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalendarError"
+                }
+              }
+            },
+            "description": "revision conflict"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalendarError"
+                }
+              }
+            },
+            "description": "disabled or invalid configuration"
+          }
+        },
+        "summary": "Permanently tombstone an event and enqueue deletion of remote copies",
+        "x-required-role": "operator"
       }
     },
     "/api/control": {

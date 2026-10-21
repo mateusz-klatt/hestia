@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "poll_seconds": 60,
+  "accounts": {
+    "wife": {
+      "provider": "caldav",
+      "url": "https://caldav.icloud.com/",
+      "username_env": "HESTIA_ICLOUD_USER",
+      "password_env": "HESTIA_ICLOUD_APP_PASSWORD"
+    },
+    "me": {
+      "provider": "google",
+      "client_id_env": "HESTIA_GOOGLE_CLIENT_ID",
+      "client_secret_env": "HESTIA_GOOGLE_CLIENT_SECRET",
+      "refresh_token_env": "HESTIA_GOOGLE_REFRESH_TOKEN"
+    }
+  },
+  "groups": [
+    {
+      "id": "family",
+      "calendars": [
+        {
+          "id": "wife-family",
+          "account": "wife",
+          "calendar_id": "https://pNN-caldav.icloud.com/REPLACE-WITH-DISCOVERED-COLLECTION/"
+        },
+        {
+          "id": "my-google",
+          "account": "me",
+          "calendar_id": "REPLACE-WITH-DISCOVERED-ID@group.calendar.google.com"
+        }
+      ]
+    }
+  ]
+}

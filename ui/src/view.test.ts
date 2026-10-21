@@ -191,4 +191,18 @@ describe("renderViewSwitch", () => {
     renderViewSwitch(e, () => undefined, { showAdmin: true });
     expect(e.switchBox.querySelectorAll("button")).toHaveLength(3);
   });
+  it("restores the calendar tab and hides every other section", () => {
+    localStorage.setItem("hestia.view", "calendar");
+    const base = els();
+    const calendarEl = document.createElement("section");
+    const switcher = renderViewSwitch({ ...base, calendarEl }, () => undefined, { showAdmin: false });
+    expect(calendarEl.hidden).toBe(false);
+    expect(base.roomsEl.hidden).toBe(true);
+    expect(base.eventsEl.hidden).toBe(true);
+    expect(base.adminEl.hidden).toBe(true);
+    expect(base.switchBox.querySelectorAll("button")).toHaveLength(3);
+    switcher.apply("rooms");
+    expect(calendarEl.hidden).toBe(true);
+  });
+
 });

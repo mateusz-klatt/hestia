@@ -68,6 +68,66 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/calendars": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Selected local calendar events and synchronization health
+         * @description Requires viewer. Account credentials and remote calendar URLs are never returned.
+         */
+        get: operations["getCalendars"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/calendars/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create or edit a local calendar event and enqueue synchronization
+         * @description Requires operator. Existing events require id and current revision; stale edits return 409.
+         */
+        post: operations["saveCalendarEvent"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/calendars/events/delete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Permanently tombstone an event and enqueue deletion of remote copies
+         * @description Requires operator. The current revision is mandatory; stale deletes return 409.
+         */
+        post: operations["deleteCalendarEvent"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/control": {
         parameters: {
             query?: never;
@@ -559,6 +619,242 @@ export interface components {
             automations: components["schemas"]["Rule"][];
             /** Ok */
             ok: boolean;
+        };
+        /** CalendarCancelledInstance */
+        CalendarCancelledInstance: {
+            /** Originalstarttime */
+            originalStartTime: components["schemas"]["CalendarDate"] | components["schemas"]["CalendarDateTime"];
+            /**
+             * Status
+             * @constant
+             */
+            status: "cancelled";
+        };
+        /** CalendarCreateRequest */
+        CalendarCreateRequest: {
+            /** Group */
+            group: string;
+            payload: components["schemas"]["CalendarPayload"];
+        };
+        /**
+         * CalendarDate
+         * @description All-day calendar date; an event's end date is exclusive.
+         */
+        CalendarDate: {
+            /** Date */
+            date: string;
+        };
+        /**
+         * CalendarDateTime
+         * @description An RFC3339 instant, optionally expressed in an IANA time zone.
+         */
+        CalendarDateTime: {
+            /** Datetime */
+            dateTime: string;
+            /** Timezone */
+            timeZone?: string;
+        };
+        /** CalendarDeleteRequest */
+        CalendarDeleteRequest: {
+            /** Group */
+            group: string;
+            /** Id */
+            id: string;
+            /** Revision */
+            revision: number;
+        };
+        /** CalendarEndpointStatus */
+        CalendarEndpointStatus: {
+            /** Enabled */
+            enabled: boolean;
+            /** Group Id */
+            group_id: string;
+            /** Id */
+            id: string;
+            /** Last Error */
+            last_error: string | null;
+            /** Last Success */
+            last_success: number | null;
+        };
+        /** CalendarError */
+        CalendarError: {
+            /** Error */
+            error: string;
+        };
+        /** CalendarEvent */
+        CalendarEvent: {
+            /** Deleted */
+            deleted: boolean;
+            /** Group Id */
+            group_id: string;
+            /** Id */
+            id: string;
+            /** Modified At */
+            modified_at: number;
+            payload: components["schemas"]["CalendarPayload"];
+            /** Revision */
+            revision: number;
+            /** Uid */
+            uid: string;
+        };
+        /** CalendarGroup */
+        CalendarGroup: {
+            /** Id */
+            id: string;
+        };
+        /** CalendarInstance */
+        CalendarInstance: {
+            /**
+             * Description
+             * @default
+             */
+            description: string;
+            /** End */
+            end: components["schemas"]["CalendarDate"] | components["schemas"]["CalendarDateTime"];
+            /**
+             * Endtimeunspecified
+             * @default false
+             */
+            endTimeUnspecified: boolean;
+            /**
+             * Location
+             * @default
+             */
+            location: string;
+            /** Originalstarttime */
+            originalStartTime: components["schemas"]["CalendarDate"] | components["schemas"]["CalendarDateTime"];
+            /** Start */
+            start: components["schemas"]["CalendarDate"] | components["schemas"]["CalendarDateTime"];
+            /**
+             * Status
+             * @default confirmed
+             * @enum {string}
+             */
+            status: "confirmed" | "tentative";
+            /**
+             * Summary
+             * @default
+             */
+            summary: string;
+            /**
+             * Transparency
+             * @default opaque
+             * @enum {string}
+             */
+            transparency: "opaque" | "transparent";
+            /**
+             * Visibility
+             * @default default
+             * @enum {string}
+             */
+            visibility: "default" | "public" | "private" | "confidential";
+        };
+        /**
+         * CalendarPayload
+         * @description Portable core content; recurrence remains an unexpanded RFC5545 series.
+         *
+         *     The event codec validates dates, time zones, rule semantics and exceptions.
+         *     Invitations, alarms and provider presentation fields are outside this contract.
+         */
+        CalendarPayload: {
+            /**
+             * Description
+             * @default
+             */
+            description: string;
+            /** End */
+            end: components["schemas"]["CalendarDate"] | components["schemas"]["CalendarDateTime"];
+            /**
+             * Endtimeunspecified
+             * @description The end is unknown; end holds a compatibility placeholder (same instant, or next day for all-day).
+             * @default false
+             */
+            endTimeUnspecified: boolean;
+            /** Exceptions */
+            exceptions?: (components["schemas"]["CalendarCancelledInstance"] | components["schemas"]["CalendarInstance"])[];
+            /**
+             * Location
+             * @default
+             */
+            location: string;
+            /** Recurrence */
+            recurrence?: string[];
+            /** Start */
+            start: components["schemas"]["CalendarDate"] | components["schemas"]["CalendarDateTime"];
+            /**
+             * Status
+             * @default confirmed
+             * @enum {string}
+             */
+            status: "confirmed" | "tentative" | "cancelled";
+            /**
+             * Summary
+             * @default
+             */
+            summary: string;
+            /**
+             * Transparency
+             * @default opaque
+             * @enum {string}
+             */
+            transparency: "opaque" | "transparent";
+            /**
+             * Visibility
+             * @default default
+             * @enum {string}
+             */
+            visibility: "default" | "public" | "private" | "confidential";
+        };
+        /** CalendarPendingOperation */
+        CalendarPendingOperation: {
+            /** Attempts */
+            attempts: number;
+            /** Endpoint Id */
+            endpoint_id: string;
+            /** Event Id */
+            event_id: string;
+            /** Last Error */
+            last_error: string | null;
+            /** Next Attempt */
+            next_attempt: number;
+            /** Revision */
+            revision: number;
+        };
+        /** CalendarSaved */
+        CalendarSaved: {
+            event: components["schemas"]["CalendarEvent"];
+            /**
+             * Ok
+             * @constant
+             */
+            ok: true;
+        };
+        /** CalendarSyncStatus */
+        CalendarSyncStatus: {
+            /** Endpoints */
+            endpoints: components["schemas"]["CalendarEndpointStatus"][];
+            /** Pending */
+            pending: components["schemas"]["CalendarPendingOperation"][];
+        };
+        /** CalendarUpdateRequest */
+        CalendarUpdateRequest: {
+            /** Group */
+            group: string;
+            /** Id */
+            id: string;
+            payload: components["schemas"]["CalendarPayload"];
+            /** Revision */
+            revision: number;
+        };
+        /** Calendars */
+        Calendars: {
+            /** Enabled */
+            enabled: boolean;
+            /** Events */
+            events: components["schemas"]["CalendarEvent"][];
+            /** Groups */
+            groups: components["schemas"]["CalendarGroup"][];
+            status: components["schemas"]["CalendarSyncStatus"];
         };
         /**
          * ChangePasswordRequest
@@ -1574,6 +1870,149 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ControlError"];
+                };
+            };
+        };
+    };
+    getCalendars: {
+        parameters: {
+            query?: {
+                /** @description Selected configured group; defaults to the first group. */
+                group?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description calendar state */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Calendars"];
+                };
+            };
+            /** @description unknown group */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalendarError"];
+                };
+            };
+            /** @description invalid configuration */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalendarError"];
+                };
+            };
+        };
+    };
+    saveCalendarEvent: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CalendarCreateRequest"] | components["schemas"]["CalendarUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description saved */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalendarSaved"];
+                };
+            };
+            /** @description invalid event */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalendarError"];
+                };
+            };
+            /** @description revision conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalendarError"];
+                };
+            };
+            /** @description disabled or invalid configuration */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalendarError"];
+                };
+            };
+        };
+    };
+    deleteCalendarEvent: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CalendarDeleteRequest"];
+            };
+        };
+        responses: {
+            /** @description tombstoned */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalendarSaved"];
+                };
+            };
+            /** @description invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalendarError"];
+                };
+            };
+            /** @description revision conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalendarError"];
+                };
+            };
+            /** @description disabled or invalid configuration */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalendarError"];
                 };
             };
         };

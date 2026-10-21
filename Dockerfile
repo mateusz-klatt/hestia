@@ -37,9 +37,12 @@ COPY --from=ui-build /app/ui/dist ./ui/dist/
 # on the /data volume, see docker-compose.yml.)
 COPY tools/klima.ir ./tools/klima.ir
 
-# A volume mounts over /data at runtime; create+own it so a no-mount / named-volume
-# run is still writable by the non-root uid.
-RUN mkdir -p /data && chown 1000:1000 /data
+# Keep /etc/localtime a regular file. Docker follows an existing destination
+# symlink when mounting the host timezone; the base image's symlink to Etc/UTC
+# would otherwise replace the UTC zone database with the host's local zone.
+# A volume mounts over /data at runtime; keep it writable by the non-root uid.
+RUN cp --remove-destination /usr/share/zoneinfo/Etc/UTC /etc/localtime \
+    && mkdir -p /data && chown 1000:1000 /data
 
 # Cosmetic under network_mode: host (EXPOSE is a no-op there) — documents the
 # ports: 8925 device-facing, 8926 control (loopback), 8927 web UI (loopback).

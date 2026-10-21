@@ -3,6 +3,8 @@
 // the `import.meta.env.DEV` branch in main.ts, so a production `vite build` (DEV === false) dead-eliminates
 // that branch and never bundles this file — it can never affect the shipped app.
 import type { Discovery } from "../api/types";
+import { dateKey, shiftDay } from "../calendar-model";
+import type { CalendarEvent, CalendarPayload } from "../calendar-model";
 import { device, discovery } from "../fixtures";
 
 // Deliberately long, multi-word room + device names (the registry, not i18n) to stress the room cards and
@@ -67,9 +69,21 @@ function jsonResponse(body: unknown): Response {
   return new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
 }
 
+const today = dateKey(new Date());
+let calendarEvents: CalendarEvent[] = [{
+  id: "demo-family", group_id: "family", revision: 1, deleted: false,
+  payload: { summary: "Rodzinny spacer", location: "Park", description: "Czas dla nas.",
+    start: { date: today }, end: { date: shiftDay(today, 1) } },
+}];
+
 const ROUTES: Record<string, () => Response> = {
   whoami: () => jsonResponse({ user: null, role: null }), // auth-off → boots straight through, full access
   discovery: () => jsonResponse(RICH),
+  calendars: () => jsonResponse({ enabled: true, groups: [{ id: "family" }], events: calendarEvents,
+    status: { endpoints: [
+      { id: "wife-icloud", group_id: "family", enabled: true, last_success: Date.now() / 1000, last_error: null },
+      { id: "my-google", group_id: "family", enabled: true, last_success: Date.now() / 1000, last_error: null },
+    ], pending: [] } }),
   settings: () => jsonResponse({ locale: null, temp_scale: null, theme: null }),
   "rooms/icons": () => jsonResponse({ "Salon z aneksem kuchennym": "🛋️", "Łazienka": "🛁" }),
   audit: () => jsonResponse(AUDIT),
@@ -92,6 +106,16 @@ export function installMock(): void {
     const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
     const match = /\/api\/(.+?)\/?(?:\?|$)/.exec(url);
     const key = match?.[1];
+    if ((key === "calendars/events" || key === "calendars/events/delete") && typeof init?.body === "string") {
+      const body = JSON.parse(init.body) as { group: string; id?: string; revision?: number; payload?: CalendarPayload };
+      if (key === "calendars/events/delete") calendarEvents = calendarEvents.filter((item) => item.id !== body.id);
+      else if (body.payload !== undefined) {
+        const event: CalendarEvent = { id: body.id ?? `demo-${String(Date.now())}`, group_id: body.group,
+          revision: (body.revision ?? 0) + 1, deleted: false, payload: body.payload };
+        calendarEvents = [...calendarEvents.filter((item) => item.id !== event.id), event];
+      }
+      return Promise.resolve(jsonResponse({ ok: true }));
+    }
     const handler = key !== undefined ? ROUTES[key] : undefined;
     if (handler !== undefined) return Promise.resolve(handler());
     if (key !== undefined && (init?.method ?? "GET") !== "GET") return Promise.resolve(jsonResponse({ ok: true }));

@@ -88,6 +88,9 @@ sequence.
 - **Local sensor inputs via RTL-SDR** — an `rtl_433` feeder (baked into the Docker
   image) streams 433 MHz **temperature & humidity** sensors in locally; no gateway,
   no cloud.
+- **Bidirectional calendars** — opt-in server-side synchronization of explicitly selected
+  Apple/iCloud (including writable shared calendars), Google and local SQLite calendars.
+  See [`docs/CALENDAR_SYNC.md`](docs/CALENDAR_SYNC.md) for account setup and the CLI.
 - **Optional integrations** (all opt-in, off by default): a Tuya v3.3 LAN
   client for a temperature device ([`docs/TUYA.md`](docs/TUYA.md)), an
   outdoor-temperature poller (Open-Meteo), and IR control via a serial-attached

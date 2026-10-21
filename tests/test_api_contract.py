@@ -457,6 +457,7 @@ class TolerantResponseContractTests(unittest.TestCase):
         "ControlSwitch", "ControlThermostat", "ControlThermostatPower", "IrRequest", "LoginRequest",
         "NameRequest", "ResetPasswordRequest", "RoomIconRequest", "RuleInput", "SceneRequest",
         "SetDisabledRequest", "SetRoleRequest", "SettingsUpdate", "WholeHomeRequest",
+        "CalendarCreateRequest", "CalendarUpdateRequest", "CalendarDeleteRequest",
     }
 
     def test_strictness_lives_only_on_request_schemas(self):
