@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import base64
 import copy
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 import hashlib
@@ -16,7 +17,7 @@ import http.client
 import json
 import time
 from urllib.error import HTTPError, URLError
-from urllib.parse import quote, unquote, urlencode, urljoin, urlsplit
+from urllib.parse import quote, unquote, urlencode, urljoin, urlsplit, urlunsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 import xml.etree.ElementTree as ET
 
@@ -112,6 +113,16 @@ def _master_payload(payload: dict) -> dict:
     return {key: value for key, value in payload.items() if key != "exceptions"}
 
 
+def _google_description(data: dict, private: dict) -> None:
+    data["description"], marker = codec.encode_google_description(data.get("description", ""))
+    if marker is not None:
+        private["hestia_description_encoding"] = marker
+    elif "hestia_description_encoding" in private:
+        # An explicit empty value overrides properties retained/inherited by
+        # Google's PATCH semantics; omission alone would keep the stale marker.
+        private["hestia_description_encoding"] = ""
+
+
 def _google_etag(master: dict, exceptions: list[dict]) -> str:
     if not master.get("etag"):
         raise ProviderError("Calendar event is missing a revision", retryable=True)
@@ -136,6 +147,22 @@ def _master_etag(etag: str | None) -> str | None:
         except (ValueError, KeyError, TypeError):
             raise ProviderError("Invalid stored calendar revision") from None
     return etag
+
+
+@dataclass
+class _Mutation:
+    attempted: bool = False
+
+
+@contextmanager
+def _mutation_guard():
+    """Distinguish failed preflight reads from possibly completed writes."""
+    mutation = _Mutation()
+    try:
+        yield mutation
+    except ProviderError as exc:
+        exc.no_mutation = not mutation.attempted
+        raise
 
 
 class GoogleCalendarProvider:
@@ -417,11 +444,17 @@ class GoogleCalendarProvider:
         private["hestia_end_unspecified"] = "true" if payload.get("endTimeUnspecified") else "false"
         if current.get("recurringEventId"):
             private["hestia_detached_instance"] = current["id"]
+        _google_description(data, private)
         data["extendedProperties"] = {"private": private}
         return data
 
     def put(self, remote_id: str, payload: dict, etag: str | None, *, create: bool,
             uid: str | None = None) -> RemoteEvent:
+        with _mutation_guard() as mutation:
+            return self._put(remote_id, payload, etag, create=create, uid=uid, mutation=mutation)
+
+    def _put(self, remote_id: str, payload: dict, etag: str | None, *, create: bool,
+             uid: str | None, mutation: _Mutation) -> RemoteEvent:
         payload = codec.validate_payload(payload)
         self._check_calendar()
         uid = uid or remote_id
@@ -429,6 +462,7 @@ class GoogleCalendarProvider:
             data = self._patch_body(payload, uid, {})
             data["id"] = remote_id
             try:
+                mutation.attempted = True
                 self._request("POST", self._events_path, params={"sendUpdates": "none"}, data=data)
             except ProviderError as exc:
                 if exc.status != 409:
@@ -447,8 +481,10 @@ class GoogleCalendarProvider:
                 and current.payload.get("exceptions") != payload.get("exceptions")):
             raise self._type_restriction()
         if _master_payload(current.payload) != _master_payload(payload) or current.uid != uid:
+            data = self._patch_body(payload, uid, master)
+            mutation.attempted = True
             master = self._request("PATCH", self._events_path + "/" + quote(remote_id, safe=""),
-                params={"sendUpdates": "none"}, data=self._patch_body(payload, uid, master), etag=master["etag"])
+                params={"sendUpdates": "none"}, data=data, etag=master["etag"])
         wanted = {codec.original_start_key(e["originalStartTime"]): e for e in payload.get("exceptions", [])}
         existing = ({codec.original_start_key(e["originalStartTime"]): e for e in current.payload.get("exceptions", [])}
                     if payload.get("recurrence") else {})
@@ -476,10 +512,12 @@ class GoogleCalendarProvider:
             data.pop("originalStartTime", None)
             private = dict(instance.get("extendedProperties", {}).get("private", {}))
             private["hestia_end_unspecified"] = "true" if override.get("endTimeUnspecified") else "false"
+            _google_description(data, private)
             data["extendedProperties"] = {"private": private}
             data.setdefault("status", "confirmed")
             for field in ("summary", "description", "location"):
                 data.setdefault(field, "")
+            mutation.attempted = True
             self._request("PATCH", self._events_path + "/" + quote(instance["id"], safe=""),
                           params={"sendUpdates": "none"}, data=data, etag=instance["etag"])
         result = self._current(remote_id)[0]
@@ -488,6 +526,11 @@ class GoogleCalendarProvider:
         return result
 
     def delete(self, remote_id: str, etag: str | None, *, uid: str | None = None) -> None:
+        with _mutation_guard() as mutation:
+            self._delete(remote_id, etag, uid=uid, mutation=mutation)
+
+    def _delete(self, remote_id: str, etag: str | None, *, uid: str | None,
+                mutation: _Mutation) -> None:
         self._check_calendar()
         if not etag:
             try:
@@ -501,9 +544,11 @@ class GoogleCalendarProvider:
             if not uid or current.uid != uid:
                 raise ProviderError("Unconfirmed Google event identity differs", conflict=True)
             etag = current.etag
+        master_etag = _master_etag(etag)
         try:
+            mutation.attempted = True
             self._request("DELETE", self._events_path + "/" + quote(remote_id, safe=""),
-                          params={"sendUpdates": "none"}, etag=_master_etag(etag))
+                          params={"sendUpdates": "none"}, etag=master_etag)
         except ProviderError as exc:
             if exc.status not in {404, 410}:
                 raise
@@ -548,6 +593,31 @@ def _properties(response: ET.Element, *, strict=False) -> dict[str, ET.Element]:
     return properties
 
 
+def _verify_collection_echo(response: ET.Element) -> None:
+    """Accept only iCloud's collection ETag plus absent calendar-data echo.
+
+    A collection has no VEVENT body. This is not a missing child resource;
+    every child and every unexpected collection error must still abort the read.
+    """
+    parts = response.findall("d:propstat", NS)
+    if response.find("d:status", NS) is not None or len(parts) != 2:
+        raise ProviderError("CalDAV returned unexpected collection inventory metadata", retryable=True)
+    by_status = {}
+    for part in parts:
+        status, prop = _status(part), part.find("d:prop", NS)
+        if prop is None or status in by_status:
+            raise ProviderError("CalDAV returned incomplete collection inventory metadata", retryable=True)
+        by_status[status] = prop
+    success, missing = by_status.get(200), by_status.get(404)
+    if (success is None or missing is None
+            or [node.tag for node in success] != [f"{{{DAV}}}getetag"]
+            or [node.tag for node in missing] != [f"{{{CAL}}}calendar-data"]):
+        raise ProviderError("CalDAV returned unexpected collection inventory properties", retryable=True)
+    etag, data = success[0], missing[0]
+    if not (etag.text or "").strip() or len(etag) or len(data) or (data.text or "").strip():
+        raise ProviderError("CalDAV collection inventory metadata contains unexpected content", retryable=True)
+
+
 def _secure_url(url: str) -> str:
     try:
         parsed = urlsplit(url)
@@ -561,6 +631,12 @@ def _secure_url(url: str) -> str:
     return url
 
 
+def _same_https_location(left: str, right: str) -> bool:
+    """Compare an exact path while allowing the equivalent HTTPS :443 origin."""
+    first, second = urlsplit(_secure_url(left)), urlsplit(_secure_url(right))
+    return (first.hostname, first.port or 443, first.path) == (second.hostname, second.port or 443, second.path)
+
+
 def _trusted_url(url: str, base: str) -> str:
     _secure_url(url)
     current, target = urlsplit(base), urlsplit(url)
@@ -572,7 +648,7 @@ def _trusted_url(url: str, base: str) -> str:
     return url
 
 
-def _ical_record(remote_id: str, body: bytes, etag: str | None) -> RemoteEvent:
+def _ical_record(remote_id: str, body: bytes, etag: str | None, *, floating_time_zone: str | None = None) -> RemoteEvent:
     if not etag:
         raise ProviderError("CalDAV event is missing a revision", retryable=True)
     try:
@@ -592,13 +668,13 @@ def _ical_record(remote_id: str, body: bytes, etag: str | None) -> RemoteEvent:
             raise ValueError
         updated = max((value.timestamp() for value in stamps), default=0.0)
         deleted = str(master.get("STATUS", "")).upper() == "CANCELLED"
-        payload = None if deleted else codec.from_ical(body)[1]
+        payload = None if deleted else codec.from_ical(body, floating_time_zone=floating_time_zone)[1]
         return RemoteEvent(remote_id, uid, payload, etag, updated, deleted)
     except (ValueError, TypeError, AttributeError, KeyError):
         raise ProviderError("CalDAV event cannot be safely synchronized") from None
 
 
-def _merge_ical(original: bytes, generated: bytes) -> bytes:
+def _merge_ical(original: bytes, generated: bytes, *, floating_time_zone: str | None = None) -> bytes:
     """Keep destination-only metadata (including alarms and invitations) on edit."""
     old, new = Calendar.from_ical(original), Calendar.from_ical(generated)
     controlled = {"UID", "DTSTAMP", "LAST-MODIFIED", "CREATED", "SEQUENCE", "SUMMARY", "DESCRIPTION",
@@ -609,7 +685,10 @@ def _merge_ical(original: bytes, generated: bytes) -> bytes:
         if prop is None:
             return ""
         value = prop.dt
-        return codec.original_start_key({"dateTime" if isinstance(value, datetime) else "date": value.isoformat()})
+        temporal = {"dateTime" if isinstance(value, datetime) else "date": value.isoformat()}
+        if isinstance(value, datetime) and value.tzinfo is None and floating_time_zone:
+            temporal["timeZone"] = floating_time_zone
+        return codec.original_start_key(temporal)
 
     previous = {recurrence_key(e): e for e in old.walk("VEVENT")}
     for event in new.walk("VEVENT"):
@@ -631,11 +710,16 @@ class CalDAVProvider:
     """
 
     def __init__(self, calendar_id: str, *, username: str, password: str,
-                 url: str = "https://caldav.icloud.com", transport=None):
+                 url: str = "https://caldav.icloud.com", floating_time_zone: str | None = None, transport=None):
         self.url = _secure_url(url)
+        self.floating_time_zone = floating_time_zone
         self.calendar_id = _trusted_url(calendar_id, self.url) if calendar_id else ""
         if self.calendar_id and not self.calendar_id.endswith("/"):
             raise ProviderError("CalDAV calendar collection URL must end with a slash")
+        host = urlsplit(self.calendar_id).hostname or ""
+        # iCloud rejects VEVENTs with neither DTEND nor DURATION, even though
+        # RFC5545 permits an omitted end for a point/unknown-end event.
+        self._explicit_end = host == "caldav.icloud.com" or host.endswith("-caldav.icloud.com")
         self._auth = "Basic " + base64.b64encode((username + ":" + password).encode()).decode()
         self._transport = transport or HTTPTransport()
 
@@ -645,10 +729,13 @@ class CalDAVProvider:
     def _resource(self, remote_id: str) -> str:
         if not self.calendar_id:
             raise ProviderError("Select an explicit CalDAV calendar collection")
-        _secure_url(remote_id)
-        if not remote_id.startswith(self.calendar_id) or remote_id == self.calendar_id:
+        target, selected = urlsplit(_secure_url(remote_id)), urlsplit(self.calendar_id)
+        if ((target.hostname, target.port or 443) != (selected.hostname, selected.port or 443)
+                or not target.path.startswith(selected.path) or target.path == selected.path):
             raise ProviderError("CalDAV event URL is outside the selected calendar")
-        return remote_id
+        # The server can omit :443 in REPORT hrefs. Keep one stable identity in
+        # the exact configured origin style; do not rewrite configuration or DB.
+        return urlunsplit((selected.scheme, selected.netloc, target.path, "", ""))
 
     def _request(self, method: str, url: str, *, body=None, headers=None) -> HTTPResponse:
         values = {"Authorization": self._auth, **(headers or {})}
@@ -726,11 +813,14 @@ class CalDAVProvider:
         if not self.calendar_id:
             raise ProviderError("Select an explicit CalDAV calendar collection")
         base, responses = self._propfind(self.calendar_id, self._CALENDAR_PROPS)
-        if base != self.calendar_id:
+        if not _same_https_location(base, self.calendar_id):
             # A moved collection must be rediscovered and deliberately selected;
             # silently rebinding IDs could turn all mapped events into deletions.
             raise ProviderError("CalDAV calendar URL changed; rediscover and update configuration")
-        if len(responses) != 1 or urljoin(base, responses[0].findtext("d:href", "", NS)) != self.calendar_id:
+        if len(responses) != 1:
+            raise ProviderError("CalDAV did not verify the selected calendar", retryable=True)
+        href = responses[0].findtext("d:href", namespaces=NS)
+        if not href or not _same_https_location(urljoin(base, href), self.calendar_id):
             raise ProviderError("CalDAV did not verify the selected calendar", retryable=True)
         properties = _properties(responses[0])
         info = self._info(self.calendar_id, properties)
@@ -752,13 +842,17 @@ class CalDAVProvider:
             href = item.findtext("d:href", namespaces=NS)
             if not href:
                 raise ProviderError("CalDAV event listing omitted a resource URL", retryable=True)
-            remote_id = self._resource(urljoin(self.calendar_id, href))
+            target = urljoin(self.calendar_id, href)
+            if _same_https_location(target, self.calendar_id):
+                _verify_collection_echo(item)
+                continue
+            remote_id = self._resource(target)
             properties = _properties(item, strict=True)
             data, etag = properties.get(f"{{{CAL}}}calendar-data"), properties.get(f"{{{DAV}}}getetag")
             if data is None or not data.text or etag is None or remote_id in seen:
                 raise ProviderError("CalDAV returned an incomplete event inventory", retryable=True)
             seen.add(remote_id)
-            records.append(_ical_record(remote_id, data.text.encode(), etag.text))
+            records.append(_ical_record(remote_id, data.text.encode(), etag.text, floating_time_zone=self.floating_time_zone))
         after = self._check_calendar()
         if before != after:
             raise ProviderError("CalDAV calendar changed during inventory; retry required", retryable=True)
@@ -766,15 +860,20 @@ class CalDAVProvider:
 
     def _get(self, remote_id: str) -> tuple[RemoteEvent, bytes]:
         response = self._request("GET", self._resource(remote_id), headers={"Accept": "text/calendar"})
-        return _ical_record(remote_id, response.body, response.header("ETag")), response.body
+        return _ical_record(remote_id, response.body, response.header("ETag"), floating_time_zone=self.floating_time_zone), response.body
 
     def put(self, remote_id: str, payload: dict, etag: str | None, *, create: bool,
             uid: str | None = None) -> RemoteEvent:
+        with _mutation_guard() as mutation:
+            return self._put(remote_id, payload, etag, create=create, uid=uid, mutation=mutation)
+
+    def _put(self, remote_id: str, payload: dict, etag: str | None, *, create: bool,
+             uid: str | None, mutation: _Mutation) -> RemoteEvent:
         payload = codec.validate_payload(payload)
         self._resource(remote_id)
         self._check_calendar()
         uid = uid or remote_id
-        generated = codec.to_ical(payload, uid)
+        generated = codec.to_ical(payload, uid, explicit_end=self._explicit_end)
         headers = {"Content-Type": "text/calendar; charset=utf-8"}
         if create:
             headers["If-None-Match"] = "*"
@@ -787,8 +886,9 @@ class CalDAVProvider:
             if not etag or current.etag != etag:
                 raise ProviderError("CalDAV event changed before update", status=412, conflict=True)
             headers["If-Match"] = etag
-            generated = _merge_ical(body, generated)
+            generated = _merge_ical(body, generated, floating_time_zone=self.floating_time_zone)
         try:
+            mutation.attempted = True
             self._request("PUT", remote_id, body=generated, headers=headers)
         except ProviderError as exc:
             if not create or exc.status not in {409, 412}:
@@ -806,6 +906,11 @@ class CalDAVProvider:
         return result
 
     def delete(self, remote_id: str, etag: str | None, *, uid: str | None = None) -> None:
+        with _mutation_guard() as mutation:
+            self._delete(remote_id, etag, uid=uid, mutation=mutation)
+
+    def _delete(self, remote_id: str, etag: str | None, *, uid: str | None,
+                mutation: _Mutation) -> None:
         self._resource(remote_id)
         self._check_calendar()
         if not etag:
@@ -821,6 +926,7 @@ class CalDAVProvider:
                 raise ProviderError("Unconfirmed CalDAV event identity differs", conflict=True)
             etag = current.etag
         try:
+            mutation.attempted = True
             self._request("DELETE", remote_id, headers={"If-Match": etag})
         except ProviderError as exc:
             if exc.status not in {404, 410}:

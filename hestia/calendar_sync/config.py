@@ -8,6 +8,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlsplit
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
 class ConfigError(ValueError):
@@ -27,6 +28,7 @@ class CalendarConfig:
     id: str
     account: str
     calendar_id: str
+    floating_time_zone: str | None = None
 
 
 @dataclass(frozen=True)
@@ -81,6 +83,18 @@ def _https(raw, label: str) -> str:
     return value
 
 
+def _floating_zone(raw) -> str:
+    name = _string(raw, "floating_time_zone")
+    try:
+        # Host-local and leap-second/implementation trees are not explicit IANA policies.
+        if name in {"localtime", "posixrules"} or name.startswith(("posix/", "right/")):
+            raise ValueError
+        ZoneInfo(name)
+    except (ValueError, ZoneInfoNotFoundError):
+        raise ConfigError("floating_time_zone must name a valid IANA time zone") from None
+    return name
+
+
 def parse_config(raw) -> SyncConfig:
     data = _object(raw, {"version", "poll_seconds", "accounts", "groups"}, "configuration")
     if type(data.get("version")) is not int or data["version"] != 1:
@@ -124,7 +138,7 @@ def parse_config(raw) -> SyncConfig:
             raise ConfigError("Each group must explicitly select at least one external calendar")
         endpoints = []
         for endpoint in selected:
-            endpoint = _object(endpoint, {"id", "account", "calendar_id"}, "calendar")
+            endpoint = _object(endpoint, {"id", "account", "calendar_id", "floating_time_zone"}, "calendar")
             endpoint_id = _string(endpoint.get("id"), "endpoint identifier", _ID)
             account = _string(endpoint.get("account"), "calendar account", _ID)
             if account not in accounts:
@@ -136,12 +150,17 @@ def parse_config(raw) -> SyncConfig:
                     raise ConfigError("CalDAV calendar URL must end with a slash")
             if accounts[account].provider == "google" and calendar_id == "primary":
                 raise ConfigError("Select the explicit Google calendar ID returned by discovery")
+            floating_zone = None
+            if "floating_time_zone" in endpoint:
+                if accounts[account].provider != "caldav":
+                    raise ConfigError("floating_time_zone is supported only for CalDAV calendars")
+                floating_zone = _floating_zone(endpoint["floating_time_zone"])
             identity = (accounts[account].provider, calendar_id)
             if endpoint_id in endpoint_ids or identity in calendars:
                 raise ConfigError("An endpoint or calendar may belong to only one group")
             endpoint_ids.add(endpoint_id)
             calendars.add(identity)
-            endpoints.append(CalendarConfig(endpoint_id, account, calendar_id))
+            endpoints.append(CalendarConfig(endpoint_id, account, calendar_id, floating_zone))
         groups.append(GroupConfig(group_id, tuple(endpoints)))
     return SyncConfig(float(poll), accounts, tuple(groups))
 
@@ -160,10 +179,15 @@ def load_config(path=None, *, environ=None) -> SyncConfig | None:
     return parse_config(raw)
 
 
-def make_provider(account: AccountConfig, calendar_id: str, *, environ=None):
+def make_provider(account: AccountConfig, calendar_id: str, *, floating_time_zone=None, environ=None):
     """Create a provider without logging or persisting resolved credentials."""
     from .providers import CalDAVProvider, GoogleProvider
 
+    options = {}
+    if floating_time_zone is not None:
+        if account.provider != "caldav":
+            raise ConfigError("floating_time_zone is supported only for CalDAV calendars")
+        options["floating_time_zone"] = _floating_zone(floating_time_zone)
     env = os.environ if environ is None else environ
     credentials = {}
     for name, reference in account.credential_env.items():
@@ -173,10 +197,10 @@ def make_provider(account: AccountConfig, calendar_id: str, *, environ=None):
         credentials[name] = value
     if account.provider == "google":
         return GoogleProvider(calendar_id, **credentials)
-    return CalDAVProvider(calendar_id, url=account.url, **credentials)
+    return CalDAVProvider(calendar_id, url=account.url, **credentials, **options)
 
 
 def make_providers(config: SyncConfig, *, environ=None) -> dict:
     return {endpoint.id: make_provider(config.accounts[endpoint.account], endpoint.calendar_id,
-                                       environ=environ)
+                                       floating_time_zone=endpoint.floating_time_zone, environ=environ)
             for group in config.groups for endpoint in group.calendars}

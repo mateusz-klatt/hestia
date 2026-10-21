@@ -36,12 +36,15 @@ class ProviderError(Exception):
     """Safe diagnostic: never contains HTTP bodies, URLs, or credentials."""
 
     def __init__(self, message: str, *, status: int | None = None,
-                 retryable: bool = False, conflict: bool = False, code: str | None = None):
+                 retryable: bool = False, conflict: bool = False, code: str | None = None,
+                 no_mutation: bool = False):
         super().__init__(message)
         self.status = status
         self.retryable = retryable
         self.conflict = conflict
         self.code = code
+        # True only when this call certainly failed before attempting any mutation.
+        self.no_mutation = no_mutation
 
 
 class CalendarProvider(Protocol):

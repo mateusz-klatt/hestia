@@ -283,13 +283,15 @@ class SyncStore:
                                   seen=False, deleted=False, uncertain=False)
                 s.add(replica)
                 s.flush()
+            prior_uncertain = replica.uncertain
             replica.outbound_hash = event.fingerprint
             replica.outbound_revision = event.revision
             # An abrupt process exit during the request is an uncertain write too.
             replica.uncertain = True
             return {"remote_id": replica.remote_id, "etag": replica.etag,
                     "create": not replica.seen, "deleted": event.deleted, "uid": event.uid,
-                    "payload": json.loads(event.payload_json), "revision": event.revision}
+                    "payload": json.loads(event.payload_json), "revision": event.revision,
+                    "prior_uncertain": prior_uncertain}
 
     def acknowledge(self, endpoint_id, event_id, intent, remote):
         with self.transaction() as s:
@@ -317,18 +319,22 @@ class SyncStore:
                 job.attempts = 0
                 job.next_attempt = 0
 
-    def failed(self, endpoint_id, event_id, code, *, conflict=False):
+    def failed(self, endpoint_id, event_id, code, *, conflict=False, no_mutation=False,
+               prior_uncertain=True):
         with self.transaction() as s:
             key = (endpoint_id, event_id)
             job = s.get(Outbox, key)
             job.attempts += 1
             job.next_attempt = self.clock() + min(3600, 5 * 2 ** min(job.attempts - 1, 10))
             job.last_error = code
-            if conflict:
+            # A preflight failure can undo only the uncertainty added by this attempt.
+            # Earlier lost responses or partial deliveries remain unresolved.
+            if conflict or (no_mutation and not prior_uncertain):
                 replica = s.get(Replica, key)
                 replica.uncertain = False
                 replica.observed_hash = None
                 replica.outbound_hash = None
+                replica.outbound_revision = None
             s.get(Endpoint, endpoint_id).last_error = code
 
     def status(self):

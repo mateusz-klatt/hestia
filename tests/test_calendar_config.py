@@ -36,6 +36,8 @@ class CalendarConfigTests(unittest.TestCase):
         self.assertEqual(parsed.poll_seconds, 60)
         self.assertEqual(parsed.store_groups()[0]["calendars"][0]["provider"], "caldav")
         self.assertEqual(len(parsed.groups[0].calendars), 2)
+        self.assertIsNone(parsed.groups[0].calendars[0].floating_time_zone)
+        self.assertIsNone(config.CalendarConfig("endpoint", "account", "calendar").floating_time_zone)
         self.assertEqual(config.parse_config({"version": 1, "accounts": {}, "groups": []}).groups, ())
 
     def test_disabled_load_and_valid_file(self):
@@ -115,6 +117,58 @@ class CalendarConfigTests(unittest.TestCase):
         for raw in cases:
             with self.subTest(raw=raw), self.assertRaises(config.ConfigError):
                 config.parse_config(raw)
+
+    def test_explicit_caldav_floating_zone_is_a_runtime_policy_only(self):
+        raw = sample()
+        baseline = config.parse_config(raw).store_groups()
+        raw["groups"][0]["calendars"][0]["floating_time_zone"] = "Europe/Warsaw"
+        parsed = config.parse_config(raw)
+        self.assertEqual(parsed.groups[0].calendars[0].floating_time_zone, "Europe/Warsaw")
+        self.assertIsNone(parsed.groups[0].calendars[1].floating_time_zone)
+        self.assertEqual(parsed.store_groups(), baseline)
+        raw["groups"][0]["calendars"][0]["floating_time_zone"] = "UTC"
+        self.assertEqual(config.parse_config(raw).groups[0].calendars[0].floating_time_zone, "UTC")
+
+    def test_rejects_implicit_or_invalid_floating_time_policies(self):
+        for zone in (None, "", " Europe/Warsaw", "Europe/Warsaw ", False, 60, [], {},
+                     "Unknown/SECRET", "/Europe/Warsaw", "../Europe/Warsaw",
+                     "localtime", "posixrules", "posix/Europe/Warsaw", "right/Europe/Warsaw"):
+            raw = sample()
+            raw["groups"][0]["calendars"][0]["floating_time_zone"] = zone
+            with self.subTest(zone=zone), self.assertRaises(config.ConfigError) as caught:
+                config.parse_config(raw)
+            self.assertNotIn("SECRET", str(caught.exception))
+        for zone in ("Europe/Warsaw", None):
+            raw = sample()
+            raw["groups"][0]["calendars"][1]["floating_time_zone"] = zone
+            with self.subTest(google_zone=zone), self.assertRaisesRegex(config.ConfigError, "only for CalDAV"):
+                config.parse_config(raw)
+
+    def test_floating_zone_is_passed_only_to_selected_caldav_endpoint(self):
+        raw = sample()
+        raw["groups"][0]["calendars"][0]["floating_time_zone"] = "Europe/Warsaw"
+        parsed = config.parse_config(raw)
+        providers = SimpleNamespace(GoogleProvider=mock.Mock(), CalDAVProvider=mock.Mock())
+        env = {"C_USER": "private-user", "C_PASS": "SECRET", "G_ID": "id", "G_SECRET": "secret",
+               "G_TOKEN": "token"}
+        with mock.patch.dict(sys.modules, {"hestia.calendar_sync.providers": providers}):
+            config.make_providers(parsed, environ=env)
+            providers.CalDAVProvider.assert_called_once_with("https://caldav.example/one/",
+                username="private-user", password="SECRET", url="https://caldav.icloud.com/",
+                floating_time_zone="Europe/Warsaw")
+            providers.GoogleProvider.assert_called_once_with("family@example.com", client_id="id",
+                client_secret="secret", refresh_token="token")
+            with self.assertRaisesRegex(config.ConfigError, "only for CalDAV"):
+                config.make_provider(parsed.accounts["me"], "family@example.com",
+                                     floating_time_zone="Europe/Warsaw", environ=env)
+            with self.assertRaises(config.ConfigError):
+                config.make_provider(parsed.accounts["wife"], "", floating_time_zone="Unknown/SECRET",
+                                     environ=env)
+            # Account-level discovery does not opt calendars into an interpretation policy.
+            providers.CalDAVProvider.reset_mock()
+            config.make_provider(parsed.accounts["wife"], "", environ=env)
+            providers.CalDAVProvider.assert_called_once_with("", username="private-user",
+                password="SECRET", url="https://caldav.icloud.com/")
 
     def test_provider_factories_resolve_env_only(self):
         parsed = config.parse_config(sample())

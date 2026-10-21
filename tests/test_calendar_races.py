@@ -6,7 +6,8 @@ import unittest
 
 from hestia import db
 from hestia.calendar_sync.engine import SyncEngine
-from hestia.calendar_sync.types import RemoteEvent
+from hestia.calendar_sync.store import SyncStore
+from hestia.calendar_sync.types import ProviderError, RemoteEvent
 from tests import test_calendar_sync as fixtures
 
 
@@ -103,6 +104,129 @@ class CalendarRaceTests(unittest.TestCase):
         provider.remote("source", fixtures.payload("Same second edit"))
         self.run_sync()
         self.assert_content(fixtures.payload("Same second edit"))
+
+    def test_confirmed_prewrite_403_releases_only_this_attempt_and_keeps_newer_remote_edit(self):
+        created = self.store.save_local("family", fixtures.payload())
+        self.run_sync()
+        self.tick()
+        self.store.save_local("family", fixtures.payload("Queued local"), created["id"])
+        apple = self.providers["apple"]
+        apple.write_error = ProviderError("Permission lost before PUT", status=403, no_mutation=True)
+        result = self.engine.run_once()
+        self.assertEqual(result["errors"], {"apple": "permission_denied"})
+        with self.sessions() as session:
+            replica = session.get(db.CalendarReplica, ("apple", created["id"]))
+            self.assertFalse(replica.uncertain)
+            self.assertIsNone(replica.observed_hash)
+            self.assertIsNone(replica.outbound_hash)
+            self.assertIsNone(replica.outbound_revision)
+        # The owner's separate client can still edit a shared calendar while this
+        # account cannot read it. A complete read after restored access must win.
+        apple.pull_error = ProviderError("Permission still absent", status=403)
+        self.tick()
+        apple.remote(apple.active()[0].remote_id, fixtures.payload("Newer owner edit"))
+        self.assertIn("apple", self.engine.run_once()["errors"])
+        self.assertEqual(self.local()[0]["payload"], fixtures.payload("Queued local"))
+        db.reset_engine_cache()
+        _, self.sessions = db.init_db(self.path)
+        self.store = SyncStore(self.sessions, clock=lambda: self.now)
+        self.engine = SyncEngine(self.store, self.providers)
+        apple.pull_error = apple.write_error = None
+        attempts_before_recovery = apple.puts
+        self.tick()
+        self.run_sync()
+        self.assert_content(fixtures.payload("Newer owner edit"))
+        self.assertEqual(apple.puts, attempts_before_recovery)
+        self.assertEqual(self.store.status()["pending"], [])
+
+    def test_confirmed_preflight_failure_does_not_erase_earlier_uncertain_attempt(self):
+        created = self.store.save_local("family", fixtures.payload())
+        self.run_sync()
+        self.tick()
+        wanted = fixtures.payload("Delivery may already have started")
+        self.store.save_local("family", wanted, created["id"])
+        apple = self.providers["apple"]
+        apple.write_error = TimeoutError("Delivery outcome unknown")
+        self.engine.run_once()
+        self.tick()
+        apple.write_error = ProviderError("This retry never reached PUT", status=403, no_mutation=True)
+        self.engine.run_once()
+        with self.sessions() as session:
+            replica = session.get(db.CalendarReplica, ("apple", created["id"]))
+            self.assertTrue(replica.uncertain)
+            self.assertEqual(replica.outbound_hash, fixtures.fingerprint(wanted))
+            self.assertEqual(replica.observed_hash, fixtures.fingerprint(fixtures.payload()))
+        apple.write_error = None
+        self.tick()
+        self.run_sync()
+        self.assert_content(wanted)
+
+    def test_default_provider_error_keeps_uncertainty_without_a_prewrite_guarantee(self):
+        error = ProviderError("403 can occur after one operation of a series", status=403)
+        self.assertFalse(error.no_mutation)
+        created = self.store.save_local("family", fixtures.payload())
+        self.providers["apple"].write_error = error
+        self.engine.run_once()
+        with self.sessions() as session:
+            self.assertTrue(session.get(db.CalendarReplica, ("apple", created["id"])).uncertain)
+
+    def test_postwrite_readback_404_remains_uncertain_and_is_recovered_without_duplicate_write(self):
+        created = self.store.save_local("family", fixtures.payload())
+        apple = self.providers["apple"]
+        def readback_failure():
+            raise ProviderError("GET failed after a successful PUT", status=404)
+        apple.after_write = readback_failure
+        self.assertEqual(self.engine.run_once()["errors"], {"apple": "http_404"})
+        with self.sessions() as session:
+            self.assertTrue(session.get(db.CalendarReplica, ("apple", created["id"])).uncertain)
+        self.assertEqual(len(apple.active()), 1)
+        apple.after_write = None
+        self.tick()
+        self.run_sync()
+        self.assert_content(fixtures.payload())
+        self.assertEqual(apple.puts, 1)
+        self.assertEqual(self.store.status()["pending"], [])
+
+    def test_invalid_pull_does_not_mark_pending_write_uncertain_and_recovery_observes_newer_data(self):
+        created = self.store.save_local("family", fixtures.payload())
+        self.run_sync()
+        self.tick()
+        self.store.save_local("family", fixtures.payload("Pending while source invalid"), created["id"])
+        apple = self.providers["apple"]
+        apple.pull_error = ValueError("Malformed calendar inventory")
+        self.assertEqual(self.engine.run_once()["errors"], {"apple": "invalid_calendar_data"})
+        with self.sessions() as session:
+            replica = session.get(db.CalendarReplica, ("apple", created["id"]))
+            self.assertFalse(replica.uncertain)
+            self.assertIsNone(replica.outbound_hash)
+        self.tick()
+        apple.remote(apple.active()[0].remote_id, fixtures.payload("Valid newer source"))
+        apple.pull_error = None
+        attempts_before_recovery = apple.puts
+        self.run_sync()
+        self.assert_content(fixtures.payload("Valid newer source"))
+        self.assertEqual(apple.puts, attempts_before_recovery)
+
+    def test_prewrite_signal_without_prior_state_defaults_to_preserving_uncertainty(self):
+        created = self.store.save_local("family", fixtures.payload())
+        intent = self.store.prepare("apple", created["id"], self.providers["apple"].allocate_id)
+        self.assertFalse(intent["prior_uncertain"])
+        self.store.failed("apple", created["id"], "permission_denied", no_mutation=True)
+        with self.sessions() as session:
+            self.assertTrue(session.get(db.CalendarReplica, ("apple", created["id"])).uncertain)
+
+    def test_engine_missing_prior_state_conservatively_preserves_uncertainty(self):
+        created = self.store.save_local("family", fixtures.payload())
+        original_prepare = self.store.prepare
+        def prepare_without_prior_state(*args):
+            intent = original_prepare(*args)
+            intent.pop("prior_uncertain")
+            return intent
+        self.store.prepare = prepare_without_prior_state
+        self.providers["apple"].write_error = ProviderError("No new mutation", no_mutation=True)
+        self.engine.run_once()
+        with self.sessions() as session:
+            self.assertTrue(session.get(db.CalendarReplica, ("apple", created["id"])).uncertain)
 
     def test_uncertain_delivery_finishes_desired_unit_before_destination_edit(self):
         created = self.store.save_local("family", fixtures.payload())

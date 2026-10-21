@@ -87,7 +87,10 @@ function EventEditor({ event, group, day, copy, onClose, onSaved }: {
   const title = useRef<HTMLInputElement>(null);
   useEffect(() => { title.current?.focus(); }, []);
   const field = <K extends keyof EventDraft,>(name: K, value: EventDraft[K]): void => {
-    setDraft((old) => ({ ...old, [name]: value }));
+    setDraft((old) => ({ ...old, [name]: value,
+      ...(name === "start" || name === "timezone" ? { startOffset: "" } : {}),
+      ...(name === "end" || name === "timezone" ? { endOffset: "" } : {}),
+    }));
   };
   const submit = async (remove: boolean): Promise<void> => {
     if (remove && !window.confirm(copy.confirm)) return;
@@ -136,7 +139,7 @@ function EventEditor({ event, group, day, copy, onClose, onSaved }: {
         onChange={(e) => { field("summary", e.target.value); }} /></label>
       <label className="calendar-checkbox"><input type="checkbox" checked={draft.allDay} onChange={(e) => {
         const allDay = e.target.checked;
-        setDraft((old) => ({ ...old, allDay, start: allDay ? old.start.slice(0, 10) : `${old.start}T09:00`,
+        setDraft((old) => ({ ...old, allDay, startOffset: "", endOffset: "", start: allDay ? old.start.slice(0, 10) : `${old.start}T09:00`,
           end: allDay ? shiftDay(old.end.slice(0, 10), old.end.slice(0, 10) === old.start.slice(0, 10) ? 1 : 0) : `${old.end}T10:00` }));
       }} />{copy.allDay}</label>
       <label className="calendar-checkbox"><input type="checkbox" checked={draft.endUnknown}

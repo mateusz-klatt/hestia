@@ -87,9 +87,9 @@ def dav_get(payload=None, etag='"v1"', uid="family-uid"):
     return response(codec.to_ical(payload or PAYLOAD, uid), headers={"ETag": etag})
 
 
-def dav(*responses, calendar_id=CALENDAR):
+def dav(*responses, calendar_id=CALENDAR, floating_time_zone=None):
     transport = QueueTransport(*responses)
-    return p.CalDAVProvider(calendar_id, username="user", password="secret", transport=transport), transport
+    return p.CalDAVProvider(calendar_id, username="user", password="secret", floating_time_zone=floating_time_zone, transport=transport), transport
 
 
 class GoogleReadTests(unittest.TestCase):
@@ -806,6 +806,244 @@ class UnknownEndProviderTests(unittest.TestCase):
         body = json.loads(transport.calls[4][2]["body"])
         self.assertNotIn("endTimeUnspecified", body)
         self.assertEqual(body["extendedProperties"]["private"]["hestia_end_unspecified"], "true")
+
+
+class CalDAVDefaultPortIdentityTests(unittest.TestCase):
+    def test_report_default_port_aliases_keep_configured_origin_and_stable_ids(self):
+        explicit = CALENDAR.replace("caldav.icloud.com/", "caldav.icloud.com:443/")
+        for selected, alias in ((explicit, CALENDAR), (CALENDAR, explicit)):
+            with self.subTest(selected=selected):
+                provider, transport = dav(dav_acl(href=alias), multistatus(dav_item(href=alias + "one.ics")), dav_acl(href=alias),
+                                          dav_acl(href=selected), multistatus(dav_item(href=selected + "one.ics")), dav_acl(href=selected),
+                                          calendar_id=selected)
+                first = provider.pull(None)
+                second = provider.pull(first.cursor)
+                expected_id = selected + "one.ics"
+                self.assertEqual(first.events[0].remote_id, expected_id)
+                self.assertEqual(second.events[0].remote_id, expected_id)
+                self.assertEqual(first.events[0].uid, second.events[0].uid)
+                self.assertEqual(first.events[0].payload, PAYLOAD)
+                self.assertEqual(provider.calendar_id, selected)
+                self.assertTrue(all(call[1] == selected for call in transport.calls))
+                self.assertTrue(provider.allocate_id("uid").startswith(selected))
+
+    def test_default_port_only_redirect_is_accepted_but_collection_moves_are_rejected(self):
+        explicit = CALENDAR.replace("caldav.icloud.com/", "caldav.icloud.com:443/")
+        for selected, alias in ((explicit, CALENDAR), (CALENDAR, explicit)):
+            provider, _ = dav(response(status=301, headers={"Location": alias}), dav_acl(href=alias), calendar_id=selected)
+            self.assertEqual(provider._check_calendar(), "one")
+        for changed in (CALENDAR.replace("caldav.icloud.com/", "p01-caldav.icloud.com/"), CALENDAR + "other/"):
+            provider, _ = dav(response(status=301, headers={"Location": changed}), dav_acl(href=changed))
+            with self.assertRaises(ProviderError):
+                provider._check_calendar()
+        provider, _ = dav(multistatus(dav_response('<d:resourcetype><c:calendar/></d:resourcetype>', href=CALENDAR + "other/")))
+        with self.assertRaises(ProviderError):
+            provider._check_calendar()
+        provider, _ = dav(multistatus('<d:response><d:propstat><d:prop/><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response>'))
+        with self.assertRaises(ProviderError):
+            provider._check_calendar()
+
+    def test_equivalent_origin_never_relaxes_collection_path_or_credentials_boundary(self):
+        explicit = CALENDAR.replace("caldav.icloud.com/", "caldav.icloud.com:443/")
+        provider, _ = dav(calendar_id=explicit)
+        self.assertEqual(provider._resource(CALENDAR + "one.ics"), explicit + "one.ics")
+        for remote_id in (CALENDAR, CALENDAR.replace("family/", "family-other/") + "one.ics",
+                          CALENDAR.replace("caldav.icloud.com/", "p01-caldav.icloud.com/") + "one.ics",
+                          CALENDAR.replace("caldav.icloud.com/", "caldav.icloud.com:444/") + "one.ics",
+                          CALENDAR + "%2e%2e/other/one.ics", CALENDAR + "one.ics?secret=value",
+                          CALENDAR.replace("https://", "https://user:secret@") + "one.ics"):
+            with self.subTest(remote_id=remote_id), self.assertRaises(ProviderError):
+                provider._resource(remote_id)
+
+    def test_existing_get_mapping_identity_is_not_rewritten(self):
+        explicit = CALENDAR.replace("caldav.icloud.com/", "caldav.icloud.com:443/")
+        provider, transport = dav(dav_get(), calendar_id=explicit)
+        event, _ = provider._get(RESOURCE)
+        self.assertEqual(event.remote_id, RESOURCE)
+        self.assertEqual(transport.calls[0][1], explicit + "one.ics")
+        self.assertEqual(provider.calendar_id, explicit)
+
+
+class CalDAVCollectionEchoTests(unittest.TestCase):
+    @staticmethod
+    def echo(*, good_status=200, missing_status=404, good_prop='<d:getetag>"collection-v1"</d:getetag>',
+             missing_prop='<c:calendar-data/>', direct="", href="/1/calendars/family/"):
+        return (f'<d:response><d:href>{escape(href)}</d:href>{direct}'
+                f'<d:propstat><d:prop>{good_prop}</d:prop><d:status>HTTP/1.1 {good_status} Status</d:status></d:propstat>'
+                f'<d:propstat><d:prop>{missing_prop}</d:prop><d:status>HTTP/1.1 {missing_status} Status</d:status></d:propstat>'
+                '</d:response>')
+
+    def test_actual_icloud_collection_metadata_echo_is_not_an_event_or_deletion(self):
+        explicit = CALENDAR.replace("caldav.icloud.com/", "caldav.icloud.com:443/")
+        provider, transport = dav(dav_acl(href=explicit), multistatus(self.echo(), dav_item(href=explicit + "one.ics")),
+                                  dav_acl(href=explicit), calendar_id=explicit)
+        snapshot = provider.pull(None)
+        self.assertTrue(snapshot.complete and snapshot.full)
+        self.assertEqual(len(snapshot.events), 1)
+        self.assertEqual(snapshot.events[0].remote_id, explicit + "one.ics")
+        self.assertFalse(snapshot.events[0].deleted)
+        self.assertEqual(snapshot.events[0].payload, PAYLOAD)
+        self.assertEqual(len(transport.calls), 3)  # Both collection checks remain mandatory.
+
+    def test_collection_errors_or_unexpected_shape_abort_full_inventory(self):
+        bad_entries = [self.echo(good_status=403), self.echo(good_status=500), self.echo(missing_status=403),
+                       self.echo(missing_status=200), self.echo(good_prop='<d:displayname>Unexpected</d:displayname>'),
+                       self.echo(missing_prop='<d:getetag/>'), self.echo(good_prop='<d:getetag/>'),
+                       self.echo(missing_prop='<c:calendar-data>BEGIN:VCALENDAR</c:calendar-data>'),
+                       self.echo(good_prop='<d:getetag><d:extra/></d:getetag>'),
+                       self.echo(missing_prop='<c:calendar-data><c:extra/></c:calendar-data>'),
+                       '<d:response><d:href>/1/calendars/family/</d:href></d:response>',
+                       '<d:response><d:href>/1/calendars/family/</d:href><d:propstat><d:status>HTTP/1.1 200 OK</d:status></d:propstat>'
+                       '<d:propstat><d:prop/><d:status>HTTP/1.1 404 Missing</d:status></d:propstat></d:response>']
+        bad_entries.extend(self.echo(direct=f'<d:status>HTTP/1.1 {status} Status</d:status>') for status in (200, 401, 403, 507))
+        for entry in bad_entries:
+            provider, transport = dav(dav_acl(), multistatus(dav_item(), entry))
+            with self.subTest(entry=entry), self.assertRaises(ProviderError):
+                provider.pull(None)
+            self.assertEqual(len(transport.calls), 2)  # No completed inventory/cursor is returned.
+
+    def test_child_calendar_data_404_is_not_ignored_with_benign_self_echo(self):
+        missing_child = dav_response('<c:calendar-data/>', href=CALENDAR + "missing.ics", propstatus=404)
+        provider, _ = dav(dav_acl(), multistatus(self.echo(), dav_item(), missing_child))
+        with self.assertRaises(ProviderError):
+            provider.pull(None)
+        # The metadata shape is permitted only for the exact verified collection,
+        # never for a child event, a sibling collection, or another origin.
+        for href in (RESOURCE, CALENDAR + "sibling/", CALENDAR.replace("caldav.icloud.com", "p01-caldav.icloud.com")):
+            provider, _ = dav(dav_acl(), multistatus(self.echo(href=href)))
+            with self.subTest(href=href), self.assertRaises(ProviderError):
+                provider.pull(None)
+
+
+class CalDAVFloatingTimePolicyTests(unittest.TestCase):
+    @staticmethod
+    def floating_ical(*, start="20260115T120000", end="20260115T130000", summary="Synthetic floating", tzid=None):
+        parameter = ";TZID=" + tzid if tzid else ""
+        return ('BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\nUID:floating@synthetic.test\r\n'
+                'DTSTAMP:20260101T000000Z\r\nSUMMARY:' + summary + '\r\nDTSTART' + parameter + ':' + start
+                + '\r\nDTEND' + parameter + ':' + end + '\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n').encode()
+
+    @staticmethod
+    def expected(summary="Synthetic floating"):
+        return codec.validate_payload({"summary": summary,
+            "start": {"dateTime": "2026-01-15T12:00:00+01:00", "timeZone": "Europe/Warsaw"},
+            "end": {"dateTime": "2026-01-15T13:00:00+01:00", "timeZone": "Europe/Warsaw"}})
+
+    def test_explicit_policy_is_used_for_full_pull_and_get_without_changing_identity(self):
+        raw = self.floating_ical()
+        item = dav_response('<d:getetag>"floating-v1"</d:getetag><c:calendar-data>' + escape(raw.decode()) + '</c:calendar-data>', href=RESOURCE)
+        provider, _ = dav(dav_acl(), multistatus(item), dav_acl(), response(raw, headers={"ETag": '\"floating-v1\"'}),
+                          floating_time_zone="Europe/Warsaw")
+        snapshot = provider.pull(None)
+        current, _ = provider._get(RESOURCE)
+        self.assertEqual(snapshot.events[0], current)
+        self.assertEqual(current.payload, self.expected())
+        self.assertEqual((current.remote_id, current.uid), (RESOURCE, "floating@synthetic.test"))
+        self.assertTrue(snapshot.full and snapshot.complete)
+        self.assertEqual(provider.floating_time_zone, "Europe/Warsaw")
+
+    def test_default_policy_and_invalid_or_ambiguous_wall_times_stay_rejected(self):
+        cases = [(self.floating_ical(), None), (self.floating_ical(), "No/Such_Zone"),
+                 (self.floating_ical(start="20261025T023000", end="20261025T033000"), "Europe/Warsaw"),
+                 (self.floating_ical(start="20260329T023000", end="20260329T033000"), "Europe/Warsaw"),
+                 (self.floating_ical(tzid="No/Such_Zone"), "Europe/Warsaw")]
+        for raw, policy in cases:
+            provider, _ = dav(response(raw, headers={"ETag": '\"floating-v1\"'}), floating_time_zone=policy)
+            with self.subTest(policy=policy, raw=raw), self.assertRaises(ProviderError):
+                provider._get(RESOURCE)
+
+    def test_create_and_update_verify_returned_floating_times_with_the_same_policy(self):
+        original = self.floating_ical()
+        provider, transport = dav(dav_acl(), response(status=201), response(original, headers={"ETag": '\"floating-v1\"'}),
+                                  floating_time_zone="Europe/Warsaw")
+        created = provider.put(RESOURCE, self.expected(), None, create=True, uid="floating@synthetic.test")
+        self.assertEqual(created.payload, self.expected())
+        self.assertIn(b"DTSTART;TZID=Europe/Warsaw:20260115T120000", transport.calls[1][2]["body"])
+        old = original.replace(b'END:VEVENT', b'X-DESTINATION:preserved\r\nEND:VEVENT')
+        changed = self.floating_ical(summary="Synthetic changed")
+        provider, transport = dav(dav_acl(), response(old, headers={"ETag": '\"floating-v1\"'}), response(status=204),
+                                  response(changed, headers={"ETag": '\"floating-v2\"'}), floating_time_zone="Europe/Warsaw")
+        updated = provider.put(RESOURCE, self.expected("Synthetic changed"), '\"floating-v1\"', create=False, uid="floating@synthetic.test")
+        self.assertEqual(updated.payload, self.expected("Synthetic changed"))
+        self.assertIn(b"X-DESTINATION:preserved", transport.calls[2][2]["body"])
+        self.assertEqual(transport.calls[2][2]["headers"]["If-Match"], '\"floating-v1\"')
+
+    def test_aware_and_all_day_values_ignore_floating_fallback(self):
+        for content in (PAYLOAD, codec.validate_payload({"summary": "Aware UTC", "start": {"dateTime": "2026-01-15T12:00:00+00:00", "timeZone": "UTC"},
+                                                        "end": {"dateTime": "2026-01-15T13:00:00+00:00", "timeZone": "UTC"}})):
+            provider, _ = dav(dav_get(content), floating_time_zone="Europe/Warsaw")
+            self.assertEqual(provider._get(RESOURCE)[0].payload, content)
+
+    def test_floating_recurrence_id_metadata_matches_its_anchored_equivalent(self):
+        import re
+        base = codec.validate_payload({**self.expected(), "recurrence": ["RRULE:FREQ=DAILY;COUNT=2"]})
+        original = {"dateTime": "2026-01-16T12:00:00+01:00", "timeZone": "Europe/Warsaw"}
+        override = {"originalStartTime": original, **codec.default_instance(base, original), "summary": "Synthetic override"}
+        before = codec.validate_payload({**base, "exceptions": [override]})
+        raw = codec.to_ical(before, "floating@synthetic.test")
+        raw = re.sub(b'BEGIN:VTIMEZONE\r\n.*?END:VTIMEZONE\r\n', b'', raw, flags=re.DOTALL)
+        raw = raw.replace(b';TZID=Europe/Warsaw:', b':')
+        raw = raw.replace(b'SUMMARY:Synthetic override', b'SUMMARY:Synthetic override\r\nX-DESTINATION:override-metadata')
+        self.assertEqual(codec.from_ical(raw, floating_time_zone="Europe/Warsaw")[1], before)
+        wanted = codec.validate_payload({**before, "summary": "Changed master"})
+        provider, transport = dav(dav_acl(), response(raw, headers={"ETag": '\"floating-v1\"'}), response(status=204),
+                                  dav_get(wanted, etag='\"floating-v2\"', uid="floating@synthetic.test"), floating_time_zone="Europe/Warsaw")
+        self.assertEqual(provider.put(RESOURCE, wanted, '\"floating-v1\"', create=False, uid="floating@synthetic.test").payload, wanted)
+        self.assertIn(b"X-DESTINATION:override-metadata", transport.calls[2][2]["body"])
+
+
+class CalDAVExplicitEndCompatibilityTests(unittest.TestCase):
+    @staticmethod
+    def contents():
+        start = {"dateTime": "2026-11-01T09:00:00+00:00", "timeZone": "UTC"}
+        zero = codec.validate_payload({"summary": "Synthetic point", "start": start, "end": start})
+        return [zero, codec.validate_payload({**zero, "endTimeUnspecified": True}),
+                codec.validate_payload({**PAYLOAD, "endTimeUnspecified": True}), PAYLOAD,
+                codec.validate_payload({"summary": "Synthetic fixed offset",
+                    "start": {"dateTime": "2026-11-01T09:00:00+03:30", "timeZone": "GMT+03:30"},
+                    "end": {"dateTime": "2026-11-01T10:00:00+03:30", "timeZone": "GMT+03:30"}})]
+
+    def test_icloud_hosts_emit_explicit_end_and_preserve_unknown_zero_and_dates(self):
+        for host in ("caldav.icloud.com", "p116-caldav.icloud.com"):
+            selected = CALENDAR.replace("caldav.icloud.com", host)
+            for content in self.contents():
+                with self.subTest(host=host, content=content):
+                    accepted = codec.to_ical(content, "compatibility@synthetic.test", explicit_end=True)
+                    provider, transport = dav(dav_acl(href=selected), response(status=201),
+                                              response(accepted, headers={"ETag": '\"compat-v1\"'}), calendar_id=selected)
+                    result = provider.put(selected + "one.ics", content, None, create=True, uid="compatibility@synthetic.test")
+                    body = transport.calls[1][2]["body"]
+                    event = Calendar.from_ical(body).walk("VEVENT")[0]
+                    self.assertIn("DTEND", event)
+                    self.assertNotIn("DURATION", event)
+                    self.assertEqual(result.payload, content)
+                    self.assertEqual(codec.from_ical(body)[1], content)
+                    self.assertEqual("X-HESTIA-END-UNSPECIFIED" in event, bool(content.get("endTimeUnspecified")))
+                    if "dateTime" in content["start"] and content["end"] == content["start"]:
+                        self.assertEqual(event["DTEND"].dt, event["DTSTART"].dt)
+
+    def test_other_caldav_hosts_keep_rfc_omitted_end_without_inventing_duration(self):
+        for host in ("caldav.example.test", "calendar.icloud.com", "p116-caldav.icloud.com.evil.test"):
+            selected = "https://" + host + "/1/calendars/family/"
+            for content in self.contents()[:3]:
+                with self.subTest(host=host, content=content):
+                    transport = QueueTransport(dav_acl(href=selected), response(status=201),
+                        response(codec.to_ical(content, "compatibility@synthetic.test"), headers={"ETag": '\"compat-v1\"'}))
+                    provider = p.CalDAVProvider(selected, username="user", password="secret", url="https://" + host + "/", transport=transport)
+                    result = provider.put(selected + "one.ics", content, None, create=True, uid="compatibility@synthetic.test")
+                    event = Calendar.from_ical(transport.calls[1][2]["body"]).walk("VEVENT")[0]
+                    self.assertNotIn("DTEND", event)
+                    self.assertNotIn("DURATION", event)
+                    self.assertEqual(result.payload, content)
+
+    def test_unknown_end_replay_matches_iclouds_explicit_end_copy(self):
+        content = self.contents()[1]
+        accepted = codec.to_ical(content, "compatibility@synthetic.test", explicit_end=True)
+        provider, transport = dav(dav_acl(), response(status=412), response(accepted, headers={"ETag": '\"compat-v1\"'}))
+        result = provider.put(RESOURCE, content, None, create=True, uid="compatibility@synthetic.test")
+        self.assertEqual(result.payload, content)
+        self.assertEqual(result.remote_id, RESOURCE)
+        self.assertEqual(transport.calls[1][2]["headers"]["If-None-Match"], "*")
 
 
 if __name__ == '__main__':

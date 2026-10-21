@@ -125,7 +125,7 @@ describe("React calendar", () => {
     vi.stubGlobal("fetch", fetcher);
   });
   afterEach(async () => {
-    await flush(() => { root.unmount(); }); host.remove(); vi.unstubAllGlobals(); vi.restoreAllMocks();
+    await flush(() => { root.unmount(); }); host.remove(); vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks();
   });
   const click = async (button: HTMLElement): Promise<void> => { await flush(() => { button.click(); }); };
   const button = (text: string): HTMLButtonElement => {
@@ -161,6 +161,62 @@ describe("React calendar", () => {
     await flush(() => { required(host.querySelector("form")).dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })); });
     expect(postBodies()[0]?.group).toBe("family"); expect((postBodies()[0]?.payload as { summary: string }).summary).toBe("Dinner together");
     expect(postBodies()[0]?.id).toBeUndefined(); expect(host.textContent).toContain("Saved locally");
+  });
+  it("clears only edited timestamp offsets when moving a Warsaw event across DST", async () => {
+    vi.setSystemTime(new Date("2026-10-24T12:00:00Z"));
+    const fixture = data();
+    const original = event();
+    original.payload.start = { dateTime: "2026-10-24T09:00:00+02:00", timeZone: "Europe/Warsaw" };
+    original.payload.end = { dateTime: "2026-10-24T10:00:00+02:00", timeZone: "Europe/Warsaw" };
+    fixture.events = [original];
+    fetcher.mockImplementation(() => Promise.resolve(new Response(JSON.stringify(fixture), { status: 200 })));
+    await flush(() => { root.render(<Calendar canWrite />); });
+    await click(button("Family walk"));
+    const startOffset = required(Array.from(host.querySelectorAll("label")).find((label) => label.textContent === "Start offset")?.querySelector("input") ?? null);
+    const endOffset = required(Array.from(host.querySelectorAll("label")).find((label) => label.textContent === "End offset")?.querySelector("input") ?? null);
+    await input("Starts", "2026-10-26T09:00");
+    expect(startOffset.value).toBe(""); expect(endOffset.value).toBe("+02:00");
+    await input("Ends", "2026-10-26T10:00");
+    expect(endOffset.value).toBe("");
+    await flush(() => { required(host.querySelector("form")).dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })); });
+    expect(postBodies()[0]?.payload).toMatchObject({
+      start: { dateTime: "2026-10-26T09:00:00", timeZone: "Europe/Warsaw" },
+      end: { dateTime: "2026-10-26T10:00:00", timeZone: "Europe/Warsaw" },
+    });
+  });
+  it("preserves untouched fallback offsets and accepts explicit choices after editing times", async () => {
+    vi.setSystemTime(new Date("2026-10-25T12:00:00Z"));
+    const fixture = data();
+    const original = event();
+    original.payload.start = { dateTime: "2026-10-25T02:30:00+01:00", timeZone: "Europe/Warsaw" };
+    original.payload.end = { dateTime: "2026-10-25T03:30:00+01:00", timeZone: "Europe/Warsaw" };
+    fixture.events = [original];
+    fetcher.mockImplementation(() => Promise.resolve(new Response(JSON.stringify(fixture), { status: 200 })));
+    await flush(() => { root.render(<Calendar canWrite />); });
+    await click(button("Family walk")); await input("Title", "Title only");
+    await flush(() => { required(host.querySelector("form")).dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })); });
+    expect(postBodies()[0]?.payload).toMatchObject({ start: original.payload.start, end: original.payload.end });
+    await click(button("Family walk"));
+    await input("Starts", "2026-10-25T02:15"); await input("Ends", "2026-10-25T02:45");
+    await input("Start offset", "+01:00"); await input("End offset", "+01:00");
+    await flush(() => { required(host.querySelector("form")).dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })); });
+    expect(postBodies()[1]?.payload).toMatchObject({
+      start: { dateTime: "2026-10-25T02:15:00+01:00", timeZone: "Europe/Warsaw" },
+      end: { dateTime: "2026-10-25T02:45:00+01:00", timeZone: "Europe/Warsaw" },
+    });
+  });
+  it("clears both offsets on a zone change and when toggling all-day mode", async () => {
+    await flush(() => { root.render(<Calendar canWrite />); }); await click(button("Family walk"));
+    const startOffset = required(Array.from(host.querySelectorAll("label")).find((label) => label.textContent === "Start offset")?.querySelector("input") ?? null);
+    const endOffset = required(Array.from(host.querySelectorAll("label")).find((label) => label.textContent === "End offset")?.querySelector("input") ?? null);
+    await input("Time zone (IANA)", "America/New_York");
+    expect(startOffset.value).toBe(""); expect(endOffset.value).toBe("");
+    await input("Start offset", "-04:00"); await input("End offset", "-04:00");
+    const allDay = required(Array.from(host.querySelectorAll("label")).find((label) => label.textContent === "All day")?.querySelector("input") ?? null);
+    await click(allDay); await click(allDay);
+    const returnedStartOffset = required(Array.from(host.querySelectorAll("label")).find((label) => label.textContent === "Start offset")?.querySelector("input") ?? null);
+    const returnedEndOffset = required(Array.from(host.querySelectorAll("label")).find((label) => label.textContent === "End offset")?.querySelector("input") ?? null);
+    expect(returnedStartOffset.value).toBe(""); expect(returnedEndOffset.value).toBe("");
   });
   it("edits a point event and explicitly controls an unspecified end", async () => {
     const fixture = data();

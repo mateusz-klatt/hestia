@@ -81,6 +81,21 @@ class CalendarEventTests(unittest.TestCase):
         assert "exceptions" not in master
         assert fingerprint(from_google_bundle(master, exceptions)) == fingerprint(source)
 
+    def test_exception_explicitly_cleared_text_does_not_inherit_master_after_ical_roundtrip(self):
+        source = {**timed(), "recurrence": ["RRULE:FREQ=WEEKLY;COUNT=3"], "exceptions": [
+            {"originalStartTime": {"dateTime": "2026-03-29T07:00:00Z"},
+             "start": {"dateTime": "2026-03-29T09:00:00+02:00", "timeZone": "Europe/Warsaw"},
+             "end": {"dateTime": "2026-03-29T10:00:00+02:00", "timeZone": "Europe/Warsaw"},
+             "summary": "", "description": "", "location": ""}]}
+        encoded = to_ical(source, "cleared-text")
+        self.assertIn(b"SUMMARY:\r\n", encoded)
+        self.assertIn(b"DESCRIPTION:\r\n", encoded)
+        self.assertIn(b"LOCATION:\r\n", encoded)
+        _, restored = from_ical(encoded)
+        self.assertEqual(fingerprint(source), fingerprint(restored))
+        self.assertEqual({key: restored["exceptions"][0][key] for key in ("summary", "description", "location")},
+                         {"summary": "", "description": "", "location": ""})
+
 
     def test_defaults_newlines_recurrence_order_and_server_metadata_do_not_churn(self):
         first = timed()
@@ -295,6 +310,40 @@ class CalendarEventTests(unittest.TestCase):
             _, parsed = from_ical(ics(event("DTSTART:20261021T090000Z\nX-HESTIA-END-UNSPECIFIED:TRUE\n" + explicit)))
             self.assertNotIn("endTimeUnspecified", parsed)
 
+    def test_explicit_end_compatibility_preserves_point_and_unknown_semantics(self):
+        point = timed()
+        point["end"] = deepcopy(point["start"])
+        for source in (point, {**timed(), "endTimeUnspecified": True},
+                       {**all_day(), "endTimeUnspecified": True}):
+            normal = to_ical(source, "compat-end")
+            compatible = to_ical(source, "compat-end", explicit_end=True)
+            self.assertNotIn(b"DTEND", normal)
+            self.assertIn(b"DTEND", compatible)
+            self.assertEqual(fingerprint(source), fingerprint(from_ical(compatible)[1]))
+        _, zero_duration = from_ical(ics(event("DTSTART:20261021T090000Z\nDURATION:PT0S\nX-HESTIA-END-UNSPECIFIED:TRUE")))
+        self.assertTrue(zero_duration["endTimeUnspecified"])
+        self.assertEqual(zero_duration["start"], zero_duration["end"])
+        for ending, remains_unknown in (("20261022", True), ("20261023", False)):
+            _, parsed = from_ical(ics(event("DTSTART;VALUE=DATE:20261021\nDTEND;VALUE=DATE:" + ending + "\nX-HESTIA-END-UNSPECIFIED:TRUE")))
+            self.assertEqual(parsed.get("endTimeUnspecified", False), remains_unknown)
+
+    def test_explicit_end_compatibility_handles_unknown_and_point_recurrence_exceptions(self):
+        source = {**timed(), "recurrence": ["RRULE:FREQ=WEEKLY;COUNT=3"], "exceptions": [
+            {"originalStartTime": {"dateTime": "2026-03-29T07:00:00Z"}, "summary": "Unknown end",
+             "start": {"dateTime": "2026-03-29T10:00:00+02:00", "timeZone": "Europe/Warsaw"},
+             "end": {"dateTime": "2026-03-29T10:00:00+02:00", "timeZone": "Europe/Warsaw"},
+             "endTimeUnspecified": True},
+            {"originalStartTime": {"dateTime": "2026-04-05T07:00:00Z"}, "summary": "Known point",
+             "start": {"dateTime": "2026-04-05T11:00:00+02:00", "timeZone": "Europe/Warsaw"},
+             "end": {"dateTime": "2026-04-05T11:00:00+02:00", "timeZone": "Europe/Warsaw"}}]}
+        compatible = to_ical(source, "compat-series", explicit_end=True)
+        self.assertEqual(compatible.count(b"DTEND"), 3)
+        self.assertEqual(fingerprint(source), fingerprint(from_ical(compatible)[1]))
+        edited = compatible.replace(b"DTEND;TZID=Europe/Warsaw:20260329T100000", b"DTEND;TZID=Europe/Warsaw:20260329T120000")
+        _, restored = from_ical(edited)
+        self.assertNotIn("endTimeUnspecified", restored["exceptions"][0])
+        self.assertEqual(restored["exceptions"][0]["end"]["dateTime"], "2026-03-29T12:00:00+02:00")
+
     def test_unknown_end_series_keeps_known_and_unknown_exception_semantics(self):
         source = {**timed(), "recurrence": ["RRULE:FREQ=WEEKLY;COUNT=5"],
                   "endTimeUnspecified": True, "status": "tentative", "exceptions": [
@@ -312,3 +361,57 @@ class CalendarEventTests(unittest.TestCase):
         override.pop("endTimeUnspecified")
         cancelled = {**normalized["exceptions"][1], "extendedProperties": {"private": {"hestia_end_unspecified": "true"}}}
         self.assertEqual(normalized, from_google_bundle(master, [override, cancelled]))
+
+    def test_floating_times_require_explicit_policy_and_become_named_zone_on_writes(self):
+        source = ics(event("DTSTART:20261021T090000\nDTEND:20261021T100000"))
+        with self.assertRaisesRegex(EventValidationError, "Floating times"):
+            from_ical(source)
+        _, anchored = from_ical(source, floating_time_zone="Europe/Warsaw")
+        self.assertEqual(anchored["start"], {"dateTime": "2026-10-21T09:00:00+02:00", "timeZone": "Europe/Warsaw"})
+        self.assertEqual(anchored["end"]["dateTime"], "2026-10-21T10:00:00+02:00")
+        written = to_ical(anchored, "anchored")
+        self.assertIn(b"DTSTART;TZID=Europe/Warsaw:20261021T090000", written)
+        self.assertEqual(fingerprint(anchored), fingerprint(from_ical(written)[1]))
+        hinted = source.replace("VERSION:2.0", "VERSION:2.0\r\nX-WR-TIMEZONE:Europe/Warsaw")
+        with self.assertRaisesRegex(EventValidationError, "Floating times"):
+            from_ical(hinted)
+        self.assertEqual(from_ical(hinted, floating_time_zone="UTC")[1]["start"]["dateTime"], "2026-10-21T09:00:00+00:00")
+
+    def test_floating_policy_leaves_aware_and_all_day_properties_unchanged(self):
+        aware = {**timed(), "recurrence": ["RRULE:FREQ=WEEKLY;UNTIL=20261201T080000Z", "EXDATE:20261021T070000Z"]}
+        encoded = to_ical(aware, "aware")
+        self.assertEqual(from_ical(encoded)[1], from_ical(encoded, floating_time_zone="America/New_York")[1])
+        days = {**all_day(), "recurrence": ["RRULE:FREQ=YEARLY;UNTIL=20301024", "RDATE;VALUE=DATE:20271024"]}
+        encoded = to_ical(days, "days")
+        self.assertEqual(from_ical(encoded)[1], from_ical(encoded, floating_time_zone="Europe/Warsaw")[1])
+        _, duration = from_ical(ics(event("DTSTART:20261021T090000\nDURATION:PT1H")), floating_time_zone="Europe/Warsaw")
+        self.assertEqual(duration["end"]["dateTime"], "2026-10-21T10:00:00+02:00")
+
+    def test_floating_series_anchors_until_dates_and_detached_exceptions_across_dst(self):
+        master = event("DTSTART:20260322T090000\nDTEND:20260322T100000\nRRULE:FREQ=WEEKLY;UNTIL=20260430T090000\nRDATE:20260330T090000,20260331T070000Z\nEXDATE:20260406T090000")
+        moved = event("RECURRENCE-ID:20260329T090000\nDTSTART:20260329T110000\nDTEND:20260329T120000\nSUMMARY:Moved")
+        cancelled = event("RECURRENCE-ID:20260405T090000\nSTATUS:CANCELLED")
+        _, payload = from_ical(ics(master + "\n" + moved + "\n" + cancelled), floating_time_zone="Europe/Warsaw")
+        self.assertIn("RRULE:FREQ=WEEKLY;UNTIL=20260430T070000Z", payload["recurrence"])
+        self.assertIn("RDATE:20260330T070000Z", payload["recurrence"])
+        self.assertIn("RDATE:20260331T070000Z", payload["recurrence"])
+        self.assertIn("EXDATE:20260406T070000Z", payload["recurrence"])
+        self.assertEqual(payload["exceptions"][0]["originalStartTime"]["dateTime"], "2026-03-29T09:00:00+02:00")
+        self.assertEqual(payload["exceptions"][0]["start"]["dateTime"], "2026-03-29T11:00:00+02:00")
+        self.assertEqual(fingerprint(payload), fingerprint(from_ical(to_ical(payload, "test"))[1]))
+        _, unbounded = from_ical(ics(event("DTSTART:20260322T090000\nDTEND:20260322T100000\nRRULE:FREQ=WEEKLY")), floating_time_zone="Europe/Warsaw")
+        self.assertEqual(unbounded["recurrence"], ["RRULE:FREQ=WEEKLY"])
+        _, until_utc = from_ical(ics(event("DTSTART:20260322T090000\nDTEND:20260322T100000\nRRULE:FREQ=WEEKLY;UNTIL=20260430T070000Z")), floating_time_zone="Europe/Warsaw")
+        self.assertEqual(until_utc["recurrence"], ["RRULE:FREQ=WEEKLY;UNTIL=20260430T070000Z"])
+
+    def test_floating_policy_rejects_dst_gaps_folds_bad_zones_and_custom_tzids(self):
+        for stamp in ("20260329T023000", "20261025T023000"):
+            with self.assertRaises(EventValidationError):
+                from_ical(ics(event("DTSTART:" + stamp)), floating_time_zone="Europe/Warsaw")
+        for zone in ("", "Invalid/Unknown", "../UTC", "localtime", "posixrules", "right/UTC", "posix/UTC", True, 12):
+            with self.assertRaises(EventValidationError):
+                from_ical(ics(event("DTSTART:20261021T090000")), floating_time_zone=zone)
+        with self.assertRaises(EventValidationError):
+            from_ical(ics(event("DTSTART;TZID=Custom/Unknown:20261021T090000")), floating_time_zone="Europe/Warsaw")
+        with self.assertRaises(EventValidationError):
+            from_ical(ics(event("DTSTART:20261021T090000\nRDATE;VALUE=PERIOD:20261022T090000Z/PT1H")), floating_time_zone="Europe/Warsaw")

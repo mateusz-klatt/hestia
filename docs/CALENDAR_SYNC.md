@@ -210,9 +210,20 @@ widoczność i przejrzystość oraz serie i wyjątki. Wydarzenie godzinowe może
 zerowy czas trwania; w iCalendar zapisuje się je bez `DTEND`. Pole
 `endTimeUnspecified: true` oznacza nieznaną godzinę zakończenia, a nie sztuczny
 czas trwania. Integracja zachowuje tę informację przez własny znacznik CalDAV
-i prywatne metadane Google. W wydarzeniach niecyklicznych starsze strefy
+i prywatne metadane Google. Dla zgodności z Apple/iCloud adapter może zapisać jawny
+`DTEND` równy kanonicznemu końcowi, także równy początkowi wydarzenia godzinowego.
+Nie dodaje przy tym fikcyjnego dodatniego czasu trwania. Jeśli urządzenie nada
+wydarzeniu rzeczywisty koniec, wcześniejszy znacznik nieznanego końca przestaje
+obowiązywać. W wydarzeniach niecyklicznych starsze strefy
 `GMT+01:00` itp. są normalizowane do UTC z zachowaniem rzeczywistej chwili
 wydarzenia. Serie z takim starszym oznaczeniem wymagają równoważnej strefy IANA.
+
+Google potrafi usuwać z opisu importowane stopki konferencji Meet zaczynające się
+od `-::~:~`. Hestia zapisuje takie opisy jako tekst z encjami HTML i krótkim
+prywatnym znacznikiem zawierającym skrót zapisu. Odczyt odtwarza oryginał tylko
+wtedy, gdy skrót nadal pasuje; późniejsza edycja opisu przez użytkownika nie jest
+dekodowana na podstawie starego znacznika. Zwykłe opisy pozostają bez tego
+przekształcenia. Kontrola po zapisie musi potwierdzić pełną treść.
 
 Importowane są też zwykłe dane terminów utworzonych z Gmaila i urodzin. Google
 ogranicza ich późniejszą edycję: we wpisach z Gmaila tytuł, miejsce i czas są
@@ -229,6 +240,36 @@ typy Google (np. czas skupienia i praca z wybranego miejsca) są odrzucane zamia
 cichej utraty semantyki. Współdzielony kalendarz bez zapisu,
 cofnięte hasło aplikacji albo wycofana zgoda OAuth wymagają zmiany uprawnień lub
 ponownej autoryzacji. Stan błędu nie usuwa lokalnej historii ani oczekujących zmian.
+
+## Jawne przypisanie strefy czasom „floating”
+
+W iCalendar godzina bez `TZID` i bez końcowego `Z` jest czasem „floating”: oznacza
+tę samą godzinę lokalną niezależnie od strefy, w której znajduje się odbiorca.
+Google Calendar wymaga określonej strefy lub offsetu, więc takiego znaczenia nie
+da się przenieść do Google bez wyboru sposobu przeliczenia.
+[RFC 5545 §3.3.5](https://datatracker.ietf.org/doc/html/rfc5545#section-3.3.5),
+[Google: początek i koniec wydarzenia](https://developers.google.com/workspace/calendar/api/v3/reference/events).
+
+Domyślnie Hestia odrzuca takie godziny. Po świadomym wyborze można dodać
+`"floating_time_zone": "Europe/Warsaw"` do konfiguracji konkretnego kalendarza
+CalDAV w grupie. Jest to jawna decyzja o **przypisaniu** strefy: lokalna godzina
+otrzymuje offset właściwy dla tej strefy w dniu wydarzenia. Lokalna kopia, Google
+oraz późniejsze zwykłe zapisy do CalDAV zawierają już konkretną strefę IANA.
+Podczas podróży Google pokaże tę samą chwilę w strefie urządzenia; nie zachowa
+reguły „ta sama godzina lokalna w każdej strefie”.
+
+Hestia nie wybiera tej opcji automatycznie na podstawie strefy hosta,
+`X-WR-TIMEZONE` ani obecności `VTIMEZONE`. Właściwość kolekcji CalDAV
+`calendar-timezone` może pomóc podjąć decyzję, lecz służy serwerowi do przeliczania
+raportów i sama nie zmienia znaczenia zapisanych czasów floating.
+[RFC 4791 §5.2.2](https://datatracker.ietf.org/doc/html/rfc4791#section-5.2.2).
+
+Opcja dotyczy wyłącznie godzin bez własnej strefy: nie zmienia dat całodniowych,
+UTC ani godzin z jawnym `TZID`. Obejmuje też granicę cyklu `UNTIL`, dodatkowe
+daty, wykluczenia i wyjątki. Niejednoznaczna lub nieistniejąca godzina podczas
+zmiany czasu jest nadal odrzucana; wymaga wskazania jednoznacznej chwili w źródle.
+Bez świadomie wybranej polityki należy poprawić strefę wydarzenia w kalendarzu
+źródłowym albo pozostawić taki kalendarz poza synchronizacją.
 
 ## Testy
 

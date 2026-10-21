@@ -9,12 +9,15 @@ from __future__ import annotations
 from copy import deepcopy
 from datetime import date, datetime, timedelta, timezone
 import hashlib
+import html
 import json
 import re
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from icalendar import Calendar, Event, Timezone, vRecur
+
+from .time_zones import canonical_zone
 
 
 class EventValidationError(ValueError):
@@ -62,6 +65,9 @@ def _temporal(value: Any, default_zone: str | None = None) -> dict:
             zone = timezone(timedelta(minutes=minutes))
         else:
             zone = ZoneInfo(zone_name) if zone_name else _UTC
+            if zone_name:
+                zone_name = canonical_zone(zone_name)
+                zone = ZoneInfo(zone_name)
     except (ValueError, TypeError, ZoneInfoNotFoundError):
         _fail("Invalid dateTime or unknown IANA timeZone")
     if parsed.microsecond:
@@ -261,13 +267,32 @@ def from_google_event(event: dict) -> dict:
     return validate_payload({key: value for key, value in _google_content(event).items() if key in _CONTENT})
 
 
+def encode_google_description(description: str) -> tuple[str, str | None]:
+    """Protect literal legacy Meet footer delimiters from Google's stripping."""
+    if "-::~:~" not in description:
+        return description, None
+    encoded = html.escape(description, quote=False).replace("-::~:~", "&#45;::~:~")
+    return encoded, "html-v1:" + hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def decode_google_description(description: Any, marker: Any) -> Any:
+    """Decode only our exact unchanged representation, never arbitrary user HTML."""
+    if (isinstance(description, str)
+            and marker == "html-v1:" + hashlib.sha256(description.encode("utf-8")).hexdigest()):
+        return html.unescape(description)
+    return description
+
+
 def _google_content(event: dict) -> dict:
     result = {key: deepcopy(value) for key, value in event.items() if key in (_CONTENT | {"originalStartTime"})}
+    private = event.get("extendedProperties", {}).get("private", {})
+    if "description" in result:
+        result["description"] = decode_google_description(result["description"], private.get("hestia_description_encoding"))
     native = event.get("endTimeUnspecified", False)
     if type(native) is not bool:
         _fail("endTimeUnspecified must be boolean")
     result["endTimeUnspecified"] = native
-    marker = event.get("extendedProperties", {}).get("private", {}).get("hestia_end_unspecified")
+    marker = private.get("hestia_end_unspecified")
     if marker in ("true", "false"):
         unknown_end = marker == "true"
         if unknown_end and not native and event.get("status") != "cancelled":
@@ -301,22 +326,24 @@ def to_google_exception(exception: dict) -> dict:
     return result
 
 
-def _ical_time(prop: Any) -> dict:
+def _ical_time(prop: Any, floating_time_zone: str | None = None) -> dict:
     value = prop.dt
     if isinstance(value, datetime):
         name = prop.params.get("TZID") or getattr(value.tzinfo, "key", None)
+        if value.tzinfo is None and not name:
+            name = floating_time_zone
         return _temporal({"dateTime": value.isoformat(), **({"timeZone": str(name)} if name else {})})
     return _temporal({"date": value.isoformat()})
 
 
-def _ical_content(event: Event, parent: dict | None = None) -> dict:
+def _ical_content(event: Event, parent: dict | None = None, *, floating_time_zone: str | None = None) -> dict:
     if event.errors:
         _fail("Malformed iCalendar event")
     if "RECURRENCE-ID" in event and event["RECURRENCE-ID"].params.get("RANGE"):
         _fail("RECURRENCE-ID RANGE changes are not supported")
     result = {key: str(event.get(key, parent.get(key, "") if parent else "")) for key in _TEXT}
     if "RECURRENCE-ID" in event:
-        result["originalStartTime"] = _ical_time(event["RECURRENCE-ID"])
+        result["originalStartTime"] = _ical_time(event["RECURRENCE-ID"], floating_time_zone)
     for field in _OPTIONAL:
         ical_name = {"transparency": "TRANSP", "visibility": "CLASS"}.get(field, field)
         if ical_name.upper() in event:
@@ -325,14 +352,14 @@ def _ical_content(event: Event, parent: dict | None = None) -> dict:
         return {"originalStartTime": result["originalStartTime"], "status": "cancelled"}
     if "DTSTART" not in event:
         _fail("iCalendar event is missing DTSTART")
-    result["start"] = _ical_time(event["DTSTART"])
+    result["start"] = _ical_time(event["DTSTART"], floating_time_zone)
     fixed = _FIXED_ZONE.fullmatch(str(event["DTSTART"].params.get("TZID", "")))
     if fixed and any(name in event for name in ("RRULE", "RDATE", "EXDATE", "EXRULE")):
         _fail("A recurring fixed-offset calendar needs an equivalent IANA timeZone")
     if "DTEND" in event and "DURATION" in event:
         _fail("iCalendar event cannot contain both DTEND and DURATION")
     if "DTEND" in event:
-        result["end"] = _ical_time(event["DTEND"])
+        result["end"] = _ical_time(event["DTEND"], floating_time_zone)
     else:
         duration = event.decoded("DURATION", timedelta(days=1) if "date" in result["start"] else timedelta(0))
         starting = _dt(result["start"])
@@ -342,7 +369,8 @@ def _ical_content(event: Event, parent: dict | None = None) -> dict:
             starting = starting.astimezone(_UTC)
         ending = starting + duration
         result["end"] = _temporal({"dateTime": ending.isoformat(), "timeZone": result["start"]["timeZone"]} if isinstance(ending, datetime) else {"date": ending.isoformat()})
-    if str(event.get("X-HESTIA-END-UNSPECIFIED", "")).upper() == "TRUE" and "DTEND" not in event and "DURATION" not in event:
+    if (str(event.get("X-HESTIA-END-UNSPECIFIED", "")).upper() == "TRUE"
+            and _time_key(result["end"]) == _time_key(_unspecified_end(result["start"]))):
         result["endTimeUnspecified"] = True
     elif parent and parent.get("endTimeUnspecified"):
         result["endTimeUnspecified"] = False
@@ -350,6 +378,21 @@ def _ical_content(event: Event, parent: dict | None = None) -> dict:
     for name in ("RRULE", "RDATE", "EXDATE", "EXRULE"):
         props = event.get(name, [])
         for prop in props if isinstance(props, list) else [props]:
+            if floating_time_zone:
+                prop = deepcopy(prop)
+                if name in ("RDATE", "EXDATE") and not prop.params.get("TZID"):
+                    for item in prop.dts:
+                        if isinstance(item.dt, datetime) and item.dt.tzinfo is None:
+                            item.dt = _dt(_temporal({"dateTime": item.dt.isoformat(), "timeZone": floating_time_zone})).astimezone(_UTC)
+                if (name == "RRULE" and isinstance(event["DTSTART"].dt, datetime)
+                        and event["DTSTART"].dt.tzinfo is None and not event["DTSTART"].params.get("TZID")):
+                    # A floating series permits a local UNTIL. Anchoring its DTSTART
+                    # requires anchoring that boundary too, then serializing it UTC.
+                    prop["UNTIL"] = [_dt(_temporal({"dateTime": value.isoformat(), "timeZone": floating_time_zone})).astimezone(_UTC)
+                                     if isinstance(value, datetime) and value.tzinfo is None else value
+                                     for value in prop.get("UNTIL", [])]
+                    if not prop["UNTIL"]:
+                        del prop["UNTIL"]
             params = prop.params.to_ical().decode()
             lines.append(name + (";" + params if params else "") + ":" + prop.to_ical().decode())
     if lines:
@@ -357,8 +400,20 @@ def _ical_content(event: Event, parent: dict | None = None) -> dict:
     return result
 
 
-def from_ical(data: str | bytes) -> tuple[str, dict]:
-    """Read one CalDAV resource (one UID, one series master, optional overrides)."""
+def from_ical(data: str | bytes, *, floating_time_zone: str | None = None) -> tuple[str, dict]:
+    """Read one resource; explicitly opt in to anchoring floating times in IANA.
+
+    No timezone is inferred from the host, calendar hints or embedded VTIMEZONEs.
+    An opted-in floating value becomes a zoned value, including on future writes.
+    """
+    if floating_time_zone is not None:
+        if (not isinstance(floating_time_zone, str) or floating_time_zone in ("localtime", "posixrules")
+                or floating_time_zone.startswith(("right/", "posix/"))):
+            _fail("floating_time_zone must name an IANA time zone")
+        try:
+            ZoneInfo(floating_time_zone)
+        except (ValueError, ZoneInfoNotFoundError):
+            _fail("floating_time_zone must name an IANA time zone")
     try:
         calendar = Calendar.from_ical(data)
         events = calendar.walk("VEVENT")
@@ -368,8 +423,9 @@ def from_ical(data: str | bytes) -> tuple[str, dict]:
         uid = str(masters[0].get("UID", ""))
         if not uid or any(str(event.get("UID", "")) != uid for event in events):
             _fail("A CalDAV resource must have one nonempty UID")
-        result = _ical_content(masters[0])
-        result["exceptions"] = [_ical_content(event, result) for event in events if "RECURRENCE-ID" in event]
+        result = _ical_content(masters[0], floating_time_zone=floating_time_zone)
+        result["exceptions"] = [_ical_content(event, result, floating_time_zone=floating_time_zone)
+                                for event in events if "RECURRENCE-ID" in event]
         return uid, validate_payload(result)
     except (ValueError, TypeError, KeyError, AttributeError) as exc:
         if isinstance(exc, EventValidationError):
@@ -377,7 +433,12 @@ def from_ical(data: str | bytes) -> tuple[str, dict]:
         _fail("Invalid iCalendar resource")
 
 
-def to_ical(payload: dict, uid: str) -> bytes:
+def to_ical(payload: dict, uid: str, *, explicit_end: bool = False) -> bytes:
+    """Serialize portable content, optionally including server-required end fields.
+
+    Some CalDAV servers reject RFC5545's implicit point-event end. The explicit
+    compatibility form uses the canonical end unchanged, without a made-up duration.
+    """
     content = validate_payload(payload)
     if not isinstance(uid, str) or not uid or "\r" in uid or "\n" in uid:
         _fail("A nonempty single-line UID is required")
@@ -390,11 +451,11 @@ def to_ical(payload: dict, uid: str) -> bytes:
         event.add("uid", uid)
         event.add("dtstamp", datetime.now(_UTC).replace(microsecond=0))
         for field in _TEXT:
-            if item.get(field):
+            if field in item and (item[field] or "originalStartTime" in item):
                 event.add(field, item[field])
         for field, ical_name in (("start", "dtstart"), ("end", "dtend"), ("originalStartTime", "recurrence-id")):
             if field in item:
-                if field == "end" and (item.get("endTimeUnspecified") or _time_key(item["end"]) == _time_key(item["start"])):
+                if field == "end" and not explicit_end and (item.get("endTimeUnspecified") or _time_key(item["end"]) == _time_key(item["start"])):
                     continue
                 event.add(ical_name, _dt(item[field]))
                 if item[field].get("timeZone", "UTC") != "UTC":
