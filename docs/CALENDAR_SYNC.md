@@ -104,8 +104,10 @@ docker compose up -d --build
 Przy uruchamianiu bez Dockera zainstaluj `requirements.txt`, wykonaj `npm ci`
 i `npm run build` w katalogu `ui`, ustaw `HESTIA_DB` na trwały plik SQLite
 (np. `data/hestia.db`) oraz `HESTIA_CALENDAR_CONFIG` na przygotowany plik JSON
-i uruchom `python -m hestia`. Migracja `0004` jest wykonywana automatycznie
-przez istniejący mechanizm Alembica; nie wymaga ręcznych poleceń SQL.
+i uruchom `python -m hestia`. Migracje `0004` i `0005` są wykonywane automatycznie
+przez istniejący mechanizm Alembica; nie wymagają ręcznych poleceń SQL.
+Migracja `0005` dodaje trwałe klucze ponowień tworzenia wydarzeń oraz indeksy
+używane przy uzgadnianiu kopii i kolejki.
 
 ## Wykrywanie i obsługa
 
@@ -163,8 +165,29 @@ Widok został napisany w React i działa na telefonie oraz komputerze. Pokazuje
 tygodniową agendę; serie cykliczne są wyświetlane oddzielnie i edytowane jako całość.
 Nie rozwija pojedynczych wystąpień serii do kolumn tygodnia. Formularz zachowuje
 istniejące wyjątki, a wyłączenie cykliczności usuwa je razem z regułami serii.
+Zmiana typu całodniowe/godzinowe jest dostępna dla zwykłych wydarzeń. Dla serii
+z regułami lub wyjątkami formularz pokazuje ograniczenie i blokuje tę zmianę,
+aby nie pozostawić dat wyjątków i reguł w niezgodnym typie. Samą treść, godziny
+i reguły serii nadal można edytować.
+W czasie zapisu pola bieżącego formularza są nieaktywne. Można przejść do innego
+wydarzenia; zakończenie poprzedniego zapisu nie usuwa nowego szkicu.
+Po konflikcie rewizji lista jest odświeżana, a szkic pozostaje otwarty.
+Anulowanie i ponowne otwarcie wydarzenia używa aktualnej rewizji.
+
 Przy niejednoznacznej godzinie zmiany czasu można podać jawne przesunięcie UTC
 w opcjach zaawansowanych.
+
+Klient HTTP tworzący wydarzenie przez `POST /api/calendars/events` musi przesłać
+`idempotency_key` obok `group` i `payload`. Jest to niezmienny klucz danej próby
+utworzenia, np. UUID; dozwolone jest 16–128 znaków `A–Z`, `a–z`, `0–9`, `_`, `-`.
+Formularz React tworzy go raz dla nowego szkicu i ponawia zapis z tym samym kluczem.
+SQLite zachowuje klucz również po restarcie i usunięciu wydarzenia. Powtórzenie
+tej samej znormalizowanej treści zwraca istniejące wydarzenie w jego bieżącym stanie,
+bez dodatkowej kopii, nadpisania późniejszych zmian ani cofnięcia usunięcia.
+Ponowne użycie klucza z inną treścią zwraca `409`: odszukaj utworzone wydarzenie
+na odświeżonej liście i edytuj je z aktualną rewizją. Zwykłe edycje i usunięcia
+używają `id` i `revision`, bez `idempotency_key`.
+CLI tworzy nowe wydarzenie przy każdym osobnym wywołaniu `put` bez `--event`.
 
 ## Reguły i odporność
 
@@ -174,6 +197,9 @@ trwale w bazie; stara kopia nie odtwarza skasowanego wydarzenia. Operacje są
 idempotentne, a ponowienia używają tej samej tożsamości kopii po awarii lub restarcie.
 Własne echo nie tworzy nowego wydarzenia. Nie scala się wydarzeń wyłącznie po tytule
 i godzinie: dwie niezależnie utworzone pozycje mogą być zamierzonymi wydarzeniami.
+Worker uzgadnia zmiany z poprawnie pobranych snapshotów, korzystając z odczytów
+zbiorczych. Pusta odpowiedź przyrostowa nie skanuje całej historii wydarzeń;
+trwała kolejka jest nadal obsługiwana niezależnie.
 
 Konflikt edycji i usunięcia rozstrzyga **usunięcie**, niezależnie od daty edycji.
 Nie można przywrócić wydarzenia z tym samym UID; ponowne utworzenie tworzy nowy UID.

@@ -1,10 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import type { SyntheticEvent } from "react";
 import { createRoot } from "react-dom/client";
 import { apiUrl } from "./api/client";
 import { currentLocale } from "./i18n";
 import {
-  dateKey, draftPayload, eventDraft, localTime, moveDraftStart, onDay, shiftDay, weekStart,
+  changeDraftAllDay, dateKey, draftPayload, eventDraft, localTime, moveDraftStart, onDay, shiftDay, weekStart,
 } from "./calendar-model";
 import type { CalendarData, CalendarEvent, EventDraft } from "./calendar-model";
 import "./calendar.css";
@@ -28,6 +28,7 @@ const labels = {
     endUnknownHelp: "Only the start is known. A displayed compatibility end does not set a duration.",
     start: "Starts", end: "Ends", exclusive: "End date (exclusive)", timezone: "Time zone (IANA)",
     recurrence: "Recurrence rules (optional)", recurrenceHelp: "One RRULE, EXDATE or RDATE per line. Changes apply to the whole series; existing exceptions are preserved. Removing all rules also removes the exceptions.",
+    typeLocked: "Changing between all-day and timed events is disabled for recurring series and occurrence exceptions. Remove recurrence, save and reopen the event before changing its type.",
     offset: "UTC offset (optional)", startOffset: "Start offset", endOffset: "End offset",
     offsetHelp: "For an ambiguous autumn time, specify +02:00 or +01:00. The offset must match the IANA zone. Nonexistent spring times cannot be saved.",
     offsetMismatch: "The UTC offset does not match this local date and time in the selected time zone. Check the daylight-saving transition.",
@@ -57,6 +58,7 @@ const labels = {
     endUnknownHelp: "Znany jest tylko początek. Techniczna data końca nie określa długości wydarzenia.",
     start: "Początek", end: "Koniec", exclusive: "Data końca (wyłączna)", timezone: "Strefa czasowa (IANA)",
     recurrence: "Reguły cykliczności (opcjonalnie)", recurrenceHelp: "Jedna reguła RRULE, EXDATE lub RDATE w wierszu. Edytujesz całą serię; istniejące wyjątki zostają zachowane. Usunięcie wszystkich reguł usuwa też wyjątki.",
+    typeLocked: "Zmiana między wydarzeniem całodniowym a godzinowym jest zablokowana dla serii i wyjątków wystąpień. Usuń cykliczność, zapisz i otwórz wydarzenie ponownie, aby zmienić jego typ.",
     offset: "Przesunięcie UTC (opcjonalnie)", startOffset: "Przesunięcie początku", endOffset: "Przesunięcie końca",
     offsetHelp: "Dla dwuznacznej godziny jesiennej podaj +02:00 lub +01:00. Przesunięcie musi odpowiadać strefie IANA. Nieistniejące godziny wiosenne nie mogą zostać zapisane.",
     offsetMismatch: "Przesunięcie UTC nie odpowiada tej dacie i godzinie w wybranej strefie. Sprawdź zmianę czasu.",
@@ -79,19 +81,28 @@ async function readCalendar(group: string): Promise<CalendarData> {
   return await response.json() as CalendarData;
 }
 
-function EventEditor({ event, group, day, copy, onClose, onSaved }: {
+function createIdempotencyKey(): string {
+  // Unlike randomUUID, getRandomValues also supports HTTP LAN installations.
+  return Array.from(crypto.getRandomValues(new Uint8Array(32)),
+    (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function EventEditor({ event, group, day, copy, onClose, onSaved, onConflict }: {
   event: CalendarEvent | null; group: string; day: string; copy: Copy;
-  onClose: () => void; onSaved: (message: string) => void;
+  onClose: () => void; onSaved: (message: string) => void; onConflict: () => Promise<void>;
 }) {
   const [editing, setEditing] = useState(() => {
     const draft = eventDraft(event, day);
     return { draft, startAnchor: draft.start };
   });
   const { draft } = editing;
+  const [idempotencyKey] = useState(() => event === null ? createIdempotencyKey() : null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const title = useRef<HTMLInputElement>(null);
   const mounted = useRef(false);
+  const typeNote = useId();
+  const typeLocked = draft.recurrence.trim() !== "" || (event?.payload.exceptions?.length ?? 0) > 0;
   useEffect(() => {
     mounted.current = true;
     title.current?.focus();
@@ -130,13 +141,15 @@ function EventEditor({ event, group, day, copy, onClose, onSaved }: {
     setError("");
     try {
       const body = remove ? { group, id: event?.id, revision: event?.revision }
-        : { group, payload: draftPayload(draft, event), ...(event === null ? {} : { id: event.id, revision: event.revision }) };
+        : { group, payload: draftPayload(draft, event), ...(event === null ? { idempotency_key: idempotencyKey }
+          : { id: event.id, revision: event.revision }) };
       const response = await fetch(apiUrl(remove ? "calendars/events/delete" : "calendars/events"), {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
       });
       if (!mounted.current) return;
       if (!response.ok) {
         setError(response.status === 409 ? copy.conflict : copy.saveError);
+        if (response.status === 409) await onConflict();
         return;
       }
       onSaved(remove ? copy.deleted : copy.saved);
@@ -152,18 +165,20 @@ function EventEditor({ event, group, day, copy, onClose, onSaved }: {
   };
   return <div className="calendar-editor">
     <form onSubmit={formSubmit} aria-label={event === null ? copy.new : copy.edit}>
+      <fieldset className="calendar-editor-fields" disabled={busy}>
       <div className="calendar-editor-heading"><h3>{event === null ? copy.new : copy.edit}</h3>
         <button type="button" onClick={onClose} disabled={busy}>{copy.cancel}</button></div>
       <label>{copy.titleField}<input ref={title} required value={draft.summary} maxLength={1000}
         onChange={(e) => { field("summary", e.target.value); }} /></label>
-      <label className="calendar-checkbox"><input type="checkbox" checked={draft.allDay} onChange={(e) => {
+      <label className="calendar-checkbox"><input type="checkbox" checked={draft.allDay} disabled={typeLocked}
+        aria-describedby={typeLocked ? typeNote : undefined} onChange={(e) => {
         const allDay = e.target.checked;
         setEditing((old) => {
-          const start = allDay ? old.draft.start.slice(0, 10) : `${old.draft.start}T09:00`;
-          return { startAnchor: start, draft: { ...old.draft, allDay, startOffset: "", endOffset: "", start,
-            end: allDay ? shiftDay(old.draft.end.slice(0, 10), old.draft.end.slice(0, 10) === old.draft.start.slice(0, 10) ? 1 : 0) : `${old.draft.end}T10:00` } };
+          const draft = changeDraftAllDay(old.draft, allDay);
+          return { startAnchor: draft.start, draft };
         });
       }} />{copy.allDay}</label>
+      {typeLocked && <p id={typeNote} className="calendar-note">{copy.typeLocked}</p>}
       <label className="calendar-checkbox"><input type="checkbox" checked={draft.endUnknown}
         onChange={(e) => { field("endUnknown", e.target.checked); }} />{copy.endUnknown}</label>
       {draft.endUnknown && <p className="calendar-note">{copy.endUnknownHelp}</p>}
@@ -190,6 +205,7 @@ function EventEditor({ event, group, day, copy, onClose, onSaved }: {
       {error !== "" && <p className="calendar-error" role="alert">{error}</p>}
       <div className="calendar-form-actions"><button className="calendar-primary" type="submit" disabled={busy}>{busy ? copy.saving : copy.save}</button>
         {event !== null && <button className="calendar-delete" type="button" disabled={busy} onClick={() => { void submit(true); }}>{copy.delete}</button>}</div>
+      </fieldset>
     </form>
   </div>;
 }
@@ -257,7 +273,7 @@ export function Calendar({ canWrite, active = true }: { canWrite: boolean; activ
     {data?.enabled === true && data.groups.length === 0 && <p>{copy.noGroups}</p>}
     {data?.enabled === true && data.groups.length > 0 && <>
       <div className="calendar-toolbar"><label className="calendar-group">{copy.group}<select value={group} onChange={(e) => {
-        setGroup(e.target.value); setEditor(null); setNotice("");
+        ++editorNumber.current; setGroup(e.target.value); setEditor(null); setNotice("");
       }}>{data.groups.map((item) => <option key={item.id} value={item.id}>{item.id}</option>)}</select></label>
         <div className="calendar-navigation"><button type="button" aria-label={copy.previous} onClick={() => { setWeek(shiftDay(week, -7)); }}>←</button>
           <button type="button" onClick={() => { setWeek(weekStart(today)); }}>{copy.today}</button>
@@ -266,7 +282,12 @@ export function Calendar({ canWrite, active = true }: { canWrite: boolean; activ
       <div className="calendar-range"><h3>{new Intl.DateTimeFormat(locale, { month: "long", year: "numeric" }).format(new Date(`${week}T12:00:00`))}</h3>
         {!canWrite && <span>{copy.readonly}</span>}</div>
       {editor !== null && canWrite && <EventEditor key={`${group}:${String(editor.id)}`} event={editor.event} day={editor.day} group={group} copy={copy}
-        onClose={() => { setEditor(null); }} onSaved={(message) => { setEditor(null); setNotice(message); void refresh(); }} />}
+        onClose={() => { ++editorNumber.current; setEditor(null); }}
+        onConflict={async () => { if (editor.id === editorNumber.current) await refresh(); }}
+        onSaved={(message) => {
+          if (editor.id !== editorNumber.current) return;
+          ++editorNumber.current; setEditor(null); setNotice(message); void refresh();
+        }} />}
       {editor?.event !== undefined && editor.event !== null && !canWrite && <article className="calendar-editor" aria-label={copy.details}>
         <div className="calendar-editor-heading"><h3>{editor.event.payload.summary}</h3><button type="button" onClick={() => { setEditor(null); }}>{copy.close}</button></div>
         <p>{copy.start}: {localTime(editor.event.payload.start, editor.event.payload.start.timeZone ?? zone).replace("T", " ")}</p>

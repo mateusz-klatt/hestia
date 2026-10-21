@@ -39,7 +39,7 @@ def _read(group):
 
 
 def _write(body, deleting):
-    allowed = {"group", "id", "revision"} | (set() if deleting else {"payload"})
+    allowed = {"group", "id", "revision"} | (set() if deleting else {"payload", "idempotency_key"})
     if not isinstance(body, dict) or set(body) - allowed:
         raise ValueError("Invalid calendar request")
     if not isinstance(body.get("group"), str):
@@ -53,13 +53,17 @@ def _write(body, deleting):
         raise ValueError("The current calendar event revision is required")
     if event_id is None and "revision" in body:
         raise ValueError("A new calendar event cannot specify a revision")
+    if event_id is None and not isinstance(body.get("idempotency_key"), str):
+        raise ValueError("A new calendar event requires an idempotency key")
+    if event_id is not None and "idempotency_key" in body:
+        raise ValueError("Calendar create keys cannot be used for edits")
     store = _store()
     if store is None:
         raise ConfigError("Calendar synchronization is disabled")
     if deleting:
         return store.delete_local(body["group"], event_id, expected_revision=body["revision"])
     return store.save_local(body["group"], body.get("payload"), event_id=event_id,
-                            expected_revision=body.get("revision"))
+                            expected_revision=body.get("revision"), idempotency_key=body.get("idempotency_key"))
 
 
 def register(app, read_json_body):

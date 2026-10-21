@@ -1,6 +1,6 @@
 # UAT formularza kalendarza
 
-Weryfikacja 22 października 2026: **10/10 scenariuszy PASS** w Google Chrome
+Weryfikacja 22 października 2026: **15/15 scenariuszy PASS** w Google Chrome
 headless, sterowanym przez Playwright. Testowano rzeczywisty komponent React,
 z atrapami wszystkich odpowiedzi API i fikcyjnymi wydarzeniami. Test nie wykonywał
 żądań do produkcyjnej Hestii, Google ani iCloud.
@@ -23,6 +23,18 @@ Nieznany koniec nie podlega tej kontroli.
 
 Podczas zapisu można otworzyć inne wydarzenie lub grupę. Zakończenie wcześniejszego
 zapisu nie zamyka nowego formularza, nie usuwa jego szkicu i nie odświeża starej grupy.
+Pola bieżącego formularza są na czas zapisu nieaktywne. Odpowiedź `409` odświeża
+listę, zachowując szkic; anulowanie i ponowne otwarcie używa aktualnej rewizji.
+
+Zmiana zwykłego wydarzenia między całodniowym a godzinowym zachowuje zajęte dni.
+Jeden dzień przechodzi na `09:00–10:00` tego samego dnia; w wydarzeniu wielodniowym
+koniec przypada na ostatni zajęty dzień. Końcowa północ pozostaje wyłączną granicą.
+Zmiana tego typu dla serii z regułami lub wyjątkami jest zablokowana z wyjaśnieniem.
+Usunięcie cykliczności, zapis i ponowne otwarcie umożliwiają zmianę typu.
+
+Nowy szkic ma stały klucz ponowienia tworzenia. Po utracie odpowiedzi zapis jest
+ponawiany z tym samym kluczem, aby API zwróciło istniejące wydarzenie bez duplikatu.
+Klucz jest przechowywany w otwartym szkicu; przeładowanie strony nie zachowuje szkicu.
 
 Inspiracją jest ograniczenie liczby ręcznych poprawek przy zachowaniu kontroli
 nad długością wydarzenia. Google dokumentuje możliwość ustawienia domyślnej
@@ -47,6 +59,11 @@ przytoczone instrukcje nie gwarantują takiego samego sprzężenia pól w tych p
 | 8 | Uprawnienia viewer | Otwórz szczegóły jako viewer: brak przycisku dodawania, formularza edycji i przycisku zapisu; nie są wysyłane żądania zapisu. | PASS |
 | 9 | Jawne przesunięcie i zmiana czasu | Wpisz początek `2026-03-29 02:30`, strefę `Europe/Warsaw` i przesunięcie `+01:00`: formularz pokazuje błąd bez POST i zachowuje szkic. Popraw początek na `03:30`, przesunięcie na `+02:00`: zapis przechodzi. | PASS |
 | 10 | Zmiana edytora podczas zapisu | Opóźnij POST wydarzenia A. Otwórz formularz B i wpisz tytuł. Zakończ POST A: formularz B pozostaje otwarty z niezmienionym szkicem. | PASS |
+| 11 | Całodniowe i godzinowe | Wpisz `2026-12-31 09:00–10:00`, zaznacz i odznacz „Cały dzień”: wraca ten sam dzień `09:00–10:00`. Ustaw koniec `2027-01-02 10:00`: całodniowy koniec wyłączny wynosi `2027-01-03`; powrót do godzinowego daje `2027-01-02 10:00`. | PASS |
+| 12 | Aktualna rewizja po konflikcie | Podczas edycji A zmień wersję na serwerze. POST zwraca `409`: szkic zostaje, lista otrzymuje nową wersję. Anuluj i otwórz wydarzenie ponownie: kolejny zapis wysyła aktualną rewizję. | PASS |
+| 13 | Utrata odpowiedzi tworzenia | Atrapa API zapisuje nowe wydarzenie, po czym zrywa odpowiedź. Ponów zapis: oba POST mają ten sam `idempotency_key`, a API zachowuje jedno nowe wydarzenie. | PASS |
+| 14 | Pola podczas zapisu | Opóźnij POST bieżącego formularza: wszystkie jego pola i przyciski są nieaktywne. Dodawanie innego wydarzenia i nawigacja pozostają dostępne. Zakończ POST: pojawia się sukces. | PASS |
+| 15 | Typ dat w serii | Otwórz serię z RRULE: przełącznik „Cały dzień” jest nieaktywny, a widoczne wyjaśnienie opisuje ograniczenie. Brak żądań zapisu. | PASS |
 
 Do ręcznego powtarzania podstawowych scenariuszy uruchom atrapy interfejsu:
 
@@ -60,7 +77,11 @@ Otwórz `http://127.0.0.1:5179/?mock` i zakładkę kalendarza. Parametr `?mock`
 działa w serwerze developerskim; dane są fikcyjne i znikają po przeładowaniu.
 Przed edycją wybierz tydzień zawierający wydarzenie testowe. W DevTools włącz
 widok urządzenia `390×844`; strefę zmień w panelu Sensors → Location → Timezone.
-Wykonuj tabelę, obserwując również żądania w panelu Network.
+Wykonuj scenariusze, obserwując również żądania w panelu Network. Prosta atrapa
+`?mock` nie odtwarza trwałej idempotencji SQLite; scenariusz 13 wykonano z osobną
+atrapą API zapamiętującą klucze i z zerwaniem odpowiedzi po zapisie. Trwałość po
+restarcie, późniejszej edycji i usunięciu sprawdzają testy
+`tests/test_calendar_idempotency.py` na tymczasowych bazach SQLite.
 
 Do scenariuszy 2 i 10 można w konsoli tej **lokalnej strony z `?mock`** przechwycić POST:
 
@@ -114,11 +135,13 @@ npm run lint
 npm run build
 ```
 
-W tej weryfikacji przeszło **559 testów w 24 plikach**, w tym 37 testów kalendarza
+W tej weryfikacji przeszło **577 testów w 24 plikach**, w tym 55 testów kalendarza
 także przy strefie środowiska Los Angeles. Testy komponentu obejmują dodatkowo
 niepełny początek, ręczny czas 30 minut, zerową długość, zmianę czasu i zachowanie
 niezmienionych przesunięć, poprawne jesienne przesunięcia oraz opóźnione odpowiedzi
 po zmianie grupy lub ponownym otwarciu tego samego wydarzenia.
+Obejmują również konwersję dat w obu kierunkach, aktualną rewizję po `409`,
+ochronę pól podczas zapisu i stałą tożsamość ponowienia nowego szkicu.
 Sprawdzenie typów, lint i build również przeszły.
 
 Widok mobilny był emulacją Chrome. **Nie testowano Safari, fizycznego iPhone’a ani

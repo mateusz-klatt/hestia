@@ -56,7 +56,8 @@ from pydantic.json_schema import models_json_schema
 #        `blinds_set` (no native client does), so the tightened bound + changed unit is safe.
 # 0.10.0: local calendar read/write surface, with optimistic revisions and sync health.
 # 0.11.0: portable calendar content preserves unspecified end times.
-CONTRACT_VERSION = "0.11.0"
+# 0.12.0: calendar creates require a durable per-draft idempotency key.
+CONTRACT_VERSION = "0.12.0"
 OPENAPI_PATH = Path(__file__).resolve().parent.parent / "docs" / "api" / "openapi.json"
 
 # De-duplicated string literals (SonarPython S1192): the OpenAPI content-type, the paths reused
@@ -890,9 +891,14 @@ class CalendarCreateRequest(BaseModel):
     model_config = _STRICT
     group: str
     payload: CalendarPayload
+    idempotency_key: Annotated[str, Field(min_length=16, max_length=128, pattern=r"^[A-Za-z0-9_-]+$",
+        description="Stable per-draft create key, reused after an uncertain response. Reuse with different content returns 409; retries never restore deleted events.")]
 
 
-class CalendarUpdateRequest(CalendarCreateRequest):
+class CalendarUpdateRequest(BaseModel):
+    model_config = _STRICT
+    group: str
+    payload: CalendarPayload
     id: Annotated[str, Field(min_length=1)]
     revision: Annotated[int, Field(ge=1)]
 
@@ -1460,13 +1466,13 @@ def build_openapi() -> dict:
                 "post": {
                     "operationId": "saveCalendarEvent",
                     "summary": "Create or edit a local calendar event and enqueue synchronization",
-                    "description": "Requires operator. Existing events require id and current revision; stale edits return 409.",
+                    "description": "Requires operator. Creates require a stable per-draft idempotency_key; retries return the same event's current state, including deletion. Reusing a key with different content returns 409. Existing events require id and current revision, and cannot supply a create key; stale edits return 409.",
                     "requestBody": {"required": True, "content": {_APP_JSON: {"schema": {
                         "oneOf": [_ref("CalendarCreateRequest"), _ref("CalendarUpdateRequest")]}}}},
                     "responses": {
                         "200": {"description": "saved", "content": {_APP_JSON: {"schema": _ref("CalendarSaved")}}},
                         "400": {"description": "invalid event", "content": {_APP_JSON: {"schema": _ref("CalendarError")}}},
-                        "409": {"description": "revision conflict", "content": {_APP_JSON: {"schema": _ref("CalendarError")}}},
+                        "409": {"description": "revision or create-key content conflict", "content": {_APP_JSON: {"schema": _ref("CalendarError")}}},
                         "503": {"description": "disabled or invalid configuration", "content": {_APP_JSON: {"schema": _ref("CalendarError")}}},
                     },
                 },

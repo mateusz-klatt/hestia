@@ -25,7 +25,7 @@ from threading import RLock
 
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import URL, Engine, ForeignKey, UniqueConstraint, create_engine, event, text
+from sqlalchemy import URL, Engine, ForeignKey, Index, UniqueConstraint, create_engine, event, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
 DEFAULT_DB_PATH = "/data/hestia.db"
@@ -133,7 +133,8 @@ class CalendarEvent(Base):
     """A canonical series, including exceptions; tombstones are never pruned."""
 
     __tablename__ = "calendar_events"
-    __table_args__ = (UniqueConstraint("group_id", "uid"),)
+    __table_args__ = (UniqueConstraint("group_id", "uid"),
+                      Index("uq_calendar_events_create_key", "group_id", "create_key", unique=True))
     id: Mapped[str] = mapped_column(primary_key=True)
     group_id: Mapped[str] = mapped_column(ForeignKey("calendar_groups.id"))
     uid: Mapped[str]
@@ -144,6 +145,8 @@ class CalendarEvent(Base):
     revision: Mapped[int]
     modified_at: Mapped[float]
     source: Mapped[str]
+    create_key: Mapped[str | None]
+    create_fingerprint: Mapped[str | None]
 
 
 class CalendarReplica(Base):
@@ -152,7 +155,7 @@ class CalendarReplica(Base):
     __tablename__ = "calendar_replicas"
     __table_args__ = (UniqueConstraint("endpoint_id", "remote_id"),)
     endpoint_id: Mapped[str] = mapped_column(ForeignKey("calendar_endpoints.id"), primary_key=True)
-    event_id: Mapped[str] = mapped_column(ForeignKey("calendar_events.id"), primary_key=True)
+    event_id: Mapped[str] = mapped_column(ForeignKey("calendar_events.id"), primary_key=True, index=True)
     remote_id: Mapped[str]
     etag: Mapped[str | None]
     observed_hash: Mapped[str | None]
@@ -169,7 +172,7 @@ class CalendarOutbox(Base):
 
     __tablename__ = "calendar_outbox"
     endpoint_id: Mapped[str] = mapped_column(ForeignKey("calendar_endpoints.id"), primary_key=True)
-    event_id: Mapped[str] = mapped_column(ForeignKey("calendar_events.id"), primary_key=True)
+    event_id: Mapped[str] = mapped_column(ForeignKey("calendar_events.id"), primary_key=True, index=True)
     revision: Mapped[int]
     attempts: Mapped[int]
     next_attempt: Mapped[float]

@@ -3,7 +3,7 @@ import { createRoot } from "react-dom/client";
 import type { Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Calendar, mountCalendar } from "./calendar";
-import { dateKey, draftPayload, eventDraft, localTime, moveDraftStart, onDay, shiftDay, weekStart } from "./calendar-model";
+import { changeDraftAllDay, dateKey, draftPayload, eventDraft, localTime, moveDraftStart, onDay, shiftDay, weekStart } from "./calendar-model";
 import type { CalendarData, CalendarEvent } from "./calendar-model";
 
 async function flush(action: () => void): Promise<void> {
@@ -26,6 +26,29 @@ function data(): CalendarData {
 }
 
 describe("calendar date and payload semantics", () => {
+  it("converts a single all-day date back to a one-hour event on that same date", () => {
+    const draft = { ...eventDraft(null, "2026-10-24"), timezone: "Europe/Warsaw", startOffset: "+02:00", endOffset: "+02:00" };
+    const allDay = changeDraftAllDay(draft, true);
+    expect(allDay).toMatchObject({ start: "2026-10-24", end: "2026-10-25", startOffset: "", endOffset: "" });
+    expect(changeDraftAllDay(allDay, false)).toMatchObject({ start: "2026-10-24T09:00", end: "2026-10-24T10:00", timezone: "Europe/Warsaw" });
+    expect(changeDraftAllDay(draft, false)).toBe(draft);
+  });
+  it.each([
+    { end: "2026-10-26T10:00", exclusive: "2026-10-27", last: "2026-10-26" },
+    { end: "2026-10-27T00:00", exclusive: "2026-10-27", last: "2026-10-26" },
+    { end: "2026-10-25T00:00", exclusive: "2026-10-25", last: "2026-10-24" },
+  ])("preserves occupied civil dates when converting a timed end of $end", ({ end, exclusive, last }) => {
+    const draft = { ...eventDraft(null, "2026-10-24"), timezone: "Europe/Warsaw", end };
+    const allDay = changeDraftAllDay(draft, true);
+    expect(allDay.end).toBe(exclusive);
+    expect(changeDraftAllDay(allDay, false).end).toBe(`${last}T10:00`);
+  });
+  it("leaves cleared dates empty during mode changes instead of generating invalid dates", () => {
+    const draft = { ...eventDraft(null, "2026-10-24"), start: "", end: "" };
+    const allDay = changeDraftAllDay(draft, true);
+    expect(allDay).toMatchObject({ start: "", end: "" });
+    expect(changeDraftAllDay(allDay, false)).toMatchObject({ start: "", end: "" });
+  });
   it("moves a new one-hour event across midnight and year boundaries using civil time", () => {
     const draft = { ...eventDraft(null, "2026-12-31"), timezone: "Pacific/Auckland" };
     const moved = moveDraftStart(draft, "2026-12-31T23:45").draft;
@@ -188,6 +211,13 @@ describe("React calendar", () => {
   };
   const inputValue = (label: string): string => required(Array.from(host.querySelectorAll("label"))
     .find((item) => item.textContent === label)?.querySelector("input") ?? null).value;
+  const recurrence = async (value: string): Promise<void> => {
+    const field = required(host.querySelector<HTMLTextAreaElement>('[aria-label="Recurrence rules (optional)"]'));
+    await flush(() => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set?.call(field, value);
+      field.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+  };
   const postBodies = (): Record<string, unknown>[] => fetcher.mock.calls.filter((call) => call[1]?.method === "POST")
     .map((call) => JSON.parse(typeof call[1]?.body === "string" ? call[1].body : "{}") as Record<string, unknown>);
 
@@ -209,6 +239,45 @@ describe("React calendar", () => {
     await flush(() => { required(host.querySelector("form")).dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })); });
     expect(postBodies()[0]?.group).toBe("family"); expect((postBodies()[0]?.payload as { summary: string }).summary).toBe("Dinner together");
     expect(postBodies()[0]?.id).toBeUndefined(); expect(host.textContent).toContain("Saved locally");
+    expect(postBodies()[0]?.idempotency_key).toEqual(expect.stringMatching(/^[A-Za-z0-9_-]{16,128}$/));
+  });
+  it("reuses a create key after a lost response and gives a separate new draft a new key", async () => {
+    let attempts = 0;
+    fetcher.mockImplementation((_, options) => {
+      if (options?.method === "POST" && ++attempts === 1) return Promise.reject(new Error("Response lost"));
+      return Promise.resolve(new Response(JSON.stringify(data()), { status: 200 }));
+    });
+    await flush(() => { root.render(<Calendar canWrite />); });
+    await click(button("Add event")); await input("Title", "One creation despite retry");
+    const submit = async (): Promise<void> => { await flush(() => { required(host.querySelector("form"))
+      .dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })); }); };
+    await submit(); expect(host.textContent).toContain("Could not save");
+    await submit(); expect(postBodies()[1]).toEqual(postBodies()[0]);
+    await click(button("Add event")); await input("Title", "A separate new event"); await submit();
+    expect(postBodies()[2]?.idempotency_key).not.toBe(postBodies()[0]?.idempotency_key);
+  });
+  it("keeps the original create key and edited draft when an uncertain creation conflicts", async () => {
+    let attempts = 0;
+    fetcher.mockImplementation((_, options) => {
+      if (options?.method === "POST") return ++attempts === 1 ? Promise.reject(new Error("Response lost"))
+        : Promise.resolve(new Response("{}", { status: 409 }));
+      return Promise.resolve(new Response(JSON.stringify(data()), { status: 200 }));
+    });
+    await flush(() => { root.render(<Calendar canWrite />); });
+    await click(button("Add event")); await input("Title", "First creation content");
+    await flush(() => { required(host.querySelector("form")).dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })); });
+    await input("Title", "Edited after the lost response");
+    await flush(() => { required(host.querySelector("form")).dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })); });
+    expect(postBodies()[1]?.idempotency_key).toBe(postBodies()[0]?.idempotency_key);
+    expect(inputValue("Title")).toBe("Edited after the lost response");
+    expect(host.textContent).toContain("This event changed elsewhere");
+  });
+  it("generates a secure create key when randomUUID is unavailable on an HTTP LAN page", async () => {
+    vi.stubGlobal("crypto", { getRandomValues: (bytes: Uint8Array): Uint8Array => { bytes.fill(171); return bytes; } });
+    await flush(() => { root.render(<Calendar canWrite />); });
+    await click(button("Add event")); await input("Title", "HTTP LAN creation");
+    await flush(() => { required(host.querySelector("form")).dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })); });
+    expect(postBodies()[0]?.idempotency_key).toBe("ab".repeat(32));
   });
   it("creates a one-hour overnight event and retains a manually selected shorter duration", async () => {
     await flush(() => { root.render(<Calendar canWrite />); });
@@ -250,6 +319,30 @@ describe("React calendar", () => {
     expect(inputValue("End date (exclusive)")).toBe("2026-11-03");
     await flush(() => { required(host.querySelector("form")).dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })); });
     expect(postBodies()[0]?.payload).toMatchObject({ start: { date: "2026-10-31" }, end: { date: "2026-11-03" } });
+  });
+  it("toggles a new event through all-day without adding an extra day", async () => {
+    await flush(() => { root.render(<Calendar canWrite />); });
+    await click(button("Add event")); await input("Title", "Mode switch");
+    await input("Time zone (IANA)", "Europe/Warsaw"); await input("Starts", "2026-10-24T09:00");
+    const allDay = required(Array.from(host.querySelectorAll("label"))
+      .find((label) => label.textContent === "All day")?.querySelector("input") ?? null);
+    await click(allDay); expect(inputValue("End date (exclusive)")).toBe("2026-10-25");
+    await click(allDay);
+    expect(inputValue("Starts")).toBe("2026-10-24T09:00"); expect(inputValue("Ends")).toBe("2026-10-24T10:00");
+    await flush(() => { required(host.querySelector("form")).dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })); });
+    expect(postBodies()[0]?.payload).toMatchObject({ start: { dateTime: "2026-10-24T09:00:00", timeZone: "Europe/Warsaw" },
+      end: { dateTime: "2026-10-24T10:00:00", timeZone: "Europe/Warsaw" } });
+  });
+  it.each(["2026-10-26T10:00", "2026-10-27T00:00"])("retains the last occupied day when toggling a multi-day end of %s", async (ending) => {
+    await flush(() => { root.render(<Calendar canWrite />); });
+    await click(button("Add event")); await input("Title", "Several days");
+    await input("Starts", "2026-10-24T09:00"); await input("Ends", ending);
+    const allDay = required(Array.from(host.querySelectorAll("label"))
+      .find((label) => label.textContent === "All day")?.querySelector("input") ?? null);
+    await click(allDay); expect(inputValue("End date (exclusive)")).toBe("2026-10-27");
+    await click(allDay); expect(inputValue("Ends")).toBe("2026-10-26T10:00");
+    await input("Starts", "2026-11-24T09:00");
+    expect(inputValue("Ends")).toBe("2026-11-26T10:00");
   });
   it("automatically moves the end and clears both changed offsets across DST", async () => {
     vi.setSystemTime(new Date("2026-10-24T12:00:00Z"));
@@ -334,7 +427,10 @@ describe("React calendar", () => {
       start: { dateTime: "2026-03-29T01:30:00+01:00", timeZone: "Europe/Warsaw" },
       end: { dateTime: "2026-03-29T01:30:00+01:00", timeZone: "Europe/Warsaw" } });
   });
-  it.each(["family", "work"])("keeps the current %s editor when an older save finishes", async (nextGroup) => {
+  it.each([
+    { nextGroup: "family", status: 200 }, { nextGroup: "work", status: 200 },
+    { nextGroup: "family", status: 409 }, { nextGroup: "work", status: 409 },
+  ])("keeps the current $nextGroup editor when an older save finishes with $status", async ({ nextGroup, status }) => {
     const fixture = data();
     const second = event();
     second.id = "local-2"; second.group_id = nextGroup; second.payload.summary = "Second plan";
@@ -352,7 +448,7 @@ describe("React calendar", () => {
     }
     await click(button("Second plan")); await input("Title", "Keep this second draft");
     const readCount = fetcher.mock.calls.filter((call) => call[1]?.method !== "POST").length;
-    await flush(() => { resolveSave(new Response("{}", { status: 200 })); });
+    await flush(() => { resolveSave(new Response("{}", { status })); });
     expect(inputValue("Title")).toBe("Keep this second draft");
     expect(host.textContent).not.toContain("Saved locally");
     expect(required(host.querySelector("select")).value).toBe(nextGroup);
@@ -374,6 +470,47 @@ describe("React calendar", () => {
     await flush(() => { resolveSave(new Response("{}", { status: 200 })); });
     expect(inputValue("Title")).toBe("Reopened draft");
     expect(host.textContent).not.toContain("Saved locally");
+  });
+  it("disables only the pending editor fields and restores them after a failed save", async () => {
+    let finishSave: (response: Response) => void = () => { throw new Error("Save not pending"); };
+    const pendingSave = new Promise<Response>((resolve) => { finishSave = resolve; });
+    fetcher.mockImplementation((_, options) => options?.method === "POST" ? pendingSave
+      : Promise.resolve(new Response(JSON.stringify(data()), { status: 200 })));
+    await flush(() => { root.render(<Calendar canWrite />); });
+    await click(button("Family walk")); await input("Title", "Keep the submitted draft");
+    await flush(() => { required(host.querySelector("form")).dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })); });
+    expect(required(host.querySelector("fieldset")).disabled).toBe(true);
+    expect(Array.from(host.querySelectorAll("form input, form textarea")).every((field) => field.matches(":disabled"))).toBe(true);
+    expect(button("Family walk").disabled).toBe(false); expect(required(host.querySelector("select")).disabled).toBe(false);
+    await flush(() => { finishSave(new Response("{}", { status: 503 })); });
+    expect(required(host.querySelector("fieldset")).disabled).toBe(false);
+    expect(inputValue("Title")).toBe("Keep the submitted draft");
+    await input("Title", "Can edit after failure"); expect(inputValue("Title")).toBe("Can edit after failure");
+  });
+  it("blocks type conversion while recurrence rules or existing occurrence exceptions remain", async () => {
+    const fixture = data(); const series = event();
+    series.payload.recurrence = ["RRULE:FREQ=WEEKLY;UNTIL=20261130T080000Z", "RDATE:20261123T080000Z", "EXDATE:20261116T080000Z"];
+    series.payload.exceptions = [{ originalStartTime: { dateTime: "2026-11-09T08:00:00Z" }, status: "cancelled" }];
+    fixture.events = [series];
+    fetcher.mockImplementation(() => Promise.resolve(new Response(JSON.stringify(fixture), { status: 200 })));
+    await flush(() => { root.render(<Calendar canWrite />); }); await click(button("Family walk"));
+    const allDay = required(Array.from(host.querySelectorAll("label"))
+      .find((label) => label.textContent === "All day")?.querySelector("input") ?? null);
+    expect(allDay.disabled).toBe(true); expect(host.textContent).toContain("disabled for recurring series");
+    await click(allDay); expect(allDay.checked).toBe(false);
+    await input("Title", "Series title only");
+    await flush(() => { required(host.querySelector("form")).dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })); });
+    expect(postBodies()[0]?.payload).toMatchObject({ recurrence: series.payload.recurrence, exceptions: series.payload.exceptions });
+    await click(button("Family walk")); await recurrence("");
+    expect(required(Array.from(host.querySelectorAll("label"))
+      .find((label) => label.textContent === "All day")?.querySelector("input") ?? null).disabled).toBe(true);
+  });
+  it("blocks a new recurring draft's type until its rules are removed", async () => {
+    await flush(() => { root.render(<Calendar canWrite />); }); await click(button("Add event"));
+    const allDay = required(Array.from(host.querySelectorAll("label"))
+      .find((label) => label.textContent === "All day")?.querySelector("input") ?? null);
+    await recurrence("RRULE:FREQ=WEEKLY;UNTIL=20261130T080000Z"); expect(allDay.disabled).toBe(true);
+    await recurrence(""); expect(allDay.disabled).toBe(false); await click(allDay); expect(allDay.checked).toBe(true);
   });
   it("clears both offsets on a zone change and when toggling all-day mode", async () => {
     await flush(() => { root.render(<Calendar canWrite />); }); await click(button("Family walk"));
@@ -430,9 +567,49 @@ describe("React calendar", () => {
     await flush(() => { required(host.querySelector("form")).dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })); });
     expect(host.textContent).toContain("This event changed elsewhere"); expect(host.querySelector<HTMLInputElement>("form input")?.value).toBe("Changed walk");
     expect(postBodies()[0]).toMatchObject({ id: "local-1", revision: 3, group: "family" });
+    expect(postBodies()[0]?.idempotency_key).toBeUndefined();
     fetcher.mockImplementation(() => Promise.resolve(new Response(JSON.stringify(data()), { status: 200 })));
     vi.spyOn(window, "confirm").mockReturnValue(true); await click(button("Delete event"));
     expect(postBodies()[1]).toEqual({ id: "local-1", revision: 3, group: "family" }); expect(host.textContent).toContain("Deleted locally");
+  });
+  it("refreshes the list on409 while preserving the draft, then reopens the latest revision", async () => {
+    const fixture = data();
+    fetcher.mockImplementation((_, options) => Promise.resolve(new Response(JSON.stringify(fixture),
+      { status: options?.method === "POST" ? 409 : 200 })));
+    await flush(() => { root.render(<Calendar canWrite />); });
+    await click(button("Family walk")); await input("Title", "My conflicted draft");
+    const updated = event(); updated.revision = 4; updated.payload.summary = "Changed elsewhere";
+    fixture.events = [updated];
+    await flush(() => { required(host.querySelector("form")).dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })); });
+    expect(inputValue("Title")).toBe("My conflicted draft");
+    expect(host.textContent).toContain("This event changed elsewhere");
+    expect(postBodies()[0]).toMatchObject({ id: "local-1", revision: 3 });
+    await click(button("Cancel")); await click(button("Changed elsewhere"));
+    expect(inputValue("Title")).toBe("Changed elsewhere");
+    fetcher.mockImplementation(() => Promise.resolve(new Response(JSON.stringify(fixture), { status: 200 })));
+    await flush(() => { required(host.querySelector("form")).dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })); });
+    expect(postBodies()[1]).toMatchObject({ id: "local-1", revision: 4 });
+    expect(host.textContent).toContain("Saved locally");
+  });
+  it("keeps another draft intact if opened while a conflict refresh is pending", async () => {
+    const fixture = data(); const second = event(); second.id = "local-2"; second.payload.summary = "Second plan";
+    fixture.events.push(second);
+    let resolveRefresh: (response: Response) => void = () => { throw new Error("Refresh not pending"); };
+    const pendingRefresh = new Promise<Response>((resolve) => { resolveRefresh = resolve; });
+    let conflicting = false;
+    fetcher.mockImplementation((_, options) => {
+      if (options?.method === "POST") { conflicting = true; return Promise.resolve(new Response("{}", { status: 409 })); }
+      return conflicting ? pendingRefresh : Promise.resolve(new Response(JSON.stringify(fixture), { status: 200 }));
+    });
+    await flush(() => { root.render(<Calendar canWrite />); }); await click(button("Family walk"));
+    await input("Title", "Conflicted first draft");
+    await flush(() => { required(host.querySelector("form")).dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })); });
+    expect(inputValue("Title")).toBe("Conflicted first draft"); expect(button("Cancel").disabled).toBe(true);
+    await click(button("Second plan")); await input("Title", "Preserve second draft");
+    await flush(() => { resolveRefresh(new Response(JSON.stringify(fixture), { status: 200 })); });
+    expect(inputValue("Title")).toBe("Preserve second draft");
+    expect(host.textContent).not.toContain("This event changed elsewhere");
+    expect(button("Save event").disabled).toBe(false);
   });
   it("explains provider restrictions from pending operations after a successful pull", async () => {
     const fixture = data();

@@ -99,7 +99,7 @@ export interface paths {
         put?: never;
         /**
          * Create or edit a local calendar event and enqueue synchronization
-         * @description Requires operator. Existing events require id and current revision; stale edits return 409.
+         * @description Requires operator. Creates require a stable per-draft idempotency_key; retries return the same event's current state, including deletion. Reusing a key with different content returns 409. Existing events require id and current revision, and cannot supply a create key; stale edits return 409.
          */
         post: operations["saveCalendarEvent"];
         delete?: never;
@@ -634,6 +634,11 @@ export interface components {
         CalendarCreateRequest: {
             /** Group */
             group: string;
+            /**
+             * Idempotency Key
+             * @description Stable per-draft create key, reused after an uncertain response. Reuse with different content returns 409; retries never restore deleted events.
+             */
+            idempotency_key: string;
             payload: components["schemas"]["CalendarPayload"];
         };
         /**
@@ -1946,7 +1951,7 @@ export interface operations {
                     "application/json": components["schemas"]["CalendarError"];
                 };
             };
-            /** @description revision conflict */
+            /** @description revision or create-key content conflict */
             409: {
                 headers: {
                     [name: string]: unknown;

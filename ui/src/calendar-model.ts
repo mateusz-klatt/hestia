@@ -106,6 +106,23 @@ function civilTimestamp(value: string, allDay: boolean): number | null {
   return timestamp;
 }
 
+export function changeDraftAllDay(draft: EventDraft, allDay: boolean): EventDraft {
+  if (draft.allDay === allDay) return draft;
+  const startDay = draft.start.slice(0, 10);
+  const endDay = draft.end.slice(0, 10);
+  const endStamp = civilTimestamp(endDay, true);
+  const midnightEnd = draft.end.slice(11) === "00:00" && endDay > startDay;
+  let end = "";
+  if (endStamp !== null) {
+    // Use a UTC arithmetic grid for civil dates, independent of the device zone.
+    const offsetDays = allDay ? (midnightEnd ? 0 : 1) : (endDay > startDay ? -1 : 0);
+    const finalDay = new Date(endStamp + offsetDays * 86400000).toISOString().slice(0, 10);
+    end = allDay ? finalDay : `${finalDay}T10:00`;
+  }
+  return { ...draft, allDay, start: allDay || startDay === "" ? startDay : `${startDay}T09:00`,
+    end, startOffset: "", endOffset: "" };
+}
+
 export function moveDraftStart(draft: EventDraft, start: string, startAnchor = draft.start): {
   draft: EventDraft; startAnchor: string;
 } {

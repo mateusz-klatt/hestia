@@ -6,9 +6,12 @@ sync checkpoints; the durable write intent covers a process dying after HTTP.
 from __future__ import annotations
 
 import json
+import re
 import time
 import uuid
+from collections import defaultdict
 from contextlib import contextmanager
+from dataclasses import dataclass
 
 from sqlalchemy import select, text
 
@@ -19,6 +22,14 @@ from .events import fingerprint, validate_payload
 
 class CalendarConflict(ValueError):
     """The supplied revision is stale, or an immutable identity was reassigned."""
+
+
+@dataclass
+class _Inventory:
+    events: dict
+    events_by_uid: dict
+    replicas: dict
+    replicas_by_event: dict
 
 
 class SyncStore:
@@ -132,16 +143,30 @@ class SyncStore:
             raise CalendarConflict("Calendar event changed; reload before editing")
         return event
 
-    def save_local(self, group, payload, event_id=None, expected_revision=None):
+    def save_local(self, group, payload, event_id=None, expected_revision=None, *, idempotency_key=None):
+        if idempotency_key is not None and (event_id is not None
+                or not isinstance(idempotency_key, str)
+                or re.fullmatch(r"[A-Za-z0-9_-]{16,128}", idempotency_key) is None):
+            raise ValueError("Invalid calendar create idempotency key")
         payload = validate_payload(payload)
         digest = fingerprint(payload)
         with self.transaction() as s:
             self._require_group(s, group)
             if event_id is None:
+                if idempotency_key is not None:
+                    previous = s.scalar(select(Event).where(Event.group_id == group,
+                                                            Event.create_key == idempotency_key))
+                    if previous is not None:
+                        if previous.create_fingerprint != digest:
+                            raise CalendarConflict("Calendar create key was already used for different content")
+                        # Return current state, including later edits/deletion. A retry
+                        # never rewrites content, resets revision or requeues delivery.
+                        return self._event_dict(previous)
                 identifier = uuid.uuid4().hex
                 event = Event(id=identifier, group_id=group, uid=identifier + "@hestia",
                               payload_json=json.dumps(payload), fingerprint=digest, deleted=False,
-                              revision=1, modified_at=self.clock(), source="local")
+                              revision=1, modified_at=self.clock(), source="local",
+                              create_key=idempotency_key, create_fingerprint=digest if idempotency_key is not None else None)
                 s.add(event)
                 s.flush()
             else:
@@ -179,17 +204,20 @@ class SyncStore:
             SyncStore._enqueue_endpoint(s, event, endpoint)
 
     @staticmethod
-    def _enqueue_endpoint(s, event, endpoint):
+    def _enqueue_endpoint(s, event, endpoint, *, replicas=None, jobs=None):
         key = (endpoint.id, event.id)
-        replica = s.get(Replica, key)
+        replica = s.get(Replica, key) if replicas is None else replicas.get(key)
         if event.deleted and replica is None:
             return
         if replica is not None and replica.applied_revision == event.revision and not replica.uncertain:
             return
-        job = s.get(Outbox, key)
+        job = s.get(Outbox, key) if jobs is None else jobs.get(key)
         if job is None:
-            s.add(Outbox(endpoint_id=endpoint.id, event_id=event.id, revision=event.revision,
-                         attempts=0, next_attempt=0))
+            job = Outbox(endpoint_id=endpoint.id, event_id=event.id, revision=event.revision,
+                         attempts=0, next_attempt=0)
+            s.add(job)
+            if jobs is not None:
+                jobs[key] = job
         elif job.revision != event.revision:
             job.revision = event.revision
             job.attempts = 0
@@ -209,6 +237,7 @@ class SyncStore:
         """Checkpoint only complete reads. All sources are reconciled before delivery."""
         errors = {}
         with self.transaction() as s:
+            touched = set()
             for endpoint_id, snapshot in sorted(snapshots.items()):
                 try:
                     # A malformed endpoint rolls back its entire inventory, including
@@ -217,70 +246,125 @@ class SyncStore:
                         if not snapshot.complete:
                             raise ValueError("Incomplete calendar snapshot")
                         endpoint = s.get(Endpoint, endpoint_id)
+                        inventory = self._inventory(s, endpoint, snapshot)
                         seen_ids = set()
+                        observed = set()
                         for remote in snapshot.events:
                             seen_ids.add(remote.remote_id)
-                            self._observe(s, endpoint, remote)
+                            observed.add(self._observe(s, endpoint, remote, inventory))
                         if snapshot.full:
-                            for replica in s.scalars(select(Replica).where(Replica.endpoint_id == endpoint_id)):
+                            for replica in inventory.replicas.values():
                                 if replica.seen and not replica.deleted and replica.remote_id not in seen_ids:
-                                    self._tombstone(s.get(Event, replica.event_id), endpoint_id)
+                                    self._tombstone(inventory.events[replica.event_id], endpoint_id)
                                     replica.deleted = True
                                     replica.uncertain = False
+                                    observed.add(replica.event_id)
                         endpoint.cursor = snapshot.cursor
                         endpoint.last_success = self.clock()
                         endpoint.last_error = None
+                    # IDs belonging to a rolled-back savepoint must not escape.
+                    touched.update(observed)
                 except Exception as exc:
                     if not isolate_errors:
                         raise
                     errors[endpoint_id] = exc
             s.flush()
-            # Resolve matching copies against the FINAL winner, including later snapshots.
-            for event in s.scalars(select(Event)):
-                for replica in s.scalars(select(Replica).where(Replica.event_id == event.id)):
-                    matches = replica.deleted if event.deleted else (
-                        not replica.deleted and replica.observed_hash == event.fingerprint)
-                    # A matching last observation cannot confirm an in-flight
-                    # write of a different version, including a local revert.
-                    if matches and not replica.uncertain:
-                        replica.applied_revision = event.revision
-                        job = s.get(Outbox, (replica.endpoint_id, event.id))
-                        if job is not None:
-                            s.delete(job)
-                    else:
-                        replica.applied_revision = 0
-                self._enqueue(s, event)
+            self._reconcile(s, touched)
         return errors
 
-    def _observe(self, s, endpoint, remote):
-        replica = s.scalar(select(Replica).where(Replica.endpoint_id == endpoint.id,
-                                                Replica.remote_id == remote.remote_id))
+    @staticmethod
+    def _by_values(s, model, column, values, *conditions):
+        # Leave room below older SQLite's 999-bind limit for other predicates.
+        values = sorted(set(values))
+        for start in range(0, len(values), 400):
+            yield from s.scalars(select(model).where(column.in_(values[start:start + 400]), *conditions))
+
+    def _inventory(self, s, endpoint, snapshot):
+        replicas = {}
+        if snapshot.full:
+            replicas = {row.remote_id: row for row in s.scalars(select(Replica).where(
+                Replica.endpoint_id == endpoint.id, Replica.seen, Replica.deleted.is_(False)))}
+        remote_ids = {remote.remote_id for remote in snapshot.events}
+        for row in self._by_values(s, Replica, Replica.remote_id, remote_ids - replicas.keys(),
+                                   Replica.endpoint_id == endpoint.id):
+            replicas[row.remote_id] = row
+        events = {row.id: row for row in self._by_values(s, Event, Event.id,
+                                                       [replica.event_id for replica in replicas.values()])}
+        events_by_uid = {row.uid: row for row in events.values()}
+        uids = {remote.uid for remote in snapshot.events}
+        for row in self._by_values(s, Event, Event.uid, uids - events_by_uid.keys(), Event.group_id == endpoint.group_id):
+            events[row.id] = row
+            events_by_uid[row.uid] = row
+        replicas_by_event = {row.event_id: row for row in replicas.values()}
+        # A newly advertised href with an existing UID must still be rejected,
+        # even when its former href was absent from this incremental page.
+        for row in self._by_values(s, Replica, Replica.event_id, events.keys() - replicas_by_event.keys(),
+                                   Replica.endpoint_id == endpoint.id):
+            replicas[row.remote_id] = row
+            replicas_by_event[row.event_id] = row
+        return _Inventory(events, events_by_uid, replicas, replicas_by_event)
+
+    def _reconcile(self, s, touched):
+        if not touched:
+            return
+        events = list(self._by_values(s, Event, Event.id, touched))
+        replicas = {(row.endpoint_id, row.event_id): row
+                    for row in self._by_values(s, Replica, Replica.event_id, touched)}
+        jobs = {(row.endpoint_id, row.event_id): row
+                for row in self._by_values(s, Outbox, Outbox.event_id, touched)}
+        by_event, by_group = defaultdict(list), defaultdict(list)
+        for replica in replicas.values():
+            by_event[replica.event_id].append(replica)
+        for endpoint in self._by_values(s, Endpoint, Endpoint.group_id, [event.group_id for event in events], Endpoint.enabled):
+            by_group[endpoint.group_id].append(endpoint)
+        # Resolve only observed/tombstoned events against the FINAL winner.
+        for event in events:
+            for replica in by_event[event.id]:
+                matches = replica.deleted if event.deleted else (
+                    not replica.deleted and replica.observed_hash == event.fingerprint)
+                # A matching last observation cannot confirm an in-flight
+                # write of a different version, including a local revert.
+                if matches and not replica.uncertain:
+                    replica.applied_revision = event.revision
+                    job = jobs.pop((replica.endpoint_id, event.id), None)
+                    if job is not None:
+                        s.delete(job)
+                else:
+                    replica.applied_revision = 0
+            for endpoint in by_group[event.group_id]:
+                self._enqueue_endpoint(s, event, endpoint, replicas=replicas, jobs=jobs)
+
+    def _observe(self, s, endpoint, remote, inventory):
+        replica = inventory.replicas.get(remote.remote_id)
         if replica is not None:
-            event = s.get(Event, replica.event_id)
+            event = inventory.events[replica.event_id]
             if not remote.deleted and remote.uid != event.uid:
                 raise ValueError("A mapped remote event changed its immutable UID")
         else:
-            event = s.scalar(select(Event).where(Event.group_id == endpoint.group_id, Event.uid == remote.uid))
+            event = inventory.events_by_uid.get(remote.uid)
             if event is None:
                 event = Event(id=uuid.uuid4().hex, group_id=endpoint.group_id, uid=remote.uid,
                               payload_json="{}", fingerprint="", deleted=False, revision=0,
                               modified_at=0, source="")
                 s.add(event)
                 s.flush()
-            key = (endpoint.id, event.id)
-            if s.get(Replica, key) is not None:
+                inventory.events[event.id] = event
+                inventory.events_by_uid[event.uid] = event
+            if event.id in inventory.replicas_by_event:
                 raise ValueError("Duplicate UID within calendar; resolve duplicates before synchronization")
             replica = Replica(endpoint_id=endpoint.id, event_id=event.id, remote_id=remote.remote_id,
                               applied_revision=0, seen=False, deleted=False, uncertain=False)
             s.add(replica)
             s.flush()
+            inventory.replicas[remote.remote_id] = replica
+            inventory.replicas_by_event[event.id] = replica
         replica.seen = True
         replica.etag = remote.etag
         if remote.deleted:
             replica.deleted = True
             replica.uncertain = False
             self._tombstone(event, endpoint.id)
-            return
+            return event.id
         digest = fingerprint(remote.payload)
         echo = digest == replica.observed_hash or (replica.uncertain and digest == replica.outbound_hash)
         replica.deleted = False
@@ -300,6 +384,7 @@ class SyncStore:
             replica.uncertain = False
             replica.outbound_hash = None
             replica.outbound_revision = None
+        return event.id
 
     def due(self, healthy):
         with self.sessions() as s:

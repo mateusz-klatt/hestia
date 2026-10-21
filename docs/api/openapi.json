@@ -253,13 +253,22 @@
             "title": "Group",
             "type": "string"
           },
+          "idempotency_key": {
+            "description": "Stable per-draft create key, reused after an uncertain response. Reuse with different content returns 409; retries never restore deleted events.",
+            "maxLength": 128,
+            "minLength": 16,
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "title": "Idempotency Key",
+            "type": "string"
+          },
           "payload": {
             "$ref": "#/components/schemas/CalendarPayload"
           }
         },
         "required": [
           "group",
-          "payload"
+          "payload",
+          "idempotency_key"
         ],
         "title": "CalendarCreateRequest",
         "type": "object"
@@ -3126,7 +3135,7 @@
   "info": {
     "description": "Local cloud-free smart-home control API. Generated from hestia/api_contract.py \u2014 do not edit by hand; run `python -m hestia.api_contract`.",
     "title": "hestia API",
-    "version": "0.11.0"
+    "version": "0.12.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -3329,7 +3338,7 @@
     },
     "/api/calendars/events": {
       "post": {
-        "description": "Requires operator. Existing events require id and current revision; stale edits return 409.",
+        "description": "Requires operator. Creates require a stable per-draft idempotency_key; retries return the same event's current state, including deletion. Reusing a key with different content returns 409. Existing events require id and current revision, and cannot supply a create key; stale edits return 409.",
         "operationId": "saveCalendarEvent",
         "requestBody": {
           "content": {
@@ -3377,7 +3386,7 @@
                 }
               }
             },
-            "description": "revision conflict"
+            "description": "revision or create-key content conflict"
           },
           "503": {
             "content": {
