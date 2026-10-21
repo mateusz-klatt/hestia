@@ -1856,6 +1856,7 @@ def _shadow_sync_db(rt) -> None:
 
 async def main() -> None:  # pragma: no cover
     from .web import start_web, stop_web
+    from .calendar_sync.runtime import poll_calendars
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     config = ProxyConfig()
     # Resolve the upstream once at startup (off-loop), with a hard ceiling so a slow or
@@ -1886,6 +1887,7 @@ async def main() -> None:  # pragma: no cover
     ir_worker = asyncio.create_task(_ir_worker(rt))    # no-op unless HESTIA_FLIPPER enabled
     thermostat_task = asyncio.create_task(_thermostat_poller(rt))  # no-op in proxy (the cloud polls)
     cover_confirm_task = asyncio.create_task(_cover_confirm_watcher(rt))  # no-op in proxy (cloud retries)
+    calendar_task = asyncio.create_task(poll_calendars())  # opt-in via HESTIA_CALENDAR_CONFIG
     loop = asyncio.get_running_loop()
     _install_term_handler(loop, asyncio.current_task())   # SIGTERM -> graceful persist (docker/systemd stop)
     log.info("hestia proxy: device :%d -> cloud %s:%d | control %s:%d | web %s:%d | registry %s",
@@ -1909,8 +1911,9 @@ async def main() -> None:  # pragma: no cover
         ir_worker.cancel()
         thermostat_task.cancel()
         cover_confirm_task.cancel()
+        calendar_task.cancel()
         await asyncio.gather(autosave, scheduler, niania, weather_task, sensor433_task, ir_worker,
-                             thermostat_task, cover_confirm_task, return_exceptions=True)
+                             thermostat_task, cover_confirm_task, calendar_task, return_exceptions=True)
         try:
             await _persist(rt)                 # share save_lock — any in-flight
         except OSError:                        # control-op write finishes first

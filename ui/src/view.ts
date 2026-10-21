@@ -1,6 +1,6 @@
 import { t } from "./i18n";
 
-export type ViewName = "rooms" | "events" | "admin";
+export type ViewName = "rooms" | "events" | "calendar" | "admin";
 
 const STORAGE_KEY = "hestia.view";
 
@@ -11,7 +11,7 @@ const STORAGE_KEY = "hestia.view";
 export function storedView(): ViewName {
   try {
     const stored = localStorage.getItem(STORAGE_KEY);
-    return stored === "admin" || stored === "events" ? stored : "rooms";
+    return stored === "admin" || stored === "events" || stored === "calendar" ? stored : "rooms";
   } catch {
     return "rooms";
   }
@@ -31,6 +31,7 @@ export interface ViewSwitchEls {
   roomsEl: HTMLElement;
   eventsEl: HTMLElement;
   adminEl: HTMLElement;
+  calendarEl?: HTMLElement;
 }
 
 /** The switcher's handles: `apply` to switch views programmatically, `setRoomsInRoom` to flip the
@@ -66,6 +67,11 @@ export function renderViewSwitch(
     { name: "rooms", btn: roomsBtn, section: els.roomsEl },
     { name: "events", btn: eventsBtn, section: els.eventsEl },
   ];
+  if (els.calendarEl !== undefined) {
+    const calendarBtn = document.createElement("button");
+    calendarBtn.textContent = document.documentElement.lang === "pl" ? "📅 Kalendarz" : "📅 Calendar";
+    tabs.push({ name: "calendar", btn: calendarBtn, section: els.calendarEl });
+  }
   if (showAdmin) tabs.push({ name: "admin", btn: adminBtn, section: els.adminEl });
   // A non-admin never sees the engineer view — force it hidden so a stale stored "admin" can't reveal it.
   if (!showAdmin) els.adminEl.hidden = true;

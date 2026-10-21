@@ -54,7 +54,10 @@ from pydantic.json_schema import models_json_schema
 #        perceptual blind-scale curve (non-linear, to match how venetian blinds open) moved client-side, so
 #        the slider speaks raw wire and the backend just clamps. Request-only; only this web UI sends
 #        `blinds_set` (no native client does), so the tightened bound + changed unit is safe.
-CONTRACT_VERSION = "0.9.0"
+# 0.10.0: local calendar read/write surface, with optimistic revisions and sync health.
+# 0.11.0: portable calendar content preserves unspecified end times.
+# 0.12.0: calendar creates require a durable per-draft idempotency key.
+CONTRACT_VERSION = "0.12.0"
 OPENAPI_PATH = Path(__file__).resolve().parent.parent / "docs" / "api" / "openapi.json"
 
 # De-duplicated string literals (SonarPython S1192): the OpenAPI content-type, the paths reused
@@ -65,6 +68,9 @@ _P_ROOM_ICONS = "/api/rooms/icons"
 _P_AUTOMATIONS = "/api/automations"
 _P_USERS = "/api/users"
 _P_WHOLE_HOME = "/api/whole-home"
+_P_CALENDARS = "/api/calendars"
+_P_CALENDAR_EVENTS = _P_CALENDARS + "/events"
+_P_CALENDAR_DELETE = _P_CALENDAR_EVENTS + "/delete"
 _ADMIN_ROLE_DESC = "Requires the admin role."
 _NO_SUCH_USER = "no such user"
 
@@ -822,6 +828,152 @@ _USER_MODELS = (AddUserRequest, SetRoleRequest, SetDisabledRequest, ResetPasswor
                 ChangePasswordRequest, UserRow, UsersList, Rf433Device, Rf433Feed, DbStats)
 
 
+class CalendarDate(BaseModel):
+    """All-day calendar date; an event's end date is exclusive."""
+
+    model_config = _STRICT
+    date: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
+
+
+class CalendarDateTime(BaseModel):
+    """An RFC3339 instant, optionally expressed in an IANA time zone."""
+
+    model_config = _STRICT
+    dateTime: str
+    timeZone: Annotated[str, Field(default=None, json_schema_extra=_OMIT)] = None
+
+
+CalendarTime = CalendarDate | CalendarDateTime
+
+
+class CalendarCancelledInstance(BaseModel):
+    model_config = _STRICT
+    originalStartTime: CalendarTime
+    status: Literal["cancelled"]
+
+
+class CalendarInstance(BaseModel):
+    model_config = _STRICT
+    originalStartTime: CalendarTime
+    start: CalendarTime
+    end: CalendarTime
+    endTimeUnspecified: bool = False
+    summary: str = ""
+    description: str = ""
+    location: str = ""
+    status: Literal["confirmed", "tentative"] = "confirmed"
+    transparency: Literal["opaque", "transparent"] = "opaque"
+    visibility: Literal["default", "public", "private", "confidential"] = "default"
+
+
+class CalendarPayload(BaseModel):
+    """Portable core content; recurrence remains an unexpanded RFC5545 series.
+
+    The event codec validates dates, time zones, rule semantics and exceptions.
+    Invitations, alarms and provider presentation fields are outside this contract.
+    """
+
+    model_config = _STRICT
+    start: CalendarTime
+    end: CalendarTime
+    endTimeUnspecified: bool = Field(default=False, description="The end is unknown; end holds a compatibility placeholder (same instant, or next day for all-day).")
+    summary: str = ""
+    description: str = ""
+    location: str = ""
+    recurrence: list[str] = Field(default_factory=list)
+    exceptions: list[CalendarCancelledInstance | CalendarInstance] = Field(default_factory=list)
+    status: Literal["confirmed", "tentative", "cancelled"] = "confirmed"
+    transparency: Literal["opaque", "transparent"] = "opaque"
+    visibility: Literal["default", "public", "private", "confidential"] = "default"
+
+
+class CalendarCreateRequest(BaseModel):
+    model_config = _STRICT
+    group: str
+    payload: CalendarPayload
+    idempotency_key: Annotated[str, Field(min_length=16, max_length=128, pattern=r"^[A-Za-z0-9_-]+$",
+        description="Stable per-draft create key, reused after an uncertain response. Reuse with different content returns 409; retries never restore deleted events.")]
+
+
+class CalendarUpdateRequest(BaseModel):
+    model_config = _STRICT
+    group: str
+    payload: CalendarPayload
+    id: Annotated[str, Field(min_length=1)]
+    revision: Annotated[int, Field(ge=1)]
+
+
+class CalendarDeleteRequest(BaseModel):
+    model_config = _STRICT
+    group: str
+    id: Annotated[str, Field(min_length=1)]
+    revision: Annotated[int, Field(ge=1)]
+
+
+class CalendarEvent(BaseModel):
+    model_config = _READ
+    id: str
+    group_id: str
+    uid: str
+    payload: CalendarPayload
+    revision: int
+    deleted: bool
+    modified_at: float
+
+
+class CalendarGroup(BaseModel):
+    model_config = _READ
+    id: str
+
+
+class CalendarEndpointStatus(BaseModel):
+    model_config = _READ
+    id: str
+    group_id: str
+    enabled: bool
+    last_success: float | None
+    last_error: str | None
+
+
+class CalendarPendingOperation(BaseModel):
+    model_config = _READ
+    endpoint_id: str
+    event_id: str
+    revision: int
+    attempts: int
+    next_attempt: float
+    last_error: str | None
+
+
+class CalendarSyncStatus(BaseModel):
+    model_config = _READ
+    endpoints: list[CalendarEndpointStatus]
+    pending: list[CalendarPendingOperation]
+
+
+class Calendars(BaseModel):
+    model_config = _READ
+    enabled: bool
+    groups: list[CalendarGroup]
+    events: list[CalendarEvent]
+    status: CalendarSyncStatus
+
+
+class CalendarSaved(BaseModel):
+    model_config = _READ
+    ok: Literal[True]
+    event: CalendarEvent
+
+
+class CalendarError(BaseModel):
+    model_config = _READ
+    error: str
+
+
+_CALENDAR_MODELS = (CalendarCreateRequest, CalendarUpdateRequest, CalendarDeleteRequest,
+                    Calendars, CalendarSaved, CalendarError)
+
+
 def _ref(name: str) -> dict:
     return {"$ref": f"#/components/schemas/{name}"}
 
@@ -857,6 +1009,9 @@ _PATH_ROLES = {
     ("POST", "/api/me/password"): "viewer",
     ("GET", "/api/rf433"): "admin",
     ("GET", "/api/db/stats"): "admin",
+    ("GET", _P_CALENDARS): "viewer",
+    ("POST", _P_CALENDAR_EVENTS): "operator",
+    ("POST", _P_CALENDAR_DELETE): "operator",
 }
 
 
@@ -866,7 +1021,7 @@ def _component_schemas() -> dict:
         [(model, "validation")
          for model in (*_CONTROL_MODELS, ControlSuccess, ControlError, *_COMMAND_MODELS,
                        *_READ_MODELS, *_AUTH_MODELS, *_AUTOMATION_MODELS, *_EVENT_MODELS,
-                       *_USER_MODELS)],
+                       *_USER_MODELS, *_CALENDAR_MODELS)],
         ref_template="#/components/schemas/{model}",
     )
     schemas = combined.get("$defs", {})
@@ -1292,6 +1447,49 @@ def build_openapi() -> dict:
                                 "content": {_APP_JSON: {"schema": _ref("DbStats")}}},
                     },
                 }
+            },
+            _P_CALENDARS: {
+                "get": {
+                    "operationId": "getCalendars",
+                    "summary": "Selected local calendar events and synchronization health",
+                    "description": "Requires viewer. Account credentials and remote calendar URLs are never returned.",
+                    "parameters": [{"name": "group", "in": "query", "schema": {"type": "string"},
+                                    "description": "Selected configured group; defaults to the first group."}],
+                    "responses": {
+                        "200": {"description": "calendar state", "content": {_APP_JSON: {"schema": _ref("Calendars")}}},
+                        "400": {"description": "unknown group", "content": {_APP_JSON: {"schema": _ref("CalendarError")}}},
+                        "503": {"description": "invalid configuration", "content": {_APP_JSON: {"schema": _ref("CalendarError")}}},
+                    },
+                },
+            },
+            _P_CALENDAR_EVENTS: {
+                "post": {
+                    "operationId": "saveCalendarEvent",
+                    "summary": "Create or edit a local calendar event and enqueue synchronization",
+                    "description": "Requires operator. Creates require a stable per-draft idempotency_key; retries return the same event's current state, including deletion. Reusing a key with different content returns 409. Existing events require id and current revision, and cannot supply a create key; stale edits return 409.",
+                    "requestBody": {"required": True, "content": {_APP_JSON: {"schema": {
+                        "oneOf": [_ref("CalendarCreateRequest"), _ref("CalendarUpdateRequest")]}}}},
+                    "responses": {
+                        "200": {"description": "saved", "content": {_APP_JSON: {"schema": _ref("CalendarSaved")}}},
+                        "400": {"description": "invalid event", "content": {_APP_JSON: {"schema": _ref("CalendarError")}}},
+                        "409": {"description": "revision or create-key content conflict", "content": {_APP_JSON: {"schema": _ref("CalendarError")}}},
+                        "503": {"description": "disabled or invalid configuration", "content": {_APP_JSON: {"schema": _ref("CalendarError")}}},
+                    },
+                },
+            },
+            _P_CALENDAR_DELETE: {
+                "post": {
+                    "operationId": "deleteCalendarEvent",
+                    "summary": "Permanently tombstone an event and enqueue deletion of remote copies",
+                    "description": "Requires operator. The current revision is mandatory; stale deletes return 409.",
+                    "requestBody": {"required": True, "content": {_APP_JSON: {"schema": _ref("CalendarDeleteRequest")}}},
+                    "responses": {
+                        "200": {"description": "tombstoned", "content": {_APP_JSON: {"schema": _ref("CalendarSaved")}}},
+                        "400": {"description": "invalid request", "content": {_APP_JSON: {"schema": _ref("CalendarError")}}},
+                        "409": {"description": "revision conflict", "content": {_APP_JSON: {"schema": _ref("CalendarError")}}},
+                        "503": {"description": "disabled or invalid configuration", "content": {_APP_JSON: {"schema": _ref("CalendarError")}}},
+                    },
+                },
             },
         },
         "components": {"schemas": _component_schemas()},

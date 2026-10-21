@@ -7,8 +7,10 @@ from __future__ import annotations
 
 import os
 import shutil
+import sqlite3
 import tempfile
 import unittest
+from contextlib import closing
 from pathlib import Path
 from unittest import mock
 
@@ -84,6 +86,27 @@ class DbSchemaTests(unittest.TestCase):
         nested = self.dir / "a" / "b" / "hestia.db"
         db.make_engine(nested)
         self.assertTrue(nested.parent.is_dir())
+
+    def test_reserved_url_characters_are_literal_sqlite_filename_characters(self):
+        for index, filename in enumerate(("calendar?mode=ro.db", "calendar#family.db",
+                                          "calendar?uri=true&mode=ro#family.db")):
+            with self.subTest(filename=filename):
+                directory = self.dir / str(index)
+                target = directory / filename
+                engine, sessions = db.init_db(target)
+                self.assertEqual(engine.url.database, str(target))
+                self.assertEqual(dict(engine.url.query), {})
+                with db.session_scope(sessions) as session:
+                    session.add(db.AppMeta(key="filename", value=filename))
+                with engine.connect() as connection:
+                    databases = {row.name: row.file for row in connection.exec_driver_sql("PRAGMA database_list")}
+                    self.assertEqual(Path(databases["main"]), target.resolve())
+                db.reset_engine_cache()
+                self.assertTrue(target.is_file())
+                with closing(sqlite3.connect(target)) as connection:
+                    self.assertEqual(connection.execute(
+                        "SELECT value FROM app_meta WHERE key='filename'").fetchone(), (filename,))
+                self.assertEqual(set(directory.iterdir()), {target})
 
     def test_models_match_migration_no_drift(self):
         # Lock model↔migration parity into CI: a model change without a matching migration

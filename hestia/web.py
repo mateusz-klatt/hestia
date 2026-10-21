@@ -158,6 +158,9 @@ _PATH_USERS = "/api/users"
 _PATH_WHOLE_HOME = "/api/whole-home"
 _USERNAME_REQUIRED = "username is required"   # shared 400 message across the admin user verbs
 _ROUTE_MIN_ROLE = {
+    ("GET", "/api/calendars"): _VIEWER,
+    ("POST", "/api/calendars/events"): _OPERATOR,
+    ("POST", "/api/calendars/events/delete"): _OPERATOR,
     # reads every signed-in user (incl. a read-only viewer) needs — the room / event-log / temps / own-prefs surface
     ("GET", "/api/discovery"): _VIEWER,
     ("GET", "/api/events"): _VIEWER,
@@ -1081,11 +1084,13 @@ def _validate_control_payload(op) -> "str | None":
 
 
 def make_app(rt):
+    from .calendar_sync.api import register as register_calendars
     app = web.Application(
         client_max_size=MAX_RULE_BODY + 4096,
         middlewares=[_auth_middleware, _empty_404_405_middleware],   # auth OUTERMOST: gate before routing
     )
     app[_RT_KEY] = rt
+    register_calendars(app, _read_json_body)
     app.router.add_get("/", _ui_index, allow_head=False)                          # the TS app (Vite build)
     app.router.add_get("/assets/{path:[A-Za-z0-9._-]+}", _ui_asset, allow_head=False)
     app.router.add_get("/ui/", _ui_redirect, allow_head=False)                    # retired alias -> /

@@ -21,10 +21,11 @@ import os
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
+from threading import RLock
 
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import Engine, ForeignKey, create_engine, event, text
+from sqlalchemy import URL, Engine, ForeignKey, Index, UniqueConstraint, create_engine, event, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
 DEFAULT_DB_PATH = "/data/hestia.db"
@@ -107,6 +108,77 @@ class Audit(Base):
     result: Mapped[str | None]
 
 
+class CalendarGroup(Base):
+    """Only explicitly configured calendars participate in a group."""
+
+    __tablename__ = "calendar_groups"
+    id: Mapped[str] = mapped_column(primary_key=True)
+    enabled: Mapped[bool]
+
+
+class CalendarEndpoint(Base):
+    __tablename__ = "calendar_endpoints"
+    id: Mapped[str] = mapped_column(primary_key=True)
+    group_id: Mapped[str] = mapped_column(ForeignKey("calendar_groups.id"))
+    provider: Mapped[str]
+    account: Mapped[str]
+    calendar_id: Mapped[str]
+    enabled: Mapped[bool]
+    cursor: Mapped[str | None]
+    last_success: Mapped[float | None]
+    last_error: Mapped[str | None]
+
+
+class CalendarEvent(Base):
+    """A canonical series, including exceptions; tombstones are never pruned."""
+
+    __tablename__ = "calendar_events"
+    __table_args__ = (UniqueConstraint("group_id", "uid"),
+                      Index("uq_calendar_events_create_key", "group_id", "create_key", unique=True))
+    id: Mapped[str] = mapped_column(primary_key=True)
+    group_id: Mapped[str] = mapped_column(ForeignKey("calendar_groups.id"))
+    uid: Mapped[str]
+    payload_json: Mapped[str]
+    fingerprint: Mapped[str]
+    deleted: Mapped[bool]
+    deleted_at: Mapped[float | None]
+    revision: Mapped[int]
+    modified_at: Mapped[float]
+    source: Mapped[str]
+    create_key: Mapped[str | None]
+    create_fingerprint: Mapped[str | None]
+
+
+class CalendarReplica(Base):
+    """Reserved before HTTP, so a lost response cannot allocate a second external ID."""
+
+    __tablename__ = "calendar_replicas"
+    __table_args__ = (UniqueConstraint("endpoint_id", "remote_id"),)
+    endpoint_id: Mapped[str] = mapped_column(ForeignKey("calendar_endpoints.id"), primary_key=True)
+    event_id: Mapped[str] = mapped_column(ForeignKey("calendar_events.id"), primary_key=True, index=True)
+    remote_id: Mapped[str]
+    etag: Mapped[str | None]
+    observed_hash: Mapped[str | None]
+    applied_revision: Mapped[int]
+    seen: Mapped[bool]
+    deleted: Mapped[bool]
+    outbound_hash: Mapped[str | None]
+    outbound_revision: Mapped[int | None]
+    uncertain: Mapped[bool]
+
+
+class CalendarOutbox(Base):
+    """Coalescing, durable delivery queue. A row survives every failed HTTP operation."""
+
+    __tablename__ = "calendar_outbox"
+    endpoint_id: Mapped[str] = mapped_column(ForeignKey("calendar_endpoints.id"), primary_key=True)
+    event_id: Mapped[str] = mapped_column(ForeignKey("calendar_events.id"), primary_key=True, index=True)
+    revision: Mapped[int]
+    attempts: Mapped[int]
+    next_attempt: Mapped[float]
+    last_error: Mapped[str | None]
+
+
 metadata = Base.metadata
 
 _MIGRATIONS_DIR = Path(__file__).resolve().parent / "migrations"
@@ -129,7 +201,8 @@ def make_engine(path) -> Engine:
     # check_same_thread=False: writes run in run_in_executor worker threads (the cancel-safe write
     # path), so the connection must be usable off the creating thread. Explicit, not relying on the
     # dialect default. Single-writer serialisation is handled by the caller's save_lock + WAL.
-    engine = create_engine(f"sqlite:///{p}", connect_args={"check_same_thread": False})
+    engine = create_engine(URL.create("sqlite", database=str(p)),
+                           connect_args={"check_same_thread": False})
     event.listen(engine, "connect", lambda dbapi_conn, _record: _apply_pragmas(dbapi_conn))
     return engine
 
@@ -148,6 +221,7 @@ def _alembic_config(connection) -> Config:
 # upgrade (logging "Context impl SQLiteImpl…" every time + churning a new connection pool). Keyed by the
 # resolved path string so tests on distinct temp DBs stay isolated; reset_engine_cache() disposes them.
 _ENGINE_CACHE: "dict[str, tuple[Engine, sessionmaker[Session]]]" = {}
+_ENGINE_CACHE_LOCK = RLock()
 
 
 def init_db(path=None) -> tuple[Engine, sessionmaker[Session]]:
@@ -155,6 +229,11 @@ def init_db(path=None) -> tuple[Engine, sessionmaker[Session]]:
     schema via Alembic. **Cached per resolved path**: the engine is built and the migration run ONCE per
     DB file for the process lifetime; later calls return the same pair (call ``reset_engine_cache`` to
     rebuild). Migrations run programmatically — never runtime autogenerate."""
+    with _ENGINE_CACHE_LOCK:
+        return _init_db_locked(path)
+
+
+def _init_db_locked(path) -> tuple[Engine, sessionmaker[Session]]:
     key = str(db_path() if path is None else path)
     cached = _ENGINE_CACHE.get(key)
     if cached is not None:
@@ -174,9 +253,10 @@ def init_db(path=None) -> tuple[Engine, sessionmaker[Session]]:
 def reset_engine_cache() -> None:
     """Dispose every cached engine and clear the cache. For test isolation (a fresh temp DB per test)
     and the rare case of re-initialising after the on-disk file is replaced underneath us."""
-    for engine, _ in _ENGINE_CACHE.values():
-        engine.dispose()
-    _ENGINE_CACHE.clear()
+    with _ENGINE_CACHE_LOCK:
+        for engine, _ in _ENGINE_CACHE.values():
+            engine.dispose()
+        _ENGINE_CACHE.clear()
 
 
 @contextmanager
