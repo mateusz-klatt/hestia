@@ -3,7 +3,7 @@ import { createRoot } from "react-dom/client";
 import type { Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Calendar, mountCalendar } from "./calendar";
-import { dateKey, draftPayload, eventDraft, localTime, onDay, shiftDay, weekStart } from "./calendar-model";
+import { dateKey, draftPayload, eventDraft, localTime, moveDraftStart, onDay, shiftDay, weekStart } from "./calendar-model";
 import type { CalendarData, CalendarEvent } from "./calendar-model";
 
 async function flush(action: () => void): Promise<void> {
@@ -26,6 +26,52 @@ function data(): CalendarData {
 }
 
 describe("calendar date and payload semantics", () => {
+  it("moves a new one-hour event across midnight and year boundaries using civil time", () => {
+    const draft = { ...eventDraft(null, "2026-12-31"), timezone: "Pacific/Auckland" };
+    const moved = moveDraftStart(draft, "2026-12-31T23:45").draft;
+    expect(moved.end).toBe("2027-01-01T00:45");
+    expect(draftPayload(moved, null).end).toEqual({ dateTime: "2027-01-01T00:45:00", timeZone: "Pacific/Auckland" });
+  });
+  it("preserves a manually chosen duration on subsequent start changes", () => {
+    const draft = eventDraft(null, "2026-10-24");
+    const customized = { ...moveDraftStart(draft, "2026-10-24T12:00").draft, end: "2026-10-24T12:30" };
+    expect(moveDraftStart(customized, "2026-10-26T08:15").draft.end).toBe("2026-10-26T08:45");
+  });
+  it("preserves exclusive all-day duration over leap days and DST weekends", () => {
+    const draft = { ...eventDraft(null, "2028-02-27"), allDay: true, start: "2028-02-27", end: "2028-03-01" };
+    const moved = moveDraftStart(draft, "2026-10-24").draft;
+    expect(moved.end).toBe("2026-10-27");
+    expect(moveDraftStart(moved, "2026-12-30").draft.end).toBe("2027-01-02");
+  });
+  it("keeps the end and last complete start while start input is cleared or invalid", () => {
+    const draft = { ...eventDraft(null, "2026-10-24"), end: "2026-10-24T11:30", startOffset: "+02:00", endOffset: "+02:00" };
+    for (const incomplete of ["", "2026-10-", "2026-02-30T09:00", "2026-10-24T25:00", "0000-10-24T09:00"]) {
+      const editing = moveDraftStart(draft, incomplete);
+      expect(editing.draft.end).toBe(draft.end);
+      expect(editing.draft.endOffset).toBe("+02:00");
+      expect(editing.startAnchor).toBe(draft.start);
+      const completed = moveDraftStart(editing.draft, "2026-10-26T09:00", editing.startAnchor);
+      expect(completed.draft.end).toBe("2026-10-26T11:30");
+      expect(completed.draft.endOffset).toBe("");
+    }
+  });
+  it("keeps untouched offsets and does not replace an invalid manually entered end", () => {
+    const draft = { ...eventDraft(null, "2026-10-24"), startOffset: "+02:00", endOffset: "+02:00" };
+    expect(moveDraftStart(draft, draft.start).draft).toBe(draft);
+    for (const end of ["", "2026-10-24T08:00"]) {
+      const moved = moveDraftStart({ ...draft, end }, "2026-10-25T09:00").draft;
+      expect(moved.end).toBe(end);
+      expect(moved.endOffset).toBe("+02:00");
+    }
+    const allDay = { ...draft, allDay: true, start: "2026-10-24", end: "2026-10-24" };
+    expect(moveDraftStart(allDay, "2026-10-25").draft.end).toBe("2026-10-24");
+  });
+  it("preserves point-event zero duration and the displayed duration across DST", () => {
+    const draft = { ...eventDraft(null, "2026-03-28"), timezone: "Europe/Warsaw", start: "2026-03-28T01:30", end: "2026-03-28T03:30" };
+    expect(moveDraftStart(draft, "2026-03-29T01:30").draft.end).toBe("2026-03-29T03:30");
+    const point = { ...draft, end: draft.start };
+    expect(moveDraftStart(point, "2026-10-25T04:00").draft.end).toBe("2026-10-25T04:00");
+  });
   it("uses date-only arithmetic across daylight saving and Monday weeks", () => {
     expect(weekStart("2026-10-25")).toBe("2026-10-19");
     expect(weekStart("2026-10-26")).toBe("2026-10-26");
@@ -140,6 +186,8 @@ describe("React calendar", () => {
       field.dispatchEvent(new Event("input", { bubbles: true })); field.dispatchEvent(new Event("change", { bubbles: true }));
     });
   };
+  const inputValue = (label: string): string => required(Array.from(host.querySelectorAll("label"))
+    .find((item) => item.textContent === label)?.querySelector("input") ?? null).value;
   const postBodies = (): Record<string, unknown>[] => fetcher.mock.calls.filter((call) => call[1]?.method === "POST")
     .map((call) => JSON.parse(typeof call[1]?.body === "string" ? call[1].body : "{}") as Record<string, unknown>);
 
@@ -162,7 +210,48 @@ describe("React calendar", () => {
     expect(postBodies()[0]?.group).toBe("family"); expect((postBodies()[0]?.payload as { summary: string }).summary).toBe("Dinner together");
     expect(postBodies()[0]?.id).toBeUndefined(); expect(host.textContent).toContain("Saved locally");
   });
-  it("clears only edited timestamp offsets when moving a Warsaw event across DST", async () => {
+  it("creates a one-hour overnight event and retains a manually selected shorter duration", async () => {
+    await flush(() => { root.render(<Calendar canWrite />); });
+    await click(button("Add event")); await input("Title", "Evening plan");
+    await input("Starts", "2026-12-31T23:30");
+    expect(inputValue("Ends")).toBe("2027-01-01T00:30");
+    await input("Ends", "2027-01-01T00:00");
+    await input("Starts", "2027-01-04T08:00");
+    expect(inputValue("Ends")).toBe("2027-01-04T08:30");
+    await flush(() => { required(host.querySelector("form")).dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })); });
+    expect(postBodies()[0]?.payload).toMatchObject({
+      start: { dateTime: "2027-01-04T08:00:00" }, end: { dateTime: "2027-01-04T08:30:00" },
+    });
+  });
+  it("waits through a cleared start without losing the edited duration or end offset", async () => {
+    await flush(() => { root.render(<Calendar canWrite />); });
+    await click(button("Family walk"));
+    const day = inputValue("Starts").slice(0, 10);
+    await input("Ends", `${day}T12:30`);
+    await input("End offset", "+02:00");
+    await input("Starts", "");
+    expect(inputValue("Ends")).toBe(`${day}T12:30`);
+    expect(inputValue("End offset")).toBe("+02:00");
+    await input("Starts", "2027-01-04T08:00");
+    expect(inputValue("Ends")).toBe("2027-01-04T10:30");
+    expect(inputValue("End offset")).toBe("");
+  });
+  it("moves a multi-day all-day event while retaining its exclusive end date", async () => {
+    vi.setSystemTime(new Date("2026-10-24T12:00:00Z"));
+    const fixture = data();
+    const original = event();
+    original.payload.start = { date: "2026-10-24" };
+    original.payload.end = { date: "2026-10-27" };
+    fixture.events = [original];
+    fetcher.mockImplementation(() => Promise.resolve(new Response(JSON.stringify(fixture), { status: 200 })));
+    await flush(() => { root.render(<Calendar canWrite />); });
+    await click(button("Family walk"));
+    await input("Starts", "2026-10-31");
+    expect(inputValue("End date (exclusive)")).toBe("2026-11-03");
+    await flush(() => { required(host.querySelector("form")).dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })); });
+    expect(postBodies()[0]?.payload).toMatchObject({ start: { date: "2026-10-31" }, end: { date: "2026-11-03" } });
+  });
+  it("automatically moves the end and clears both changed offsets across DST", async () => {
     vi.setSystemTime(new Date("2026-10-24T12:00:00Z"));
     const fixture = data();
     const original = event();
@@ -175,9 +264,8 @@ describe("React calendar", () => {
     const startOffset = required(Array.from(host.querySelectorAll("label")).find((label) => label.textContent === "Start offset")?.querySelector("input") ?? null);
     const endOffset = required(Array.from(host.querySelectorAll("label")).find((label) => label.textContent === "End offset")?.querySelector("input") ?? null);
     await input("Starts", "2026-10-26T09:00");
-    expect(startOffset.value).toBe(""); expect(endOffset.value).toBe("+02:00");
-    await input("Ends", "2026-10-26T10:00");
-    expect(endOffset.value).toBe("");
+    expect(startOffset.value).toBe(""); expect(endOffset.value).toBe("");
+    expect(inputValue("Ends")).toBe("2026-10-26T10:00");
     await flush(() => { required(host.querySelector("form")).dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })); });
     expect(postBodies()[0]?.payload).toMatchObject({
       start: { dateTime: "2026-10-26T09:00:00", timeZone: "Europe/Warsaw" },

@@ -95,6 +95,38 @@ export function eventDraft(event: CalendarEvent | null, day: string): EventDraft
     recurrence: payload?.recurrence?.join("\n") ?? "",
   };
 }
+
+function civilTimestamp(value: string, allDay: boolean): number | null {
+  const pattern = allDay ? /^\d{4}-\d{2}-\d{2}$/ : /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/;
+  if (!pattern.test(value) || value.startsWith("0000-")) return null;
+  // UTC is only an arithmetic grid here: these are civil values in draft.timezone,
+  // never instants interpreted in the browser's local time zone.
+  const timestamp = Date.parse(`${value}${allDay ? "T00:00" : ""}:00Z`);
+  if (!Number.isFinite(timestamp) || new Date(timestamp).toISOString().slice(0, value.length) !== value) return null;
+  return timestamp;
+}
+
+export function moveDraftStart(draft: EventDraft, start: string, startAnchor = draft.start): {
+  draft: EventDraft; startAnchor: string;
+} {
+  if (start === draft.start) return { draft, startAnchor };
+  const nextStart = civilTimestamp(start, draft.allDay);
+  const previousStart = civilTimestamp(startAnchor, draft.allDay);
+  const previousEnd = civilTimestamp(draft.end, draft.allDay);
+  const next = { ...draft, start, startOffset: "" };
+  if (nextStart !== null && previousStart !== null && previousEnd !== null) {
+    const duration = previousEnd - previousStart;
+    if (draft.allDay ? duration > 0 : duration >= 0) {
+      const ending = new Date(nextStart + duration).toISOString().slice(0, draft.allDay ? 10 : 16);
+      if (civilTimestamp(ending, draft.allDay) !== null && ending !== draft.end) {
+        next.end = ending;
+        next.endOffset = "";
+      }
+    }
+  }
+  return { draft: next, startAnchor: nextStart === null ? startAnchor : start };
+}
+
 export function draftPayload(draft: EventDraft, original: CalendarEvent | null): CalendarPayload {
   // Preserve supported fields and occurrence exceptions while editing the series.
   const time = (field: "start" | "end"): EventTime => {

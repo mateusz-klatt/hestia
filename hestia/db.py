@@ -25,7 +25,7 @@ from threading import RLock
 
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import Engine, ForeignKey, UniqueConstraint, create_engine, event, text
+from sqlalchemy import URL, Engine, ForeignKey, UniqueConstraint, create_engine, event, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
 DEFAULT_DB_PATH = "/data/hestia.db"
@@ -198,7 +198,8 @@ def make_engine(path) -> Engine:
     # check_same_thread=False: writes run in run_in_executor worker threads (the cancel-safe write
     # path), so the connection must be usable off the creating thread. Explicit, not relying on the
     # dialect default. Single-writer serialisation is handled by the caller's save_lock + WAL.
-    engine = create_engine(f"sqlite:///{p}", connect_args={"check_same_thread": False})
+    engine = create_engine(URL.create("sqlite", database=str(p)),
+                           connect_args={"check_same_thread": False})
     event.listen(engine, "connect", lambda dbapi_conn, _record: _apply_pragmas(dbapi_conn))
     return engine
 

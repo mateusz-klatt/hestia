@@ -39,33 +39,65 @@ class SyncStore:
 
     def configure(self, groups):
         """Retire removed endpoints without removing identities, events or tombstones."""
+        groups = tuple(groups)
+        group_ids = {group["id"] for group in groups}
+        identities = {(item["id"], group["id"], item["provider"], item["account"], item["calendar_id"])
+                      for group in groups for item in group["calendars"]}
+        with self.sessions() as s:
+            # SQLite's legacy transaction mode does not begin for SELECT.
+            # Both metadata reads must observe the same committed snapshot.
+            s.execute(text("BEGIN"))
+            if self._configuration_matches(s, group_ids, identities):
+                return
         with self.transaction() as s:
-            for row in s.scalars(select(Group)):
-                row.enabled = False
-            for row in s.scalars(select(Endpoint)):
-                row.enabled = False
+            # API reads can configure concurrently with the poller or another
+            # process. Decide again after acquiring SQLite's write lock.
+            if self._configuration_matches(s, group_ids, identities):
+                return
+            existing_groups = {row.id: row for row in s.scalars(select(Group))}
+            existing_endpoints = {row.id: row for row in s.scalars(select(Endpoint))}
+            endpoint_ids = {identity[0] for identity in identities}
+            for row in existing_groups.values():
+                row.enabled = row.id in group_ids
+            for row in existing_endpoints.values():
+                if row.id not in endpoint_ids:
+                    row.enabled = False
+            backfill = []
             for group in groups:
                 gid = group["id"]
-                row = s.get(Group, gid)
+                row = existing_groups.get(gid)
                 if row is None:
                     row = Group(id=gid, enabled=True)
                     s.add(row)
                     s.flush()
+                    existing_groups[gid] = row
                 row.enabled = True
                 for item in group["calendars"]:
                     identity = (gid, item["provider"], item["account"], item["calendar_id"])
-                    endpoint = s.get(Endpoint, item["id"])
+                    endpoint = existing_endpoints.get(item["id"])
                     if endpoint is None:
                         endpoint = Endpoint(id=item["id"], group_id=gid, provider=item["provider"],
                                             account=item["account"], calendar_id=item["calendar_id"],
                                             enabled=True)
                         s.add(endpoint)
+                        existing_endpoints[endpoint.id] = endpoint
+                        backfill.append(endpoint)
                     elif (endpoint.group_id, endpoint.provider, endpoint.account, endpoint.calendar_id) != identity:
                         raise CalendarConflict("Calendar endpoint identity cannot be reassigned; use a new identifier")
+                    elif not endpoint.enabled:
+                        backfill.append(endpoint)
                     endpoint.enabled = True
             s.flush()
-            for event in s.scalars(select(Event)):
-                self._enqueue(s, event)
+            for endpoint in backfill:
+                for event in s.scalars(select(Event).where(Event.group_id == endpoint.group_id)):
+                    self._enqueue_endpoint(s, event, endpoint)
+
+    @staticmethod
+    def _configuration_matches(s, group_ids, identities):
+        current_groups = set(s.scalars(select(Group.id).where(Group.enabled)))
+        current_identities = set(s.execute(select(Endpoint.id, Endpoint.group_id, Endpoint.provider,
+                                                  Endpoint.account, Endpoint.calendar_id).where(Endpoint.enabled)))
+        return current_groups == group_ids and current_identities == identities
 
     def groups(self):
         with self.sessions() as s:
@@ -144,21 +176,25 @@ class SyncStore:
     @staticmethod
     def _enqueue(s, event):
         for endpoint in s.scalars(select(Endpoint).where(Endpoint.group_id == event.group_id, Endpoint.enabled)):
-            key = (endpoint.id, event.id)
-            replica = s.get(Replica, key)
-            if event.deleted and replica is None:
-                continue
-            if replica is not None and replica.applied_revision == event.revision:
-                continue
-            job = s.get(Outbox, key)
-            if job is None:
-                s.add(Outbox(endpoint_id=endpoint.id, event_id=event.id, revision=event.revision,
-                             attempts=0, next_attempt=0))
-            elif job.revision != event.revision:
-                job.revision = event.revision
-                job.attempts = 0
-                job.next_attempt = 0
-                job.last_error = None
+            SyncStore._enqueue_endpoint(s, event, endpoint)
+
+    @staticmethod
+    def _enqueue_endpoint(s, event, endpoint):
+        key = (endpoint.id, event.id)
+        replica = s.get(Replica, key)
+        if event.deleted and replica is None:
+            return
+        if replica is not None and replica.applied_revision == event.revision:
+            return
+        job = s.get(Outbox, key)
+        if job is None:
+            s.add(Outbox(endpoint_id=endpoint.id, event_id=event.id, revision=event.revision,
+                         attempts=0, next_attempt=0))
+        elif job.revision != event.revision:
+            job.revision = event.revision
+            job.attempts = 0
+            job.next_attempt = 0
+            job.last_error = None
 
     def endpoints(self):
         with self.sessions() as s:

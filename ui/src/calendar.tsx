@@ -4,7 +4,7 @@ import { createRoot } from "react-dom/client";
 import { apiUrl } from "./api/client";
 import { currentLocale } from "./i18n";
 import {
-  dateKey, draftPayload, eventDraft, localTime, onDay, shiftDay, weekStart,
+  dateKey, draftPayload, eventDraft, localTime, moveDraftStart, onDay, shiftDay, weekStart,
 } from "./calendar-model";
 import type { CalendarData, CalendarEvent, EventDraft } from "./calendar-model";
 import "./calendar.css";
@@ -81,16 +81,20 @@ function EventEditor({ event, group, day, copy, onClose, onSaved }: {
   event: CalendarEvent | null; group: string; day: string; copy: Copy;
   onClose: () => void; onSaved: (message: string) => void;
 }) {
-  const [draft, setDraft] = useState<EventDraft>(() => eventDraft(event, day));
+  const [editing, setEditing] = useState(() => {
+    const draft = eventDraft(event, day);
+    return { draft, startAnchor: draft.start };
+  });
+  const { draft } = editing;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const title = useRef<HTMLInputElement>(null);
   useEffect(() => { title.current?.focus(); }, []);
   const field = <K extends keyof EventDraft,>(name: K, value: EventDraft[K]): void => {
-    setDraft((old) => ({ ...old, [name]: value,
-      ...(name === "start" || name === "timezone" ? { startOffset: "" } : {}),
+    setEditing((old) => old.draft[name] === value ? old : ({ ...old, draft: { ...old.draft, [name]: value,
+      ...(name === "timezone" ? { startOffset: "" } : {}),
       ...(name === "end" || name === "timezone" ? { endOffset: "" } : {}),
-    }));
+    } }));
   };
   const submit = async (remove: boolean): Promise<void> => {
     if (remove && !window.confirm(copy.confirm)) return;
@@ -139,15 +143,18 @@ function EventEditor({ event, group, day, copy, onClose, onSaved }: {
         onChange={(e) => { field("summary", e.target.value); }} /></label>
       <label className="calendar-checkbox"><input type="checkbox" checked={draft.allDay} onChange={(e) => {
         const allDay = e.target.checked;
-        setDraft((old) => ({ ...old, allDay, startOffset: "", endOffset: "", start: allDay ? old.start.slice(0, 10) : `${old.start}T09:00`,
-          end: allDay ? shiftDay(old.end.slice(0, 10), old.end.slice(0, 10) === old.start.slice(0, 10) ? 1 : 0) : `${old.end}T10:00` }));
+        setEditing((old) => {
+          const start = allDay ? old.draft.start.slice(0, 10) : `${old.draft.start}T09:00`;
+          return { startAnchor: start, draft: { ...old.draft, allDay, startOffset: "", endOffset: "", start,
+            end: allDay ? shiftDay(old.draft.end.slice(0, 10), old.draft.end.slice(0, 10) === old.draft.start.slice(0, 10) ? 1 : 0) : `${old.draft.end}T10:00` } };
+        });
       }} />{copy.allDay}</label>
       <label className="calendar-checkbox"><input type="checkbox" checked={draft.endUnknown}
         onChange={(e) => { field("endUnknown", e.target.checked); }} />{copy.endUnknown}</label>
       {draft.endUnknown && <p className="calendar-note">{copy.endUnknownHelp}</p>}
       <div className="calendar-form-row">
         <label>{copy.start}<input required type={draft.allDay ? "date" : "datetime-local"} value={draft.start}
-          onChange={(e) => { field("start", e.target.value); }} /></label>
+          onChange={(e) => { const start = e.target.value; setEditing((old) => moveDraftStart(old.draft, start, old.startAnchor)); }} /></label>
         <label>{draft.allDay ? copy.exclusive : copy.end}<input required={!draft.endUnknown} disabled={draft.endUnknown} type={draft.allDay ? "date" : "datetime-local"}
           value={draft.end} onChange={(e) => { field("end", e.target.value); }} /></label>
       </div>

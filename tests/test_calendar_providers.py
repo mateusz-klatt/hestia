@@ -212,7 +212,11 @@ class GoogleWriteTests(unittest.TestCase):
         provider, transport = google(google_acl(), response(status=204))
         provider.delete("event", '"v2"')
         self.assertEqual(transport.calls[1][2]["headers"]["If-Match"], '"v2"')
-        self.assertEqual(provider.allocate_id("uid"), provider.allocate_id("uid"))
+        expected_id = "h17b788a70eeccbdc2fcb2d2d3db216c02fa88ac668beeb164bb2328c864bf3f4"
+        restarted, restarted_transport = google()
+        self.assertEqual(provider.allocate_id("uid"), expected_id)
+        self.assertEqual(restarted.allocate_id("uid"), expected_id)
+        self.assertEqual(restarted_transport.calls, [])
         self.assertRegex(provider.allocate_id("uid"), "^[0-9a-v]{5,1024}$")
 
     def test_conflict_permission_errors_and_missing_deletion(self):
@@ -384,7 +388,11 @@ class CalDAVWriteTests(unittest.TestCase):
         for status in (204, 404, 410):
             provider, _ = dav(dav_acl(), response(status=status))
             provider.delete(RESOURCE, '"v2"')
-        self.assertEqual(provider.allocate_id("uid"), provider.allocate_id("uid"))
+        expected_id = CALENDAR + "h17b788a70eeccbdc2fcb2d2d3db216c02fa88ac668beeb164bb2328c864bf3f4.ics"
+        restarted, restarted_transport = dav()
+        self.assertEqual(provider.allocate_id("uid"), expected_id)
+        self.assertEqual(restarted.allocate_id("uid"), expected_id)
+        self.assertEqual(restarted_transport.calls, [])
         self.assertTrue(provider.allocate_id("uid").startswith(CALENDAR))
 
     def test_failed_writes_permissions_and_conflicts(self):
