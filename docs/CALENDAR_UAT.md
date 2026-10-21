@@ -1,6 +1,6 @@
 # UAT formularza kalendarza
 
-Weryfikacja 22 października 2026: **8/8 scenariuszy PASS** w Google Chrome
+Weryfikacja 22 października 2026: **10/10 scenariuszy PASS** w Google Chrome
 headless, sterowanym przez Playwright. Testowano rzeczywisty komponent React,
 z atrapami wszystkich odpowiedzi API i fikcyjnymi wydarzeniami. Test nie wykonywał
 żądań do produkcyjnej Hestii, Google ani iCloud.
@@ -17,6 +17,12 @@ Formularz zachowuje **czas według zegara w wybranej strefie**: przeniesienie
 zmianę czasu może mieć inną długość w sekundach. Serwer nadal sprawdza strefę IANA,
 nieistniejące godziny wiosenne i dwuznaczne godziny jesienne. Zmienione pola tracą
 stare przesunięcie UTC; nietknięte znaczniki czasu zachowują swoje przesunięcia.
+Ręcznie wpisane przesunięcie musi odtwarzać tę samą godzinę w wybranej strefie;
+formularz odrzuca przesunięcia niezgodne ze strefą i nieistniejące godziny wiosenne.
+Nieznany koniec nie podlega tej kontroli.
+
+Podczas zapisu można otworzyć inne wydarzenie lub grupę. Zakończenie wcześniejszego
+zapisu nie zamyka nowego formularza, nie usuwa jego szkicu i nie odświeża starej grupy.
 
 Inspiracją jest ograniczenie liczby ręcznych poprawek przy zachowaniu kontroli
 nad długością wydarzenia. Google dokumentuje możliwość ustawienia domyślnej
@@ -39,6 +45,8 @@ przytoczone instrukcje nie gwarantują takiego samego sprzężenia pól w tych p
 | 6 | Widok mobilny, Warszawa | Przy rozmiarze `390×844` i strefie przeglądarki `Europe/Warsaw` wprowadź początek `2026-10-26 09:00`: koniec wynosi `10:00`, strona nie przewija się poziomo i nie zgłasza błędów JavaScript. | PASS |
 | 7 | Widok mobilny, Los Angeles | Powtórz scenariusz 6 przy strefie przeglądarki `America/Los_Angeles`. Długość i brak poziomego przewijania pozostają takie same. | PASS |
 | 8 | Uprawnienia viewer | Otwórz szczegóły jako viewer: brak przycisku dodawania, formularza edycji i przycisku zapisu; nie są wysyłane żądania zapisu. | PASS |
+| 9 | Jawne przesunięcie i zmiana czasu | Wpisz początek `2026-03-29 02:30`, strefę `Europe/Warsaw` i przesunięcie `+01:00`: formularz pokazuje błąd bez POST i zachowuje szkic. Popraw początek na `03:30`, przesunięcie na `+02:00`: zapis przechodzi. | PASS |
+| 10 | Zmiana edytora podczas zapisu | Opóźnij POST wydarzenia A. Otwórz formularz B i wpisz tytuł. Zakończ POST A: formularz B pozostaje otwarty z niezmienionym szkicem. | PASS |
 
 Do ręcznego powtarzania podstawowych scenariuszy uruchom atrapy interfejsu:
 
@@ -54,17 +62,23 @@ Przed edycją wybierz tydzień zawierający wydarzenie testowe. W DevTools włą
 widok urządzenia `390×844`; strefę zmień w panelu Sensors → Location → Timezone.
 Wykonuj tabelę, obserwując również żądania w panelu Network.
 
-Do scenariusza 2 można w konsoli tej **lokalnej strony z `?mock`** przechwycić POST:
+Do scenariuszy 2 i 10 można w konsoli tej **lokalnej strony z `?mock`** przechwycić POST:
 
 ```js
 (() => {
   const originalFetch = window.fetch.bind(window);
   window.calendarUatStatus = 200;
-  window.fetch = (input, init) => {
+  window.calendarUatDelay = false;
+  window.calendarUatResume = null;
+  window.fetch = async (input, init) => {
     const url = String(input instanceof Request ? input.url : input);
-    if (init?.method === "POST" && url.includes("/api/calendars/events")
-        && window.calendarUatStatus !== 200) {
-      return Promise.resolve(new Response("{}", { status: window.calendarUatStatus }));
+    if (init?.method === "POST" && url.includes("/api/calendars/events")) {
+      if (window.calendarUatDelay) {
+        await new Promise(resolve => { window.calendarUatResume = resolve; });
+      }
+      if (window.calendarUatStatus !== 200) {
+        return new Response("{}", { status: window.calendarUatStatus });
+      }
     }
     return originalFetch(input, init);
   };
@@ -72,7 +86,10 @@ Do scenariusza 2 można w konsoli tej **lokalnej strony z `?mock`** przechwycić
 ```
 
 Ustaw `window.calendarUatStatus = 409`, następnie `503`, a na końcu `200` przed
-kolejnymi próbami zapisu. Do scenariusza 8 można zamontować ten sam komponent
+kolejnymi próbami zapisu. Do scenariusza 10 ustaw `window.calendarUatDelay = true`,
+zapisz A i otwórz szkic B. Następnie ustaw `window.calendarUatDelay = false` i wykonaj
+`window.calendarUatResume?.()`: szkic B ma pozostać otwarty.
+Do scenariusza 8 można zamontować ten sam komponent
 bez uprawnienia zapisu, nadal na stronie z atrapami:
 
 ```js
@@ -97,10 +114,12 @@ npm run lint
 npm run build
 ```
 
-W tej weryfikacji przeszło **550 testów w 24 plikach**, w tym 28 testów kalendarza
+W tej weryfikacji przeszło **559 testów w 24 plikach**, w tym 37 testów kalendarza
 także przy strefie środowiska Los Angeles. Testy komponentu obejmują dodatkowo
 niepełny początek, ręczny czas 30 minut, zerową długość, zmianę czasu i zachowanie
-niezmienionych przesunięć. Sprawdzenie typów, lint i build również przeszły.
+niezmienionych przesunięć, poprawne jesienne przesunięcia oraz opóźnione odpowiedzi
+po zmianie grupy lub ponownym otwarciu tego samego wydarzenia.
+Sprawdzenie typów, lint i build również przeszły.
 
 Widok mobilny był emulacją Chrome. **Nie testowano Safari, fizycznego iPhone’a ani
 Androida, natywnej klawiatury telefonu ani pełnej obsługi klawiaturą/czytnikiem ekranu.**

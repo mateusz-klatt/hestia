@@ -30,6 +30,7 @@ const labels = {
     recurrence: "Recurrence rules (optional)", recurrenceHelp: "One RRULE, EXDATE or RDATE per line. Changes apply to the whole series; existing exceptions are preserved. Removing all rules also removes the exceptions.",
     offset: "UTC offset (optional)", startOffset: "Start offset", endOffset: "End offset",
     offsetHelp: "For an ambiguous autumn time, specify +02:00 or +01:00. The offset must match the IANA zone. Nonexistent spring times cannot be saved.",
+    offsetMismatch: "The UTC offset does not match this local date and time in the selected time zone. Check the daylight-saving transition.",
     googleRestricted: "Google restricts changes to this Gmail or Contacts event. Edit it in its source or use a regular calendar event. The local change remains queued.",
     permission: "Calendar access is restricted. Check account authorization and sharing permissions for full read and write access.",
     exceptions: "Existing occurrence exceptions", save: "Save event", saving: "Saving…", cancel: "Cancel",
@@ -58,6 +59,7 @@ const labels = {
     recurrence: "Reguły cykliczności (opcjonalnie)", recurrenceHelp: "Jedna reguła RRULE, EXDATE lub RDATE w wierszu. Edytujesz całą serię; istniejące wyjątki zostają zachowane. Usunięcie wszystkich reguł usuwa też wyjątki.",
     offset: "Przesunięcie UTC (opcjonalnie)", startOffset: "Przesunięcie początku", endOffset: "Przesunięcie końca",
     offsetHelp: "Dla dwuznacznej godziny jesiennej podaj +02:00 lub +01:00. Przesunięcie musi odpowiadać strefie IANA. Nieistniejące godziny wiosenne nie mogą zostać zapisane.",
+    offsetMismatch: "Przesunięcie UTC nie odpowiada tej dacie i godzinie w wybranej strefie. Sprawdź zmianę czasu.",
     googleRestricted: "Google ogranicza zmiany tego wydarzenia z Gmaila lub Kontaktów. Zmień je w źródle albo użyj zwykłego wydarzenia. Lokalna zmiana pozostaje w kolejce.",
     permission: "Ograniczony dostęp do kalendarza. Sprawdź autoryzację konta i udostępnianie z pełnymi uprawnieniami odczytu i zapisu.",
     exceptions: "Istniejące wyjątki wystąpień", save: "Zapisz wydarzenie", saving: "Zapisywanie…", cancel: "Anuluj",
@@ -89,7 +91,12 @@ function EventEditor({ event, group, day, copy, onClose, onSaved }: {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const title = useRef<HTMLInputElement>(null);
-  useEffect(() => { title.current?.focus(); }, []);
+  const mounted = useRef(false);
+  useEffect(() => {
+    mounted.current = true;
+    title.current?.focus();
+    return () => { mounted.current = false; };
+  }, []);
   const field = <K extends keyof EventDraft,>(name: K, value: EventDraft[K]): void => {
     setEditing((old) => old.draft[name] === value ? old : ({ ...old, draft: { ...old.draft, [name]: value,
       ...(name === "timezone" ? { startOffset: "" } : {}),
@@ -107,6 +114,13 @@ function EventEditor({ event, group, day, copy, onClose, onSaved }: {
           : draft.startOffset === "" && draft.endOffset === "" && draft.end < draft.start;
         if (draft.summary.trim() === "" || badOrder
             || (draft.endUnknown ? [draft.startOffset] : [draft.startOffset, draft.endOffset]).some((offset) => offset !== "" && !/^(Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$/.test(offset))) throw new Error("invalid");
+        const times = [{ value: draft.start, offset: draft.startOffset },
+          ...(draft.endUnknown ? [] : [{ value: draft.end, offset: draft.endOffset }])];
+        if (!draft.allDay && times.some(({ value, offset }) => offset !== ""
+            && localTime({ dateTime: `${value}:00${offset}` }, draft.timezone) !== value)) {
+          setError(copy.offsetMismatch);
+          return;
+        }
       } catch {
         setError(copy.invalid);
         return;
@@ -120,15 +134,16 @@ function EventEditor({ event, group, day, copy, onClose, onSaved }: {
       const response = await fetch(apiUrl(remove ? "calendars/events/delete" : "calendars/events"), {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
       });
+      if (!mounted.current) return;
       if (!response.ok) {
         setError(response.status === 409 ? copy.conflict : copy.saveError);
         return;
       }
       onSaved(remove ? copy.deleted : copy.saved);
     } catch {
-      setError(copy.saveError);
+      if (mounted.current) setError(copy.saveError);
     } finally {
-      setBusy(false);
+      if (mounted.current) setBusy(false);
     }
   };
   const formSubmit = (formEvent: SyntheticEvent<HTMLFormElement>): void => {
@@ -187,7 +202,8 @@ export function Calendar({ canWrite, active = true }: { canWrite: boolean; activ
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [loading, setLoading] = useState(true);
-  const [editor, setEditor] = useState<{ event: CalendarEvent | null; day: string } | null>(null);
+  const [editor, setEditor] = useState<{ id: number; event: CalendarEvent | null; day: string } | null>(null);
+  const editorNumber = useRef(0);
   const requestNumber = useRef(0);
   const refresh = useCallback(async (): Promise<void> => {
     const request = ++requestNumber.current;
@@ -222,7 +238,7 @@ export function Calendar({ canWrite, active = true }: { canWrite: boolean; activ
   const series = events.filter((event) => (event.payload.recurrence?.length ?? 0) > 0);
   const open = (event: CalendarEvent | null, day: string): void => {
     setNotice("");
-    setEditor({ event, day });
+    setEditor({ id: ++editorNumber.current, event, day });
   };
   const card = (event: CalendarEvent, recurring = false) => <button type="button" className="calendar-event" key={event.id}
     onClick={() => { open(event, event.payload.start.date ?? localTime(event.payload.start, zone).slice(0, 10)); }}>
@@ -249,7 +265,7 @@ export function Calendar({ canWrite, active = true }: { canWrite: boolean; activ
         <button type="button" onClick={() => { void refresh(); }} disabled={loading}>{copy.refresh}</button></div>
       <div className="calendar-range"><h3>{new Intl.DateTimeFormat(locale, { month: "long", year: "numeric" }).format(new Date(`${week}T12:00:00`))}</h3>
         {!canWrite && <span>{copy.readonly}</span>}</div>
-      {editor !== null && canWrite && <EventEditor key={`${group}:${editor.event?.id ?? "new"}:${editor.day}`} event={editor.event} day={editor.day} group={group} copy={copy}
+      {editor !== null && canWrite && <EventEditor key={`${group}:${String(editor.id)}`} event={editor.event} day={editor.day} group={group} copy={copy}
         onClose={() => { setEditor(null); }} onSaved={(message) => { setEditor(null); setNotice(message); void refresh(); }} />}
       {editor?.event !== undefined && editor.event !== null && !canWrite && <article className="calendar-editor" aria-label={copy.details}>
         <div className="calendar-editor-heading"><h3>{editor.event.payload.summary}</h3><button type="button" onClick={() => { setEditor(null); }}>{copy.close}</button></div>

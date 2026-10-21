@@ -184,7 +184,7 @@ class SyncStore:
         replica = s.get(Replica, key)
         if event.deleted and replica is None:
             return
-        if replica is not None and replica.applied_revision == event.revision:
+        if replica is not None and replica.applied_revision == event.revision and not replica.uncertain:
             return
         job = s.get(Outbox, key)
         if job is None:
@@ -240,7 +240,9 @@ class SyncStore:
                 for replica in s.scalars(select(Replica).where(Replica.event_id == event.id)):
                     matches = replica.deleted if event.deleted else (
                         not replica.deleted and replica.observed_hash == event.fingerprint)
-                    if matches:
+                    # A matching last observation cannot confirm an in-flight
+                    # write of a different version, including a local revert.
+                    if matches and not replica.uncertain:
                         replica.applied_revision = event.revision
                         job = s.get(Outbox, (replica.endpoint_id, event.id))
                         if job is not None:
@@ -355,7 +357,7 @@ class SyncStore:
                 job.attempts = 0
                 job.next_attempt = 0
 
-    def failed(self, endpoint_id, event_id, code, *, conflict=False, no_mutation=False,
+    def failed(self, endpoint_id, event_id, code, *, no_mutation=False,
                prior_uncertain=True):
         with self.transaction() as s:
             key = (endpoint_id, event_id)
@@ -365,7 +367,7 @@ class SyncStore:
             job.last_error = code
             # A preflight failure can undo only the uncertainty added by this attempt.
             # Earlier lost responses or partial deliveries remain unresolved.
-            if conflict or (no_mutation and not prior_uncertain):
+            if no_mutation and not prior_uncertain:
                 replica = s.get(Replica, key)
                 replica.uncertain = False
                 replica.observed_hash = None

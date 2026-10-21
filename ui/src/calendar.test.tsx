@@ -293,6 +293,88 @@ describe("React calendar", () => {
       end: { dateTime: "2026-10-25T02:45:00+01:00", timeZone: "Europe/Warsaw" },
     });
   });
+  it.each([
+    { name: "nonexistent spring start", start: "2026-03-29T02:30", end: "2026-03-29T03:30", startOffset: "+01:00", endOffset: "+02:00" },
+    { name: "nonexistent spring end", start: "2026-03-29T01:30", end: "2026-03-29T02:30", startOffset: "+01:00", endOffset: "+01:00" },
+    { name: "wrong offset for a winter date", start: "2026-10-26T09:00", end: "2026-10-26T10:00", startOffset: "+02:00", endOffset: "+02:00" },
+  ])("rejects a $name without posting or changing the user's wall times", async ({ start, end, startOffset, endOffset }) => {
+    await flush(() => { root.render(<Calendar canWrite />); });
+    await click(button("Add event")); await input("Title", "Explicit offset test");
+    await input("Time zone (IANA)", "Europe/Warsaw");
+    await input("Starts", start); await input("Ends", end);
+    await input("Start offset", startOffset); await input("End offset", endOffset);
+    await flush(() => { required(host.querySelector("form")).dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })); });
+    expect(postBodies()).toHaveLength(0);
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain("UTC offset does not match");
+    expect(inputValue("Starts")).toBe(start); expect(inputValue("Ends")).toBe(end);
+  });
+  it.each(["+02:00", "+01:00"])("accepts the valid Warsaw autumn occurrence selected by %s", async (offset) => {
+    await flush(() => { root.render(<Calendar canWrite />); });
+    await click(button("Add event")); await input("Title", "Autumn choice");
+    await input("Time zone (IANA)", "Europe/Warsaw");
+    await input("Starts", "2026-10-25T02:15"); await input("Ends", "2026-10-25T02:45");
+    await input("Start offset", offset); await input("End offset", offset);
+    await flush(() => { required(host.querySelector("form")).dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })); });
+    expect(postBodies()[0]?.payload).toMatchObject({
+      start: { dateTime: `2026-10-25T02:15:00${offset}`, timeZone: "Europe/Warsaw" },
+      end: { dateTime: `2026-10-25T02:45:00${offset}`, timeZone: "Europe/Warsaw" },
+    });
+  });
+  it("ignores an unused invalid end offset when only the start is known", async () => {
+    await flush(() => { root.render(<Calendar canWrite />); });
+    await click(button("Add event")); await input("Title", "Only a known start");
+    await input("Time zone (IANA)", "Europe/Warsaw");
+    await input("Starts", "2026-03-29T01:30"); await input("Start offset", "+01:00");
+    await input("End offset", "invalid");
+    await click(required(Array.from(host.querySelectorAll("label"))
+      .find((label) => label.textContent === "End time unknown")?.querySelector("input") ?? null));
+    await flush(() => { required(host.querySelector("form")).dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })); });
+    const payload = postBodies()[0]?.payload;
+    expect(payload).toMatchObject({ endTimeUnspecified: true,
+      start: { dateTime: "2026-03-29T01:30:00+01:00", timeZone: "Europe/Warsaw" },
+      end: { dateTime: "2026-03-29T01:30:00+01:00", timeZone: "Europe/Warsaw" } });
+  });
+  it.each(["family", "work"])("keeps the current %s editor when an older save finishes", async (nextGroup) => {
+    const fixture = data();
+    const second = event();
+    second.id = "local-2"; second.group_id = nextGroup; second.payload.summary = "Second plan";
+    fixture.events.push(second);
+    let resolveSave: (response: Response) => void = () => { throw new Error("Save has not started"); };
+    const pendingSave = new Promise<Response>((resolve) => { resolveSave = resolve; });
+    fetcher.mockImplementation((_, options) => options?.method === "POST" ? pendingSave
+      : Promise.resolve(new Response(JSON.stringify(fixture), { status: 200 })));
+    await flush(() => { root.render(<Calendar canWrite />); });
+    await click(button("Family walk")); await input("Title", "Saved first plan");
+    await flush(() => { required(host.querySelector("form")).dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })); });
+    if (nextGroup !== "family") {
+      const select = required(host.querySelector("select"));
+      await flush(() => { select.value = nextGroup; select.dispatchEvent(new Event("change", { bubbles: true })); });
+    }
+    await click(button("Second plan")); await input("Title", "Keep this second draft");
+    const readCount = fetcher.mock.calls.filter((call) => call[1]?.method !== "POST").length;
+    await flush(() => { resolveSave(new Response("{}", { status: 200 })); });
+    expect(inputValue("Title")).toBe("Keep this second draft");
+    expect(host.textContent).not.toContain("Saved locally");
+    expect(required(host.querySelector("select")).value).toBe(nextGroup);
+    expect(fetcher.mock.calls.filter((call) => call[1]?.method !== "POST")).toHaveLength(readCount);
+    expect(postBodies()).toHaveLength(1);
+  });
+  it("gives a reopened event a fresh editor while its older save is still pending", async () => {
+    let resolveSave: (response: Response) => void = () => { throw new Error("Save has not started"); };
+    const pendingSave = new Promise<Response>((resolve) => { resolveSave = resolve; });
+    fetcher.mockImplementation((_, options) => options?.method === "POST" ? pendingSave
+      : Promise.resolve(new Response(JSON.stringify(data()), { status: 200 })));
+    await flush(() => { root.render(<Calendar canWrite />); });
+    await click(button("Family walk")); await input("Title", "First draft");
+    await flush(() => { required(host.querySelector("form")).dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })); });
+    await click(button("Family walk"));
+    expect(inputValue("Title")).toBe("Family walk");
+    await input("Title", "Reopened draft");
+    expect(button("Save event").disabled).toBe(false);
+    await flush(() => { resolveSave(new Response("{}", { status: 200 })); });
+    expect(inputValue("Title")).toBe("Reopened draft");
+    expect(host.textContent).not.toContain("Saved locally");
+  });
   it("clears both offsets on a zone change and when toggling all-day mode", async () => {
     await flush(() => { root.render(<Calendar canWrite />); }); await click(button("Family walk"));
     const startOffset = required(Array.from(host.querySelectorAll("label")).find((label) => label.textContent === "Start offset")?.querySelector("input") ?? null);

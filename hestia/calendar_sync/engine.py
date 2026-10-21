@@ -84,8 +84,6 @@ class SyncEngine:
                 except Exception as exc:
                     code = error_code(exc)
                     self.store.failed(endpoint_id, event_id, code,
-                                      conflict=isinstance(exc, ProviderError) and (
-                                          exc.conflict or exc.code == "google_event_type_restricted"),
                                       no_mutation=isinstance(exc, ProviderError) and exc.no_mutation,
                                       prior_uncertain=intent.get("prior_uncertain", True))
                     errors[endpoint_id] = code

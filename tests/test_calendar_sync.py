@@ -56,7 +56,7 @@ class FakeCalendar:
         if current and not current.deleted and fingerprint(current.payload) == fingerprint(content):
             return current
         if current and etag != current.etag:
-            raise ProviderError("precondition", status=412, conflict=True)
+            raise ProviderError("precondition", status=412, conflict=True, no_mutation=True)
         result = self.remote(remote_id, content, uid=uid)
         if self.after_write:
             self.after_write()
@@ -69,7 +69,7 @@ class FakeCalendar:
         current = self.events.get(remote_id)
         if current and not current.deleted:
             if current.etag != etag:
-                raise ProviderError("precondition", status=412, conflict=True)
+                raise ProviderError("precondition", status=412, conflict=True, no_mutation=True)
             self.remote(remote_id, None, deleted=True)
         if self.after_write:
             self.after_write()
@@ -444,7 +444,7 @@ class SyncTests(unittest.TestCase):
         self.store.save_local("family", payload("Restricted local edit"), created["id"])
         google = self.providers["google"]
         google.write_error = ProviderError("Cannot change fields of this event type",
-                                           code="google_event_type_restricted")
+                                           code="google_event_type_restricted", no_mutation=True)
         result = self.engine.run_once()
         self.assertEqual(result["errors"], {"google": "google_event_type_restricted"})
         self.assertEqual(self.store.status()["pending"][0]["last_error"], "google_event_type_restricted")

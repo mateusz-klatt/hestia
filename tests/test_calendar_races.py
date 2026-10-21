@@ -7,7 +7,7 @@ import unittest
 from hestia import db
 from hestia.calendar_sync.engine import SyncEngine
 from hestia.calendar_sync.store import SyncStore
-from hestia.calendar_sync.types import ProviderError, RemoteEvent
+from hestia.calendar_sync.types import ProviderError, RemoteEvent, Snapshot
 from tests import test_calendar_sync as fixtures
 
 
@@ -247,6 +247,155 @@ class CalendarRaceTests(unittest.TestCase):
         apple.remote(apple.active()[0].remote_id, fixtures.payload("After delivery"))
         self.run_sync()
         self.assert_content(fixtures.payload("After delivery"))
+
+    def test_local_revert_keeps_uncertain_write_queued_until_confirmed_after_restart(self):
+        original = fixtures.payload("Original")
+        created = self.store.save_local("family", original)
+        self.run_sync()
+        self.tick()
+        self.store.save_local("family", fixtures.payload("Unconfirmed change"), created["id"])
+        apple = self.providers["apple"]
+        apple.write_error = TimeoutError("The write response was lost")
+        self.engine.run_once()
+        self.tick()
+        reverted = self.store.save_local("family", original, created["id"])
+        # The other endpoint still reports Original. A matching old observation
+        # must not remove Apple's unconfirmed delivery while Apple is offline.
+        apple.pull_error = OSError("Offline")
+        self.engine.run_once()
+        with self.sessions() as session:
+            replica = session.get(db.CalendarReplica, ("apple", created["id"]))
+            job = session.get(db.CalendarOutbox, ("apple", created["id"]))
+            self.assertTrue(replica.uncertain)
+            self.assertEqual(replica.outbound_hash, fixtures.fingerprint(fixtures.payload("Unconfirmed change")))
+            self.assertEqual(job.revision, reverted["revision"])
+        db.reset_engine_cache()
+        _, self.sessions = db.init_db(self.path)
+        self.store = SyncStore(self.sessions, clock=lambda: self.now)
+        self.engine = SyncEngine(self.store, self.providers)
+        apple.pull_error = apple.write_error = None
+        pull = apple.pull
+        apple.pull = lambda cursor: Snapshot([], "empty-incremental", complete=True, full=False)
+        writes = apple.puts
+        self.tick()
+        self.run_sync()
+        apple.pull = pull
+        self.assertEqual(apple.puts, writes + 1)
+        self.assertEqual(self.store.status()["pending"], [])
+        with self.sessions() as session:
+            self.assertFalse(session.get(db.CalendarReplica, ("apple", created["id"])).uncertain)
+        self.tick()
+        apple.remote(apple.active()[0].remote_id, fixtures.payload("Later genuine edit"))
+        self.run_sync()
+        self.assert_content(fixtures.payload("Later genuine edit"))
+
+    def test_reenable_repairs_matching_applied_revision_with_uncertainty_and_missing_job(self):
+        created = self.store.save_local("family", fixtures.payload())
+        self.run_sync()
+        # Persist the state produced by the former matching-hash acknowledgment
+        # bug: the job was removed although its write outcome remained unknown.
+        with self.store.transaction() as session:
+            replica = session.get(db.CalendarReplica, ("apple", created["id"]))
+            replica.uncertain = True
+            replica.outbound_hash = fixtures.fingerprint(fixtures.payload("Unconfirmed change"))
+            replica.outbound_revision = created["revision"] + 1
+        self.store.configure([{**self.groups[0], "calendars": self.groups[0]["calendars"][1:]}])
+        self.store.configure(self.groups)
+        with self.sessions() as session:
+            self.assertIsNotNone(session.get(db.CalendarOutbox, ("apple", created["id"])))
+        self.run_sync()
+        self.assertEqual(self.store.status()["pending"], [])
+        with self.sessions() as session:
+            self.assertFalse(session.get(db.CalendarReplica, ("apple", created["id"])).uncertain)
+
+    def test_preflight_conflict_or_type_restriction_preserves_earlier_uncertainty(self):
+        created = self.store.save_local("family", fixtures.payload())
+        self.run_sync()
+        self.tick()
+        wanted = fixtures.payload("Unconfirmed desired version")
+        self.store.save_local("family", wanted, created["id"])
+        apple = self.providers["apple"]
+        apple.write_error = TimeoutError("Earlier request outcome unknown")
+        self.engine.run_once()
+        for error, code in (
+            (ProviderError("Retry stopped before writing", status=412, conflict=True, no_mutation=True), "conflict"),
+            (ProviderError("Type forbids the retry", code="google_event_type_restricted", no_mutation=True),
+             "google_event_type_restricted"),
+        ):
+            self.tick(30)
+            apple.write_error = error
+            with self.subTest(code=code):
+                self.assertEqual(self.engine.run_once()["errors"], {"apple": code})
+                with self.sessions() as session:
+                    replica = session.get(db.CalendarReplica, ("apple", created["id"]))
+                    self.assertTrue(replica.uncertain)
+                    self.assertEqual(replica.outbound_hash, fixtures.fingerprint(wanted))
+                    self.assertEqual(replica.observed_hash, fixtures.fingerprint(fixtures.payload()))
+                    self.assertIsNotNone(replica.outbound_revision)
+                    self.assertIsNotNone(session.get(db.CalendarOutbox, ("apple", created["id"])))
+        apple.write_error = None
+        self.tick(30)
+        self.run_sync()
+        self.assert_content(wanted)
+
+    def test_remote_deletion_still_resolves_an_uncertain_pending_write(self):
+        created = self.store.save_local("family", fixtures.payload())
+        self.run_sync()
+        self.tick()
+        self.store.save_local("family", fixtures.payload("Unconfirmed edit"), created["id"])
+        apple = self.providers["apple"]
+        apple.write_error = TimeoutError("Unknown outcome")
+        self.engine.run_once()
+        self.tick()
+        apple.remote(apple.active()[0].remote_id, None, deleted=True)
+        apple.write_error = None
+        self.run_sync()
+        self.assertEqual(self.local(), [])
+        self.assertEqual(self.store.status()["pending"], [])
+        with self.sessions() as session:
+            self.assertFalse(session.get(db.CalendarReplica, ("apple", created["id"])).uncertain)
+            self.assertTrue(session.get(db.CalendarEvent, created["id"]).deleted)
+
+    def test_partial_recurring_conflict_keeps_whole_intent_through_restart(self):
+        initial = fixtures.payload("Original series", recurrence=["RRULE:FREQ=DAILY;COUNT=3"])
+        created = self.store.save_local("family", initial)
+        self.run_sync()
+        self.tick()
+        desired = fixtures.payload("Changed series", recurrence=initial["recurrence"], exceptions=[
+            {"originalStartTime": {"dateTime": "2026-10-25T12:00:00+01:00", "timeZone": "Europe/Warsaw"},
+             "status": "cancelled"}])
+        self.store.save_local("family", desired, created["id"])
+        google = self.providers["google"]
+        original_put = google.put
+
+        def partial_conflict(remote_id, content, etag, **kwargs):
+            self.tick()
+            # A master PATCH succeeded, then an exception PATCH hit HTTP 412.
+            google.remote(remote_id, {key: value for key, value in content.items() if key != "exceptions"},
+                          uid=kwargs["uid"])
+            raise ProviderError("Occurrence changed after master update", status=412, conflict=True)
+
+        google.put = partial_conflict
+        self.assertEqual(self.engine.run_once()["errors"], {"google": "conflict"})
+        with self.sessions() as session:
+            replica = session.get(db.CalendarReplica, ("google", created["id"]))
+            self.assertTrue(replica.uncertain)
+            self.assertEqual(replica.outbound_hash, fixtures.fingerprint(desired))
+            self.assertEqual(replica.observed_hash, fixtures.fingerprint(initial))
+        db.reset_engine_cache()
+        _, self.sessions = db.init_db(self.path)
+        self.store = SyncStore(self.sessions, clock=lambda: self.now)
+        self.engine = SyncEngine(self.store, self.providers)
+        google.put = original_put
+        self.tick()
+        self.run_sync()
+        self.assert_content(desired)
+        self.assertEqual(self.store.status()["pending"], [])
+        self.tick()
+        later = {**desired, "summary": "Normal edit after completion"}
+        google.remote(google.active()[0].remote_id, later)
+        self.run_sync()
+        self.assert_content(later)
 
     def test_another_source_edit_can_replace_an_uncertain_pending_unit(self):
         created = self.store.save_local("family", fixtures.payload())
