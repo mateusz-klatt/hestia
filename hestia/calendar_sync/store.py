@@ -39,14 +39,9 @@ class SyncStore:
 
     @contextmanager
     def transaction(self):
-        with self.sessions() as session:
+        with self.sessions.begin() as session:
             session.execute(text("BEGIN IMMEDIATE"))
-            try:
-                yield session
-                session.commit()
-            except BaseException:
-                session.rollback()
-                raise
+            yield session
 
     def configure(self, groups):
         """Retire removed endpoints without removing identities, events or tombstones."""
