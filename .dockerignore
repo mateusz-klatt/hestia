@@ -7,6 +7,8 @@
 !tools/
 !tools/klima.ir
 !requirements.txt
+!LICENSE
+!NOTICE
 !ui/
 !ui/**
 ui/node_modules/
