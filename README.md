@@ -124,5 +124,10 @@ npm run build
 
 Copyright (C) 2026 Mateusz Klatt
 
-This project is licensed under the GNU Affero General Public License v3.0.
-See the [LICENSE](LICENSE) file for details.
+This project is licensed under the [Apache License, Version 2.0](LICENSE).
+See [NOTICE](NOTICE) for attribution. Third-party dependencies retain their own
+licenses.
+
+Revisions through `81e30dd286acd4bfac35cb559d0c5cd2650210cb` were released under
+AGPL-3.0. This change applies to subsequent revisions and does not revoke earlier
+license grants.
