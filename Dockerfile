@@ -27,6 +27,7 @@ RUN apt-get update \
 # Runtime deps (cryptography — the Tuya AES primitive). Copied + installed before the
 # source so an app-code change doesn't bust the cached dependency layer.
 COPY requirements.txt ./
+COPY LICENSE NOTICE ./
 RUN pip install --no-cache-dir -r requirements.txt
 COPY hestia/ ./hestia/
 COPY --from=ui-build /app/ui/dist ./ui/dist/
