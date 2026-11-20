@@ -1,0 +1,237 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="How the private Hestia household installation handles account, smart-home, calendar and optional financial data.">
+  <meta name="color-scheme" content="light dark">
+  <title>Privacy Policy · Hestia</title>
+  <style>
+    :root { color-scheme: light dark; --bg: #f8f6f1; --paper: #fffefa; --ink: #25312e; --muted: #59645f; --line: #d9dfd5; --accent: #87512b; --note: #f0f3e9; }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--ink); font: 1rem/1.7 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    .page { width: min(100% - 2rem, 76ch); margin: 2rem auto; padding: clamp(1.2rem, 4vw, 3rem); background: var(--paper); border: 1px solid var(--line); border-radius: 1rem; }
+    nav, footer { font-size: .94rem; color: var(--muted); }
+    nav { display: flex; flex-wrap: wrap; gap: .65rem 1.3rem; padding-bottom: 1.1rem; border-bottom: 1px solid var(--line); }
+    a { color: var(--accent); text-underline-offset: .2em; overflow-wrap: anywhere; }
+    a:hover { text-decoration-thickness: .14em; }
+    a:focus-visible { outline: 3px solid var(--accent); outline-offset: 4px; border-radius: 2px; }
+    .skip { position: absolute; top: .5rem; left: .5rem; transform: translateY(-180%); padding: .5rem 1rem; background: var(--paper); }
+    .skip:focus { transform: none; }
+    .eyebrow { margin: 2rem 0 .35rem; color: var(--accent); font-size: .82rem; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; }
+    h1 { margin: 0; font-size: clamp(2rem, 7vw, 3rem); line-height: 1.15; letter-spacing: -.025em; }
+    h2 { margin: 2.2rem 0 .65rem; font-size: 1.3rem; line-height: 1.35; }
+    p, ul { margin: .85rem 0; }
+    ul { padding-left: 1.3rem; }
+    li + li { margin-top: .6rem; }
+    .updated { color: var(--muted); }
+    .notice { margin: 1.5rem 0; padding: 1rem 1.2rem; background: var(--note); border-left: 4px solid var(--accent); border-radius: .35rem; }
+    .notice p { margin: 0; }
+    code { font-size: .92em; overflow-wrap: anywhere; }
+    footer { margin-top: 2.5rem; padding-top: 1rem; border-top: 1px solid var(--line); }
+    @media (prefers-color-scheme: dark) { :root { --bg: #151c19; --paper: #1d2722; --ink: #ecf0e8; --muted: #bbc8bd; --line: #3c4a40; --accent: #f0ba88; --note: #29372d; } }
+    @media print { body { background: white; color: black; } .page { width: 100%; margin: 0; padding: 0; border: 0; } nav, .skip { display: none; } a { color: inherit; } }
+  </style>
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+  <div class="page">
+    <nav aria-label="Legal navigation">
+      <a href="/">Hestia</a>
+      <a href="privacy-policy.html" aria-current="page">Privacy Policy</a>
+      <a href="terms-of-service.html">Terms of Service</a>
+    </nav>
+    <main id="main">
+      <p class="eyebrow">Private household installation</p>
+      <h1>Privacy Policy</h1>
+      <p class="updated">Last updated: <time datetime="2026-11-20">20 November 2026</time></p>
+      <p>This policy covers Hestia at <strong>hestia.klatt.ie</strong>, operated by
+        <strong>Mateusz Klatt</strong>. Hestia is a self-hosted smart-home and household application
+        for the operator and invited users, not a public subscription service. The operator is the
+        contact responsible for this installation and, where applicable data protection law requires
+        it, its data controller. Contact: <a href="mailto:mateusz@klatt.ie">mateusz@klatt.ie</a>.</p>
+      <p>Self-hosted means that application data are handled on the installation's server. It does
+        not mean that data stay only in your browser or that enabled integrations never contact
+        external providers. Independently operated copies of Hestia have their own operators and
+        privacy arrangements.</p>
+      <aside class="notice" aria-label="Status of optional banking access">
+        <p><strong>Optional banking access is under preparation.</strong> The released Hestia
+          application does not currently contain an Enable Banking connector. The banking section
+          below describes the intended optional, read-only feature, which requires explicit
+          activation and account authorisation before use.</p>
+      </aside>
+
+      <h2 id="data">1. Data handled by Hestia</h2>
+      <ul>
+        <li><strong>Accounts and access:</strong> usernames, password hashes, roles, account status,
+          authentication sessions and user preferences such as language, theme and temperature units.
+          Login passwords are verified using salted scrypt hashes; Hestia does not need a readable
+          copy of a user's application password after verification.</li>
+        <li><strong>Devices and household activity:</strong> device and network identifiers, room
+          names, device names, settings, commands and state reports. Depending on connected hardware,
+          these can include temperature, humidity, motion or door states, heating settings and power
+          readings. Automation rules can contain schedules, conditions and presence-related settings.</li>
+        <li><strong>Activity and diagnostics:</strong> timestamps, user or automation actions,
+          affected devices, results, connection information and error messages. Device protocols and
+          diagnostic logs can contain device identifiers, state values and network addresses.</li>
+        <li><strong>Optional calendars:</strong> events from explicitly selected Google or
+          Apple/iCloud calendars, including authorised shared calendars. Data can include titles,
+          notes, locations, dates, time zones, recurrence rules and exceptions, together with external
+          identifiers, revisions, synchronisation status and deletion records. Event text may contain
+          information about other people.</li>
+        <li><strong>Integration configuration:</strong> selected accounts, calendar identifiers,
+          service settings and credentials needed by enabled integrations. These can include Google
+          OAuth credentials and refresh tokens, Apple app-specific credentials and local device keys.
+          Secrets are configured on the server separately from the calendar event database.</li>
+        <li><strong>Visits and contact:</strong> IP addresses and ordinary HTTP request metadata,
+          including requested URLs, timestamps, headers and security signals, can be processed by
+          the web server and reverse proxies. If you email the operator, your address and message
+          are used to deal with your request.</li>
+      </ul>
+      <p>Device and application state may be stored in server-side JSON files or SQLite, depending
+        on configuration. Calendar events, mappings, pending operations and deletion records are
+        stored in SQLite. Server logs, configuration files and operator-managed backups are separate
+        forms of storage.</p>
+
+      <h2>2. Purposes and control over optional features</h2>
+      <p>Data are used to provide household device control, run requested automations, maintain
+        accounts and permissions, remember preferences, synchronise selected calendars, troubleshoot
+        faults and protect the installation. Calendar changes, including deletions, can propagate
+        to the other calendars in a configured group.</p>
+      <p>External calendar synchronisation, outdoor weather requests and other optional integrations
+        are enabled through configuration. Selecting a shared calendar can make its supported event
+        content available to other connected calendars and authorised Hestia users. Application roles
+        control actions; they do not provide a separate private calendar space for every household
+        member.</p>
+      <p>Where the GDPR applies, necessary account, device, automation, diagnostic and security
+        processing is based on the operator's legitimate interests in providing and securing the
+        requested private household service, balanced against affected people's rights. Optional
+        account connections require the account holder's authorisation and, where consent is the
+        applicable data protection basis, their consent. Information about other people within
+        authorised shared content is used only for the requested household purpose, on a lawful basis
+        such as legitimate interests where applicable. Contact correspondence is handled to respond
+        to requests and protect rights. This policy is not a blanket consent to additional uses.</p>
+      <p>Purely personal or household activities may fall outside the GDPR. That depends on the
+        actual processing; it does not remove the separate responsibilities of external providers.
+        Contact the operator about the purpose or basis applicable to particular data.</p>
+
+      <h2 id="recipients">3. Who can receive data</h2>
+      <ul>
+        <li><strong>Authorised household users and administrators:</strong> users can access
+          household information within the application's available roles. The operator and people
+          authorised to maintain the server or its backups may have administrative access.</li>
+        <li><strong>Hosting, delivery and security:</strong> this deployment uses Cloudflare and
+          an Apache HTTPS reverse proxy. These components handle requests and responses to deliver
+          and protect the application, and can process request content, IP addresses and technical
+          metadata. Cloudflare may apply security checks or necessary security cookies according to
+          its configuration. See <a href="https://www.cloudflare.com/privacypolicy/">Cloudflare's
+          privacy policy</a>.</li>
+        <li><strong>Calendar providers:</strong> when enabled, Google and Apple/iCloud receive
+          authentication requests and the supported event data needed for synchronisation. Other
+          people with access to a destination calendar may see the copied events under that
+          calendar's sharing settings. See the
+          <a href="https://policies.google.com/privacy">Google privacy policy</a> and
+          <a href="https://www.apple.com/legal/privacy/">Apple privacy policy</a>.</li>
+        <li><strong>Device vendor cloud in proxy mode:</strong> Hestia can relay device protocol
+          traffic to the configured upstream vendor service. Standalone mode replaces that upstream
+          device service; it does not turn off separately enabled external integrations.</li>
+        <li><strong>Optional network and weather services:</strong> enabling DNS-over-HTTPS
+          resolution can send the queried hostname and server connection information to Google or
+          Cloudflare resolvers. Enabling Open-Meteo weather sends configured latitude and longitude
+          to Open-Meteo, which also receives the server's network address. See
+          <a href="https://open-meteo.com/en/terms">Open-Meteo's terms and privacy information</a>.</li>
+      </ul>
+      <p>Selling household data or using them for targeted advertising is not part of this service.
+        External providers operate under their own terms and privacy notices. Their processing may
+        take place outside your country, including outside the EEA; this installation does not
+        promise exclusive EEA storage. Where data protection law applies, the operator must use
+        appropriate transfer arrangements. Contact the operator for details relevant to an enabled
+        integration.</p>
+
+      <h2>4. Planned optional banking access through Enable Banking</h2>
+      <p>The intended integration would let an account holder expressly authorise read-only access
+        to their own bank accounts through Enable Banking. It is intended for private household
+        budgeting, such as reviewing spending and recurring charges and preparing cash-flow estimates.
+        It is not a payment initiation, money transfer or financial advice service.</p>
+      <p>Authorisation would take place through the bank and Enable Banking's authorisation flow.
+        <strong>Do not enter bank passwords, PINs or one-time banking codes into Hestia.</strong>
+        Hestia would use its own application credentials and the resulting authorised access session,
+        not your online-banking login credentials.</p>
+      <p>After explicit activation and authorisation, the intended design would receive and store
+        authorised account identifiers, balances and transaction data on this self-hosted server.
+        Depending on the bank, transaction data can include dates, amounts, currencies, counterparties,
+        descriptions and booking status. Server-side credentials and session identifiers would be
+        needed to maintain permitted access. The actual data scope and access controls must be
+        explained before the feature is enabled.</p>
+      <p>Enable Banking provides the regulated account information service under its own terms and
+        privacy notice. Its free restricted-production arrangement permits individual non-commercial
+        access to the Control Panel user's own linked accounts, subject to its current terms; it is
+        not permission to access other people's accounts or provide a public banking service. See
+        <a href="https://enablebanking.com/terms/">Enable Banking's application terms</a>,
+        <a href="https://enablebanking.com/docs/api/linked-accounts/">restricted account linking</a>
+        and <a href="https://tilisy.enablebanking.com/terms">end-user terms</a>.</p>
+      <p>You would be able to revoke bank access through the bank or Enable Banking's consent controls
+        and ask the operator to disconnect it. Revocation stops future authorised collection; it does
+        not automatically erase copies already stored by Hestia. Deleting local data is a separate
+        request, and providers manage their own records under their own obligations.</p>
+
+      <h2 id="retention">5. Retention, disconnection and deletion</h2>
+      <p>Configuration and household records are retained while needed for the requested service,
+        synchronisation integrity, troubleshooting or an applicable legal obligation. Retention
+        depends on the type of record and operator settings. Activity logs have configurable age
+        and row limits; pruning runs when new audit records are appended. Server logs and backups
+        have their own operator-managed lifecycle. There is no single automatic deletion deadline
+        for all Hestia data.</p>
+      <p><strong>Calendar deletion is not complete local erasure.</strong> A deleted event is marked
+        inactive, and its existing event payload, external mapping and durable deletion record can
+        remain in SQLite. Deletion records are kept permanently in normal operation to stop an old
+        external copy from recreating the event. Pending operations may also survive restarts.</p>
+      <p>Disconnecting an integration or revoking a provider token does not erase previously stored
+        records, provider-side copies or backups. For full removal, contact the operator so that
+        local records, synchronisation mappings, external copies and backups can be considered
+        together. Deletion requests are assessed against applicable rights and obligations; the
+        software's default retention is not a refusal of a lawful erasure request.</p>
+
+      <h2>6. Browser storage and security</h2>
+      <p>When sign-in is enabled, Hestia issues the necessary <code>hestia_session</code> cookie,
+        currently with a 30-day expiry. It is signed, HttpOnly and SameSite=Strict. Its Secure flag
+        depends on deployment configuration. Native clients can use an equivalent bearer token.
+        Browser local storage remembers the selected dashboard view; user preferences can also be
+        stored on the server. Logging out clears the browser's Hestia cookie; it does not erase
+        household records.</p>
+      <p>These legal pages contain no JavaScript, external fonts, advertising or analytics resources.
+        This does not prevent ordinary hosting/security processing or an existing session cookie
+        from being sent with a page request.</p>
+      <p>Protection relies on account permissions, server and network controls, secret handling and
+        backup practices. Hestia does not provide a general encryption-at-rest layer for its SQLite
+        databases, configuration files or backups. Some supported legacy device protocols are
+        unencrypted. HTTPS delivery does not make those device links, server storage or provider
+        processing end-to-end encrypted.</p>
+
+      <h2 id="rights">7. Your choices and rights</h2>
+      <p>Contact <a href="mailto:mateusz@klatt.ie">mateusz@klatt.ie</a> to ask about access,
+        correction, deletion, restriction or a copy of your data, or to disconnect an optional
+        integration. Where applicable law provides them, you may also have rights to portability,
+        to object to processing based on legitimate interests, and to withdraw consent without
+        affecting processing that was lawful before withdrawal. You may complain to a competent
+        data protection supervisory authority. Rights are subject to their legal conditions and
+        the rights of other people; proportionate identity verification may be needed.</p>
+      <p>Providing data needed for an account or integration is optional, but without it the relevant
+        feature may not work. Hestia's household automations are configured by authorised users.
+        The planned budget analysis is not intended to make credit, eligibility or other decisions
+        producing legal or similarly significant effects about you.</p>
+
+      <h2>8. Changes to this policy</h2>
+      <p>The operator may update this page as the installation changes. The date above identifies
+        the current version. Materially different processing, including activation of the planned
+        banking connector, requires an updated explanation and any necessary authorisation before
+        it starts.</p>
+    </main>
+    <footer>
+      <p>Hestia · Mateusz Klatt · <a href="mailto:mateusz@klatt.ie">mateusz@klatt.ie</a><br>
+        <a href="terms-of-service.html">Terms of Service</a> ·
+        <a href="https://github.com/mateusz-klatt/hestia">Hestia source code</a></p>
+    </footer>
+  </div>
+</body>
+</html>

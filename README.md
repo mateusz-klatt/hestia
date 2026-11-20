@@ -120,6 +120,27 @@ npm test
 npm run build
 ```
 
+## Privacy and terms
+
+The English documents for the private Hestia instance operated by Mateusz Klatt
+are published at:
+
+- [Privacy Policy](https://hestia.klatt.ie/privacy-policy.html)
+- [Terms of Use](https://hestia.klatt.ie/terms-of-service.html)
+
+Their version-controlled sources are
+[`ui/public/privacy-policy.html`](ui/public/privacy-policy.html) and
+[`ui/public/terms-of-service.html`](ui/public/terms-of-service.html). Vite copies
+them into the UI build; rebuild and recreate the container to publish an update.
+These two documents support public `GET` and `HEAD` requests without signing in.
+Application data and actions continue to use the existing authentication and
+role checks.
+
+The documents describe optional banking access as a feature in preparation;
+publishing them does not activate a bank connection. Operators of other
+self-hosted instances should adapt the operator details and data practices to
+their own deployment.
+
 ## License
 
 Copyright (C) 2026 Mateusz Klatt
