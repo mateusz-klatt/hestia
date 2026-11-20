@@ -205,8 +205,9 @@ class BudgetStoreTests(unittest.TestCase):
         before = self.rows(db.BudgetAccount)
         self.now += 20
         good = snapshot(transaction("new")).accounts[0]
-        error = SimpleNamespace(identification_hash="second", code="provider_error")
-        self.store.commit_snapshot("bank", SimpleNamespace(valid_until=1000000, accounts=(good,), errors=(error,)))
+        error = SimpleNamespace(identification_hash="second", transactions=None, balances=None,
+                                transactions_error="provider_error", balances_error="network")
+        self.store.commit_snapshot("bank", SimpleNamespace(valid_until=1000000, accounts=(good, error), errors=()))
         self.assertEqual(len(self.rows(db.BudgetTransaction)), 3)
         state = self.store.status()[0]
         self.assertEqual(state["last_success"], 1000)
@@ -214,9 +215,10 @@ class BudgetStoreTests(unittest.TestCase):
         failed = next(account for account in self.rows(db.BudgetAccount) if account.identification_hash == "second")
         self.assertEqual(failed.observed_at, 1000)
         self.assertEqual(failed.balances_json, before[1].balances_json)
-        self.assertEqual(failed.last_error, "provider_error")
-        errors = (SimpleNamespace(identification_hash="synthetic-hash", code="network"), error)
-        self.store.commit_snapshot("bank", SimpleNamespace(valid_until=1000000, accounts=(), errors=errors))
+        self.assertEqual(failed.last_error, "component_errors")
+        errors = (SimpleNamespace(identification_hash="synthetic-hash", transactions=None, balances=None,
+                                 transactions_error="network", balances_error="network"), error)
+        self.store.commit_snapshot("bank", SimpleNamespace(valid_until=1000000, accounts=errors, errors=()))
         self.assertEqual(self.store.status()[0]["last_error"], "account_errors")
         self.assertEqual(len(self.rows(db.BudgetTransaction)), 3)
 
