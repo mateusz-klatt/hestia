@@ -106,6 +106,7 @@ class Classifier:
     def __init__(self, has_dimmers: bool = False):
         self.has_dimmers = has_dimmers
         self.nodes: "dict[int, NodeInfo]" = {}
+        self.roster: "set[int]" = set()          # nodes the gateway itself listed in a `[1e 15]`
 
     def ingest_roster(self, frame: Frame) -> None:
         """Seed nodes from a `[1e 15]` roster (TLV `0x004d` = `<node><flag>` pairs;
@@ -117,6 +118,7 @@ class Classifier:
             return
         for i in range(0, len(data) - 1, 2):
             node, flag = data[i], data[i + 1]
+            self.roster.add(node)
             self.nodes.setdefault(node, NodeInfo()).power = "battery" if flag == 0x01 else "mains"
 
     def observe(self, frame: Frame) -> None:

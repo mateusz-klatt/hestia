@@ -430,6 +430,7 @@ class SceneCaptureTests(unittest.TestCase):
 
     def test_latest_press_wins_on_overwrite(self):
         rt = proxy.ProxyRuntime()
+        rt.registry.observe(7, "light", "inferred")          # known node, so its press is admitted
         sess = make_session(rt)
         sess._observe(Frame(SCENE_PRESS[1:-1]), "D->C")      # node 2 / scene 3
         press_b = build_frame(0x1E, 0x09, tlv(0x0047, b"\x07") + tlv(0x0046, b"\x2b\x01\x02\x00"))
@@ -437,6 +438,57 @@ class SceneCaptureTests(unittest.TestCase):
         sess._observe(Frame(SCENE_BATCH[1:-1]), "C->D")
         self.assertEqual(rt.registry.scene_batch(7, 2), SCENE_ELEMENTS.hex())
         self.assertIsNone(rt.registry.scene_batch(2, 3))     # earlier press lost
+
+
+def _event(node: int) -> Frame:
+    return Frame(build_frame(0x1E, 0x09, tlv(0x0047, bytes([node])) + tlv(0x0046, b"\x30\x03\xff\x0c"))[1:-1])
+
+
+class AdmitEventNodeTests(unittest.TestCase):
+    """Phantom (bit-flipped) node ids must not create registry entries, state or automations."""
+
+    def _rt(self):
+        rt = proxy.ProxyRuntime()
+        rt.registry.observe(9, "thermostat", "inferred")
+        return rt
+
+    def test_non_event_and_empty_registry_admitted(self):
+        rt = proxy.ProxyRuntime()
+        self.assertTrue(proxy._admit_event_node(rt, Frame(NOISE[1:-1])))
+        self.assertTrue(proxy._admit_event_node(rt, _event(0x49)))   # first run: nothing to protect
+
+    def test_registered_node_admitted(self):
+        rt = self._rt()
+        self.assertTrue(proxy._admit_event_node(rt, _event(9)))
+
+    def test_roster_node_admitted_and_clears_pending(self):
+        rt = self._rt()
+        self.assertFalse(proxy._admit_event_node(rt, _event(0x30)))
+        rt.classifier.ingest_roster(Frame(build_frame(0x1E, 0x15, tlv(0x004D, b"\x30\x00"))[1:-1]))
+        self.assertTrue(proxy._admit_event_node(rt, _event(0x30)))
+        self.assertNotIn(0x30, rt.pending_nodes)
+
+    def test_unknown_node_needs_repeated_sightings(self):
+        rt = self._rt()
+        with self.assertLogs("hestia.proxy", level="WARNING"):
+            self.assertFalse(proxy._admit_event_node(rt, _event(0x49)))
+            self.assertFalse(proxy._admit_event_node(rt, _event(0x49)))
+        self.assertTrue(proxy._admit_event_node(rt, _event(0x49)))   # 3rd sighting → real device
+        self.assertNotIn(0x49, rt.pending_nodes)
+
+    def test_old_sightings_expire(self):
+        rt = self._rt()
+        with mock.patch.object(proxy.time, "monotonic", side_effect=[0.0, 1.0, 0.5 + proxy.NEW_NODE_WINDOW_S]):
+            self.assertFalse(proxy._admit_event_node(rt, _event(0x89)))
+            self.assertFalse(proxy._admit_event_node(rt, _event(0x89)))
+            self.assertFalse(proxy._admit_event_node(rt, _event(0x89)))   # 1st one aged out → 2/3
+        self.assertEqual(len(rt.pending_nodes[0x89]), 2)
+
+    def test_proxy_observe_drops_phantom_event(self):
+        rt = self._rt()
+        make_session(rt)._observe(_event(0x49), "D->C")
+        self.assertNotIn("73", rt.registry.nodes)
+        self.assertEqual(rt.state.thermostat_on, {})
 
 
 # --- async paths -------------------------------------------------------------

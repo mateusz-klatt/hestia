@@ -562,6 +562,9 @@ class ProxyRuntime:
     # 433 MHz device discovery: in-memory roll-up of every decoded rtl_433 packet (the local-433
     # feeder filters to one sensor; this captures all of them). Display-only; reset on restart.
     rf433: Rf433Registry = field(default_factory=Rf433Registry)
+    # Event sightings of nodes neither registered nor on the gateway roster: node → monotonic
+    # timestamps. A node is admitted only after NEW_NODE_MIN_SIGHTINGS within NEW_NODE_WINDOW_S.
+    pending_nodes: dict = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         self._seq = _safe_seq_counter()
@@ -592,6 +595,36 @@ async def _close(writer: "asyncio.StreamWriter | None") -> None:
 
 def _event_node(frame: Frame) -> "bytes | None":
     return tlv_value(frame, 0x0047) if (frame.type, frame.cmd) == (0x1E, 0x09) else None
+
+
+# The gateway occasionally emits a checksum-valid `[1e 09]` whose node byte has a flipped bit
+# (seen 2026-08-12: node 9 also reported as 73 = 9|0x40 and 137 = 9|0x80). Each such phantom
+# shows up once, so a node that is neither registered nor on the roster must be seen a few
+# times in a short window before it may create a registry entry, state, or fire automations.
+NEW_NODE_MIN_SIGHTINGS = 3
+NEW_NODE_WINDOW_S = 3600.0
+
+
+def _admit_event_node(rt, frame: Frame) -> bool:
+    """Return False for a `[1e 09]` from a node that hasn't earned a registry entry yet. An empty
+    registry (first run, nothing learned) has no baseline to protect, so everything is admitted."""
+    node_b = _event_node(frame)
+    if not node_b or not rt.registry.nodes:
+        return True
+    node = node_b[0]
+    if str(node) in rt.registry.nodes or node in rt.classifier.roster:
+        rt.pending_nodes.pop(node, None)
+        return True
+    now = time.monotonic()
+    seen = [t for t in rt.pending_nodes.get(node, ()) if now - t < NEW_NODE_WINDOW_S] + [now]
+    if len(seen) >= NEW_NODE_MIN_SIGHTINGS:
+        rt.pending_nodes.pop(node, None)
+        log.info("admitting new node %#04x after %d sightings", node, len(seen))
+        return True
+    rt.pending_nodes[node] = seen
+    log.warning("ignoring event from unknown node %#04x (%d/%d sightings) — possible corrupt frame",
+                node, len(seen), NEW_NODE_MIN_SIGHTINGS)
+    return False
 
 
 def _log_state_changes(node_b: bytes, changed: dict) -> None:
@@ -794,6 +827,8 @@ class ProxySession:
         level = logging.DEBUG if (frame.type, frame.cmd) in _NOISE else logging.INFO
         log.log(level, "%s %s", direction, summarize(frame))
         if not frame.checksum_ok:         # don't act on a corrupt frame
+            return []
+        if not _admit_event_node(self.rt, frame):   # a likely bit-flipped phantom node
             return []
         changed = self.rt.state.apply(frame)
         node_b = _event_node(frame)

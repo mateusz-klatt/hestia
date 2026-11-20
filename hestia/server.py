@@ -21,7 +21,7 @@ import uuid
 
 from . import commands
 from .protocol import Deframer, Frame, build_frame, tlv
-from .proxy import (INJECT_GAP_SECS, ProxyConfig, ProxyRuntime, _close, _echo_command_frame,
+from .proxy import (INJECT_GAP_SECS, ProxyConfig, ProxyRuntime, _admit_event_node, _close, _echo_command_frame,
                     _feed_discovery, _start, summarize)
 from .state import tlv_value
 
@@ -144,6 +144,8 @@ class StandaloneSession:
         if (frame.type, frame.cmd) not in _NOISE:
             log.info("%s %s", self.peer, summarize(frame))
         if not frame.checksum_ok:
+            return []
+        if not _admit_event_node(self.rt, frame):    # a likely bit-flipped phantom node
             return []
         changed = self.rt.state.apply(frame)
         node_b = _event_node(frame)
