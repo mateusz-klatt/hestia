@@ -174,6 +174,21 @@ class BudgetCredentialTests(unittest.TestCase):
         with self.assertRaises(config.BudgetConfigError):
             self.read()
 
+    def test_explicit_file_limit_preserves_runtime_default_and_rejects_invalid_limits(self):
+        self.key.write_bytes(b"FAKE")
+        self.assertEqual(config._read_secret(str(self.key), max_bytes=4), b"FAKE")
+        with self.assertRaises(config.BudgetConfigError):
+            config._read_secret(str(self.key), max_bytes=3)
+        with mock.patch.object(config, "_MAX_SECRET_BYTES", 3):
+            with self.assertRaises(config.BudgetConfigError):
+                config._read_secret(str(self.key))
+            self.assertEqual(config._read_secret(str(self.key), max_bytes=4), b"FAKE")
+        self.key.write_bytes(b"")
+        self.assertEqual(config._read_secret(str(self.key), max_bytes=0), b"")
+        for limit in (-1, True, 1.5, "4"):
+            with self.subTest(limit=limit), self.assertRaises(config.BudgetConfigError):
+                config._read_secret(str(self.key), max_bytes=limit)
+
     def test_file_growth_after_stat_is_bounded_and_rejected(self):
         original_stat = os.fstat
         def grow_after_stat(descriptor):

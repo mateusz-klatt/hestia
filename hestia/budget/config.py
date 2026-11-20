@@ -122,22 +122,25 @@ def load_config(path=None, *, environ=None) -> BudgetConfig | None:
     return parse_config(raw)
 
 
-def _read_secret(path: str) -> bytes:
+def _read_secret(path: str, *, max_bytes=None) -> bytes:
+    limit = _MAX_SECRET_BYTES if max_bytes is None else max_bytes
+    if type(limit) is not int or limit < 0:
+        raise BudgetConfigError("Invalid budget file size limit")
     try:
         descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
         try:
             info = os.fstat(descriptor)
             if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid()
                     or stat.S_IMODE(info.st_mode) not in (0o400, 0o600)
-                    or info.st_size > _MAX_SECRET_BYTES):
+                    or info.st_size > limit):
                 raise ValueError
             data = b""
-            while len(data) <= _MAX_SECRET_BYTES:
-                chunk = os.read(descriptor, _MAX_SECRET_BYTES + 1 - len(data))
+            while len(data) <= limit:
+                chunk = os.read(descriptor, limit + 1 - len(data))
                 if not chunk:
                     break
                 data += chunk
-            if len(data) > _MAX_SECRET_BYTES:
+            if len(data) > limit:
                 raise ValueError
             return data
         finally:

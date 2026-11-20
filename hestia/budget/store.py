@@ -11,6 +11,7 @@ from sqlalchemy import delete, func, select, text
 
 from ..db import BudgetAccount as Account, BudgetConnection as Connection
 from ..db import BudgetTransaction as Transaction, BudgetUnresolved as Unresolved, User
+from ..db import BudgetImportBatch as ImportBatch, BudgetImportUnresolved as ImportUnresolved
 
 
 class BudgetStoreError(ValueError):
@@ -27,6 +28,10 @@ def _safe_error(code):
                "invalid_session", "expired_session", "session_mismatch",
                "account_selection", "invalid_pagination", "limit_exceeded"}
     return code if code in allowed else "invalid_data"
+
+
+def _ledger_reference(tx):
+    return tx["entry_reference"] if (tx["status"] == "BOOK" and (tx["booking_date"] or tx["value_date"])) else None
 
 
 class BudgetStore:
@@ -139,9 +144,7 @@ class BudgetStore:
         account.last_attempt, account.last_error = now, None
         session.execute(delete(Unresolved).where(Unresolved.account_id == account.id))
         ordinal = 0
-        references = Counter(tx["entry_reference"] for tx in observation.transactions
-                             if tx["entry_reference"] is not None and tx["status"] == "BOOK"
-                             and (tx["booking_date"] or tx["value_date"]))
+        references = Counter(filter(None, map(_ledger_reference, observation.transactions)))
         for tx in observation.transactions:
             conflict = tx["entry_reference"] is not None and references[tx["entry_reference"]] > 1
             ordinal = self._import_transaction(session, account.id, tx, conflict, ordinal, now)
@@ -151,20 +154,145 @@ class BudgetStore:
         ref = tx["entry_reference"]
         if conflict:
             prior = session.get(Transaction, (account_id, ref))
-            if prior is not None:
-                prior.uncertain = True
-        if conflict or tx["status"] != "BOOK" or ref is None or not (tx["booking_date"] or tx["value_date"]):
+            if prior is None:
+                # A durable uncertain head also protects references that have
+                # never had a canonical entry from an older offline backfill.
+                prior = Transaction(account_id=account_id, entry_reference=ref,
+                                    payload_json=_json(tx), observed_at=now, uncertain=True,
+                                    source="api", api_observed_at=now)
+                session.add(prior)
+                session.flush()
+            prior.uncertain, prior.api_observed_at = True, now
+        if conflict or _ledger_reference(tx) is None:
             session.add(Unresolved(account_id=account_id, ordinal=ordinal,
                                    payload_json=_json(tx), observed_at=now))
             return ordinal + 1
         existing = session.get(Transaction, (account_id, ref))
         if existing is None:
             session.add(Transaction(account_id=account_id, entry_reference=ref,
-                                    payload_json=_json(tx), observed_at=now, uncertain=False))
+                                    payload_json=_json(tx), observed_at=now, uncertain=False,
+                                    source="api", api_observed_at=now))
             session.flush()
         else:
             existing.payload_json, existing.observed_at, existing.uncertain = _json(tx), now, False
+            existing.source, existing.api_observed_at = "api", now
         return ordinal
+
+    def import_snapshot(self, config, snapshot):
+        """Add offline history without touching API state or scheduling."""
+        item = next((c for c in config.connections if c.id == snapshot.connection_id), None)
+        if item is None or snapshot.identification_hash not in item.accounts:
+            raise BudgetStoreError("Import requires an explicitly selected bank account")
+        with self.transaction() as session:
+            self._owner(session, item.owner)
+            account = self._offline_account(session, config, item, snapshot.identification_hash)
+            batch = session.scalar(select(ImportBatch).where(ImportBatch.fingerprint == snapshot.digest))
+            if batch is not None:
+                if batch.account_id != account.id:
+                    raise BudgetStoreError("Offline import identity mismatch")
+                report = {**json.loads(batch.report_json), "duplicate": True}
+                for field in ("inserted", "updated", "preserved_api", "stale", "unresolved", "unchanged"):
+                    report[field] = 0
+                return report
+            self._restore_api_conflicts(session, account.id)
+            batch = ImportBatch(id=str(uuid.uuid4()), fingerprint=snapshot.digest,
+                                account_id=account.id, fetched_at=snapshot.fetched_at,
+                                imported_at=self.clock(), balances_json=(None if snapshot.balances is None
+                                                                         else _json(snapshot.balances)), report_json="{}")
+            session.add(batch)
+            session.flush()
+            report = {"batch_id": batch.id, "duplicate": False, "inserted": 0, "updated": 0,
+                      "preserved_api": 0, "stale": 0, "unresolved": 0, "unchanged": 0}
+            references = Counter(filter(None, map(_ledger_reference, snapshot.transactions)))
+            for tx in snapshot.transactions:
+                ref = _ledger_reference(tx)
+                conflict = ref is not None and references[ref] > 1
+                action, reason = self._offline_transaction(session, account.id, tx, conflict, snapshot.fetched_at)
+                if action is not None:
+                    report[action] += 1
+                if reason is not None:
+                    session.add(ImportUnresolved(batch_id=batch.id, ordinal=report["unresolved"],
+                                                 reason=reason, payload_json=_json(tx)))
+                    report["unresolved"] += 1
+            batch.report_json = _json(report)
+            return report
+
+    @staticmethod
+    def _offline_account(session, config, item, identity_hash):
+        row = session.get(Connection, item.id)
+        identity = (item.owner, config.application_id, item.bank_name, item.country)
+        if row is None:
+            row = Connection(id=item.id, owner=item.owner, application_id=config.application_id,
+                             bank_name=item.bank_name, country=item.country, enabled=False,
+                             next_attempt=0, failures=0)
+            session.add(row)
+            session.flush()
+        elif (row.owner, row.application_id, row.bank_name, row.country) != identity:
+            raise BudgetStoreError("Bank connection identity cannot be reassigned")
+        account = session.scalar(select(Account).where(Account.owner == item.owner,
+                                                       Account.identification_hash == identity_hash))
+        if account is None:
+            account = Account(id=str(uuid.uuid4()), owner=item.owner, connection_id=item.id,
+                              identification_hash=identity_hash, enabled=False, balances_json="[]")
+            session.add(account)
+            session.flush()
+        elif account.connection_id != item.id:
+            raise BudgetStoreError("An account may belong to only one connection per owner")
+        return account
+
+    @staticmethod
+    def _restore_api_conflicts(session, account_id):
+        """Protect pre-0007 API conflicts that lacked a canonical placeholder."""
+        rows = list(session.scalars(select(Unresolved).where(Unresolved.account_id == account_id)))
+        payloads = [(row, json.loads(row.payload_json)) for row in rows]
+        refs = Counter(filter(None, (_ledger_reference(tx) for _, tx in payloads)))
+        for row, tx in payloads:
+            ref = _ledger_reference(tx)
+            if ref is not None and refs[ref] > 1 and session.get(Transaction, (account_id, ref)) is None:
+                session.add(Transaction(account_id=account_id, entry_reference=ref, payload_json=row.payload_json,
+                                        observed_at=row.observed_at, uncertain=True, source="api",
+                                        api_observed_at=row.observed_at))
+                session.flush()
+
+    @staticmethod
+    def _offline_transaction(session, account_id, tx, conflict, fetched_at):
+        ref = _ledger_reference(tx)
+        if ref is None:
+            return None, "non_canonical"
+        existing = session.get(Transaction, (account_id, ref))
+        if existing is not None and (existing.source == "api" or existing.api_observed_at is not None):
+            reason = "api_preserved" if conflict or existing.uncertain or existing.payload_json != _json(tx) else None
+            return "preserved_api", reason
+        if existing is not None and fetched_at < existing.observed_at:
+            return "stale", "stale_conflict" if conflict else None
+        if conflict:
+            BudgetStore._offline_conflict(session, account_id, ref, tx, existing, fetched_at)
+            return None, "reference_conflict"
+        if existing is None:
+            session.add(Transaction(account_id=account_id, entry_reference=ref, payload_json=_json(tx),
+                                    observed_at=fetched_at, uncertain=False, source="offline_import"))
+            session.flush()
+            return "inserted", None
+        return BudgetStore._update_offline(existing, tx, fetched_at)
+
+    @staticmethod
+    def _offline_conflict(session, account_id, ref, tx, existing, fetched_at):
+        if existing is None:
+            existing = Transaction(account_id=account_id, entry_reference=ref, payload_json=_json(tx),
+                                   observed_at=fetched_at, uncertain=True, source="offline_import")
+            session.add(existing)
+            session.flush()
+        existing.uncertain, existing.observed_at = True, fetched_at
+
+    @staticmethod
+    def _update_offline(existing, tx, fetched_at):
+        if fetched_at == existing.observed_at:
+            if existing.payload_json != _json(tx) or existing.uncertain:
+                existing.uncertain = True
+                return None, "same_time_conflict"
+            return "unchanged", None
+        existing.payload_json, existing.observed_at, existing.uncertain = _json(tx), fetched_at, False
+        return "updated", None
 
     def status(self, *, owner=None):
         now = self.clock()
@@ -184,9 +312,19 @@ class BudgetStore:
                     Transaction.account_id.in_(accounts), Transaction.uncertain.is_(True)))
                 unresolved = session.scalar(select(func.count()).select_from(Unresolved).where(
                     Unresolved.account_id.in_(accounts)))
+                imports = select(ImportBatch.id).where(ImportBatch.account_id.in_(accounts))
+                import_count = session.scalar(select(func.count()).select_from(ImportBatch).where(
+                    ImportBatch.account_id.in_(accounts)))
+                import_unresolved = session.scalar(select(func.count()).select_from(ImportUnresolved).where(
+                    ImportUnresolved.batch_id.in_(imports)))
+                imported = session.scalar(select(func.count()).select_from(Transaction).where(
+                    Transaction.account_id.in_(accounts), Transaction.source == "offline_import",
+                    Transaction.uncertain.is_(False)))
                 result.append({"connection": row.id, "owner": row.owner, "enabled": row.enabled,
                                "selected_accounts": selected, "transactions": canonical, "unresolved": unresolved,
                                "uncertain_transactions": uncertain,
+                               "offline_imports": import_count, "offline_transactions": imported,
+                               "offline_unresolved": import_unresolved,
                                "last_attempt": row.last_attempt, "last_success": row.last_success,
                                "next_attempt": row.next_attempt, "last_error": row.last_error,
                                "failures": row.failures, "valid_until": row.valid_until,
