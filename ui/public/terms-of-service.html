@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Terms for the private Hestia household installation, its optional integrations and planned read-only banking access.">
+  <meta name="color-scheme" content="light dark">
+  <title>Terms of Service · Hestia</title>
+  <style>
+    :root { color-scheme: light dark; --bg: #f8f6f1; --paper: #fffefa; --ink: #25312e; --muted: #59645f; --line: #d9dfd5; --accent: #87512b; --note: #f0f3e9; }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--ink); font: 1rem/1.7 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    .page { width: min(100% - 2rem, 76ch); margin: 2rem auto; padding: clamp(1.2rem, 4vw, 3rem); background: var(--paper); border: 1px solid var(--line); border-radius: 1rem; }
+    nav, footer { font-size: .94rem; color: var(--muted); }
+    nav { display: flex; flex-wrap: wrap; gap: .65rem 1.3rem; padding-bottom: 1.1rem; border-bottom: 1px solid var(--line); }
+    a { color: var(--accent); text-underline-offset: .2em; overflow-wrap: anywhere; }
+    a:hover { text-decoration-thickness: .14em; }
+    a:focus-visible { outline: 3px solid var(--accent); outline-offset: 4px; border-radius: 2px; }
+    .skip { position: absolute; top: .5rem; left: .5rem; transform: translateY(-180%); padding: .5rem 1rem; background: var(--paper); }
+    .skip:focus { transform: none; }
+    .eyebrow { margin: 2rem 0 .35rem; color: var(--accent); font-size: .82rem; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; }
+    h1 { margin: 0; font-size: clamp(2rem, 7vw, 3rem); line-height: 1.15; letter-spacing: -.025em; }
+    h2 { margin: 2.2rem 0 .65rem; font-size: 1.3rem; line-height: 1.35; }
+    p, ul { margin: .85rem 0; }
+    ul { padding-left: 1.3rem; }
+    li + li { margin-top: .6rem; }
+    .updated { color: var(--muted); }
+    .notice { margin: 1.5rem 0; padding: 1rem 1.2rem; background: var(--note); border-left: 4px solid var(--accent); border-radius: .35rem; }
+    .notice p { margin: 0; }
+    footer { margin-top: 2.5rem; padding-top: 1rem; border-top: 1px solid var(--line); }
+    @media (prefers-color-scheme: dark) { :root { --bg: #151c19; --paper: #1d2722; --ink: #ecf0e8; --muted: #bbc8bd; --line: #3c4a40; --accent: #f0ba88; --note: #29372d; } }
+    @media print { body { background: white; color: black; } .page { width: 100%; margin: 0; padding: 0; border: 0; } nav, .skip { display: none; } a { color: inherit; } }
+  </style>
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+  <div class="page">
+    <nav aria-label="Legal navigation">
+      <a href="/">Hestia</a>
+      <a href="privacy-policy.html">Privacy Policy</a>
+      <a href="terms-of-service.html" aria-current="page">Terms of Service</a>
+    </nav>
+    <main id="main">
+      <p class="eyebrow">Private household installation</p>
+      <h1>Terms of Service</h1>
+      <p class="updated">Last updated: <time datetime="2026-11-20">20 November 2026</time></p>
+      <p>These terms explain use of the Hestia installation at <strong>hestia.klatt.ie</strong>,
+        operated by <strong>Mateusz Klatt</strong>. Contact:
+        <a href="mailto:mateusz@klatt.ie">mateusz@klatt.ie</a>. It is a private, self-hosted
+        household application for the operator and invited users, not an offer of a public SaaS,
+        banking or payment service.</p>
+      <p>Use this installation only if the operator has authorised your access, and follow these
+        terms and the permissions assigned to your account. If you operate your own copy of the
+        open-source software, you are responsible for that separate installation and its users.</p>
+      <aside class="notice" aria-label="Status of optional banking access">
+        <p><strong>Banking access is being prepared, not offered as a released Hestia feature.</strong>
+          The current application has no Enable Banking connector. Any future read-only connection
+          requires explicit activation and the account holder's bank authorisation. These terms
+          do not themselves connect a bank account or authorise access.</p>
+      </aside>
+
+      <h2>1. Current service and optional integrations</h2>
+      <p>Hestia provides local smart-home device monitoring and control, household automations,
+        user accounts and preferences, activity logs and optional synchronisation of selected
+        Google and Apple/iCloud calendars with a local SQLite calendar. Optional features can
+        include outdoor weather data and additional local device integrations.</p>
+      <p>Available functions depend on the installed version, hardware, configuration and your
+        role. Administrators manage users and settings, operators can perform permitted control
+        and editing actions, and viewers have read access to the information exposed to their role.
+        A role does not imply access to an external account that its owner has not authorised.</p>
+      <p>Standalone mode replaces the upstream vendor device service. Proxy mode relays device
+        traffic to that upstream service. Separately enabled integrations may contact their
+        providers in either mode.</p>
+
+      <h2>2. Responsible use and account security</h2>
+      <ul>
+        <li>Connect and control only devices, calendars and accounts that you own or are
+          authorised to use. Respect other household members and people mentioned in shared data.</li>
+        <li>Keep application credentials, session tokens and integration secrets private. Do not
+          bypass permissions, probe other users' accounts or use this installation to send
+          malicious traffic. Report suspected misuse or an exposed credential to the operator.</li>
+        <li>Check device actions and automation rules before relying on them. Hestia is not
+          designed as an emergency or safety-critical service. Automated commands can affect real
+          equipment and should be tested and supervised where appropriate.</li>
+        <li>Do not place unnecessary sensitive information in event notes, device names,
+          diagnostic reports or support messages.</li>
+      </ul>
+
+      <h2>3. Calendar synchronisation</h2>
+      <p>Synchronisation is opt-in and limited to the calendars selected in a configured group.
+        Adding, editing or deleting an event in a connected calendar or Hestia can change the other
+        copies. Only link a shared calendar if the necessary sharing permissions are in place.</p>
+      <p>Not every provider feature or event format is portable. Provider restrictions, concurrent
+        edits, unavailable networks or expired authorisation can delay or prevent delivery. Check
+        synchronisation status and important events, and keep suitable backups before substantial
+        changes. Hestia's record is not a guarantee that a provider has completed a write.</p>
+      <p>Deleting a calendar event marks the local record inactive and queues deletion of connected
+        copies. Event payloads, mappings and permanent deletion records can remain in SQLite to
+        prevent older copies from restoring the event. Disconnecting a calendar is not the same as
+        deleting its local history or provider-side data. The
+        <a href="privacy-policy.html#retention">Privacy Policy</a> explains retention and removal
+        requests.</p>
+
+      <h2>4. Planned read-only banking access</h2>
+      <p>The intended optional feature would allow an individual to authorise access to their own
+        linked accounts through Enable Banking for private, non-commercial household budgeting.
+        It would read permitted account information, balances and transactions and store the
+        authorised data on this self-hosted server after explicit activation. Bank coverage,
+        transaction history, card support and data freshness would depend on the bank and provider.</p>
+      <p>Hestia would not initiate transfers or payments, hold money or ask you to give it bank login
+        passwords, PINs or one-time banking codes. Complete bank authentication only through the
+        bank and Enable Banking's authorisation flow. Do not paste banking credentials into Hestia,
+        a support request or a source-code repository.</p>
+      <p>The regulated account information service would be provided by Enable Banking under its
+        separate terms, authorisation and privacy arrangements. Its free restricted-production
+        arrangement is subject to its current rules for the Control Panel user's own linked
+        accounts. It does not grant permission for access to somebody else's accounts, professional
+        use or a public banking service. See
+        <a href="https://enablebanking.com/terms/">Enable Banking's application terms</a> and
+        <a href="https://enablebanking.com/docs/api/linked-accounts/">restricted account linking</a>.</p>
+      <p>You would be able to revoke the bank/provider consent or ask the operator to disconnect
+        access. Doing so would stop future authorised collection but would not automatically erase
+        previously stored local data. Local deletion would be handled separately as explained in
+        the <a href="privacy-policy.html">Privacy Policy</a>.</p>
+      <p>Any future spending categories, subscription detection or cash-flow estimates would be
+        organisational aids, not financial advice or a promise that funds will be available.
+        Check actual bank balances, pending transactions and payment deadlines before making a
+        financial decision. No banking feature should be treated as available until its implemented
+        scope, access controls and activation process have been explained.</p>
+
+      <h2>5. Data handling and external services</h2>
+      <p>The <a href="privacy-policy.html">Privacy Policy</a> describes server-side storage,
+        cookies, activity logs, optional integrations and your choices. Self-hosting does not mean
+        browser-only processing. This deployment uses Cloudflare and an Apache reverse proxy for
+        delivery and security, and enabled providers process information needed for their services.</p>
+      <p>Google, Apple, Enable Banking and other external services have their own terms. You must
+        have the right permissions for your use of them. Their availability, eligibility rules,
+        charges and data-access conditions are separate from this household installation.</p>
+
+      <h2>6. Availability, maintenance and access changes</h2>
+      <p>This is a home-operated installation without a published uptime or support commitment.
+        Maintenance, hardware failures, internet problems or provider changes may interrupt it.
+        Features can change or be withdrawn; the operator should explain material changes affecting
+        your use or data.</p>
+      <p>The operator may restrict or disable access to protect the household, investigate misuse
+        or retire the installation. Contact the operator if you need access to your records or
+        wish to discuss a restriction. Disabling an account does not by itself erase activity logs,
+        calendar records or backups, and does not remove applicable data protection rights.</p>
+      <p>No paid public subscription is offered through this installation. Running a separate copy
+        may involve hosting, hardware, network or third-party service costs, which are not covered
+        by access to this household instance.</p>
+
+      <h2>7. Practical limits and legal rights</h2>
+      <p>Device reports, calendar copies and any future financial information can be delayed,
+        incomplete or incorrect. Check important results at their source. Server security depends
+        on deployment controls and backup practices; some supported legacy device links are
+        unencrypted, and Hestia does not provide a general encryption-at-rest layer.</p>
+      <p>These terms do not promise uninterrupted operation, complete provider coverage or a
+        particular outcome. They also do not exclude liability, remedies or consumer and data
+        protection rights that cannot lawfully be excluded. Any responsibility for a problem is
+        assessed under the applicable law and circumstances; no particular court or jurisdiction
+        is selected by this page.</p>
+
+      <h2>8. Open-source licence</h2>
+      <p>Use, copying, modification and redistribution of the current Hestia source code are
+        governed by the <a href="https://github.com/mateusz-klatt/hestia/blob/master/LICENSE">Apache
+        License, Version 2.0</a>, including its own notices and conditions. Third-party components
+        retain their respective licences. These installation terms do not replace the source-code
+        licence or withdraw rights already granted under it.</p>
+
+      <h2>9. Changes and contact</h2>
+      <p>The date above identifies this version. The operator may update these terms as the
+        installation develops. Material changes, particularly activation of optional banking access
+        or a new use of personal data, should be explained before they take effect and require any
+        necessary fresh authorisation. Questions, privacy requests and security concerns can be
+        sent to <a href="mailto:mateusz@klatt.ie">mateusz@klatt.ie</a>.</p>
+    </main>
+    <footer>
+      <p>Hestia · Mateusz Klatt · <a href="mailto:mateusz@klatt.ie">mateusz@klatt.ie</a><br>
+        <a href="privacy-policy.html">Privacy Policy</a> ·
+        <a href="https://github.com/mateusz-klatt/hestia">Hestia source code</a></p>
+    </footer>
+  </div>
+</body>
+</html>

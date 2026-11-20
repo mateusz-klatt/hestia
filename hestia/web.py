@@ -79,6 +79,10 @@ _EMPTY_SETTINGS = {"locale": None, "temp_scale": None, "theme": None}
 _RT_KEY = web.AppKey("rt", object)
 _UI_DIST_ENV = "HESTIA_UI_DIST"
 _DEFAULT_UI_DIST = Path(__file__).resolve().parent.parent / "ui" / "dist"
+_PUBLIC_DOCUMENTS = {
+    "/privacy-policy.html": "privacy-policy.html",
+    "/terms-of-service.html": "terms-of-service.html",
+}
 
 # App-level login (#43). OPT-IN: gating is enforced ONLY when HESTIA_SESSION_SECRET is set. With no secret
 # auth is OFF and routes stay OPEN (loopback/dev and pre-config deployments are unaffected; the reverse
@@ -138,8 +142,10 @@ def _summary(devices: dict) -> dict:
 
 def _is_public_route(method: str, path: str) -> bool:
     """Exact method+path allowlist reachable WITHOUT a session: the app shell + its assets + the /ui/
-    redirect (GET, so the login form can load), and login/logout (POST). Everything else is gated —
+    redirect (GET), the two legal documents (GET/HEAD), and login/logout (POST). Everything else is gated —
     incl. a wrong-method hit on a public path (e.g. GET /api/login → gated, not a public 405)."""
+    if method in ("GET", "HEAD") and path in _PUBLIC_DOCUMENTS:
+        return True
     if method == "GET":
         return path in ("/", "/ui/") or path.startswith("/assets/")
     return method == "POST" and path in ("/api/login", "/api/logout")
@@ -782,6 +788,13 @@ async def _ui_asset(request):  # NOSONAR S7503: aiohttp route handlers must be c
     return _ui_built_file_response(_ui_dist_dir() / "assets" / request.match_info["path"])
 
 
+async def _ui_document(request):  # NOSONAR S7503: aiohttp route handlers must be coroutines (the framework awaits them)
+    # Exact registered routes select fixed filenames; no arbitrary dist file is public.
+    response = _ui_built_file_response(_ui_dist_dir() / _PUBLIC_DOCUMENTS[request.path])
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    return response
+
+
 async def _discovery(request):  # NOSONAR S7503: aiohttp route handlers must be coroutines (the framework awaits them)
     rt = _rt(request)
     devices = _merged_discovery(rt)
@@ -1094,6 +1107,8 @@ def make_app(rt):
     app.router.add_get("/", _ui_index, allow_head=False)                          # the TS app (Vite build)
     app.router.add_get("/assets/{path:[A-Za-z0-9._-]+}", _ui_asset, allow_head=False)
     app.router.add_get("/ui/", _ui_redirect, allow_head=False)                    # retired alias -> /
+    for path in _PUBLIC_DOCUMENTS:
+        app.router.add_get(path, _ui_document)                                  # GET + HEAD for URL validators
     app.router.add_post("/api/login", _login)
     app.router.add_post("/api/logout", _logout)
     app.router.add_get("/api/whoami", _whoami, allow_head=False)
