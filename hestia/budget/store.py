@@ -32,7 +32,7 @@ def _safe_error(code):
     allowed = {"authorization", "rate_limit", "unavailable", "network", "invalid_response",
                "provider_error", "invalid_data", "configuration", "unsupported_amount", "internal_error",
                "invalid_session", "expired_session", "session_mismatch",
-               "account_selection", "invalid_pagination", "limit_exceeded"}
+               "account_selection", "invalid_pagination", "limit_exceeded", "deferred", "acquisition_timeout"}
     return code if code in allowed else "invalid_data"
 
 
@@ -475,17 +475,22 @@ class BudgetStore:
         return "updated", None
 
     @staticmethod
-    def _component_status(component, operation, account, connection, now):
+    def _component_status(component, operation, account, connection, now, shared):
         success = getattr(component, "last_success", None)
         age = None if success is None else max(0, now - success)
         error = getattr(component, "last_error", None)
-        next_attempt = max(connection.next_attempt, getattr(component, "next_attempt", 0))
+        deadlines = [stamp for stamp in (getattr(component, "retry_at", None), shared["retry_at"]) if stamp is not None]
+        retry_at = max(deadlines, default=None)
+        suspended = getattr(component, "suspended", False) or shared["suspended"]
+        next_attempt = max(shared["next_attempt"], getattr(component, "next_attempt", 0),
+                           getattr(component, "backoff_until", 0), retry_at or 0)
         state, error = BudgetStore._component_state(component, account, connection, now,
-                                                    success, age, error, next_attempt, operation)
+                                                    success, age, error, next_attempt, operation, suspended)
         return {"last_attempt": getattr(component, "last_attempt", None),
                 "last_success": success, "last_error": error,
                 "failures": getattr(component, "failures", 0),
                 "next_attempt": next_attempt, "state": state,
+                "retry_at": retry_at, "suspended": suspended,
                 "stale": age is None or age >= STALE_AFTER[operation],
                 "age_seconds": age, "stale_after_seconds": STALE_AFTER[operation]}
 
@@ -496,8 +501,8 @@ class BudgetStore:
                 or connection.last_error in {"authorization", "invalid_session", "expired_session", "session_mismatch"})
 
     @staticmethod
-    def _component_state(component, account, connection, now, success, age, error, next_attempt, operation):
-        if BudgetStore._component_blocked(account, connection, now):
+    def _component_state(component, account, connection, now, success, age, error, next_attempt, operation, suspended=False):
+        if suspended or BudgetStore._component_blocked(account, connection, now):
             return "blocked", error
         if getattr(component, "attempt_id", None) is not None:
             lease = component.lease_until
@@ -510,15 +515,17 @@ class BudgetStore:
             return "never", None
         return ("ready" if age >= STALE_AFTER[operation] else "ok"), None
 
-    def _account_status(self, session, account, connection, now):
+    def _account_status(self, session, account, connection, now, shared):
         return {"id": account.id, "enabled": account.enabled, "configured": account.configured,
                 "kind": account.kind, "kind_confirmed_at": account.kind_confirmed_at,
                 "last_attempt": account.last_attempt, "last_success": account.observed_at,
                 "last_error": account.last_error,
                 "components": {op: self._component_status(session.get(Component, (account.id, op)),
-                                                           op, account, connection, now) for op in OPERATIONS}}
+                                                           op, account, connection, now, shared) for op in OPERATIONS}}
 
     def status(self, *, owner=None):
+        from .scheduler import shared_state
+
         now = self.clock()
         with self.sessions() as session:
             session.execute(text("BEGIN"))
@@ -527,6 +534,7 @@ class BudgetStore:
                 query = query.where(Connection.owner == owner)
             result = []
             for row in session.scalars(query):
+                shared = shared_state(session, row)
                 accounts = select(Account.id).where(Account.connection_id == row.id)
                 selected = session.scalar(select(func.count()).select_from(Account).where(
                     Account.connection_id == row.id, Account.enabled, Account.configured))
@@ -555,8 +563,9 @@ class BudgetStore:
                                "last_attempt": row.last_attempt, "last_success": row.last_success,
                                "next_attempt": row.next_attempt, "last_error": row.last_error,
                                "failures": row.failures, "valid_until": row.valid_until,
+                               "request_limits": shared,
                                "renewal_due": row.valid_until is not None and row.valid_until - now <= 604800,
-                               "accounts": [self._account_status(session, account, row, now)
+                               "accounts": [self._account_status(session, account, row, now, shared)
                                             for account in session.scalars(select(Account).where(
                                                 Account.connection_id == row.id).order_by(Account.id))]})
             return result

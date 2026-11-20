@@ -1,7 +1,7 @@
 # Budget 2A: account controls and independent acquisition
 
-**IMPLEMENTATION STATUS:** 2A.1 is merged in #166; 2A.2 is implemented in the
-component-sync branch. 2A.3 remains proposed and unimplemented.
+**IMPLEMENTATION STATUS:** 2A.1 and 2A.2 are merged in #166 and #167.
+2A.3 implements the endpoint-quota and operator-review behavior described below.
 This is backend/CLI work; it does not activate bank data in the live service.
 Existing behavior and import guarantees remain documented in [BUDGET.md](BUDGET.md).
 
@@ -20,7 +20,7 @@ No live callbacks, bank-panel changes, automatic poller or production activation
 Keep stable identity `(owner, identification_hash)` and the existing local account ID.
 Session account UIDs remain temporary routes; currency, display name and kind are
 not identity keys. Reauthorisation must not duplicate or silently reclassify accounts.
-Proposed kinds: `unknown`, `current`, `savings`, `credit_card`, `other`.
+Kinds: `unknown`, `current`, `savings`, `credit_card`, `other`.
 Store explicit owner confirmation separately: confirmed kind, confirmation time
 and confirmation origin. Existing accounts migrate to unconfirmed `unknown`.
 Provider metadata or a prefill may suggest a kind, but never confirms it.
@@ -45,7 +45,7 @@ explicit selection action. Version/document this change to legacy CLI selection
 behavior before shipping it, and test it independently of kind confirmation.
 An operator workflow must explicitly record owner confirmation rather than treating
 existing configuration, an admin row or successful bank consent as that confirmation.
-Proposed CLI actions: `accounts`, `account select <local-id>`,
+CLI actions: `accounts`, `account select <local-id>`,
 `account deselect <local-id>` and `account confirm-kind <local-id> --kind <kind>`.
 These privileged local actions act on behalf of the configured owner, not as an
 authenticated browser principal. Append an audit record containing actor, owner,
@@ -93,11 +93,14 @@ evidence that both endpoint budgets are available. Persist limits by stable loca
 account and operation, with applicable shared bank/session/application cooldowns.
 An `ASPSP_RATE_LIMIT_EXCEEDED` response on an account endpoint defaults to that
 account and operation, preserving healthy sibling accounts. Session-level 429
-blocks the connection. Explicit application/provider-wide errors use that wider
-scope; genuinely unclassified responses use a conservative connection floor.
+blocks the connection. Shared application/provider cooldowns are also consulted.
+The current public API documents no distinct application-wide error code, so
+Hestia never invents one from arbitrary response text. Unclassified responses use
+a conservative connection floor; a shared limit needs trusted policy/adapter metadata.
 Do not infer a global limit from one known account-level rate error.
 Use verified bank policy/configuration; no universal provider quota is assumed.
-Default background cadence is two acquisitions per day per selected endpoint,
+Default cadence is at most two acquisitions per rolling 24 hours per selected endpoint,
+with at least 12 hours between starts,
 subject to stricter verified bank quotas. This is an operational ceiling, not a
 promise of bank allowance or spare manual requests.
 Reserve an account/endpoint **acquisition** in a short transaction before its first
@@ -113,20 +116,26 @@ The HTTP client returns safe structured retry metadata without raw response bodi
 URLs or account identifiers. Preserve recognized provider error codes through an
 allowlist to distinguish account-level ASPSP errors from provider limits. Parse
 `Retry-After` delay-seconds and HTTP-date using an injected clock; malformed/past
-values use a conservative fallback. For background ASPSP quota errors the proposed
-minimum/fallback cooldown is six hours; other verified rate classes follow their
-own documented policy. Valid longer server deadlines always take precedence.
+values use a conservative fallback. The current minimum/fallback rate cooldown
+is six hours, in addition to consumed quota/cadence. Valid longer server deadlines
+always take precedence.
 Compute eligibility from the latest applicable quota, backoff and valid server
 deadline. Never retry earlier than a valid `Retry-After`; an extreme delay suspends
 automatic acquisition for operator review instead of truncating the delay early.
-For this proposal, a valid delay exceeding seven days or extending beyond session
+An oversized hint, valid delay exceeding seven days or extending beyond session
 validity suspends automatic acquisition. Keep the original deadline; suspension
 does not make a retry eligible at the seven-day boundary.
+Local `limits list/resume` commands support explicit operator review. Resume
+clears only suspension, atomically audits actor/owner/scope, and preserves all
+server deadlines, backoffs, debits and account selection. A repeated review is
+a no-op. No financial or limit-control HTTP routes are added.
 Persist failure/backoff before returning. No immediate HTTP retries; manual refresh
 uses the same reservation path. Background calls continue to omit all PSU headers.
 Legitimate interactive PSU context is a separate 2B decision; never forge it to
-claim an online allowance. Proposed transport timeout is 60 seconds per request
-with a 15-minute whole-acquisition deadline, in addition to row/page/size bounds.
+claim an online allowance. Transport timeout is at most 60 seconds, with a
+15-minute monotonic HTTP-round deadline checked before/after requests and between
+bounded response chunks, in addition to row/page/size bounds. A pending socket read
+can finish within its already assigned timeout; late data is never published.
 Reaching that deadline reports incomplete/deferred and retains previous data.
 If pagination cannot finish within permitted acquisition/transport constraints, retain committed history and
 report deferred/incomplete work; do not publish a partial transaction collection.
@@ -139,6 +148,10 @@ Backfill component success only from known complete API acquisition timestamps,
 never offline `fetched_at`, import time or transaction observation times.
 Carry the existing connection `next_attempt` reservation forward as a shared floor,
 so upgrading cannot create a fresh allowance. New state alone must not enable work.
+Migration 0010 also carries the latest known legacy attempt into conservative quota
+debits, labelled `legacy_upper_bound`; these do not invent endpoint attempt/success
+timestamps. New debits are labelled `api`. Neither a crash nor lease expiry refunds
+a debit. File import never creates acquisitions or modifies shared limits.
 Preserve the transaction key, BOOK/quarantine rules and decimal/currency contracts.
 Offline import remains atomic, idempotent, credential-free and network-free.
 It preserves enabled flags, archives balances, and cannot refresh API component

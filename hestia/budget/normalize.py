@@ -33,7 +33,7 @@ class BudgetDataError(ValueError):
 
     CODES = frozenset({"invalid_data", "unsupported_amount", "invalid_session",
                        "expired_session", "session_mismatch", "account_selection", "invalid_pagination",
-                       "limit_exceeded"})
+                       "limit_exceeded", "deferred"})
 
     def __init__(self, code="invalid_data"):
         self.code = code if isinstance(code, str) and code in self.CODES else "invalid_data"
@@ -321,7 +321,7 @@ def _selected_account(client, primary, uid, start, end, budget, before_component
 
 
 def fetch_snapshot(client, session_id: str, connection: ConnectionConfig, *, today: date, now=None,
-                   before_component=None) -> Snapshot:
+                   before_component=None, on_session=None) -> Snapshot:
     """Validate the session, then independently fetch complete components.
 
     A failed component contributes only a safe diagnostic. HTTP401 invalidates
@@ -333,6 +333,8 @@ def fetch_snapshot(client, session_id: str, connection: ConnectionConfig, *, tod
         raise BudgetDataError()
     start, end = (today - timedelta(days=364)).isoformat(), today.isoformat()
     expiry, hashes = _session_state(client, session_id, connection, _current_time(now))
+    if on_session is not None:
+        on_session(expiry)
     accounts, errors, budget = [], [], {"remaining": MAX_TRANSACTIONS, "bytes": MAX_NORMALIZED_BYTES}
     for primary in connection.accounts:
         if _budget_exhausted(budget):

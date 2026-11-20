@@ -31,14 +31,39 @@ SECOND_UID = "00000000-0000-4000-8000-000000000004"
 FAKE_KEY = b"synthetic key; never sent to a bank"
 
 
+class AdvancingTime:
+    """Coupled synthetic wall/monotonic clocks; pacing never sleeps in tests."""
+
+    @property
+    def now(self):
+        return self._wall
+
+    @now.setter
+    def now(self, value):
+        if hasattr(self, "_wall"):
+            self._tick += value - self._wall
+        else:
+            self._tick = 1000.0
+            self.sleeps = []
+        self._wall = value
+
+    def monotonic(self):
+        return self._tick
+
+    def sleep(self, seconds):
+        self.sleeps.append(seconds)
+        self.now += seconds
+
+
 def reserved_snapshots(*observations):
     """Mock acquisition results while preserving the real pre-HTTP reservations."""
     remaining = iter(observations)
 
-    def fetch(client, session_id, connection, *, before_component, **kwargs):
+    def fetch(client, session_id, connection, *, before_component, on_session, **kwargs):
         observation = next(remaining)
         if isinstance(observation, Exception):
             raise observation
+        on_session(observation.valid_until)
         for primary in connection.accounts:
             for operation in ("transactions", "balances"):
                 if not before_component(primary, operation):
@@ -80,7 +105,7 @@ class SyntheticBank:
         raise AssertionError("Unexpected synthetic API route")
 
 
-class BudgetRuntimeTests(unittest.TestCase):
+class BudgetRuntimeTests(AdvancingTime, unittest.TestCase):
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()
         self.path = Path(self.directory.name) / "synthetic.db"
@@ -104,7 +129,7 @@ class BudgetRuntimeTests(unittest.TestCase):
 
     def acquisition(self, config=None, **kwargs):
         return runtime.run_once(self.config if config is None else config,
-                                clock=lambda: self.now, **kwargs)
+                                clock=lambda: self.now, monotonic=self.monotonic, sleeper=self.sleep, **kwargs)
 
     def invoke(self, arguments):
         stdout, stderr = io.StringIO(), io.StringIO()
@@ -132,21 +157,30 @@ class BudgetRuntimeTests(unittest.TestCase):
         self.assertEqual(json.loads(account.balances_json)[0]["balance_amount"]["amount"], "-12.345")
         self.assertEqual(json.loads(self.rows(db.BudgetTransaction)[0].payload_json)["amount"],
                          "12345678901234567890.12345")
-        self.assertEqual(result["status"][0]["next_attempt"], self.now + 43200)
+        self.assertEqual(result["status"][0]["next_attempt"], 0)
+        self.assertEqual(len(self.rows(db.BudgetAcquisition)), 2)
         self.assertNotIn("SECRET", json.dumps(result))
         self.assertNotIn("synthetic-hash", json.dumps(result))
 
     def test_crash_reserves_before_http_and_restart_defers_without_reading_credentials(self):
+        bank = SyntheticBank(self.config)
+        get = bank.get
+        def interrupt(path, query=None):
+            if path.endswith("/balances"):
+                raise SystemExit("simulated interruption")
+            return get(path, query)
+        bank.get = interrupt
         with mock.patch.object(runtime, "credentials", return_value=(FAKE_KEY, APP)), \
              self.assertRaisesRegex(SystemExit, "simulated interruption"):
-            self.acquisition(path=self.path, client_factory=mock.Mock(side_effect=SystemExit("simulated interruption")))
+            self.acquisition(path=self.path, client_factory=mock.Mock(return_value=bank))
         db.reset_engine_cache()
         _, self.sessions = db.init_db(self.path)
         with mock.patch.object(runtime, "credentials") as credentials:
             result = self.acquisition(path=self.path, client_factory=mock.Mock())
         credentials.assert_not_called()
         self.assertEqual(result["results"], [{"connection": "bank", "state": "deferred"}])
-        self.assertEqual(result["status"][0]["next_attempt"], self.now + 43200)
+        self.assertEqual(result["status"][0]["next_attempt"], 0)
+        self.assertEqual(len(self.rows(db.BudgetAcquisition)), 2)
         self.assertEqual(result["status"][0]["failures"], 0)
         self.now += 43200
         with mock.patch.object(runtime, "credentials", return_value=(FAKE_KEY, APP)):
@@ -179,7 +213,7 @@ class BudgetRuntimeTests(unittest.TestCase):
                 result = json.loads(output)
                 self.assertEqual(result["results"], [{"connection": "bank", "state": "failed"}])
                 self.assertEqual(result["status"][0]["last_error"], expected)
-                self.assertEqual(result["status"][0]["next_attempt"], self.now + 43200)
+                self.assertEqual(result["status"][0]["next_attempt"], self.now + 21600)
                 self.assertEqual(self.rows(db.BudgetTransaction)[0].payload_json, original)
                 self.assertNotIn("Synthetic purchase", output)
                 self.assertNotIn("synthetic-hash", output)
@@ -197,7 +231,7 @@ class BudgetRuntimeTests(unittest.TestCase):
                                                            accounts=(first, second), errors=()))
         previous_quarantine = self.rows(db.BudgetUnresolved)[0].payload_json
         old_success = self.now
-        self.now += 3600
+        self.now += 43200
         self.factory = mock.Mock(return_value=SyntheticBank(self.config, failures=("second-hash",)))
         with mock.patch.object(cli, "load_config", return_value=self.config), \
              mock.patch.object(cli, "run_once", side_effect=self.cli_acquisition), \
@@ -223,7 +257,7 @@ class BudgetRuntimeTests(unittest.TestCase):
         self.assertEqual({row.entry_reference for row in self.rows(db.BudgetTransaction)},
                          {"seed-first", "seed-second", "ref-1"})
         self.assertEqual([row.payload_json for row in self.rows(db.BudgetUnresolved)], [previous_quarantine])
-        self.assertEqual(result["status"][0]["next_attempt"], self.now + 43200)
+        self.assertEqual(result["status"][0]["next_attempt"], 0)
         self.assertNotIn("second-hash", output)
         self.assertNotIn("SECRET", output)
         self.now += 43200
@@ -251,6 +285,7 @@ class BudgetRuntimeTests(unittest.TestCase):
         self.store.commit_snapshot("bank", snapshot(transaction(), valid_until=self.now + 31536000))
         invalid = snapshot(transaction("new-but-unselected"), account_hash="not-selected", valid_until=self.now + 31536000)
         valid = snapshot(transaction("other-ref"), account_hash="second-hash", valid_until=self.now + 31536000)
+        self.now += 43200
         with mock.patch.object(runtime, "credentials", return_value=(FAKE_KEY, APP)), \
              mock.patch.object(runtime, "fetch_snapshot", side_effect=reserved_snapshots(invalid, valid)):
             result = self.acquisition(config, path=self.path, client_factory=mock.Mock())
@@ -332,6 +367,7 @@ class BudgetRuntimeTests(unittest.TestCase):
     def test_cli_unexpected_error_never_exposes_exception_and_durable_data_survives(self):
         prepare_selected(self.store, self.config)
         self.store.commit_snapshot("bank", snapshot(transaction(), valid_until=self.now + 31536000))
+        self.now += 43200
         with mock.patch.object(cli, "load_config", return_value=self.config), \
              mock.patch.object(cli, "run_once", side_effect=self.cli_acquisition), \
              mock.patch.object(runtime, "credentials", side_effect=RuntimeError("SECRET key path and bank payload")):
@@ -340,7 +376,7 @@ class BudgetRuntimeTests(unittest.TestCase):
         self.assertEqual(json.loads(output)["status"][0]["last_error"], "internal_error")
         self.assertNotIn("SECRET", output)
         self.assertEqual(len(self.rows(db.BudgetTransaction)), 1)
-        self.assertEqual(self.store.status()[0]["next_attempt"], self.now + 43200)
+        self.assertEqual(self.store.status()[0]["next_attempt"], self.now + 21600)
 
     def test_cli_unexpected_database_failure_is_redacted(self):
         with mock.patch.object(cli, "execute", side_effect=RuntimeError("SECRET database detail")):

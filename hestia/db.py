@@ -231,6 +231,52 @@ class BudgetComponent(Base):
     next_attempt: Mapped[float] = mapped_column(default=0, server_default=text("0"))
     attempt_id: Mapped[str | None]
     lease_until: Mapped[float | None]
+    retry_at: Mapped[float | None]
+    suspended: Mapped[bool] = mapped_column(default=False, server_default=text("0"))
+    backoff_until: Mapped[float] = mapped_column(default=0, server_default=text("0"))
+
+
+class BudgetAcquisition(Base):
+    """Immutable quota debits; every page of one acquisition shares a debit."""
+
+    __tablename__ = "budget_acquisitions"
+    __table_args__ = (UniqueConstraint("account_id", "operation", "attempt_id"),
+                      Index("ix_budget_acquisition_window", "account_id", "operation", "started_at"))
+    id: Mapped[str] = mapped_column(primary_key=True)
+    account_id: Mapped[str] = mapped_column(ForeignKey("budget_accounts.id"))
+    operation: Mapped[str]
+    attempt_id: Mapped[str]
+    started_at: Mapped[float]
+    origin: Mapped[str]
+
+
+class BudgetRequestLimit(Base):
+    """Shared persistent cooldowns and application-wide transport pacing."""
+
+    __tablename__ = "budget_request_limits"
+    scope: Mapped[str] = mapped_column(primary_key=True)
+    key: Mapped[str] = mapped_column(primary_key=True)
+    next_attempt: Mapped[float] = mapped_column(default=0, server_default=text("0"))
+    next_request_at: Mapped[float] = mapped_column(default=0, server_default=text("0"))
+    last_request_at: Mapped[float | None]
+    retry_at: Mapped[float | None]
+    suspended: Mapped[bool] = mapped_column(default=False, server_default=text("0"))
+
+
+class BudgetLimitAudit(Base):
+    """Operator review of suspended limits, without financial or secret payloads."""
+
+    __tablename__ = "budget_limit_audit"
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    scope: Mapped[str]
+    target_key: Mapped[str]
+    owner: Mapped[str] = mapped_column(ForeignKey("users.username"))
+    actor: Mapped[str]
+    origin: Mapped[str]
+    field: Mapped[str]
+    old_value_json: Mapped[str]
+    new_value_json: Mapped[str]
+    changed_at: Mapped[float]
 
 
 class BudgetAccountAudit(Base):

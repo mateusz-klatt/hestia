@@ -13,12 +13,13 @@ from hestia import db
 from hestia.budget import normalize, runtime
 from hestia.budget.client import BudgetAPIError
 from hestia.budget.normalize import AccountFailure, AccountSnapshot, Snapshot
+from hestia.budget.scheduler import BudgetScheduler
 from hestia.budget.store import BudgetStore, BudgetStoreError, OPERATIONS, STALE_AFTER
 from tests.test_budget_store import APP, configuration, prepare_selected, snapshot, transaction
-from tests.test_budget_runtime import ACCOUNT_UID, SECOND_UID, FAKE_KEY, SyntheticBank
+from tests.test_budget_runtime import ACCOUNT_UID, SECOND_UID, FAKE_KEY, AdvancingTime, SyntheticBank
 
 
-class ComponentCase(unittest.TestCase):
+class ComponentCase(AdvancingTime, unittest.TestCase):
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()
         self.path = Path(self.directory.name) / "components.db"
@@ -44,7 +45,8 @@ class ComponentCase(unittest.TestCase):
 
     def components(self, primary="synthetic-hash"):
         account_id = self.account(primary).id
-        fields = ("last_attempt", "last_success", "last_error", "failures", "next_attempt", "attempt_id", "lease_until")
+        fields = ("last_attempt", "last_success", "last_error", "failures", "next_attempt", "attempt_id", "lease_until",
+                  "retry_at", "suspended")
         return {row.operation: {field: getattr(row, field) for field in fields}
                 for row in self.rows(db.BudgetComponent) if row.account_id == account_id}
 
@@ -69,7 +71,8 @@ class ComponentCase(unittest.TestCase):
     def acquire(self, bank, *, config=None):
         with mock.patch.object(runtime, "credentials", return_value=(FAKE_KEY, APP)):
             return runtime.run_once(self.config if config is None else config, path=self.path,
-                                    clock=lambda: self.now, client_factory=mock.Mock(return_value=bank))
+                                    clock=lambda: self.now, client_factory=mock.Mock(return_value=bank),
+                                    monotonic=self.monotonic, sleeper=self.sleep)
 
 
 class ComponentPublicationTests(ComponentCase):
@@ -354,6 +357,12 @@ class ComponentStatusTests(ComponentCase):
 
 
 class ComponentRuntimeTests(ComponentCase):
+    def reserve(self, *operations, attempt_id="round"):
+        scheduler = BudgetScheduler(self.store)
+        for operation in operations:
+            self.assertTrue(scheduler.reserve_component(self.config.connections[0], "synthetic-hash", operation,
+                                                        attempt_id=attempt_id, valid_until=self.now + 31536000))
+
     def test_401_discards_all_staged_accounts_and_does_not_invent_unvisited_attempts(self):
         self.config = configuration(accounts=("synthetic-hash", "second-hash"))
         prepare_selected(self.store, self.config)
@@ -362,7 +371,8 @@ class ComponentRuntimeTests(ComponentCase):
             self.observation(primary="second-hash", transactions=(transaction("second-seed"),), balances=())))
         old_rows = [(row.entry_reference, row.payload_json) for row in self.rows(db.BudgetTransaction)]
         previous_success = self.now
-        self.now += 60
+        self.now += 43200
+        started = self.now
         bank = SyntheticBank(self.config)
         get = bank.get
         def fail_second(path, query=None):
@@ -379,10 +389,13 @@ class ComponentRuntimeTests(ComponentCase):
         self.assertEqual([path for path, _ in bank.calls], [f"/sessions/{APP}",
                          f"/accounts/{ACCOUNT_UID}/transactions", f"/accounts/{ACCOUNT_UID}/balances",
                          f"/accounts/{SECOND_UID}/transactions"])
+        attempted_at = {("synthetic-hash", "transactions"): started,
+                        ("synthetic-hash", "balances"): started + 1,
+                        ("second-hash", "transactions"): started + 2}
         for primary, operations in (("synthetic-hash", OPERATIONS), ("second-hash", ("transactions",))):
             for operation in operations:
                 part = self.components(primary)[operation]
-                self.assertEqual(part["last_attempt"], self.now)
+                self.assertEqual(part["last_attempt"], attempted_at[(primary, operation)])
                 self.assertEqual(part["last_success"], previous_success)
                 self.assertEqual(part["last_error"], "authorization")
                 self.assertIsNone(part["attempt_id"])
@@ -421,7 +434,7 @@ class ComponentRuntimeTests(ComponentCase):
         bank = SyntheticBank(self.config)
         result = self.acquire(bank)
         self.assertEqual(result["results"], [{"connection": "bank", "state": "deferred"}])
-        self.assertEqual([path for path, _ in bank.calls], [f"/sessions/{APP}"])
+        self.assertEqual(bank.calls, [])
         self.assertEqual(self.components(), before)
         self.assertEqual(self.state()["failures"], 0)
         self.assertIsNone(self.state()["last_success"])
@@ -441,12 +454,13 @@ class ComponentRuntimeTests(ComponentCase):
         self.config = configuration(accounts=("synthetic-hash", "second-hash"))
         prepare_selected(self.store, self.config)
         bank = SyntheticBank(self.config)
+        started = self.now
         with mock.patch.object(normalize, "MAX_TRANSACTIONS", 1):
             result = self.acquire(bank)
         self.assertEqual(result["results"], [{"connection": "bank", "state": "partial"}])
         self.assertEqual([path for path, _ in bank.calls], [f"/sessions/{APP}", f"/accounts/{ACCOUNT_UID}/transactions"])
         parts = self.components()
-        self.assertEqual(parts["transactions"]["last_attempt"], self.now)
+        self.assertEqual(parts["transactions"]["last_attempt"], started)
         self.assertEqual(parts["transactions"]["last_success"], self.now)
         self.assertIsNone(parts["balances"]["last_attempt"])
         self.assertEqual(parts["balances"]["last_error"], "limit_exceeded")
@@ -469,14 +483,15 @@ class ComponentRuntimeTests(ComponentCase):
 
     def test_crash_leaves_durable_markers_then_restart_observes_lease_and_quota(self):
         bank = SyntheticBank(self.config)
+        started = self.now
         get = bank.get
         def interrupt(path, query=None):
             if path.startswith("/accounts/"):
                 operation = path.rsplit("/", 1)[1]
                 part = self.components()[operation]
                 self.assertIsNotNone(part["attempt_id"])
-                self.assertEqual(part["last_attempt"], self.now)
-                self.assertEqual(part["lease_until"], self.now + 900)
+                self.assertEqual(part["last_attempt"], started if operation == "transactions" else started + 1)
+                self.assertEqual(part["lease_until"], part["last_attempt"] + 900)
             if path.endswith("/balances"):
                 raise SystemExit("synthetic interruption")
             return get(path, query)
@@ -491,7 +506,8 @@ class ComponentRuntimeTests(ComponentCase):
         self.store = BudgetStore(self.sessions, clock=lambda: self.now)
         self.now += 901
         with mock.patch.object(runtime, "credentials") as credentials:
-            result = runtime.run_once(self.config, path=self.path, clock=lambda: self.now)
+            result = runtime.run_once(self.config, path=self.path, clock=lambda: self.now,
+                                      monotonic=self.monotonic, sleeper=self.sleep)
         credentials.assert_not_called()
         self.assertEqual(result["results"], [{"connection": "bank", "state": "deferred"}])
         self.assertEqual(self.components(), before)

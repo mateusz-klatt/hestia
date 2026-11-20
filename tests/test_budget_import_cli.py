@@ -20,6 +20,7 @@ from hestia.budget import __main__ as cli
 from hestia.budget import runtime
 from hestia.budget.store import BudgetStore
 from tests.test_budget_store import configuration, prepare_selected, snapshot, transaction
+from tests.test_budget_import_store import quota_state, seed_retry_state
 
 
 PRIVATE_HASH = "PRIVATE-account-hash-never-log"
@@ -137,7 +138,10 @@ class BudgetImportCLITests(unittest.TestCase):
         store.start_attempt("other-bank")
         store.commit_snapshot("other-bank", snapshot(transaction("other-reference"),
                                                      account_hash="other-private-hash", valid_until=self.now + 31536000))
+        target = next(row for row in self.rows(db.BudgetAccount) if row.connection_id == "bank")
+        seed_retry_state(self.sessions, target.id, self.now)
         before = store.status()
+        quota_before = quota_state(self.rows)
         code, output, diagnostic = self.invoke(self.arguments())
         self.assertEqual((code, diagnostic), (0, ""))
         after = store.status()
@@ -147,6 +151,7 @@ class BudgetImportCLITests(unittest.TestCase):
         self.assertEqual(after[1], before[1])
         self.assertEqual(len(self.rows(db.BudgetAccount)), 2)
         self.assertTrue(all(account.enabled for account in self.rows(db.BudgetAccount)))
+        self.assertEqual(quota_state(self.rows), quota_before)
         self.assertEqual({row.entry_reference for row in self.rows(db.BudgetTransaction)},
                          {"other-reference", "PRIVATE-entry-reference"})
         self.assert_redacted(output)

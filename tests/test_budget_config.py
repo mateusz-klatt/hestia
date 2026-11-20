@@ -116,6 +116,67 @@ class BudgetConfigurationTests(unittest.TestCase):
         raw["connections"].append(other)
         self.assertEqual(len(config.parse_config(raw).connections), 2)
 
+    def test_default_policy_is_immutable_and_preserves_six_argument_connections(self):
+        policy = config.AcquisitionPolicy()
+        self.assertEqual((policy.max_acquisitions_24h, policy.minimum_interval_seconds,
+                          policy.request_interval_seconds), (2, 43200, 1))
+        self.assertEqual(config.parse_config(sample()).connections[0].policy, policy)
+        legacy = config.ConnectionConfig("bank", "alice", "Synthetic Bank", "PL", "/test/session", ())
+        self.assertEqual(legacy.policy, policy)
+        with self.assertRaises(FrozenInstanceError):
+            policy.request_interval_seconds = 0
+        with self.assertRaises(FrozenInstanceError):
+            legacy.policy = config.AcquisitionPolicy(max_acquisitions_24h=1)
+
+    def test_optional_partial_policy_uses_defaults_without_mutating_input(self):
+        for overrides in ({}, {"max_acquisitions_24h": 1}, {"minimum_interval_seconds": 86400},
+                          {"request_interval_seconds": 2},
+                          {"max_acquisitions_24h": 1, "minimum_interval_seconds": 604800,
+                           "request_interval_seconds": 60}):
+            with self.subTest(overrides=overrides):
+                raw = sample()
+                raw["connections"][0]["policy"] = overrides
+                before = deepcopy(raw)
+                policy = config.parse_config(raw).connections[0].policy
+                self.assertEqual(policy, config.AcquisitionPolicy(**overrides))
+                self.assertEqual(raw, before)
+
+    def test_policy_object_rejects_unknown_fields_and_nonobjects(self):
+        for value in (None, [], True, 1, "SECRET", {"unknown": "SECRET"},
+                      {"max_acquisitions_24h": 1, "extra": "SECRET"}, {1: 2}):
+            with self.subTest(value=value):
+                raw = sample()
+                raw["connections"][0]["policy"] = value
+                self.assert_invalid(raw)
+        raw = sample()
+        raw["connections"][0]["policy"] = {}
+        raw["connections"][0]["unknown"] = "SECRET"
+        self.assert_invalid(raw)
+        del raw["connections"][0]["unknown"]
+        del raw["connections"][0]["accounts"]
+        self.assert_invalid(raw)
+
+    def test_policy_types_bounds_and_direct_construction_cannot_relax_limits(self):
+        bounds = {"max_acquisitions_24h": (1, 2), "minimum_interval_seconds": (43200, 604800),
+                  "request_interval_seconds": (1, 60)}
+        for field, (minimum, maximum) in bounds.items():
+            for value in (None, True, False, float(minimum), "SECRET", [], {},
+                          minimum - 1, maximum + 1, float("nan"), float("inf")):
+                with self.subTest(field=field, value=value):
+                    raw = sample()
+                    raw["connections"][0]["policy"] = {field: value}
+                    self.assert_invalid(raw)
+                    with self.assertRaisesRegex(config.BudgetConfigError, "^Invalid acquisition policy$"):
+                        config.AcquisitionPolicy(**{field: value})
+            for value in (minimum, maximum):
+                with self.subTest(field=field, boundary=value):
+                    raw = sample()
+                    raw["connections"][0]["policy"] = {field: value}
+                    self.assertEqual(getattr(config.parse_config(raw).connections[0].policy, field), value)
+        for value in (None, {}, 1, "SECRET"):
+            with self.subTest(policy=value), self.assertRaises(config.BudgetConfigError):
+                config.ConnectionConfig("bank", "alice", "Synthetic Bank", "PL", "/test/session", (), value)
+
 
 class BudgetCredentialTests(unittest.TestCase):
     def setUp(self):

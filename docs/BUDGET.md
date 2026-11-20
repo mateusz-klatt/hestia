@@ -1,7 +1,7 @@
 # Budget: read-only Enable Banking foundation
 
 Status: development foundation; **not enabled in the Hestia server, dashboard or
-production deployment**. This first slice supplies an explicit CLI ingestion path
+production deployment**. This module supplies an explicit CLI ingestion path
 and SQLite persistence. It does not make payments, categorise expenses or offer
 bank login in the browser. Existing public policies still describe the deployed
 service; update them before enabling this connector there.
@@ -62,8 +62,7 @@ unresolved observations represent the last complete snapshot with multiplicity.
 A database-specific process lock prevents overlapping CLI runs. Successful imports
 and failures persist timestamps and retry state. Restarting cannot lose committed
 history. Failed transient calls are retried by a later explicit `once` invocation,
-with a persisted 12-hour quota reservation made before HTTP; 429 waits at least
-six hours. Authorization/data errors
+with persisted endpoint quota/cadence reservations made before HTTP. Authorization/data errors
 require correction before useful progress; CLI never loops in a tight retry.
 Distinct observations using the same reference are retained in unresolved
 quarantine. Any previous canonical row using that reference is marked uncertain
@@ -81,7 +80,9 @@ retry metadata. Only a complete API account observation backfills both success
 times; offline imports cannot advance them. Each endpoint persists a round marker
 and a 15-minute running lease before HTTP. Restart retains attempts and cooldowns;
 an expired running marker is shown as interrupted, without inventing a success.
-The connection-level quota gate remains in force until endpoint scheduling lands.
+Migration 0010 adds independent endpoint scheduling, retaining existing connection
+deadlines as a shared floor. A failing card endpoint can no longer consume the
+eligibility of a healthy account or its other endpoint.
 
 Status adds `accounts[].components.transactions` and `.balances`, with states,
 age, stale flag and explicit freshness thresholds (36 hours for transactions,
@@ -98,6 +99,73 @@ All calls in this stage are unattended and omit **all** PSU headers. Do not forg
 IP/User-Agent values or assume an interactive request has unlimited quota.
 Future interactive refresh must derive real PSU context through an explicitly
 trusted reverse-proxy configuration; arbitrary forwarded headers are untrusted.
+
+### Endpoint quotas and transport pacing
+
+The default operational ceiling is two acquisitions per **rolling 24 hours**, at
+least 12 hours apart, for each stable local account and operation. This is not a
+claim that every bank grants that allowance. Configuration may make the ceiling
+stricter; verify the bank's actual limits before enabling unattended acquisition.
+For example, a connection may add this optional policy object:
+
+```json
+"policy": {
+  "max_acquisitions_24h": 1,
+  "minimum_interval_seconds": 86400,
+  "request_interval_seconds": 2
+}
+```
+
+Omitted policy fields default to `2`, `43200` and `1`. Allowed values are 1–2
+acquisitions, 43200–604800 seconds between acquisition starts, and 1–60 seconds
+between application HTTP requests. Existing version-1 configurations still work.
+Each transaction collection, including all continuation pages, consumes one
+durable acquisition. Errors, process termination and expired running leases do not
+refund it. If cancellation, expiry or a newly discovered shared block occurs
+after reservation but before HTTP, that reservation also remains consumed. This
+conservative cost prevents an uncertain interrupted request from gaining a refund.
+New session IDs, configuration reloads and manual `once` invocations
+cannot reset quota history. Migration keeps conservative legacy attempt debits
+and the old shared connection deadline, so upgrade cannot grant a fresh allowance.
+
+Every GET, including session metadata and continuation pages, separately reserves
+an application transport slot. Short pacing waits happen outside database write
+transactions; long cooldowns defer work. Owner, selection, current round lease and
+shared limits are checked again before network work. When no endpoint is due,
+`once` defers before reading credentials or requesting session metadata.
+
+An allowlisted `ASPSP_RATE_LIMIT_EXCEEDED` on an account endpoint delays only that
+account/operation. Unclassified and session-level 429s delay the connection.
+Shared application/provider floors are always consulted, but no wider scope is
+guessed from an arbitrary error message. The current API supplies no distinct
+application-wide error code. All rate errors retain at least a six-hour floor
+plus consumed cadence/quota and any longer valid `Retry-After` deadline.
+Seconds and HTTP dates are supported; malformed/past hints use the fallback.
+Oversized hints, delays over seven days or reaching beyond session validity
+suspend automatic acquisition without truncating the deadline. Status exposes
+the deadline/suspension; no automatic reset occurs.
+After checking the provider response or confirming an unknown hint was invalid,
+the local operator can list limits and record an explicit review:
+
+```sh
+python -m hestia.budget --config /secure/budget.json --db /secure/test.db limits list --owner existing-admin
+python -m hestia.budget --config /secure/budget.json --db /secure/test.db limits resume --owner existing-admin --connection personal-bank --scope component --account LOCAL_ACCOUNT_ID --operation transactions
+```
+
+Resume clears only the suspension flag and appends an atomic operator audit. It
+does not shorten any retained server deadline, backoff, cadence or rolling quota,
+and does not select an account. Valid future deadlines still defer requests after
+review. Other explicit scopes are `connection`, `application` and `provider`;
+application/provider reviews can affect other connections and are privileged
+local operator actions. These commands read neither keys nor session files and
+have no HTTP equivalent. Repeating a completed review is a no-op.
+
+Requests use at most a 60-second socket timeout and a 15-minute monotonic round
+deadline, checked between bounded response chunks and before/after HTTP. An
+already pending socket read may finish within its assigned timeout; data arriving
+after the round deadline is discarded. An incomplete transaction page sequence
+preserves the previous ledger/quarantine; independently complete components may
+still publish. No immediate HTTP retries occur.
 
 ## Secrets and local storage
 
@@ -302,7 +370,7 @@ importer's clock is rejected rather than silently adjusted.
 
 ## Next slices (not implemented here)
 
-1. Admin-only, owner-scoped account selection and consent renewal. Reserved
+1. Authenticated, owner-scoped browser account selection and consent renewal. Reserved
    callback: `https://hestia.klatt.ie/api/budget/enable-banking/callback`; **no route
    exists yet**. Use expiring single-use state bound to user, browser and bank;
    keep callback query secrets out of access logs, referrers and page content.
@@ -314,7 +382,7 @@ importer's clock is rejected rather than silently adjusted.
    support for cards, pending entries or statement due dates from bank branding.
 4. Year view and conservative categorisation/subscription hints with manual
    correction. The owner must explicitly choose each account's kind (current,
-   savings, credit card, foreign currency); CACC or a product name is insufficient.
+   savings, credit card or other); CACC or a product name is insufficient.
    Card repayments/internal transfers must not duplicate spending;
    recurring transactions do not prove unused subscriptions. Mortgage due dates
    and forecasts require explicit schedule inputs and freshness indicators.
@@ -322,10 +390,8 @@ importer's clock is rejected rather than silently adjusted.
    stops acquisition and retains history; provider revocation is not local erasure.
 6. Full React UI, background scheduling, legal-document update, access-control UAT
    and staged deployment after review. No bank data is sent to external AI tools.
-7. Per-account and endpoint quota scheduling with persistent Retry-After and
-   separate transport pacing. Current independent freshness still shares the
-   conservative connection-level acquisition reservation. Do not retry immediately
-   to compensate for a partial result.
+7. Authenticated UI for limit inspection and operator review, preserving the CLI's
+   deadlines and audit. Do not erase quota history to compensate for a partial result.
 
 ## Sources
 
