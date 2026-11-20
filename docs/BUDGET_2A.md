@@ -109,11 +109,12 @@ work. A restarted acquisition may consume another allowance; an uncertain reques
 after a crash conservatively retains its reservation across restart, configuration
 changes and session renewal. Expiring a running lease must not erase consumed quota.
 The HTTP client returns safe structured retry metadata without raw response bodies,
-URLs or account identifiers. Parse `Retry-After` delay-seconds and HTTP-date using
-an injected clock, and preserve recognized provider error codes through an
-allowlist so account-level ASPSP errors can be distinguished from provider limits.
-Parse retry metadata using
-an injected clock; malformed/past values use a conservative fallback policy.
+URLs or account identifiers. Preserve recognized provider error codes through an
+allowlist to distinguish account-level ASPSP errors from provider limits. Parse
+`Retry-After` delay-seconds and HTTP-date using an injected clock; malformed/past
+values use a conservative fallback. For background ASPSP quota errors the proposed
+minimum/fallback cooldown is six hours; other verified rate classes follow their
+own documented policy. Valid longer server deadlines always take precedence.
 Compute eligibility from the latest applicable quota, backoff and valid server
 deadline. Never retry earlier than a valid `Retry-After`; an extreme delay suspends
 automatic acquisition for operator review instead of truncating the delay early.
