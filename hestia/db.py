@@ -179,6 +179,61 @@ class CalendarOutbox(Base):
     last_error: Mapped[str | None]
 
 
+class BudgetConnection(Base):
+    """Opt-in bank acquisition state; session IDs and keys stay outside SQLite."""
+
+    __tablename__ = "budget_connections"
+    id: Mapped[str] = mapped_column(primary_key=True)
+    owner: Mapped[str] = mapped_column(ForeignKey("users.username"))
+    application_id: Mapped[str]
+    bank_name: Mapped[str]
+    country: Mapped[str]
+    enabled: Mapped[bool]
+    valid_until: Mapped[float | None]
+    last_attempt: Mapped[float | None]
+    last_success: Mapped[float | None]
+    next_attempt: Mapped[float]
+    failures: Mapped[int]
+    last_error: Mapped[str | None]
+
+
+class BudgetAccount(Base):
+    """Stable owner-scoped identity, independent of session account UIDs."""
+
+    __tablename__ = "budget_accounts"
+    __table_args__ = (UniqueConstraint("owner", "identification_hash"),)
+    id: Mapped[str] = mapped_column(primary_key=True)
+    connection_id: Mapped[str] = mapped_column(ForeignKey("budget_connections.id"))
+    owner: Mapped[str] = mapped_column(ForeignKey("users.username"))
+    identification_hash: Mapped[str]
+    enabled: Mapped[bool]
+    balances_json: Mapped[str]
+    observed_at: Mapped[float | None]
+    last_attempt: Mapped[float | None]
+    last_error: Mapped[str | None]
+
+
+class BudgetTransaction(Base):
+    """Canonical entries have a provider-guaranteed account-scoped reference."""
+
+    __tablename__ = "budget_transactions"
+    account_id: Mapped[str] = mapped_column(ForeignKey("budget_accounts.id"), primary_key=True)
+    entry_reference: Mapped[str] = mapped_column(primary_key=True)
+    payload_json: Mapped[str]
+    observed_at: Mapped[float]
+    uncertain: Mapped[bool]
+
+
+class BudgetUnresolved(Base):
+    """Last complete ambiguous observations; ordinal preserves real multiplicity."""
+
+    __tablename__ = "budget_unresolved"
+    account_id: Mapped[str] = mapped_column(ForeignKey("budget_accounts.id"), primary_key=True)
+    ordinal: Mapped[int] = mapped_column(primary_key=True)
+    payload_json: Mapped[str]
+    observed_at: Mapped[float]
+
+
 metadata = Base.metadata
 
 _MIGRATIONS_DIR = Path(__file__).resolve().parent / "migrations"
