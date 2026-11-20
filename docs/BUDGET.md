@@ -124,6 +124,11 @@ python -m hestia.budget --config /secure/budget.json --db /secure/test.db status
 python -m hestia.budget --config /secure/budget.json --db /secure/test.db once
 ```
 
+`status` preserves the original CLI behavior: it applies the configured API
+selection to stored metadata without contacting a bank. Use `status --stored-only`
+to inspect persisted state without applying selection or enabling offline-only
+metadata. Neither status command reads private keys/session files.
+
 Use a separate test DB and fake API fixtures during development. Live acquisition
 uses the fixed HTTPS Enable Banking origin, validated RS256 JWTs, bounded
 responses, a GET-only route allowlist and no HTTP redirects. Errors expose safe
@@ -132,6 +137,110 @@ codes only. There is no custom production API URL setting.
 Migration 0006 adds four empty tables on the next startup of any upgraded Hestia
 SQLite deployment, even when acquisition is disabled. Merging this foundation
 therefore changes the schema at that next restart; it does not start bank access.
+
+## Offline JSON history import
+
+The operator can import a complete local export of Enable Banking responses:
+
+```sh
+umask 077
+python -m hestia.budget --config /secure/budget.json --db /secure/test.db import-snapshot --file /secure/account-history.json
+python -m hestia.budget --config /secure/budget.json --db /secure/test.db status --stored-only
+```
+
+This is a server/operator CLI feature. There is no HTTP upload, browser importer,
+bank request, credential resolution or automatic file discovery. The command is
+generic for the **Enable Banking response schema**; arbitrary JSON, bank-specific
+CSV and MT940 are not supported formats. The existing configuration still
+explicitly selects the account hash and identifies its enabled admin owner;
+credential file references may remain unavailable for a purely offline import.
+
+One file describes one selected account:
+
+```json
+{
+  "version": 1,
+  "connection_id": "personal-bank",
+  "aspsp": {"name": "Bank name returned by Enable Banking", "country": "PL"},
+  "identification_hash": "primary-identification-hash-selected-by-owner",
+  "fetched_at": "2026-11-19T12:00:00+00:00",
+  "complete": true,
+  "transactions": {
+    "transactions": [],
+    "continuation_key": null
+  },
+  "balances": {"balances": []}
+}
+```
+
+`transactions.transactions` contains raw transaction objects from the API;
+`balances.balances` optionally contains raw balance objects. Combine all pages
+from the completed export before importing. A remaining continuation key,
+explicit error, missing completeness declaration, duplicate JSON key or malformed
+row rejects the **entire file before opening the database**. `complete: true` is
+the exporter's declaration of a completed acquisition, not proof that the bank
+provided every historic transaction. `fetched_at` is the actual source observation
+time, must include a UTC offset and cannot be in the future. No session UID or
+session ID is needed; primary account hashes match across reauthorisations.
+
+Files must be regular, owned by the process user, mode 0400 or 0600 and not a
+symlink at the final component. Limits are 32 MiB input, 32 MiB normalized data
+and 100,000 total transaction/balance observations before deduplication. All
+records use the same amount/date/status normalization as API acquisition. There
+is **no 365-day filter** in the importer, so older history is preserved. Unknown
+fields inside a transaction are not persisted, including volatile detail IDs.
+
+The whole file, its provenance record and any newly required metadata commit
+atomically. New offline-only connections/accounts are stored disabled; existing
+selection flags remain unchanged. The enabled admin owner and selected hash are
+checked again inside the database transaction, including on repeated imports.
+Bad identity or a write failure rolls the entire file back.
+
+Matching is by local account plus stable `entry_reference`. Only dated BOOK
+records enter canonical counts. Missing references/dates, other statuses and
+conflicts go to a **separate offline quarantine**, preserving multiplicity without
+replacing the current API quarantine. Any prior API observation or API conflict
+decision takes precedence over every offline file, even a newer file. An offline
+import cannot clear uncertainty established by the API.
+
+Among offline-only observations, strictly newer source timestamps may update a
+record; older files cannot overwrite it or introduce a newer uncertainty flag.
+Equal-time conflicting records remain uncertain. A durable uncertain placeholder
+also protects a reference that has only ever had conflicting observations, so an
+older file cannot later publish it as a safe transaction. A newer unambiguous
+offline observation may resolve an offline-only conflict; the API can resolve it
+through normal acquisition.
+
+Each canonical entry identifies its source (`api` or `offline_import`) and source
+observation time. Import batches separately record source time, ingestion time,
+normalized content digest and outcome counts. A normalized repeat (including JSON
+formatting/key-order changes, reordered rows or changed volatile detail handles)
+is idempotent. Unreferenced identical transactions retain their real multiplicity.
+The report on a repeat identifies the previous batch rather than applying it again.
+The CLI batch identifier is an opaque UUID; the content fingerprint stays in the
+database. API BOOK conflicts now also retain an uncertain placeholder when no
+canonical entry existed before, so the uncertainty count can increase for that
+case even without an offline import.
+
+Imported balances are archived with their batch. They never replace a live balance
+or imply current available funds. Import does not change API last-success times,
+errors, consent validity, quota reservations or backoff. Status reports offline
+batch/transaction/quarantine counts separately and prints no financial payloads,
+account hashes, bank references or filenames.
+
+Original files remain with the operator; import does not remove them. Protect and
+retain/delete them according to the operator's storage policy. Imported SQLite
+history and quarantine persist until explicitly erased by the operator; this
+module has no automatic financial retention/erasure job. Protect the database,
+WAL files and backups too; none of this storage is encrypted by the module.
+
+Migration 0007 preserves existing records as API observations and adds provenance
+and offline batch/quarantine storage. It does not import any file or enable bank
+access at startup. Run pilots against a separate private database. Before storing
+bank records in the live service, update the published privacy/terms documents to
+describe the actual enabled feature and retention practices.
+Keep exporter/importer clocks synchronized; a source timestamp ahead of the
+importer's clock is rejected rather than silently adjusted.
 
 ## Next slices (not implemented here)
 

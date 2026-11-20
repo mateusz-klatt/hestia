@@ -216,15 +216,15 @@ class BudgetStoreTests(unittest.TestCase):
         state = self.store.status()[0]
         self.assertEqual(state["transactions"], 1)
         self.assertEqual(state["unresolved"], 4)
-        self.assertEqual(state["uncertain_transactions"], 1)
+        self.assertEqual(state["uncertain_transactions"], 2)
         self.assertTrue(next(row for row in self.rows(db.BudgetTransaction) if row.entry_reference == "ref-1").uncertain)
         self.store.commit_snapshot("bank", snapshot())
         self.assertEqual(self.store.status()[0]["unresolved"], 0)
-        self.assertEqual(self.store.status()[0]["uncertain_transactions"], 1)
+        self.assertEqual(self.store.status()[0]["uncertain_transactions"], 2)
         self.store.commit_snapshot("bank", snapshot(transaction()))
         self.assertEqual(self.store.status()[0]["transactions"], 2)
         self.assertEqual(self.store.status()[0]["unresolved"], 0)
-        self.assertEqual(self.store.status()[0]["uncertain_transactions"], 0)
+        self.assertEqual(self.store.status()[0]["uncertain_transactions"], 1)
 
     def test_pending_and_booked_same_reference_are_not_a_booked_conflict(self):
         self.store.configure(configuration())

@@ -222,6 +222,8 @@ class BudgetTransaction(Base):
     payload_json: Mapped[str]
     observed_at: Mapped[float]
     uncertain: Mapped[bool]
+    source: Mapped[str] = mapped_column(default="api", server_default=text("'api'"))
+    api_observed_at: Mapped[float | None]
 
 
 class BudgetUnresolved(Base):
@@ -232,6 +234,29 @@ class BudgetUnresolved(Base):
     ordinal: Mapped[int] = mapped_column(primary_key=True)
     payload_json: Mapped[str]
     observed_at: Mapped[float]
+
+
+class BudgetImportBatch(Base):
+    """One normalized offline observation; no file paths or credential material."""
+
+    __tablename__ = "budget_import_batches"
+    id: Mapped[str] = mapped_column(primary_key=True)
+    fingerprint: Mapped[str] = mapped_column(unique=True)
+    account_id: Mapped[str] = mapped_column(ForeignKey("budget_accounts.id"))
+    fetched_at: Mapped[float]
+    imported_at: Mapped[float]
+    balances_json: Mapped[str | None]
+    report_json: Mapped[str]
+
+
+class BudgetImportUnresolved(Base):
+    """Offline uncertainty never replaces the latest API unresolved snapshot."""
+
+    __tablename__ = "budget_import_unresolved"
+    batch_id: Mapped[str] = mapped_column(ForeignKey("budget_import_batches.id"), primary_key=True)
+    ordinal: Mapped[int] = mapped_column(primary_key=True)
+    reason: Mapped[str]
+    payload_json: Mapped[str]
 
 
 metadata = Base.metadata
