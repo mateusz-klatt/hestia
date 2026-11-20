@@ -606,6 +606,13 @@ NEW_NODE_MIN_SIGHTINGS = 3
 NEW_NODE_WINDOW_S = 86400.0
 
 
+_SCENE_PRESS_PREFIXES = (b"\x2b\x01", b"\x5b\x03")   # scene activation / central scene
+
+
+def _is_scene_press(frame: Frame) -> bool:
+    return (tlv_value(frame, 0x0046) or b"")[:2] in _SCENE_PRESS_PREFIXES
+
+
 def _admit_event_node(rt, frame: Frame) -> bool:
     """Return False for a `[1e 09]` from a node that hasn't earned a registry entry yet. An empty
     registry (first run, nothing learned) has no baseline to protect, so everything is admitted."""
@@ -830,7 +837,7 @@ class ProxySession:
         if not frame.checksum_ok:         # don't act on a corrupt frame
             return []
         if not _admit_event_node(self.rt, frame):   # a likely bit-flipped phantom node
-            if direction == "D->C":
+            if direction == "D->C" and _is_scene_press(frame):
                 self._pending_scene = None  # the cloud may react to THIS (forwarded) press — never
             return []                       # learn that batch under an earlier, known button
         changed = self.rt.state.apply(frame)

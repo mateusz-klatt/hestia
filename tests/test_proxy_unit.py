@@ -502,12 +502,13 @@ class AdmitEventNodeTests(unittest.TestCase):
         self.assertIsNone(rt.registry.scene_batch(2, 3))     # not mis-learned under node 2
         self.assertNotIn("66", rt.registry.nodes)
 
-    def test_quarantined_cloud_frame_keeps_pending_scene(self):
+    def test_quarantined_non_press_keeps_pending_scene(self):
         rt = self._rt()
         sess = make_session(rt)
-        sess._pending_scene = (9, 3, proxy.time.monotonic())
-        sess._observe(_event(0x49), "C->D")
-        self.assertIsNotNone(sess._pending_scene)
+        for direction in ("C->D", "D->C"):                   # a cloud frame, or a non-press report
+            sess._pending_scene = (9, 3, proxy.time.monotonic())
+            sess._observe(_event(0x49), direction)
+            self.assertIsNotNone(sess._pending_scene)
 
     def test_quiet_new_sensor_admitted_within_a_day(self):
         rt = self._rt()
