@@ -188,6 +188,9 @@ describe("React calendar", () => {
   let root: Root;
   let fetcher: ReturnType<typeof vi.fn<typeof fetch>>;
   beforeEach(() => {
+    // event() is "today" at a fixed +02:00 offset; pin the clock inside Warsaw summer time so the
+    // fixture's wall-clock hours don't shift by one whenever the suite runs in winter (+01:00).
+    vi.setSystemTime(new Date("2026-10-20T12:00:00Z"));
     vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
     host = document.createElement("div"); document.body.append(host); root = createRoot(host);
     fetcher = vi.fn<typeof fetch>().mockImplementation(() => Promise.resolve(new Response(JSON.stringify(data()), { status: 200 })));
