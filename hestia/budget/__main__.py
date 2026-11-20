@@ -9,6 +9,7 @@ import time
 
 from .config import BudgetConfigError, load_config
 from .import_file import BudgetImportError, load_import
+from .limits import BudgetLimits, LIMIT_SCOPES
 from .runtime import BudgetBusyError, budget_lock, run_once
 from .store import ACCOUNT_KINDS, BudgetStore, BudgetStoreError
 
@@ -33,6 +34,13 @@ def execute(args):
             store.configure(config)
         if args.command == "accounts":
             return {"accounts": store.accounts(args.owner)}
+        if args.command == "limits":
+            limits = BudgetLimits(store, config)
+            if args.action == "list":
+                return {"limits": limits.list(args.owner)}
+            return {"limit": limits.resume(args.owner, args.connection, args.scope,
+                                            account_id=args.account, operation=args.operation,
+                                            actor="operator:" + str(os.geteuid()))}
         if args.command == "account":
             actor = "operator:" + str(os.geteuid())
             if args.action == "confirm-kind":
@@ -63,6 +71,16 @@ def main(argv=None):
         action.add_argument("--owner", required=True, help="Existing enabled admin username")
         if name == "confirm-kind":
             action.add_argument("--kind", required=True, choices=sorted(ACCOUNT_KINDS), help="Owner-confirmed account kind")
+    limits = commands.add_parser("limits", help="Inspect limits or clear operator suspension without bypassing deadlines")
+    limit_actions = limits.add_subparsers(dest="action", required=True)
+    listed = limit_actions.add_parser("list", help="Show stored limits for one configured owner")
+    listed.add_argument("--owner", required=True)
+    resumed = limit_actions.add_parser("resume", help="Clear suspension while retaining retry deadlines and quota")
+    resumed.add_argument("--owner", required=True)
+    resumed.add_argument("--connection", required=True)
+    resumed.add_argument("--scope", required=True, choices=sorted(LIMIT_SCOPES))
+    resumed.add_argument("--account", help="Local account ID, required only for component scope")
+    resumed.add_argument("--operation", choices=("transactions", "balances"), help="Required only for component scope")
     args = parser.parse_args(argv)
     try:
         result = execute(args)

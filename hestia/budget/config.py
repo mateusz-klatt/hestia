@@ -15,6 +15,22 @@ class BudgetConfigError(ValueError):
 
 
 @dataclass(frozen=True)
+class AcquisitionPolicy:
+    """Operator ceilings; these values do not establish a bank's allowance."""
+
+    max_acquisitions_24h: int = 2
+    minimum_interval_seconds: int = 43200
+    request_interval_seconds: int = 1
+
+    def __post_init__(self):
+        for value, lower, upper in ((self.max_acquisitions_24h, 1, 2),
+                                    (self.minimum_interval_seconds, 43200, 604800),
+                                    (self.request_interval_seconds, 1, 60)):
+            if type(value) is not int or not lower <= value <= upper:
+                raise BudgetConfigError("Invalid acquisition policy")
+
+
+@dataclass(frozen=True)
 class ConnectionConfig:
     id: str
     owner: str
@@ -22,6 +38,11 @@ class ConnectionConfig:
     country: str
     session_file: str
     accounts: tuple[str, ...]
+    policy: AcquisitionPolicy = AcquisitionPolicy()
+
+    def __post_init__(self):
+        if type(self.policy) is not AcquisitionPolicy:
+            raise BudgetConfigError("Invalid acquisition policy")
 
 
 @dataclass(frozen=True)
@@ -74,6 +95,13 @@ def _json_object(pairs):
     return result
 
 
+def _policy(value):
+    fields = {"max_acquisitions_24h", "minimum_interval_seconds", "request_interval_seconds"}
+    if not isinstance(value, dict) or not set(value) <= fields:
+        raise BudgetConfigError("Invalid acquisition policy fields")
+    return AcquisitionPolicy(**value)
+
+
 def parse_config(raw) -> BudgetConfig:
     data = _object(raw, {"version", "application_id", "key_file", "connections"}, "budget configuration")
     if type(data["version"]) is not int or data["version"] != 1:
@@ -84,7 +112,11 @@ def parse_config(raw) -> BudgetConfig:
         raise BudgetConfigError("connections must be a list")
     connections, identifiers = [], set()
     for item in data["connections"]:
-        item = _object(item, {"id", "owner", "bank_name", "country", "session_file", "accounts"}, "connection")
+        fields = {"id", "owner", "bank_name", "country", "session_file", "accounts"}
+        if isinstance(item, dict) and "policy" in item:
+            fields.add("policy")
+        item = _object(item, fields, "connection")
+        policy = _policy(item.get("policy", {}))
         identifier = _text(item["id"], "connection identifier")
         if not _ID.fullmatch(identifier) or identifier in identifiers:
             raise BudgetConfigError("Invalid or duplicate connection identifier")
@@ -104,7 +136,7 @@ def parse_config(raw) -> BudgetConfig:
                 raise BudgetConfigError("Duplicate account hash")
             hashes.add(account_hash)
             accounts.append(account_hash)
-        connections.append(ConnectionConfig(identifier, owner, bank_name, country, session_file, tuple(accounts)))
+        connections.append(ConnectionConfig(identifier, owner, bank_name, country, session_file, tuple(accounts), policy))
     return BudgetConfig(application_id, key_file, tuple(connections))
 
 

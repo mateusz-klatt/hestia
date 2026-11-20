@@ -11,10 +11,10 @@ from hestia import db
 from hestia.budget import runtime
 from hestia.budget.store import ACCOUNT_KINDS, BudgetStore, BudgetStoreError
 from tests import test_budget_store as fixtures
-from tests.test_budget_runtime import SyntheticBank
+from tests.test_budget_runtime import AdvancingTime, SyntheticBank
 
 
-class BudgetAccountControlTests(unittest.TestCase):
+class BudgetAccountControlTests(AdvancingTime, unittest.TestCase):
     setUp = fixtures.BudgetStoreTests.setUp
     tearDown = fixtures.BudgetStoreTests.tearDown
     rows = fixtures.BudgetStoreTests.rows
@@ -34,7 +34,8 @@ class BudgetAccountControlTests(unittest.TestCase):
         for _ in range(2):
             self.store.configure(config)
         with mock.patch.object(runtime, "credentials") as credentials:
-            result = runtime.run_once(config, path=self.path, clock=lambda: self.now, client_factory=mock.Mock())
+            result = runtime.run_once(config, path=self.path, clock=lambda: self.now, client_factory=mock.Mock(),
+                                      monotonic=self.monotonic, sleeper=self.sleep)
         credentials.assert_not_called()
         self.assertEqual(result["results"][0]["state"], "deferred")
         self.assertEqual(self.store.accounts("owner"), before)
@@ -52,7 +53,8 @@ class BudgetAccountControlTests(unittest.TestCase):
         from tests.test_budget_runtime import SECOND_UID, ACCOUNT_UID
         with mock.patch.object(runtime, "credentials", return_value=(b"fake-key", fixtures.APP)):
             result = runtime.run_once(config, path=self.path, clock=lambda: self.now,
-                                      client_factory=mock.Mock(return_value=bank))
+                                      client_factory=mock.Mock(return_value=bank),
+                                      monotonic=self.monotonic, sleeper=self.sleep)
         paths = [path for path, _ in bank.calls]
         self.assertIn(f"/accounts/{SECOND_UID}/transactions", paths)
         self.assertNotIn(f"/accounts/{ACCOUNT_UID}/transactions", paths)

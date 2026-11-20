@@ -16,6 +16,30 @@ from hestia.budget.store import BudgetStoreError
 from tests import test_budget_store as fixtures
 
 
+def quota_state(rows):
+    """Exact durable endpoint debits, retry hints and shared transport limits."""
+    return {model.__tablename__: sorted(
+        [tuple(getattr(row, column.name) for column in model.__table__.columns) for row in rows(model)],
+        key=repr) for model in (db.BudgetComponent, db.BudgetAcquisition, db.BudgetRequestLimit)}
+
+
+def seed_retry_state(sessions, account_id, now, *, application_id=fixtures.APP):
+    with sessions.begin() as session:
+        for operation in ("transactions", "balances"):
+            row = session.get(db.BudgetComponent, (account_id, operation))
+            row.retry_at, row.suspended = now + 604800, True
+            session.add(db.BudgetAcquisition(id="synthetic-debit-" + operation, account_id=account_id,
+                                             operation=operation, attempt_id="synthetic-previous-round",
+                                             started_at=now - 300, origin="api"))
+        session.add_all([
+            db.BudgetRequestLimit(scope="application", key=application_id, next_attempt=now + 600,
+                                  next_request_at=now + 1, last_request_at=now - 2,
+                                  retry_at=now + 900, suspended=True),
+            db.BudgetRequestLimit(scope="connection", key="bank", next_attempt=now + 1200,
+                                  next_request_at=0, last_request_at=None,
+                                  retry_at=now + 1800, suspended=False)])
+
+
 class BudgetImportStoreTests(unittest.TestCase):
     setUp = fixtures.BudgetStoreTests.setUp
     tearDown = fixtures.BudgetStoreTests.tearDown
@@ -87,7 +111,9 @@ class BudgetImportStoreTests(unittest.TestCase):
         self.store.start_attempt("bank")
         self.store.commit_snapshot("bank", fixtures.snapshot(fixtures.transaction(), fixtures.transaction(None)))
         self.store.record_failure("bank", "rate_limit")
+        seed_retry_state(self.sessions, self.rows(db.BudgetAccount)[0].id, self.now)
         state = self.store.status()[0]
+        quota_before = quota_state(self.rows)
         component_rows = self.rows(db.BudgetComponent)
         self.assertEqual(len(component_rows), 2)
         component_before = [(row.operation, row.last_attempt, row.last_success, row.last_error,
@@ -111,6 +137,7 @@ class BudgetImportStoreTests(unittest.TestCase):
         self.assertEqual([(row.operation, row.last_attempt, row.last_success, row.last_error,
                            row.failures, row.next_attempt, row.attempt_id, row.lease_until)
                           for row in self.rows(db.BudgetComponent)], component_before)
+        self.assertEqual(quota_state(self.rows), quota_before)
 
     def test_strict_observation_order_and_equal_time_conflicts(self):
         config = fixtures.configuration()
