@@ -514,6 +514,10 @@ class ProxyConfig:
     automations_path: str = AUTOMATIONS_PATH
     web_host: str = WEB_HOST
     web_port: int = WEB_PORT
+    # False while ``cloud_host`` is only the seed because startup DoH failed (e.g. the box
+    # booted before its WAN came up); a later upstream failure then re-resolves.
+    cloud_resolved: bool = True
+    cloud_retry_at: float = -math.inf     # monotonic time of the last re-resolve attempt
 
 
 @dataclass
@@ -715,8 +719,9 @@ def _proxy_engine_injects(rt, node_b: "bytes | None", changed: dict, scene, dire
 class ProxySession:
     """One device↔cloud pairing: raw relay both ways plus a decoding tap."""
 
-    def __init__(self, rt, dev_reader, dev_writer, cloud_host, cloud_port):
+    def __init__(self, rt, dev_reader, dev_writer, cloud_host, cloud_port, config=None):
         self.rt = rt
+        self.config = config              # lets a failed dial re-resolve a seed-only upstream
         self.dev_reader = dev_reader
         self.dev_writer = dev_writer
         self.cloud_host = cloud_host
@@ -728,16 +733,23 @@ class ProxySession:
         # to another stream's traffic, and it is discarded with the session.
         self._pending_scene = None
 
-    async def run(self) -> None:
+    async def _dial(self):
         try:
-            cloud_reader, cloud_writer = await asyncio.open_connection(
-                self.cloud_host, self.cloud_port
-            )
+            return await asyncio.open_connection(self.cloud_host, self.cloud_port)
         except OSError:
             log.exception("upstream %s:%d unreachable for %s",
                           self.cloud_host, self.cloud_port, self.peer)
+            return None
+
+    async def run(self) -> None:
+        conn = await self._dial()
+        if conn is None and self.config is not None and await _refresh_cloud(self.config):
+            self.cloud_host = self.config.cloud_host       # seed was stale — retry once on the real IP
+            conn = await self._dial()
+        if conn is None:
             await _close(self.dev_writer)
             return
+        cloud_reader, cloud_writer = conn
 
         log.info("+ device %s <-> cloud %s:%d", self.peer, self.cloud_host, self.cloud_port)
         self.rt.sessions.append(self)
@@ -1803,7 +1815,7 @@ async def handle_control(rt, reader, writer) -> None:
 
 
 def _proxy_session(rt, reader, writer, config):
-    return ProxySession(rt, reader, writer, config.cloud_host, config.cloud_port)
+    return ProxySession(rt, reader, writer, config.cloud_host, config.cloud_port, config=config)
 
 
 async def _start(rt, config, session_factory=_proxy_session):
@@ -1826,16 +1838,48 @@ async def _start(rt, config, session_factory=_proxy_session):
     return proxy_srv, control_srv
 
 
-def _resolve_cloud(config) -> str:
-    """Return the IP to dial: if ``HESTIA_CLOUD_HOSTNAME`` is set, DoH-resolve it
-    (seed = the configured ``cloud_host`` = ``HESTIA_CLOUD_HOST``); otherwise the host
-    verbatim (a literal pin). Pure (no mutation) and synchronous (blocking DoH/probe) —
-    the caller runs it in an executor with a timeout ceiling and assigns the result, so
-    an orphaned thread after a timeout can't race-mutate the config."""
-    if CLOUD_HOSTNAME:
-        return resolve.resolve_cloud_ip(
-            CLOUD_HOSTNAME, seed=config.cloud_host, port=config.cloud_port)
-    return config.cloud_host
+def _resolve_cloud(config) -> "tuple[str, bool]":
+    """Return ``(ip, resolved)``: if ``HESTIA_CLOUD_HOSTNAME`` is set, DoH-resolve it,
+    falling back to the configured ``cloud_host`` (= ``HESTIA_CLOUD_HOST``) seed with
+    ``resolved=False``; otherwise the host verbatim (a literal pin, ``resolved=True``).
+    Pure (no mutation) and synchronous (blocking DoH/probe) — the caller runs it in an
+    executor with a timeout ceiling and assigns the result, so an orphaned thread after a
+    timeout can't race-mutate the config."""
+    if not CLOUD_HOSTNAME:
+        return config.cloud_host, True
+    ip = resolve.doh_resolve(CLOUD_HOSTNAME, port=config.cloud_port)
+    if ip is None:
+        return resolve.seed_fallback(CLOUD_HOSTNAME, config.cloud_host), False
+    return ip, True
+
+
+CLOUD_RETRY_S = 30.0       # min gap between re-resolves, so a reconnect storm can't spam DoH
+CLOUD_RESOLVE_TIMEOUT_S = 15.0
+
+
+async def _refresh_cloud(config) -> bool:
+    """After an upstream dial failed: if ``cloud_host`` is only the startup seed, DoH-resolve
+    ``HESTIA_CLOUD_HOSTNAME`` again (throttled to one attempt per ``CLOUD_RETRY_S``). On
+    success adopt the answer and return True iff it differs from the host that just failed."""
+    if config.cloud_resolved or not CLOUD_HOSTNAME:
+        return False
+    now = time.monotonic()
+    if now - config.cloud_retry_at < CLOUD_RETRY_S:
+        return False
+    config.cloud_retry_at = now
+    try:
+        ip = await asyncio.wait_for(
+            asyncio.get_running_loop().run_in_executor(
+                None, lambda: resolve.doh_resolve(CLOUD_HOSTNAME, port=config.cloud_port)),
+            timeout=CLOUD_RESOLVE_TIMEOUT_S)
+    except asyncio.TimeoutError:
+        log.warning("cloud re-resolution of %s timed out", CLOUD_HOSTNAME)
+        return False
+    if ip is None:
+        return False
+    previous, config.cloud_host, config.cloud_resolved = config.cloud_host, ip, True
+    log.info("cloud re-resolved: %s -> %s (was %s)", CLOUD_HOSTNAME, ip, previous)
+    return ip != previous
 
 
 def _shadow_sync_db(rt) -> None:
@@ -1859,13 +1903,15 @@ async def main() -> None:  # pragma: no cover
     from .calendar_sync.runtime import poll_calendars
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     config = ProxyConfig()
-    # Resolve the upstream once at startup (off-loop), with a hard ceiling so a slow or
+    # Resolve the upstream at startup (off-loop), with a hard ceiling so a slow or
     # hostile DoH/probe can never stall startup — fall back to the seed on timeout.
+    # A seed-only result is re-resolved later, when a device dial upstream fails.
     try:
-        config.cloud_host = await asyncio.wait_for(
+        config.cloud_host, config.cloud_resolved = await asyncio.wait_for(
             asyncio.get_running_loop().run_in_executor(None, _resolve_cloud, config),
-            timeout=15.0)
+            timeout=CLOUD_RESOLVE_TIMEOUT_S)
     except asyncio.TimeoutError:
+        config.cloud_resolved = not CLOUD_HOSTNAME     # a literal pin never needs re-resolving
         log.error("cloud resolution timed out; using seed %s", config.cloud_host)
     from .auth import users_path
     from .store_sql import open_audit_engine, open_stores

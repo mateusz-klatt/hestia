@@ -865,6 +865,84 @@ class RunTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(rt.sessions, [])
 
 
+class RefreshCloudTests(unittest.IsolatedAsyncioTestCase):
+    """Re-resolving a seed-only upstream after the box booted before its WAN was up."""
+
+    def _cfg(self, **kw):
+        return proxy.ProxyConfig(cloud_host="9.9.9.9", cloud_resolved=False, **kw)
+
+    async def test_already_resolved_is_noop(self):
+        cfg = proxy.ProxyConfig(cloud_host="9.9.9.9")
+        with mock.patch.object(proxy, "CLOUD_HOSTNAME", "gw"), \
+             mock.patch.object(proxy.resolve, "doh_resolve") as r:
+            self.assertFalse(await proxy._refresh_cloud(cfg))
+        r.assert_not_called()
+
+    async def test_no_hostname_is_noop(self):
+        with mock.patch.object(proxy, "CLOUD_HOSTNAME", None), \
+             mock.patch.object(proxy.resolve, "doh_resolve") as r:
+            self.assertFalse(await proxy._refresh_cloud(self._cfg()))
+        r.assert_not_called()
+
+    async def test_success_adopts_new_ip_and_marks_resolved(self):
+        cfg = self._cfg()
+        with mock.patch.object(proxy, "CLOUD_HOSTNAME", "gw"), \
+             mock.patch.object(proxy.resolve, "doh_resolve", return_value="8.8.4.4") as r:
+            self.assertTrue(await proxy._refresh_cloud(cfg))
+        r.assert_called_once_with("gw", port=cfg.cloud_port)
+        self.assertEqual((cfg.cloud_host, cfg.cloud_resolved), ("8.8.4.4", True))
+
+    async def test_same_ip_marks_resolved_but_reports_unchanged(self):
+        cfg = self._cfg()
+        with mock.patch.object(proxy, "CLOUD_HOSTNAME", "gw"), \
+             mock.patch.object(proxy.resolve, "doh_resolve", return_value="9.9.9.9"):
+            self.assertFalse(await proxy._refresh_cloud(cfg))          # no point re-dialling the same IP
+        self.assertTrue(cfg.cloud_resolved)
+
+    async def test_failure_keeps_seed_and_throttles(self):
+        cfg = self._cfg()
+        with mock.patch.object(proxy, "CLOUD_HOSTNAME", "gw"), \
+             mock.patch.object(proxy.resolve, "doh_resolve", return_value=None) as r:
+            self.assertFalse(await proxy._refresh_cloud(cfg))
+            self.assertFalse(await proxy._refresh_cloud(cfg))          # within CLOUD_RETRY_S → skipped
+        self.assertEqual(r.call_count, 1)
+        self.assertEqual((cfg.cloud_host, cfg.cloud_resolved), ("9.9.9.9", False))
+
+    async def test_timeout_keeps_seed(self):
+        cfg = self._cfg()
+        with mock.patch.object(proxy, "CLOUD_HOSTNAME", "gw"), \
+             mock.patch.object(proxy.resolve, "doh_resolve", return_value="8.8.4.4"), \
+             mock.patch("asyncio.wait_for", new=mock.AsyncMock(side_effect=asyncio.TimeoutError)):
+            self.assertFalse(await proxy._refresh_cloud(cfg))
+        self.assertEqual((cfg.cloud_host, cfg.cloud_resolved), ("9.9.9.9", False))
+
+    async def test_session_retries_once_on_reresolved_ip(self):
+        rt = proxy.ProxyRuntime()
+        cfg = self._cfg(cloud_port=1)
+        dev_w, cloud_w = FakeWriter(), FakeWriter()
+        sess = proxy._proxy_session(rt, FakeReader([]), dev_w, cfg)
+        conn = mock.AsyncMock(side_effect=[OSError("unreachable"), (FakeReader([]), cloud_w)])
+        with mock.patch.object(proxy, "CLOUD_HOSTNAME", "gw"), \
+             mock.patch.object(proxy.resolve, "doh_resolve", return_value="8.8.4.4"), \
+             mock.patch("asyncio.open_connection", new=conn):
+            await sess.run()
+        self.assertEqual([c.args for c in conn.call_args_list], [("9.9.9.9", 1), ("8.8.4.4", 1)])
+        self.assertTrue(dev_w.closed and cloud_w.closed)
+
+    async def test_session_gives_up_when_reresolve_fails(self):
+        rt = proxy.ProxyRuntime()
+        dev_w = FakeWriter()
+        sess = proxy._proxy_session(rt, FakeReader([]), dev_w, self._cfg())
+        conn = mock.AsyncMock(side_effect=OSError("unreachable"))
+        with mock.patch.object(proxy, "CLOUD_HOSTNAME", "gw"), \
+             mock.patch.object(proxy.resolve, "doh_resolve", return_value=None), \
+             mock.patch("asyncio.open_connection", new=conn):
+            await sess.run()
+        self.assertEqual(conn.call_count, 1)
+        self.assertTrue(dev_w.closed)
+        self.assertEqual(rt.sessions, [])
+
+
 DOOR_EVENT_NODE12 = build_frame(
     0x1E, 0x09,
     tlv(0x0047, b"\x12") + tlv(0x0046, bytes.fromhex("7105000000ff061600")),
@@ -2072,14 +2150,21 @@ class MergedDiscoveryTests(unittest.TestCase):
     def test_resolve_cloud_no_hostname_keeps_host(self):
         cfg = proxy.ProxyConfig(cloud_host="9.9.9.9")
         with mock.patch.object(proxy, "CLOUD_HOSTNAME", None):
-            self.assertEqual(proxy._resolve_cloud(cfg), "9.9.9.9")     # literal pin — no resolution
+            self.assertEqual(proxy._resolve_cloud(cfg), ("9.9.9.9", True))  # literal pin — no resolution
 
     def test_resolve_cloud_hostname_resolves(self):
         cfg = proxy.ProxyConfig(cloud_host="9.9.9.9")                  # 9.9.9.9 = seed
         with mock.patch.object(proxy, "CLOUD_HOSTNAME", "gw.keemple.com"), \
-             mock.patch.object(proxy.resolve, "resolve_cloud_ip", return_value="1.2.3.4") as r:
-            self.assertEqual(proxy._resolve_cloud(cfg), "1.2.3.4")     # pure: returns, doesn't mutate
-            r.assert_called_once_with("gw.keemple.com", seed="9.9.9.9", port=cfg.cloud_port)
+             mock.patch.object(proxy.resolve, "doh_resolve", return_value="1.2.3.4") as r:
+            self.assertEqual(proxy._resolve_cloud(cfg), ("1.2.3.4", True))  # pure: returns, doesn't mutate
+            r.assert_called_once_with("gw.keemple.com", port=cfg.cloud_port)
+        self.assertEqual(cfg.cloud_host, "9.9.9.9")
+
+    def test_resolve_cloud_doh_failure_returns_seed_unresolved(self):
+        cfg = proxy.ProxyConfig(cloud_host="9.9.9.9")
+        with mock.patch.object(proxy, "CLOUD_HOSTNAME", "gw.keemple.com"), \
+             mock.patch.object(proxy.resolve, "doh_resolve", return_value=None):
+            self.assertEqual(proxy._resolve_cloud(cfg), ("9.9.9.9", False))  # seed, flagged for retry
 
     def test_endpoint_names_in_discovery(self):
         """Per-endpoint labels (registry) ride alongside the live endpoint states."""
