@@ -120,19 +120,24 @@ Mask account-number display metadata; do not return raw provider JSON.
 
 ### Account display prerequisite for 2C
 
-2A stores a stable primary identification hash, not account product/name, currency,
-provider account type or a masked number. Consequently 2B.1 exposes local IDs and
-controls but cannot yet offer a recognizable account selector. Complete a separate
-small metadata migration and acquisition/import change before implementing that UI.
-Retain bounded display fields from verified account resources: currency, product,
-provider account type and, when available, a masked identifier suffix. Exclude full
-account numbers, primary hashes and raw provider payloads from the HTTP contract.
-Existing rows without these fields must say that their display metadata is missing;
-never invent a label or infer a credit-card classification from balances. Product
-and account type may suggest a kind for explicit confirmation; they never confirm
-kind, select an account or establish identity. Test real-looking synthetic accounts
-with distinct currencies and card products so selection is understandable without
-UUIDs or exposing bank identifiers.
+The display-metadata step adds an optional strict `account` block to offline import
+version 1, documented in [BUDGET.md](BUDGET.md#optional-private-account-display-metadata).
+It accepts only product, declared currency, an already-masked four-character suffix
+and a separate observation time. A context-bound metadata digest is independent of
+the unchanged transaction digest. It is applied atomically before the existing
+duplicate-batch return; old exports and API records preserve their prior behavior.
+Migration 0012 stores current display metadata separately from account controls.
+
+Owner-private HTTP account views expose nullable `display` metadata with provenance
+and times, plus separate `observed_balance_currencies` from current API balances.
+Missing data stays missing. No new bank calls, details requests, consent flow or
+additional endpoint is introduced. Provider holder names and account-type codes
+are excluded, as are full numbers, hashes, provider UIDs and raw payloads. Never
+infer a credit-card classification from currency or balances. Product text can
+suggest a kind for later explicit confirmation but never confirms kind, selects an
+account or establishes identity. Suffixes can collide and are not identity keys.
+Test recognizable synthetic card/account products, missing labels, currency
+differences and suffix collisions before delivering the 2C account selector.
 
 Transaction pages report `account_total` and `uncertain_total` for the whole owned
 account, independently of date filters. The current bounded page query sorts and

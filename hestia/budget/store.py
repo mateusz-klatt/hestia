@@ -15,6 +15,7 @@ from ..db import BudgetImportBatch as ImportBatch, BudgetImportUnresolved as Imp
 from ..db import BudgetAccountAudit as AccountAudit
 from ..db import BudgetConnectionAudit as ConnectionAudit
 from ..db import BudgetComponent as Component
+from .account_metadata import BudgetMetadataError, apply_account_metadata
 
 ACCOUNT_KINDS = frozenset({"current", "savings", "credit_card", "other"})
 OPERATIONS = ("transactions", "balances")
@@ -461,6 +462,13 @@ class BudgetStore:
         with self.transaction() as session:
             self._owner(session, item.owner)
             account = self._offline_account(session, config, item, snapshot.identification_hash)
+            metadata = {}
+            if snapshot.metadata is not None:
+                try:
+                    state = apply_account_metadata(session, account.id, snapshot.metadata, now=self.clock())
+                    metadata = {"metadata": {"state": state, "product_rejected": int(snapshot.metadata.product_rejected)}}
+                except BudgetMetadataError as exc:
+                    raise BudgetStoreError("Invalid account display metadata: " + exc.code) from None
             batch = session.scalar(select(ImportBatch).where(ImportBatch.fingerprint == snapshot.digest))
             if batch is not None:
                 if batch.account_id != account.id:
@@ -468,7 +476,7 @@ class BudgetStore:
                 report = {**json.loads(batch.report_json), "duplicate": True}
                 for field in ("inserted", "updated", "preserved_api", "stale", "unresolved", "unchanged"):
                     report[field] = 0
-                return report
+                return {**report, **metadata}
             self._restore_api_conflicts(session, account.id)
             batch = ImportBatch(id=str(uuid.uuid4()), fingerprint=snapshot.digest,
                                 account_id=account.id, fetched_at=snapshot.fetched_at,
@@ -490,7 +498,7 @@ class BudgetStore:
                                                  reason=reason, payload_json=_json(tx)))
                     report["unresolved"] += 1
             batch.report_json = _json(report)
-            return report
+            return {**report, **metadata}
 
     @staticmethod
     def _offline_account(session, config, item, identity_hash):

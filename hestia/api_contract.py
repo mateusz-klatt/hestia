@@ -58,7 +58,8 @@ from pydantic.json_schema import models_json_schema
 # 0.11.0: portable calendar content preserves unspecified end times.
 # 0.12.0: calendar creates require a durable per-draft idempotency key.
 # 0.13.0: private owner-scoped stored budget reads and versioned local controls.
-CONTRACT_VERSION = "0.13.0"
+# 0.14.0: safe account display metadata, separate from currencies observed in API balances.
+CONTRACT_VERSION = "0.14.0"
 OPENAPI_PATH = Path(__file__).resolve().parent.parent / "docs" / "api" / "openapi.json"
 
 # De-duplicated string literals (SonarPython S1192): the OpenAPI content-type, the paths reused
@@ -1040,6 +1041,18 @@ class BudgetComponents(BaseModel):
     balances: BudgetComponentStatus
 
 
+class BudgetAccountDisplay(BaseModel):
+    """Allowlisted display labels and their provenance, never bank account identity."""
+
+    model_config = _READ
+    product: str | None
+    currency: str | None
+    masked_suffix: str | None
+    source: str = Field(description="Currently offline_import; clients must handle future values.")
+    observed_at: float = Field(description="Time of the last accepted metadata patch; preserved fields can be older.")
+    imported_at: float
+
+
 class BudgetAccount(BaseModel):
     """Owner-visible control metadata; opaque local IDs never reveal bank identities."""
 
@@ -1056,6 +1069,9 @@ class BudgetAccount(BaseModel):
     kind_confirmed_by: str | None
     kind_confirmation_origin: str | None
     components: BudgetComponents
+    display: BudgetAccountDisplay | None = None
+    observed_balance_currencies: list[str] = Field(default_factory=list,
+        description="Sorted unique currencies from current stored API balances only; independent of declared display currency.")
 
 
 class BudgetConnection(BaseModel):

@@ -17,6 +17,7 @@ from sqlalchemy import and_, func, or_, select, text
 from ..db import AppMeta, User, BudgetAccount as Account, BudgetConnection as Connection
 from ..db import BudgetComponent as Component, BudgetTransaction as Transaction, BudgetImportBatch as ImportBatch
 from ..db import BudgetRequestLimit as RequestLimit
+from ..db import BudgetAccountDisplay as AccountDisplay
 from .limits import BudgetLimits, SHARED_SCOPES
 from .scheduler import shared_state
 from .store import BudgetControlConflict, BudgetNotFound, BudgetStore, BudgetStoreError, OPERATIONS
@@ -28,6 +29,7 @@ MAX_ARCHIVED_IMPORTS = 20
 _CURSOR_DOMAIN = b"hestia/budget/transactions/cursor/v1"
 _TRANSACTION_FIELDS = ("amount", "currency", "credit_debit_indicator", "status", "booking_date", "value_date",
                        "transaction_date", "remittance_information")
+_DISPLAY_FIELDS = ("product", "currency", "masked_suffix", "source", "observed_at", "imported_at")
 
 
 class BudgetQueryError(BudgetStoreError):
@@ -83,7 +85,11 @@ class BudgetHTTPStore(BudgetStore):
     def _account_dict(self, account, connection, *, session=None):
         metadata = super()._account_dict(account, connection, session=session)
         state = shared_state(session, connection)
-        return {**metadata, "components": self._account_status(session, account, connection, self.clock(), state)["components"]}
+        display = session.get(AccountDisplay, account.id)
+        currencies = sorted({value["balance_amount"]["currency"] for value in json.loads(account.balances_json)})
+        return {**metadata, "components": self._account_status(session, account, connection, self.clock(), state)["components"],
+                "display": None if display is None else {field: getattr(display, field) for field in _DISPLAY_FIELDS},
+                "observed_balance_currencies": currencies}
 
     def connections(self, owner):
         with self._read(owner) as session:

@@ -814,6 +814,8 @@ export interface components {
             connection: string;
             /** Control Version */
             control_version: number;
+            /** @default null */
+            display: components["schemas"]["BudgetAccountDisplay"] | null;
             /** Id */
             id: string;
             /**
@@ -827,6 +829,11 @@ export interface components {
             kind_confirmed_at: number | null;
             /** Kind Confirmed By */
             kind_confirmed_by: string | null;
+            /**
+             * Observed Balance Currencies
+             * @description Sorted unique currencies from current stored API balances only; independent of declared display currency.
+             */
+            observed_balance_currencies?: string[];
             /** Paused */
             paused: boolean;
             /** Selected */
@@ -845,6 +852,8 @@ export interface components {
             connection: string;
             /** Control Version */
             control_version: number;
+            /** @default null */
+            display: components["schemas"]["BudgetAccountDisplay"] | null;
             /** Id */
             id: string;
             /**
@@ -858,10 +867,39 @@ export interface components {
             kind_confirmed_at: number | null;
             /** Kind Confirmed By */
             kind_confirmed_by: string | null;
+            /**
+             * Observed Balance Currencies
+             * @description Sorted unique currencies from current stored API balances only; independent of declared display currency.
+             */
+            observed_balance_currencies?: string[];
             /** Paused */
             paused: boolean;
             /** Selected */
             selected: boolean;
+        };
+        /**
+         * BudgetAccountDisplay
+         * @description Allowlisted display labels and their provenance, never bank account identity.
+         */
+        BudgetAccountDisplay: {
+            /** Currency */
+            currency: string | null;
+            /** Imported At */
+            imported_at: number;
+            /** Masked Suffix */
+            masked_suffix: string | null;
+            /**
+             * Observed At
+             * @description Time of the last accepted metadata patch; preserved fields can be older.
+             */
+            observed_at: number;
+            /** Product */
+            product: string | null;
+            /**
+             * Source
+             * @description Currently offline_import; clients must handle future values.
+             */
+            source: string;
         };
         /** BudgetAccountSaved */
         BudgetAccountSaved: {
