@@ -68,6 +68,186 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/budget/account-kind": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Explicitly confirm one owned account's kind
+         * @description Requires the exact admin owner and a same-origin browser session; bearer-only mutations are rejected. expected_version is required. Missing versions or stale conflicting changes return 409 with current safe state after owner validation; an already-applied desired state returns 200 with changed=false even after a stale retry. No bank request is made.
+         */
+        post: operations["setBudgetAccountKind"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/budget/account-selection": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Select or deselect one owned account
+         * @description Requires the exact admin owner and a same-origin browser session; bearer-only mutations are rejected. expected_version is required. Missing versions or stale conflicting changes return 409 with current safe state after owner validation; an already-applied desired state returns 200 with changed=false even after a stale retry. No bank request is made.
+         */
+        post: operations["setBudgetAccountSelection"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/budget/accounts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Stored accounts and versioned owner controls
+         * @description Requires an authenticated SQLite admin owner. Reads never contact a bank.
+         */
+        get: operations["getBudgetAccounts"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/budget/balances": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Live stored balances and separate archived import metadata
+         * @description Requires an authenticated SQLite admin owner. Reads never contact a bank.
+         */
+        get: operations["getBudgetBalances"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/budget/connection-state": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Pause or resume one owned connection locally
+         * @description Requires the exact admin owner and a same-origin browser session; bearer-only mutations are rejected. expected_version is required. Missing versions or stale conflicting changes return 409 with current safe state after owner validation; an already-applied desired state returns 200 with changed=false even after a stale retry. No bank request is made.
+         */
+        post: operations["setBudgetConnectionState"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/budget/connections": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Stored connections and implemented capabilities
+         * @description Requires an authenticated SQLite admin owner. Reads never contact a bank.
+         */
+        get: operations["getBudgetConnections"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/budget/limits": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Sanitized stored limits without provider or application keys
+         * @description Requires an authenticated SQLite admin owner. Reads never contact a bank.
+         */
+        get: operations["getBudgetLimits"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/budget/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Stored component freshness and acquisition health
+         * @description Requires an authenticated SQLite admin owner. Reads never contact a bank.
+         */
+        get: operations["getBudgetStatus"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/budget/transactions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Stored canonical booked transactions
+         * @description Requires an authenticated SQLite admin owner. Reads never contact a bank.
+         */
+        get: operations["getBudgetTransactions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/calendars": {
         parameters: {
             query?: never;
@@ -619,6 +799,525 @@ export interface components {
             automations: components["schemas"]["Rule"][];
             /** Ok */
             ok: boolean;
+        };
+        /**
+         * BudgetAccount
+         * @description Owner-visible control metadata; opaque local IDs never reveal bank identities.
+         */
+        BudgetAccount: {
+            /** Active */
+            active: boolean;
+            components: components["schemas"]["BudgetComponents"];
+            /** Configured */
+            configured: boolean;
+            /** Connection */
+            connection: string;
+            /** Control Version */
+            control_version: number;
+            /** Id */
+            id: string;
+            /**
+             * Kind
+             * @description Stored account kind; clients must handle future values.
+             */
+            kind: string;
+            /** Kind Confirmation Origin */
+            kind_confirmation_origin: string | null;
+            /** Kind Confirmed At */
+            kind_confirmed_at: number | null;
+            /** Kind Confirmed By */
+            kind_confirmed_by: string | null;
+            /** Paused */
+            paused: boolean;
+            /** Selected */
+            selected: boolean;
+        };
+        /** BudgetAccountChanged */
+        BudgetAccountChanged: {
+            /** Active */
+            active: boolean;
+            /** Changed */
+            changed: boolean;
+            components: components["schemas"]["BudgetComponents"];
+            /** Configured */
+            configured: boolean;
+            /** Connection */
+            connection: string;
+            /** Control Version */
+            control_version: number;
+            /** Id */
+            id: string;
+            /**
+             * Kind
+             * @description Stored account kind; clients must handle future values.
+             */
+            kind: string;
+            /** Kind Confirmation Origin */
+            kind_confirmation_origin: string | null;
+            /** Kind Confirmed At */
+            kind_confirmed_at: number | null;
+            /** Kind Confirmed By */
+            kind_confirmed_by: string | null;
+            /** Paused */
+            paused: boolean;
+            /** Selected */
+            selected: boolean;
+        };
+        /** BudgetAccountSaved */
+        BudgetAccountSaved: {
+            account: components["schemas"]["BudgetAccountChanged"];
+            /**
+             * Ok
+             * @constant
+             */
+            ok: true;
+        };
+        /** BudgetAccountStatus */
+        BudgetAccountStatus: {
+            components: components["schemas"]["BudgetComponents"];
+            /** Configured */
+            configured: boolean;
+            /** Control Version */
+            control_version: number;
+            /** Enabled */
+            enabled: boolean;
+            /** Id */
+            id: string;
+            /** Kind */
+            kind: string;
+            /** Kind Confirmed At */
+            kind_confirmed_at: number | null;
+            /** Last Attempt */
+            last_attempt: number | null;
+            /** Last Error */
+            last_error: string | null;
+            /** Last Success */
+            last_success: number | null;
+            /** Paused */
+            paused: boolean;
+        };
+        /** BudgetAccounts */
+        BudgetAccounts: {
+            /** Accounts */
+            accounts: components["schemas"]["BudgetAccount"][];
+        };
+        /**
+         * BudgetArchivedBalances
+         * @description Historical import metadata; archived values are not combined with live balances.
+         */
+        BudgetArchivedBalances: {
+            /** Balance Count */
+            balance_count: number;
+            /** Fetched At */
+            fetched_at: number;
+            /** Id */
+            id: string;
+            /** Imported At */
+            imported_at: number;
+        };
+        /** BudgetBalance */
+        BudgetBalance: {
+            balance_amount: components["schemas"]["BudgetMoney"];
+            /** Balance Type */
+            balance_type: string;
+            /** Name */
+            name: string;
+            /** Reference Date */
+            reference_date: string | null;
+        };
+        /** BudgetBalances */
+        BudgetBalances: {
+            /** Account Id */
+            account_id: string;
+            /** Archived Has More */
+            archived_has_more: boolean;
+            /** Archived Imports */
+            archived_imports: components["schemas"]["BudgetArchivedBalances"][];
+            /** Balances */
+            balances: components["schemas"]["BudgetBalance"][];
+            /** Balances Total */
+            balances_total: number;
+            /** Balances Truncated */
+            balances_truncated: boolean;
+            freshness: components["schemas"]["BudgetComponentStatus"];
+        };
+        /**
+         * BudgetCapabilities
+         * @description Only stored reads and local controls are implemented in phase 2B.1.
+         */
+        BudgetCapabilities: {
+            /** Account Controls */
+            account_controls: boolean;
+            /** Background Selection */
+            background_selection: boolean;
+            /** Consent */
+            consent: boolean;
+            /** Refresh */
+            refresh: boolean;
+            /** Stored Reads */
+            stored_reads: boolean;
+        };
+        /** BudgetComponentLimit */
+        BudgetComponentLimit: {
+            /** Account */
+            account: string;
+            /** Backoff Until */
+            backoff_until: number;
+            /** Connection */
+            connection: string;
+            /** Last Attempt */
+            last_attempt: number | null;
+            /** Last Request At */
+            last_request_at: number | null;
+            /** Last Success */
+            last_success: number | null;
+            /** Lease Until */
+            lease_until: number | null;
+            /** Next Attempt */
+            next_attempt: number;
+            /** Next Request At */
+            next_request_at: number;
+            /**
+             * Operation
+             * @enum {string}
+             */
+            operation: "transactions" | "balances";
+            /** Retry At */
+            retry_at: number | null;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            scope: "component";
+            /** Suspended */
+            suspended: boolean;
+        };
+        /**
+         * BudgetComponentStatus
+         * @description Independent API freshness and effective component/shared retry policy.
+         */
+        BudgetComponentStatus: {
+            /** Age Seconds */
+            age_seconds: number | null;
+            /** Failures */
+            failures: number;
+            /** Last Attempt */
+            last_attempt: number | null;
+            /** Last Error */
+            last_error: string | null;
+            /** Last Success */
+            last_success: number | null;
+            /** Next Attempt */
+            next_attempt: number;
+            /** Retry At */
+            retry_at: number | null;
+            /** Stale */
+            stale: boolean;
+            /** Stale After Seconds */
+            stale_after_seconds: number;
+            /**
+             * State
+             * @description Currently blocked, running, error, deferred, never, ready or ok; clients must handle future values.
+             */
+            state: string;
+            /** Suspended */
+            suspended: boolean;
+        };
+        /** BudgetComponents */
+        BudgetComponents: {
+            balances: components["schemas"]["BudgetComponentStatus"];
+            transactions: components["schemas"]["BudgetComponentStatus"];
+        };
+        /** BudgetConflict */
+        BudgetConflict: {
+            /** Current */
+            current: components["schemas"]["BudgetAccount"] | components["schemas"]["BudgetConnection"];
+            /**
+             * Error
+             * @constant
+             */
+            error: "budget_version_conflict";
+            /**
+             * Ok
+             * @constant
+             */
+            ok: false;
+        };
+        /** BudgetConnection */
+        BudgetConnection: {
+            /** Bank Name */
+            bank_name: string;
+            /** Control Version */
+            control_version: number;
+            /** Country */
+            country: string;
+            /** Enabled */
+            enabled: boolean;
+            /** Id */
+            id: string;
+            /** Last Attempt */
+            last_attempt: number | null;
+            /** Last Error */
+            last_error: string | null;
+            /** Last Success */
+            last_success: number | null;
+            /** Paused */
+            paused: boolean;
+            /** Renewal Due */
+            renewal_due: boolean;
+            /** Valid Until */
+            valid_until: number | null;
+        };
+        /** BudgetConnectionChanged */
+        BudgetConnectionChanged: {
+            /** Bank Name */
+            bank_name: string;
+            /** Changed */
+            changed: boolean;
+            /** Control Version */
+            control_version: number;
+            /** Country */
+            country: string;
+            /** Enabled */
+            enabled: boolean;
+            /** Id */
+            id: string;
+            /** Last Attempt */
+            last_attempt: number | null;
+            /** Last Error */
+            last_error: string | null;
+            /** Last Success */
+            last_success: number | null;
+            /** Paused */
+            paused: boolean;
+            /** Renewal Due */
+            renewal_due: boolean;
+            /** Valid Until */
+            valid_until: number | null;
+        };
+        /** BudgetConnectionSaved */
+        BudgetConnectionSaved: {
+            connection: components["schemas"]["BudgetConnectionChanged"];
+            /**
+             * Ok
+             * @constant
+             */
+            ok: true;
+        };
+        /**
+         * BudgetConnectionStateRequest
+         * @description Pause or resume a local connection; no provider session is created or closed.
+         */
+        BudgetConnectionStateRequest: {
+            /** Connection Id */
+            connection_id: string;
+            /** Expected Version */
+            expected_version: number;
+            /** Paused */
+            paused: boolean;
+        };
+        /** BudgetConnectionStatus */
+        BudgetConnectionStatus: {
+            /** Accounts */
+            accounts: components["schemas"]["BudgetAccountStatus"][];
+            /** Configured Accounts */
+            configured_accounts: number;
+            /** Connection */
+            connection: string;
+            /** Control Version */
+            control_version: number;
+            /** Enabled */
+            enabled: boolean;
+            /** Failures */
+            failures: number;
+            /** Last Attempt */
+            last_attempt: number | null;
+            /** Last Error */
+            last_error: string | null;
+            /** Last Success */
+            last_success: number | null;
+            /** Next Attempt */
+            next_attempt: number;
+            /** Offline Imports */
+            offline_imports: number;
+            /** Offline Transactions */
+            offline_transactions: number;
+            /** Offline Unresolved */
+            offline_unresolved: number;
+            /** Owner */
+            owner: string;
+            /** Paused */
+            paused: boolean;
+            /** Renewal Due */
+            renewal_due: boolean;
+            request_limits: components["schemas"]["BudgetSharedState"];
+            /** Selected Accounts */
+            selected_accounts: number;
+            /** Selection Policy Version */
+            selection_policy_version: number;
+            /** Transactions */
+            transactions: number;
+            /** Uncertain Transactions */
+            uncertain_transactions: number;
+            /** Unresolved */
+            unresolved: number;
+            /** Valid Until */
+            valid_until: number | null;
+        };
+        /** BudgetConnections */
+        BudgetConnections: {
+            capabilities: components["schemas"]["BudgetCapabilities"];
+            /** Connections */
+            connections: components["schemas"]["BudgetConnection"][];
+        };
+        /** BudgetError */
+        BudgetError: {
+            /** Error */
+            error: string;
+            /**
+             * Ok
+             * @constant
+             */
+            ok: false;
+        };
+        /**
+         * BudgetKindRequest
+         * @description Explicitly confirm an owned account's kind without inferring it from currency.
+         */
+        BudgetKindRequest: {
+            /** Account Id */
+            account_id: string;
+            /** Expected Version */
+            expected_version: number;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "current" | "savings" | "credit_card" | "other";
+        };
+        /** BudgetLimits */
+        BudgetLimits: {
+            /** Limits */
+            limits: (components["schemas"]["BudgetSharedLimit"] | components["schemas"]["BudgetComponentLimit"])[];
+        };
+        /** BudgetMoney */
+        BudgetMoney: {
+            /** Amount */
+            amount: string;
+            /** Currency */
+            currency: string;
+        };
+        /**
+         * BudgetSelectionRequest
+         * @description Select one owned, configured account using its current control version.
+         */
+        BudgetSelectionRequest: {
+            /** Account Id */
+            account_id: string;
+            /** Expected Version */
+            expected_version: number;
+            /** Selected */
+            selected: boolean;
+        };
+        /** BudgetSharedLimit */
+        BudgetSharedLimit: {
+            /** Backoff Until */
+            backoff_until: number;
+            /** Connection */
+            connection: string;
+            /** Last Attempt */
+            last_attempt: number | null;
+            /** Last Request At */
+            last_request_at: number | null;
+            /** Last Success */
+            last_success: number | null;
+            /** Lease Until */
+            lease_until: number | null;
+            /** Next Attempt */
+            next_attempt: number;
+            /** Next Request At */
+            next_request_at: number;
+            /** Retry At */
+            retry_at: number | null;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            scope: "application" | "connection" | "provider";
+            /** Suspended */
+            suspended: boolean;
+        };
+        /** BudgetSharedState */
+        BudgetSharedState: {
+            /** Next Attempt */
+            next_attempt: number;
+            /** Retry At */
+            retry_at: number | null;
+            /** Suspended */
+            suspended: boolean;
+        };
+        /** BudgetStatus */
+        BudgetStatus: {
+            /** Status */
+            status: components["schemas"]["BudgetConnectionStatus"][];
+        };
+        /**
+         * BudgetTransaction
+         * @description Canonical booked observation; amount is an exact unsigned decimal string.
+         */
+        BudgetTransaction: {
+            /** Amount */
+            amount: string;
+            /** Api Observed At */
+            api_observed_at: number | null;
+            /** Booking Date */
+            booking_date: string | null;
+            /**
+             * Credit Debit Indicator
+             * @enum {string}
+             */
+            credit_debit_indicator: "CRDT" | "DBIT";
+            /** Currency */
+            currency: string;
+            /** Entry Reference */
+            entry_reference: string;
+            /** Observed At */
+            observed_at: number;
+            /** Remittance Information */
+            remittance_information: string[];
+            /**
+             * Source
+             * @description Currently api or offline_import; clients must handle future values.
+             */
+            source: string;
+            /**
+             * Status
+             * @constant
+             */
+            status: "BOOK";
+            /** Transaction Date */
+            transaction_date: string | null;
+            /** Value Date */
+            value_date: string | null;
+        };
+        /**
+         * BudgetTransactions
+         * @description A bounded keyset page; totals cover the whole owned account.
+         */
+        BudgetTransactions: {
+            /** Account Id */
+            account_id: string;
+            /**
+             * Account Total
+             * @description Whole-account canonical booked count, independent of date filters and pagination.
+             */
+            account_total: number;
+            /** Next Cursor */
+            next_cursor: string | null;
+            /** Transactions */
+            transactions: components["schemas"]["BudgetTransaction"][];
+            /** Uncertain Total */
+            uncertain_total: number;
         };
         /** CalendarCancelledInstance */
         CalendarCancelledInstance: {
@@ -1875,6 +2574,782 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ControlError"];
+                };
+            };
+        };
+    };
+    setBudgetAccountKind: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BudgetKindRequest"];
+            };
+        };
+        responses: {
+            /** @description local control saved; changed=false is a no-op */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetAccountSaved"];
+                };
+            };
+            /** @description invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description session required; middleware may return an empty body */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description admin owner or browser-origin requirement failed; middleware may return an empty body */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description unknown, disabled or foreign resource */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description missing version, stale conflicting change or SQLite session users required */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"] | components["schemas"]["BudgetConflict"];
+                };
+            };
+            /** @description internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description budget configuration unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+        };
+    };
+    setBudgetAccountSelection: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BudgetSelectionRequest"];
+            };
+        };
+        responses: {
+            /** @description local control saved; changed=false is a no-op */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetAccountSaved"];
+                };
+            };
+            /** @description invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description session required; middleware may return an empty body */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description admin owner or browser-origin requirement failed; middleware may return an empty body */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description unknown, disabled or foreign resource */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description missing version, stale conflicting change or SQLite session users required */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"] | components["schemas"]["BudgetConflict"];
+                };
+            };
+            /** @description internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description budget configuration unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+        };
+    };
+    getBudgetAccounts: {
+        parameters: {
+            query?: {
+                /** @description Optional owned connection filter. */
+                connection_id?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description owner-scoped stored state; no bank request */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetAccounts"];
+                };
+            };
+            /** @description invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description session required; middleware may return an empty body */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description admin owner or browser-origin requirement failed; middleware may return an empty body */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description unknown, disabled or foreign resource */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description SQLite session users required */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description budget configuration unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+        };
+    };
+    getBudgetBalances: {
+        parameters: {
+            query: {
+                /** @description Owned opaque local account ID. */
+                account_id: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description owner-scoped stored state; no bank request */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetBalances"];
+                };
+            };
+            /** @description invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description session required; middleware may return an empty body */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description admin owner or browser-origin requirement failed; middleware may return an empty body */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description unknown, disabled or foreign resource */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description SQLite session users required */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description budget configuration unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+        };
+    };
+    setBudgetConnectionState: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BudgetConnectionStateRequest"];
+            };
+        };
+        responses: {
+            /** @description local control saved; changed=false is a no-op */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetConnectionSaved"];
+                };
+            };
+            /** @description invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description session required; middleware may return an empty body */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description admin owner or browser-origin requirement failed; middleware may return an empty body */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description unknown, disabled or foreign resource */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description missing version, stale conflicting change or SQLite session users required */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"] | components["schemas"]["BudgetConflict"];
+                };
+            };
+            /** @description internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description budget configuration unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+        };
+    };
+    getBudgetConnections: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description owner-scoped stored state; no bank request */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetConnections"];
+                };
+            };
+            /** @description invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description session required; middleware may return an empty body */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description admin owner or browser-origin requirement failed; middleware may return an empty body */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description unknown, disabled or foreign resource */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description SQLite session users required */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description budget configuration unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+        };
+    };
+    getBudgetLimits: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description owner-scoped stored state; no bank request */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetLimits"];
+                };
+            };
+            /** @description invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description session required; middleware may return an empty body */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description admin owner or browser-origin requirement failed; middleware may return an empty body */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description unknown, disabled or foreign resource */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description SQLite session users required */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description budget configuration unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+        };
+    };
+    getBudgetStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description owner-scoped stored state; no bank request */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetStatus"];
+                };
+            };
+            /** @description invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description session required; middleware may return an empty body */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description admin owner or browser-origin requirement failed; middleware may return an empty body */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description unknown, disabled or foreign resource */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description SQLite session users required */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description budget configuration unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+        };
+    };
+    getBudgetTransactions: {
+        parameters: {
+            query: {
+                /** @description Owned opaque local account ID. */
+                account_id: string;
+                /** @description Inclusive stored booking date, falling back to value date. */
+                date_from?: string;
+                /** @description Inclusive stored booking date, falling back to value date. */
+                date_to?: string;
+                /** @description Maximum page size; totals cover the whole account. */
+                limit?: number;
+                /** @description Opaque encrypted keyset cursor bound to owner, account and filters. */
+                cursor?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description owner-scoped stored state; no bank request */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetTransactions"];
+                };
+            };
+            /** @description invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description session required; middleware may return an empty body */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description admin owner or browser-origin requirement failed; middleware may return an empty body */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description unknown, disabled or foreign resource */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description SQLite session users required */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description budget configuration unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
                 };
             };
         };

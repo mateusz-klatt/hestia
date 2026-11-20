@@ -189,6 +189,8 @@ class BudgetConnection(Base):
     bank_name: Mapped[str]
     country: Mapped[str]
     enabled: Mapped[bool]
+    paused: Mapped[bool] = mapped_column(default=False, server_default=text("0"))
+    control_version: Mapped[int] = mapped_column(default=1, server_default=text("1"))
     valid_until: Mapped[float | None]
     last_attempt: Mapped[float | None]
     last_success: Mapped[float | None]
@@ -207,6 +209,7 @@ class BudgetAccount(Base):
     owner: Mapped[str] = mapped_column(ForeignKey("users.username"))
     identification_hash: Mapped[str]
     enabled: Mapped[bool]
+    control_version: Mapped[int] = mapped_column(default=1, server_default=text("1"))
     configured: Mapped[bool] = mapped_column(default=False, server_default=text("0"))
     kind: Mapped[str] = mapped_column(default="unknown", server_default=text("'unknown'"))
     kind_confirmed_at: Mapped[float | None]
@@ -285,6 +288,21 @@ class BudgetAccountAudit(Base):
     __tablename__ = "budget_account_audit"
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     account_id: Mapped[str] = mapped_column(ForeignKey("budget_accounts.id"))
+    owner: Mapped[str] = mapped_column(ForeignKey("users.username"))
+    actor: Mapped[str]
+    origin: Mapped[str]
+    field: Mapped[str]
+    old_value_json: Mapped[str]
+    new_value_json: Mapped[str]
+    changed_at: Mapped[float]
+
+
+class BudgetConnectionAudit(Base):
+    """Private connection pause controls, separate from shared application audit."""
+
+    __tablename__ = "budget_connection_audit"
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    connection_id: Mapped[str] = mapped_column(ForeignKey("budget_connections.id"))
     owner: Mapped[str] = mapped_column(ForeignKey("users.username"))
     actor: Mapped[str]
     origin: Mapped[str]

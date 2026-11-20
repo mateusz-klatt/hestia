@@ -13,7 +13,7 @@ from pathlib import Path
 from .client import BudgetAPIError, EnableBankingClient
 from .config import BudgetConfigError, credentials
 from .normalize import BudgetDataError, fetch_snapshot
-from .store import BudgetStore, BudgetStoreError
+from .store import BudgetStore, BudgetStoreError, BudgetPausedError
 from .scheduler import BudgetScheduler, BudgetDeferredError
 
 ACQUISITION_SECONDS = 900
@@ -58,9 +58,10 @@ def _monotonic_time(clock):
 class AcquisitionClient:
     """One bounded round; every GET rechecks durable limits outside network I/O."""
 
-    def __init__(self, client, scheduler, connection, attempt_id, *, monotonic, sleeper):
+    def __init__(self, client, scheduler, connection, attempt_id, *, monotonic, sleeper, guard=None):
         self.client, self.scheduler, self.connection = client, scheduler, connection
         self.attempt_id, self.monotonic, self.sleeper = attempt_id, monotonic, sleeper
+        self.guard = guard if guard is not None else lambda: None
         self.deadline = _monotonic_time(monotonic) + ACQUISITION_SECONDS
         self.valid_until = None
         self.primary = self.operation = None
@@ -69,6 +70,7 @@ class AcquisitionClient:
         self.valid_until = valid_until
 
     def begin_component(self, primary, operation):
+        self.guard()
         self.primary, self.operation = primary, operation
         if _monotonic_time(self.monotonic) >= self.deadline:
             return False
@@ -77,12 +79,14 @@ class AcquisitionClient:
 
     def _request_slot(self):
         while True:
+            self.guard()
             remaining = self.deadline - _monotonic_time(self.monotonic)
             if remaining <= 0:
                 raise BudgetAPIError(code="acquisition_timeout", retryable=True)
             delay = self.scheduler.request_wait(self.connection, primary=self.primary, operation=self.operation,
                                                 attempt_id=self.attempt_id, valid_until=self.valid_until)
             if not delay:
+                self.guard()
                 return
             if delay >= remaining:
                 raise BudgetDeferredError()
@@ -98,7 +102,9 @@ class AcquisitionClient:
         except BudgetAPIError as exc:
             self.scheduler.record_rate_limit(self.connection, primary=self.primary, operation=self.operation,
                                              error=exc, valid_until=self.valid_until)
+            self.guard()
             raise
+        self.guard()
         if _monotonic_time(self.monotonic) >= self.deadline:
             raise BudgetAPIError(code="acquisition_timeout", retryable=True)
         return result
@@ -122,18 +128,22 @@ def budget_lock(path):
 def _run_connection(config, connection, store, scheduler, client_factory, clock, monotonic, sleeper):
     attempt_id = str(uuid.uuid4())
     try:
+        version = store.acquisition_version(connection.id, connection.owner)
         if not scheduler.can_start(connection):
             return {"connection": connection.id, "state": "deferred"}
         chosen = store.selected_hashes(connection.id, connection.owner)
         selected = replace(connection, accounts=tuple(h for h in connection.accounts if h in chosen))
         key, session_id = credentials(config, connection)
         client = AcquisitionClient(client_factory(config.application_id, key), scheduler, connection, attempt_id,
-                                   monotonic=monotonic, sleeper=sleeper)
+                                   monotonic=monotonic, sleeper=sleeper,
+                                   guard=lambda: store.acquisition_version(connection.id, connection.owner,
+                                                                          expected_version=version))
         snapshot = fetch_snapshot(client, session_id, selected,
                                   today=datetime.fromtimestamp(clock(), timezone.utc).date(), now=clock(),
                                   before_component=client.begin_component, on_session=client.session_validated)
-        store.commit_snapshot(connection.id, snapshot, attempt_id=attempt_id)
-    except BudgetDeferredError:
+        store.commit_snapshot(connection.id, snapshot, attempt_id=attempt_id, expected_version=version)
+    except (BudgetDeferredError, BudgetPausedError):
+        store.release_round(connection.id, attempt_id)
         state = "deferred"
     except Exception as exc:
         # Storage failure here still escapes to the safe CLI; bank/programming

@@ -1,6 +1,7 @@
 # Budget 2B: private HTTP API and Enable Banking consent lifecycle
 
-**Status: design, not implementation or activation.** Baseline: `7bbd7a9`
+**Status:** 2B.1 private stored API/controls is implemented and defaults off;
+later executor/poller/consent work below remains design, without activation. Baseline: `7bbd7a9`
 (#166–168). Fleet deployment reports and an independent read-only check agree:
 the running container matches that commit, SQLite is at `0010`, and all eleven
 budget tables are empty. Existing CLI behavior is documented in
@@ -27,7 +28,8 @@ Implement in separately reviewed pieces, each preserving the 2A full coverage ga
    explicitly configured external sessions under 2A limits. No new SCA/callback is
    needed to use those already-authorized sessions; their live use is not implied.
 3. **2C:** React budget screens, account choices, freshness/renewal and UAT, first
-   using the stored-data API and existing external sessions.
+   using the stored-data API and existing external sessions. Before this piece,
+   add and review safe account display metadata as described below.
 4. **2B.2:** private consent storage, bounded control-plane client, single-use flow,
    Strict-cookie callback bridge and synthetic end-to-end harness.
 5. **2B.3:** generation-fenced session adoption, renewal/close semantics,
@@ -69,7 +71,7 @@ An administrator cannot read or modify another administrator's budget.
 | Authenticated enabled viewer/operator | `403`. |
 | Authoritative SQLite users unavailable | `409`, static `budget_requires_sqlite_users`; no fallback. |
 | Unknown or another owner's local resource ID | Identical `404`, including mutation targets. |
-| Missing/stale expected version during a write | `409`; return safe current metadata to its owner. |
+| Missing expected version or a stale version with conflicting intent | `409`; return safe current metadata to its owner. |
 | Feature explicitly disabled | `404`; no activation through a request. |
 
 Classify every non-public route as admin in both `web._ROUTE_MIN_ROLE` and
@@ -116,6 +118,28 @@ balance types, treat credit limits as cash, or deduce card repayment dates. Keep
 `source`, source observation time, API acquisition time and import time distinct.
 Mask account-number display metadata; do not return raw provider JSON.
 
+### Account display prerequisite for 2C
+
+2A stores a stable primary identification hash, not account product/name, currency,
+provider account type or a masked number. Consequently 2B.1 exposes local IDs and
+controls but cannot yet offer a recognizable account selector. Complete a separate
+small metadata migration and acquisition/import change before implementing that UI.
+Retain bounded display fields from verified account resources: currency, product,
+provider account type and, when available, a masked identifier suffix. Exclude full
+account numbers, primary hashes and raw provider payloads from the HTTP contract.
+Existing rows without these fields must say that their display metadata is missing;
+never invent a label or infer a credit-card classification from balances. Product
+and account type may suggest a kind for explicit confirmation; they never confirm
+kind, select an account or establish identity. Test real-looking synthetic accounts
+with distinct currencies and card products so selection is understandable without
+UUIDs or exposing bank identifiers.
+
+Transaction pages report `account_total` and `uncertain_total` for the whole owned
+account, independently of date filters. The current bounded page query sorts and
+filters normalized JSON dates within one account. Before materially larger ledgers,
+measure it and consider an indexed normalized date column in a separate migration;
+do not trade correct stable keysets for offset pagination.
+
 ### Mutations, web audit and jobs
 
 2B mutations are browser-cookie operations. Require JSON framing/body limits and
@@ -132,7 +156,9 @@ Set `actor` from the authenticated username and `origin="web"` inside the truste
 service; reject caller-supplied actor/origin/owner. Extend 2A control audit without
 changing CLI `operator:<uid>` semantics. Optimistic account/control versions prevent
 two tabs silently overwriting each other's choices; repeat identical intent is a
-no-op. Acquisition timestamps/debits do not increment a control revision.
+no-op, also when an older supplied version asks for the already current value;
+return its current version without another audit row. Missing web versions still
+conflict. Acquisition timestamps/debits do not increment a control revision.
 Kind confirmation never selects an account.
 
 Financial/control audit stays private to the owner. The existing global audit

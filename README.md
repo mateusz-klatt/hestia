@@ -141,11 +141,13 @@ publishing them does not activate a bank connection. Operators of other
 self-hosted instances should adapt the operator details and data practices to
 their own deployment.
 
-A read-only Enable Banking **development foundation** provides explicit account
-selection, CLI ingestion and SQLite storage. It is not loaded by the server and
-has no dashboard or public bank-login callback. See [`docs/BUDGET.md`](docs/BUDGET.md)
-for configuration, durability, privacy boundaries and the remaining UI/renewal
-work. Do not point development tests at production bank accounts or the live DB.
+The read-only Enable Banking foundation provides explicit account selection,
+CLI ingestion and SQLite storage. An optional private API exposes the owner's
+stored data and audited controls; it defaults off and requires SQLite admin
+authentication. Dashboard screens, background polling and browser bank consent
+remain separate work. See [`docs/BUDGET.md`](docs/BUDGET.md) for configuration,
+durability and privacy boundaries. Use synthetic data and a separate database
+for development tests.
 
 ## License
 

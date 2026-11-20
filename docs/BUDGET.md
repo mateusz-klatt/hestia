@@ -1,10 +1,10 @@
 # Budget: read-only Enable Banking foundation
 
-Status: development foundation; **not enabled in the Hestia server, dashboard or
-production deployment**. This module supplies an explicit CLI ingestion path
-and SQLite persistence. It does not make payments, categorise expenses or offer
-bank login in the browser. Existing public policies still describe the deployed
-service; update them before enabling this connector there.
+Status: the CLI foundation is deployed; the private 2B.1 HTTP API is opt-in and
+disabled by default. Budget dashboard screens, server acquisition jobs/poller and
+browser bank consent are not implemented in this piece. This module does not make
+payments or categorise expenses. Update public policies before enabling actual
+bank processing or exposing real stored records through the live service.
 
 ## Decisions
 
@@ -12,8 +12,8 @@ service; update them before enabling this connector there.
 - Only explicitly configured account `identification_hash` values are fetched.
   Authorising or linking accounts in Enable Banking does not select them in Hestia.
 - Each connection belongs to one existing, enabled Hestia **admin**. Financial
-  data is separate from shared calendars/device permissions. No HTTP endpoints are
-  added in this stage, and CLI status prints counts and freshness, not amounts,
+  data is separate from shared calendars/device permissions. The private HTTP API
+  requires that administrator to be the exact owner. CLI status prints counts and freshness, not amounts,
   account hashes, account numbers, descriptions, session IDs or credentials.
 - Reauthorisation replaces the external session file, preserving the connection
   ID and selected account hashes. Session account UIDs are temporary routing data,
@@ -30,6 +30,55 @@ service; update them before enabling this connector there.
 - Balance types stay distinct. They are observations, not proof of card statement
   debt, minimum payment or due date. Bank account type labels alone do not prove
   that an account is a credit card.
+
+## Private stored-data API (2B.1)
+
+Set `HESTIA_BUDGET_HTTP_ENABLED=1` only when ready to expose this feature. It also
+requires `HESTIA_PERSIST=sqlite`, an authoritative SQLite users store, enabled
+Hestia authentication and an existing enabled admin principal. Auth-off/dev and
+legacy JSON-user fallback never grant financial access. Another admin's IDs get
+the same 404 as unknown IDs. The flag defaults off; no key/session file, account
+discovery, import or network acquisition happens when reading stored data.
+
+Available admin routes are GET `/api/budget/connections`, `/accounts`, `/status`,
+`/transactions`, `/balances` and `/limits` under the same `/api/budget` prefix.
+Transaction and balance reads require a local `account_id`. Transaction pages use
+date filters, a bounded `limit` (default 50/max 200) and an encrypted cursor bound
+to the owner/account/filter. Its expiry or tampering requires a fresh first page.
+Canonical entries and uncertainty counts remain separate. Large balance lists
+are explicitly marked truncated; archived-import metadata is separately labeled.
+Responses expose no signing keys, bank session/account UIDs or primary hashes.
+`account_total` counts the account's canonical entries across all dates;
+`uncertain_total` also applies to the whole account, independently of page filters.
+Account display metadata is a prerequisite for the later account-choice UI:
+the present API returns local IDs and controls, not recognizable product labels.
+
+Browser-only POST controls are `/api/budget/account-selection`, `/account-kind`
+and `/connection-state`. They require the HttpOnly session cookie, JSON, and exact
+`Origin` matching an explicitly configured HTTPS `HESTIA_BUDGET_PUBLIC_ORIGIN`
+(for example `https://hestia.klatt.ie`). Any Authorization header is rejected for
+these mutations; authenticated bearer reads remain supported. Unknown fields,
+duplicate JSON fields, duplicate scalar query parameters and invalid types are
+rejected. Supply the current `control_version` as `expected_version`; a missing
+or stale conflicting version returns 409 with safe current owner metadata.
+
+Selection/kind/pause writes audit the authenticated username with origin `web` in
+the same transaction, without publishing financial details in the global audit
+feed or SSE. Identical intent is a no-op. Migration 0011 starts existing control
+versions at 1, preserves selections/history/quota and adds a persistent connection
+pause. Config reload cannot undo pause. Pause does not deselect accounts or clear
+consumed quota; an in-flight round cannot publish after it is paused.
+
+All budget responses, including errors, use `Cache-Control: no-store` and
+`Referrer-Policy: no-referrer`. Verify these headers at the public reverse proxy
+as well: its existing vhost header override must not replace the budget policy.
+Use synthetic, separate-database records for HTTP/UAT checks; enabling the flag
+does not itself authorize live import or access to bank credentials.
+
+Connection capabilities explicitly report that refresh jobs, background selection
+and browser consent remain unavailable. No callback/consent/public completion route
+is added in 2B.1. See [BUDGET_2B.md](BUDGET_2B.md) for the separately reviewed
+executor/poller, React and later consent/renewal sequence.
 
 ## Acquisition and durability
 
@@ -238,7 +287,8 @@ These privileged local CLI actions act on behalf of the named, existing enabled
 admin owner. They do not establish an authenticated browser principal. Listing
 and mutation are owner-scoped: another owner's ID is rejected without returning
 that account's data. The operator actor is recorded as `operator:<process uid>`;
-there are no caller-supplied actor/origin flags. No financial HTTP route is added.
+there are no caller-supplied actor/origin flags. Web controls use the separate
+guarded HTTP surface described above and audit the authenticated owner.
 
 Confirmable kinds are `current`, `savings`, `credit_card` and `other`. Kind does not
 infer currency or select an account; selecting does not confirm kind. Different
@@ -249,10 +299,10 @@ owner, local account ID, time, field, enum/boolean changes and origin, without
 amounts, IBANs or descriptions. Audit/confirmation survives restart and does not
 change ledger records, balances, consent validity or quota reservations.
 
-At this stage `once` still uses the connection-level cooldown and atomic account
-snapshot from the foundation. It now fetches only the intersection of configured
-and owner-selected identities. Independent balance/transaction freshness and
-account/endpoint retry budgets are subsequent 2A.2/2A.3 work, not enabled here.
+`once` fetches only the intersection of configured and owner-selected identities,
+honoring persistent pause. It uses the independent balance/transaction freshness
+and account/endpoint retry budgets implemented in 2A.2/2A.3. Reading the private
+HTTP API does not run it or change those reservations.
 
 Use a separate test DB and fake API fixtures during development. Live acquisition
 uses the fixed HTTPS Enable Banking origin, validated RS256 JWTs, bounded
@@ -370,27 +420,31 @@ importer's clock is rejected rather than silently adjusted.
 
 ## Next slices (not implemented here)
 
-1. Authenticated, owner-scoped browser account selection and consent renewal. Reserved
+1. Separately reviewed executor and opt-in background scheduling on explicitly
+   configured external sessions, preserving 2A quota and ownership. Then React
+   budget screens and synthetic UAT. See the delivery order in BUDGET_2B.md.
+2. Browser consent and renewal. Reserved
    callback: `https://hestia.klatt.ie/api/budget/enable-banking/callback`; **no route
    exists yet**. Use expiring single-use state bound to user, browser and bank;
    keep callback query secrets out of access logs, referrers and page content.
-2. Reminder seven days before actual provider `valid_until`; an **Odnów** action
-   that starts fresh SCA, matches accounts by primary hash, verifies the new
-   session and only then closes the previous session. No fixed assumption that
-   every consent is exactly 180 days. Status already reports renewal due.
-3. Verify ING/BNP field shapes with owner-approved PoC sessions. Do not infer
+3. Reminder seven days before actual provider `valid_until`; an **Odnów** action
+   verifies and adopts a new session without automatically closing external/PoC
+   sessions. Some banks invalidate the old consent during new SCA; retaining the
+   old local reference does not guarantee it remains usable. No universal 180-day
+   assumption. Status already reports renewal due.
+4. Verify ING/BNP field shapes with owner-approved PoC sessions. Do not infer
    support for cards, pending entries or statement due dates from bank branding.
-4. Year view and conservative categorisation/subscription hints with manual
+5. Year view and conservative categorisation/subscription hints with manual
    correction. The owner must explicitly choose each account's kind (current,
    savings, credit card or other); CACC or a product name is insufficient.
    Card repayments/internal transfers must not duplicate spending;
    recurring transactions do not prove unused subscriptions. Mortgage due dates
    and forecasts require explicit schedule inputs and freshness indicators.
-5. Decide export, erasure and retention before broader use. Disabling a connection
+6. Decide export, erasure and retention before broader use. Disabling a connection
    stops acquisition and retains history; provider revocation is not local erasure.
-6. Full React UI, background scheduling, legal-document update, access-control UAT
-   and staged deployment after review. No bank data is sent to external AI tools.
-7. Authenticated UI for limit inspection and operator review, preserving the CLI's
+7. Legal-document update, access-control UAT and staged activation after review.
+   No bank data is sent to external AI tools.
+8. Authenticated UI for limit inspection and operator review, preserving the CLI's
    deadlines and audit. Do not erase quota history to compensate for a partial result.
 
 ## Sources

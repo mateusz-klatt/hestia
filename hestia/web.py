@@ -164,6 +164,15 @@ _PATH_USERS = "/api/users"
 _PATH_WHOLE_HOME = "/api/whole-home"
 _USERNAME_REQUIRED = "username is required"   # shared 400 message across the admin user verbs
 _ROUTE_MIN_ROLE = {
+    ("GET", "/api/budget/connections"): _ADMIN,
+    ("GET", "/api/budget/accounts"): _ADMIN,
+    ("GET", "/api/budget/status"): _ADMIN,
+    ("GET", "/api/budget/transactions"): _ADMIN,
+    ("GET", "/api/budget/balances"): _ADMIN,
+    ("GET", "/api/budget/limits"): _ADMIN,
+    ("POST", "/api/budget/account-selection"): _ADMIN,
+    ("POST", "/api/budget/account-kind"): _ADMIN,
+    ("POST", "/api/budget/connection-state"): _ADMIN,
     ("GET", "/api/calendars"): _VIEWER,
     ("POST", "/api/calendars/events"): _OPERATOR,
     ("POST", "/api/calendars/events/delete"): _OPERATOR,
@@ -845,7 +854,16 @@ async def _events(request):
     return resp
 
 
-async def _read_json_body(request, max_body=MAX_BODY):
+def _unique_json_fields(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("Duplicate JSON fields")
+        result[key] = value
+    return result
+
+
+async def _read_json_body(request, max_body=MAX_BODY, *, reject_duplicates=False):
     """Read and JSON-parse the request body, enforcing framing limits. On any
     content-type/framing/size/parse error this returns ``(response, True)``;
     on success returns ``(obj, False)``. A zero-length body parses to ``{}``
@@ -872,7 +890,8 @@ async def _read_json_body(request, max_body=MAX_BODY):
                      {"ok": False, "error": f"body must be ≤ {max_body} bytes"}), True
     body = await request.content.read(cl) if cl > 0 else b""
     try:
-        return (json.loads(body) if body else {}), False
+        return (json.loads(body, object_pairs_hook=_unique_json_fields if reject_duplicates else None)
+                if body else {}), False
     except ValueError:
         return _json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "invalid JSON"}), True
 
@@ -1098,12 +1117,15 @@ def _validate_control_payload(op) -> "str | None":
 
 def make_app(rt):
     from .calendar_sync.api import register as register_calendars
+    from .budget.api import register as register_budget
     app = web.Application(
         client_max_size=MAX_RULE_BODY + 4096,
         middlewares=[_auth_middleware, _empty_404_405_middleware],   # auth OUTERMOST: gate before routing
     )
     app[_RT_KEY] = rt
     register_calendars(app, _read_json_body)
+    register_budget(app, _read_json_body, auth_enabled=lambda: _AUTH_ENABLED,
+                    session_secret=lambda: _SESSION_SECRET)
     app.router.add_get("/", _ui_index, allow_head=False)                          # the TS app (Vite build)
     app.router.add_get("/assets/{path:[A-Za-z0-9._-]+}", _ui_asset, allow_head=False)
     app.router.add_get("/ui/", _ui_redirect, allow_head=False)                    # retired alias -> /

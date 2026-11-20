@@ -57,7 +57,8 @@ from pydantic.json_schema import models_json_schema
 # 0.10.0: local calendar read/write surface, with optimistic revisions and sync health.
 # 0.11.0: portable calendar content preserves unspecified end times.
 # 0.12.0: calendar creates require a durable per-draft idempotency key.
-CONTRACT_VERSION = "0.12.0"
+# 0.13.0: private owner-scoped stored budget reads and versioned local controls.
+CONTRACT_VERSION = "0.13.0"
 OPENAPI_PATH = Path(__file__).resolve().parent.parent / "docs" / "api" / "openapi.json"
 
 # De-duplicated string literals (SonarPython S1192): the OpenAPI content-type, the paths reused
@@ -71,6 +72,16 @@ _P_WHOLE_HOME = "/api/whole-home"
 _P_CALENDARS = "/api/calendars"
 _P_CALENDAR_EVENTS = _P_CALENDARS + "/events"
 _P_CALENDAR_DELETE = _P_CALENDAR_EVENTS + "/delete"
+_P_BUDGET = "/api/budget/"
+_P_BUDGET_CONNECTIONS = _P_BUDGET + "connections"
+_P_BUDGET_ACCOUNTS = _P_BUDGET + "accounts"
+_P_BUDGET_STATUS = _P_BUDGET + "status"
+_P_BUDGET_TRANSACTIONS = _P_BUDGET + "transactions"
+_P_BUDGET_BALANCES = _P_BUDGET + "balances"
+_P_BUDGET_LIMITS = _P_BUDGET + "limits"
+_P_BUDGET_SELECTION = _P_BUDGET + "account-selection"
+_P_BUDGET_KIND = _P_BUDGET + "account-kind"
+_P_BUDGET_CONNECTION_STATE = _P_BUDGET + "connection-state"
 _ADMIN_ROLE_DESC = "Requires the admin role."
 _NO_SUCH_USER = "no such user"
 
@@ -974,6 +985,303 @@ _CALENDAR_MODELS = (CalendarCreateRequest, CalendarUpdateRequest, CalendarDelete
                     Calendars, CalendarSaved, CalendarError)
 
 
+BudgetId = Annotated[str, Field(min_length=1, max_length=128)]
+BudgetVersion = Annotated[int, Field(ge=1)]
+BudgetConfirmedKind = Literal["current", "savings", "credit_card", "other"]
+
+
+class BudgetSelectionRequest(BaseModel):
+    """Select one owned, configured account using its current control version."""
+
+    model_config = _STRICT
+    account_id: BudgetId
+    selected: bool
+    expected_version: BudgetVersion
+
+
+class BudgetKindRequest(BaseModel):
+    """Explicitly confirm an owned account's kind without inferring it from currency."""
+
+    model_config = _STRICT
+    account_id: BudgetId
+    kind: BudgetConfirmedKind
+    expected_version: BudgetVersion
+
+
+class BudgetConnectionStateRequest(BaseModel):
+    """Pause or resume a local connection; no provider session is created or closed."""
+
+    model_config = _STRICT
+    connection_id: BudgetId
+    paused: bool
+    expected_version: BudgetVersion
+
+
+class BudgetComponentStatus(BaseModel):
+    """Independent API freshness and effective component/shared retry policy."""
+
+    model_config = _READ
+    last_attempt: float | None
+    last_success: float | None
+    last_error: str | None
+    failures: int
+    next_attempt: float
+    state: str = Field(description="Currently blocked, running, error, deferred, never, ready or ok; clients must handle future values.")
+    retry_at: float | None
+    suspended: bool
+    stale: bool
+    age_seconds: float | None
+    stale_after_seconds: int
+
+
+class BudgetComponents(BaseModel):
+    model_config = _READ
+    transactions: BudgetComponentStatus
+    balances: BudgetComponentStatus
+
+
+class BudgetAccount(BaseModel):
+    """Owner-visible control metadata; opaque local IDs never reveal bank identities."""
+
+    model_config = _READ
+    id: str
+    connection: str
+    configured: bool
+    selected: bool
+    active: bool
+    paused: bool
+    control_version: int
+    kind: str = Field(description="Stored account kind; clients must handle future values.")
+    kind_confirmed_at: float | None
+    kind_confirmed_by: str | None
+    kind_confirmation_origin: str | None
+    components: BudgetComponents
+
+
+class BudgetConnection(BaseModel):
+    model_config = _READ
+    id: str
+    enabled: bool
+    paused: bool
+    control_version: int
+    bank_name: str
+    country: str
+    valid_until: float | None
+    renewal_due: bool
+    last_attempt: float | None
+    last_success: float | None
+    last_error: str | None
+
+
+class BudgetCapabilities(BaseModel):
+    """Only stored reads and local controls are implemented in phase 2B.1."""
+
+    model_config = _READ
+    stored_reads: bool
+    account_controls: bool
+    refresh: bool
+    background_selection: bool
+    consent: bool
+
+
+class BudgetConnections(BaseModel):
+    model_config = _READ
+    connections: list[BudgetConnection]
+    capabilities: BudgetCapabilities
+
+
+class BudgetAccounts(BaseModel):
+    model_config = _READ
+    accounts: list[BudgetAccount]
+
+
+class BudgetSharedState(BaseModel):
+    model_config = _READ
+    next_attempt: float
+    retry_at: float | None
+    suspended: bool
+
+
+class BudgetAccountStatus(BaseModel):
+    model_config = _READ
+    id: str
+    enabled: bool
+    configured: bool
+    paused: bool
+    control_version: int
+    kind: str
+    kind_confirmed_at: float | None
+    last_attempt: float | None
+    last_success: float | None
+    last_error: str | None
+    components: BudgetComponents
+
+
+class BudgetConnectionStatus(BaseModel):
+    model_config = _READ
+    connection: str
+    owner: str
+    enabled: bool
+    paused: bool
+    control_version: int
+    selection_policy_version: Annotated[int, Field(ge=1)]
+    configured_accounts: int
+    selected_accounts: int
+    transactions: int
+    unresolved: int
+    uncertain_transactions: int
+    offline_imports: int
+    offline_transactions: int
+    offline_unresolved: int
+    last_attempt: float | None
+    last_success: float | None
+    next_attempt: float
+    last_error: str | None
+    failures: int
+    valid_until: float | None
+    request_limits: BudgetSharedState
+    renewal_due: bool
+    accounts: list[BudgetAccountStatus]
+
+
+class BudgetStatus(BaseModel):
+    model_config = _READ
+    status: list[BudgetConnectionStatus]
+
+
+class BudgetTransaction(BaseModel):
+    """Canonical booked observation; amount is an exact unsigned decimal string."""
+
+    model_config = _READ
+    entry_reference: str
+    amount: str = Field(pattern=r"^[0-9]+(?:\.[0-9]+)?$")
+    currency: str
+    credit_debit_indicator: Literal["CRDT", "DBIT"]
+    status: Literal["BOOK"]
+    booking_date: str | None
+    value_date: str | None
+    transaction_date: str | None
+    remittance_information: list[str]
+    source: str = Field(description="Currently api or offline_import; clients must handle future values.")
+    observed_at: float
+    api_observed_at: float | None
+
+
+class BudgetTransactions(BaseModel):
+    """A bounded keyset page; totals cover the whole owned account."""
+
+    model_config = _READ
+    account_id: str
+    transactions: list[BudgetTransaction]
+    account_total: int = Field(description="Whole-account canonical booked count, independent of date filters and pagination.")
+    uncertain_total: int
+    next_cursor: str | None
+
+
+class BudgetMoney(BaseModel):
+    model_config = _READ
+    amount: str = Field(pattern=r"^-?[0-9]+(?:\.[0-9]+)?$")
+    currency: str
+
+
+class BudgetBalance(BaseModel):
+    model_config = _READ
+    name: str
+    balance_type: str
+    balance_amount: BudgetMoney
+    reference_date: str | None
+
+
+class BudgetArchivedBalances(BaseModel):
+    """Historical import metadata; archived values are not combined with live balances."""
+
+    model_config = _READ
+    id: str
+    fetched_at: float
+    imported_at: float
+    balance_count: int
+
+
+class BudgetBalances(BaseModel):
+    model_config = _READ
+    account_id: str
+    balances: list[BudgetBalance]
+    balances_total: int
+    balances_truncated: bool
+    freshness: BudgetComponentStatus
+    archived_imports: list[BudgetArchivedBalances]
+    archived_has_more: bool
+
+
+class BudgetLimitFields(BaseModel):
+    model_config = _READ
+    connection: str
+    suspended: bool
+    retry_at: float | None
+    next_attempt: float
+    backoff_until: float
+    lease_until: float | None
+    last_attempt: float | None
+    last_success: float | None
+    last_request_at: float | None
+    next_request_at: float
+
+
+class BudgetSharedLimit(BudgetLimitFields):
+    scope: Literal["connection", "application", "provider"]
+
+
+class BudgetComponentLimit(BudgetLimitFields):
+    scope: Literal["component"]
+    account: str
+    operation: Literal["transactions", "balances"]
+
+
+BudgetLimit = Annotated[BudgetSharedLimit | BudgetComponentLimit, Field(discriminator="scope")]
+
+
+class BudgetLimits(BaseModel):
+    model_config = _READ
+    limits: list[BudgetLimit]
+
+
+class BudgetAccountChanged(BudgetAccount):
+    changed: bool
+
+
+class BudgetConnectionChanged(BudgetConnection):
+    changed: bool
+
+
+class BudgetAccountSaved(BaseModel):
+    model_config = _READ
+    ok: Literal[True]
+    account: BudgetAccountChanged
+
+
+class BudgetConnectionSaved(BaseModel):
+    model_config = _READ
+    ok: Literal[True]
+    connection: BudgetConnectionChanged
+
+
+class BudgetError(BaseModel):
+    model_config = _READ
+    ok: Literal[False]
+    error: str
+
+
+class BudgetConflict(BudgetError):
+    error: Literal["budget_version_conflict"]
+    current: BudgetAccount | BudgetConnection
+
+
+_BUDGET_MODELS = (BudgetSelectionRequest, BudgetKindRequest, BudgetConnectionStateRequest,
+                  BudgetConnections, BudgetAccounts, BudgetStatus, BudgetTransactions,
+                  BudgetBalances, BudgetLimits, BudgetAccountSaved, BudgetConnectionSaved,
+                  BudgetError, BudgetConflict)
+
+
 def _ref(name: str) -> dict:
     return {"$ref": f"#/components/schemas/{name}"}
 
@@ -1012,6 +1320,15 @@ _PATH_ROLES = {
     ("GET", _P_CALENDARS): "viewer",
     ("POST", _P_CALENDAR_EVENTS): "operator",
     ("POST", _P_CALENDAR_DELETE): "operator",
+    ("GET", _P_BUDGET_CONNECTIONS): "admin",
+    ("GET", _P_BUDGET_ACCOUNTS): "admin",
+    ("GET", _P_BUDGET_STATUS): "admin",
+    ("GET", _P_BUDGET_TRANSACTIONS): "admin",
+    ("GET", _P_BUDGET_BALANCES): "admin",
+    ("GET", _P_BUDGET_LIMITS): "admin",
+    ("POST", _P_BUDGET_SELECTION): "admin",
+    ("POST", _P_BUDGET_KIND): "admin",
+    ("POST", _P_BUDGET_CONNECTION_STATE): "admin",
 }
 
 
@@ -1021,7 +1338,7 @@ def _component_schemas() -> dict:
         [(model, "validation")
          for model in (*_CONTROL_MODELS, ControlSuccess, ControlError, *_COMMAND_MODELS,
                        *_READ_MODELS, *_AUTH_MODELS, *_AUTOMATION_MODELS, *_EVENT_MODELS,
-                       *_USER_MODELS, *_CALENDAR_MODELS)],
+                       *_USER_MODELS, *_CALENDAR_MODELS, *_BUDGET_MODELS)],
         ref_template="#/components/schemas/{model}",
     )
     schemas = combined.get("$defs", {})
@@ -1494,6 +1811,7 @@ def build_openapi() -> dict:
         },
         "components": {"schemas": _component_schemas()},
     }
+    doc["paths"].update(_budget_paths())
     # Tag every operation with its RBAC floor (machine-readable; a test cross-checks each against the
     # real web._required_role / public allowlist so the contract's roles can never drift from the server).
     for path, ops in doc["paths"].items():
@@ -1501,6 +1819,65 @@ def build_openapi() -> dict:
             op["x-required-role"] = _PATH_ROLES[(method.upper(), path)]
     _make_responses_tolerant(doc)
     return doc
+
+
+def _budget_responses(model):
+    response = {"200": {"description": "owner-scoped stored state; no bank request",
+                        "content": {_APP_JSON: {"schema": _ref(model)}}}}
+    failures = {"400": "invalid request", "401": "session required; middleware may return an empty body",
+                "403": "admin owner or browser-origin requirement failed; middleware may return an empty body",
+                "404": "unknown, disabled or foreign resource", "409": "SQLite session users required",
+                "500": "internal error", "503": "budget configuration unavailable"}
+    for code, description in failures.items():
+        response[code] = {"description": description, "content": {_APP_JSON: {"schema": _ref("BudgetError")}}}
+    return response
+
+
+def _budget_query(name, *, required=False, schema=None, description=""):
+    return {"name": name, "in": "query", "required": required,
+            "schema": schema or {"type": "string", "minLength": 1, "maxLength": 128},
+            "description": description}
+
+
+def _budget_paths():
+    """Phase 2B.1 is a private stored-data surface, with no consent or refresh routes."""
+    account = _budget_query("account_id", required=True, description="Owned opaque local account ID.")
+    dates = [_budget_query(name, schema={"type": "string", "format": "date", "pattern": r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$"},
+                           description="Inclusive stored booking date, falling back to value date.")
+             for name in ("date_from", "date_to")]
+    transactions = [account, *dates,
+                    _budget_query("limit", schema={"type": "integer", "minimum": 1, "maximum": 200, "default": 50},
+                                  description="Maximum page size; totals cover the whole account."),
+                    _budget_query("cursor", schema={"type": "string", "minLength": 1, "maxLength": 8192},
+                                  description="Opaque encrypted keyset cursor bound to owner, account and filters.")]
+    reads = (
+        (_P_BUDGET_CONNECTIONS, "getBudgetConnections", "Stored connections and implemented capabilities", "BudgetConnections", []),
+        (_P_BUDGET_ACCOUNTS, "getBudgetAccounts", "Stored accounts and versioned owner controls", "BudgetAccounts",
+         [_budget_query("connection_id", description="Optional owned connection filter.")]),
+        (_P_BUDGET_STATUS, "getBudgetStatus", "Stored component freshness and acquisition health", "BudgetStatus", []),
+        (_P_BUDGET_TRANSACTIONS, "getBudgetTransactions", "Stored canonical booked transactions", "BudgetTransactions", transactions),
+        (_P_BUDGET_BALANCES, "getBudgetBalances", "Live stored balances and separate archived import metadata", "BudgetBalances", [account]),
+        (_P_BUDGET_LIMITS, "getBudgetLimits", "Sanitized stored limits without provider or application keys", "BudgetLimits", []),
+    )
+    paths = {path: {"get": {"operationId": operation, "summary": summary,
+                            "description": "Requires an authenticated SQLite admin owner. Reads never contact a bank.",
+                            "parameters": parameters, "responses": _budget_responses(model)}}
+             for path, operation, summary, model, parameters in reads}
+    writes = (
+        (_P_BUDGET_SELECTION, "setBudgetAccountSelection", "Select or deselect one owned account", "BudgetSelectionRequest", "BudgetAccountSaved"),
+        (_P_BUDGET_KIND, "setBudgetAccountKind", "Explicitly confirm one owned account's kind", "BudgetKindRequest", "BudgetAccountSaved"),
+        (_P_BUDGET_CONNECTION_STATE, "setBudgetConnectionState", "Pause or resume one owned connection locally", "BudgetConnectionStateRequest", "BudgetConnectionSaved"),
+    )
+    for path, operation, summary, request, model in writes:
+        responses = _budget_responses(model)
+        responses["200"]["description"] = "local control saved; changed=false is a no-op"
+        responses["409"] = {"description": "missing version, stale conflicting change or SQLite session users required",
+                            "content": {_APP_JSON: {"schema": {"anyOf": [_ref("BudgetError"), _ref("BudgetConflict")]}}}}
+        paths[path] = {"post": {"operationId": operation, "summary": summary,
+                                "description": "Requires the exact admin owner and a same-origin browser session; bearer-only mutations are rejected. expected_version is required. Missing versions or stale conflicting changes return 409 with current safe state after owner validation; an already-applied desired state returns 200 with changed=false even after a stale retry. No bank request is made.",
+                                "requestBody": {"required": True, "content": {_APP_JSON: {"schema": _ref(request)}}},
+                                "responses": responses}}
+    return paths
 
 
 def _schema_refs(node) -> "set[str]":

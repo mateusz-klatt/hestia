@@ -111,7 +111,7 @@ class BudgetScheduler:
 
     @staticmethod
     def _blocked(connection, limits, now):
-        return connection.next_attempt > now or any(
+        return connection.paused or connection.next_attempt > now or any(
             row is not None and (row.suspended or max(row.next_attempt, row.retry_at or 0) > now)
             for row in limits)
 
