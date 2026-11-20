@@ -31,6 +31,23 @@ SECOND_UID = "00000000-0000-4000-8000-000000000004"
 FAKE_KEY = b"synthetic key; never sent to a bank"
 
 
+def reserved_snapshots(*observations):
+    """Mock acquisition results while preserving the real pre-HTTP reservations."""
+    remaining = iter(observations)
+
+    def fetch(client, session_id, connection, *, before_component, **kwargs):
+        observation = next(remaining)
+        if isinstance(observation, Exception):
+            raise observation
+        for primary in connection.accounts:
+            for operation in ("transactions", "balances"):
+                if not before_component(primary, operation):
+                    raise AssertionError("Synthetic acquisition could not reserve its component")
+        return observation
+
+    return fetch
+
+
 class SyntheticBank:
     """Small API fixture; real normalization and SQLite commits remain in use."""
 
@@ -168,17 +185,18 @@ class BudgetRuntimeTests(unittest.TestCase):
                 self.assertNotIn("synthetic-hash", output)
                 self.assertNotIn("12345678901234567890", output)
 
-    def test_partial_account_error_commits_good_account_and_preserves_failed_account_data(self):
+    def test_transaction_failure_preserves_ledger_and_refreshes_independent_balances(self):
         self.config = configuration(accounts=("synthetic-hash", "second-hash"))
         prepare_selected(self.store, self.config)
         first = snapshot(transaction("seed-first"), valid_until=self.now + 31536000).accounts[0]
         second = snapshot(transaction("seed-second"), account_hash="second-hash", valid_until=self.now + 31536000).accounts[0]
         second.balances = ({"name": "Old balance", "balance_type": "CLBD",
                             "balance_amount": {"amount": "999.01", "currency": "PLN"}},)
+        second.transactions = (*second.transactions, transaction(None))
         self.store.commit_snapshot("bank", SimpleNamespace(valid_until=self.now + 31536000,
                                                            accounts=(first, second), errors=()))
+        previous_quarantine = self.rows(db.BudgetUnresolved)[0].payload_json
         old_success = self.now
-        second_before = next(row for row in self.rows(db.BudgetAccount) if row.identification_hash == "second-hash")
         self.now += 3600
         self.factory = mock.Mock(return_value=SyntheticBank(self.config, failures=("second-hash",)))
         with mock.patch.object(cli, "load_config", return_value=self.config), \
@@ -191,13 +209,20 @@ class BudgetRuntimeTests(unittest.TestCase):
         self.assertEqual(result["status"][0]["last_error"], "partial_data")
         self.assertEqual(result["status"][0]["last_success"], old_success)
         accounts = {row.identification_hash: row for row in self.rows(db.BudgetAccount)}
-        self.assertEqual(accounts["second-hash"].balances_json, second_before.balances_json)
+        self.assertEqual(json.loads(accounts["second-hash"].balances_json)[0]["balance_amount"]["amount"], "-12.345")
         self.assertEqual(accounts["second-hash"].observed_at, old_success)
-        self.assertEqual(accounts["second-hash"].last_error, "provider_error")
+        self.assertEqual(accounts["second-hash"].last_error, "transactions_provider_error")
         self.assertEqual(accounts["synthetic-hash"].observed_at, self.now)
         self.assertIsNone(accounts["synthetic-hash"].last_error)
+        states = {item["id"]: item for item in result["status"][0]["accounts"]}
+        failed = states[accounts["second-hash"].id]["components"]
+        self.assertEqual(failed["transactions"]["last_success"], old_success)
+        self.assertEqual(failed["transactions"]["last_error"], "provider_error")
+        self.assertEqual(failed["balances"]["last_success"], self.now)
+        self.assertIsNone(failed["balances"]["last_error"])
         self.assertEqual({row.entry_reference for row in self.rows(db.BudgetTransaction)},
                          {"seed-first", "seed-second", "ref-1"})
+        self.assertEqual([row.payload_json for row in self.rows(db.BudgetUnresolved)], [previous_quarantine])
         self.assertEqual(result["status"][0]["next_attempt"], self.now + 43200)
         self.assertNotIn("second-hash", output)
         self.assertNotIn("SECRET", output)
@@ -209,10 +234,14 @@ class BudgetRuntimeTests(unittest.TestCase):
             code, output, diagnostic = self.invoke(["--db", str(self.path), "once"])
         self.assertEqual((code, diagnostic), (1, ""))
         result = json.loads(output)
-        self.assertEqual(result["results"], [{"connection": "bank", "state": "failed"}])
-        self.assertEqual(result["status"][0]["last_error"], "account_errors")
+        self.assertEqual(result["results"], [{"connection": "bank", "state": "partial"}])
+        self.assertEqual(result["status"][0]["last_error"], "partial_data")
         self.assertEqual(result["status"][0]["last_success"], old_success)
         self.assertEqual(len(self.rows(db.BudgetTransaction)), 3)
+        self.assertEqual([row.payload_json for row in self.rows(db.BudgetUnresolved)], [previous_quarantine])
+        for account in result["status"][0]["accounts"]:
+            self.assertEqual(account["components"]["balances"]["last_success"], self.now)
+            self.assertEqual(account["components"]["transactions"]["last_error"], "provider_error")
 
     def test_invalid_commit_is_atomic_and_other_connections_continue(self):
         first = self.config.connections[0]
@@ -223,7 +252,7 @@ class BudgetRuntimeTests(unittest.TestCase):
         invalid = snapshot(transaction("new-but-unselected"), account_hash="not-selected", valid_until=self.now + 31536000)
         valid = snapshot(transaction("other-ref"), account_hash="second-hash", valid_until=self.now + 31536000)
         with mock.patch.object(runtime, "credentials", return_value=(FAKE_KEY, APP)), \
-             mock.patch.object(runtime, "fetch_snapshot", side_effect=(invalid, valid)):
+             mock.patch.object(runtime, "fetch_snapshot", side_effect=reserved_snapshots(invalid, valid)):
             result = self.acquisition(config, path=self.path, client_factory=mock.Mock())
         self.assertEqual(result["results"], [{"connection": "bank", "state": "failed"},
                                             {"connection": "other-bank", "state": "updated"}])
@@ -232,7 +261,7 @@ class BudgetRuntimeTests(unittest.TestCase):
         self.assertIsNone(result["status"][1]["last_error"])
         self.now += 43200
         with mock.patch.object(runtime, "credentials", return_value=(FAKE_KEY, APP)), \
-             mock.patch.object(runtime, "fetch_snapshot", side_effect=(ValueError("SECRET failure"), valid)):
+             mock.patch.object(runtime, "fetch_snapshot", side_effect=reserved_snapshots(ValueError("SECRET failure"), valid)):
             result = self.acquisition(config, path=self.path, client_factory=mock.Mock())
         self.assertEqual(result["results"], [{"connection": "bank", "state": "failed"},
                                             {"connection": "other-bank", "state": "updated"}])

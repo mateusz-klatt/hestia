@@ -218,6 +218,21 @@ class BudgetAccount(Base):
     last_error: Mapped[str | None]
 
 
+class BudgetComponent(Base):
+    """Independent complete API observations and crash-safe in-flight markers."""
+
+    __tablename__ = "budget_components"
+    account_id: Mapped[str] = mapped_column(ForeignKey("budget_accounts.id"), primary_key=True)
+    operation: Mapped[str] = mapped_column(primary_key=True)
+    last_attempt: Mapped[float | None]
+    last_success: Mapped[float | None]
+    last_error: Mapped[str | None]
+    failures: Mapped[int] = mapped_column(default=0, server_default=text("0"))
+    next_attempt: Mapped[float] = mapped_column(default=0, server_default=text("0"))
+    attempt_id: Mapped[str | None]
+    lease_until: Mapped[float | None]
+
+
 class BudgetAccountAudit(Base):
     """Append-only account control history, without financial payloads."""
 

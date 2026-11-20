@@ -34,11 +34,11 @@ service; update them before enabling this connector there.
 ## Acquisition and durability
 
 Each run validates the authorised session, bank and selected account mappings;
-retrieves balances and **every** transaction page; validates and normalises all
-records; then commits each successful account's complete data and each failed
-account's error status in one SQLite transaction. A failure on one account never
-publishes a partial set of that account's pages or prevents other accounts from
-refreshing. Network I/O never holds a database write transaction. Hestia's
+then retrieves transactions and balances independently. Transactions publish only
+after **every** page validates; balances publish only after their complete response
+validates. An endpoint failure preserves that endpoint's previous data while its
+successful sibling can refresh. Successful components and safe errors commit in
+one SQLite transaction. Network I/O never holds a database write transaction. Hestia's
 existing SQLAlchemy/Alembic engine supplies WAL, FULL durability and migrations.
 
 The requested window covers 365 calendar dates through today, with boundaries
@@ -48,11 +48,11 @@ are filtered locally because banks may ignore the requested start date. A year
 requested is not a promise that a bank supplies a complete year. Booking date is
 used first, value date second; undated records are marked unresolved.
 
-Repeated pages, malformed rows and partial/network/permission errors fail that
-account's snapshot. Missing
+Repeated pages, malformed rows and partial/network errors fail that component.
+Missing
 selected accounts, changed bank identity and invalid/expired sessions fail the
-connection before any account is imported. Previously committed balances,
-transactions and unresolved observations for failed accounts remain intact.
+connection before any component is imported; a late HTTP 401 also discards all
+staged results. Previously committed data for failed components remain intact.
 The CLI returns a partial/failed state and a nonzero exit code; only a completely
 successful connection advances its full-success timestamp. Absence in a later
 response never deletes historical ledger entries. A newer BOOK entry cannot be
@@ -75,6 +75,24 @@ of earlier uncertainty. A reconciliation UI remains a later slice.
 There is no server poller or cron installation in this stage. A production poller
 should default to two runs per day, with bank-specific limits and manual refresh
 rules verified before enabling it.
+
+Migration 0009 adds separate transaction/balance attempt, success, safe-error and
+retry metadata. Only a complete API account observation backfills both success
+times; offline imports cannot advance them. Each endpoint persists a round marker
+and a 15-minute running lease before HTTP. Restart retains attempts and cooldowns;
+an expired running marker is shown as interrupted, without inventing a success.
+The connection-level quota gate remains in force until endpoint scheduling lands.
+
+Status adds `accounts[].components.transactions` and `.balances`, with states,
+age, stale flag and explicit freshness thresholds (36 hours for transactions,
+24 hours for balances). These are acquisition ages; absent bank observation times
+remain absent. A completed fetch does not prove the bank returned its full history.
+`running` means an unexpired request lease; `error` also covers an interrupted
+lease. `never` has no complete API observation, `deferred` is waiting for its
+deadline, `blocked` cannot currently acquire, `ok` is fresh and `ready` is stale
+and eligible for a later refresh. Errors and their deadlines remain visible.
+Account/connection `last_success` still means both components completed for the
+entire selected scope. Partial success does not advance this combined timestamp.
 
 All calls in this stage are unattended and omit **all** PSU headers. Do not forge
 IP/User-Agent values or assume an interactive request has unlimited quota.
@@ -138,6 +156,8 @@ offline import do not select them or confirm a kind. Acquisition requires both
 the allowlist and persisted owner selection. Removing an account from configuration
 stops acquisition without erasing its identity, history or prior selection; an
 explicit deselection persists after removal/readdition, status and restart.
+Changing the selected scope during acquisition aborts staged publication and can
+consume that round's reservation; the next run respects the existing cooldown.
 
 ```sh
 python -m hestia.budget --config /secure/budget.json --db /secure/test.db accounts --owner existing-admin
@@ -302,11 +322,10 @@ importer's clock is rejected rather than silently adjusted.
    stops acquisition and retains history; provider revocation is not local erasure.
 6. Full React UI, background scheduling, legal-document update, access-control UAT
    and staged deployment after review. No bank data is sent to external AI tools.
-7. Independent transaction/balance freshness: retain a complete transaction fetch
-   if a later balance call fails (including 429), while preserving and clearly
-   marking the old balance. This needs explicit per-part status and timestamps;
-   the present account snapshot remains atomic and keeps its prior committed
-   data when either part fails. Do not retry immediately to compensate.
+7. Per-account and endpoint quota scheduling with persistent Retry-After and
+   separate transport pacing. Current independent freshness still shares the
+   conservative connection-level acquisition reservation. Do not retry immediately
+   to compensate for a partial result.
 
 ## Sources
 

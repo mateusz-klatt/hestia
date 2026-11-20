@@ -1,7 +1,7 @@
 # Budget 2A: account controls and independent acquisition
 
-**IMPLEMENTATION STATUS:** 2A.1 is implemented in the account-controls branch;
-2A.2 and 2A.3 below remain proposed and unimplemented. Baseline: master `84fb76d`.
+**IMPLEMENTATION STATUS:** 2A.1 is merged in #166; 2A.2 is implemented in the
+component-sync branch. 2A.3 remains proposed and unimplemented.
 This is backend/CLI work; it does not activate bank data in the live service.
 Existing behavior and import guarantees remain documented in [BUDGET.md](BUDGET.md).
 
@@ -62,14 +62,14 @@ user), 403 for a valid non-admin, and 404 for another owner's resource.
 Introduce a component key `(local_account_id, operation)`, where operation is
 `transactions` or `balances`. Each has separate attempt, complete-success and
 error state; connection session validity and identity checks remain shared.
-Proposed component fields: `last_attempt_at`, `last_success_at`, `last_error`,
-`consecutive_failures`, `next_attempt_at` and a bounded acquisition reservation.
+Component fields: `last_attempt`, `last_success`, `last_error`, `failures`,
+`next_attempt`, plus an internal round ID and a 15-minute in-flight lease.
 Distinguish acquisition time from any bank-supplied source observation timestamp;
 an absent bank timestamp stays absent. Transaction row `observed_at` and
 `api_observed_at` retain their existing meanings, independent of component freshness.
 Expose states `never`, `ready`, `deferred`, `running`, `ok`, `error`, `blocked`;
 derive stale age from complete-success time and an explicit freshness policy.
-Proposed configurable defaults: transactions stale after 36 hours and balances
+Current freshness policy: transactions stale after 36 hours and balances
 after 24 hours. These describe acquisition freshness, not invented bank source
 timestamps or a guarantee of current bank data.
 State `ok` describes a completed request, not guaranteed bank history completeness.

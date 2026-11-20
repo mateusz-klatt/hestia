@@ -13,8 +13,11 @@ from ..db import BudgetAccount as Account, BudgetConnection as Connection
 from ..db import BudgetTransaction as Transaction, BudgetUnresolved as Unresolved, User
 from ..db import BudgetImportBatch as ImportBatch, BudgetImportUnresolved as ImportUnresolved
 from ..db import BudgetAccountAudit as AccountAudit
+from ..db import BudgetComponent as Component
 
 ACCOUNT_KINDS = frozenset({"current", "savings", "credit_card", "other"})
+OPERATIONS = ("transactions", "balances")
+STALE_AFTER = {"transactions": 129600, "balances": 86400}
 
 
 class BudgetStoreError(ValueError):
@@ -87,6 +90,17 @@ class BudgetStore:
         elif account.connection_id != item.id:
             raise BudgetStoreError("An account may belong to only one connection per owner")
         account.configured = True
+        for operation in OPERATIONS:
+            BudgetStore._component(session, account.id, operation)
+
+    @staticmethod
+    def _component(session, account_id, operation):
+        row = session.get(Component, (account_id, operation))
+        if row is None:
+            row = Component(account_id=account_id, operation=operation, failures=0, next_attempt=0)
+            session.add(row)
+            session.flush()
+        return row
 
     @staticmethod
     def _account_dict(account, connection):
@@ -181,7 +195,30 @@ class BudgetStore:
             row.last_attempt, row.next_attempt = now, now + 43200
             return True
 
-    def record_failure(self, connection_id, code):
+    def start_component_attempt(self, connection_id, identity_hash, operation, *, attempt_id):
+        """Persist an in-flight marker in a short transaction BEFORE endpoint HTTP."""
+        if operation not in OPERATIONS or not isinstance(attempt_id, str) or not attempt_id:
+            raise BudgetStoreError("Invalid component acquisition")
+        now = self.clock()
+        with self.transaction() as session:
+            connection = session.get(Connection, connection_id)
+            if connection is None or not connection.enabled:
+                raise BudgetStoreError("Unknown or disabled bank connection")
+            self._owner(session, connection.owner)
+            account = session.scalar(select(Account).where(
+                Account.connection_id == connection_id, Account.owner == connection.owner,
+                Account.identification_hash == identity_hash, Account.configured, Account.enabled))
+            if account is None:
+                raise BudgetStoreError("Bank account selection changed during acquisition")
+            row = self._component(session, account.id, operation)
+            if row.lease_until is not None and row.lease_until > now:
+                return False
+            row.last_attempt, row.attempt_id, row.lease_until = now, attempt_id, now + 900
+            row.next_attempt = max(row.next_attempt, connection.next_attempt)
+            account.last_attempt = now
+            return True
+
+    def record_failure(self, connection_id, code, *, attempt_id=None):
         # Do not persist arbitrary exception strings, provider bodies or identifiers.
         safe_code = _safe_error(code)
         with self.transaction() as session:
@@ -191,8 +228,23 @@ class BudgetStore:
             # Keep the 12-hour pre-HTTP quota reservation, including after a crash
             # or partial fetch. A later explicit run safely retries after restart.
             row.next_attempt = max(row.next_attempt, self.clock() + 21600)
+            if attempt_id is not None:
+                accounts = select(Account.id).where(Account.connection_id == connection_id)
+                for component in session.scalars(select(Component).where(
+                        Component.account_id.in_(accounts), Component.attempt_id == attempt_id)):
+                    self._component_error(component, safe_code)
 
-    def commit_snapshot(self, connection_id, snapshot):
+    def _snapshot_accounts(self, session, connection, snapshot):
+        self._owner(session, connection.owner)
+        accounts = {a.identification_hash: a for a in session.scalars(select(Account).where(
+            Account.connection_id == connection.id, Account.owner == connection.owner, Account.enabled, Account.configured))}
+        observations = (*snapshot.accounts, *snapshot.errors)
+        if (len(observations) != len(accounts)
+                or {a.identification_hash for a in observations} != set(accounts)):
+            raise BudgetStoreError("Bank account selection changed during acquisition")
+        return accounts
+
+    def commit_snapshot(self, connection_id, snapshot, *, attempt_id=None):
         now = self.clock()
         if snapshot.valid_until <= now:
             raise BudgetStoreError("Bank session has expired")
@@ -200,33 +252,80 @@ class BudgetStore:
             row = session.get(Connection, connection_id)
             if row is None or not row.enabled:
                 raise BudgetStoreError("Unknown or disabled bank connection")
-            self._owner(session, row.owner)
-            accounts = {a.identification_hash: a for a in session.scalars(select(Account).where(
-                Account.connection_id == connection_id, Account.owner == row.owner, Account.enabled, Account.configured))}
-            observations = (*snapshot.accounts, *snapshot.errors)
-            if (len(observations) != len(accounts)
-                    or {a.identification_hash for a in observations} != set(accounts)):
-                raise BudgetStoreError("Bank account selection changed during acquisition")
+            accounts = self._snapshot_accounts(session, row, snapshot)
             for error in snapshot.errors:
+                if error.code != "limit_exceeded":
+                    raise BudgetStoreError("Invalid global acquisition failure")
                 account = accounts[error.identification_hash]
-                account.last_attempt, account.last_error = now, _safe_error(error.code)
+                # A global resource cap can skip an account without any HTTP.
+                account.last_error = _safe_error(error.code)
+            completed, errors = 0, len(snapshot.errors)
             for observation in snapshot.accounts:
-                self._import_account(session, accounts[observation.identification_hash], observation, now)
+                good, bad = self._import_account(session, accounts[observation.identification_hash],
+                                               observation, now, attempt_id)
+                completed += good
+                errors += bad
             row.valid_until = snapshot.valid_until
-            if snapshot.errors:
+            if errors:
                 row.failures += 1
-                row.last_error = "partial_data" if snapshot.accounts else "account_errors"
-            else:
+                row.last_error = "partial_data" if completed else "account_errors"
+            elif completed == len(accounts) * len(OPERATIONS):
                 row.last_success = now
                 row.failures, row.last_error = 0, None
 
-    def _import_account(self, session, account, observation, now):
-        account.balances_json, account.observed_at = _json(observation.balances), now
-        account.last_attempt, account.last_error = now, None
+    @staticmethod
+    def _component_error(component, code):
+        component.last_error = code
+        component.failures += 1
+        component.attempt_id, component.lease_until = None, None
+
+    def _apply_component(self, session, account, observation, operation, now, attempt_id):
+        data = getattr(observation, operation)
+        error = getattr(observation, operation + "_error", None)
+        if data is None and error is None:
+            return 0, 0
+        if data is not None and error is not None:
+            raise BudgetStoreError("Ambiguous component result")
+        component = self._component(session, account.id, operation)
+        if attempt_id is not None and component.attempt_id != attempt_id:
+            foreign_active = (component.attempt_id is not None
+                              and (component.lease_until is None or component.lease_until > now))
+            if error != "limit_exceeded" or foreign_active:
+                raise BudgetStoreError("Component acquisition reservation changed")
+        if attempt_id is None:
+            component.last_attempt = now
+        if error is not None:
+            self._component_error(component, _safe_error(error))
+            return 0, 1
+        if operation == "balances":
+            account.balances_json = _json(data)
+        else:
+            self._import_transactions(session, account, data, now)
+        component.last_success, component.last_error, component.failures = now, None, 0
+        component.attempt_id, component.lease_until = None, None
+        return 1, 0
+
+    def _import_account(self, session, account, observation, now, attempt_id):
+        results = [self._apply_component(session, account, observation, operation, now, attempt_id)
+                   for operation in OPERATIONS]
+        completed = sum(good for good, _ in results)
+        errors = sum(bad for _, bad in results)
+        if completed or errors:
+            if attempt_id is None:
+                account.last_attempt = now
+            failures = [(op, self._component(session, account.id, op).last_error) for op in OPERATIONS]
+            failures = [(op, code) for op, code in failures if code is not None]
+            account.last_error = ("component_errors" if len(failures) == 2 else
+                                  failures[0][0] + "_" + failures[0][1] if failures else None)
+        if completed == len(OPERATIONS):
+            account.observed_at = now
+        return completed, errors
+
+    def _import_transactions(self, session, account, transactions, now):
         session.execute(delete(Unresolved).where(Unresolved.account_id == account.id))
         ordinal = 0
-        references = Counter(filter(None, map(_ledger_reference, observation.transactions)))
-        for tx in observation.transactions:
+        references = Counter(filter(None, map(_ledger_reference, transactions)))
+        for tx in transactions:
             conflict = tx["entry_reference"] is not None and references[tx["entry_reference"]] > 1
             ordinal = self._import_transaction(session, account.id, tx, conflict, ordinal, now)
 
@@ -375,6 +474,50 @@ class BudgetStore:
         existing.payload_json, existing.observed_at, existing.uncertain = _json(tx), fetched_at, False
         return "updated", None
 
+    @staticmethod
+    def _component_status(component, operation, account, connection, now):
+        success = getattr(component, "last_success", None)
+        age = None if success is None else max(0, now - success)
+        error = getattr(component, "last_error", None)
+        next_attempt = max(connection.next_attempt, getattr(component, "next_attempt", 0))
+        state, error = BudgetStore._component_state(component, account, connection, now,
+                                                    success, age, error, next_attempt, operation)
+        return {"last_attempt": getattr(component, "last_attempt", None),
+                "last_success": success, "last_error": error,
+                "failures": getattr(component, "failures", 0),
+                "next_attempt": next_attempt, "state": state,
+                "stale": age is None or age >= STALE_AFTER[operation],
+                "age_seconds": age, "stale_after_seconds": STALE_AFTER[operation]}
+
+    @staticmethod
+    def _component_blocked(account, connection, now):
+        return (not (account.enabled and account.configured and connection.enabled)
+                or connection.valid_until is not None and connection.valid_until <= now
+                or connection.last_error in {"authorization", "invalid_session", "expired_session", "session_mismatch"})
+
+    @staticmethod
+    def _component_state(component, account, connection, now, success, age, error, next_attempt, operation):
+        if BudgetStore._component_blocked(account, connection, now):
+            return "blocked", error
+        if getattr(component, "attempt_id", None) is not None:
+            lease = component.lease_until
+            return ("running", error) if lease is not None and lease > now else ("error", "interrupted")
+        if error is not None:
+            return "error", error
+        if next_attempt > now:
+            return "deferred", None
+        if success is None:
+            return "never", None
+        return ("ready" if age >= STALE_AFTER[operation] else "ok"), None
+
+    def _account_status(self, session, account, connection, now):
+        return {"id": account.id, "enabled": account.enabled, "configured": account.configured,
+                "kind": account.kind, "kind_confirmed_at": account.kind_confirmed_at,
+                "last_attempt": account.last_attempt, "last_success": account.observed_at,
+                "last_error": account.last_error,
+                "components": {op: self._component_status(session.get(Component, (account.id, op)),
+                                                           op, account, connection, now) for op in OPERATIONS}}
+
     def status(self, *, owner=None):
         now = self.clock()
         with self.sessions() as session:
@@ -413,11 +556,7 @@ class BudgetStore:
                                "next_attempt": row.next_attempt, "last_error": row.last_error,
                                "failures": row.failures, "valid_until": row.valid_until,
                                "renewal_due": row.valid_until is not None and row.valid_until - now <= 604800,
-                               "accounts": [{"id": account.id, "enabled": account.enabled,
-                                             "configured": account.configured, "kind": account.kind,
-                                             "kind_confirmed_at": account.kind_confirmed_at,
-                                             "last_attempt": account.last_attempt,
-                                             "last_success": account.observed_at, "last_error": account.last_error}
+                               "accounts": [self._account_status(session, account, row, now)
                                             for account in session.scalars(select(Account).where(
                                                 Account.connection_id == row.id).order_by(Account.id))]})
             return result

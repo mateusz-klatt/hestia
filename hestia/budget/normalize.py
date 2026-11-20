@@ -1,4 +1,4 @@
-"""Validate a complete, selected-account snapshot without retaining raw bank data.
+"""Validate complete components for selected accounts without retaining raw data.
 
 Account UIDs belong to sessions; primary identification hashes identify accounts.
 Only entry references can identify transactions across pulls. Missing references
@@ -43,8 +43,10 @@ class BudgetDataError(ValueError):
 @dataclass(frozen=True)
 class AccountSnapshot:
     identification_hash: str
-    balances: tuple[dict, ...]
-    transactions: tuple[dict, ...]
+    balances: tuple[dict, ...] | None
+    transactions: tuple[dict, ...] | None
+    balances_error: str | None = None
+    transactions_error: str | None = None
 
 
 @dataclass(frozen=True)
@@ -239,10 +241,16 @@ def _windowed_records(result, start, end):
     return tuple(item for item in result if item["entry_reference"] in relevant or _in_window(item, start, end))
 
 
+def _budget_exhausted(budget):
+    return budget["remaining"] <= 0 or budget["bytes"] <= 0
+
+
 def _transactions(client, uid, start, end, budget):
     result, references, seen = [], {}, set()
     key = None
     for _ in range(MAX_PAGES):
+        if _budget_exhausted(budget):
+            raise BudgetDataError("limit_exceeded")
         query = {"date_from": start, "date_to": end}
         if key is not None:
             query["continuation_key"] = key
@@ -280,26 +288,46 @@ def _session_state(client, session_id, connection, now):
     return expiry, hashes
 
 
-def _selected_account(client, primary, uid, start, end, budget):
+def _balances(client, uid, budget):
+    balances = normalize_balances(client.get(f"/accounts/{uid}/balances"))
+    for item in balances:
+        _charge(item, budget)
+    return balances
+
+
+def _component(primary, operation, budget, before_component, fetch):
+    if _budget_exhausted(budget):
+        return None, "limit_exceeded"
+    # Reservation/owner validation precedes HTTP and must remain fatal on error.
+    if before_component is not None and not before_component(primary, operation):
+        return None, None
     try:
-        transactions = _transactions(client, uid, start, end, budget)
-        balances = normalize_balances(client.get(f"/accounts/{uid}/balances"))
-        for item in balances:
-            _charge(item, budget)
+        return fetch(), None
     except BudgetAPIError as exc:
         if exc.status == 401:
             raise
-        return AccountFailure(primary, exc.code)
+        return None, exc.code
     except BudgetDataError as exc:
-        return AccountFailure(primary, exc.code)
-    return AccountSnapshot(primary, balances, transactions)
+        return None, exc.code
 
 
-def fetch_snapshot(client, session_id: str, connection: ConnectionConfig, *, today: date, now=None) -> Snapshot:
-    """Validate the session, then fetch each selected account atomically.
+def _selected_account(client, primary, uid, start, end, budget, before_component):
+    transactions, transactions_error = _component(
+        primary, "transactions", budget, before_component,
+        lambda: _transactions(client, uid, start, end, budget))
+    balances, balances_error = _component(
+        primary, "balances", budget, before_component, lambda: _balances(client, uid, budget))
+    return AccountSnapshot(primary, balances, transactions, balances_error, transactions_error)
 
-    A failed account contributes only a safe diagnostic. HTTP401 invalidates the
-    entire session; other failed accounts do not block healthy accounts.
+
+def fetch_snapshot(client, session_id: str, connection: ConnectionConfig, *, today: date, now=None,
+                   before_component=None) -> Snapshot:
+    """Validate the session, then independently fetch complete components.
+
+    A failed component contributes only a safe diagnostic. HTTP401 invalidates
+    the entire session; other failures do not discard healthy components.
+    before_component reserves once per component; False skips it without error,
+    while callback failures propagate before the corresponding HTTP request.
     """
     if type(today) is not date or today.toordinal() <= 364:
         raise BudgetDataError()
@@ -307,12 +335,8 @@ def fetch_snapshot(client, session_id: str, connection: ConnectionConfig, *, tod
     expiry, hashes = _session_state(client, session_id, connection, _current_time(now))
     accounts, errors, budget = [], [], {"remaining": MAX_TRANSACTIONS, "bytes": MAX_NORMALIZED_BYTES}
     for primary in connection.accounts:
-        if budget["remaining"] < 0 or budget["bytes"] < 0:
+        if _budget_exhausted(budget):
             errors.append(AccountFailure(primary, "limit_exceeded"))
             continue
-        item = _selected_account(client, primary, hashes[primary], start, end, budget)
-        if isinstance(item, AccountFailure):
-            errors.append(item)
-        else:
-            accounts.append(item)
+        accounts.append(_selected_account(client, primary, hashes[primary], start, end, budget, before_component))
     return Snapshot(expiry, tuple(accounts), start, end, tuple(errors))

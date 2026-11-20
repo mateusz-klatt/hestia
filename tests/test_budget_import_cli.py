@@ -120,6 +120,7 @@ class BudgetImportCLITests(unittest.TestCase):
         self.assertFalse(self.rows(db.BudgetConnection)[0].enabled)
         self.assertFalse(account.enabled)
         self.assertFalse(account.configured)
+        self.assertEqual(self.rows(db.BudgetComponent), [])
         self.assertIsNone(self.rows(db.BudgetConnection)[0].last_attempt)
         self.assertEqual(self.rows(db.BudgetConnection)[0].next_attempt, 0)
         self.assert_redacted(output + repeated)
@@ -142,6 +143,7 @@ class BudgetImportCLITests(unittest.TestCase):
         after = store.status()
         for field in ("enabled", "last_attempt", "last_success", "next_attempt", "last_error", "failures"):
             self.assertEqual(after[0][field], before[0][field])
+        self.assertEqual(after[0]["accounts"], before[0]["accounts"])
         self.assertEqual(after[1], before[1])
         self.assertEqual(len(self.rows(db.BudgetAccount)), 2)
         self.assertTrue(all(account.enabled for account in self.rows(db.BudgetAccount)))

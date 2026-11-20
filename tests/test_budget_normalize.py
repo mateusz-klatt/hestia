@@ -11,6 +11,7 @@ from hestia.budget.client import BudgetAPIError
 from hestia.budget.config import ConnectionConfig
 from hestia.budget.normalize import (AccountFailure, AccountSnapshot, BudgetDataError, Snapshot, fetch_snapshot,
                                      normalize_balances, normalize_transaction)
+from hestia.budget.store import BudgetStoreError
 
 SESSION = "10000000-0000-0000-0000-000000000001"
 ACCOUNT = "20000000-0000-0000-0000-000000000001"
@@ -154,13 +155,22 @@ class FetchSnapshotTests(unittest.TestCase):
     def fetch(self, **kwargs):
         return fetch_snapshot(self.client, SESSION, self.connection, today=TODAY, now=NOW, **kwargs)
 
-    def assert_failed_account(self, code=None):
+    def assert_failed_transactions(self, code=None, *, balances_code=None):
         snapshot = self.fetch()
-        self.assertEqual(snapshot.accounts, ())
-        self.assertEqual(len(snapshot.errors), 1)
-        self.assertEqual(snapshot.errors[0].identification_hash, PRIMARY)
+        self.assertEqual(snapshot.errors, ())
+        self.assertEqual(len(snapshot.accounts), 1)
+        account = snapshot.accounts[0]
+        self.assertEqual(account.identification_hash, PRIMARY)
+        self.assertIsNone(account.transactions)
         if code is not None:
-            self.assertEqual(snapshot.errors[0].code, code)
+            self.assertEqual(account.transactions_error, code)
+        else:
+            self.assertIsNotNone(account.transactions_error)
+        self.assertEqual(account.balances_error, balances_code)
+        if balances_code is None:
+            self.assertEqual(account.balances, normalize_balances({"balances": [balance()]}))
+        else:
+            self.assertIsNone(account.balances)
         return snapshot
 
     def test_fetches_only_selected_primary_hash_and_preserves_frozen_contract(self):
@@ -172,6 +182,8 @@ class FetchSnapshotTests(unittest.TestCase):
         self.assertEqual(result.date_to, TODAY.isoformat())
         self.assertEqual(result.valid_until, datetime(2027, 1, 1, tzinfo=timezone.utc).timestamp())
         self.assertEqual(result.errors, ())
+        self.assertIsNone(result.accounts[0].balances_error)
+        self.assertIsNone(result.accounts[0].transactions_error)
         self.assertEqual(self.client.calls, [("/sessions/" + SESSION, None),
             ("/accounts/" + ACCOUNT + "/transactions", {"date_from": result.date_from, "date_to": result.date_to}),
             ("/accounts/" + ACCOUNT + "/balances", None)])
@@ -283,7 +295,7 @@ class FetchSnapshotTests(unittest.TestCase):
         for row in (None, transaction(booking_date="2020-01-01", transaction_amount={"amount": "NaN", "currency": "PLN"})):
             self.client = FakeClient()
             self.client.pages[ACCOUNT] = [{"transactions": [row]}]
-            self.assert_failed_account()
+            self.assert_failed_transactions()
 
     def test_window_keeps_outside_conflict_versions_when_any_version_is_relevant_or_dateless(self):
         rows = [transaction("relevant", booking_date="2020-01-01"), transaction("relevant"),
@@ -298,14 +310,14 @@ class FetchSnapshotTests(unittest.TestCase):
         for page in (None, {}, {"transactions": {}}, {"transactions": None}):
             self.client = FakeClient()
             self.client.pages[ACCOUNT] = [page]
-            self.assert_failed_account()
+            self.assert_failed_transactions()
         for key in ("", False, [], "x" * 8193):
             self.client = FakeClient()
             self.client.pages[ACCOUNT] = [{"transactions": [], "continuation_key": key}]
-            self.assert_failed_account("invalid_pagination")
+            self.assert_failed_transactions("invalid_pagination")
         self.client = FakeClient()
         self.client.pages[ACCOUNT] = [{"transactions": [], "continuation_key": "repeat"}] * 2
-        self.assert_failed_account("invalid_pagination")
+        self.assert_failed_transactions("invalid_pagination")
 
     def test_page_limit_and_total_raw_record_limit_cover_all_selected_accounts(self):
         self.assertEqual(normalize.MAX_PAGES, 1000)
@@ -313,33 +325,178 @@ class FetchSnapshotTests(unittest.TestCase):
         self.client.pages[ACCOUNT] = [{"transactions": [], "continuation_key": "1"},
                                      {"transactions": [], "continuation_key": "2"}]
         with mock.patch.object(normalize, "MAX_PAGES", 2):
-            self.assert_failed_account("limit_exceeded")
+            self.assert_failed_transactions("limit_exceeded")
         self.client = FakeClient()
         self.client.pages[ACCOUNT] = [{"transactions": [transaction()] * 3}]
         with mock.patch.object(normalize, "MAX_TRANSACTIONS", 2):
-            self.assert_failed_account("limit_exceeded")
+            self.assert_failed_transactions("limit_exceeded", balances_code="limit_exceeded")
         self.client = FakeClient()
         self.connection = replace(self.connection, accounts=(PRIMARY, "unselected"))
         self.client.pages[OTHER] = [{"transactions": [transaction("second-account")]}]
         with mock.patch.object(normalize, "MAX_TRANSACTIONS", 1):
             snapshot = self.fetch()
         self.assertEqual(len(snapshot.accounts), 1)
+        self.assertEqual(snapshot.accounts[0].transactions, (normalize_transaction(transaction()),))
+        self.assertIsNone(snapshot.accounts[0].balances)
+        self.assertEqual(snapshot.accounts[0].balances_error, "limit_exceeded")
         self.assertEqual(snapshot.errors, (AccountFailure("unselected", "limit_exceeded"),))
         self.client = FakeClient()
         result = self.fetch()
         self.assertEqual(len(result.accounts), 2)
 
-    def test_second_page_provider_failure_discards_partial_account_data(self):
+    def test_second_page_provider_failure_discards_partial_transactions_but_keeps_balances(self):
         failure = BudgetAPIError(429, "rate_limit", True)
         self.client.pages[ACCOUNT] = [{"transactions": [transaction()], "continuation_key": "more"}, failure]
-        self.assert_failed_account("rate_limit")
+        self.assert_failed_transactions("rate_limit")
+
+    def test_component_failures_never_discard_the_other_complete_component(self):
+        for failed in ({"transactions"}, {"balances"}, {"transactions", "balances"}):
+            with self.subTest(failed=failed):
+                self.client = FakeClient()
+                if "transactions" in failed:
+                    self.client.pages[ACCOUNT] = [BudgetAPIError(429, "rate_limit", True)]
+                if "balances" in failed:
+                    self.client.balances[ACCOUNT] = BudgetAPIError(429, "rate_limit", True)
+                result = self.fetch()
+                self.assertEqual(result.errors, ())
+                account = result.accounts[0]
+                for operation in ("transactions", "balances"):
+                    if operation in failed:
+                        self.assertIsNone(getattr(account, operation))
+                        self.assertEqual(getattr(account, operation + "_error"), "rate_limit")
+                    else:
+                        expected = ((normalize_transaction(transaction()),) if operation == "transactions"
+                                    else normalize_balances({"balances": [balance()]}))
+                        self.assertEqual(getattr(account, operation), expected)
+                        self.assertIsNone(getattr(account, operation + "_error"))
+                self.assertEqual([path.rsplit("/", 1)[-1] for path, _ in self.client.calls[1:]],
+                                 ["transactions", "balances"])
+
+    def test_malformed_balances_keep_complete_transactions_and_safe_error(self):
+        self.client.balances[ACCOUNT] = {"balances": [balance(balance_amount={"amount": "PRIVATE", "currency": "PLN"})]}
+        account = self.fetch().accounts[0]
+        self.assertEqual(account.transactions, (normalize_transaction(transaction()),))
+        self.assertIsNone(account.transactions_error)
+        self.assertIsNone(account.balances)
+        self.assertEqual(account.balances_error, "unsupported_amount")
+        self.assertNotIn("PRIVATE", repr(account))
+
+    def test_component_callback_skips_without_http_errors_or_empty_success_substitution(self):
+        for skipped in ({"transactions"}, {"balances"}, {"transactions", "balances"}):
+            with self.subTest(skipped=skipped):
+                self.client = FakeClient()
+                callback = mock.Mock(side_effect=lambda primary, operation: operation not in skipped)
+                result = self.fetch(before_component=callback)
+                self.assertEqual(callback.call_args_list,
+                                 [mock.call(PRIMARY, "transactions"), mock.call(PRIMARY, "balances")])
+                self.assertEqual(result.errors, ())
+                account = result.accounts[0]
+                for operation in ("transactions", "balances"):
+                    self.assertIsNone(getattr(account, operation + "_error"))
+                    self.assertEqual(getattr(account, operation) is None, operation in skipped)
+                self.assertEqual([path.rsplit("/", 1)[-1] for path, _ in self.client.calls[1:]],
+                                 [operation for operation in ("transactions", "balances") if operation not in skipped])
+
+    def test_callback_reserves_once_per_component_not_per_continuation_page(self):
+        self.client.pages[ACCOUNT] = [{"transactions": [transaction()], "continuation_key": "more"},
+                                     {"transactions": [transaction("second-page")]}]
+        callback = mock.Mock(return_value=True)
+        result = self.fetch(before_component=callback)
+        self.assertEqual(len(result.accounts[0].transactions), 2)
+        self.assertEqual(callback.call_args_list,
+                         [mock.call(PRIMARY, "transactions"), mock.call(PRIMARY, "balances")])
+        self.assertEqual(len(self.client.calls), 4)
+
+    def test_session_and_mapping_validation_precede_component_callback(self):
+        for change in ({"status": "EXPIRED"}, {"aspsp": {"name": "Other", "country": "PL"}},
+                       {"access": {"valid_until": "2020-01-01T00:00:00Z"}}, {"accounts_data": []}):
+            self.client = FakeClient()
+            self.client.session.update(change)
+            callback = mock.Mock(return_value=True)
+            with self.subTest(change=change), self.assertRaises(BudgetDataError):
+                self.fetch(before_component=callback)
+            callback.assert_not_called()
+            self.assertEqual(self.client.calls, [("/sessions/" + SESSION, None)])
+
+    def test_callback_owner_change_is_fatal_before_corresponding_component_request(self):
+        for denied in ("transactions", "balances"):
+            self.client = FakeClient()
+            failure = BudgetStoreError("Owner or selection changed")
+            def authorize(primary, operation):
+                self.assertEqual(primary, PRIMARY)
+                if operation == denied:
+                    raise failure
+                return True
+            callback = mock.Mock(side_effect=authorize)
+            with self.subTest(denied=denied), self.assertRaises(BudgetStoreError) as caught:
+                self.fetch(before_component=callback)
+            self.assertIs(caught.exception, failure)
+            operations = [path.rsplit("/", 1)[-1] for path, _ in self.client.calls[1:]]
+            self.assertEqual(operations, [] if denied == "transactions" else ["transactions"])
+            self.assertEqual(callback.call_count, 1 if denied == "transactions" else 2)
+
+    def test_late_401_on_second_account_is_fatal_despite_prior_complete_components(self):
+        self.connection = replace(self.connection, accounts=(PRIMARY, "unselected"))
+        failure = BudgetAPIError(401, "authorization")
+        self.client.balances[OTHER] = failure
+        callback = mock.Mock(return_value=True)
+        with self.assertRaises(BudgetAPIError) as caught:
+            self.fetch(before_component=callback)
+        self.assertIs(caught.exception, failure)
+        self.assertEqual(callback.call_args_list, [mock.call(PRIMARY, "transactions"), mock.call(PRIMARY, "balances"),
+                                                  mock.call("unselected", "transactions"), mock.call("unselected", "balances")])
+        self.assertEqual(len(self.client.calls), 5)
+
+    def test_exact_row_or_byte_limit_stops_balances_and_later_accounts_before_reservation(self):
+        self.connection = replace(self.connection, accounts=(PRIMARY, "unselected"))
+        tx_bytes = len(json.dumps(normalize_transaction(transaction()), separators=(",", ":")).encode("utf-8"))
+        for constant, limit in (("MAX_TRANSACTIONS", 1), ("MAX_NORMALIZED_BYTES", tx_bytes)):
+            self.client = FakeClient()
+            callback = mock.Mock(return_value=True)
+            with self.subTest(constant=constant), mock.patch.object(normalize, constant, limit):
+                result = self.fetch(before_component=callback)
+            self.assertEqual(result.accounts[0].transactions, (normalize_transaction(transaction()),))
+            self.assertIsNone(result.accounts[0].transactions_error)
+            self.assertIsNone(result.accounts[0].balances)
+            self.assertEqual(result.accounts[0].balances_error, "limit_exceeded")
+            self.assertEqual(result.errors, (AccountFailure("unselected", "limit_exceeded"),))
+            callback.assert_called_once_with(PRIMARY, "transactions")
+            self.assertEqual(len(self.client.calls), 2)
+
+    def test_exhausted_budget_during_paging_prevents_further_http_and_partial_transactions(self):
+        self.client.pages[ACCOUNT] = [{"transactions": [transaction()], "continuation_key": "not-requested"}]
+        callback = mock.Mock(return_value=True)
+        with mock.patch.object(normalize, "MAX_TRANSACTIONS", 1):
+            result = self.fetch(before_component=callback)
+        self.assertEqual(result.accounts, (AccountSnapshot(PRIMARY, None, None, "limit_exceeded", "limit_exceeded"),))
+        self.assertEqual(result.errors, ())
+        callback.assert_called_once_with(PRIMARY, "transactions")
+        self.assertEqual(len(self.client.calls), 2)
+
+    def test_initially_exhausted_budget_skips_whole_accounts_without_callback_or_http(self):
+        self.connection = replace(self.connection, accounts=(PRIMARY, "unselected"))
+        for constant in ("MAX_TRANSACTIONS", "MAX_NORMALIZED_BYTES"):
+            self.client = FakeClient()
+            callback = mock.Mock(return_value=True)
+            with self.subTest(constant=constant), mock.patch.object(normalize, constant, 0):
+                result = self.fetch(before_component=callback)
+            self.assertEqual(result.accounts, ())
+            self.assertEqual(result.errors, (AccountFailure(PRIMARY, "limit_exceeded"),
+                                             AccountFailure("unselected", "limit_exceeded")))
+            callback.assert_not_called()
+            self.assertEqual(self.client.calls, [("/sessions/" + SESSION, None)])
 
     def test_failed_account_does_not_block_healthy_account_and_diagnostics_stay_safe(self):
         self.connection = replace(self.connection, accounts=(PRIMARY, "unselected"))
         self.client.balances[ACCOUNT] = BudgetAPIError(400, "private-bank-error-body")
         snapshot = self.fetch()
-        self.assertEqual(snapshot.errors, (AccountFailure(PRIMARY, "provider_error"),))
-        self.assertEqual([account.identification_hash for account in snapshot.accounts], ["unselected"])
+        self.assertEqual(snapshot.errors, ())
+        self.assertEqual([account.identification_hash for account in snapshot.accounts], [PRIMARY, "unselected"])
+        self.assertEqual(snapshot.accounts[0].transactions, (normalize_transaction(transaction()),))
+        self.assertIsNone(snapshot.accounts[0].balances)
+        self.assertEqual(snapshot.accounts[0].balances_error, "provider_error")
+        self.assertEqual(snapshot.accounts[1].transactions, ())
+        self.assertEqual(snapshot.accounts[1].balances, ())
         self.assertEqual(self.client.calls[1][0], "/accounts/" + ACCOUNT + "/transactions")
         self.assertNotIn("private-bank", repr(snapshot))
 
@@ -362,9 +519,9 @@ class FetchSnapshotTests(unittest.TestCase):
         self.client.pages[ACCOUNT] = [{"transactions": [transaction(), transaction("second")]}]
         with mock.patch.object(normalize, "MAX_TRANSACTIONS", 1):
             snapshot = self.fetch()
-        self.assertEqual(snapshot.accounts, ())
-        self.assertEqual(snapshot.errors, (AccountFailure(PRIMARY, "limit_exceeded"),
-                                           AccountFailure("unselected", "limit_exceeded")))
+        self.assertEqual(snapshot.accounts, (AccountSnapshot(PRIMARY, None, None, "limit_exceeded", "limit_exceeded"),))
+        self.assertEqual(snapshot.errors, (AccountFailure("unselected", "limit_exceeded"),))
+        self.assertEqual(len(self.client.calls), 2)
         self.assertFalse(any(OTHER in path for path, _ in self.client.calls))
 
     def test_normalized_byte_limit_includes_balances_and_stops_remaining_accounts(self):
@@ -379,7 +536,16 @@ class FetchSnapshotTests(unittest.TestCase):
                 self.connection = replace(self.connection, accounts=(PRIMARY, "unselected"))
                 with mock.patch.object(normalize, "MAX_NORMALIZED_BYTES", limit):
                     result = self.fetch()
-                self.assertEqual(result.accounts, ())
-                self.assertEqual(result.errors, (AccountFailure(PRIMARY, "limit_exceeded"),
-                                                 AccountFailure("unselected", "limit_exceeded")))
+                self.assertEqual(len(result.accounts), 1)
+                self.assertIsNone(result.accounts[0].balances)
+                self.assertEqual(result.accounts[0].balances_error, "limit_exceeded")
+                if limit < tx_bytes:
+                    self.assertIsNone(result.accounts[0].transactions)
+                    self.assertEqual(result.accounts[0].transactions_error, "limit_exceeded")
+                    self.assertEqual(len(self.client.calls), 2)
+                else:
+                    self.assertEqual(result.accounts[0].transactions, (normalize_transaction(transaction()),))
+                    self.assertIsNone(result.accounts[0].transactions_error)
+                    self.assertEqual(len(self.client.calls), 3)
+                self.assertEqual(result.errors, (AccountFailure("unselected", "limit_exceeded"),))
                 self.assertFalse(any(OTHER in path for path, _ in self.client.calls))
