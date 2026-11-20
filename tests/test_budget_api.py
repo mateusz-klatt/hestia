@@ -22,6 +22,7 @@ from hestia.budget import api, config, runtime
 from hestia.budget.config import BudgetConfigError
 from hestia.budget.store import BudgetStore
 from hestia.budget.views import BudgetHTTPStore
+from hestia.proxy import EventBus
 from tests.test_budget_store import configuration, prepare_selected, snapshot, transaction
 
 
@@ -134,6 +135,69 @@ class BudgetAPITests(unittest.IsolatedAsyncioTestCase):
         capabilities = (await (await self.get("connections")).json())["capabilities"]
         self.assertEqual(capabilities, {"stored_reads": True, "account_controls": True, "refresh": False,
                                        "background_selection": False, "consent": False})
+
+    async def test_display_metadata_and_observed_currencies_are_private_and_not_global_events(self):
+        initial = await self.account()
+        self.assertIsNone(initial["display"])
+        self.assertEqual(initial["observed_balance_currencies"], ["PLN"])
+        with self.sessions.begin() as session:
+            session.add_all([
+                db.BudgetAccountDisplay(account_id=self.alice_id, product="Alice synthetic card", currency="CHF",
+                                        masked_suffix="A123", source="offline_import", observed_at=900,
+                                        imported_at=1000, digest="PRIVATE-ALICE-DISPLAY-DIGEST"),
+                db.BudgetAccountDisplay(account_id=self.bob_id, product="Bob private display", currency="USD",
+                                        masked_suffix="B0B1", source="offline_import", observed_at=900,
+                                        imported_at=1000, digest="PRIVATE-BOB-DISPLAY-DIGEST")])
+            balance = {"name": "Synthetic booked", "balance_type": "CLBD",
+                       "balance_amount": {"amount": "1", "currency": "EUR"}}
+            session.get(db.BudgetAccount, self.alice_id).balances_json = json.dumps([
+                balance, {**balance, "balance_amount": {"amount": "2", "currency": "PLN"}}, balance])
+            archived = {**balance, "balance_amount": {"amount": "3", "currency": "GBP"}}
+            session.add(db.BudgetImportBatch(id="display-archive", fingerprint="display-archive", account_id=self.alice_id,
+                                             fetched_at=900, imported_at=1000, balances_json=json.dumps([archived]), report_json="{}"))
+        bus = EventBus()
+        self.client.server.app[web._RT_KEY].event_bus = bus
+        subscription = await bus.try_subscribe()
+        self.addCleanup(subscription.close)
+        with mock.patch.object(web, "_audit") as global_audit:
+            response = await self.get("accounts")
+            self.assertEqual(response.status, 200)
+            self.assert_private_headers(response)
+            body = await response.json()
+            api_contract.BudgetAccounts.model_validate(body)
+            account = body["accounts"][0]
+            self.assertEqual(account["display"], {"product": "Alice synthetic card", "currency": "CHF",
+                                                  "masked_suffix": "A123", "source": "offline_import",
+                                                  "observed_at": 900, "imported_at": 1000})
+            self.assertEqual(account["observed_balance_currencies"], ["EUR", "PLN"])
+            for private in (PRIVATE_A, PRIVATE_B, "DISPLAY-DIGEST", "Bob private display", "B0B1"):
+                self.assertNotIn(private, json.dumps(body))
+            saved = await self.post("account-selection", {"account_id": self.alice_id, "selected": False,
+                                                           "expected_version": account["control_version"]})
+            self.assertEqual(saved.status, 200)
+            saved_body = await saved.json()
+            api_contract.BudgetAccountSaved.model_validate(saved_body)
+            self.assertEqual(saved_body["account"]["display"], account["display"])
+            self.assertEqual(saved_body["account"]["observed_balance_currencies"], ["EUR", "PLN"])
+            conflict = await self.post("account-selection", {"account_id": self.alice_id, "selected": True,
+                                                              "expected_version": account["control_version"]})
+            self.assertEqual(conflict.status, 409)
+            current = await conflict.json()
+            api_contract.BudgetConflict.model_validate(current)
+            self.assertEqual(current["current"]["display"], account["display"])
+            for account_id in (self.bob_id, "missing-display-account"):
+                denied = await self.post("account-kind", {"account_id": account_id, "kind": "other", "expected_version": 1})
+                self.assertEqual(denied.status, 404)
+                self.assertEqual(await denied.json(), {"ok": False, "error": "budget_not_found"})
+            other = await (await self.get("accounts", user="bob")).json()
+            self.assertEqual(other["accounts"][0]["display"]["product"], "Bob private display")
+            self.assertNotIn("Alice synthetic card", json.dumps(other))
+        global_audit.assert_not_called()
+        await asyncio.sleep(0)
+        self.assertTrue(subscription.queue.empty())
+        audits = [(row.field, row.old_value_json, row.new_value_json) for row in self.rows(db.BudgetAccountAudit)]
+        self.assertNotIn("synthetic card", json.dumps(audits))
+        self.assertNotIn("A123", json.dumps(audits))
 
     async def test_disabled_feature_authoff_json_backend_and_roles_fail_closed(self):
         with mock.patch.dict(os.environ, {"HESTIA_BUDGET_HTTP_ENABLED": "0"}), \

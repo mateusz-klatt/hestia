@@ -221,6 +221,20 @@ class BudgetAccount(Base):
     last_error: Mapped[str | None]
 
 
+class BudgetAccountDisplay(Base):
+    """Optional portable account labels, independent of controls and API freshness."""
+
+    __tablename__ = "budget_account_display"
+    account_id: Mapped[str] = mapped_column(ForeignKey("budget_accounts.id"), primary_key=True)
+    product: Mapped[str | None]
+    currency: Mapped[str | None]
+    masked_suffix: Mapped[str | None]
+    source: Mapped[str] = mapped_column(default="offline_import", server_default=text("'offline_import'"))
+    observed_at: Mapped[float]
+    imported_at: Mapped[float]
+    digest: Mapped[str]
+
+
 class BudgetComponent(Base):
     """Independent complete API observations and crash-safe in-flight markers."""
 

@@ -12,6 +12,7 @@ import json
 import math
 
 from .config import BudgetConfig, BudgetConfigError, _read_secret
+from .account_metadata import AccountMetadata, BudgetMetadataError, parse_account_metadata
 from . import normalize
 
 MAX_IMPORT_BYTES = 32 * 1024 * 1024
@@ -24,7 +25,7 @@ class BudgetImportError(ValueError):
 
     CODES = frozenset({"invalid_file", "invalid_json", "invalid_import", "context_mismatch",
                        "invalid_timestamp", "incomplete_import", "limit_exceeded",
-                       "invalid_data", "unsupported_amount"})
+                       "invalid_data", "unsupported_amount", "invalid_metadata"})
 
     def __init__(self, code="invalid_import"):
         self.code = code if isinstance(code, str) and code in self.CODES else "invalid_import"
@@ -39,6 +40,7 @@ class ImportSnapshot:
     transactions: tuple[dict, ...]
     balances: tuple[dict, ...] | None
     digest: str
+    metadata: AccountMetadata | None = None
 
 
 def _object(value, required, optional=()):
@@ -137,7 +139,7 @@ def _digest(config, connection, primary, fetched_at, transactions, balances):
 def parse_import(raw, config: BudgetConfig, *, now: float) -> ImportSnapshot:
     """Validate an explicit one-account document without filtering its history."""
     raw = _object(raw, {"version", "connection_id", "aspsp", "identification_hash", "fetched_at",
-                        "complete", "transactions"}, {"balances"})
+                        "complete", "transactions"}, {"balances", "account"})
     _input_size(raw)
     if type(raw["version"]) is not int or raw["version"] != 1:
         raise BudgetImportError()
@@ -145,15 +147,25 @@ def parse_import(raw, config: BudgetConfig, *, now: float) -> ImportSnapshot:
         raise BudgetImportError("incomplete_import")
     connection = _context(raw, config)
     fetched_at = _timestamp(raw["fetched_at"], now)
+    primary = raw["identification_hash"]
+    metadata = None
+    if "account" in raw:
+        context = {"application_id": config.application_id, "owner": connection.owner,
+                   "connection_id": connection.id,
+                   "aspsp": {"name": connection.bank_name, "country": connection.country},
+                   "identification_hash": primary}
+        try:
+            metadata = parse_account_metadata(raw["account"], now=now, context=context)
+        except BudgetMetadataError:
+            raise BudgetImportError("invalid_metadata") from None
     budget = {"records": MAX_RECORDS, "bytes": MAX_NORMALIZED_BYTES}
     try:
         transactions = _transactions(raw["transactions"], budget)
         balances = _balances(raw["balances"], budget) if "balances" in raw else None
     except normalize.BudgetDataError as exc:
         raise BudgetImportError(exc.code) from None
-    primary = raw["identification_hash"]
     digest = _digest(config, connection, primary, fetched_at, transactions, balances)
-    return ImportSnapshot(connection.id, primary, fetched_at, transactions, balances, digest)
+    return ImportSnapshot(connection.id, primary, fetched_at, transactions, balances, digest, metadata)
 
 
 def _unique_object(pairs):

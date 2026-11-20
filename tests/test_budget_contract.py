@@ -75,6 +75,22 @@ class BudgetRequestContractTests(unittest.TestCase):
 
 
 class BudgetReadContractTests(unittest.TestCase):
+    def test_display_additions_are_optional_typed_and_forward_compatible(self):
+        legacy = contract.BudgetAccount.model_validate(ACCOUNT)
+        self.assertIsNone(legacy.display)
+        self.assertEqual(legacy.observed_balance_currencies, [])
+        display = {"product": "Synthetic Card", "currency": "CHF", "masked_suffix": "A123",
+                   "source": "future_metadata_source", "observed_at": 900, "imported_at": 1000}
+        metadata = contract.BudgetAccount.model_validate({**ACCOUNT, "display": display,
+                                                         "observed_balance_currencies": ["EUR", "PLN"]})
+        self.assertEqual(metadata.display.source, "future_metadata_source")
+        self.assertEqual(metadata.display.currency, "CHF")
+        self.assertEqual(metadata.observed_balance_currencies, ["EUR", "PLN"])
+        contract.BudgetAccountDisplay.model_validate({**display, "product": None, "currency": None, "masked_suffix": None})
+        for private_field in ("digest", "identification_hash", "uid", "name", "iban", "account_number"):
+            with self.subTest(private_field=private_field), self.assertRaises(ValueError):
+                contract.BudgetAccountDisplay.model_validate({**display, private_field: "not-public"})
+
     def test_named_packets_and_capabilities_describe_only_implemented_operations(self):
         reads = ((contract.BudgetConnections, {"connections": [CONNECTION], "capabilities": CAPABILITIES}),
                  (contract.BudgetAccounts, {"accounts": [ACCOUNT]}),
@@ -156,7 +172,7 @@ class BudgetOpenApiTests(unittest.TestCase):
             method = "post" if path.endswith(("account-selection", "account-kind", "connection-state")) else "get"
             self.assertEqual(set(methods), {method})
             self.assertEqual(methods[method]["x-required-role"], "admin")
-        self.assertEqual(document["info"]["version"], "0.13.0")
+        self.assertEqual(document["info"]["version"], "0.14.0")
 
     def test_query_metadata_pins_required_account_dates_limit_and_opaque_cursor(self):
         paths = contract.build_openapi()["paths"]
@@ -187,6 +203,12 @@ class BudgetOpenApiTests(unittest.TestCase):
         future["new_health_field"] = True
         with self.assertRaises(ValueError):
             contract.BudgetComponentStatus.model_validate(future)
+        account = schemas["BudgetAccount"]
+        for field in ("display", "observed_balance_currencies"):
+            self.assertNotIn(field, account["required"])
+        display = schemas["BudgetAccountDisplay"]
+        self.assertEqual(set(display["properties"]), {"product", "currency", "masked_suffix", "source", "observed_at", "imported_at"})
+        self.assertNotIn("enum", display["properties"]["source"])
 
 
 class BudgetProviderBindingTests(unittest.TestCase):
@@ -234,6 +256,9 @@ class BudgetProviderBindingTests(unittest.TestCase):
                                             fetched_at=900, imported_at=950, balances_json=json.dumps([BALANCE]), report_json="{}"))
             session.add(db.BudgetRequestLimit(scope="application", key=self.config.application_id,
                                              suspended=True, retry_at=100000, next_attempt=100000))
+            session.add(db.BudgetAccountDisplay(account_id=self.account_id, product="Synthetic product", currency="CHF",
+                                                masked_suffix="A123", source="offline_import", observed_at=900,
+                                                imported_at=1000, digest="private-binding-digest"))
         self.assert_reads_match()
         page = self.views.transactions("owner", self.account_id, limit=1)
         self.assertIsNotNone(page["next_cursor"])

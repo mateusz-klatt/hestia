@@ -122,6 +122,65 @@ class BudgetViewsTests(unittest.TestCase):
         self.assertEqual(caught.exception.status, 403)
         self.assertTrue(self.rows(db.BudgetAccount)[0].enabled)
 
+    def test_display_defaults_and_cli_metadata_remain_nonfinancial(self):
+        account = self.http.accounts("owner")[0]
+        self.assertIsNone(account["display"])
+        self.assertEqual(account["observed_balance_currencies"], [])
+        with self.sessions.begin() as session:
+            session.add(db.BudgetAccountDisplay(account_id=self.account, product="Synthetic Card", currency="CHF",
+                                                masked_suffix="A123", source="offline_import", observed_at=900,
+                                                imported_at=self.now, digest="private-display-digest"))
+        cli_accounts = self.store.accounts("owner")
+        confirmed = self.store.confirm_account_kind("owner", self.account, "credit_card", actor="operator")
+        for metadata in (*cli_accounts, confirmed):
+            self.assertNotIn("display", metadata)
+            self.assertNotIn("observed_balance_currencies", metadata)
+        self.assertNotIn("Synthetic Card", json.dumps([cli_accounts, confirmed, self.store.status()]))
+
+    def test_display_is_allowlisted_and_balance_currencies_never_infer_from_archive_or_ledger(self):
+        self.seed()
+        self.store.commit_snapshot("bank", fixtures.snapshot(fixtures.transaction("usd-transaction", currency="USD")))
+        def balance(currency):
+            return {"name": "Synthetic balance", "balance_type": "CLBD",
+                    "balance_amount": {"amount": "10", "currency": currency}}
+        with self.sessions.begin() as session:
+            session.add(db.BudgetAccountDisplay(account_id=self.account, product="Synthetic Card", currency="CHF",
+                                                masked_suffix="A123", source="offline_import", observed_at=900,
+                                                imported_at=self.now, digest="private-display-digest"))
+            session.get(db.BudgetAccount, self.account).balances_json = json.dumps([balance("PLN"), balance("EUR"), balance("PLN")])
+            session.add(db.BudgetImportBatch(id="archived-currencies", fingerprint="archived-currencies",
+                                             account_id=self.account, fetched_at=800, imported_at=900,
+                                             balances_json=json.dumps([balance("GBP")]), report_json="{}"))
+        before = self.dump()
+        account = self.http.accounts("owner")[0]
+        self.assertEqual(account["display"], {"product": "Synthetic Card", "currency": "CHF", "masked_suffix": "A123",
+                                              "source": "offline_import", "observed_at": 900, "imported_at": self.now})
+        self.assertEqual(account["observed_balance_currencies"], ["EUR", "PLN"])
+        self.assertEqual(account["components"]["balances"]["last_success"], self.now)
+        self.assertEqual(self.dump(), before)
+        self.assertNotIn("private-display-digest", json.dumps(account))
+        with self.sessions.begin() as session:
+            session.get(db.BudgetAccount, self.account).balances_json = "[]"
+        self.assertEqual(self.http.accounts("owner")[0]["observed_balance_currencies"], [])
+        self.assertEqual(self.http.accounts("owner")[0]["display"]["currency"], "CHF")
+
+    def test_display_foreign_and_missing_resources_do_not_expose_metadata(self):
+        with self.sessions.begin() as session:
+            session.add(db.BudgetAccountDisplay(account_id=self.foreign, product="FOREIGN DISPLAY PRODUCT", currency="USD",
+                                                masked_suffix="B0B1", source="offline_import", observed_at=900,
+                                                imported_at=self.now, digest="FOREIGN DISPLAY DIGEST"))
+        self.assertIsNone(self.http.accounts("owner")[0]["display"])
+        self.assertNotIn("FOREIGN DISPLAY", json.dumps(self.http.accounts("owner")))
+        self.assertEqual(self.http.accounts("other")[0]["display"]["product"], "FOREIGN DISPLAY PRODUCT")
+        errors = []
+        for account_id in (self.foreign, "missing-account"):
+            with self.assertRaises(BudgetNotFound) as caught:
+                self.http.confirm_account_kind("owner", account_id, "other", actor="owner", origin="web")
+            errors.append(str(caught.exception))
+        self.assertEqual(errors[0], errors[1])
+        with self.assertRaises(BudgetNotFound):
+            self.http.accounts("owner", "other-bank")
+
     def test_foreign_missing_and_corrupt_parent_accounts_fail_closed(self):
         self.seed()
         for identity in (self.foreign, "missing", None, [], ""):

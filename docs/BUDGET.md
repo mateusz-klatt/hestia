@@ -50,8 +50,11 @@ are explicitly marked truncated; archived-import metadata is separately labeled.
 Responses expose no signing keys, bank session/account UIDs or primary hashes.
 `account_total` counts the account's canonical entries across all dates;
 `uncertain_total` also applies to the whole account, independently of page filters.
-Account display metadata is a prerequisite for the later account-choice UI:
-the present API returns local IDs and controls, not recognizable product labels.
+Account responses also provide an optional private `display` object and separate
+`observed_balance_currencies`. Display currency is provider-declared; currencies
+observed in current API balances do not establish the account's declared currency.
+Missing metadata is returned as `display: null`. See the offline metadata contract
+below; reads never fetch missing labels from the bank.
 
 Browser-only POST controls are `/api/budget/account-selection`, `/account-kind`
 and `/connection-state`. They require the HttpOnly session cookie, JSON, and exact
@@ -344,7 +347,13 @@ One file describes one selected account:
     "transactions": [],
     "continuation_key": null
   },
-  "balances": {"balances": []}
+  "balances": {"balances": []},
+  "account": {
+    "product": "VISA PREMIUM",
+    "currency": "PLN",
+    "masked_suffix": "1234",
+    "observed_at": "2026-11-18T09:00:00+00:00"
+  }
 }
 ```
 
@@ -357,6 +366,55 @@ the exporter's declaration of a completed acquisition, not proof that the bank
 provided every historic transaction. `fetched_at` is the actual source observation
 time, must include a UTC offset and cannot be in the future. No session UID or
 session ID is needed; primary account hashes match across reauthorisations.
+
+### Optional private account display metadata
+
+The optional `account` block above contains exactly four required fields when
+present. `product`, `currency` and `masked_suffix` may each be null; `observed_at`
+must be the actual account-metadata observation time, with a UTC offset and no
+future timestamp. It is independent of transaction `fetched_at` and the export
+time. Omit the whole block when the observation time or metadata is unavailable.
+Old version-1 exports without this block remain valid and do not erase labels.
+
+Products accept up to 1024 input characters. Hestia normalizes Unicode, removes
+control/format characters, collapses whitespace and limits the display to 64
+characters. It replaces identifier-like products with null before truncating,
+including long digit sequences and IBAN/UUID-like values, and reports a safe
+`product_rejected` count. This does not block valid history import. An empty
+product also becomes null. Currency
+is syntactically three uppercase ASCII letters, consistent with transaction
+normalization; no current ISO-code membership list is enforced. The suffix is
+exactly four uppercase ASCII letters/digits, calculated by the private exporter.
+Never place a full account number, card number, holder name, account type, provider
+UID or session identifier in this block. Unknown fields are rejected. The synthetic
+example above does not identify a real account.
+
+Migration 0012 adds a separate display row per account; existing accounts have no
+display row. Metadata has its own context-bound digest and never changes the
+transaction batch fingerprint. Within the same import transaction, metadata is
+applied before the duplicate-batch return. Thus adding a description to an already
+imported export can update only its display metadata; ledger rows, original batch
+counts and quarantines remain unchanged. A metadata conflict rolls the entire
+import back. Repeated identical metadata is a no-op, older observations are
+ignored, and different metadata at the same observation time is rejected with
+the fixed diagnostic `metadata_conflict`. Null
+fields preserve existing values; an all-null patch does nothing. The displayed
+observation time describes the last accepted patch, so retained fields can be
+older. Hestia assigns source `offline_import` and its own ingestion time.
+
+The CLI reports only metadata outcome state and the product-rejection count, never
+its values or digest. Only the
+existing owner-private HTTP account response exposes `display` with product,
+declared currency, suffix, source and observation/ingestion times. Metadata does
+not enter shared audit, SSE or logs, and does not change selection, confirmed kind,
+control versions, API freshness, balances, quota or backoff. Currencies observed
+in current API balances are a separate sorted list; archived import balances are
+excluded. These labels are not evidence of credit-card debt or repayment dates.
+
+No additional bank request, account discovery or consent exchange is introduced.
+Use a separate private test database for exports and migration/import pilots.
+
+### History validation and storage
 
 Files must be regular, owned by the process user, mode 0400 or 0600 and not a
 symlink at the final component. Limits are 32 MiB input, 32 MiB normalized data

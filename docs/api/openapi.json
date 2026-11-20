@@ -242,6 +242,17 @@
             "title": "Control Version",
             "type": "integer"
           },
+          "display": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BudgetAccountDisplay"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
           "id": {
             "title": "Id",
             "type": "string"
@@ -283,6 +294,14 @@
               }
             ],
             "title": "Kind Confirmed By"
+          },
+          "observed_balance_currencies": {
+            "description": "Sorted unique currencies from current stored API balances only; independent of declared display currency.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Observed Balance Currencies",
+            "type": "array"
           },
           "paused": {
             "title": "Paused",
@@ -335,6 +354,17 @@
             "title": "Control Version",
             "type": "integer"
           },
+          "display": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BudgetAccountDisplay"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
           "id": {
             "title": "Id",
             "type": "string"
@@ -377,6 +407,14 @@
             ],
             "title": "Kind Confirmed By"
           },
+          "observed_balance_currencies": {
+            "description": "Sorted unique currencies from current stored API balances only; independent of declared display currency.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Observed Balance Currencies",
+            "type": "array"
+          },
           "paused": {
             "title": "Paused",
             "type": "boolean"
@@ -402,6 +440,68 @@
           "changed"
         ],
         "title": "BudgetAccountChanged",
+        "type": "object"
+      },
+      "BudgetAccountDisplay": {
+        "description": "Allowlisted display labels and their provenance, never bank account identity.",
+        "properties": {
+          "currency": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Currency"
+          },
+          "imported_at": {
+            "title": "Imported At",
+            "type": "number"
+          },
+          "masked_suffix": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Masked Suffix"
+          },
+          "observed_at": {
+            "description": "Time of the last accepted metadata patch; preserved fields can be older.",
+            "title": "Observed At",
+            "type": "number"
+          },
+          "product": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Product"
+          },
+          "source": {
+            "description": "Currently offline_import; clients must handle future values.",
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "product",
+          "currency",
+          "masked_suffix",
+          "source",
+          "observed_at",
+          "imported_at"
+        ],
+        "title": "BudgetAccountDisplay",
         "type": "object"
       },
       "BudgetAccountSaved": {
@@ -4689,7 +4789,7 @@
   "info": {
     "description": "Local cloud-free smart-home control API. Generated from hestia/api_contract.py \u2014 do not edit by hand; run `python -m hestia.api_contract`.",
     "title": "hestia API",
-    "version": "0.13.0"
+    "version": "0.14.0"
   },
   "openapi": "3.1.0",
   "paths": {
