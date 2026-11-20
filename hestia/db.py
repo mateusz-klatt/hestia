@@ -207,10 +207,30 @@ class BudgetAccount(Base):
     owner: Mapped[str] = mapped_column(ForeignKey("users.username"))
     identification_hash: Mapped[str]
     enabled: Mapped[bool]
+    configured: Mapped[bool] = mapped_column(default=False, server_default=text("0"))
+    kind: Mapped[str] = mapped_column(default="unknown", server_default=text("'unknown'"))
+    kind_confirmed_at: Mapped[float | None]
+    kind_confirmed_by: Mapped[str | None]
+    kind_confirmation_origin: Mapped[str | None]
     balances_json: Mapped[str]
     observed_at: Mapped[float | None]
     last_attempt: Mapped[float | None]
     last_error: Mapped[str | None]
+
+
+class BudgetAccountAudit(Base):
+    """Append-only account control history, without financial payloads."""
+
+    __tablename__ = "budget_account_audit"
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    account_id: Mapped[str] = mapped_column(ForeignKey("budget_accounts.id"))
+    owner: Mapped[str] = mapped_column(ForeignKey("users.username"))
+    actor: Mapped[str]
+    origin: Mapped[str]
+    field: Mapped[str]
+    old_value_json: Mapped[str]
+    new_value_json: Mapped[str]
+    changed_at: Mapped[float]
 
 
 class BudgetTransaction(Base):

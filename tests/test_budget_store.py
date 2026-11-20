@@ -24,6 +24,15 @@ def configuration(accounts=("synthetic-hash",), **changes):
     return BudgetConfig(APP, "/test/key.pem", (connection,))
 
 
+def prepare_selected(store, config):
+    """Set up an explicitly selected API fixture within the configured allowlist."""
+    store.configure(config)
+    for owner in {connection.owner for connection in config.connections}:
+        for account in store.accounts(owner):
+            if account["configured"]:
+                store.set_account_selected(owner, account["id"], True, actor=owner)
+
+
 def transaction(ref="ref-1", **changes):
     tx = {"entry_reference": ref, "amount": "12345678901234567890.12345", "currency": "PLN",
           "credit_debit_indicator": "DBIT", "status": "BOOK", "booking_date": "2026-11-20",
@@ -75,27 +84,31 @@ class BudgetStoreTests(unittest.TestCase):
 
     def test_selection_retirement_and_reenable_preserve_account_identity(self):
         config = configuration()
-        self.store.configure(config)
+        prepare_selected(self.store, config)
         original = self.rows(db.BudgetAccount)[0].id
         self.store.configure(config)
         self.assertEqual(self.rows(db.BudgetAccount)[0].id, original)
         self.store.configure(replace(config, connections=()))
-        self.assertFalse(self.rows(db.BudgetAccount)[0].enabled)
+        self.assertFalse(self.rows(db.BudgetAccount)[0].configured)
+        self.assertTrue(self.rows(db.BudgetAccount)[0].enabled)
         self.assertFalse(self.store.status()[0]["enabled"])
         with self.assertRaises(BudgetStoreError):
             self.store.start_attempt("bank")
         self.store.configure(config)
         self.assertEqual(self.rows(db.BudgetAccount)[0].id, original)
+        self.assertTrue(self.rows(db.BudgetAccount)[0].configured)
+        self.assertTrue(self.rows(db.BudgetAccount)[0].enabled)
         duplicate = replace(config.connections[0], id="duplicate")
         with self.assertRaises(BudgetStoreError):
             self.store.configure(replace(config, connections=(config.connections[0], duplicate)))
         self.assertEqual(len(self.store.status()), 1)
         self.store.configure(configuration(accounts=()))
         self.assertFalse(self.store.start_attempt("bank"))
-        self.assertFalse(self.rows(db.BudgetAccount)[0].enabled)
+        self.assertFalse(self.rows(db.BudgetAccount)[0].configured)
+        self.assertTrue(self.rows(db.BudgetAccount)[0].enabled)
 
     def test_durable_pre_http_quota_and_failure_restart(self):
-        self.store.configure(configuration())
+        prepare_selected(self.store, configuration())
         with self.assertRaises(BudgetStoreError):
             self.store.start_attempt("unknown")
         self.assertTrue(self.store.start_attempt("bank"))
@@ -115,7 +128,7 @@ class BudgetStoreTests(unittest.TestCase):
         self.assertEqual(self.store.status()[0]["last_error"], "invalid_data")
 
     def test_repeated_import_corrections_absence_and_unresolved_multiplicity(self):
-        self.store.configure(configuration())
+        prepare_selected(self.store, configuration())
         original = transaction()
         self.store.commit_snapshot("bank", snapshot(original))
         self.store.commit_snapshot("bank", snapshot(original))
@@ -140,7 +153,7 @@ class BudgetStoreTests(unittest.TestCase):
         self.assertIsNone(self.store.status()[0]["last_error"])
 
     def test_commit_rechecks_expiry_owner_and_entire_selection(self):
-        self.store.configure(configuration())
+        prepare_selected(self.store, configuration())
         for observation in (snapshot(valid_until=1000), snapshot(account_hash="different"),
                             SimpleNamespace(valid_until=100000, accounts=(), errors=())):
             with self.subTest(observation=observation), self.assertRaises(BudgetStoreError):
@@ -161,7 +174,7 @@ class BudgetStoreTests(unittest.TestCase):
     def test_owner_scoped_redacted_status_and_renewal_boundary(self):
         config = configuration()
         other = replace(config.connections[0], id="other-bank", owner="other")
-        self.store.configure(replace(config, connections=(config.connections[0], other)))
+        prepare_selected(self.store, replace(config, connections=(config.connections[0], other)))
         self.store.commit_snapshot("bank", snapshot(transaction()))
         state = self.store.status(owner="owner")
         self.assertEqual(len(state), 1)
@@ -176,7 +189,7 @@ class BudgetStoreTests(unittest.TestCase):
         self.assertEqual(self.store.status(owner="missing"), [])
 
     def test_failed_second_account_rolls_back_first_account(self):
-        self.store.configure(configuration(accounts=("synthetic-hash", "second")))
+        prepare_selected(self.store, configuration(accounts=("synthetic-hash", "second")))
         first = snapshot(transaction()).accounts[0]
         invalid = snapshot({"missing": "required fields"}, account_hash="second").accounts[0]
         combined = SimpleNamespace(valid_until=1000000, accounts=(first, invalid), errors=())
@@ -186,7 +199,7 @@ class BudgetStoreTests(unittest.TestCase):
         self.assertIsNone(self.rows(db.BudgetAccount)[0].observed_at)
 
     def test_partial_and_all_failed_snapshots_preserve_failed_account_data(self):
-        self.store.configure(configuration(accounts=("synthetic-hash", "second")))
+        prepare_selected(self.store, configuration(accounts=("synthetic-hash", "second")))
         good, second = snapshot(transaction()).accounts[0], snapshot(transaction(), account_hash="second").accounts[0]
         self.store.commit_snapshot("bank", SimpleNamespace(valid_until=1000000, accounts=(good, second), errors=()))
         before = self.rows(db.BudgetAccount)
@@ -208,7 +221,7 @@ class BudgetStoreTests(unittest.TestCase):
         self.assertEqual(len(self.rows(db.BudgetTransaction)), 3)
 
     def test_conflicting_references_quarantine_without_freezing_other_records(self):
-        self.store.configure(configuration())
+        prepare_selected(self.store, configuration())
         self.store.commit_snapshot("bank", snapshot(transaction()))
         self.store.commit_snapshot("bank", snapshot(transaction(), transaction(amount="99"),
                                                      transaction("fresh"), transaction("new-conflict"),
@@ -227,7 +240,7 @@ class BudgetStoreTests(unittest.TestCase):
         self.assertEqual(self.store.status()[0]["uncertain_transactions"], 1)
 
     def test_pending_and_booked_same_reference_are_not_a_booked_conflict(self):
-        self.store.configure(configuration())
+        prepare_selected(self.store, configuration())
         self.store.commit_snapshot("bank", snapshot(transaction(status="PDNG"), transaction(),
                                                      transaction(booking_date=None)))
         state = self.store.status()[0]

@@ -19,7 +19,7 @@ from hestia import db
 from hestia.budget import __main__ as cli
 from hestia.budget import runtime
 from hestia.budget.store import BudgetStore
-from tests.test_budget_store import configuration, snapshot, transaction
+from tests.test_budget_store import configuration, prepare_selected, snapshot, transaction
 
 
 PRIVATE_HASH = "PRIVATE-account-hash-never-log"
@@ -119,6 +119,7 @@ class BudgetImportCLITests(unittest.TestCase):
         self.assertEqual(imported_balance[0]["balance_amount"]["amount"], "-12.345")
         self.assertFalse(self.rows(db.BudgetConnection)[0].enabled)
         self.assertFalse(account.enabled)
+        self.assertFalse(account.configured)
         self.assertIsNone(self.rows(db.BudgetConnection)[0].last_attempt)
         self.assertEqual(self.rows(db.BudgetConnection)[0].next_attempt, 0)
         self.assert_redacted(output + repeated)
@@ -129,7 +130,7 @@ class BudgetImportCLITests(unittest.TestCase):
         other = replace(original, id="other-bank", accounts=("other-private-hash",))
         live_config = replace(self.config, connections=(original, other))
         store = BudgetStore(self.sessions, clock=lambda: self.now)
-        store.configure(live_config)
+        prepare_selected(store, live_config)
         store.start_attempt("bank")
         store.record_failure("bank", "rate_limit")
         store.start_attempt("other-bank")
@@ -258,7 +259,7 @@ class BudgetImportCLITests(unittest.TestCase):
     def test_storage_failure_is_redacted_and_existing_data_survives(self):
         self.initialize()
         store = BudgetStore(self.sessions, clock=lambda: self.now)
-        store.configure(self.config)
+        prepare_selected(store, self.config)
         store.commit_snapshot("bank", snapshot(transaction("committed"), account_hash=PRIVATE_HASH,
                                               valid_until=self.now + 31536000))
         before = store.status()

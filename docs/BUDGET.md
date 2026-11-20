@@ -124,10 +124,47 @@ python -m hestia.budget --config /secure/budget.json --db /secure/test.db status
 python -m hestia.budget --config /secure/budget.json --db /secure/test.db once
 ```
 
-`status` preserves the original CLI behavior: it applies the configured API
-selection to stored metadata without contacting a bank. Use `status --stored-only`
-to inspect persisted state without applying selection or enabling offline-only
-metadata. Neither status command reads private keys/session files.
+Since migration 0008 (selection policy 2), the version-1 configuration's account
+list is a hard **allowlist**, separate from persisted owner selection. `status`
+reconciles that allowlist without contacting a bank. It never selects an account
+or reverses an explicit opt-out. `status --stored-only` also skips allowlist
+reconciliation. Neither command reads private keys/session files.
+
+### Explicit account controls
+
+Existing selected accounts keep their selection during upgrade. Newly configured
+accounts start unselected, with kind `unknown`; configuration, bank consent and
+offline import do not select them or confirm a kind. Acquisition requires both
+the allowlist and persisted owner selection. Removing an account from configuration
+stops acquisition without erasing its identity, history or prior selection; an
+explicit deselection persists after removal/readdition, status and restart.
+
+```sh
+python -m hestia.budget --config /secure/budget.json --db /secure/test.db accounts --owner existing-admin
+python -m hestia.budget --config /secure/budget.json --db /secure/test.db account select LOCAL_ACCOUNT_ID --owner existing-admin
+python -m hestia.budget --config /secure/budget.json --db /secure/test.db account confirm-kind LOCAL_ACCOUNT_ID --owner existing-admin --kind credit_card
+python -m hestia.budget --config /secure/budget.json --db /secure/test.db account deselect LOCAL_ACCOUNT_ID --owner existing-admin
+```
+
+These privileged local CLI actions act on behalf of the named, existing enabled
+admin owner. They do not establish an authenticated browser principal. Listing
+and mutation are owner-scoped: another owner's ID is rejected without returning
+that account's data. The operator actor is recorded as `operator:<process uid>`;
+there are no caller-supplied actor/origin flags. No financial HTTP route is added.
+
+Confirmable kinds are `current`, `savings`, `credit_card` and `other`. Kind does not
+infer currency or select an account; selecting does not confirm kind. Different
+currencies and balance types remain distinct observations. No product-name/CACC
+heuristic confirms the type. Repeating a selection or an already-confirmed kind
+is a no-op. Changed choices commit with an append-only audit containing actor,
+owner, local account ID, time, field, enum/boolean changes and origin, without
+amounts, IBANs or descriptions. Audit/confirmation survives restart and does not
+change ledger records, balances, consent validity or quota reservations.
+
+At this stage `once` still uses the connection-level cooldown and atomic account
+snapshot from the foundation. It now fetches only the intersection of configured
+and owner-selected identities. Independent balance/transaction freshness and
+account/endpoint retry budgets are subsequent 2A.2/2A.3 work, not enabled here.
 
 Use a separate test DB and fake API fixtures during development. Live acquisition
 uses the fixed HTTPS Enable Banking origin, validated RS256 JWTs, bounded

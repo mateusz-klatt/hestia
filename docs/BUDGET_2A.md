@@ -1,7 +1,8 @@
 # Budget 2A: account controls and independent acquisition
 
-**DRAFT / PROPOSED / UNIMPLEMENTED.** Baseline: master `02f03bc`.
-This document proposes backend work; it does not enable bank acquisition.
+**IMPLEMENTATION STATUS:** 2A.1 is implemented in the account-controls branch;
+2A.2 and 2A.3 below remain proposed and unimplemented. Baseline: master `84fb76d`.
+This is backend/CLI work; it does not activate bank data in the live service.
 Existing behavior and import guarantees remain documented in [BUDGET.md](BUDGET.md).
 
 ## Scope and sequence
