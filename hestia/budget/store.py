@@ -23,7 +23,7 @@ def _json(value):
 
 def _safe_error(code):
     allowed = {"authorization", "rate_limit", "unavailable", "network", "invalid_response",
-               "provider_error", "invalid_data", "configuration", "unsupported_amount",
+               "provider_error", "invalid_data", "configuration", "unsupported_amount", "internal_error",
                "invalid_session", "expired_session", "session_mismatch",
                "account_selection", "invalid_pagination", "limit_exceeded"}
     return code if code in allowed else "invalid_data"
@@ -140,7 +140,8 @@ class BudgetStore:
         session.execute(delete(Unresolved).where(Unresolved.account_id == account.id))
         ordinal = 0
         references = Counter(tx["entry_reference"] for tx in observation.transactions
-                             if tx["entry_reference"] is not None)
+                             if tx["entry_reference"] is not None and tx["status"] == "BOOK"
+                             and (tx["booking_date"] or tx["value_date"]))
         for tx in observation.transactions:
             conflict = tx["entry_reference"] is not None and references[tx["entry_reference"]] > 1
             ordinal = self._import_transaction(session, account.id, tx, conflict, ordinal, now)

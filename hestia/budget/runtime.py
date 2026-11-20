@@ -17,6 +17,16 @@ class BudgetBusyError(RuntimeError):
     """Another bank acquisition process holds this database's lock."""
 
 
+def _error_code(exc):
+    if isinstance(exc, BudgetAPIError):
+        return "configuration" if exc.code == "invalid_configuration" else exc.code
+    if isinstance(exc, BudgetConfigError):
+        return "configuration"
+    if isinstance(exc, BudgetDataError):
+        return exc.code
+    return "invalid_data" if isinstance(exc, BudgetStoreError) else "internal_error"
+
+
 @contextmanager
 def budget_lock(path):
     target = Path(str(Path(path).resolve()) + ".budget-sync.lock")
@@ -51,16 +61,10 @@ def run_once(config, *, path=None, clock=time.time, client_factory=EnableBanking
                 snapshot = fetch_snapshot(client, session_id, connection,
                                           today=datetime.fromtimestamp(clock(), timezone.utc).date(), now=clock())
                 store.commit_snapshot(connection.id, snapshot)
-            except (BudgetAPIError, BudgetDataError, BudgetConfigError, BudgetStoreError) as exc:
-                if isinstance(exc, BudgetAPIError):
-                    code = "configuration" if exc.code == "invalid_configuration" else exc.code
-                elif isinstance(exc, BudgetConfigError):
-                    code = "configuration"
-                elif isinstance(exc, BudgetDataError):
-                    code = exc.code
-                else:
-                    code = "invalid_data"
-                store.record_failure(connection.id, code)
+            except Exception as exc:
+                # One provider/programming failure must not starve independent
+                # connections. Storage failure here still escapes to the safe CLI.
+                store.record_failure(connection.id, _error_code(exc))
                 results.append({"connection": connection.id, "state": "failed"})
             else:
                 state = ("partial" if snapshot.accounts else "failed") if snapshot.errors else "updated"

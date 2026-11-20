@@ -109,6 +109,7 @@ def parse_config(raw) -> BudgetConfig:
 
 
 def load_config(path=None, *, environ=None) -> BudgetConfig | None:
+    """Read an operator-selected local path; not reachable from HTTP or LLM input."""
     env = os.environ if environ is None else environ
     path = env.get("HESTIA_BUDGET_CONFIG") if path is None else path
     if path is None or path == "":

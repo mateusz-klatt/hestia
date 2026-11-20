@@ -87,7 +87,9 @@ Use the project's deployment environment and external mounted files. Set
 `HESTIA_BUDGET_CONFIG` to the JSON configuration path. Key and session files must
 be regular, owner-only files owned by the process user, with no symlink at the
 final path component. They are never read from browser storage, logged or copied
-into SQLite. Protect their directories and the SQLite DB, WAL files and backups
+into SQLite. For bind-mounted secrets, host file ownership must match the
+container process UID; changing mode alone does not change ownership.
+Protect their directories and the SQLite DB, WAL files and backups
 with filesystem permissions. SQLite financial data is **not encrypted at rest**
 by this module. Do not commit bank exports, raw responses, signing keys or
 session files to git. This foundation does not read or migrate the existing PoC
@@ -127,6 +129,10 @@ uses the fixed HTTPS Enable Banking origin, validated RS256 JWTs, bounded
 responses, a GET-only route allowlist and no HTTP redirects. Errors expose safe
 codes only. There is no custom production API URL setting.
 
+Migration 0006 adds four empty tables on the next startup of any upgraded Hestia
+SQLite deployment, even when acquisition is disabled. Merging this foundation
+therefore changes the schema at that next restart; it does not start bank access.
+
 ## Next slices (not implemented here)
 
 1. Admin-only, owner-scoped account selection and consent renewal. Reserved
@@ -149,6 +155,11 @@ codes only. There is no custom production API URL setting.
    stops acquisition and retains history; provider revocation is not local erasure.
 6. Full React UI, background scheduling, legal-document update, access-control UAT
    and staged deployment after review. No bank data is sent to external AI tools.
+7. Independent transaction/balance freshness: retain a complete transaction fetch
+   if a later balance call fails (including 429), while preserving and clearly
+   marking the old balance. This needs explicit per-part status and timestamps;
+   the present account snapshot remains atomic and keeps its prior committed
+   data when either part fails. Do not retry immediately to compensate.
 
 ## Sources
 

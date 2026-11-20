@@ -226,6 +226,18 @@ class BudgetStoreTests(unittest.TestCase):
         self.assertEqual(self.store.status()[0]["unresolved"], 0)
         self.assertEqual(self.store.status()[0]["uncertain_transactions"], 0)
 
+    def test_pending_and_booked_same_reference_are_not_a_booked_conflict(self):
+        self.store.configure(configuration())
+        self.store.commit_snapshot("bank", snapshot(transaction(status="PDNG"), transaction(),
+                                                     transaction(booking_date=None)))
+        state = self.store.status()[0]
+        self.assertEqual(state["transactions"], 1)
+        self.assertEqual(state["uncertain_transactions"], 0)
+        self.assertEqual(state["unresolved"], 2)
+        self.store.commit_snapshot("bank", snapshot(transaction(status="PDNG")))
+        self.assertEqual(self.store.status()[0]["transactions"], 1)
+        self.assertEqual(self.store.status()[0]["uncertain_transactions"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()

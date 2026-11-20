@@ -144,6 +144,7 @@ class BudgetRuntimeTests(unittest.TestCase):
                  (BudgetAPIError(429, "rate_limit", True), "rate_limit"),
                  (BudgetAPIError(code="invalid_configuration"), "configuration"),
                  (BudgetDataError("invalid_session"), "invalid_session"),
+                 (ValueError("SECRET provider or programming error"), "internal_error"),
                  (BudgetConfigError("Cannot safely read budget credential file"), "configuration"),
                  (BudgetStoreError("Bank account selection changed during acquisition"), "invalid_data")]
         for error, expected in cases:
@@ -228,6 +229,14 @@ class BudgetRuntimeTests(unittest.TestCase):
         self.assertEqual({row.entry_reference for row in self.rows(db.BudgetTransaction)}, {"ref-1", "other-ref"})
         self.assertEqual(result["status"][0]["last_error"], "invalid_data")
         self.assertIsNone(result["status"][1]["last_error"])
+        self.now += 43200
+        with mock.patch.object(runtime, "credentials", return_value=(FAKE_KEY, APP)), \
+             mock.patch.object(runtime, "fetch_snapshot", side_effect=(ValueError("SECRET failure"), valid)):
+            result = self.acquisition(config, path=self.path, client_factory=mock.Mock())
+        self.assertEqual(result["results"], [{"connection": "bank", "state": "failed"},
+                                            {"connection": "other-bank", "state": "updated"}])
+        self.assertEqual(result["status"][0]["last_error"], "internal_error")
+        self.assertNotIn("SECRET", json.dumps(result))
 
     def test_discovery_only_connection_is_deferred_without_any_secret_or_http_access(self):
         with mock.patch.object(runtime, "credentials") as credentials:
@@ -297,10 +306,17 @@ class BudgetRuntimeTests(unittest.TestCase):
              mock.patch.object(cli, "run_once", side_effect=self.cli_acquisition), \
              mock.patch.object(runtime, "credentials", side_effect=RuntimeError("SECRET key path and bank payload")):
             code, output, diagnostic = self.invoke(["--db", str(self.path), "once"])
-        self.assertEqual((code, output), (1, ""))
-        self.assertEqual(diagnostic, "Bank acquisition failed; previously committed data is retained\n")
+        self.assertEqual((code, diagnostic), (1, ""))
+        self.assertEqual(json.loads(output)["status"][0]["last_error"], "internal_error")
+        self.assertNotIn("SECRET", output)
         self.assertEqual(len(self.rows(db.BudgetTransaction)), 1)
         self.assertEqual(self.store.status()[0]["next_attempt"], self.now + 43200)
+
+    def test_cli_unexpected_database_failure_is_redacted(self):
+        with mock.patch.object(cli, "execute", side_effect=RuntimeError("SECRET database detail")):
+            code, output, diagnostic = self.invoke(["status"])
+        self.assertEqual((code, output), (1, ""))
+        self.assertEqual(diagnostic, "Bank acquisition failed; previously committed data is retained\n")
 
     def test_cli_success_and_deferred_result_exit_zero(self):
         self.factory = mock.Mock(return_value=SyntheticBank(self.config))
