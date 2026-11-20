@@ -518,6 +518,7 @@ class ProxyConfig:
     # booted before its WAN came up); a later upstream failure then re-resolves.
     cloud_resolved: bool = True
     cloud_retry_at: float = -math.inf     # monotonic time of the last re-resolve attempt
+    cloud_refresh: "asyncio.Future | None" = None   # the one in-flight re-resolve, shared by all sessions
 
 
 @dataclass
@@ -743,9 +744,11 @@ class ProxySession:
 
     async def run(self) -> None:
         conn = await self._dial()
-        if conn is None and self.config is not None and await _refresh_cloud(self.config):
-            self.cloud_host = self.config.cloud_host       # seed was stale — retry once on the real IP
-            conn = await self._dial()
+        if conn is None and self.config is not None:
+            await _refresh_cloud(self.config)
+            if self.config.cloud_host != self.cloud_host:  # seed was stale (re-resolved by us or a
+                self.cloud_host = self.config.cloud_host   # concurrent session) — retry once
+                conn = await self._dial()
         if conn is None:
             await _close(self.dev_writer)
             return
@@ -1857,29 +1860,39 @@ CLOUD_RETRY_S = 30.0       # min gap between re-resolves, so a reconnect storm c
 CLOUD_RESOLVE_TIMEOUT_S = 15.0
 
 
-async def _refresh_cloud(config) -> bool:
+async def _refresh_cloud(config) -> None:
     """After an upstream dial failed: if ``cloud_host`` is only the startup seed, DoH-resolve
-    ``HESTIA_CLOUD_HOSTNAME`` again (throttled to one attempt per ``CLOUD_RETRY_S``). On
-    success adopt the answer and return True iff it differs from the host that just failed."""
+    ``HESTIA_CLOUD_HOSTNAME`` again, adopting the answer into ``config``. One lookup runs at a
+    time and is shared by every session that fails meanwhile; a new one starts at most once per
+    ``CLOUD_RETRY_S``. Callers wait up to ``CLOUD_RESOLVE_TIMEOUT_S``, but a lookup that outlives
+    them still publishes its result (callers compare ``config.cloud_host`` to what they dialled)."""
     if config.cloud_resolved or not CLOUD_HOSTNAME:
-        return False
-    now = time.monotonic()
-    if now - config.cloud_retry_at < CLOUD_RETRY_S:
-        return False
-    config.cloud_retry_at = now
+        return
+    fut = config.cloud_refresh
+    if fut is None:
+        now = time.monotonic()
+        if now - config.cloud_retry_at < CLOUD_RETRY_S:
+            return
+        config.cloud_retry_at = now
+        fut = config.cloud_refresh = asyncio.create_task(_run_refresh(config))
     try:
-        ip = await asyncio.wait_for(
-            asyncio.get_running_loop().run_in_executor(
-                None, lambda: resolve.doh_resolve(CLOUD_HOSTNAME, port=config.cloud_port)),
-            timeout=CLOUD_RESOLVE_TIMEOUT_S)
+        await asyncio.wait_for(asyncio.shield(fut), timeout=CLOUD_RESOLVE_TIMEOUT_S)
     except asyncio.TimeoutError:
-        log.warning("cloud re-resolution of %s timed out", CLOUD_HOSTNAME)
-        return False
+        log.warning("cloud re-resolution of %s still running after %.0fs",
+                    CLOUD_HOSTNAME, CLOUD_RESOLVE_TIMEOUT_S)
+
+
+async def _run_refresh(config) -> None:
+    """The shared re-resolve: DoH off-loop, adopt a successful answer, then free the slot."""
+    try:
+        ip = await asyncio.get_running_loop().run_in_executor(
+            None, lambda: resolve.doh_resolve(CLOUD_HOSTNAME, port=config.cloud_port))
+    finally:
+        config.cloud_refresh = None
     if ip is None:
-        return False
+        return
     previous, config.cloud_host, config.cloud_resolved = config.cloud_host, ip, True
     log.info("cloud re-resolved: %s -> %s (was %s)", CLOUD_HOSTNAME, ip, previous)
-    return ip != previous
 
 
 def _shadow_sync_db(rt) -> None:

@@ -26,6 +26,7 @@ only got the seed, :func:`doh_resolve` is retried (throttled) after an upstream 
 """
 from __future__ import annotations
 
+import http.client
 import ipaddress
 import json
 import logging
@@ -79,7 +80,7 @@ def doh_resolve(hostname: str, *, port: int = 8925, timeout: float = 3.0,
     for endpoint in endpoints:
         try:
             answers = _doh_a_records(endpoint, hostname, timeout)
-        except (OSError, ValueError) as exc:             # network (URLError⊂OSError) / bad-JSON
+        except (OSError, ValueError, http.client.HTTPException) as exc:  # network / bad-JSON / truncated body
             log.warning("DoH %s failed for %s: %r", endpoint, hostname, exc)
             continue
         for ip in answers[:MAX_CANDIDATES]:
