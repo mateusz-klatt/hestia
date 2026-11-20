@@ -130,6 +130,13 @@ class ObserveTests(unittest.TestCase):
         make_session(rt)._observe(Frame(DOOR_EVENT[1:-1]))
         self.assertEqual(rt.state.doors[0x12], "open")
 
+    def test_phantom_node_event_dropped(self):
+        rt = ProxyRuntime()
+        rt.registry.observe(9, "thermostat", "inferred")
+        self.assertEqual(make_session(rt)._observe(Frame(DOOR_EVENT[1:-1])), [])   # node 0x12 unknown
+        self.assertEqual(rt.state.doors, {})
+        self.assertNotIn("18", rt.registry.nodes)
+
     def test_bad_checksum_skipped(self):
         rt = ProxyRuntime()
         body = bytearray(DOOR_EVENT[1:-1])

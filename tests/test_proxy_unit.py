@@ -430,6 +430,8 @@ class SceneCaptureTests(unittest.TestCase):
 
     def test_latest_press_wins_on_overwrite(self):
         rt = proxy.ProxyRuntime()
+        rt.registry.observe(2, "light", "inferred")          # known nodes, so both presses are admitted
+        rt.registry.observe(7, "light", "inferred")
         sess = make_session(rt)
         sess._observe(Frame(SCENE_PRESS[1:-1]), "D->C")      # node 2 / scene 3
         press_b = build_frame(0x1E, 0x09, tlv(0x0047, b"\x07") + tlv(0x0046, b"\x2b\x01\x02\x00"))
@@ -437,6 +439,83 @@ class SceneCaptureTests(unittest.TestCase):
         sess._observe(Frame(SCENE_BATCH[1:-1]), "C->D")
         self.assertEqual(rt.registry.scene_batch(7, 2), SCENE_ELEMENTS.hex())
         self.assertIsNone(rt.registry.scene_batch(2, 3))     # earlier press lost
+
+
+def _event(node: int) -> Frame:
+    return Frame(build_frame(0x1E, 0x09, tlv(0x0047, bytes([node])) + tlv(0x0046, b"\x30\x03\xff\x0c"))[1:-1])
+
+
+class AdmitEventNodeTests(unittest.TestCase):
+    """Phantom (bit-flipped) node ids must not create registry entries, state or automations."""
+
+    def _rt(self):
+        rt = proxy.ProxyRuntime()
+        rt.registry.observe(9, "thermostat", "inferred")
+        return rt
+
+    def test_non_event_and_empty_registry_admitted(self):
+        rt = proxy.ProxyRuntime()
+        self.assertTrue(proxy._admit_event_node(rt, Frame(NOISE[1:-1])))
+        self.assertTrue(proxy._admit_event_node(rt, _event(0x49)))   # first run: nothing to protect
+
+    def test_registered_node_admitted(self):
+        rt = self._rt()
+        self.assertTrue(proxy._admit_event_node(rt, _event(9)))
+
+    def test_roster_node_admitted_and_clears_pending(self):
+        rt = self._rt()
+        self.assertFalse(proxy._admit_event_node(rt, _event(0x30)))
+        rt.classifier.ingest_roster(Frame(build_frame(0x1E, 0x15, tlv(0x004D, b"\x30\x00"))[1:-1]))
+        self.assertTrue(proxy._admit_event_node(rt, _event(0x30)))
+        self.assertNotIn(0x30, rt.pending_nodes)
+
+    def test_unknown_node_needs_repeated_sightings(self):
+        rt = self._rt()
+        with self.assertLogs("hestia.proxy", level="WARNING"):
+            self.assertFalse(proxy._admit_event_node(rt, _event(0x49)))
+            self.assertFalse(proxy._admit_event_node(rt, _event(0x49)))
+        self.assertTrue(proxy._admit_event_node(rt, _event(0x49)))   # 3rd sighting → real device
+        self.assertNotIn(0x49, rt.pending_nodes)
+
+    def test_old_sightings_expire(self):
+        rt = self._rt()
+        with mock.patch.object(proxy.time, "monotonic", side_effect=[0.0, 1.0, 0.5 + proxy.NEW_NODE_WINDOW_S]):
+            self.assertFalse(proxy._admit_event_node(rt, _event(0x89)))
+            self.assertFalse(proxy._admit_event_node(rt, _event(0x89)))
+            self.assertFalse(proxy._admit_event_node(rt, _event(0x89)))   # 1st one aged out → 2/3
+        self.assertEqual(len(rt.pending_nodes[0x89]), 2)
+
+    def test_proxy_observe_drops_phantom_event(self):
+        rt = self._rt()
+        make_session(rt)._observe(_event(0x49), "D->C")
+        self.assertNotIn("73", rt.registry.nodes)
+        self.assertEqual(rt.state.thermostat_on, {})
+
+    def test_quarantined_press_invalidates_pending_scene_capture(self):
+        rt = self._rt()
+        rt.registry.observe(2, "light", "inferred")
+        sess = make_session(rt)
+        sess._observe(Frame(SCENE_PRESS[1:-1]), "D->C")      # known node 2 / scene 3 → pending
+        phantom = build_frame(0x1E, 0x09, tlv(0x0047, b"\x42") + tlv(0x0046, b"\x2b\x01\x03\x00"))
+        sess._observe(Frame(phantom[1:-1]), "D->C")          # quarantined press, forwarded to cloud
+        sess._observe(Frame(SCENE_BATCH[1:-1]), "C->D")      # the cloud's reaction to the phantom
+        self.assertIsNone(rt.registry.scene_batch(2, 3))     # not mis-learned under node 2
+        self.assertNotIn("66", rt.registry.nodes)
+
+    def test_quarantined_non_press_keeps_pending_scene(self):
+        rt = self._rt()
+        sess = make_session(rt)
+        for direction in ("C->D", "D->C"):                   # a cloud frame, or a non-press report
+            sess._pending_scene = (9, 3, proxy.time.monotonic())
+            sess._observe(_event(0x49), direction)
+            self.assertIsNotNone(sess._pending_scene)
+
+    def test_quiet_new_sensor_admitted_within_a_day(self):
+        rt = self._rt()
+        hours = [0.0, 6 * 3600.0, 20 * 3600.0]               # three reports, hours apart
+        with mock.patch.object(proxy.time, "monotonic", side_effect=hours):
+            self.assertEqual([proxy._admit_event_node(rt, _event(0x21)) for _ in hours],
+                             [False, False, True])
 
 
 # --- async paths -------------------------------------------------------------
