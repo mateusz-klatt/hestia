@@ -5,6 +5,7 @@ import fcntl
 import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
+from dataclasses import replace
 from pathlib import Path
 
 from .client import BudgetAPIError, EnableBankingClient
@@ -52,13 +53,15 @@ def run_once(config, *, path=None, clock=time.time, client_factory=EnableBanking
         store.configure(config)
         results = []
         for connection in config.connections:
+            chosen = store.selected_hashes(connection.id, connection.owner)
+            selected_connection = replace(connection, accounts=tuple(h for h in connection.accounts if h in chosen))
             if not store.start_attempt(connection.id):
                 results.append({"connection": connection.id, "state": "deferred"})
                 continue
             try:
                 key, session_id = credentials(config, connection)
                 client = client_factory(config.application_id, key)
-                snapshot = fetch_snapshot(client, session_id, connection,
+                snapshot = fetch_snapshot(client, session_id, selected_connection,
                                           today=datetime.fromtimestamp(clock(), timezone.utc).date(), now=clock())
                 store.commit_snapshot(connection.id, snapshot)
             except Exception as exc:

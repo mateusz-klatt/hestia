@@ -22,7 +22,7 @@ from hestia.budget.client import BudgetAPIError
 from hestia.budget.config import BudgetConfigError
 from hestia.budget.normalize import BudgetDataError
 from hestia.budget.store import BudgetStore, BudgetStoreError
-from tests.test_budget_store import APP, configuration, snapshot, transaction
+from tests.test_budget_store import APP, configuration, prepare_selected, snapshot, transaction
 
 
 ACCOUNT_UID = "00000000-0000-4000-8000-000000000002"
@@ -75,6 +75,7 @@ class BudgetRuntimeTests(unittest.TestCase):
         self.factory = mock.Mock()
         self.now = datetime(2026, 11, 20, 12, tzinfo=timezone.utc).timestamp()
         self.store = BudgetStore(self.sessions, clock=lambda: self.now)
+        prepare_selected(self.store, self.config)
 
     def tearDown(self):
         db.reset_engine_cache()
@@ -136,7 +137,7 @@ class BudgetRuntimeTests(unittest.TestCase):
         self.assertEqual(result["results"][0]["state"], "updated")
 
     def test_expected_acquisition_failures_keep_data_quota_and_safe_cli_exit_one(self):
-        self.store.configure(self.config)
+        prepare_selected(self.store, self.config)
         self.store.commit_snapshot("bank", snapshot(transaction(), valid_until=self.now + 31536000))
         original = self.rows(db.BudgetTransaction)[0].payload_json
         cases = [(BudgetAPIError(403, "authorization"), "authorization"),
@@ -169,7 +170,7 @@ class BudgetRuntimeTests(unittest.TestCase):
 
     def test_partial_account_error_commits_good_account_and_preserves_failed_account_data(self):
         self.config = configuration(accounts=("synthetic-hash", "second-hash"))
-        self.store.configure(self.config)
+        prepare_selected(self.store, self.config)
         first = snapshot(transaction("seed-first"), valid_until=self.now + 31536000).accounts[0]
         second = snapshot(transaction("seed-second"), account_hash="second-hash", valid_until=self.now + 31536000).accounts[0]
         second.balances = ({"name": "Old balance", "balance_type": "CLBD",
@@ -217,7 +218,7 @@ class BudgetRuntimeTests(unittest.TestCase):
         first = self.config.connections[0]
         second = replace(first, id="other-bank", owner="other", accounts=("second-hash",))
         config = replace(self.config, connections=(first, second))
-        self.store.configure(config)
+        prepare_selected(self.store, config)
         self.store.commit_snapshot("bank", snapshot(transaction(), valid_until=self.now + 31536000))
         invalid = snapshot(transaction("new-but-unselected"), account_hash="not-selected", valid_until=self.now + 31536000)
         valid = snapshot(transaction("other-ref"), account_hash="second-hash", valid_until=self.now + 31536000)
@@ -300,7 +301,7 @@ class BudgetRuntimeTests(unittest.TestCase):
         self.assertIn("existing enabled admin owner", diagnostic)
 
     def test_cli_unexpected_error_never_exposes_exception_and_durable_data_survives(self):
-        self.store.configure(self.config)
+        prepare_selected(self.store, self.config)
         self.store.commit_snapshot("bank", snapshot(transaction(), valid_until=self.now + 31536000))
         with mock.patch.object(cli, "load_config", return_value=self.config), \
              mock.patch.object(cli, "run_once", side_effect=self.cli_acquisition), \

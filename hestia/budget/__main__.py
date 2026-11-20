@@ -3,13 +3,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
 
 from .config import BudgetConfigError, load_config
 from .import_file import BudgetImportError, load_import
 from .runtime import BudgetBusyError, budget_lock, run_once
-from .store import BudgetStore, BudgetStoreError
+from .store import ACCOUNT_KINDS, BudgetStore, BudgetStoreError
 
 
 def execute(args):
@@ -28,8 +29,17 @@ def execute(args):
         store = BudgetStore(sessions)
         if importing:
             return {"import": store.import_snapshot(config, snapshot), "status": store.status()}
-        if not args.stored_only:
+        if args.command != "status" or not args.stored_only:
             store.configure(config)
+        if args.command == "accounts":
+            return {"accounts": store.accounts(args.owner)}
+        if args.command == "account":
+            actor = "operator:" + str(os.geteuid())
+            if args.action == "confirm-kind":
+                account = store.confirm_account_kind(args.owner, args.account_id, args.kind, actor=actor)
+            else:
+                account = store.set_account_selected(args.owner, args.account_id, args.action == "select", actor=actor)
+            return {"account": account}
         return {"status": store.status()}
 
 
@@ -43,6 +53,16 @@ def main(argv=None):
     commands.add_parser("once", help="Acquire selected accounts when their local quota permits")
     importing = commands.add_parser("import-snapshot", help="Import a complete local snapshot without bank access")
     importing.add_argument("--file", required=True, help="Private JSON snapshot file")
+    accounts = commands.add_parser("accounts", help="List local account metadata for one owner")
+    accounts.add_argument("--owner", required=True, help="Existing enabled admin username")
+    account = commands.add_parser("account", help="Set local account selection or confirm its kind")
+    actions = account.add_subparsers(dest="action", required=True)
+    for name in ("select", "deselect", "confirm-kind"):
+        action = actions.add_parser(name)
+        action.add_argument("account_id", help="Local account ID from accounts")
+        action.add_argument("--owner", required=True, help="Existing enabled admin username")
+        if name == "confirm-kind":
+            action.add_argument("--kind", required=True, choices=sorted(ACCOUNT_KINDS), help="Owner-confirmed account kind")
     args = parser.parse_args(argv)
     try:
         result = execute(args)

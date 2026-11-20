@@ -59,6 +59,7 @@ class BudgetImportStoreTests(unittest.TestCase):
         self.assertEqual(state["next_attempt"], 0)
         account = self.rows(db.BudgetAccount)[0]
         self.assertFalse(account.enabled)
+        self.assertFalse(account.configured)
         self.assertEqual(account.balances_json, "[]")
         self.assertIsNone(account.observed_at)
         batch = self.rows(db.BudgetImportBatch)[0]
@@ -81,7 +82,7 @@ class BudgetImportStoreTests(unittest.TestCase):
 
     def test_api_precedence_and_api_state_unaffected(self):
         config = fixtures.configuration()
-        self.store.configure(config)
+        fixtures.prepare_selected(self.store, config)
         self.store.start_attempt("bank")
         self.store.commit_snapshot("bank", fixtures.snapshot(fixtures.transaction(), fixtures.transaction(None)))
         self.store.record_failure("bank", "rate_limit")
@@ -138,7 +139,7 @@ class BudgetImportStoreTests(unittest.TestCase):
     def test_api_conflict_promotes_authority_without_falsifying_payload_source(self):
         config = fixtures.configuration()
         self.store.import_snapshot(config, self.imported(fixtures.transaction(), fetched_at=700))
-        self.store.configure(config)
+        fixtures.prepare_selected(self.store, config)
         self.store.commit_snapshot("bank", fixtures.snapshot(fixtures.transaction(), fixtures.transaction(amount="2")))
         canonical = self.rows(db.BudgetTransaction)[0]
         self.assertEqual(canonical.source, "offline_import")
@@ -156,7 +157,7 @@ class BudgetImportStoreTests(unittest.TestCase):
 
     def test_legacy_api_quarantine_is_protected_even_without_existing_canonical(self):
         config = fixtures.configuration()
-        self.store.configure(config)
+        fixtures.prepare_selected(self.store, config)
         account = self.rows(db.BudgetAccount)[0]
         with self.sessions.begin() as session:
             for i, tx in enumerate((fixtures.transaction(), fixtures.transaction(amount="2"), fixtures.transaction(None))):
@@ -232,6 +233,65 @@ class BudgetImportStoreTests(unittest.TestCase):
             self.assertEqual(connection.exec_driver_sql("SELECT payload_json FROM budget_transactions").scalar_one(), "{}")
             command.upgrade(db._alembic_config(connection), "head")
         engine.dispose()
+
+    def test_migration_0008_preserves_selection_history_provenance_and_quota(self):
+        db.reset_engine_cache()
+        engine = db.make_engine(self.path)
+        self.addCleanup(engine.dispose)
+        with engine.begin() as connection:
+            command.downgrade(db._alembic_config(connection), "0007")
+            connection.exec_driver_sql(
+                "INSERT INTO budget_connections "
+                "(id,owner,application_id,bank_name,country,enabled,next_attempt,failures,last_success,last_error) "
+                "VALUES ('bank','owner','app','Synthetic Bank','PL',1,90000,2,800,'rate_limit')")
+            connection.exec_driver_sql(
+                "INSERT INTO budget_accounts "
+                "(id,connection_id,owner,identification_hash,enabled,balances_json,observed_at) "
+                "VALUES (?,?,?,?,?,?,?)",
+                [("selected", "bank", "owner", "api-hash", 1, '[{"synthetic":true}]', 800),
+                 ("retired", "bank", "owner", "offline-hash", 0, "[]", None)])
+            connection.exec_driver_sql(
+                "INSERT INTO budget_transactions "
+                "(account_id,entry_reference,payload_json,observed_at,uncertain,source,api_observed_at) "
+                "VALUES (?,?,?,?,?,?,?)",
+                [("selected", "api-ref", '{"amount":"12.345"}', 800, 1, "api", 850),
+                 ("retired", "offline-ref", '{"amount":"99.01"}', 700, 0, "offline_import", None)])
+            connection.exec_driver_sql(
+                "INSERT INTO budget_unresolved (account_id,ordinal,payload_json,observed_at) "
+                "VALUES (?,?,?,?)", ("selected", 0, '{"synthetic":"api-conflict"}', 850))
+            connection.exec_driver_sql(
+                "INSERT INTO budget_import_batches "
+                "(id,fingerprint,account_id,fetched_at,imported_at,balances_json,report_json) "
+                "VALUES ('batch','digest','retired',700,900,'[]','{}')")
+            connection.exec_driver_sql(
+                "INSERT INTO budget_import_unresolved (batch_id,ordinal,reason,payload_json) "
+                "VALUES ('batch',0,'missing_reference','{}')")
+
+            def historical_rows():
+                return {table: [tuple(row) for row in connection.exec_driver_sql(f"SELECT * FROM {table}")]
+                        for table in ("budget_connections", "budget_transactions", "budget_unresolved",
+                                      "budget_import_batches", "budget_import_unresolved")}
+
+            before = historical_rows()
+            for revision in ("0008", "0007", "0008"):
+                if revision == "0007":
+                    command.downgrade(db._alembic_config(connection), revision)
+                else:
+                    command.upgrade(db._alembic_config(connection), revision)
+                    rows = connection.exec_driver_sql(
+                        "SELECT id,configured,enabled,kind,kind_confirmed_at,kind_confirmed_by,"
+                        "kind_confirmation_origin FROM budget_accounts ORDER BY id").all()
+                    self.assertEqual([tuple(row) for row in rows],
+                                     [("retired", 0, 0, "unknown", None, None, None),
+                                      ("selected", 1, 1, "unknown", None, None, None)])
+                self.assertEqual(historical_rows(), before)
+                accounts = connection.exec_driver_sql(
+                    "SELECT id,identification_hash,enabled,balances_json,observed_at "
+                    "FROM budget_accounts ORDER BY id").all()
+                self.assertEqual([tuple(row) for row in accounts],
+                                 [("retired", "offline-hash", 0, "[]", None),
+                                  ("selected", "api-hash", 1, '[{"synthetic":true}]', 800.0)])
+                self.assertEqual(connection.exec_driver_sql("PRAGMA foreign_key_check").all(), [])
 
 
 if __name__ == "__main__":

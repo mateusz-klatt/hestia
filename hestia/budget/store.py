@@ -12,6 +12,9 @@ from sqlalchemy import delete, func, select, text
 from ..db import BudgetAccount as Account, BudgetConnection as Connection
 from ..db import BudgetTransaction as Transaction, BudgetUnresolved as Unresolved, User
 from ..db import BudgetImportBatch as ImportBatch, BudgetImportUnresolved as ImportUnresolved
+from ..db import BudgetAccountAudit as AccountAudit
+
+ACCOUNT_KINDS = frozenset({"current", "savings", "credit_card", "other"})
 
 
 class BudgetStoreError(ValueError):
@@ -55,7 +58,7 @@ class BudgetStore:
             for row in session.scalars(select(Connection)):
                 row.enabled = False
             for row in session.scalars(select(Account)):
-                row.enabled = False
+                row.configured = False
             for item in config.connections:
                 self._owner(session, item.owner)
                 row = session.get(Connection, item.id)
@@ -78,12 +81,90 @@ class BudgetStore:
                                                        Account.identification_hash == identity_hash))
         if account is None:
             account = Account(id=str(uuid.uuid4()), owner=item.owner, connection_id=item.id,
-                              identification_hash=identity_hash, enabled=True, balances_json="[]")
+                              identification_hash=identity_hash, enabled=False, configured=True, balances_json="[]")
             session.add(account)
             session.flush()
         elif account.connection_id != item.id:
             raise BudgetStoreError("An account may belong to only one connection per owner")
-        account.enabled = True
+        account.configured = True
+
+    @staticmethod
+    def _account_dict(account, connection):
+        return {"id": account.id, "connection": account.connection_id, "configured": account.configured,
+                "selected": account.enabled, "active": account.enabled and account.configured and connection.enabled,
+                "kind": account.kind, "kind_confirmed_at": account.kind_confirmed_at,
+                "kind_confirmed_by": account.kind_confirmed_by,
+                "kind_confirmation_origin": account.kind_confirmation_origin}
+
+    def accounts(self, owner):
+        """Owner-scoped control metadata, without financial records or hashes."""
+        with self.sessions() as session:
+            session.execute(text("BEGIN"))
+            self._owner(session, owner)
+            rows = session.execute(select(Account, Connection).join(Connection).where(
+                Account.owner == owner, Connection.owner == owner).order_by(Account.id))
+            return [self._account_dict(account, connection) for account, connection in rows]
+
+    @staticmethod
+    def _actor(actor, origin):
+        if (not isinstance(actor, str) or not actor.strip() or len(actor) > 128
+                or any(ord(c) < 32 or ord(c) == 127 for c in actor) or origin != "operator"):
+            raise BudgetStoreError("Invalid account control actor or origin")
+
+    def _owned_account(self, session, owner, account_id):
+        self._owner(session, owner)
+        account = session.get(Account, account_id)
+        if account is None or account.owner != owner:
+            raise BudgetStoreError("Unknown bank account")
+        connection = session.get(Connection, account.connection_id)
+        if connection.owner != owner:
+            raise BudgetStoreError("Unknown bank account")
+        return account, connection
+
+    def _audit(self, session, account, actor, origin, field, old, new):
+        session.add(AccountAudit(account_id=account.id, owner=account.owner, actor=actor, origin=origin,
+                                 field=field, old_value_json=_json(old), new_value_json=_json(new),
+                                 changed_at=self.clock()))
+
+    def set_account_selected(self, owner, account_id, selected, *, actor, origin="operator"):
+        """Explicit owner selection; allowlist reconciliation cannot override it."""
+        self._actor(actor, origin)
+        if type(selected) is not bool:
+            raise BudgetStoreError("Account selection must be a boolean")
+        with self.transaction() as session:
+            account, connection = self._owned_account(session, owner, account_id)
+            if selected and not (account.configured and connection.enabled):
+                raise BudgetStoreError("Bank account is outside the configured allowlist")
+            changed = account.enabled != selected
+            if changed:
+                self._audit(session, account, actor, origin, "selected", account.enabled, selected)
+                account.enabled = selected
+            return {**self._account_dict(account, connection), "changed": changed}
+
+    def confirm_account_kind(self, owner, account_id, kind, *, actor, origin="operator"):
+        """Record an explicit confirmation without selecting or moving history."""
+        self._actor(actor, origin)
+        if not isinstance(kind, str) or kind not in ACCOUNT_KINDS:
+            raise BudgetStoreError("Unknown account kind")
+        with self.transaction() as session:
+            account, connection = self._owned_account(session, owner, account_id)
+            changed = account.kind != kind or account.kind_confirmed_at is None
+            if changed:
+                old = {"kind": account.kind, "confirmed": account.kind_confirmed_at is not None}
+                self._audit(session, account, actor, origin, "kind", old, {"kind": kind, "confirmed": True})
+                account.kind, account.kind_confirmed_at = kind, self.clock()
+                account.kind_confirmed_by, account.kind_confirmation_origin = actor, origin
+            return {**self._account_dict(account, connection), "changed": changed}
+
+    def selected_hashes(self, connection_id, owner):
+        with self.sessions() as session:
+            session.execute(text("BEGIN"))
+            self._owner(session, owner)
+            row = session.get(Connection, connection_id)
+            if row is None or row.owner != owner or not row.enabled:
+                return set()
+            return set(session.scalars(select(Account.identification_hash).where(
+                Account.connection_id == connection_id, Account.owner == owner, Account.enabled, Account.configured)))
 
     def start_attempt(self, connection_id):
         """Reserve quota BEFORE HTTP; a crash cannot cause an immediate duplicate fetch."""
@@ -94,7 +175,7 @@ class BudgetStore:
                 raise BudgetStoreError("Unknown or disabled bank connection")
             self._owner(session, row.owner)
             selected = session.scalar(select(func.count()).select_from(Account).where(
-                Account.connection_id == connection_id, Account.enabled))
+                Account.connection_id == connection_id, Account.owner == row.owner, Account.enabled, Account.configured))
             if not selected or row.next_attempt > now:
                 return False
             row.last_attempt, row.next_attempt = now, now + 43200
@@ -121,7 +202,7 @@ class BudgetStore:
                 raise BudgetStoreError("Unknown or disabled bank connection")
             self._owner(session, row.owner)
             accounts = {a.identification_hash: a for a in session.scalars(select(Account).where(
-                Account.connection_id == connection_id, Account.enabled))}
+                Account.connection_id == connection_id, Account.owner == row.owner, Account.enabled, Account.configured))}
             observations = (*snapshot.accounts, *snapshot.errors)
             if (len(observations) != len(accounts)
                     or {a.identification_hash for a in observations} != set(accounts)):
@@ -305,7 +386,9 @@ class BudgetStore:
             for row in session.scalars(query):
                 accounts = select(Account.id).where(Account.connection_id == row.id)
                 selected = session.scalar(select(func.count()).select_from(Account).where(
-                    Account.connection_id == row.id, Account.enabled))
+                    Account.connection_id == row.id, Account.enabled, Account.configured))
+                configured = session.scalar(select(func.count()).select_from(Account).where(
+                    Account.connection_id == row.id, Account.configured))
                 canonical = session.scalar(select(func.count()).select_from(Transaction).where(
                     Transaction.account_id.in_(accounts), Transaction.uncertain.is_(False)))
                 uncertain = session.scalar(select(func.count()).select_from(Transaction).where(
@@ -321,6 +404,7 @@ class BudgetStore:
                     Transaction.account_id.in_(accounts), Transaction.source == "offline_import",
                     Transaction.uncertain.is_(False)))
                 result.append({"connection": row.id, "owner": row.owner, "enabled": row.enabled,
+                               "selection_policy_version": 2, "configured_accounts": configured,
                                "selected_accounts": selected, "transactions": canonical, "unresolved": unresolved,
                                "uncertain_transactions": uncertain,
                                "offline_imports": import_count, "offline_transactions": imported,
@@ -330,6 +414,8 @@ class BudgetStore:
                                "failures": row.failures, "valid_until": row.valid_until,
                                "renewal_due": row.valid_until is not None and row.valid_until - now <= 604800,
                                "accounts": [{"id": account.id, "enabled": account.enabled,
+                                             "configured": account.configured, "kind": account.kind,
+                                             "kind_confirmed_at": account.kind_confirmed_at,
                                              "last_attempt": account.last_attempt,
                                              "last_success": account.observed_at, "last_error": account.last_error}
                                             for account in session.scalars(select(Account).where(
