@@ -205,6 +205,14 @@ explicitly enable the relevant flags. API deployment alone neither copies PoC
 files nor imports records. Callback-specific logging gates apply later to SCA,
 not to this external-session data path.
 
+External-session cutover must coordinate every tool using the same application/
+bank/account context: Hestia's local debits cannot see recent PoC requests, and
+bank quotas are not separate allowances per tool. Stop competing PoC acquisition
+before enabling Hestia. Carry verified recent attempts into conservative quota
+state, or wait the applicable full rolling window and any longer server cooldown
+from the latest known attempt. Crossing midnight or merely waiting until tomorrow
+is not evidence of a fresh allowance. No key/app/session recreation to reset it.
+
 ## Browser consent: preserve the Strict session cookie
 
 `hestia_session` is currently HttpOnly, `SameSite=Strict`, with configurable Secure.
