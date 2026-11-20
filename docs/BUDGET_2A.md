@@ -23,6 +23,11 @@ Proposed kinds: `unknown`, `current`, `savings`, `credit_card`, `other`.
 Store explicit owner confirmation separately: confirmed kind, confirmation time
 and confirmation origin. Existing accounts migrate to unconfirmed `unknown`.
 Provider metadata or a prefill may suggest a kind, but never confirms it.
+Secondary identification hashes are reconciliation hints, not automatic merge
+keys: some are not unique. A changed primary hash or ambiguous alias requires
+explicit reconciliation without reassigning existing history.
+See [AccountResource](https://enablebanking.com/docs/api/reference/#accountresource)
+for the distinction between the primary hash and non-unique secondary hashes.
 Missing `balance_after_transaction`, a product name or an account-type code does
 not prove a credit card. An imported file cannot supply trusted confirmation.
 Account kind and currencies are independent: a credit card may be multicurrency,
@@ -39,9 +44,17 @@ explicit selection action. Version/document this change to legacy CLI selection
 behavior before shipping it, and test it independently of kind confirmation.
 An operator workflow must explicitly record owner confirmation rather than treating
 existing configuration, an admin row or successful bank consent as that confirmation.
+Proposed CLI actions: `accounts`, `account select <local-id>`,
+`account deselect <local-id>` and `account confirm-kind <local-id> --kind <kind>`.
+These privileged local actions act on behalf of the configured owner, not as an
+authenticated browser principal. Append an audit record containing actor, owner,
+local account ID, time, field, old/new enum or boolean and origin; omit amounts,
+IBANs and bank descriptions.
 2A adds no financial HTTP access. The 2B contract must reject access when auth is
 off, require an enabled authenticated principal and enforce exact owner scope.
 An admin role alone must not grant another household member's financial data.
+Later HTTP access returns 401 for an invalid/missing session (including a disabled
+user), 403 for a valid non-admin, and 404 for another owner's resource.
 
 ## 2A.2 — independent transactions and balances
 
@@ -55,6 +68,9 @@ an absent bank timestamp stays absent. Transaction row `observed_at` and
 `api_observed_at` retain their existing meanings, independent of component freshness.
 Expose states `never`, `ready`, `deferred`, `running`, `ok`, `error`, `blocked`;
 derive stale age from complete-success time and an explicit freshness policy.
+Proposed configurable defaults: transactions stale after 36 hours and balances
+after 24 hours. These describe acquisition freshness, not invented bank source
+timestamps or a guarantee of current bank data.
 State `ok` describes a completed request, not guaranteed bank history completeness.
 Session expiry/revocation blocks new work without erasing previously stored data.
 Split normalizer output into component successes/failures. Validate the session,
@@ -74,8 +90,15 @@ components refreshed. Keep an explicit all-selected-components success timestamp
 Depends on independent component state; it must not use a connection timestamp as
 evidence that both endpoint budgets are available. Persist limits by stable local
 account and operation, with applicable shared bank/session/application cooldowns.
-Unknown rate-limit scope should conservatively block the enclosing connection.
+An `ASPSP_RATE_LIMIT_EXCEEDED` response on an account endpoint defaults to that
+account and operation, preserving healthy sibling accounts. Session-level 429
+blocks the connection. Explicit application/provider-wide errors use that wider
+scope; genuinely unclassified responses use a conservative connection floor.
+Do not infer a global limit from one known account-level rate error.
 Use verified bank policy/configuration; no universal provider quota is assumed.
+Default background cadence is two acquisitions per day per selected endpoint,
+subject to stricter verified bank quotas. This is an operational ceiling, not a
+promise of bank allowance or spare manual requests.
 Reserve an account/endpoint **acquisition** in a short transaction before its first
 HTTP call. Correct continuation pages share that acquisition; do not charge a
 daily refresh allowance again for each page. ING's refresh series limit must not
@@ -87,12 +110,22 @@ after a crash conservatively retains its reservation across restart, configurati
 changes and session renewal. Expiring a running lease must not erase consumed quota.
 The HTTP client returns safe structured retry metadata without raw response bodies,
 URLs or account identifiers. Parse `Retry-After` delay-seconds and HTTP-date using
+an injected clock, and preserve recognized provider error codes through an
+allowlist so account-level ASPSP errors can be distinguished from provider limits.
+Parse retry metadata using
 an injected clock; malformed/past values use a conservative fallback policy.
 Compute eligibility from the latest applicable quota, backoff and valid server
 deadline. Never retry earlier than a valid `Retry-After`; an extreme delay suspends
 automatic acquisition for operator review instead of truncating the delay early.
+For this proposal, a valid delay exceeding seven days or extending beyond session
+validity suspends automatic acquisition. Keep the original deadline; suspension
+does not make a retry eligible at the seven-day boundary.
 Persist failure/backoff before returning. No immediate HTTP retries; manual refresh
 uses the same reservation path. Background calls continue to omit all PSU headers.
+Legitimate interactive PSU context is a separate 2B decision; never forge it to
+claim an online allowance. Proposed transport timeout is 60 seconds per request
+with a 15-minute whole-acquisition deadline, in addition to row/page/size bounds.
+Reaching that deadline reports incomplete/deferred and retains previous data.
 If pagination cannot finish within permitted acquisition/transport constraints, retain committed history and
 report deferred/incomplete work; do not publish a partial transaction collection.
 
