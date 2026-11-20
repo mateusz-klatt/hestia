@@ -216,7 +216,8 @@ observation time. Import batches separately record source time, ingestion time,
 normalized content digest and outcome counts. A normalized repeat (including JSON
 formatting/key-order changes, reordered rows or changed volatile detail handles)
 is idempotent. Unreferenced identical transactions retain their real multiplicity.
-The report on a repeat identifies the previous batch rather than applying it again.
+The report on a repeat identifies the previous batch and returns zero per-run
+outcome counts. The original batch counts remain stored for provenance.
 The CLI batch identifier is an opaque UUID; the content fingerprint stays in the
 database. API BOOK conflicts now also retain an uncertain placeholder when no
 canonical entry existed before, so the uncertainty count can increase for that

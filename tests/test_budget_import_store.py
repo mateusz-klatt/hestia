@@ -70,6 +70,11 @@ class BudgetImportStoreTests(unittest.TestCase):
         self.assertEqual(json.loads(tx.payload_json)["booking_date"], "2001-01-01")
         replay = self.store.import_snapshot(config, imported)
         self.assertTrue(replay["duplicate"])
+        for field in ("inserted", "updated", "preserved_api", "stale", "unresolved", "unchanged"):
+            self.assertEqual(replay[field], 0)
+        original_report = json.loads(self.rows(db.BudgetImportBatch)[0].report_json)
+        self.assertEqual(original_report["inserted"], 1)
+        self.assertEqual(original_report["unresolved"], 3)
         self.assertEqual(len(self.rows(db.BudgetImportBatch)), 1)
         self.assertEqual(len(self.rows(db.BudgetImportUnresolved)), 3)
         self.assertEqual(self.store.status()[0], state)

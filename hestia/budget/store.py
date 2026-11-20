@@ -190,7 +190,10 @@ class BudgetStore:
             if batch is not None:
                 if batch.account_id != account.id:
                     raise BudgetStoreError("Offline import identity mismatch")
-                return {**json.loads(batch.report_json), "duplicate": True}
+                report = {**json.loads(batch.report_json), "duplicate": True}
+                for field in ("inserted", "updated", "preserved_api", "stale", "unresolved", "unchanged"):
+                    report[field] = 0
+                return report
             self._restore_api_conflicts(session, account.id)
             batch = ImportBatch(id=str(uuid.uuid4()), fingerprint=snapshot.digest,
                                 account_id=account.id, fetched_at=snapshot.fetched_at,
