@@ -600,9 +600,10 @@ def _event_node(frame: Frame) -> "bytes | None":
 # The gateway occasionally emits a checksum-valid `[1e 09]` whose node byte has a flipped bit
 # (seen 2026-08-12: node 9 also reported as 73 = 9|0x40 and 137 = 9|0x80). Each such phantom
 # shows up once, so a node that is neither registered nor on the roster must be seen a few
-# times in a short window before it may create a registry entry, state, or fire automations.
+# times before it may create a registry entry, state, or fire automations. The window is a day
+# so a genuinely new but quiet sensor (a door contact, a rarely-pressed button) still gets in.
 NEW_NODE_MIN_SIGHTINGS = 3
-NEW_NODE_WINDOW_S = 3600.0
+NEW_NODE_WINDOW_S = 86400.0
 
 
 def _admit_event_node(rt, frame: Frame) -> bool:
@@ -829,7 +830,9 @@ class ProxySession:
         if not frame.checksum_ok:         # don't act on a corrupt frame
             return []
         if not _admit_event_node(self.rt, frame):   # a likely bit-flipped phantom node
-            return []
+            if direction == "D->C":
+                self._pending_scene = None  # the cloud may react to THIS (forwarded) press — never
+            return []                       # learn that batch under an earlier, known button
         changed = self.rt.state.apply(frame)
         node_b = _event_node(frame)
         if node_b:                        # changed is only ever non-empty here

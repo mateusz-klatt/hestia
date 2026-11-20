@@ -430,7 +430,8 @@ class SceneCaptureTests(unittest.TestCase):
 
     def test_latest_press_wins_on_overwrite(self):
         rt = proxy.ProxyRuntime()
-        rt.registry.observe(7, "light", "inferred")          # known node, so its press is admitted
+        rt.registry.observe(2, "light", "inferred")          # known nodes, so both presses are admitted
+        rt.registry.observe(7, "light", "inferred")
         sess = make_session(rt)
         sess._observe(Frame(SCENE_PRESS[1:-1]), "D->C")      # node 2 / scene 3
         press_b = build_frame(0x1E, 0x09, tlv(0x0047, b"\x07") + tlv(0x0046, b"\x2b\x01\x02\x00"))
@@ -489,6 +490,31 @@ class AdmitEventNodeTests(unittest.TestCase):
         make_session(rt)._observe(_event(0x49), "D->C")
         self.assertNotIn("73", rt.registry.nodes)
         self.assertEqual(rt.state.thermostat_on, {})
+
+    def test_quarantined_press_invalidates_pending_scene_capture(self):
+        rt = self._rt()
+        rt.registry.observe(2, "light", "inferred")
+        sess = make_session(rt)
+        sess._observe(Frame(SCENE_PRESS[1:-1]), "D->C")      # known node 2 / scene 3 → pending
+        phantom = build_frame(0x1E, 0x09, tlv(0x0047, b"\x42") + tlv(0x0046, b"\x2b\x01\x03\x00"))
+        sess._observe(Frame(phantom[1:-1]), "D->C")          # quarantined press, forwarded to cloud
+        sess._observe(Frame(SCENE_BATCH[1:-1]), "C->D")      # the cloud's reaction to the phantom
+        self.assertIsNone(rt.registry.scene_batch(2, 3))     # not mis-learned under node 2
+        self.assertNotIn("66", rt.registry.nodes)
+
+    def test_quarantined_cloud_frame_keeps_pending_scene(self):
+        rt = self._rt()
+        sess = make_session(rt)
+        sess._pending_scene = (9, 3, proxy.time.monotonic())
+        sess._observe(_event(0x49), "C->D")
+        self.assertIsNotNone(sess._pending_scene)
+
+    def test_quiet_new_sensor_admitted_within_a_day(self):
+        rt = self._rt()
+        hours = [0.0, 6 * 3600.0, 20 * 3600.0]               # three reports, hours apart
+        with mock.patch.object(proxy.time, "monotonic", side_effect=hours):
+            self.assertEqual([proxy._admit_event_node(rt, _event(0x21)) for _ in hours],
+                             [False, False, True])
 
 
 # --- async paths -------------------------------------------------------------
