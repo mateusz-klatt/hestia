@@ -7,6 +7,7 @@ import datetime
 import shutil
 import signal
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -862,6 +863,146 @@ class RunTests(unittest.IsolatedAsyncioTestCase):
         with mock.patch("asyncio.open_connection", new=conn):
             await sess.run()
         self.assertTrue(dev_w.closed and cloud_w.closed)
+        self.assertEqual(rt.sessions, [])
+
+
+class RefreshCloudTests(unittest.IsolatedAsyncioTestCase):
+    """Re-resolving a seed-only upstream after the box booted before its WAN was up."""
+
+    def _cfg(self, **kw):
+        return proxy.ProxyConfig(cloud_host="9.9.9.9", cloud_resolved=False, **kw)
+
+    async def test_already_resolved_is_noop(self):
+        cfg = proxy.ProxyConfig(cloud_host="9.9.9.9")
+        with mock.patch.object(proxy, "CLOUD_HOSTNAME", "gw"), \
+             mock.patch.object(proxy.resolve, "doh_resolve") as r:
+            await proxy._refresh_cloud(cfg)
+        r.assert_not_called()
+
+    async def test_no_hostname_is_noop(self):
+        with mock.patch.object(proxy, "CLOUD_HOSTNAME", None), \
+             mock.patch.object(proxy.resolve, "doh_resolve") as r:
+            await proxy._refresh_cloud(self._cfg())
+        r.assert_not_called()
+
+    async def test_success_adopts_new_ip_and_marks_resolved(self):
+        cfg = self._cfg()
+        with mock.patch.object(proxy, "CLOUD_HOSTNAME", "gw"), \
+             mock.patch.object(proxy.resolve, "doh_resolve", return_value="8.8.4.4") as r:
+            await proxy._refresh_cloud(cfg)
+        r.assert_called_once_with("gw", port=cfg.cloud_port)
+        self.assertEqual((cfg.cloud_host, cfg.cloud_resolved, cfg.cloud_refresh),
+                         ("8.8.4.4", True, None))
+
+    async def test_failure_keeps_seed_and_throttles(self):
+        cfg = self._cfg()
+        with mock.patch.object(proxy, "CLOUD_HOSTNAME", "gw"), \
+             mock.patch.object(proxy.resolve, "doh_resolve", return_value=None) as r:
+            await proxy._refresh_cloud(cfg)
+            await proxy._refresh_cloud(cfg)                            # within CLOUD_RETRY_S → skipped
+        self.assertEqual(r.call_count, 1)
+        self.assertEqual((cfg.cloud_host, cfg.cloud_resolved, cfg.cloud_refresh),
+                         ("9.9.9.9", False, None))
+
+    async def test_concurrent_callers_share_one_lookup(self):
+        cfg = self._cfg()
+        release = threading.Event()
+        def slow(*_a, **_k):
+            release.wait(5)
+            return "8.8.4.4"
+        with mock.patch.object(proxy, "CLOUD_HOSTNAME", "gw"), \
+             mock.patch.object(proxy.resolve, "doh_resolve", side_effect=slow) as r:
+            a = asyncio.create_task(proxy._refresh_cloud(cfg))
+            b = asyncio.create_task(proxy._refresh_cloud(cfg))
+            await asyncio.sleep(0.01)
+            release.set()
+            await asyncio.gather(a, b)
+        self.assertEqual(r.call_count, 1)                              # the second waited on the first
+        self.assertEqual((cfg.cloud_host, cfg.cloud_resolved), ("8.8.4.4", True))
+
+    async def test_late_success_still_published_after_caller_timeout(self):
+        cfg = self._cfg()
+        release = threading.Event()
+        def slow(*_a, **_k):
+            release.wait(5)
+            return "8.8.4.4"
+        with mock.patch.object(proxy, "CLOUD_HOSTNAME", "gw"), \
+             mock.patch.object(proxy, "CLOUD_RESOLVE_TIMEOUT_S", 0.01), \
+             mock.patch.object(proxy.resolve, "doh_resolve", side_effect=slow):
+            await proxy._refresh_cloud(cfg)                            # gives up waiting
+            self.assertEqual(cfg.cloud_host, "9.9.9.9")
+            fut = cfg.cloud_refresh
+            self.assertIsNotNone(fut)
+            release.set()
+            await fut
+        self.assertEqual((cfg.cloud_host, cfg.cloud_resolved, cfg.cloud_refresh),
+                         ("8.8.4.4", True, None))
+
+    async def test_cancelled_lookup_frees_slot_and_keeps_seed(self):
+        cfg = self._cfg()
+        release = threading.Event()
+        with mock.patch.object(proxy, "CLOUD_HOSTNAME", "gw"), \
+             mock.patch.object(proxy, "CLOUD_RESOLVE_TIMEOUT_S", 0.01), \
+             mock.patch.object(proxy.resolve, "doh_resolve", side_effect=lambda *a, **k: release.wait(5)):
+            await proxy._refresh_cloud(cfg)
+            task = cfg.cloud_refresh
+            task.cancel()                                              # e.g. loop shutdown
+            await asyncio.gather(task, return_exceptions=True)
+            release.set()
+        self.assertEqual((cfg.cloud_host, cfg.cloud_resolved, cfg.cloud_refresh),
+                         ("9.9.9.9", False, None))
+
+    async def test_session_retries_once_on_reresolved_ip(self):
+        rt = proxy.ProxyRuntime()
+        cfg = self._cfg(cloud_port=1)
+        dev_w, cloud_w = FakeWriter(), FakeWriter()
+        sess = proxy._proxy_session(rt, FakeReader([]), dev_w, cfg)
+        conn = mock.AsyncMock(side_effect=[OSError("unreachable"), (FakeReader([]), cloud_w)])
+        with mock.patch.object(proxy, "CLOUD_HOSTNAME", "gw"), \
+             mock.patch.object(proxy.resolve, "doh_resolve", return_value="8.8.4.4"), \
+             mock.patch("asyncio.open_connection", new=conn):
+            await sess.run()
+        self.assertEqual([c.args for c in conn.call_args_list], [("9.9.9.9", 1), ("8.8.4.4", 1)])
+        self.assertTrue(dev_w.closed and cloud_w.closed)
+
+    async def test_session_retries_on_ip_another_session_resolved(self):
+        rt = proxy.ProxyRuntime()
+        cfg = self._cfg(cloud_port=1)
+        dev_w, cloud_w = FakeWriter(), FakeWriter()
+        sess = proxy._proxy_session(rt, FakeReader([]), dev_w, cfg)    # captured the seed
+        cfg.cloud_host, cfg.cloud_resolved = "8.8.4.4", True           # a concurrent session re-resolved
+        conn = mock.AsyncMock(side_effect=[OSError("unreachable"), (FakeReader([]), cloud_w)])
+        with mock.patch.object(proxy, "CLOUD_HOSTNAME", "gw"), \
+             mock.patch.object(proxy.resolve, "doh_resolve") as r, \
+             mock.patch("asyncio.open_connection", new=conn):
+            await sess.run()
+        r.assert_not_called()
+        self.assertEqual([c.args for c in conn.call_args_list], [("9.9.9.9", 1), ("8.8.4.4", 1)])
+
+    async def test_session_does_not_redial_same_ip(self):
+        rt = proxy.ProxyRuntime()
+        dev_w = FakeWriter()
+        cfg = self._cfg()
+        sess = proxy._proxy_session(rt, FakeReader([]), dev_w, cfg)
+        conn = mock.AsyncMock(side_effect=OSError("unreachable"))
+        with mock.patch.object(proxy, "CLOUD_HOSTNAME", "gw"), \
+             mock.patch.object(proxy.resolve, "doh_resolve", return_value="9.9.9.9"), \
+             mock.patch("asyncio.open_connection", new=conn):
+            await sess.run()
+        self.assertEqual(conn.call_count, 1)
+        self.assertTrue(cfg.cloud_resolved)
+
+    async def test_session_gives_up_when_reresolve_fails(self):
+        rt = proxy.ProxyRuntime()
+        dev_w = FakeWriter()
+        sess = proxy._proxy_session(rt, FakeReader([]), dev_w, self._cfg())
+        conn = mock.AsyncMock(side_effect=OSError("unreachable"))
+        with mock.patch.object(proxy, "CLOUD_HOSTNAME", "gw"), \
+             mock.patch.object(proxy.resolve, "doh_resolve", return_value=None), \
+             mock.patch("asyncio.open_connection", new=conn):
+            await sess.run()
+        self.assertEqual(conn.call_count, 1)
+        self.assertTrue(dev_w.closed)
         self.assertEqual(rt.sessions, [])
 
 
@@ -2072,14 +2213,21 @@ class MergedDiscoveryTests(unittest.TestCase):
     def test_resolve_cloud_no_hostname_keeps_host(self):
         cfg = proxy.ProxyConfig(cloud_host="9.9.9.9")
         with mock.patch.object(proxy, "CLOUD_HOSTNAME", None):
-            self.assertEqual(proxy._resolve_cloud(cfg), "9.9.9.9")     # literal pin — no resolution
+            self.assertEqual(proxy._resolve_cloud(cfg), ("9.9.9.9", True))  # literal pin — no resolution
 
     def test_resolve_cloud_hostname_resolves(self):
         cfg = proxy.ProxyConfig(cloud_host="9.9.9.9")                  # 9.9.9.9 = seed
         with mock.patch.object(proxy, "CLOUD_HOSTNAME", "gw.keemple.com"), \
-             mock.patch.object(proxy.resolve, "resolve_cloud_ip", return_value="1.2.3.4") as r:
-            self.assertEqual(proxy._resolve_cloud(cfg), "1.2.3.4")     # pure: returns, doesn't mutate
-            r.assert_called_once_with("gw.keemple.com", seed="9.9.9.9", port=cfg.cloud_port)
+             mock.patch.object(proxy.resolve, "doh_resolve", return_value="1.2.3.4") as r:
+            self.assertEqual(proxy._resolve_cloud(cfg), ("1.2.3.4", True))  # pure: returns, doesn't mutate
+            r.assert_called_once_with("gw.keemple.com", port=cfg.cloud_port)
+        self.assertEqual(cfg.cloud_host, "9.9.9.9")
+
+    def test_resolve_cloud_doh_failure_returns_seed_unresolved(self):
+        cfg = proxy.ProxyConfig(cloud_host="9.9.9.9")
+        with mock.patch.object(proxy, "CLOUD_HOSTNAME", "gw.keemple.com"), \
+             mock.patch.object(proxy.resolve, "doh_resolve", return_value=None):
+            self.assertEqual(proxy._resolve_cloud(cfg), ("9.9.9.9", False))  # seed, flagged for retry
 
     def test_endpoint_names_in_discovery(self):
         """Per-endpoint labels (registry) ride alongside the live endpoint states."""

@@ -106,6 +106,18 @@ class ResolveCloudIpTests(unittest.TestCase):
         self.assertLessEqual(cc.call_count, resolve.MAX_CANDIDATES * len(resolve.DOH_ENDPOINTS))
 
 
+class DohResolveTests(unittest.TestCase):
+    @mock.patch("hestia.resolve.urllib.request.urlopen", side_effect=OSError)
+    def test_reports_failure_as_none(self, urlopen):
+        self.assertIsNone(resolve.doh_resolve("gw"))               # no seed: the caller decides
+
+    @mock.patch("hestia.resolve.urllib.request.urlopen")
+    def test_truncated_body_tries_next_endpoint(self, urlopen):
+        import http.client
+        urlopen.side_effect = http.client.IncompleteRead(b"{")
+        self.assertIsNone(resolve.doh_resolve("gw"))
+        self.assertEqual(urlopen.call_count, len(resolve.DOH_ENDPOINTS))
+
 class DohParsingTests(unittest.TestCase):
     @mock.patch("hestia.resolve.urllib.request.urlopen")
     def test_malformed_answer_entries_dropped(self, urlopen):

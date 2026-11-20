@@ -20,11 +20,13 @@ is used verbatim (a literal pin).
 
 ``timeout`` is **per operation** (each DoH query and each connect-probe), so the
 worst case is ``len(endpoints) × (1 + MAX_CANDIDATES) × timeout`` if every probe
-times out. The proxy runs this once at startup and caps it with its own
-``asyncio.wait_for`` ceiling, so a slow/hostile upstream can't stall startup.
+times out. The proxy runs this at startup and caps it with its own
+``asyncio.wait_for`` ceiling, so a slow/hostile upstream can't stall startup. If startup
+only got the seed, :func:`doh_resolve` is retried (throttled) after an upstream dial fails.
 """
 from __future__ import annotations
 
+import http.client
 import ipaddress
 import json
 import logging
@@ -70,17 +72,15 @@ def _serves(ip: str, port: int, timeout: float) -> bool:
         return False
 
 
-def resolve_cloud_ip(hostname: str, seed: str, *, port: int = 8925,
-                     timeout: float = 3.0, endpoints=DOH_ENDPOINTS) -> str:
-    """Return the IP to dial for ``hostname`` — a DoH-resolved, global, port-serving
-    address, or ``seed`` if none qualifies. Never raises. Contract: a *DoH answer* is
-    never returned unless it's global (loop-guard), but the explicit operator ``seed``
-    (``HESTIA_CLOUD_HOST``) is honoured even if non-global — a loud error is logged
-    rather than crashing startup or silently overriding a deliberate pin."""
+def doh_resolve(hostname: str, *, port: int = 8925, timeout: float = 3.0,
+                endpoints=DOH_ENDPOINTS) -> "str | None":
+    """Return a DoH-resolved, global, port-serving address for ``hostname``, or ``None``
+    if no endpoint yields one. Never raises. Unlike :func:`resolve_cloud_ip` this reports
+    failure, so the proxy can tell a real answer from a seed fallback and retry later."""
     for endpoint in endpoints:
         try:
             answers = _doh_a_records(endpoint, hostname, timeout)
-        except (OSError, ValueError) as exc:             # network (URLError⊂OSError) / bad-JSON
+        except (OSError, ValueError, http.client.HTTPException) as exc:  # network / bad-JSON / truncated body
             log.warning("DoH %s failed for %s: %r", endpoint, hostname, exc)
             continue
         for ip in answers[:MAX_CANDIDATES]:
@@ -91,6 +91,11 @@ def resolve_cloud_ip(hostname: str, seed: str, *, port: int = 8925,
                 log.info("resolved %s -> %s (serves :%d)", hostname, ip, port)
                 return ip
             log.warning("%s for %s does not serve :%d — skipping", ip, hostname, port)
+    return None
+
+
+def seed_fallback(hostname: str, seed: str) -> str:
+    """Log why ``seed`` is being used for ``hostname`` and return it unchanged."""
     # Fallback: the operator's last-known-good seed. It SHOULD be a global address; if
     # it isn't, that's a misconfigured HESTIA_CLOUD_HOST — warn loudly but honour it
     # (never crash startup, never silently override the operator's explicit pin).
@@ -100,3 +105,14 @@ def resolve_cloud_ip(hostname: str, seed: str, *, port: int = 8925,
     else:
         log.warning("DoH resolution failed for %s; falling back to seed %s", hostname, seed)
     return seed
+
+
+def resolve_cloud_ip(hostname: str, seed: str, *, port: int = 8925,
+                     timeout: float = 3.0, endpoints=DOH_ENDPOINTS) -> str:
+    """Return the IP to dial for ``hostname`` — a DoH-resolved, global, port-serving
+    address, or ``seed`` if none qualifies. Never raises. Contract: a *DoH answer* is
+    never returned unless it's global (loop-guard), but the explicit operator ``seed``
+    (``HESTIA_CLOUD_HOST``) is honoured even if non-global — a loud error is logged
+    rather than crashing startup or silently overriding a deliberate pin."""
+    ip = doh_resolve(hostname, port=port, timeout=timeout, endpoints=endpoints)
+    return ip if ip is not None else seed_fallback(hostname, seed)
