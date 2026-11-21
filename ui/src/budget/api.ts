@@ -3,7 +3,7 @@
 // failed call cannot become an unhandled rejection. Nothing here persists financial data in the browser.
 import { apiUrl } from "../api/client";
 import type { BudgetAccount, BudgetCapabilities, BudgetConnection, BudgetJob, BudgetKind, BudgetBalances,
-  BudgetOperation, BudgetTransactions } from "./model";
+  BudgetLimit, BudgetOperation, BudgetTransactions } from "./model";
 import { idempotencyKey } from "./model";
 
 export type BudgetResult<T> =
@@ -60,6 +60,8 @@ export const budgetApi = {
       limit: options.limit,
     })),
   balances: (accountId: string) => call<BudgetBalances>(url("balances", { account_id: accountId })),
+  /** Stored limits only: no bank request, no way to lift a suspension or deadline from the browser. */
+  limits: () => call<{ limits: BudgetLimit[] }>(url("limits")),
   jobs: (connectionId?: string) => call<{ jobs: BudgetJob[] }>(url("jobs", { connection_id: connectionId })),
   setSelected: (account: BudgetAccount, selected: boolean) =>
     post<{ account: BudgetAccount }>("account-selection",

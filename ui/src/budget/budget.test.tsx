@@ -4,7 +4,7 @@ import type { Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BudgetApi, BudgetResult } from "./api";
 import { Budget } from "./budget";
-import { account, connection } from "./fixtures";
+import { account, componentLimit, connection, sharedLimit } from "./fixtures";
 import type { BudgetAccount, BudgetBalances, BudgetJob, BudgetTransaction, BudgetTransactions } from "./model";
 
 type Settle<T> = (value: BudgetResult<T>) => void;
@@ -48,6 +48,7 @@ function fakeApi(accounts: BudgetAccount[] = [account({ display })]) {
     jobs: vi.fn<BudgetApi["jobs"]>(() => ok({ jobs: [] })),
     transactions: vi.fn<BudgetApi["transactions"]>(() => ok(page([]))),
     balances: vi.fn<BudgetApi["balances"]>(() => ok(balancesData)),
+    limits: vi.fn<BudgetApi["limits"]>(() => ok({ limits: [] })),
     setSelected: vi.fn<BudgetApi["setSelected"]>(),
     setKind: vi.fn<BudgetApi["setKind"]>(),
     setPaused: vi.fn<BudgetApi["setPaused"]>(),
@@ -339,6 +340,62 @@ describe("access barrier and version-aware reads", () => {
     });
     await settle();
     expect(host.querySelector<HTMLInputElement>(".budget-account input[type=checkbox]")?.checked).toBe(false);
+  });
+});
+
+describe("download limits", () => {
+  const soon = Date.now() / 1000 + 6 * 3600;
+  function limitsFor(): Loaded<BudgetApi["limits"]> {
+    return { limits: [
+      sharedLimit("connection"), sharedLimit("application"), sharedLimit("provider", { retry_at: soon + 600, next_attempt: soon + 600 }),
+      componentLimit("local-a", "transactions", { next_attempt: soon, last_attempt: 1_795_000_000 }),
+      componentLimit("local-a", "balances", { suspended: true }),
+      componentLimit("local-b", "transactions", { lease_until: Date.now() / 1000 + 300 }),
+      componentLimit("local-b", "balances"),
+      componentLimit("other-account", "balances", { connection: "other-bank" }),
+    ] };
+  }
+
+  it("loads only on demand, shows readable states per account and offers no way to lift them", async () => {
+    const api = fakeApi([account({ display }), account({ id: "local-b", selected: false,
+      display: { ...display, product: "Synthetic Savings", masked_suffix: "0002" } })]);
+    api.limits.mockImplementation(() => ok(limitsFor()));
+    await render(api);
+    expect(api.limits).not.toHaveBeenCalled();
+    await click(button("Download limits"));
+    expect(api.limits).toHaveBeenCalledTimes(1);
+    const panel = host.querySelector(".budget-limits");
+    expect(panel?.textContent).toContain("This bank: bank asked for a pause until");
+    const rows = [...host.querySelectorAll(".budget-limits-table tbody tr")].map((row) => row.textContent);
+    expect(rows[0]).toContain("Synthetic Current ••0001");
+    expect(rows[0]).toContain("bank asked for a pause until");
+    expect(rows[0]).toContain("suspended — needs the operator");
+    expect(rows[0]).toContain("last attempt");
+    expect(rows[1]).toContain("(excluded)");
+    expect(rows[1]).toContain("download in progress");
+    expect(host.textContent).not.toContain("local-a");
+    expect(host.textContent).not.toContain("other-account");
+    expect([...host.querySelectorAll(".budget-limits button")]).toHaveLength(0);
+    await click(button("Reload"));
+    expect(api.limits).toHaveBeenCalledTimes(2);
+    await click(button("Hide limits"));
+    expect(host.querySelector(".budget-limits")).toBeNull();
+  });
+
+  it("shows free shared limits, a load failure plainly, and clears everything on lost access", async () => {
+    const api = fakeApi();
+    api.limits.mockImplementation(() => fail(500, "budget_internal_error"));
+    await render(api);
+    await click(button("Download limits"));
+    expect(host.textContent).toContain("Limits could not be loaded.");
+    api.limits.mockImplementation(() => ok({ limits: [sharedLimit("connection"), componentLimit("local-a", "balances")] }));
+    await click(button("Reload"));
+    expect(host.textContent).toContain("Shared limits: no restriction");
+    expect(host.textContent).toContain("available now");
+    api.limits.mockImplementation(() => fail(401, "budget_http_401"));
+    await click(button("Reload"));
+    expect(host.textContent).toContain("Only the budget's owner");
+    expect(host.querySelector(".budget-limits")).toBeNull();
   });
 });
 
