@@ -77,9 +77,9 @@ export const budgetApi = {
   overview: (period: string, currency?: string) =>
     call<AnalyticsOverview>(url("analytics/overview", { period, currency })),
   /** One server-bounded page of a period's entries; empty filter values are omitted. */
-  analyticsTransactions: (period: string, filter: TransactionFilter, cursor?: string) =>
+  analyticsTransactions: (period: string, filter: TransactionFilter, cursor?: string, limit?: number) =>
     call<AnalyticsTransactions>(url("analytics/transactions", {
-      period, currency: filter.currency, category_id: filter.category, kind: filter.kind, query: filter.query, cursor,
+      period, currency: filter.currency, category_id: filter.category, kind: filter.kind, query: filter.query, cursor, limit,
     })),
   categories: () => call<{ categories: AnalyticsCategory[] }>(url("analytics/categories")),
   /** The owner's explicit category/kind decision for one entry, versioned against concurrent edits. */

@@ -5,8 +5,8 @@ import type { Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BudgetApi, BudgetResult } from "../api";
 import { account } from "../fixtures";
-import { annotationOf, categoryList, entriesOf, entry } from "./fixtures";
-import type { AnalyticsTransaction, AnalyticsTransactions, AnnotationSaved } from "./model";
+import { annotationOf, categoryList, decisionOf, entriesOf, entry } from "./fixtures";
+import type { AnalyticsTransaction, AnalyticsTransactions, AnnotationSaved, TransferDecisionResult } from "./model";
 import { TransactionsPanel, transactionLabels } from "./transactions";
 
 function ok<T>(data: T): Promise<BudgetResult<T>> { return Promise.resolve({ ok: true, data }); }
@@ -14,17 +14,36 @@ function fail<T>(status: number, error: string): Promise<BudgetResult<T>> { retu
 function pageOf(rows: AnalyticsTransaction[], cursor: string | null = null): AnalyticsTransactions {
   return entriesOf("2026-11", rows, cursor);
 }
+function pairDebit(reference = "out", changes: Partial<AnalyticsTransaction> = {}): AnalyticsTransaction {
+  return entry(reference, { amount: "100.00", booking_date: "2026-11-10", ...changes });
+}
+function pairCredit(reference = "in", changes: Partial<AnalyticsTransaction> = {}): AnalyticsTransaction {
+  return entry(reference, {
+    account_id: "acc-2", amount: "0100.00", credit_debit_indicator: "CRDT", booking_date: "2026-11-11",
+    metadata: { creditor_name: null, debtor_name: "Synthetic Card Repayment", mcc: null },
+    effective: { kind: "income", category_id: null, source: "default", rule_id: null }, ...changes,
+  });
+}
+function mockPairSearch(api: ReturnType<typeof fakeApi>, debit: AnalyticsTransaction, credits: AnalyticsTransaction[]): void {
+  api.analyticsTransactions.mockImplementation((period, ...args) =>
+    ok(args[2] === 200 ? entriesOf(period, credits) : pageOf([debit])));
+}
 
 function fakeApi(rows: AnalyticsTransaction[] = [entry("e1")]) {
   return {
     analyticsTransactions: vi.fn<BudgetApi["analyticsTransactions"]>(() => ok(pageOf(rows))),
     categories: vi.fn<BudgetApi["categories"]>(() => ok({ categories: categoryList })),
     annotate: vi.fn<BudgetApi["annotate"]>(() => ok({ annotation: annotationOf() })),
-  } satisfies Pick<BudgetApi, "analyticsTransactions" | "categories" | "annotate">;
+    decideTransfer: vi.fn<BudgetApi["decideTransfer"]>(() => ok({ decision: decisionOf() })),
+  } satisfies Pick<BudgetApi, "analyticsTransactions" | "categories" | "annotate" | "decideTransfer">;
 }
 
-const accounts = [account({ id: "acc-1", display: { product: "Synthetic Current", currency: "PLN", masked_suffix: "0001",
-  source: "offline_import", observed_at: 1, imported_at: 2 } })];
+const accounts = [
+  account({ id: "acc-1", display: { product: "Synthetic Current", currency: "PLN", masked_suffix: "0001",
+    source: "offline_import", observed_at: 1, imported_at: 2 } }),
+  account({ id: "acc-2", display: { product: "Synthetic Savings", currency: "PLN", masked_suffix: "0002",
+    source: "offline_import", observed_at: 1, imported_at: 2 } }),
+];
 
 let host: HTMLElement;
 let root: Root;
@@ -329,5 +348,293 @@ describe("period entries", () => {
     await show(api, { revision: 1 });
     expect(host.textContent).toContain("Entries could not be loaded.");
     expect(host.textContent).not.toContain("No entries match.");
+  });
+});
+
+describe("manual own-transfer pairing", () => {
+  it("localizes same-day, singular and plural day distances", () => {
+    expect([0, 1, 2].map(transactionLabels.en.pairDays)).toEqual(["same day", "1 day apart", "2 days apart"]);
+    expect([0, 1, 2].map(transactionLabels.pl.pairDays)).toEqual(["ten sam dzień", "1 dzień różnicy", "2 dni różnicy"]);
+  });
+
+  it("shows the action only on eligible debit rows", async () => {
+    const rows = [
+      pairDebit("eligible"),
+      pairDebit("credit", { credit_debit_indicator: "CRDT" }),
+      pairDebit("zero", { amount: "0.00" }),
+      pairDebit("dateless", { booking_date: null, value_date: null }),
+      pairDebit("kind", { effective: { kind: "transfer", category_id: null, source: "default", rule_id: null } }),
+      pairDebit("accepted", { transfer: { status: "accepted", decision_id: "dec-1", candidate_count: 0, ambiguous: false } }),
+    ];
+    const api = fakeApi(rows);
+    await show(api);
+    const rendered = [...host.querySelectorAll<HTMLElement>(".budget-entry")];
+    expect(rendered).toHaveLength(rows.length);
+    for (const [index, row] of rendered.entries()) {
+      expect([...row.querySelectorAll("button")].some((item) => item.textContent === transactionLabels.en.pair)).toBe(index === 0);
+    }
+  });
+
+  it("searches both adjacent months with currency and limit, following every cursor", async () => {
+    const debit = pairDebit("out", { booking_date: "2026-11-02" });
+    const credit = pairCredit("in", { booking_date: "2026-10-31" });
+    const api = fakeApi([debit]);
+    await show(api);
+    api.analyticsTransactions.mockImplementation((period, ...args) => {
+      const [, cursor, limit] = args;
+      if (limit !== 200) return ok(pageOf([debit]));
+      if (period === "2026-10" && cursor === undefined) return ok(entriesOf(period, [], "october-next"));
+      return ok(entriesOf(period, period === "2026-10" ? [credit] : []));
+    });
+    await click(button(transactionLabels.en.pair));
+    const filter = { currency: "PLN", category: "", kind: "", query: "" };
+    expect(api.analyticsTransactions.mock.calls.slice(1)).toEqual([
+      ["2026-10", filter, undefined, 200], ["2026-10", filter, "october-next", 200], ["2026-11", filter, undefined, 200],
+    ]);
+    expect(host.textContent).toContain(transactionLabels.en.pairTitle);
+    expect(host.textContent).toContain("Synthetic Card Repayment");
+    expect(host.textContent).toContain("Synthetic Savings ••0002");
+    expect(host.textContent).toContain("100.00 PLN");
+    expect(host.textContent).toContain("2 days apart");
+    expect(host.querySelectorAll(".budget-pair-picker .budget-entry")).toHaveLength(1);
+  });
+
+  it("stops each month at ten pages and warns that the search was partial", async () => {
+    const debit = pairDebit();
+    const api = fakeApi([debit]);
+    await show(api);
+    let searchPage = 0;
+    api.analyticsTransactions.mockImplementation((period, ...args) => {
+      if (args[2] !== 200) return ok(pageOf([debit]));
+      searchPage += 1;
+      return ok(entriesOf(period, [], `search-${String(searchPage)}`));
+    });
+    await click(button(transactionLabels.en.pair));
+    expect(api.analyticsTransactions.mock.calls.filter((args) => args[3] === 200)).toHaveLength(10);
+    expect(host.textContent).toContain(transactionLabels.en.pairLimited);
+    expect(host.textContent).toContain(transactionLabels.en.pairEmpty);
+  });
+
+  it("restarts a stale search once, then reports a second stale cursor as a failure", async () => {
+    const debit = pairDebit();
+    const api = fakeApi([debit]);
+    await show(api);
+    let searchPage = 0;
+    api.analyticsTransactions.mockImplementation((period, ...args) => {
+      if (args[2] !== 200) return ok(pageOf([debit]));
+      searchPage += 1;
+      return searchPage % 2 === 1 ? ok(entriesOf(period, [], "stale")) : fail(409, "budget_analytics_stale_cursor");
+    });
+    await click(button(transactionLabels.en.pair));
+    expect(api.analyticsTransactions.mock.calls.filter((args) => args[3] === 200)).toHaveLength(4);
+    expect(host.textContent).toContain(transactionLabels.en.pairError);
+    expect(host.textContent).not.toContain(transactionLabels.en.pairLoading);
+  });
+
+  it("renders an explicit empty state when the search has no acceptable credit", async () => {
+    const debit = pairDebit();
+    const api = fakeApi([debit]);
+    await show(api);
+    mockPairSearch(api, debit, [pairCredit("wrong", { amount: "100.01" })]);
+    await click(button(transactionLabels.en.pair));
+    expect(host.textContent).toContain(transactionLabels.en.pairEmpty);
+    expect(host.querySelectorAll(".budget-pair-picker .budget-entry")).toHaveLength(0);
+  });
+
+  it("sends the exact manual decision and reloads the view after confirmation", async () => {
+    const debit = pairDebit();
+    const credit = pairCredit();
+    const api = fakeApi([debit]);
+    const { onChanged } = await show(api);
+    mockPairSearch(api, debit, [credit]);
+    await click(button(transactionLabels.en.pair));
+    await click(button(transactionLabels.en.pairConfirm));
+    expect(api.decideTransfer).toHaveBeenCalledWith({
+      action: "accept", source: "manual", decision_id: null, expected_version: 0,
+      debit: { account_id: "acc-1", entry_reference: "out" },
+      credit: { account_id: "acc-2", entry_reference: "in" },
+      expected_debit_fingerprint: "tfp-out", expected_credit_fingerprint: "tfp-in",
+    });
+    expect(onChanged).toHaveBeenCalledTimes(1);
+    expect(host.querySelector(".budget-pair-picker")).toBeNull();
+  });
+
+  it.each([
+    { code: "budget_analytics_source_changed", notice: transactionLabels.en.changed, reload: true },
+    { code: "budget_analytics_leg_reserved", notice: transactionLabels.en.pairReserved, reload: true },
+    { code: "budget_analytics_conflict", notice: transactionLabels.en.pairExisting, reload: true },
+    { code: "budget_analytics_invalid_request", notice: transactionLabels.en.pairInvalid, reload: false },
+    { code: "budget_analytics_stale_cursor", notice: transactionLabels.en.conflict, reload: true },
+    { code: "budget_internal_error", notice: transactionLabels.en.saveError, reload: false },
+  ])("maps $code to its pairing notice and reload behavior", async ({ code, notice, reload }) => {
+    const debit = pairDebit();
+    const credit = pairCredit();
+    const api = fakeApi([debit]);
+    const { onChanged } = await show(api);
+    mockPairSearch(api, debit, [credit]);
+    api.decideTransfer.mockImplementationOnce(() => fail(409, code));
+    await click(button(transactionLabels.en.pair));
+    await click(button(transactionLabels.en.pairConfirm));
+    expect(host.textContent).toContain(notice);
+    expect(api.analyticsTransactions.mock.calls.filter((args) => args[3] !== 200)).toHaveLength(reload ? 2 : 1);
+    expect(host.querySelector(".budget-pair-picker") === null).toBe(reload);
+    expect(onChanged).not.toHaveBeenCalled();
+  });
+
+  it("hands a failed search to the access barrier before doing anything else", async () => {
+    const debit = pairDebit();
+    const api = fakeApi([debit]);
+    const { onAccessLoss } = await show(api, { lost: true });
+    api.analyticsTransactions.mockImplementation((...args) =>
+      args[3] === 200 ? fail(401, "budget_http_401") : ok(pageOf([debit])));
+    await click(button(transactionLabels.en.pair));
+    expect(onAccessLoss).toHaveBeenCalledWith({ ok: false, status: 401, error: "budget_http_401" });
+    expect(api.analyticsTransactions.mock.calls.filter((args) => args[3] === 200)).toHaveLength(1);
+    expect(host.textContent).not.toContain(transactionLabels.en.pairError);
+  });
+
+  it("hands confirmation to the access barrier first and releases its busy state", async () => {
+    const debit = pairDebit();
+    const api = fakeApi([debit]);
+    const { onAccessLoss, onChanged } = await show(api, { lost: true });
+    mockPairSearch(api, debit, [pairCredit()]);
+    api.decideTransfer.mockImplementationOnce(() => fail(401, "budget_http_401"));
+    await click(button(transactionLabels.en.pair));
+    await click(button(transactionLabels.en.pairConfirm));
+    expect(onAccessLoss).toHaveBeenCalledWith({ ok: false, status: 401, error: "budget_http_401" });
+    expect(onChanged).not.toHaveBeenCalled();
+    expect(host.textContent).not.toContain(transactionLabels.en.saveError);
+    expect(button(transactionLabels.en.pairConfirm).disabled).toBe(false);
+  });
+
+  it("ignores a search answer that arrives after cancellation", async () => {
+    const debit = pairDebit();
+    const api = fakeApi([debit]);
+    await show(api);
+    let loaded: (value: BudgetResult<AnalyticsTransactions>) => void = () => undefined;
+    api.analyticsTransactions.mockImplementation((...args) => {
+      if (args[3] !== 200) return ok(pageOf([debit]));
+      return new Promise((resolve) => { loaded = resolve; });
+    });
+    await click(button(transactionLabels.en.pair));
+    expect(host.textContent).toContain(transactionLabels.en.pairLoading);
+    await click(button(transactionLabels.en.cancel));
+    await act(async () => { loaded({ ok: true, data: entriesOf("2026-11", [pairCredit()]) }); await Promise.resolve(); });
+    await settle();
+    expect(host.querySelector(".budget-pair-picker")).toBeNull();
+    expect(host.textContent).not.toContain("Synthetic Card Repayment");
+  });
+
+  it("closes the picker and drops its pending answer when the editor opens", async () => {
+    const debit = pairDebit();
+    const api = fakeApi([debit]);
+    await show(api);
+    let loaded: (value: BudgetResult<AnalyticsTransactions>) => void = () => undefined;
+    api.analyticsTransactions.mockImplementation((...args) => {
+      if (args[3] !== 200) return ok(pageOf([debit]));
+      return new Promise((resolve) => { loaded = resolve; });
+    });
+    await click(button(transactionLabels.en.pair));
+    expect(host.textContent).toContain(transactionLabels.en.pairLoading);
+    await click(button(transactionLabels.en.edit));
+    expect(host.querySelector(".budget-pair-picker")).toBeNull();
+    expect(host.querySelector(".budget-entry-editor")).not.toBeNull();
+    await act(async () => { loaded({ ok: true, data: entriesOf("2026-11", [pairCredit()]) }); await Promise.resolve(); });
+    await settle();
+    expect(host.querySelector(".budget-pair-picker")).toBeNull();
+    expect(host.querySelector(".budget-entry-editor")).not.toBeNull();
+    expect(host.textContent).not.toContain("Synthetic Card Repayment");
+  });
+
+  it("drops a late search answer after the panel reloads", async () => {
+    const debit = pairDebit();
+    const api = fakeApi([debit]);
+    await show(api);
+    let loaded: (value: BudgetResult<AnalyticsTransactions>) => void = () => undefined;
+    api.analyticsTransactions.mockImplementationOnce(() => new Promise((resolve) => { loaded = resolve; }));
+    await click(button(transactionLabels.en.pair));
+    api.analyticsTransactions.mockImplementation(() => ok(pageOf([debit])));
+    await show(api, { revision: 1 });
+    await act(async () => { loaded({ ok: true, data: entriesOf("2026-11", [pairCredit()]) }); await Promise.resolve(); });
+    await settle();
+    expect(host.querySelector(".budget-pair-picker")).toBeNull();
+    expect(host.textContent).not.toContain("Synthetic Card Repayment");
+  });
+
+  it("drops a late confirmation after the panel reloads", async () => {
+    const debit = pairDebit();
+    const api = fakeApi([debit]);
+    const { onChanged } = await show(api);
+    mockPairSearch(api, debit, [pairCredit()]);
+    let decided: (value: BudgetResult<{ decision: TransferDecisionResult }>) => void = () => undefined;
+    api.decideTransfer.mockImplementationOnce(() => new Promise((resolve) => { decided = resolve; }));
+    await click(button(transactionLabels.en.pair));
+    await click(button(transactionLabels.en.pairConfirm));
+    await show(api, { revision: 1 });
+    await act(async () => { decided({ ok: true, data: { decision: decisionOf() } }); await Promise.resolve(); });
+    await settle();
+    expect(onChanged).not.toHaveBeenCalled();
+    expect(host.querySelector(".budget-pair-picker")).toBeNull();
+  });
+
+  it("disables row and picker actions while a pair is being confirmed", async () => {
+    const debit = pairDebit();
+    const api = fakeApi([debit]);
+    const { onChanged } = await show(api);
+    mockPairSearch(api, debit, [pairCredit()]);
+    let decided: (value: BudgetResult<{ decision: TransferDecisionResult }>) => void = () => undefined;
+    api.decideTransfer.mockImplementationOnce(() => new Promise((resolve) => { decided = resolve; }));
+    await click(button(transactionLabels.en.pair));
+    await click(button(transactionLabels.en.pairConfirm));
+    expect(button(transactionLabels.en.pairConfirm).disabled).toBe(true);
+    expect(button(transactionLabels.en.cancel).disabled).toBe(true);
+    expect(button(transactionLabels.en.pair).disabled).toBe(true);
+    expect(button(transactionLabels.en.edit).disabled).toBe(true);
+    await act(async () => { decided({ ok: true, data: { decision: decisionOf() } }); await Promise.resolve(); });
+    await settle();
+    expect(onChanged).toHaveBeenCalledTimes(1);
+    expect(button(transactionLabels.en.pair).disabled).toBe(false);
+  });
+
+  it("cancels an open picker without changing anything", async () => {
+    const debit = pairDebit();
+    const api = fakeApi([debit]);
+    const { onChanged } = await show(api);
+    mockPairSearch(api, debit, [pairCredit()]);
+    await click(button(transactionLabels.en.pair));
+    await click(button(transactionLabels.en.cancel));
+    expect(host.querySelector(".budget-pair-picker")).toBeNull();
+    expect(api.decideTransfer).not.toHaveBeenCalled();
+    expect(onChanged).not.toHaveBeenCalled();
+  });
+
+  it("closes the category editor when the picker opens", async () => {
+    const debit = pairDebit();
+    const api = fakeApi([debit]);
+    await show(api);
+    mockPairSearch(api, debit, [pairCredit()]);
+    await click(button(transactionLabels.en.edit));
+    expect(host.querySelector(".budget-entry-editor")).not.toBeNull();
+    await click(button(transactionLabels.en.pair));
+    expect(host.querySelector(".budget-entry-editor")).toBeNull();
+    expect(host.querySelector(".budget-pair-picker")).not.toBeNull();
+  });
+
+  it("keeps one picker open and drops a late answer from the previous picker", async () => {
+    const rows = [pairDebit("first"), pairDebit("second")];
+    const api = fakeApi(rows);
+    await show(api);
+    let loaded: (value: BudgetResult<AnalyticsTransactions>) => void = () => undefined;
+    api.analyticsTransactions.mockImplementationOnce(() => new Promise((resolve) => { loaded = resolve; }));
+    const rendered = [...host.querySelectorAll<HTMLElement>(".budget-entry")];
+    await click(button(transactionLabels.en.pair, rendered[0] ?? host));
+    api.analyticsTransactions.mockImplementation(() => ok(entriesOf("2026-11", [pairCredit()])));
+    await click(button(transactionLabels.en.pair, rendered[1] ?? host));
+    await act(async () => { loaded({ ok: true, data: entriesOf("2026-11", [pairCredit("late")]) }); await Promise.resolve(); });
+    await settle();
+    expect(host.querySelectorAll(".budget-pair-picker")).toHaveLength(1);
+    expect(rendered[0]?.querySelector(".budget-pair-picker")).toBeNull();
+    expect(rendered[1]?.textContent).toContain("Synthetic Card Repayment");
+    expect(rendered[1]?.textContent).not.toContain("Synthetic shop late");
   });
 });

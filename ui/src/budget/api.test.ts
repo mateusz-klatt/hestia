@@ -26,6 +26,15 @@ describe("budget api", () => {
     expect(init).toMatchObject({ credentials: "same-origin", cache: "no-store" });
   });
 
+  it("passes an analytics page limit only when one is given", async () => {
+    const fetchMock = respond(200, { period: "2026-11", transactions: [], filtered_total: 0, next_cursor: null });
+    const filter = { currency: "PLN", category: "", kind: "", query: "" };
+    await budgetApi.analyticsTransactions("2026-11", filter, "opaque", 200);
+    expect(Object.fromEntries(sent(fetchMock).url.searchParams)).toEqual({ period: "2026-11", currency: "PLN", cursor: "opaque", limit: "200" });
+    await budgetApi.analyticsTransactions("2026-11", filter);
+    expect(Object.fromEntries(sent(fetchMock, 1).url.searchParams)).toEqual({ period: "2026-11", currency: "PLN" });
+  });
+
   it("sends refresh with its idempotency key, JSON body and no Authorization header", async () => {
     const fetchMock = respond(202, { ok: true, job: { id: "job", created: true } });
     await budgetApi.refresh(connection, { accountId: "local-a", operation: "balances" }, "synthetic-key-0000001");
