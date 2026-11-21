@@ -122,6 +122,24 @@ class ConfigHistoryWindowTests(unittest.TestCase):
         with self.assertRaises(config.BudgetConfigError):
             config.parse_config(raw_missing)
 
+    def test_load_config_json_file_roundtrips_max_history_days(self):
+        with tempfile.TemporaryDirectory() as directory:
+            cfg_path = Path(directory) / "budget.json"
+            doc = _sample_raw(max_history_days=89)
+            doc["connections"].append({
+                "id": "mbank-personal", "owner": "owner", "bank_name": "mBank",
+                "country": "PL", "session_file": "/private/mbank-session.json",
+                "accounts": ["mbank-hash"],
+            })
+            cfg_path.write_text(json.dumps(doc), encoding="utf-8")
+            loaded = config.load_config(cfg_path)
+            self.assertEqual((loaded.connections[0].max_history_days, loaded.connections[1].max_history_days),
+                             (89, 364))
+            doc["connections"][0]["max_history_days"] = True
+            cfg_path.write_text(json.dumps(doc), encoding="utf-8")
+            with self.assertRaisesRegex(config.BudgetConfigError, "^Invalid max_history_days$"):
+                config.load_config(cfg_path)
+
     def test_max_history_days_preserved_across_consent_runtime_resolve_config(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -509,6 +527,80 @@ class StoreCoverageQuarantineTests(unittest.TestCase):
         self.assertEqual({row.entry_reference for row in self.rows(db.BudgetTransaction)}, {"prior-ok", "new-tx"})
         self.assertEqual([json.loads(u.payload_json)["entry_reference"] for u in self.rows(db.BudgetUnresolved)],
                          ["prior-pdng"])
+
+    def test_runtime_acquire_keeps_single_today_across_utc_midnight_between_pages(self):
+        root = Path(self.directory.name)
+        key_file = root / "midnight-key.pem"
+        session_file = root / "midnight-session.json"
+        key_file.write_bytes(b"FAKE private key")
+        session_file.write_text(json.dumps({"session_id": SESSION}), encoding="utf-8")
+        key_file.chmod(0o600)
+        session_file.chmod(0o600)
+
+        cfg = config.BudgetConfig(
+            APPLICATION, str(key_file),
+            (config.ConnectionConfig("bnp-midnight", "owner", "BNP Paribas", "PL",
+                                     str(session_file), ("bnp-mid-hash",), max_history_days=89),),
+        )
+        fixtures.prepare_selected(self.store, cfg)
+
+        # Start 1 second before UTC midnight; pacing advances clock into 2026-11-22 between pages.
+        self.now = datetime(2026, 11, 21, 23, 59, 59, tzinfo=timezone.utc).timestamp()
+        mono = [0.0]
+
+        def advance(seconds):
+            # Advance across UTC midnight on every pacing wait.
+            step = max(seconds, 5.0)
+            mono[0] += step
+            self.now += step
+
+        client = _RecordingClient([
+            {"transactions": [_raw_tx("p1", "2026-11-20")], "continuation_key": "page-2"},
+            {"transactions": [_raw_tx("p2", "2026-11-21")], "continuation_key": None},
+        ], primary="bnp-mid-hash")
+        scheduler = BudgetScheduler(self.store, application_id=APPLICATION)
+        state, error = runtime.acquire(
+            cfg, cfg.connections[0], self.store, scheduler,
+            lambda _app, _key: client,
+            clock=lambda: self.now, monotonic=lambda: mono[0], sleeper=advance,
+        )
+        self.assertEqual((state, error), ("updated", None))
+        # Clock crossed UTC midnight into 2026-11-22, yet BOTH pages used the initial 2026-11-21 window.
+        self.assertEqual(datetime.fromtimestamp(self.now, timezone.utc).date(), date(2026, 11, 22))
+        tx_queries = [q for path, q in client.calls if path == f"/accounts/{UID}/transactions"]
+        self.assertEqual(tx_queries, [
+            {"date_from": "2026-08-24", "date_to": "2026-11-21"},
+            {"date_from": "2026-08-24", "date_to": "2026-11-21", "continuation_key": "page-2"},
+        ])
+
+    def test_exact_date_from_date_to_boundaries_dateless_pdng_and_legacy_stub_contract(self):
+        before = fixtures.transaction("u-before", status="PDNG", booking_date="2026-08-23")
+        at_start = fixtures.transaction("u-at-start", status="PDNG", booking_date="2026-08-24")
+        at_end = fixtures.transaction("u-at-end", status="PDNG", booking_date="2026-11-21")
+        after = fixtures.transaction("u-after", status="PDNG", booking_date="2026-11-22")
+        dateless = fixtures.transaction("u-dateless", status="PDNG", booking_date=None, value_date=None)
+        dup_before = fixtures.transaction("dup-edge", booking_date="2026-08-23", amount="10")
+        dup_start = fixtures.transaction("dup-edge", booking_date="2026-08-24", amount="20")
+
+        self.store.commit_snapshot(
+            "bank",
+            _windowed_snapshot(before, at_start, at_end, after, dateless, dup_before, dup_start,
+                               date_from="2025-11-22", date_to="2026-11-30"),
+        )
+        # Narrow 89-day window [2026-08-24, 2026-11-21] returns only dup_start (exact date_from):
+        # - u-at-start, u-at-end, u-dateless are covered -> replaced;
+        # - u-before, u-after, dup_before are outside -> preserved;
+        # - dup-edge remains uncertain=True with both copies in unresolved.
+        self.store.commit_snapshot("bank", _windowed_snapshot(dup_start, date_from="2026-08-24", date_to="2026-11-21"))
+        kept_refs = [json.loads(u.payload_json)["entry_reference"]
+                     for u in sorted(self.rows(db.BudgetUnresolved), key=lambda r: r.ordinal)]
+        self.assertEqual(kept_refs, ["u-before", "u-after", "dup-edge", "dup-edge"])
+        self.assertTrue(self.rows(db.BudgetTransaction)[0].uncertain)
+
+        # Contract pin: legacy SimpleNamespace stubs without date_from/date_to keep full-replace behavior,
+        # whereas real normalize.Snapshot instances always carry validated bounds and enforce U1.
+        self.store.commit_snapshot("bank", fixtures.snapshot(valid_until=self.now + 1000))
+        self.assertEqual(self.rows(db.BudgetUnresolved), [])
 
 
 if __name__ == "__main__":
