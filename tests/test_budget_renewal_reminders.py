@@ -10,6 +10,7 @@ from hestia.budget.renewal_reminders import (
     MAX_CONNECTIONS,
     MAX_LEAD_DAYS,
     MAX_NOTIFIED,
+    MAX_TIMESTAMP,
     PRIVATE_DESTINATIONS,
     RULE_VERSION,
     SECONDS_PER_DAY,
@@ -107,6 +108,10 @@ class RenewalRemindersTests(unittest.TestCase):
         sub_second = evaluate_renewal_reminders("owner", NOW + 0.4, [_target("c-frac", valid_until=NOW + 1.0)])
         self.assertEqual((sub_second[0].seconds_remaining, sub_second[0].days_remaining, sub_second[0].status),
                          (0, 0, "expired"))
+        # Exact upper timestamp bound preserves integer arithmetic without float conversion.
+        at_bound = evaluate_renewal_reminders("owner", MAX_TIMESTAMP - 1, [_target("c-max", valid_until=MAX_TIMESTAMP)])
+        self.assertIs(type(at_bound[0].valid_until), int)
+        self.assertEqual((at_bound[0].seconds_remaining, at_bound[0].status), (1, "due_soon"))
 
     def test_custom_lead_days_permutation_invariance_and_tiebreaking(self):
         targets = [
@@ -139,6 +144,10 @@ class RenewalRemindersTests(unittest.TestCase):
             lambda: evaluate_renewal_reminders("owner\n", NOW, []),
             lambda: evaluate_renewal_reminders("owner", True, []),
             lambda: evaluate_renewal_reminders("owner", -1, []),
+            lambda: evaluate_renewal_reminders("owner", MAX_TIMESTAMP + 1, []),
+            lambda: evaluate_renewal_reminders("owner", float(MAX_TIMESTAMP + 1), []),
+            lambda: evaluate_renewal_reminders("owner", 2**53 + 1, []),
+            lambda: evaluate_renewal_reminders("owner", 10**400, []),
             lambda: evaluate_renewal_reminders("owner", math.inf, []),
             lambda: evaluate_renewal_reminders("owner", math.nan, []),
             lambda: evaluate_renewal_reminders("owner", NOW, [], max_connections=True),
@@ -163,6 +172,9 @@ class RenewalRemindersTests(unittest.TestCase):
             lambda: evaluate_renewal_reminders("owner", NOW, [_target(connection_id="x" * 129)]),
             lambda: evaluate_renewal_reminders("owner", NOW, [_target(bank_name="x" * 257)]),
             lambda: evaluate_renewal_reminders("owner", NOW, [_target(valid_until=-5)]),
+            lambda: evaluate_renewal_reminders("owner", NOW, [_target(valid_until=MAX_TIMESTAMP + 1)]),
+            lambda: evaluate_renewal_reminders("owner", NOW, [_target(valid_until=2**53 + 1)]),
+            lambda: evaluate_renewal_reminders("owner", NOW, [_target(valid_until=10**400)]),
             lambda: evaluate_renewal_reminders("owner", NOW, [_target(valid_until=True)]),
             lambda: evaluate_renewal_reminders("owner", NOW, [_target(valid_until=math.nan)]),
             lambda: evaluate_renewal_reminders("owner", NOW, [_target(attention="INVALID CODE")]),

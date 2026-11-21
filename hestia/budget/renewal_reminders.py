@@ -18,6 +18,7 @@ import re
 
 RULE_VERSION = 1
 SECONDS_PER_DAY = 86_400
+MAX_TIMESTAMP = 253_402_300_799  # 9999-12-31T23:59:59Z
 DEFAULT_LEAD_DAYS = (14, 7, 3, 1)
 MAX_CONNECTIONS = 100
 MAX_LEAD_DAYS = 16
@@ -65,7 +66,7 @@ class ConsentRenewalTarget:
 class ConsentRenewalReminder:
     connection_id: str
     bank_name: str
-    valid_until: float | None
+    valid_until: int | float | None
     seconds_remaining: int | None
     days_remaining: int | None
     status: str
@@ -85,9 +86,15 @@ def _text(value, maximum=MAX_TEXT):
 
 
 def _timestamp(value):
-    if type(value) not in (int, float) or not math.isfinite(value) or value < 0:
-        raise RenewalInputError()
-    return float(value)
+    if type(value) is int:
+        if not 0 <= value <= MAX_TIMESTAMP:
+            raise RenewalInputError()
+        return value
+    if type(value) is float:
+        if not math.isfinite(value) or not 0.0 <= value <= MAX_TIMESTAMP:
+            raise RenewalInputError()
+        return value
+    raise RenewalInputError()
 
 
 def _iterable(values):
