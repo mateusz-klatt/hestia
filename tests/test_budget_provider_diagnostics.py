@@ -306,6 +306,21 @@ class SocketDiagnosticTests(unittest.TestCase):
                                  (400, "provider_error", False, None))
                 self.assertLess(elapsed, self.BOUND + 2)
 
+    def test_trickled_chunk_data_is_bounded_across_all_socket_receives(self):
+        body = error_body("WRONG_TRANSACTIONS_PERIOD")
+
+        def trickle(connection):
+            connection.sendall(chunked_headers(503) + f"{len(body):X}\r\n".encode())
+            for byte in body:
+                connection.sendall(bytes([byte]))
+                time.sleep(0.05)  # About 15 s for the whole chunk.
+        for raise_errors in (True, False):
+            with self.subTest(raise_errors=raise_errors):
+                error, elapsed = self.exchange(trickle, raise_errors=raise_errors)
+                self.assertEqual((error.status, error.code, error.retryable, error.provider_error),
+                                 (503, "unavailable", True, None))
+                self.assertLess(elapsed, self.BOUND + 2)
+
     def test_a_prompt_chunked_error_body_with_a_trailer_keeps_its_identifier(self):
         body = error_body("WRONG_TRANSACTIONS_PERIOD")
         chunked = f"{len(body):X}\r\n".encode() + body + b"\r\n0\r\nX-Trailer: done\r\n\r\n"
@@ -315,6 +330,39 @@ class SocketDiagnosticTests(unittest.TestCase):
                                                raise_errors=raise_errors)
                 self.assertEqual((error.status, error.code, error.provider_error),
                                  (400, "provider_error", "WRONG_TRANSACTIONS_PERIOD"))
+                self.assertLess(elapsed, self.BOUND + 2)
+
+    def test_a_trickled_chunked_trailer_is_bounded_across_all_socket_receives(self):
+        body = error_body("WRONG_TRANSACTIONS_PERIOD")
+        chunked = f"{len(body):X}\r\n".encode() + body + b"\r\n0\r\n"
+        trailer = b"X-Trailer: " + b"x" * 220 + b"\r\n\r\n"  # Over 11 seconds when trickled.
+
+        def trickle(connection):
+            connection.sendall(chunked_headers(503) + chunked)
+            for byte in trailer:
+                connection.sendall(bytes([byte]))
+                time.sleep(0.05)
+        for raise_errors in (True, False):
+            with self.subTest(raise_errors=raise_errors):
+                error, elapsed = self.exchange(trickle, raise_errors=raise_errors)
+                self.assertEqual((error.status, error.code, error.retryable, error.provider_error),
+                                 (503, "unavailable", True, None))
+                self.assertLess(elapsed, self.BOUND + 2)
+
+    def test_a_close_delimited_identity_body_trickle_is_bounded(self):
+        body = error_body("WRONG_TRANSACTIONS_PERIOD")
+        identity_headers = headers(503, 0).replace(b"Content-Length: 0\r\n", b"")
+
+        def trickle(connection):
+            connection.sendall(identity_headers)
+            for byte in body:
+                connection.sendall(bytes([byte]))
+                time.sleep(0.05)  # About 15 s for the whole body.
+        for raise_errors in (True, False):
+            with self.subTest(raise_errors=raise_errors):
+                error, elapsed = self.exchange(trickle, raise_errors=raise_errors)
+                self.assertEqual((error.status, error.code, error.retryable, error.provider_error),
+                                 (503, "unavailable", True, None))
                 self.assertLess(elapsed, self.BOUND + 2)
 
     def test_watchdog_ignores_shutdown_errors_and_is_always_cancelled(self):
