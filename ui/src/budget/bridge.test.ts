@@ -169,6 +169,24 @@ describe("static consent completion bridge", () => {
     expect(buttons()).toHaveLength(0);
   });
 
+  it.each(["canceled", "expired", "failed", "something-new"])(
+    "shows a fixed terminal message and offers no retry for a %s completion", async (status) => {
+      reply("pending", { status: 200, body: { pending: [flow("flow-old")] } });
+      reply("complete", { status: 202, body: { ok: true, flow_id: "flow-old", status } });
+      await load();
+      expect(buttons()).toHaveLength(0);
+      expect(message()).not.toContain("Zgoda czeka na dokończenie weryfikacji");
+      expect(message()).not.toContain(status);
+      expect(calls.filter((call) => call.url.endsWith("/complete"))).toHaveLength(1);
+    });
+
+  it("keeps a manual retry only for reconciliation_required", async () => {
+    reply("pending", { status: 200, body: { pending: [flow("flow-1", "candidate")] } });
+    reply("complete", { status: 202, body: { ok: true, flow_id: "flow-1", status: "reconciliation_required" } });
+    await load();
+    expect(buttons().map((button) => button.textContent)).toEqual(["Dokończ weryfikację"]);
+  });
+
   it("explains no pending flow, a lost session and other failures without exposing details", async () => {
     reply("pending", { status: 200, body: { pending: [] } });
     await load();
