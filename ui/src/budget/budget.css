@@ -36,3 +36,10 @@
 }
 .budget-presets { display: flex; gap: .4rem; flex-wrap: wrap; margin-bottom: .5rem; }
 .budget-archived { margin-block: .4rem; font-size: .85rem; color: var(--fg-soft); }
+.budget-limits { border-top: 1px solid var(--border); padding-top: .5rem; display: grid; gap: .4rem; }
+.budget-limits-table { width: 100%; border-collapse: collapse; font-size: .8rem; }
+.budget-limits-table th, .budget-limits-table td { text-align: start; padding: .3rem .35rem; border-top: 1px solid var(--border); vertical-align: top; overflow-wrap: anywhere; }
+.budget-limits-table thead th { color: var(--fg-soft); font-weight: 500; }
+.budget-limits-table td[data-state="suspended"], .budget-limits-table td[data-state="waiting"] { color: var(--accent); }
+.budget-limits-table tr.is-excluded th { opacity: .55; }
+.budget-header .budget-actions { display: flex; gap: .4rem; flex-wrap: wrap; }

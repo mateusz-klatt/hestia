@@ -1,5 +1,16 @@
 // Synthetic test fixtures only; no real account, transaction or bank data.
-import type { BudgetAccount, BudgetComponentStatus, BudgetConnection } from "./model";
+import type { BudgetAccount, BudgetComponentLimit, BudgetComponentStatus, BudgetConnection, BudgetSharedLimit } from "./model";
+
+const freeLimit = { suspended: false, retry_at: null, next_attempt: 0, backoff_until: 0, lease_until: null,
+  last_attempt: null, last_success: null, last_request_at: null, next_request_at: 0 };
+
+export function sharedLimit(scope: BudgetSharedLimit["scope"], changes: Partial<BudgetSharedLimit> = {}): BudgetSharedLimit {
+  return { ...freeLimit, connection: "bank", scope, ...changes };
+}
+
+export function componentLimit(account: string, operation: BudgetComponentLimit["operation"], changes: Partial<BudgetComponentLimit> = {}): BudgetComponentLimit {
+  return { ...freeLimit, connection: "bank", scope: "component", account, operation, ...changes };
+}
 
 export const component: BudgetComponentStatus = {
   last_attempt: null, last_success: null, last_error: null, failures: 0, next_attempt: 0, state: "never",

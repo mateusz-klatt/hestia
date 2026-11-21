@@ -57,6 +57,8 @@ describe("budget api", () => {
     await budgetApi.accounts("bank");
     await budgetApi.jobs();
     await budgetApi.balances("local-a");
+    await budgetApi.limits();
+    expect(sent(fetchMock, 7).url.pathname).toMatch(/\/api\/budget\/limits$/);
     expect(sent(fetchMock, 4).url.searchParams.get("connection_id")).toBe("bank");
     expect(sent(fetchMock, 5).url.search).toBe("");
   });

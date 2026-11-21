@@ -13,6 +13,9 @@ export type BudgetBalances = Schemas["BudgetBalances"];
 export type BudgetBalance = Schemas["BudgetBalance"];
 export type BudgetJob = Schemas["BudgetJob"];
 export type BudgetKind = Schemas["BudgetKindRequest"]["kind"];
+export type BudgetSharedLimit = Schemas["BudgetSharedLimit"];
+export type BudgetComponentLimit = Schemas["BudgetComponentLimit"];
+export type BudgetLimit = BudgetSharedLimit | BudgetComponentLimit;
 export type BudgetOperation = "transactions" | "balances";
 
 export const KINDS: readonly BudgetKind[] = ["current", "savings", "credit_card", "other"];
@@ -125,6 +128,39 @@ export function newer<T extends { id: string; control_version: number }>(current
     const existing = shown.get(item.id);
     return existing !== undefined && existing.control_version > item.control_version ? existing : item;
   });
+}
+
+export function isComponentLimit(limit: BudgetLimit): limit is BudgetComponentLimit {
+  return limit.scope === "component" && "account" in limit;
+}
+
+export type LimitState =
+  | { kind: "suspended" }
+  | { kind: "running"; until: number }
+  | { kind: "waiting"; until: number; retry: boolean }
+  | { kind: "ready" };
+
+/** What a stored limit means right now: an operator suspension, an in-flight lease, a deadline
+ *  (cadence, backoff or the bank's Retry-After) or free. Purely descriptive; nothing here can lift it. */
+export function limitState(limit: BudgetLimit, now: number): LimitState {
+  if (limit.suspended) return { kind: "suspended" };
+  if (limit.lease_until !== null && limit.lease_until > now) return { kind: "running", until: limit.lease_until };
+  const retry = limit.retry_at ?? 0;
+  const until = Math.max(limit.next_attempt, retry, limit.backoff_until);
+  if (until > now) return { kind: "waiting", until, retry: limit.retry_at !== null && retry >= until };
+  return { kind: "ready" };
+}
+
+/** A component can start only when it and every shared scope of its connection allow it. */
+export function effectiveState(component: BudgetComponentLimit, shared: readonly BudgetSharedLimit[], now: number): LimitState {
+  const states = [component, ...shared].map((limit) => limitState(limit, now));
+  if (states.some((state) => state.kind === "suspended")) return { kind: "suspended" };
+  const own = states[0];
+  if (own?.kind === "running") return own;
+  const waits = states.filter((state): state is Extract<LimitState, { kind: "waiting" }> => state.kind === "waiting");
+  if (waits.length === 0) return { kind: "ready" };
+  const latest = waits.reduce((a, b) => (b.until > a.until ? b : a));
+  return latest;
 }
 
 export function hasActiveJob(jobs: readonly BudgetJob[]): boolean {

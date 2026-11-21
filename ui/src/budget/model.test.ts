@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { account, component } from "./fixtures";
+import { account, component, componentLimit, sharedLimit } from "./fixtures";
 import type { BudgetAccount, BudgetJob, BudgetTransaction } from "./model";
-import { accountLabel, formatAmount, freshness, hasActiveJob, idempotencyKey, isAccessLoss, latestJob, newer,
-  otherObservedCurrencies, presetRange, transactionDate, transactionText, validRange, when } from "./model";
+import { accountLabel, effectiveState, formatAmount, freshness, hasActiveJob, idempotencyKey, isAccessLoss,
+  isComponentLimit, latestJob, limitState, newer, otherObservedCurrencies, presetRange, transactionDate,
+  transactionText, validRange, when } from "./model";
 
 function job(changes: Partial<BudgetJob> = {}): BudgetJob {
   return { id: "job", connection_id: "bank", account_id: null, operation: null, source: "manual", status: "queued",
@@ -93,6 +94,34 @@ describe("access loss and version-aware merges", () => {
     const merged = newer(shown, incoming);
     expect(merged.map((item) => [item.id, item.control_version, item.selected])).toEqual([["a", 3, false], ["b", 1, true]]);
     expect(newer([account({ id: "a", control_version: 1 })], [account({ id: "a", control_version: 4 })])[0]?.control_version).toBe(4);
+  });
+});
+
+describe("stored limits", () => {
+  const now = 1_000_000;
+  it("describes suspension, in-flight lease, deadlines and free state without lifting anything", () => {
+    expect(limitState(componentLimit("a", "transactions"), now)).toEqual({ kind: "ready" });
+    expect(limitState(componentLimit("a", "transactions", { suspended: true, lease_until: now + 50 }), now)).toEqual({ kind: "suspended" });
+    expect(limitState(componentLimit("a", "transactions", { lease_until: now + 50, next_attempt: now + 900 }), now))
+      .toEqual({ kind: "running", until: now + 50 });
+    expect(limitState(componentLimit("a", "transactions", { lease_until: now - 1, next_attempt: now + 900 }), now))
+      .toEqual({ kind: "waiting", until: now + 900, retry: false });
+    expect(limitState(componentLimit("a", "transactions", { next_attempt: now + 10, retry_at: now + 500, backoff_until: now + 100 }), now))
+      .toEqual({ kind: "waiting", until: now + 500, retry: true });
+    expect(limitState(componentLimit("a", "transactions", { retry_at: now - 5, next_attempt: now - 1 }), now)).toEqual({ kind: "ready" });
+  });
+  it("combines a component with its connection's shared scopes, most restrictive first", () => {
+    const free = componentLimit("a", "balances");
+    expect(effectiveState(free, [sharedLimit("application"), sharedLimit("provider")], now)).toEqual({ kind: "ready" });
+    expect(effectiveState(free, [sharedLimit("provider", { retry_at: now + 300 })], now)).toEqual({ kind: "waiting", until: now + 300, retry: true });
+    expect(effectiveState(componentLimit("a", "balances", { next_attempt: now + 900 }), [sharedLimit("connection", { next_attempt: now + 100 })], now))
+      .toEqual({ kind: "waiting", until: now + 900, retry: false });
+    expect(effectiveState(componentLimit("a", "balances", { lease_until: now + 10 }), [sharedLimit("connection", { next_attempt: now + 100 })], now))
+      .toEqual({ kind: "running", until: now + 10 });
+    expect(effectiveState(componentLimit("a", "balances", { lease_until: now + 10 }), [sharedLimit("application", { suspended: true })], now))
+      .toEqual({ kind: "suspended" });
+    expect(isComponentLimit(free)).toBe(true);
+    expect(isComponentLimit(sharedLimit("connection"))).toBe(false);
   });
 });
 
