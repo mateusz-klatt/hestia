@@ -364,9 +364,12 @@ class ValidationTests(ServiceCase):
             self.now += 3600
 
     def test_authorization_url_allows_exactly_the_two_enable_banking_hosts(self):
-        for host in ("tilisy.enablebanking.com", "auth.enablebanking.com"):
-            with self.subTest(host=host):
-                url = f"https://{host}/ais/start?sessionid=synthetic"
+        for url in ("https://tilisy.enablebanking.com/ais/start?sessionid=synthetic",
+                    "https://auth.enablebanking.com/ais/start?sessionid=synthetic",
+                    "https://TILISY.enablebanking.com/ais/start?sessionid=synthetic",
+                    "https://auth.enablebanking.com:443/ais/start?sessionid=synthetic",
+                    "https://tilisy.enablebanking.com:/ais/start?sessionid=synthetic"):
+            with self.subTest(url=url):
                 self.provider.authorization = {"url": url}
                 result, _ = self.start()
                 self.assertEqual(result["authorization_url"], url)
@@ -376,7 +379,10 @@ class ValidationTests(ServiceCase):
                       "https://tilisy.enablebanking.co/ais/start", "https://tilisy.enablebanking.com./ais/start",
                       "https://tilisy.enablebanking.com:8443/ais/start", "http://tilisy.enablebanking.com/ais/start",
                       "https://user@tilisy.enablebanking.com/ais/start", "https://tilisy.enablebanking.com/ais/start#x",
-                      "https://tilisy.enablebanking.com\\@evil.example/", "https://auth.enablebanking.com.evil.example/"):
+                      "https://tilisy.enablebanking.com\\@evil.example/", "https://auth.enablebanking.com.evil.example/",
+                      "https://tilisy%2eenablebanking.com/ais/start", "https://[::1]/ais/start",
+                      "https://tilisy.enablebanking.com。evil.example/ais/start", "https://tilisy.enablebanking.com:0/ais/start",
+                      "https://tilisy.enablebanking.com:443@evil.example/ais/start", "https://tilisy.enablebanking.com/ais/start\n"):
             with self.subTest(value=value):
                 self.provider.authorization = {"url": value}
                 with self.assertRaises(BudgetConsentError) as raised:
