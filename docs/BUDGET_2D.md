@@ -292,3 +292,16 @@ outflow without a known accepted relationship remains spending within that scope
 - **Backup and downgrade (`0018 → 0017`):** back up SQLite (including schedules and payment
   marks) before downgrading. Downgrade drops `budget_mortgage_payments` before
   `budget_mortgage_schedules`, preserving sanitized `budget_analytics_audit` rows.
+
+## Read-only bank consent renewal reminders (OpenAPI `0.21.0`, zero migration)
+
+- `GET /api/budget/consent/renewal-reminders` (gated by `HESTIA_BUDGET_CONSENT_ENABLED=1`,
+  exact SQLite admin owner with signed browser session cookie, `allow_head=False`,
+  `Cache-Control: no-store`, zero query parameters, zero bank requests) evaluates the
+  owner's enabled `budget_connections` on demand via `renewal_reminders.evaluate_renewal_reminders`.
+- Uses only each connection's actual stored `valid_until` UTC epoch timestamp, `paused` flag
+  and explicit `attention` code — never assuming a fixed 180-day lifetime — with lead tiers
+  `(14, 7, 3, 1)` days.
+- Strictly **evaluation-only**: returns statuses, milestones, `valid_until`, remaining time
+  and `destination_kind` only (never session IDs, URLs, codes or PII destination targets),
+  triggers no notification delivery and never initiates consent renewal or modifies credentials.

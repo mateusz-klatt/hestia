@@ -65,7 +65,8 @@ from pydantic.json_schema import models_json_schema
 # 0.18.0: owner-private read-only recurring-charge hints under /api/budget/analytics/recurring.
 # 0.19.0: owner-private persisted monthly category spending limits (migration 0017).
 # 0.20.0: owner-private persisted mortgage reminder schedules and payment marks (migration 0018, evaluation-only).
-CONTRACT_VERSION = "0.20.0"
+# 0.21.0: read-only bank consent renewal reminder evaluation (GET /api/budget/consent/renewal-reminders, zero migration).
+CONTRACT_VERSION = "0.21.0"
 OPENAPI_PATH = Path(__file__).resolve().parent.parent / "docs" / "api" / "openapi.json"
 
 # De-duplicated string literals (SonarPython S1192): the OpenAPI content-type, the paths reused
@@ -1098,6 +1099,34 @@ class BudgetConsents(BaseModel):
     consents: list[BudgetConsent]
 
 
+class BudgetConsentRenewalReminder(BaseModel):
+    """Read-only private consent-renewal status derived from stored provider valid_until and attention."""
+
+    model_config = _READ
+    connection_id: str
+    bank_name: str
+    valid_until: float | None
+    seconds_remaining: int | None
+    days_remaining: int | None
+    status: Literal["attention_required", "expired", "due_soon", "healthy", "unknown_expiry"]
+    active_milestone: int | Literal["attention"] | None
+    reminder_due: bool
+    paused: bool
+    attention: str | None
+    destination_kind: Literal["owner_inbox", "owner_push", "owner_email"]
+    rule_version: int
+
+
+class BudgetConsentRenewalReminders(BaseModel):
+    """Owner-private consent renewal reminders evaluated on demand; no bank requests or delivery."""
+
+    model_config = _READ
+    evaluated_at: float
+    lead_days: list[int]
+    rule_version: int
+    reminders: list[BudgetConsentRenewalReminder]
+
+
 class BudgetConsentStarted(BaseModel):
     model_config = _READ
     ok: Literal[True]
@@ -1992,7 +2021,8 @@ _ANALYTICS_MODELS = (BudgetAnalyticsCategoryCreateRequest, BudgetAnalyticsCatego
 _BUDGET_MODELS = (BudgetSelectionRequest, BudgetKindRequest, BudgetConnectionStateRequest,
                   BudgetBackgroundSelectionRequest, BudgetRefreshRequest,
                   BudgetConsentStartRequest, BudgetConsentFlowRequest, BudgetConsentPending,
-                  BudgetConsents, BudgetConsentStarted, BudgetConsentCompleted, BudgetConsentCanceled,
+                  BudgetConsents, BudgetConsentRenewalReminders, BudgetConsentStarted, BudgetConsentCompleted,
+                  BudgetConsentCanceled,
                   BudgetConnections, BudgetAccounts, BudgetStatus, BudgetTransactions,
                   BudgetBalances, BudgetLimits, BudgetJobs, BudgetAccountSaved, BudgetConnectionSaved,
                   BudgetRefreshAccepted, BudgetError, BudgetConflict)
@@ -2027,6 +2057,7 @@ _PATH_ROLES = {
     ("GET", "/api/budget/enable-banking/callback"): "public",
     ("GET", "/api/budget/consent/pending"): "admin",
     ("GET", "/api/budget/consent/status"): "admin",
+    ("GET", "/api/budget/consent/renewal-reminders"): "admin",
     ("POST", "/api/budget/consent/start"): "admin",
     ("POST", "/api/budget/consent/complete"): "admin",
     ("POST", "/api/budget/consent/cancel"): "admin",
@@ -2690,6 +2721,7 @@ def _consent_paths():
     operations = (
         ("pending", "get", "getBudgetConsentPending", None, "BudgetConsentPending"),
         ("status", "get", "getBudgetConsents", None, "BudgetConsents"),
+        ("renewal-reminders", "get", "getBudgetConsentRenewalReminders", None, "BudgetConsentRenewalReminders"),
         ("start", "post", "startBudgetConsent", "BudgetConsentStartRequest", "BudgetConsentStarted"),
         ("complete", "post", "completeBudgetConsent", "BudgetConsentFlowRequest", "BudgetConsentCompleted"),
         ("cancel", "post", "cancelBudgetConsent", "BudgetConsentFlowRequest", "BudgetConsentCanceled"),
@@ -2700,6 +2732,9 @@ def _consent_paths():
             responses["202"] = {"description": "Known candidate awaits verification/adoption, or exchange is uncertain. "
                 "Repeating complete never repeats POST /sessions. No acquisition quota is reset.",
                 "content": {_APP_JSON: {"schema": _ref(response)}}}
+        if name == "renewal-reminders":
+            responses["413"] = {"description": "Owner connection evaluation cap exceeded; no partial reminders returned.",
+                                "content": {_APP_JSON: {"schema": _ref("BudgetError")}}}
         responses["429"] = {"description": "Durable consent throttle or provider cooldown; no automatic new consent.",
                              "content": {_APP_JSON: {"schema": _ref("BudgetError")}}}
         entry = {"operationId": operation, "summary": "Browser-bound bank consent: " + name,

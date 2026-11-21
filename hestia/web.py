@@ -167,6 +167,7 @@ _USERNAME_REQUIRED = "username is required"   # shared 400 message across the ad
 _ROUTE_MIN_ROLE = {
     ("GET", "/api/budget/consent/pending"): _ADMIN,
     ("GET", "/api/budget/consent/status"): _ADMIN,
+    ("GET", "/api/budget/consent/renewal-reminders"): _ADMIN,
     ("POST", "/api/budget/consent/start"): _ADMIN,
     ("POST", "/api/budget/consent/complete"): _ADMIN,
     ("POST", "/api/budget/consent/cancel"): _ADMIN,

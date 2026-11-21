@@ -237,9 +237,13 @@ def register(app, read_json_body, *, auth_enabled, session_secret, secure_cookie
                 raise BudgetConsentError("budget_consent_invalid_request", 400)
             bindings = _bindings(request)
             if request.method == "GET":
-                call = (lambda: service.pending(owner, fingerprint, bindings)) if operation == "pending" else lambda: service.status(owner)
-                result = await asyncio.to_thread(call)
-                return web.json_response({"pending" if operation == "pending" else "consents": result}, headers=api.PRIVATE_HEADERS)
+                if operation == "pending":
+                    payload = {"pending": await asyncio.to_thread(service.pending, owner, fingerprint, bindings)}
+                elif operation == "status":
+                    payload = {"consents": await asyncio.to_thread(service.status, owner)}
+                else:
+                    payload = await asyncio.to_thread(service.renewal_reminders, owner)
+                return web.json_response(payload, headers=api.PRIVATE_HEADERS)
             body, error = await read_json_body(request, 4096, reject_duplicates=True)
             if error:
                 return body
@@ -271,7 +275,7 @@ def register(app, read_json_body, *, auth_enabled, session_secret, secure_cookie
     app.router.add_get(CALLBACK, callback, allow_head=False)
     app.router.add_get(COMPLETE, bridge, allow_head=False)
     app.router.add_get(SCRIPT, bridge, allow_head=False)
-    for operation in ("pending", "status"):
+    for operation in ("pending", "status", "renewal-reminders"):
         app.router.add_get(PREFIX + "/" + operation, handle, allow_head=False)
     for operation in ("start", "complete", "cancel"):
         app.router.add_post(PREFIX + "/" + operation, handle)

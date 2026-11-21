@@ -483,6 +483,66 @@ class BudgetConsentStore(BudgetJobStore):
             return [self._safe_consent(row) for row in session.scalars(select(Consent).where(Consent.owner == owner)
                                                                       .order_by(Consent.created_at, Consent.id))]
 
+    def renewal_reminders(self, owner, *, now=None):
+        """Evaluate private consent-renewal reminders for owned connections (read-only, no bank I/O)."""
+        from .renewal_reminders import (
+            DEFAULT_LEAD_DAYS,
+            RULE_VERSION,
+            ConsentRenewalTarget,
+            RenewalInputError,
+            RenewalLimitError,
+            evaluate_renewal_reminders,
+        )
+
+        evaluated_at = self.clock() if now is None else now
+        with self.sessions() as session:
+            session.execute(text("BEGIN"))
+            self._owner(session, owner)
+            rows = list(session.scalars(
+                select(Connection).where(Connection.owner == owner).order_by(Connection.id)))
+            targets = [
+                ConsentRenewalTarget(
+                    owner=owner,
+                    connection_id=row.id,
+                    bank_name=row.bank_name,
+                    valid_until=row.valid_until,
+                    destination_kind="owner_inbox",
+                    destination_target=None,
+                    enabled=row.enabled,
+                    paused=row.paused,
+                    attention=row.attention,
+                )
+                for row in rows
+            ]
+        try:
+            reminders = evaluate_renewal_reminders(owner, evaluated_at, targets)
+        except RenewalLimitError:
+            raise BudgetConsentError("budget_consent_limit", 413) from None
+        except RenewalInputError:
+            raise BudgetConsentError("budget_consent_invalid_request", 400) from None
+        return {
+            "evaluated_at": evaluated_at,
+            "lead_days": list(DEFAULT_LEAD_DAYS),
+            "rule_version": RULE_VERSION,
+            "reminders": [
+                {
+                    "connection_id": item.connection_id,
+                    "bank_name": item.bank_name,
+                    "valid_until": item.valid_until,
+                    "seconds_remaining": item.seconds_remaining,
+                    "days_remaining": item.days_remaining,
+                    "status": item.status,
+                    "active_milestone": item.active_milestone,
+                    "reminder_due": item.reminder_due,
+                    "paused": item.paused,
+                    "attention": item.attention,
+                    "destination_kind": item.destination_kind,
+                    "rule_version": item.rule_version,
+                }
+                for item in reminders
+            ],
+        }
+
     def recover_interrupted(self):
         with self.transaction() as session:
             if not self.users_authoritative(session):
