@@ -19,7 +19,7 @@ function deferred<T>(): { promise: Promise<BudgetResult<T>>; settle: Settle<T> }
 }
 
 const capabilities = { stored_reads: true, account_controls: true, refresh: true, background_selection: true,
-  background_polling: false, consent: false };
+  background_polling: false, consent: false, analytics: false };
 const display = { product: "Synthetic Current", currency: "PLN", masked_suffix: "0001", source: "offline_import",
   observed_at: 1, imported_at: 2 };
 

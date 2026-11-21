@@ -1,72 +1,23 @@
 // Spending analytics (2D) helpers. Every total is computed by the server per currency and arrives as a decimal
 // STRING; the browser never adds, subtracts, converts or mixes amounts. Periods are "YYYY-MM" or "YYYY".
-import type { BudgetCapabilities, BudgetComponentStatus, BudgetTransaction } from "../model";
+import type { components } from "../../api/openapi";
+import type { BudgetCapabilities } from "../model";
 
-// Mirrors the generated BudgetAnalytics* schemas field for field; replace with Schemas[...] aliases once the
-// contract lands in openapi.ts on master. Server enums arrive as plain strings, so lookups always have a fallback.
+type Schemas = components["schemas"];
 
-export interface AnalyticsTotals {
-  currency: string;
-  gross_debits: string;
-  gross_credits: string;
-  expenses: string;
-  income: string;
-  refunds: string;
-  unclassified_credit: string;
-  excluded_debits: string;
-  excluded_credits: string;
-  transfer_debits: string;
-  transfer_credits: string;
-  /** expenses − refunds, computed by the server. */
-  net_spending: string;
-}
+// Generated contract types. Server enums arrive as plain strings, so every label lookup has a fallback.
 
-export interface AnalyticsCategoryTotal {
-  category_id: string | null;
-  name: string | null;
-  archived: boolean;
-  currency: string;
-  expenses: string;
-  refunds: string;
-  net_spending: string;
-}
+export type AnalyticsTotals = Schemas["BudgetAnalyticsCurrency"];
 
-export interface AnalyticsFreshness {
-  account_id: string;
-  transactions: BudgetComponentStatus;
-  balances: BudgetComponentStatus;
-}
+export type AnalyticsCategoryTotal = Schemas["BudgetAnalyticsCategoryTotal"];
 
-export interface AnalyticsScope {
-  selected_accounts: number;
-  excluded_accounts: number;
-  uncertain_count: number;
-  unresolved_count: number;
-  import_unresolved_count: number;
-  freshness: AnalyticsFreshness[];
-}
+export type AnalyticsFreshness = Schemas["BudgetAnalyticsFreshness"];
 
-export interface AnalyticsTransferSummary {
-  suggested: number;
-  accepted: number;
-  review: number;
-  rejected: number;
-  boundary: number;
-  /** The candidate scan stopped at its bound; some pairs may be missing. */
-  scan_limited: boolean;
-}
+export type AnalyticsScope = Schemas["BudgetAnalyticsScope"];
 
-export interface AnalyticsOverview {
-  period: string;
-  start: string;
-  end: string;
-  snapshot_digest: string;
-  scope: AnalyticsScope;
-  currencies: AnalyticsTotals[];
-  months: { month: string; currencies: AnalyticsTotals[] }[];
-  categories: AnalyticsCategoryTotal[];
-  transfer_summary: AnalyticsTransferSummary;
-}
+export type AnalyticsTransferSummary = Schemas["BudgetAnalyticsTransferSummary"];
+
+export type AnalyticsOverview = Schemas["BudgetAnalyticsOverview"];
 
 /** The owner's explicit kind choice; "auto" returns the entry to rules and defaults. */
 export type KindChoice = "auto" | "expense" | "income" | "refund" | "excluded";
@@ -75,74 +26,25 @@ export const KIND_CHOICES: readonly KindChoice[] = ["auto", "expense", "income",
 export const EFFECTIVE_KINDS = ["expense", "income", "refund", "unclassified_credit", "transfer", "excluded"] as const;
 
 /** Every entry carries one: mode "auto" with version 0 until the owner decides. */
-export interface AnalyticsAnnotation {
-  version: number;
-  mode: string;
-  category_id: string | null;
-  kind: string;
-  /** The bank entry changed after this decision was made; it needs the owner's look. */
-  stale: boolean;
-}
+export type AnalyticsAnnotation = Schemas["BudgetAnalyticsAnnotation"];
 
-export interface AnnotationSaved {
-  account_id: string;
-  entry_reference: string;
-  category_id: string | null;
-  kind: string;
-  mode: string;
-  ledger_fingerprint: string;
-  changed: boolean;
-  updated_at: number | null;
-  version: number;
-}
+export type AnnotationSaved = Schemas["BudgetAnalyticsAnnotationSaved"];
 
 export type TransferStatus = "suggested" | "accepted" | "review" | "boundary" | "rejected" | "undone";
 
-export interface AnalyticsTransaction extends Pick<BudgetTransaction, "amount" | "currency" | "credit_debit_indicator"
-  | "booking_date" | "value_date" | "transaction_date" | "remittance_information" | "source" | "observed_at" | "api_observed_at"> {
-  status: "BOOK";
-  account_id: string;
-  entry_reference: string;
-  /** Financial fingerprint: an annotation is accepted only for the entry as the owner saw it. */
-  fingerprint: string;
-  transfer_fingerprint: string;
-  annotation: AnalyticsAnnotation;
-  /** kind: expense, income, refund, excluded, unclassified_credit or transfer; source: default, manual, rule or transfer. */
-  effective: { kind: string; category_id: string | null; source: string; rule_id: string | null };
-  metadata: { creditor_name: string | null; debtor_name: string | null; mcc: string | null } | null;
-  /** status: none, suggested, accepted, review, boundary, rejected or undone. */
-  transfer: { status: string; decision_id: string | null; candidate_count: number; ambiguous: boolean };
-}
+export type AnalyticsTransaction = Schemas["BudgetAnalyticsTransaction"];
 
-export interface AnalyticsTransactions {
-  period: string;
-  start: string;
-  end: string;
-  snapshot_digest: string;
-  transactions: AnalyticsTransaction[];
-  filtered_total: number;
-  next_cursor: string | null;
-}
+export type AnalyticsTransactions = Schemas["BudgetAnalyticsTransactions"];
 
-export interface AnalyticsCategory { id: string; name: string; archived: boolean; version: number; created_at: number; updated_at: number }
-export interface CategorySaved extends AnalyticsCategory { changed: boolean }
+export type AnalyticsCategory = Schemas["BudgetAnalyticsCategory"];
+export type CategorySaved = Schemas["BudgetAnalyticsCategorySaved"];
 
 export interface TransactionFilter { currency: string; category: string; kind: string; query: string }
 export const NO_FILTER: TransactionFilter = { currency: "", category: "", kind: "", query: "" };
 /** Filter value for entries without a category (the server's explicit uncategorised bucket). */
 export const UNCATEGORISED = "uncategorised";
 
-export interface AnnotationRequest {
-  account_id: string;
-  entry_reference: string;
-  mode: "auto" | "manual";
-  category_id: string | null;
-  kind: KindChoice;
-  /** The entry's financial fingerprint as shown; a changed bank entry is refused, not silently re-annotated. */
-  expected_fingerprint: string;
-  /** 0 creates the first annotation; otherwise the version the owner saw. */
-  expected_version: number;
-}
+export type AnnotationRequest = Schemas["BudgetAnalyticsAnnotationRequest"];
 
 /** The owner's category choice in the editor: automatic (rules), explicitly none, or a category id. */
 export type CategoryChoice = { mode: "auto" } | { mode: "manual"; category_id: string | null };
@@ -184,50 +86,14 @@ export function staleAccounts(scope: AnalyticsScope): string[] {
   return scope.freshness.filter((item) => item.transactions.stale || item.transactions.suspended).map((item) => item.account_id);
 }
 
-export interface TransferLeg {
-  account_id: string;
-  entry_reference: string;
-  /** Pair fingerprint; null (with amount, currency and date) for a leg outside the selected accounts. */
-  fingerprint: string | null;
-  amount: string | null;
-  currency: string | null;
-  date: string | null;
-  selected: boolean;
-}
+export type TransferLeg = Schemas["BudgetAnalyticsLeg"];
 
 export type TransferSource = "account_identity" | "heuristic" | "manual";
 const TRANSFER_SOURCES: readonly string[] = ["account_identity", "heuristic", "manual"];
 
-export interface TransferPair {
-  /** null while the pair is only a suggestion nobody has decided on. */
-  id: string | null;
-  /** 0 before the first decision. */
-  version: number;
-  /** One of TransferStatus. */
-  status: string;
-  /** account_identity: matched by account number; heuristic: equal amount within 3 days; manual: the owner's pairing. */
-  source: string;
-  debit: TransferLeg;
-  credit: TransferLeg;
-  date_distance: number | null;
-  /** One of the legs also fits another pair; the owner has to choose, nothing is picked automatically. */
-  ambiguous: boolean;
-  /** A leg changed at the bank after the decision. */
-  stale: boolean;
-  /** Only one leg lies inside the selected accounts. */
-  boundary: boolean;
-}
+export type TransferPair = Schemas["BudgetAnalyticsTransfer"];
 
-export interface TransferList {
-  period: string;
-  start: string;
-  end: string;
-  snapshot_digest: string;
-  transfers: TransferPair[];
-  filtered_total: number;
-  next_cursor: string | null;
-  scan_limited: boolean;
-}
+export type TransferList = Schemas["BudgetAnalyticsTransfers"];
 
 export type TransferAction = "accept" | "reject" | "undo";
 /** The queues the owner reviews. Rejected and undone pairs never return as suggestions; the owner may re-accept them. */
@@ -235,16 +101,7 @@ export const TRANSFER_QUEUES = ["suggested", "review", "boundary", "accepted", "
 export type TransferQueue = (typeof TRANSFER_QUEUES)[number];
 
 /** Every field is always sent; legs and fingerprints are null for undo, which names the decision instead. */
-export interface TransferDecisionRequest {
-  action: TransferAction;
-  source: TransferSource;
-  decision_id: string | null;
-  debit: { account_id: string; entry_reference: string } | null;
-  credit: { account_id: string; entry_reference: string } | null;
-  expected_debit_fingerprint: string | null;
-  expected_credit_fingerprint: string | null;
-  expected_version: number;
-}
+export type TransferDecisionRequest = Schemas["BudgetAnalyticsTransferDecisionRequest"];
 
 export function transferDecision(pair: TransferPair, action: TransferAction): TransferDecisionRequest | null {
   const source: TransferSource = TRANSFER_SOURCES.includes(pair.source) ? pair.source as TransferSource : "manual";
@@ -266,12 +123,7 @@ export function transferDecision(pair: TransferPair, action: TransferAction): Tr
 }
 
 /** The result of a decision; the view re-reads the period rather than patching rows from it. */
-export interface TransferDecisionResult {
-  id: string; version: number; status: string; source: string; changed: boolean; rule_version: number;
-  debit_account_id: string; debit_ref: string; debit_fingerprint: string;
-  credit_account_id: string; credit_ref: string; credit_fingerprint: string;
-  created_at: number; updated_at: number;
-}
+export type TransferDecisionResult = Schemas["BudgetAnalyticsDecisionSaved"];
 
 /** The actions the owner can take on a pair; a pair with a leg outside the selection cannot be accepted. */
 export function transferActions(pair: TransferPair): TransferAction[] {
@@ -303,47 +155,24 @@ export const CATEGORY_NAME_MAX = 80;
 export const RULE_VALUE_MAX = 256;
 export const RULE_PRIORITY_MAX = 10000;
 
-export interface CategoryCreateRequest { name: string }
-export interface CategoryUpdateRequest { category_id: string; name: string; archived: boolean; expected_version: number }
+export type CategoryCreateRequest = Schemas["BudgetAnalyticsCategoryCreateRequest"];
+export type CategoryUpdateRequest = Schemas["BudgetAnalyticsCategoryUpdateRequest"];
 
 export type RuleField = "description" | "counterparty_name" | "mcc";
 export type RuleOperator = "contains" | "equals";
 export const RULE_FIELDS: readonly RuleField[] = ["description", "counterparty_name", "mcc"];
 export const RULE_OPERATORS: readonly RuleOperator[] = ["contains", "equals"];
 
-export interface AnalyticsRule {
-  id: string;
-  version: number;
-  field: string;
-  operator: string;
-  value: string;
-  category_id: string | null;
-  kind: string;
-  priority: number;
-  enabled: boolean;
-  created_at: number;
-  updated_at: number;
-}
-export interface RuleSaved extends AnalyticsRule { changed: boolean }
+export type AnalyticsRule = Schemas["BudgetAnalyticsRule"];
+export type RuleSaved = Schemas["BudgetAnalyticsRuleSaved"];
 
 /** A rule as proposed for preview; nothing changes until the previewed rule is saved. */
-export interface RuleCandidate {
-  rule_id: string | null;
-  /** 0 for a new rule, otherwise the version being replaced. */
-  expected_version: number;
-  field: RuleField;
-  operator: RuleOperator;
-  value: string;
-  category_id: string | null;
-  kind: KindChoice;
-  priority: number;
-  enabled: boolean;
-}
+export type RuleCandidate = Schemas["BudgetAnalyticsRulePreviewRequest"];
 
 /** Only the keys of an affected entry; the preview carries no amounts, dates or descriptions. */
-export interface RulePreviewExample { account_id: string; entry_reference: string }
+export type RulePreviewExample = Schemas["BudgetAnalyticsPreviewExample"];
 
-export interface RulePreview { preview_id: string; affected_count: number; examples: RulePreviewExample[]; expires_at: number }
+export type RulePreview = Schemas["BudgetAnalyticsPreview"];
 
 export function ruleCandidate(rule: AnalyticsRule | null): RuleCandidate {
   if (rule === null) {
@@ -374,7 +203,7 @@ const ZERO = /^-?0+(?:\.0+)?$/;
 
 /** True only when the server explicitly offers the analytics views. */
 export function hasAnalytics(capabilities: BudgetCapabilities | null): boolean {
-  return capabilities !== null && (capabilities as Record<string, unknown>).analytics === true;
+  return capabilities?.analytics === true;
 }
 
 export function isMonth(value: string): boolean {

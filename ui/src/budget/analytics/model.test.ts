@@ -3,14 +3,15 @@ import { annotationRequest, counterparty, currentMonth, kindChoice, hasAnalytics
 import { entry, pair } from "./fixtures";
 
 const capabilities = { stored_reads: true, account_controls: true, refresh: false, background_selection: true,
-  background_polling: false, consent: false };
+  background_polling: false, consent: false, analytics: false };
 
 describe("analysis month helpers", () => {
   it("offers analytics only on an explicit true", () => {
     expect(hasAnalytics(null)).toBe(false);
     expect(hasAnalytics(capabilities)).toBe(false);
-    expect(hasAnalytics({ ...capabilities, analytics: "yes" } as typeof capabilities)).toBe(false);
-    expect(hasAnalytics({ ...capabilities, analytics: true } as typeof capabilities)).toBe(true);
+    // An older server omits the field and a malformed one may send something other than a boolean.
+    expect(hasAnalytics({ ...capabilities, analytics: "yes" } as unknown as typeof capabilities)).toBe(false);
+    expect(hasAnalytics({ ...capabilities, analytics: true })).toBe(true);
   });
 
   it("recognises a zero decimal string without converting it", () => {
