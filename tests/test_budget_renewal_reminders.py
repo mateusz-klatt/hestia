@@ -1,12 +1,15 @@
 """Synthetic unit tests for pure private consent-renewal reminder evaluation."""
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import math
 import random
 import unittest
 
 from hestia.budget.renewal_reminders import (
+    ATTENTION_MILESTONE,
     DEFAULT_LEAD_DAYS,
+    EXPIRED_MILESTONE,
     MAX_CONNECTIONS,
     MAX_LEAD_DAYS,
     MAX_NOTIFIED,
@@ -75,34 +78,67 @@ class RenewalRemindersTests(unittest.TestCase):
         ])
 
         att = by_id["c-attention-early"]
-        self.assertEqual((att.status, att.active_milestone_days, att.reminder_due, att.attention,
+        self.assertEqual((att.status, att.active_milestone, att.reminder_due, att.attention,
                           att.days_remaining, att.rule_version),
-                         ("attention_required", 0, True, "expired_session", 60, RULE_VERSION))
+                         ("attention_required", ATTENTION_MILESTONE, True, "expired_session", 60, RULE_VERSION))
         self.assertEqual((by_id["c-expired-exact"].status, by_id["c-expired-exact"].seconds_remaining,
-                          by_id["c-expired-exact"].active_milestone_days, by_id["c-expired-exact"].reminder_due),
-                         ("expired", 0, 0, True))
+                          by_id["c-expired-exact"].active_milestone, by_id["c-expired-exact"].reminder_due),
+                         ("expired", 0, EXPIRED_MILESTONE, True))
         self.assertEqual((by_id["c-expired-past"].status, by_id["c-expired-past"].seconds_remaining,
                           by_id["c-expired-past"].days_remaining, by_id["c-expired-past"].reminder_due),
                          ("expired", -3600, -1, False))
-        self.assertEqual((by_id["c-tier-1"].status, by_id["c-tier-1"].active_milestone_days,
+        self.assertEqual((by_id["c-tier-1"].status, by_id["c-tier-1"].active_milestone,
                           by_id["c-tier-1"].days_remaining, by_id["c-tier-1"].reminder_due),
                          ("due_soon", 1, 0, True))
-        self.assertEqual((by_id["c-tier-3"].status, by_id["c-tier-3"].active_milestone_days,
+        self.assertEqual((by_id["c-tier-3"].status, by_id["c-tier-3"].active_milestone,
                           by_id["c-tier-3"].reminder_due, by_id["c-tier-3"].paused),
                          ("due_soon", 3, True, True))
-        self.assertEqual((by_id["c-tier-7-notified"].status, by_id["c-tier-7-notified"].active_milestone_days,
+        self.assertEqual((by_id["c-tier-7-notified"].status, by_id["c-tier-7-notified"].active_milestone,
                           by_id["c-tier-7-notified"].reminder_due),
                          ("due_soon", 7, False))
-        self.assertEqual((by_id["c-tier-14"].status, by_id["c-tier-14"].active_milestone_days,
+        self.assertEqual((by_id["c-tier-14"].status, by_id["c-tier-14"].active_milestone,
                           by_id["c-tier-14"].reminder_due),
                          ("due_soon", 14, True))
-        self.assertEqual((by_id["c-healthy-short-30d"].status, by_id["c-healthy-short-30d"].active_milestone_days,
+        self.assertEqual((by_id["c-healthy-short-30d"].status, by_id["c-healthy-short-30d"].active_milestone,
                           by_id["c-healthy-short-30d"].reminder_due),
                          ("healthy", None, False))
         self.assertEqual((by_id["c-unknown"].status, by_id["c-unknown"].valid_until,
                           by_id["c-unknown"].seconds_remaining, by_id["c-unknown"].days_remaining,
-                          by_id["c-unknown"].active_milestone_days, by_id["c-unknown"].reminder_due),
+                          by_id["c-unknown"].active_milestone, by_id["c-unknown"].reminder_due),
                          ("unknown_expiry", None, None, None, None, False))
+
+        # State transitions: recording "attention" does not suppress a later expiry reminder (marker 0),
+        # and UTC epoch arithmetic is invariant across local DST dates.
+        dst_spring = int(datetime(2026, 3, 29, 0, 30, tzinfo=timezone.utc).timestamp())
+        notified = set()
+        step1 = evaluate_renewal_reminders(
+            "owner", dst_spring, [_target("c-flow", valid_until=dst_spring + 14 * SECONDS_PER_DAY)]
+        )[0]
+        self.assertEqual((step1.status, step1.active_milestone, step1.reminder_due), ("due_soon", 14, True))
+        notified.add(step1.active_milestone)
+        step2 = evaluate_renewal_reminders(
+            "owner", dst_spring + 3600,
+            [_target("c-flow", valid_until=dst_spring + 14 * SECONDS_PER_DAY,
+                     attention="authorization", notified_milestones=frozenset(notified))]
+        )[0]
+        self.assertEqual((step2.status, step2.active_milestone, step2.reminder_due),
+                         ("attention_required", ATTENTION_MILESTONE, True))
+        notified.add(step2.active_milestone)
+        step3 = evaluate_renewal_reminders(
+            "owner", dst_spring + 14 * SECONDS_PER_DAY,
+            [_target("c-flow", valid_until=dst_spring + 14 * SECONDS_PER_DAY,
+                     attention=None, notified_milestones=frozenset(notified))]
+        )[0]
+        self.assertEqual((step3.status, step3.active_milestone, step3.reminder_due),
+                         ("expired", EXPIRED_MILESTONE, True))
+        notified.add(step3.active_milestone)
+        step4 = evaluate_renewal_reminders(
+            "owner", dst_spring + 15 * SECONDS_PER_DAY,
+            [_target("c-flow", valid_until=dst_spring + 14 * SECONDS_PER_DAY,
+                     attention=None, notified_milestones=frozenset(notified))]
+        )[0]
+        self.assertEqual((step4.status, step4.active_milestone, step4.reminder_due),
+                         ("expired", EXPIRED_MILESTONE, False))
 
         # Fractional remaining time floors conservatively so expiry is never understated.
         sub_second = evaluate_renewal_reminders("owner", NOW + 0.4, [_target("c-frac", valid_until=NOW + 1.0)])
@@ -122,7 +158,7 @@ class RenewalRemindersTests(unittest.TestCase):
             _target("conn-u1", valid_until=None),
         ]
         baseline = evaluate_renewal_reminders("owner", NOW, targets, lead_days=(20, 5))
-        self.assertEqual([(item.connection_id, item.active_milestone_days) for item in baseline], [
+        self.assertEqual([(item.connection_id, item.active_milestone) for item in baseline], [
             ("conn-a", 5),
             ("conn-b", 5),
             ("conn-c", 20),
@@ -148,6 +184,8 @@ class RenewalRemindersTests(unittest.TestCase):
             lambda: evaluate_renewal_reminders("owner", float(MAX_TIMESTAMP + 1), []),
             lambda: evaluate_renewal_reminders("owner", 2**53 + 1, []),
             lambda: evaluate_renewal_reminders("owner", 10**400, []),
+            lambda: evaluate_renewal_reminders("owner", datetime(2026, 11, 21, 12, 0), []),
+            lambda: evaluate_renewal_reminders("owner", datetime(2026, 11, 21, 12, 0, tzinfo=timezone.utc), []),
             lambda: evaluate_renewal_reminders("owner", math.inf, []),
             lambda: evaluate_renewal_reminders("owner", math.nan, []),
             lambda: evaluate_renewal_reminders("owner", NOW, [], max_connections=True),
@@ -165,6 +203,9 @@ class RenewalRemindersTests(unittest.TestCase):
             lambda: evaluate_renewal_reminders("owner", NOW, [_target(enabled=1)]),
             lambda: evaluate_renewal_reminders("owner", NOW, [_target(paused=1)]),
             lambda: evaluate_renewal_reminders("owner", NOW, [_target(destination_kind="shared_calendar")]),
+            lambda: evaluate_renewal_reminders("owner", NOW, [_target(destination_kind="OWNER_INBOX")]),
+            lambda: evaluate_renewal_reminders("owner", NOW, [_target(destination_kind=" owner_inbox ")]),
+            lambda: evaluate_renewal_reminders("owner", NOW, [_target(destination_kind="owner_inbóx")]),
             lambda: evaluate_renewal_reminders("owner", NOW,
                                                [_target(destination_kind="shared_calendar", enabled=False)]),
             lambda: evaluate_renewal_reminders("owner", NOW, [_target(destination_kind=None)]),
@@ -183,6 +224,7 @@ class RenewalRemindersTests(unittest.TestCase):
             lambda: evaluate_renewal_reminders("owner", NOW, [_target(notified_milestones=frozenset({True}))]),
             lambda: evaluate_renewal_reminders("owner", NOW, [_target(notified_milestones=frozenset({-1}))]),
             lambda: evaluate_renewal_reminders("owner", NOW, [_target(notified_milestones=frozenset({366}))]),
+            lambda: evaluate_renewal_reminders("owner", NOW, [_target(notified_milestones=frozenset({"other"}))]),
             lambda: evaluate_renewal_reminders("owner", NOW, [_target("dup"), _target("dup", enabled=False)]),
         ]
         for call in bad_calls:

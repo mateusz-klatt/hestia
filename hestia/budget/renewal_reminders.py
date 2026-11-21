@@ -1,10 +1,18 @@
 """Pure private bank-consent renewal reminder evaluation (Budget 2D).
 
-Evaluates owner-configured bank connections using each provider's actual
-``valid_until`` timestamp — never assuming a universal 180-day consent lifetime —
-together with explicit bank ``attention`` states. Enforces owner-private
-notification destinations only (rejecting shared calendars), performs no bank
-requests and never initiates consent renewal or modifies stored credentials.
+Evaluates owner-configured bank connections using each provider's actual UTC
+epoch-second ``valid_until`` timestamp — never assuming a universal 180-day
+consent lifetime — together with explicit bank ``attention`` states.
+
+De-duplication markers in ``notified_milestones`` distinguish bank attention
+(``ATTENTION_MILESTONE = "attention"``), expiry (``EXPIRED_MILESTONE = 0``) and
+positive lead-day tiers (``1..365``), so an attention alert never suppresses a
+subsequent expiry notification. Callers should persist a milestone marker only
+after notification delivery succeeds.
+
+Enforces owner-private notification destinations only (rejecting shared
+calendars), performs no bank requests and never initiates consent renewal or
+modifies stored credentials.
 
 Errors carry fixed messages and never echo connection IDs, bank names, targets
 or owners.
@@ -18,7 +26,9 @@ import re
 
 RULE_VERSION = 1
 SECONDS_PER_DAY = 86_400
-MAX_TIMESTAMP = 253_402_300_799  # 9999-12-31T23:59:59Z
+MAX_TIMESTAMP = 253_402_300_799  # 9999-12-31T23:59:59Z (UTC epoch seconds)
+ATTENTION_MILESTONE = "attention"
+EXPIRED_MILESTONE = 0
 DEFAULT_LEAD_DAYS = (14, 7, 3, 1)
 MAX_CONNECTIONS = 100
 MAX_LEAD_DAYS = 16
@@ -59,7 +69,7 @@ class ConsentRenewalTarget:
     enabled: bool = True
     paused: bool = False
     attention: str | None = None
-    notified_milestones: frozenset[int] = frozenset()
+    notified_milestones: frozenset[int | str] = frozenset()
 
 
 @dataclass(frozen=True, repr=False)
@@ -70,7 +80,7 @@ class ConsentRenewalReminder:
     seconds_remaining: int | None
     days_remaining: int | None
     status: str
-    active_milestone_days: int | None
+    active_milestone: int | str | None
     reminder_due: bool
     paused: bool
     attention: str | None
@@ -122,7 +132,7 @@ def _parse_notified(values):
     if len(values) > MAX_NOTIFIED:
         raise RenewalLimitError()
     for item in values:
-        if type(item) is not int or not 0 <= item <= 365:
+        if item != ATTENTION_MILESTONE and (type(item) is not int or not 0 <= item <= 365):
             raise RenewalInputError()
     return frozenset(values)
 
@@ -137,11 +147,11 @@ def _parse_attention(value):
 
 def _classify(seconds_remaining, attention, lead_days, notified):
     if attention is not None:
-        return "attention_required", 0, 0 not in notified
+        return "attention_required", ATTENTION_MILESTONE, ATTENTION_MILESTONE not in notified
     if seconds_remaining is None:
         return "unknown_expiry", None, False
     if seconds_remaining <= 0:
-        return "expired", 0, 0 not in notified
+        return "expired", EXPIRED_MILESTONE, EXPIRED_MILESTONE not in notified
     for milestone in lead_days:
         if seconds_remaining <= milestone * SECONDS_PER_DAY:
             return "due_soon", milestone, milestone not in notified
@@ -204,7 +214,7 @@ def evaluate_renewal_reminders(owner: str, now: int | float, targets: Iterable[C
             seconds_remaining=seconds,
             days_remaining=days,
             status=status,
-            active_milestone_days=milestone,
+            active_milestone=milestone,
             reminder_due=due,
             paused=paused,
             attention=attention,
