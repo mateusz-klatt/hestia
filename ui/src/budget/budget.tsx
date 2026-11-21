@@ -36,6 +36,9 @@ const labels = {
     presets: { "30": "Last 30 days", "90": "Last 90 days", year: "This year", all: "All" },
     archivedHelp: "Earlier imported balance snapshots (metadata only, not current funds)",
     fetched: "downloaded", imported: "imported", entries: "balances",
+    balanceTypes: { CLBD: "Booked (closing)", ITBD: "Booked (interim)", OPBD: "Booked (opening)",
+      ITAV: "Available (interim)", CLAV: "Available (closing)", OPAV: "Available (opening)", FWAV: "Forward available",
+      XPCD: "Expected", PRCD: "Previously closed" },
   },
   pl: {
     title: "Budżet", subtitle: "Prywatne finanse domowe.", reload: "Wczytaj ponownie", loading: "Wczytywanie budżetu…",
@@ -61,6 +64,9 @@ const labels = {
     presets: { "30": "Ostatnie 30 dni", "90": "Ostatnie 90 dni", year: "Ten rok", all: "Wszystko" },
     archivedHelp: "Wcześniej zaimportowane migawki sald (tylko metadane, nie bieżące środki)",
     fetched: "pobrano", imported: "zaimportowano", entries: "sald",
+    balanceTypes: { CLBD: "Zaksięgowane (na koniec dnia)", ITBD: "Zaksięgowane (bieżące)", OPBD: "Zaksięgowane (otwarcie)",
+      ITAV: "Dostępne (bieżące)", CLAV: "Dostępne (na koniec dnia)", OPAV: "Dostępne (otwarcie)", FWAV: "Dostępne w przyszłości",
+      XPCD: "Oczekiwane", PRCD: "Poprzednie zamknięcie" },
   },
 };
 type Labels = typeof labels.en;
@@ -82,6 +88,10 @@ function failureText(text: Labels, error: string): string {
   }
 }
 
+function balanceLabel(text: Labels, type: string, name: string): string {
+  return (text.balanceTypes as Record<string, string>)[type] ?? (name || type);
+}
+
 function jobText(text: Labels, job: BudgetJob, locale: string): string {
   const status = (text.job as Record<string, string>)[job.status] ?? job.status;
   const next = job.next_attempt !== null && !ACTIVE_JOB.has(job.status) ? when(job.next_attempt, locale) : null;
@@ -89,9 +99,13 @@ function jobText(text: Labels, job: BudgetJob, locale: string): string {
     .filter((part) => part !== null && part !== "").join(" · ");
 }
 
-export interface BudgetProps { active: boolean; api?: BudgetApi; pollMs?: number }
+export interface BudgetProps {
+  active: boolean; api?: BudgetApi; pollMs?: number;
+  /** The user this page signed in as; budget data are shown only while the cookie still names them. */
+  principal?: string | null;
+}
 
-export function Budget({ active, api = budgetApi, pollMs = 2000 }: BudgetProps) {
+export function Budget({ active, api = budgetApi, pollMs = 2000, principal }: BudgetProps) {
   const { text, locale } = pick();
   const [load, setLoad] = useState<Load>("loading");
   const [connections, setConnections] = useState<BudgetConnection[]>([]);
@@ -102,16 +116,34 @@ export function Budget({ active, api = budgetApi, pollMs = 2000 }: BudgetProps) 
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState<ReadonlySet<string>>(new Set());
   const retryKeys = useRef(new Map<string, string>());
+  // Lifecycle guards: `alive` drops work finishing after unmount; every reload takes a new `generation`
+  // so an older load can never overwrite a newer one; `epoch` changes only when data are cleared (signed
+  // out, other principal, disabled), so no response started before that may bring the data back.
+  const alive = useRef(true);
+  const generation = useRef(0);
+  const epoch = useRef(0);
+  const [revision, setRevision] = useState(0);
+  const [pollTick, setPollTick] = useState(0);
+  useEffect(() => {
+    alive.current = true;
+    return () => { alive.current = false; generation.current += 1; };
+  }, []);
 
   const reload = useCallback(async () => {
-    const [connected, listed, queued] = await Promise.all([api.connections(), api.accounts(), api.jobs()]);
-    if (!connected.ok) {
-      const denied = connected.status === 401 || connected.status === 403;
-      if (denied || connected.error === "budget_disabled") {
+    const token = ++generation.current;
+    const [connected, listed, queued, me] = await Promise.all([api.connections(), api.accounts(), api.jobs(),
+      principal === undefined ? Promise.resolve(null) : api.whoami()]);
+    if (!alive.current || token !== generation.current) return;
+    const switched = me !== null && (!me.ok || me.data.user !== principal);
+    if (!connected.ok || switched) {
+      const denied = switched || (!connected.ok && (connected.status === 401 || connected.status === 403));
+      const disabled = !switched && !connected.ok && connected.error === "budget_disabled";
+      if (denied || disabled) {
         // Another principal, a signed-out session or a disabled feature must not keep earlier data in memory.
-        setConnections([]); setAccounts([]); setJobs([]); setDetail(null);
+        epoch.current += 1;
+        setConnections([]); setAccounts([]); setJobs([]); setDetail(null); setCapabilities(null);
       }
-      setLoad(connected.error === "budget_disabled" ? "disabled" : denied ? "denied" : "error");
+      setLoad(disabled ? "disabled" : denied ? "denied" : "error");
       return;
     }
     setConnections(connected.data.connections);
@@ -119,34 +151,45 @@ export function Budget({ active, api = budgetApi, pollMs = 2000 }: BudgetProps) 
     if (listed.ok) setAccounts(listed.data.accounts);
     if (queued.ok) setJobs(queued.data.jobs);
     setLoad(listed.ok ? "ready" : "error");
-  }, [api]);
+    setRevision((current) => current + 1);
+  }, [api, principal]);
 
   useEffect(() => {
     if (active) void reload();
   }, [active, reload]);
 
   // Poll only while a job is queued/running and the view is visible; reload stored data once it settles.
+  // A failed poll re-arms the timer; an authorization failure goes through reload, which clears data.
   const polling = active && hasActiveJob(jobs);
   useEffect(() => {
     if (!polling) return undefined;
+    let cancelled = false;
     const timer = setTimeout(() => {
       void api.jobs().then((result) => {
-        if (!result.ok) return;
+        if (cancelled || !alive.current) return;
+        if (!result.ok) {
+          if (result.status === 401 || result.status === 403 || result.error === "budget_disabled") void reload();
+          else setPollTick((current) => current + 1);
+          return;
+        }
         setJobs(result.data.jobs);
         if (!hasActiveJob(result.data.jobs)) void reload();
       });
     }, pollMs);
-    return () => { clearTimeout(timer); };
-  }, [polling, jobs, api, pollMs, reload]);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [polling, jobs, pollTick, api, pollMs, reload]);
 
-  const run = useCallback(async <T,>(key: string, action: () => Promise<BudgetResult<T>>): Promise<BudgetResult<T>> => {
+  /** Runs one mutation; null when the view was unmounted or its data cleared while it was in flight. */
+  const run = useCallback(async <T,>(key: string, action: () => Promise<BudgetResult<T>>): Promise<BudgetResult<T> | null> => {
+    const started = epoch.current;
     setBusy((current) => new Set(current).add(key));
     setNotice(null);
     const result = await action();
+    if (!alive.current || started !== epoch.current) return null;
     setBusy((current) => { const next = new Set(current); next.delete(key); return next; });
     if (!result.ok) {
       setNotice(failureText(text, result.error));
-      if (result.error === "budget_version_conflict") await reload();
+      if (result.error === "budget_version_conflict" || result.status === 401 || result.status === 403) await reload();
     }
     return result;
   }, [reload, text]);
@@ -156,31 +199,39 @@ export function Budget({ active, api = budgetApi, pollMs = 2000 }: BudgetProps) 
     const key = retryKeys.current.get(connection.id) ?? idempotencyKey();
     retryKeys.current.set(connection.id, key);
     const result = await run(`refresh:${connection.id}`, () => api.refresh(connection, {}, key));
-    if (result.ok || result.status !== 0) retryKeys.current.delete(connection.id);
+    if (result === null) return;
+    // Keep the key while the outcome is unknown (network loss, unreadable 2xx, 5xx); drop it only after a
+    // job was returned or the server definitively refused without creating one.
+    const definitive = result.ok || (result.status >= 400 && result.status < 500)
+      || result.error === "budget_refresh_unavailable";
+    if (definitive) retryKeys.current.delete(connection.id);
     if (result.ok) {
       const job = result.data.job;
       setJobs((current) => [job, ...current.filter((item) => item.id !== job.id)]);
     }
   }, [api, run]);
 
+  // A saved entity replaces the shown one only when it is not older than what a later load already shows.
   const saveConnection = useCallback(async (key: string, action: () => Promise<BudgetResult<{ connection: BudgetConnection }>>) => {
     const result = await run(key, action);
-    if (result.ok) {
-      const saved = result.data.connection;
-      setConnections((current) => current.map((item) => (item.id === saved.id ? saved : item)));
-      if (key.startsWith("pause:")) {
-        const listed = await api.accounts();
-        if (listed.ok) setAccounts(listed.data.accounts);
-      }
+    if (result?.ok !== true) return;
+    const saved = result.data.connection;
+    setConnections((current) => current.map((item) =>
+      (item.id === saved.id && saved.control_version >= item.control_version ? saved : item)));
+    if (key.startsWith("pause:")) {
+      // Pause changes every account's `active` flag; re-read accounts within the same data epoch.
+      const started = epoch.current;
+      const listed = await api.accounts();
+      if (alive.current && started === epoch.current && listed.ok) setAccounts(listed.data.accounts);
     }
   }, [api, run]);
 
   const saveAccount = useCallback(async (key: string, action: () => Promise<BudgetResult<{ account: BudgetAccount }>>) => {
     const result = await run(key, action);
-    if (result.ok) {
-      const saved = result.data.account;
-      setAccounts((current) => current.map((item) => (item.id === saved.id ? { ...item, ...saved } : item)));
-    }
+    if (result?.ok !== true) return;
+    const saved = result.data.account;
+    setAccounts((current) => current.map((item) =>
+      (item.id === saved.id && saved.control_version >= item.control_version ? { ...item, ...saved } : item)));
   }, [run]);
 
   if (!active) return null;
@@ -248,7 +299,7 @@ export function Budget({ active, api = budgetApi, pollMs = 2000 }: BudgetProps) 
       })}
       {opened === null ? null : (
         <AccountDetail account={opened} label={accountLabel(opened, accounts.filter((a) => a.connection === opened.connection).indexOf(opened), text.account)}
-          api={api} text={text} locale={locale} onClose={() => { setDetail(null); }} />
+          api={api} text={text} locale={locale} revision={revision} onClose={() => { setDetail(null); }} />
       )}
     </section>
   );
@@ -289,14 +340,15 @@ function AccountRow({ account, index, text, busy, onOpen, onSelect, onKind }: Ro
 }
 
 interface DetailProps {
-  account: BudgetAccount; label: string; api: BudgetApi; text: Labels; locale: string; onClose: () => void;
+  account: BudgetAccount; label: string; api: BudgetApi; text: Labels; locale: string; revision: number;
+  onClose: () => void;
 }
 
 interface Ledger { rows: BudgetTransaction[]; cursor: string | null; uncertain: number; failed: boolean; loading: boolean }
 
 const EMPTY_LEDGER: Ledger = { rows: [], cursor: null, uncertain: 0, failed: false, loading: true };
 
-function AccountDetail({ account, label, api, text, locale, onClose }: DetailProps) {
+function AccountDetail({ account, label, api, text, locale, revision, onClose }: DetailProps) {
   const panel = useRef<HTMLElement>(null);
   useEffect(() => {
     // The detail renders below every connection; bring it into view when another account is opened.
@@ -310,6 +362,7 @@ function AccountDetail({ account, label, api, text, locale, onClose }: DetailPro
   // so a previous account's or filter's rows can never replace the current ones.
   const generation = useRef(0);
 
+  // A completed reload (for example after a refresh job settles) re-reads the open account as well.
   useEffect(() => {
     const token = ++generation.current;
     setLedger(EMPTY_LEDGER);
@@ -324,7 +377,8 @@ function AccountDetail({ account, label, api, text, locale, onClose }: DetailPro
             failed: false, loading: false }
         : { ...EMPTY_LEDGER, failed: true, loading: false });
     });
-  }, [api, account.id, range]);
+  }, [api, account.id, range, revision]);
+  useEffect(() => () => { generation.current += 1; }, []);
 
   const more = useCallback(async () => {
     const token = generation.current;
@@ -348,7 +402,7 @@ function AccountDetail({ account, label, api, text, locale, onClose }: DetailPro
         <ul className="budget-balances">
           {balances.balances.map((balance, index) => (
             <li key={`${balance.balance_type}-${String(index)}`}>
-              <span>{balance.name || balance.balance_type}</span>
+              <span title={balance.name || balance.balance_type}>{balanceLabel(text, balance.balance_type, balance.name)}</span>
               <strong>{formatAmount(balance.balance_amount.amount, balance.balance_amount.currency, locale)}</strong>
             </li>
           ))}
@@ -406,7 +460,10 @@ function AccountDetail({ account, label, api, text, locale, onClose }: DetailPro
   );
 }
 
-export function mountBudget(element: HTMLElement): { setActive: (active: boolean) => void; destroy: () => void } {
+export function mountBudget(element: HTMLElement, principal: string | null): { setActive: (active: boolean) => void; destroy: () => void } {
   const root = createRoot(element);
-  return { setActive: (active) => { root.render(<Budget active={active} />); }, destroy: () => { root.unmount(); } };
+  return {
+    setActive: (active) => { root.render(<Budget active={active} principal={principal} />); },
+    destroy: () => { root.unmount(); },
+  };
 }

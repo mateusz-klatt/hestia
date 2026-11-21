@@ -42,6 +42,7 @@ const balancesData = {
 
 function fakeApi(accounts: BudgetAccount[] = [account({ display })]) {
   return {
+    whoami: vi.fn<BudgetApi["whoami"]>(() => ok({ user: "owner", role: "admin" })),
     connections: vi.fn<BudgetApi["connections"]>(() => ok({ connections: [connection], capabilities })),
     accounts: vi.fn<BudgetApi["accounts"]>(() => ok({ accounts })),
     jobs: vi.fn<BudgetApi["jobs"]>(() => ok({ jobs: [] })),
@@ -70,8 +71,12 @@ afterEach(async () => {
   host.remove();
 });
 
-async function render(api: ReturnType<typeof fakeApi>, active = true): Promise<void> {
-  await act(async () => { root.render(<Budget active={active} api={api} pollMs={5} />); await Promise.resolve(); });
+async function render(api: ReturnType<typeof fakeApi>, active = true, principal?: string | null): Promise<void> {
+  await act(async () => {
+    root.render(principal === undefined ? <Budget active={active} api={api} pollMs={5} />
+      : <Budget active={active} api={api} pollMs={5} principal={principal} />);
+    await Promise.resolve();
+  });
   await settle();
 }
 async function settle(ms = 0): Promise<void> {
@@ -135,6 +140,126 @@ describe("budget view states", () => {
   });
 });
 
+type Loaded<F extends (...args: never[]) => unknown> = Awaited<ReturnType<F>> extends BudgetResult<infer T> ? T : never;
+
+describe("async lifecycle guards", () => {
+  it("never lets an older successful load restore data after a newer unauthorized one", async () => {
+    const api = fakeApi();
+    await render(api);
+    const old = { connections: deferred<Loaded<BudgetApi["connections"]>>(), accounts: deferred<Loaded<BudgetApi["accounts"]>>(),
+      jobs: deferred<Loaded<BudgetApi["jobs"]>>() };
+    api.connections.mockImplementationOnce(() => old.connections.promise).mockImplementationOnce(() => fail(401, "budget_http_401"));
+    api.accounts.mockImplementationOnce(() => old.accounts.promise).mockImplementationOnce(() => fail(401, "budget_http_401"));
+    api.jobs.mockImplementationOnce(() => old.jobs.promise).mockImplementationOnce(() => fail(401, "budget_http_401"));
+    await click(button("Reload"));
+    await click(button("Reload"));
+    expect(host.textContent).toContain("Only the budget's owner");
+    await act(async () => {
+      old.connections.settle({ ok: true, data: { connections: [connection], capabilities } });
+      old.accounts.settle({ ok: true, data: { accounts: [account({ display })] } });
+      old.jobs.settle({ ok: true, data: { jobs: [] } });
+      await Promise.resolve();
+    });
+    await settle();
+    expect(host.textContent).toContain("Only the budget's owner");
+    expect(host.textContent).not.toContain("Synthetic Current");
+  });
+
+  it("keeps polling after a transient jobs failure and clears data on an unauthorized poll", async () => {
+    const api = fakeApi();
+    api.jobs.mockImplementationOnce(() => ok({ jobs: [job()] }))
+      .mockImplementationOnce(() => fail(500, "budget_internal_error"))
+      .mockImplementationOnce(() => ok({ jobs: [job({ status: "running" })] }))
+      .mockImplementation(() => ok({ jobs: [job({ status: "updated" })] }));
+    await render(api);
+    for (let round = 0; round < 20 && !host.textContent.includes("Last refresh: updated"); round += 1) await settle(10);
+    expect(host.textContent).toContain("Last refresh: updated");
+    expect(api.jobs.mock.calls.length).toBeGreaterThanOrEqual(4);
+    api.jobs.mockImplementation(() => ok({ jobs: [job({ id: "job-2" })] }));
+    await click(button("Reload"));
+    api.jobs.mockImplementation(() => fail(401, "budget_http_401"));
+    api.connections.mockImplementation(() => fail(401, "budget_http_401"));
+    for (let round = 0; round < 20 && !host.textContent.includes("Only the budget's owner"); round += 1) await settle(10);
+    expect(host.textContent).toContain("Only the budget's owner");
+    expect(host.textContent).not.toContain("Synthetic Current");
+  });
+
+  it("starts no further reads when a pending poll settles after unmount", async () => {
+    const api = fakeApi();
+    const late = deferred<Loaded<BudgetApi["jobs"]>>();
+    api.jobs.mockImplementationOnce(() => ok({ jobs: [job()] })).mockImplementationOnce(() => late.promise);
+    await render(api);
+    await settle(15);
+    expect(api.jobs).toHaveBeenCalledTimes(2);
+    await act(async () => { root.unmount(); await Promise.resolve(); });
+    root = createRoot(host);
+    await act(async () => { late.settle({ ok: true, data: { jobs: [job({ status: "updated" })] } }); await Promise.resolve(); });
+    await settle(20);
+    expect(api.connections).toHaveBeenCalledTimes(1);
+    expect(api.accounts).toHaveBeenCalledTimes(1);
+  });
+
+  it("re-reads the opened account when stored data are reloaded", async () => {
+    const api = fakeApi();
+    api.transactions.mockImplementation(() => ok(page([tx("before-refresh")])));
+    await render(api);
+    await click(button("Synthetic Current"));
+    expect(host.textContent).toContain("Synthetic before-refresh");
+    api.transactions.mockImplementation(() => ok(page([tx("after-refresh")])));
+    await click(button("Reload"));
+    expect(host.textContent).toContain("Synthetic after-refresh");
+    expect(host.textContent).not.toContain("before-refresh");
+  });
+
+  it("never overwrites a newer loaded version with an older save result", async () => {
+    const api = fakeApi();
+    const save = deferred<Loaded<BudgetApi["setSelected"]>>();
+    api.setSelected.mockImplementation(() => save.promise);
+    await render(api);
+    const checkbox = () => host.querySelector<HTMLInputElement>(".budget-account input[type=checkbox]");
+    await click(checkbox() ?? host);
+    api.accounts.mockImplementation(() => ok({ accounts: [account({ display, selected: true, control_version: 3 })] }));
+    await click(button("Reload"));
+    await act(async () => {
+      save.settle({ ok: true, data: { account: account({ display, selected: false, control_version: 2 }) } });
+      await Promise.resolve();
+    });
+    await settle();
+    expect(checkbox()?.checked).toBe(true);
+  });
+
+  it("drops a save result that arrives after the data were cleared", async () => {
+    const api = fakeApi();
+    const save = deferred<Loaded<BudgetApi["setSelected"]>>();
+    api.setSelected.mockImplementation(() => save.promise);
+    await render(api);
+    await click(host.querySelector<HTMLInputElement>(".budget-account input[type=checkbox]") ?? host);
+    api.connections.mockImplementation(() => fail(403, "budget_http_403"));
+    await click(button("Reload"));
+    await act(async () => {
+      save.settle({ ok: true, data: { account: account({ display, selected: false, control_version: 2 }) } });
+      await Promise.resolve();
+    });
+    await settle();
+    expect(host.textContent).toContain("Only the budget's owner");
+    expect(host.textContent).not.toContain("Synthetic Current");
+  });
+
+  it("clears the view when the cookie no longer names the signed-in principal", async () => {
+    const api = fakeApi();
+    await render(api, true, "owner");
+    expect(host.textContent).toContain("Synthetic Current");
+    api.whoami.mockImplementation(() => ok({ user: "someone-else", role: "admin" }));
+    await click(button("Reload"));
+    expect(host.textContent).toContain("Only the budget's owner");
+    expect(host.textContent).not.toContain("Synthetic Current");
+    api.whoami.mockImplementation(() => fail(401, "budget_http_401"));
+    await click(button("Reload"));
+    expect(host.textContent).toContain("Only the budget's owner");
+    expect(api.whoami).toHaveBeenCalledTimes(3);
+  });
+});
+
 describe("refresh jobs", () => {
   it("keeps one key across a lost response, then polls until the job settles and reloads", async () => {
     const api = fakeApi();
@@ -161,6 +286,25 @@ describe("refresh jobs", () => {
     expect(api.connections.mock.calls.length).toBeGreaterThanOrEqual(2);
     await click(button("Refresh from bank"));
     expect(keys[2]).not.toBe(keys[1]);
+  });
+
+  it("keeps the key while the outcome is unknown and drops it only after a definitive answer", async () => {
+    const api = fakeApi();
+    const keys: string[] = [];
+    type Refreshed = Loaded<BudgetApi["refresh"]>;
+    const answers: [number, string][] = [[202, "budget_uncertain"], [500, "budget_internal_error"],
+      [409, "budget_refresh_in_progress"], [503, "budget_refresh_unavailable"], [0, "budget_network"]];
+    api.refresh.mockImplementation((_connection, _target, key) => {
+      keys.push(key ?? "");
+      const [status, error] = answers.shift() ?? [0, "budget_network"];
+      return fail<Refreshed>(status, error);
+    });
+    await render(api);
+    for (let index = 0; index < 5; index += 1) await click(button("Refresh from bank"));
+    expect(keys[1]).toBe(keys[0]);
+    expect(keys[2]).toBe(keys[0]);
+    expect(keys[3]).not.toBe(keys[2]);
+    expect(keys[4]).not.toBe(keys[3]);
   });
 
   it("explains busy and paused refusals without retrying silently", async () => {
@@ -278,6 +422,8 @@ describe("account detail", () => {
     await render(api);
     await click(button("Synthetic Current"));
     expect(host.textContent).toContain("−15.001 PLN");
+    expect(host.textContent).toContain("Booked (closing)");
+    expect(host.querySelector(".budget-balances span")?.getAttribute("title")).toBe("Booked");
     expect(host.textContent).toContain("metadata only, not current funds");
     expect(host.textContent).toContain("2 balances");
     expect(host.textContent).toContain("could not be loaded");

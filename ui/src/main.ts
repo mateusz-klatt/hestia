@@ -182,7 +182,7 @@ const live = new LiveController(
 function startApp(): void {
   const calendar = mountCalendar(el("calendar-root"), canControl);
   // Owner-private budget: mounted only for admins; the server decides ownership and whether it is enabled.
-  const budget = isAdmin ? mountBudget(el("budget-root")) : null;
+  const budget = isAdmin ? mountBudget(el("budget-root"), currentUsername) : null;
   const audit = renderAuditFeed(el("audit-feed"), fetchAudit, () => latestDevices);
   const rf433 = renderRf433(el("rf433"), fetchRf433);
   const dbStats = renderDbStats(el("dbstats"), fetchDbStats);

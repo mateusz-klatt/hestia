@@ -29,7 +29,11 @@ async function call<T>(target: URL, init: RequestInit = {}): Promise<BudgetResul
   }
   // Middleware 401/403 bodies are empty, which is not JSON.
   const body = (await response.json().catch(() => null)) as unknown;
-  if (response.ok && body !== null && typeof body === "object") return { ok: true, data: body as T };
+  if (response.ok) {
+    if (body !== null && typeof body === "object") return { ok: true, data: body as T };
+    // A 2xx whose body cannot be read leaves the outcome unknown (the write may have happened).
+    return { ok: false, status: response.status, error: "budget_uncertain" };
+  }
   const record = (body ?? {}) as { error?: unknown; current?: unknown };
   const error = typeof record.error === "string" ? record.error : `budget_http_${String(response.status)}`;
   return { ok: false, status: response.status, error, current: record.current };
@@ -44,6 +48,8 @@ function post<T>(path: string, body: object, headers: Record<string, string> = {
 export interface ConnectionsData { connections: BudgetConnection[]; capabilities: BudgetCapabilities }
 
 export const budgetApi = {
+  /** The cookie's current principal; another tab may have signed out or in as someone else. */
+  whoami: () => call<{ user: string | null; role: string | null }>(apiUrl("whoami")),
   connections: () => call<ConnectionsData>(url("connections")),
   accounts: (connectionId?: string) =>
     call<{ accounts: BudgetAccount[] }>(url("accounts", { connection_id: connectionId })),
@@ -68,13 +74,21 @@ export const budgetApi = {
     post<{ connection: BudgetConnection }>("background-selection",
       { connection_id: connection.id, enabled, expected_version: connection.control_version }),
   /** One key per user action: a retried or double-clicked request reuses it and gets the same job. */
-  refresh: (connection: BudgetConnection, target: { accountId?: string; operation?: BudgetOperation } = {},
-    key: string = idempotencyKey()) =>
-    post<{ job: BudgetJob & { created: boolean } }>("refresh", {
+  refresh: async (connection: BudgetConnection, target: { accountId?: string; operation?: BudgetOperation } = {},
+    key: string = idempotencyKey()): Promise<BudgetResult<{ job: BudgetJob & { created: boolean } }>> => {
+    const result = await post<{ job?: unknown }>("refresh", {
       connection_id: connection.id, expected_version: connection.control_version,
       ...(target.accountId === undefined ? {} : { account_id: target.accountId }),
       ...(target.operation === undefined ? {} : { operation: target.operation }),
-    }, { "Idempotency-Key": key }),
+    }, { "Idempotency-Key": key });
+    if (!result.ok) return result;
+    const job: unknown = result.data.job;
+    const fields = (typeof job === "object" && job !== null ? job : {}) as Record<string, unknown>;
+    if (typeof fields.id !== "string" || typeof fields.status !== "string" || typeof fields.connection_id !== "string") {
+      return { ok: false, status: 202, error: "budget_uncertain" };
+    }
+    return { ok: true, data: { job: job as BudgetJob & { created: boolean } } };
+  },
 };
 
 export type BudgetApi = typeof budgetApi;

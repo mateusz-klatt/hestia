@@ -61,13 +61,31 @@ describe("budget api", () => {
     expect(sent(fetchMock, 5).url.search).toBe("");
   });
 
+  it("treats an unreadable or incomplete success as an unknown outcome", async () => {
+    respond(202, {});
+    expect(await budgetApi.refresh(connection)).toEqual({ ok: false, status: 202, error: "budget_uncertain" });
+    respond(202, { ok: true, job: { id: "job" } });
+    expect((await budgetApi.refresh(connection)).ok).toBe(false);
+    respond(202, { ok: true, job: null });
+    expect((await budgetApi.refresh(connection)).ok).toBe(false);
+    respond(202, { ok: true, job: { id: "job", status: "queued", connection_id: "bank", created: true } });
+    expect(await budgetApi.refresh(connection)).toMatchObject({ ok: true, data: { job: { id: "job", created: true } } });
+    respond(409, { ok: false, error: "budget_refresh_in_progress" });
+    expect(await budgetApi.refresh(connection)).toMatchObject({ ok: false, status: 409 });
+    vi.stubGlobal("fetch", vi.fn(() => Promise.resolve(new Response("not json", { status: 202 }))));
+    expect(await budgetApi.refresh(connection)).toEqual({ ok: false, status: 202, error: "budget_uncertain" });
+    const fetchMock = respond(200, { user: "owner", role: "admin" });
+    expect(await budgetApi.whoami()).toEqual({ ok: true, data: { user: "owner", role: "admin" } });
+    expect(sent(fetchMock).url.pathname).toMatch(/\/api\/whoami$/);
+  });
+
   it("maps refusals, empty middleware bodies and network loss without throwing", async () => {
     respond(409, { ok: false, error: "budget_version_conflict", current: { id: "bank" } });
     expect(await budgetApi.connections()).toEqual({ ok: false, status: 409, error: "budget_version_conflict", current: { id: "bank" } });
     respond(401, undefined);
     expect(await budgetApi.connections()).toEqual({ ok: false, status: 401, error: "budget_http_401", current: undefined });
     respond(200, undefined);
-    expect((await budgetApi.connections()).ok).toBe(false);
+    expect(await budgetApi.connections()).toEqual({ ok: false, status: 200, error: "budget_uncertain" });
     vi.stubGlobal("fetch", vi.fn(() => Promise.reject(new TypeError("offline"))));
     expect(await budgetApi.connections()).toEqual({ ok: false, status: 0, error: "budget_network" });
   });
