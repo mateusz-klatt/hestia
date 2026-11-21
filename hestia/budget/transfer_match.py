@@ -95,10 +95,17 @@ def _text(value, maximum=MAX_TEXT):
     return value
 
 
+def _reference(value):
+    """Entry references are opaque bank values: kept verbatim, as the normaliser stores them."""
+    if not isinstance(value, str) or not 1 <= len(value) <= MAX_TEXT:
+        raise TransferInputError()
+    return value
+
+
 def _key(value):
     if not isinstance(value, tuple) or len(value) != 2:
         raise TransferInputError()
-    return (_text(value[0]), _text(value[1]))
+    return (_text(value[0]), _reference(value[1]))
 
 
 def _identifiers(value):

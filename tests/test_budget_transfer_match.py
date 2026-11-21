@@ -230,11 +230,23 @@ class ValidationTests(unittest.TestCase):
                entry(**base, fingerprint="A" * 64), entry(**base, fingerprint="0" * 63), entry(**base, fingerprint=12345),
                entry(**base, counterparty=[IBAN_B]), entry(**base, counterparty=(("IBAN", ""),)),
                entry(**base, eligible=1), entry("acc-unknown", "d", "DBIT"), entry("acc-a", "d", "XFER"),
-               entry("acc-a", "", "DBIT"), entry("acc-a", "ref\x7f", "DBIT"), entry(None, "d", "DBIT"),
+               entry("acc-a", "", "DBIT"), entry("acc-a", "r" * 1025, "DBIT"), entry("acc-a", 7, "DBIT"),
+               entry("acc\x00", "d", "DBIT"), entry(None, "d", "DBIT"),
                ("acc-a", "d")]
         for item in bad:
             with self.subTest(item=getattr(item, "__dict__", item)):
                 self.assertRejected(OWNER, [item], ACCOUNTS)
+
+    def test_entry_references_are_opaque_and_kept_verbatim(self):
+        opaque = ["\x00", " ", "ref\x7f\n", "\t" * 1024, "r" * 1024]
+        entries = [entry("acc-a", ref, "DBIT", f"{index + 1}.00") for index, ref in enumerate(opaque)]
+        entries += [entry("acc-b", ref, "CRDT", f"{index + 1}.00") for index, ref in enumerate(opaque)]
+        result = match(entries, blocked_pairs=frozenset({(("acc-a", "\x00"), ("acc-b", " "))}),
+                       reserved_entries=frozenset({("acc-c", "\x01")}))
+        self.assertEqual([(c.debit_key[1], c.credit_key[1], c.ambiguous) for c in result],
+                         [(ref, ref, False) for ref in sorted(opaque)])
+        self.assertEqual(match(list(reversed(entries))), result)
+        self.assertEqual(match(entries[:1] + entries[5:6], reserved_entries={("acc-a", "\x00")}), ())
 
     def test_duplicate_keys_are_rejected_even_when_one_copy_is_ineligible(self):
         self.assertRejected(OWNER, [entry("acc-a", "d", "DBIT"), entry("acc-a", "d", "CRDT", eligible=False)], ACCOUNTS)
