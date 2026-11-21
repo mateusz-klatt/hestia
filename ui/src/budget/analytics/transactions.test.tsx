@@ -165,7 +165,8 @@ describe("period entries", () => {
   });
 
   it("distinguishes explicit uncategorised from a reset to automatic, with the seen version", async () => {
-    const annotated = entry("e1", { annotation: { mode: "manual", kind: "income", category_id: "cat-old", version: 7, stale: false } });
+    const annotated = entry("e1", { credit_debit_indicator: "CRDT",
+      annotation: { mode: "manual", kind: "income", category_id: "cat-old", version: 7, stale: false } });
     const api = fakeApi([annotated]);
     await show(api);
     await click(button("Change"));
@@ -195,20 +196,35 @@ describe("period entries", () => {
     expect(select("Category", editor).value).toBe("auto");
     // The archived category the entry currently shows stays available for it.
     expect([...select("Category", editor).options].map((option) => option.value)).toContain("cat:cat-old");
-    await choose(select("Type", editor), "income");
+    await choose(select("Type", editor), "excluded");
     expect(select("Category", editor).value).toBe("cat:cat-old");
     await submit(first.querySelector(".budget-entry-editor"));
     expect(api.annotate).toHaveBeenLastCalledWith(expect.objectContaining({ entry_reference: "e1", mode: "manual",
-      category_id: "cat-old", kind: "income" }));
+      category_id: "cat-old", kind: "excluded" }));
     await click(button("Change", host.querySelectorAll<HTMLElement>(".budget-entry")[1] ?? host));
     editor = host.querySelector(".budget-entry-editor") ?? host;
-    await choose(select("Type", editor), "refund");
+    await choose(select("Type", editor), "expense");
     expect(select("Category", editor).value).toBe("none");
     // Going back to automatic hands the type back to the rules as well.
     await choose(select("Category", editor), "auto");
     expect(select("Type", editor).value).toBe("auto");
     await submit(host.querySelector(".budget-entry-editor"));
     expect(api.annotate).toHaveBeenLastCalledWith(expect.objectContaining({ entry_reference: "e2", mode: "auto", kind: "auto" }));
+  });
+
+  it("offers only types that fit the entry's direction and drops an incompatible stored one to automatic", async () => {
+    const api = fakeApi([entry("out"), entry("in", { credit_debit_indicator: "CRDT",
+      annotation: { version: 2, mode: "manual", category_id: null, kind: "expense", stale: false } })]);
+    await show(api);
+    const rows = [...host.querySelectorAll<HTMLElement>(".budget-entry")];
+    await click(button("Change", rows[0] ?? host));
+    let editor = host.querySelector(".budget-entry-editor") ?? host;
+    expect([...select("Type", editor).options].map((option) => option.value)).toEqual(["auto", "expense", "excluded"]);
+    await click(button("Cancel", editor));
+    await click(button("Change", host.querySelectorAll<HTMLElement>(".budget-entry")[1] ?? host));
+    editor = host.querySelector(".budget-entry-editor") ?? host;
+    expect([...select("Type", editor).options].map((option) => option.value)).toEqual(["auto", "income", "refund", "excluded"]);
+    expect(select("Type", editor).value).toBe("auto");
   });
 
   it("locks the editor while a save is in flight", async () => {

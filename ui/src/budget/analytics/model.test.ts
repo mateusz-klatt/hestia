@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { annotationRequest, counterparty, currentMonth, kindChoice, hasAnalytics, isMonth, isZero, monthLabel, shiftMonth, transferActions, transferDecision } from "./model";
+import { annotationRequest, counterparty, currentMonth, kindChoice, kindChoicesFor, hasAnalytics, isMonth, isZero, monthLabel, shiftMonth, transferActions, transferDecision } from "./model";
 import { entry, pair } from "./fixtures";
 
 const capabilities = { stored_reads: true, account_controls: true, refresh: false, background_selection: true,
@@ -50,6 +50,11 @@ describe("analytics decisions", () => {
     expect(annotationRequest(row, { mode: "manual", category_id: null }, "income")).toMatchObject({ mode: "manual", kind: "income" });
     expect(kindChoice("refund")).toBe("refund");
     expect(kindChoice("future_kind")).toBe("auto");
+    expect(kindChoicesFor("DBIT")).toEqual(["auto", "expense", "excluded"]);
+    expect(kindChoicesFor("CRDT")).toEqual(["auto", "income", "refund", "excluded"]);
+    expect(kindChoice("refund", "DBIT")).toBe("auto");
+    expect(kindChoice("expense", "CRDT")).toBe("auto");
+    expect(kindChoice("excluded", "CRDT")).toBe("excluded");
   });
 
   it("names the other party from the bank metadata by direction", () => {

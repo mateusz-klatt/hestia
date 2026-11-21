@@ -69,9 +69,16 @@ export function labelOf(labels: Readonly<Record<string, string>>, value: string)
   return labels[value] ?? value;
 }
 
-/** A server kind string as an editor choice; anything unknown falls back to automatic. */
-export function kindChoice(kind: string): KindChoice {
-  return (KIND_CHOICES as readonly string[]).includes(kind) ? kind as KindChoice : "auto";
+/** The kinds an entry can take by its direction: a payment out is never income or a refund, an incoming one never
+ *  an expense. The server rejects the others; rules may name any kind because they skip incompatible entries. */
+export function kindChoicesFor(indicator: "CRDT" | "DBIT"): readonly KindChoice[] {
+  return indicator === "DBIT" ? ["auto", "expense", "excluded"] : ["auto", "income", "refund", "excluded"];
+}
+
+/** A server kind string as an editor choice; anything unknown, or incompatible with the direction, is automatic. */
+export function kindChoice(kind: string, indicator?: "CRDT" | "DBIT"): KindChoice {
+  const allowed: readonly string[] = indicator === undefined ? KIND_CHOICES : kindChoicesFor(indicator);
+  return allowed.includes(kind) ? kind as KindChoice : "auto";
 }
 
 /** The other party's name as the bank reported it: the creditor of a payment, the debtor of an incoming one. */

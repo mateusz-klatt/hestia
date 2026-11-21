@@ -4,8 +4,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { BudgetApi } from "../api";
 import type { BudgetAccount } from "../model";
 import { accountLabel, formatAmount, transactionDate, transactionText } from "../model";
-import { ANALYTICS_ERROR, EFFECTIVE_KINDS, KIND_CHOICES, NO_FILTER, RELOAD_ERRORS, UNCATEGORISED, annotationRequest, counterparty,
-  currentChoice, kindChoice, labelOf } from "./model";
+import { ANALYTICS_ERROR, EFFECTIVE_KINDS, NO_FILTER, RELOAD_ERRORS, UNCATEGORISED, annotationRequest, counterparty,
+  currentChoice, kindChoice, kindChoicesFor, labelOf } from "./model";
 import type { AnalyticsCategory, AnalyticsTransaction, CategoryChoice, KindChoice, TransactionFilter } from "./model";
 
 const kindsEn = { auto: "Automatic", expense: "Expense", income: "Income", refund: "Refund", excluded: "Leave out of the budget",
@@ -233,7 +233,9 @@ function decode(value: string): CategoryChoice {
 
 function Editor({ row, categories, text, kindText, saving, onSave, onCancel }: EditorProps) {
   const [category, setCategory] = useState(encode(currentChoice(row)));
-  const [kind, setKind] = useState<KindChoice>(row.annotation.mode === "manual" ? kindChoice(row.annotation.kind) : "auto");
+  const kinds = kindChoicesFor(row.credit_debit_indicator);
+  const [kind, setKind] = useState<KindChoice>(row.annotation.mode === "manual"
+    ? kindChoice(row.annotation.kind, row.credit_debit_indicator) : "auto");
   // An archived category stays selectable only for the entry that already uses or shows it.
   const kept = new Set([row.annotation.category_id, row.effective.category_id]);
   const offered = categories.filter((item) => !item.archived || kept.has(item.id));
@@ -257,8 +259,9 @@ function Editor({ row, categories, text, kindText, saving, onSave, onCancel }: E
         </select>
       </label>
       <label>{text.kind}
-        <select value={kind} disabled={saving} onChange={(event) => { chooseKind(kindChoice(event.currentTarget.value)); }}>
-          {KIND_CHOICES.map((item) => <option key={item} value={item}>{kindText(item)}</option>)}
+        <select value={kind} disabled={saving}
+          onChange={(event) => { chooseKind(kindChoice(event.currentTarget.value, row.credit_debit_indicator)); }}>
+          {kinds.map((item) => <option key={item} value={item}>{kindText(item)}</option>)}
         </select>
       </label>
       <button type="submit" className="budget-primary" disabled={saving}>{text.save}</button>
