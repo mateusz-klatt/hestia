@@ -1,5 +1,7 @@
 import "./style.css";
 import { mountCalendar } from "./calendar";
+import { budgetApi } from "./budget/api";
+import { mountBudget } from "./budget/budget";
 
 import {
   addUser,
@@ -179,6 +181,8 @@ const live = new LiveController(
 /** Wire up the live app (events, intervals, initial fetch). Called only once authenticated. */
 function startApp(): void {
   const calendar = mountCalendar(el("calendar-root"), canControl);
+  // Owner-private budget: mounted only for admins; the server decides ownership and whether it is enabled.
+  const budget = isAdmin ? mountBudget(el("budget-root"), currentUsername) : null;
   const audit = renderAuditFeed(el("audit-feed"), fetchAudit, () => latestDevices);
   const rf433 = renderRf433(el("rf433"), fetchRf433);
   const dbStats = renderDbStats(el("dbstats"), fetchDbStats);
@@ -205,10 +209,12 @@ function startApp(): void {
       eventsEl: el("events-view"),
       adminEl: el("admin-view"),
       calendarEl: el("calendar-view"),
+      ...(budget === null ? {} : { budgetEl: el("budget-view") }),
     },
     (view) => {
       currentView = view;
       calendar.setActive(view === "calendar");
+      budget?.setActive(view === "budget");
       if (view === "rooms") {
         roomsView.goToLanding(); // tapping the rooms tab always returns to the list
       } else if (view === "events") {
@@ -221,6 +227,10 @@ function startApp(): void {
     },
     { showAdmin: isAdmin }, // a non-admin gets only 🏠 Rooms + 📜 Activity (no engineer view)
   );
+  if (budget !== null) {
+    // 404 (disabled), 401/403 (not this owner) or 409 (no SQLite users) keep the budget tab hidden.
+    void budgetApi.connections().then((result) => { switcher.setBudgetAvailable(result.ok); });
+  }
   // The "← Rooms" back label only reflects nav while the rooms view is the active one — a background
   // refresh re-rendering the hidden room detail must not flip the tab while Advanced is showing.
   onRoomsNav = (inRoom) => {

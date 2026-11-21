@@ -205,4 +205,46 @@ describe("renderViewSwitch", () => {
     expect(calendarEl.hidden).toBe(true);
   });
 
+  it("keeps the budget tab hidden and unreachable until the server confirms it", () => {
+    localStorage.setItem("hestia.view", "budget");
+    const base = els();
+    const budgetEl = document.createElement("section");
+    const changes: ViewName[] = [];
+    const switcher = renderViewSwitch({ ...base, budgetEl }, (view) => changes.push(view));
+    const budgetBtn = [...base.switchBox.querySelectorAll("button")].find((btn) => btn.textContent.includes("Budget"));
+    expect(budgetBtn?.hidden).toBe(true);
+    expect(budgetEl.hidden).toBe(true);
+    expect(base.roomsEl.hidden).toBe(false);
+    expect(localStorage.getItem("hestia.view")).toBe("budget");
+    switcher.apply("budget");
+    expect(budgetEl.hidden).toBe(true);
+    switcher.setBudgetAvailable(true);
+    expect(budgetBtn?.hidden).toBe(false);
+    expect(budgetEl.hidden).toBe(false);
+    expect(changes.at(-1)).toBe("budget");
+    switcher.setBudgetAvailable(false);
+    expect(budgetBtn?.hidden).toBe(true);
+    expect(budgetEl.hidden).toBe(true);
+    expect(base.roomsEl.hidden).toBe(false);
+    switcher.setBudgetAvailable(false);
+    expect(changes.at(-1)).toBe("rooms");
+  });
+
+  it("ignores budget availability when no budget section exists", () => {
+    const base = els();
+    const switcher = renderViewSwitch(base, () => undefined);
+    switcher.setBudgetAvailable(true);
+    switcher.apply("budget");
+    expect(base.roomsEl.hidden).toBe(false);
+  });
+
+  it("does not jump to the budget when another view was chosen", () => {
+    localStorage.setItem("hestia.view", "events");
+    const base = els();
+    const budgetEl = document.createElement("section");
+    const switcher = renderViewSwitch({ ...base, budgetEl }, () => undefined);
+    switcher.setBudgetAvailable(true);
+    expect(base.eventsEl.hidden).toBe(false);
+    expect(budgetEl.hidden).toBe(true);
+  });
 });
