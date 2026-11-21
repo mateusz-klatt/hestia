@@ -38,6 +38,19 @@ describe("budget api", () => {
     expect(sent(fetchMock, 2).url.search).toBe("");
     await budgetApi.recurring("EUR");
     expect(Object.fromEntries(sent(fetchMock, 3).url.searchParams)).toEqual({ currency: "EUR" });
+    await budgetApi.spendingLimits("2026-11");
+    expect(sent(fetchMock, 4).url.pathname).toMatch(/\/api\/budget\/analytics\/spending-limits$/);
+    expect(Object.fromEntries(sent(fetchMock, 4).url.searchParams)).toEqual({ period: "2026-11" });
+    await budgetApi.spendingLimits("2026-11", "PLN");
+    expect(Object.fromEntries(sent(fetchMock, 5).url.searchParams)).toEqual({ period: "2026-11", currency: "PLN" });
+    await budgetApi.saveSpendingLimit({
+      category_id: "cat-food", currency: "PLN", monthly_limit: "500.5", warning_percent: 80, enabled: true, expected_version: 0,
+    });
+    expect(sent(fetchMock, 6).url.pathname).toMatch(/\/api\/budget\/analytics\/spending-limit-save$/);
+    expect(sent(fetchMock, 6).init.method).toBe("POST");
+    expect(JSON.parse(sent(fetchMock, 6).init.body as string)).toEqual({
+      category_id: "cat-food", currency: "PLN", monthly_limit: "500.5", warning_percent: 80, enabled: true, expected_version: 0,
+    });
   });
 
   it("sends refresh with its idempotency key, JSON body and no Authorization header", async () => {

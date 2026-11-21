@@ -5,10 +5,10 @@ import { apiUrl } from "../api/client";
 import type { BudgetAccount, BudgetCapabilities, BudgetConnection, BudgetConsent, BudgetConsentFlow, BudgetJob,
   BudgetKind, BudgetBalances, BudgetLimit, BudgetOperation, BudgetTransactions, ConsentIntent } from "./model";
 import { idempotencyKey } from "./model";
-import type { AnalyticsCategory, AnalyticsOverview, AnalyticsRecurring, AnalyticsRule, AnalyticsTransactions,
-  AnnotationRequest, AnnotationSaved, CategoryCreateRequest, CategorySaved, CategoryUpdateRequest, RuleCandidate,
-  RulePreview, RuleSaved, TransactionFilter, TransferDecisionRequest, TransferDecisionResult, TransferList,
-  TransferQueue } from "./analytics/model";
+import type { AnalyticsCategory, AnalyticsOverview, AnalyticsRecurring, AnalyticsRule, AnalyticsSpendingLimits,
+  AnalyticsTransactions, AnnotationRequest, AnnotationSaved, CategoryCreateRequest, CategorySaved,
+  CategoryUpdateRequest, RuleCandidate, RulePreview, RuleSaved, SpendingLimitSaveRequest, SpendingLimitSaved,
+  TransactionFilter, TransferDecisionRequest, TransferDecisionResult, TransferList, TransferQueue } from "./analytics/model";
 
 export type BudgetResult<T> =
   | { ok: true; data: T }
@@ -98,6 +98,12 @@ export const budgetApi = {
   saveRule: (previewId: string) => post<{ rule: RuleSaved }>("analytics/rule-save", { preview_id: previewId }),
   /** Read-only recurring-charge hints computed by the server across selected eligible expenses. */
   recurring: (currency?: string) => call<AnalyticsRecurring>(url("analytics/recurring", { currency })),
+  /** Monthly category spending limits and server-evaluated statuses for one YYYY-MM period. */
+  spendingLimits: (period: string, currency?: string) =>
+    call<AnalyticsSpendingLimits>(url("analytics/spending-limits", { period, currency })),
+  /** Creates (expected_version=0) or updates one monthly category spending limit with strict CAS. */
+  saveSpendingLimit: (request: SpendingLimitSaveRequest) =>
+    post<{ limit: SpendingLimitSaved }>("analytics/spending-limit-save", request),
   setSelected: (account: BudgetAccount, selected: boolean) =>
     post<{ account: BudgetAccount }>("account-selection",
       { account_id: account.id, selected, expected_version: account.control_version }),

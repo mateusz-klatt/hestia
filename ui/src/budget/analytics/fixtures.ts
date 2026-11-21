@@ -1,8 +1,9 @@
 // Synthetic analytics fixtures only; no real account, transaction or bank data.
 import { component } from "../fixtures";
-import type { AnalyticsCategory, AnalyticsOverview, AnalyticsRecurring, AnalyticsRecurringHint, AnnotationSaved,
-  TransferDecisionResult, AnalyticsTotals, AnalyticsTransaction, AnalyticsTransactions, TransferLeg, TransferList,
-  TransferPair } from "./model";
+import type { AnalyticsCategory, AnalyticsOverview, AnalyticsRecurring, AnalyticsRecurringHint,
+  AnalyticsSpendingLimit, AnalyticsSpendingLimitStatus, AnalyticsSpendingLimits, AnnotationSaved,
+  SpendingLimitSaved, TransferDecisionResult, AnalyticsTotals, AnalyticsTransaction, AnalyticsTransactions,
+  TransferLeg, TransferList, TransferPair } from "./model";
 
 export function totals(currency: string, changes: Partial<AnalyticsTotals> = {}): AnalyticsTotals {
   return {
@@ -94,4 +95,32 @@ export function recurringOf(hints: AnalyticsRecurringHint[] = [], changes: Parti
   return {
     snapshot_digest: "synthetic-digest", rule_version: 1, total_hints: hints.length, truncated: false, hints, ...changes,
   };
+}
+
+export function spendingLimit(changes: Partial<AnalyticsSpendingLimit> = {}): AnalyticsSpendingLimit {
+  return {
+    id: "lim-1", category_id: "cat-food", currency: "PLN", monthly_limit: "500", warning_percent: 80,
+    enabled: true, version: 1, created_at: 1, updated_at: 1, ...changes,
+  };
+}
+
+export function spendingLimitStatus(changes: Partial<AnalyticsSpendingLimitStatus> = {}): AnalyticsSpendingLimitStatus {
+  return {
+    period: "2026-11", category_id: "cat-food", name: "Synthetic Food", currency: "PLN",
+    monthly_limit: "500", expenses: "320.5", refunds: "0", net_spending: "320.5", remaining: "179.5", over_by: "0",
+    percent_used_floor: 64, warning_percent: 80, status: "within", archived: false, ...changes,
+  };
+}
+
+export function spendingLimitsOf(period: string, limits: AnalyticsSpendingLimit[] = [],
+  statuses: AnalyticsSpendingLimitStatus[] = [],
+  changes: Partial<AnalyticsSpendingLimits> = {}): AnalyticsSpendingLimits {
+  return {
+    period, start: `${period}-01`, end: `${period}-30`, snapshot_digest: "synthetic-digest",
+    limits_version: "synthetic-limits-v1", rule_version: 1, limits, statuses, ...changes,
+  };
+}
+
+export function spendingLimitSaved(changes: Partial<SpendingLimitSaved> = {}): SpendingLimitSaved {
+  return { ...spendingLimit(), changed: true, ...changes };
 }

@@ -24,6 +24,12 @@ export type AnalyticsRecurring = Schemas["BudgetAnalyticsRecurring"];
 export type AnalyticsRecurringHint = Schemas["BudgetAnalyticsRecurringHint"];
 export type AnalyticsRecurringOccurrence = Schemas["BudgetAnalyticsRecurringOccurrence"];
 
+export type AnalyticsSpendingLimit = Schemas["BudgetAnalyticsSpendingLimit"];
+export type AnalyticsSpendingLimitStatus = Schemas["BudgetAnalyticsSpendingLimitStatus"];
+export type AnalyticsSpendingLimits = Schemas["BudgetAnalyticsSpendingLimits"];
+export type SpendingLimitSaveRequest = Schemas["BudgetAnalyticsSpendingLimitSaveRequest"];
+export type SpendingLimitSaved = Schemas["BudgetAnalyticsSpendingLimitSaved"];
+
 /** The owner's explicit kind choice; "auto" returns the entry to rules and defaults. */
 export type KindChoice = "auto" | "expense" | "income" | "refund" | "excluded";
 export const KIND_CHOICES: readonly KindChoice[] = ["auto", "expense", "income", "refund", "excluded"];
@@ -239,6 +245,7 @@ export const ANALYTICS_ERROR = {
   legReserved: "budget_analytics_leg_reserved",
   invalidRequest: "budget_analytics_invalid_request",
   staleCursor: "budget_analytics_stale_cursor",
+  limit: "budget_analytics_limit",
 } as const;
 export const RELOAD_ERRORS: ReadonlySet<string> = new Set([ANALYTICS_ERROR.conflict, ANALYTICS_ERROR.sourceChanged,
   ANALYTICS_ERROR.legReserved, ANALYTICS_ERROR.staleCursor]);
@@ -246,6 +253,8 @@ export const RELOAD_ERRORS: ReadonlySet<string> = new Set([ANALYTICS_ERROR.confl
 export const CATEGORY_NAME_MAX = 80;
 export const RULE_VALUE_MAX = 256;
 export const RULE_PRIORITY_MAX = 10000;
+export const SPENDING_LIMIT_AMOUNT_MAX = 80;
+export const DEFAULT_WARNING_PERCENT = 80;
 
 export type CategoryCreateRequest = Schemas["BudgetAnalyticsCategoryCreateRequest"];
 export type CategoryUpdateRequest = Schemas["BudgetAnalyticsCategoryUpdateRequest"];
@@ -342,6 +351,42 @@ export function monthLabel(month: string, locale: string): string {
 /** Sorted distinct currencies observed in recurring-charge hints. */
 export function recurringCurrencies(hints: readonly AnalyticsRecurringHint[]): string[] {
   return [...new Set(hints.map((hint) => hint.currency))].sort((a, b) => a.localeCompare(b));
+}
+
+/** Sorted distinct currencies across saved spending limits and optionally known accounts. */
+export function limitCurrencies(limits: readonly AnalyticsSpendingLimit[],
+  accounts: readonly BudgetAccount[] = []): string[] {
+  const codes = new Set<string>();
+  for (const item of limits) codes.add(item.currency);
+  for (const account of accounts) {
+    const code = account.display?.currency ?? null;
+    if (code !== null && validCurrency(code)) codes.add(code.trim().toUpperCase());
+  }
+  return [...codes].sort((a, b) => a.localeCompare(b));
+}
+
+const CURRENCY_CODE = /^[A-Z]{3}$/;
+const WARNING_DIGITS = /^\d{1,2}$/;
+
+/** Three ASCII letters (trimmed and uppercased) matching the server's ISO-4217 currency constraint. */
+export function validCurrency(value: string): boolean {
+  return CURRENCY_CODE.test(value.trim().toUpperCase());
+}
+
+/** Strictly positive exact decimal string within the server's 80-char limit (never uses parseFloat). */
+export function validLimitAmount(value: string): boolean {
+  const trimmed = value.trim();
+  if (trimmed === "" || trimmed.length > SPENDING_LIMIT_AMOUNT_MAX) return false;
+  const canonical = canonicalAmount(trimmed);
+  return canonical !== null && canonical !== "0";
+}
+
+/** Integer warning threshold in [1, 99], validated textually so fractional strings are rejected. */
+export function parseWarningPercent(value: string): number | null {
+  const trimmed = value.trim();
+  if (!WARNING_DIGITS.test(trimmed)) return null;
+  const parsed = Number.parseInt(trimmed, 10);
+  return parsed >= 1 && parsed <= 99 ? parsed : null;
 }
 
 /** Polish integer pluralization: 1 -> one, 2–4 (not 12–14) -> few, all others -> many. */
