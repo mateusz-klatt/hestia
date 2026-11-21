@@ -43,7 +43,7 @@
     <main id="main">
       <p class="eyebrow">Private household installation</p>
       <h1>Terms of Service</h1>
-      <p class="updated">Last updated: <time datetime="2026-11-20">20 November 2026</time></p>
+      <p class="updated">Last updated: <time datetime="2026-11-21">21 November 2026</time></p>
       <p>These terms explain use of the Hestia installation at <strong>hestia.klatt.ie</strong>,
         operated by <strong>Mateusz Klatt</strong>. Contact:
         <a href="mailto:mateusz@klatt.ie">mateusz@klatt.ie</a>. It is a private, self-hosted
@@ -53,9 +53,10 @@
         terms and the permissions assigned to your account. If you operate your own copy of the
         open-source software, you are responsible for that separate installation and its users.</p>
       <aside class="notice" aria-label="Status of optional banking access">
-        <p><strong>Banking access is being prepared, not offered as a released Hestia feature.</strong>
-          The current application has no Enable Banking connector. Any future read-only connection
-          requires explicit activation and the account holder's bank authorisation. These terms
+        <p><strong>Read-only banking access is optional and off by default.</strong> Hestia contains
+          an Enable Banking budget module, which runs only after the operator explicitly enables it
+          and only for accounts their holder has authorised at the bank and that are explicitly
+          chosen for import or synchronisation. These terms
           do not themselves connect a bank account or authorise access.</p>
       </aside>
 
@@ -101,32 +102,33 @@
         <a href="privacy-policy.html#retention">Privacy Policy</a> explains retention and removal
         requests.</p>
 
-      <h2>4. Planned read-only banking access</h2>
-      <p>The intended optional feature would allow an individual to authorise access to their own
-        linked accounts through Enable Banking for private, non-commercial household budgeting.
-        It would read permitted account information, balances and transactions and store the
-        authorised data on this self-hosted server after explicit activation. Bank coverage,
-        transaction history, card support and data freshness would depend on the bank and provider.</p>
-      <p>Hestia would not initiate transfers or payments, hold money or ask you to give it bank login
+      <h2>4. Optional read-only banking access</h2>
+      <p>The optional budget module lets an individual authorise access to their own linked accounts
+        through Enable Banking for private, non-commercial household budgeting. It reads permitted
+        balances and transactions for the chosen accounts, or imports history from an earlier
+        authorised download, and stores them on this self-hosted server, as described in the
+        <a href="privacy-policy.html#banking">Privacy Policy</a>. Only
+        the budget's owner can view it in Hestia. Bank coverage, transaction history, card support
+        and data freshness depend on the bank, the provider and their access limits.</p>
+      <p>Hestia does not initiate transfers or payments, hold money or ask you to give it bank login
         passwords, PINs or one-time banking codes. Complete bank authentication only through the
         bank and Enable Banking's authorisation flow. Do not paste banking credentials into Hestia,
         a support request or a source-code repository.</p>
-      <p>The regulated account information service would be provided by Enable Banking under its
+      <p>The regulated account information service is provided by Enable Banking under its
         separate terms, authorisation and privacy arrangements. Its free restricted-production
         arrangement is subject to its current rules for the Control Panel user's own linked
         accounts. It does not grant permission for access to somebody else's accounts, professional
         use or a public banking service. See
         <a href="https://enablebanking.com/terms/">Enable Banking's application terms</a> and
         <a href="https://enablebanking.com/docs/api/linked-accounts/">restricted account linking</a>.</p>
-      <p>You would be able to revoke the bank/provider consent or ask the operator to disconnect
-        access. Doing so would stop future authorised collection but would not automatically erase
-        previously stored local data. Local deletion would be handled separately as explained in
-        the <a href="privacy-policy.html">Privacy Policy</a>.</p>
-      <p>Any future spending categories, subscription detection or cash-flow estimates would be
-        organisational aids, not financial advice or a promise that funds will be available.
-        Check actual bank balances, pending transactions and payment deadlines before making a
-        financial decision. No banking feature should be treated as available until its implemented
-        scope, access controls and activation process have been explained.</p>
+      <p>You can revoke the bank/provider consent, pause a connection or ask the operator to
+        disconnect access. Doing so stops future collection but does not automatically erase
+        previously stored local data. Local deletion is handled separately as explained in the
+        <a href="privacy-policy.html#retention">Privacy Policy</a>.</p>
+      <p>Balances, transaction lists and any spending summaries are organisational aids, not
+        financial advice or a promise that funds will be available. They can be delayed or
+        incomplete, and pending transactions may not appear. Check actual bank balances and payment
+        deadlines before making a financial decision.</p>
 
       <h2>5. Data handling and external services</h2>
       <p>The <a href="privacy-policy.html">Privacy Policy</a> describes server-side storage,
@@ -151,7 +153,7 @@
         by access to this household instance.</p>
 
       <h2>7. Practical limits and legal rights</h2>
-      <p>Device reports, calendar copies and any future financial information can be delayed,
+      <p>Device reports, calendar copies and financial information can be delayed,
         incomplete or incorrect. Check important results at their source. Server security depends
         on deployment controls and backup practices; some supported legacy device links are
         unencrypted, and Hestia does not provide a general encryption-at-rest layer.</p>
@@ -170,9 +172,10 @@
 
       <h2>9. Changes and contact</h2>
       <p>The date above identifies this version. The operator may update these terms as the
-        installation develops. Material changes, particularly activation of optional banking access
-        or a new use of personal data, should be explained before they take effect and require any
-        necessary fresh authorisation. Questions, privacy requests and security concerns can be
+        installation develops. Material changes, such as a new use of personal data, should be
+        explained before they take effect and require any necessary fresh authorisation. Banking
+        access for an account starts only after its holder's authorisation and the operator's
+        explicit activation. Questions, privacy requests and security concerns can be
         sent to <a href="mailto:mateusz@klatt.ie">mateusz@klatt.ie</a>.</p>
     </main>
     <footer>
