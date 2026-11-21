@@ -199,9 +199,10 @@
           started it, when, which account and data type, its outcome and a technical key that
           prevents duplicate requests. Finished records become eligible for automatic cleanup after
           at least seven days; active work and backups may be kept longer.</li>
-        <li><strong>Attention state:</strong> when the bank rejects authorisation, Hestia marks the
-          connection as needing attention and stops automatic refresh for it until a successful,
-          explicitly requested check.</li>
+        <li><strong>Attention state:</strong> when the bank rejects authorisation, the access
+          session is invalid or has expired, or the connection's configuration is wrong, Hestia
+          marks the connection as needing attention and stops automatic refresh for it until a
+          successful, explicitly requested check.</li>
       </ul>
       <p>Hestia contacts the bank only for selected accounts, within the bank's access limits, when
         a refresh is requested or when the owner has enabled automatic refresh for a connection.
