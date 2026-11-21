@@ -216,6 +216,52 @@ class ClassificationTests(ProjectionCase):
 
 
 class TransferProjectionTests(ProjectionCase):
+    def test_manual_and_rule_exclusions_remove_suggestions_and_ambiguity_edges(self):
+        self.pair()
+        self.add_transaction("c", "rule-noise", amount="100", credit_debit_indicator="CRDT",
+                             remittance_information=["Literal ignored credit"])
+        self.add_transaction("d", "manual-noise", amount="100", credit_debit_indicator="CRDT")
+        initial = self.store.transfers("owner", "2026")["transfers"]
+        self.assertEqual(len(initial), 3)
+        self.assertTrue(all(row["ambiguous"] for row in initial))
+        self.annotation(account="d", reference="manual-noise", kind="excluded")
+        self.rule(field="description", operator="equals", value="Literal ignored credit", kind="excluded")
+        remaining = self.store.transfers("owner", "2026")["transfers"]
+        self.assertEqual(len(remaining), 1)
+        self.assertEqual(remaining[0]["credit"]["entry_reference"], "credit")
+        self.assertFalse(remaining[0]["ambiguous"])
+        self.assertEqual(self.output("debit")["transfer"],
+                         {"status": "suggested", "decision_id": None, "candidate_count": 1, "ambiguous": False})
+        for reference in ("rule-noise", "manual-noise"):
+            self.assertEqual(self.output(reference)["transfer"]["candidate_count"], 0)
+        self.annotation(kind="excluded")
+        self.assertEqual(self.store.transfers("owner", "2026")["filtered_total"], 0)
+
+    def test_stale_manual_exclusion_uses_current_default_and_can_suggest_again(self):
+        self.pair()
+        self.annotation(kind="excluded")
+        self.assertEqual(self.store.transfers("owner", "2026")["filtered_total"], 0)
+        self.change_transaction("a", "debit", amount="101")
+        self.change_transaction("b", "credit", amount="101")
+        current = self.output("debit")
+        self.assertTrue(current["annotation"]["stale"])
+        self.assertEqual(current["effective"]["kind"], "expense")
+        self.assertEqual(self.store.transfers("owner", "2026")["filtered_total"], 1)
+
+    def test_exclusions_never_change_accepted_or_review_decisions_and_reservations(self):
+        self.pair()
+        saved = self.decide()
+        self.annotation(kind="excluded")
+        self.rule(kind="excluded")
+        self.assertEqual(self.store.transfers("owner", "2026", status="accepted")["filtered_total"], 1)
+        self.assertEqual(self.output("debit")["effective"]["kind"], "transfer")
+        self.persisted_review(saved["id"])
+        self.add_transaction("c", "alternative", amount="100", credit_debit_indicator="CRDT")
+        self.assertEqual(self.store.transfers("owner", "2026", status="review")["filtered_total"], 1)
+        self.assertEqual(self.store.transfers("owner", "2026")["filtered_total"], 0)
+        self.assertEqual(self.output("debit")["effective"]["kind"], "excluded")
+        self.assertEqual(len(self.rows(db.BudgetTransferLeg)), 2)
+
     def test_global_ambiguity_and_cross_month_acceptance_with_restart(self):
         self.pair()
         self.add_transaction("c", "second", amount="100", credit_debit_indicator="CRDT", booking_date="2026-12-02")
