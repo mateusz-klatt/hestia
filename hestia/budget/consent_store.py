@@ -19,7 +19,8 @@ from .store import BudgetNotFound, BudgetStoreError, _json
 _HASH = re.compile(r"[a-f0-9]{64}\Z", re.ASCII)
 _ACTIVE = ("created", "started", "staged", "exchanging", "candidate")
 _ERRORS = frozenset({"authorization", "network", "rate_limit", "invalid_response", "invalid_session",
-                     "session_mismatch", "account_selection", "unavailable", "exchange_uncertain",
+                     "expired_session", "session_mismatch", "account_selection", "unavailable",
+                     "acquisition_timeout", "deferred", "configuration", "exchange_uncertain",
                      "binding_invalid", "expired", "control_changed", "canceled", "internal_error"})
 _IDENTITY_LIMIT = 1000
 _IDENTITY_BYTES = 256 * 1024

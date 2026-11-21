@@ -187,7 +187,8 @@ def _records(ledger, identities, metadata, annotations, categories, rules):
     return result
 
 
-def _scope_counts(session, owner, accounts):
+def _owner_counts(session, owner):
+    """Owner-wide uncertainty counts, over selected and excluded accounts alike."""
     def count(model, on):
         return session.scalar(select(func.count()).select_from(model).join(db.BudgetAccount, on).join(db.BudgetConnection).where(
             db.BudgetAccount.owner == owner, db.BudgetConnection.owner == owner))
@@ -197,10 +198,14 @@ def _scope_counts(session, owner, accounts):
         db.BudgetAccount.owner == owner, db.BudgetConnection.owner == owner)
     imported = session.scalar(select(func.count()).select_from(db.BudgetImportUnresolved).where(
         db.BudgetImportUnresolved.batch_id.in_(imports)))
-    return {"selected_accounts": sum(account.enabled for account in accounts),
-            "excluded_accounts": sum(not account.enabled for account in accounts), "uncertain_count": uncertain,
+    return {"uncertain_count": uncertain,
             "unresolved_count": count(db.BudgetUnresolved, db.BudgetUnresolved.account_id == db.BudgetAccount.id),
             "import_unresolved_count": imported}
+
+
+def _scope_counts(session, owner, accounts):
+    return {"selected_accounts": sum(account.enabled for account in accounts),
+            "excluded_accounts": sum(not account.enabled for account in accounts), **_owner_counts(session, owner)}
 
 
 def projection_snapshot(session, owner):
@@ -424,41 +429,53 @@ def _currency(value):
 
 
 def _source_digest(session, owner):
-    """Digest of every row the projection can read for ``owner``: a superset of its filters, all columns.
+    """Digest of everything the projection reads for ``owner``: all columns of the rows it loads
+    (equal to or a superset of its own filters) and the owner-wide counts it reports.
 
     Any committed insert, update or delete in these rows changes the digest. Columns are taken
     from the table definition, so a column added later enters the key without a code change.
+    Excluded accounts contribute only their account rows and the counts, never their ledger.
+    The selected ledger is bounded by MAX_ROWS before anything else is read, as in the projection.
     """
-    accounts = select(db.BudgetAccount.id).where(db.BudgetAccount.owner == owner)
+    selected = (db.BudgetAccount.owner == owner, db.BudgetConnection.owner == owner, db.BudgetAccount.enabled)
+    owned = (db.BudgetAccount.owner == owner, db.BudgetConnection.owner == owner)
     connections = select(db.BudgetAccount.connection_id).where(db.BudgetAccount.owner == owner)
-    batches = select(db.BudgetImportBatch.id).where(db.BudgetImportBatch.account_id.in_(accounts))
+    # (model, conditions, joined through its account and connection like the projection's own query)
     sources = (
-        (db.BudgetConnection, or_(db.BudgetConnection.owner == owner, db.BudgetConnection.id.in_(connections))),
-        (db.BudgetAccount, db.BudgetAccount.owner == owner),
-        (db.BudgetTransaction, db.BudgetTransaction.account_id.in_(accounts)),
-        (db.BudgetTransactionMetadata, db.BudgetTransactionMetadata.account_id.in_(accounts)),
-        (db.BudgetAccountIdentity, db.BudgetAccountIdentity.account_id.in_(accounts)),
-        (db.BudgetAnnotation, or_(db.BudgetAnnotation.owner == owner, db.BudgetAnnotation.account_id.in_(accounts))),
-        (db.BudgetCategory, db.BudgetCategory.owner == owner),
-        (db.BudgetRule, db.BudgetRule.owner == owner),
-        (db.BudgetTransferDecision, db.BudgetTransferDecision.owner == owner),
-        (db.BudgetUnresolved, db.BudgetUnresolved.account_id.in_(accounts)),
-        (db.BudgetImportBatch, db.BudgetImportBatch.account_id.in_(accounts)),
-        (db.BudgetImportUnresolved, db.BudgetImportUnresolved.batch_id.in_(batches)),
+        (db.BudgetTransaction, selected, True),
+        (db.BudgetConnection, (or_(db.BudgetConnection.owner == owner, db.BudgetConnection.id.in_(connections)),), False),
+        (db.BudgetAccount, (db.BudgetAccount.owner == owner,), False),
+        (db.BudgetTransactionMetadata, (*selected, db.BudgetTransactionMetadata.owner == owner), True),
+        (db.BudgetAnnotation, (*selected, db.BudgetAnnotation.owner == owner), True),
+        (db.BudgetAccountIdentity, (*owned, db.BudgetAccountIdentity.owner == owner), True),
+        (db.BudgetCategory, (db.BudgetCategory.owner == owner,), False),
+        (db.BudgetRule, (db.BudgetRule.owner == owner,), False),
+        (db.BudgetTransferDecision, (db.BudgetTransferDecision.owner == owner,), False),
     )
-    digest = hashlib.sha256(b"hestia/budget/analytics/source/v1")
+    digest = hashlib.sha256(b"hestia/budget/analytics/source/v2")
 
     def put(value):
         data = (type(value).__name__ + ":" + repr(value)).encode("utf-8", "surrogatepass")
         digest.update(len(data).to_bytes(8, "big"))
         digest.update(data)
 
-    for model, condition in sources:
+    for model, conditions, joined in sources:
         table = model.__table__
+        query = select(*table.columns)
+        if joined:
+            query = query.join(db.BudgetAccount, table.c.account_id == db.BudgetAccount.id).join(
+                db.BudgetConnection, db.BudgetAccount.connection_id == db.BudgetConnection.id)
+        query = query.where(*conditions).order_by(*table.primary_key.columns)
+        if model is db.BudgetTransaction:
+            query = query.limit(MAX_ROWS + 1)
+        rows = session.execute(query).all()
+        if model is db.BudgetTransaction and len(rows) > MAX_ROWS:
+            raise AnalyticsError("budget_analytics_limit", 413)
         put(table.name)
         put([column.name for column in table.columns])
-        for row in session.execute(select(*table.columns).where(condition).order_by(*table.primary_key.columns)):
+        for row in rows:
             put(tuple(row))
+    put(sorted(_owner_counts(session, owner).items()))
     return digest.hexdigest()
 
 

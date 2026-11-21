@@ -33,6 +33,12 @@ _SECONDS = 120
 _TOKEN = re.compile(r"[A-Za-z0-9_-]{32,128}\Z", re.ASCII)
 _CALLBACK_ERROR = re.compile(r"[A-Za-z0-9_.-]{1,128}\Z", re.ASCII)
 _READY = ("created", "started", "staged", "exchanging", "candidate")
+# Exact hosts of Enable Banking's hosted authorization UI. POST /auth answers with
+# https://tilisy.enablebanking.com/ais/start?sessionid=... (as in the provider's own examples).
+_AUTHORIZATION_HOSTS = frozenset({"tilisy.enablebanking.com", "auth.enablebanking.com"})
+_FLOW_ERRORS = frozenset({"authorization", "network", "rate_limit", "invalid_response", "invalid_session",
+                          "expired_session", "session_mismatch", "account_selection", "unavailable",
+                          "acquisition_timeout", "deferred", "binding_invalid", "control_changed"})
 
 
 def _token_hash(value):
@@ -61,7 +67,7 @@ def _url(value, *, authorization=False):
         if (parsed.scheme != "https" or not parsed.hostname or parsed.port not in (None, 443)
                 or parsed.username is not None or parsed.password is not None or parsed.fragment
                 or any(char.isspace() or ord(char) < 32 or ord(char) == 127 or char == "\\" for char in value)
-                or (authorization and parsed.hostname != "auth.enablebanking.com")
+                or (authorization and parsed.hostname not in _AUTHORIZATION_HOSTS)
                 or (not authorization and parsed.query)):
             raise ValueError
     except ValueError:
@@ -71,12 +77,13 @@ def _url(value, *, authorization=False):
 
 
 def _error(exc):
+    """Fixed flow diagnostic: a provider/API code, or a local consent code without its HTTP prefix."""
     if isinstance(exc, BudgetConfigError):
         return "configuration"
     code = getattr(exc, "code", None)
-    return code if isinstance(code, str) and code in {"authorization", "network", "rate_limit", "invalid_response", "invalid_session",
-                           "expired_session", "session_mismatch", "account_selection", "unavailable",
-                           "acquisition_timeout", "deferred"} else "internal_error"
+    if isinstance(exc, BudgetConsentError) and isinstance(code, str):
+        code = code.removeprefix("budget_consent_")
+    return code if isinstance(code, str) and code in _FLOW_ERRORS else "internal_error"
 
 
 def _post_identity_evidence(response, country, observed_at, *, allowed_hashes):

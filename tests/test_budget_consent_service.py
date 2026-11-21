@@ -39,7 +39,8 @@ class SyntheticProvider:
         self.case, self.calls, self.failures, self.hooks = case, [], {}, {}
         self.banks = {"aspsps": [{"name": "Synthetic Bank", "country": "PL", "psu_types": ["personal"],
                                   "maximum_consent_validity": 86400, "required_psu_headers": []}]}
-        self.authorization = {"url": "https://auth.enablebanking.com/ais/start?sessionid=synthetic"}
+        # The shape Enable Banking's POST /auth has actually returned (host and path; synthetic query).
+        self.authorization = {"url": "https://tilisy.enablebanking.com/ais/start?sessionid=synthetic"}
         self.created = {"session_id": SESSION_ID, "never_public": PRIVATE}
         self.session = {"status": "AUTHORIZED", "aspsp": {"name": "Synthetic Bank", "country": "PL"},
                         "psu_type": "personal", "access": {"valid_until": iso(case.now + 86400)},
@@ -361,6 +362,41 @@ class ValidationTests(ServiceCase):
             with self.assertRaises(BudgetConsentError):
                 self.start()
             self.now += 3600
+
+    def test_authorization_url_allows_exactly_the_two_enable_banking_hosts(self):
+        for host in ("tilisy.enablebanking.com", "auth.enablebanking.com"):
+            with self.subTest(host=host):
+                url = f"https://{host}/ais/start?sessionid=synthetic"
+                self.provider.authorization = {"url": url}
+                result, _ = self.start()
+                self.assertEqual(result["authorization_url"], url)
+                self.now += 3600
+        for value in ("https://tilisy.enablebanking.com.evil.example/ais/start", "https://evil-tilisy.enablebanking.com/ais/start",
+                      "https://eviltilisy.enablebanking.com/ais/start", "https://enablebanking.com/ais/start",
+                      "https://tilisy.enablebanking.co/ais/start", "https://tilisy.enablebanking.com./ais/start",
+                      "https://tilisy.enablebanking.com:8443/ais/start", "http://tilisy.enablebanking.com/ais/start",
+                      "https://user@tilisy.enablebanking.com/ais/start", "https://tilisy.enablebanking.com/ais/start#x",
+                      "https://tilisy.enablebanking.com\\@evil.example/", "https://auth.enablebanking.com.evil.example/"):
+            with self.subTest(value=value):
+                self.provider.authorization = {"url": value}
+                with self.assertRaises(BudgetConsentError) as raised:
+                    self.start()
+                self.assertEqual((raised.exception.code, raised.exception.status), ("budget_consent_invalid_response", 503))
+                self.assertNotIn(value, str(raised.exception))
+                # The flow keeps the fixed diagnostic, not a masked internal_error.
+                flow = max(self.rows(db.BudgetConsentFlow), key=lambda row: row.created_at)
+                self.assertEqual((flow.status, flow.error), ("failed", "invalid_response"))
+                self.now += 3600
+
+    def test_every_flow_diagnostic_the_service_records_survives_the_store(self):
+        from hestia.budget import consent_store
+
+        self.assertLessEqual(module._FLOW_ERRORS | {"configuration", "internal_error"}, consent_store._ERRORS)
+        self.provider.failures[("GET", "/aspsps")] = BudgetAPIError(code="acquisition_timeout", retryable=True)
+        with self.assertRaises(BudgetConsentError):
+            self.start()
+        flow = max(self.rows(db.BudgetConsentFlow), key=lambda row: row.created_at)
+        self.assertEqual((flow.status, flow.error), ("failed", "acquisition_timeout"))
 
     def test_bad_callback_never_uses_provider_or_consumes_valid_binding(self):
         result, state = self.start()
