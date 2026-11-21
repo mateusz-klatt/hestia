@@ -25,6 +25,7 @@ OPERATIONS = ("transactions", "balances")
 STALE_AFTER = {"transactions": 129600, "balances": 86400}
 # Failures that stop unattended acquisition until an explicit owner refresh verifies the session.
 ATTENTION = frozenset({"authorization", "invalid_session", "expired_session", "session_mismatch", "configuration"})
+_SELECTION_CHANGED = "Bank account selection changed during acquisition"
 
 
 class BudgetStoreError(ValueError):
@@ -256,6 +257,11 @@ class BudgetStore:
                 connection.control_version += 1
             return {**self._connection_dict(connection), "changed": changed}
 
+    @staticmethod
+    def _selected_hashes(session, connection_id, owner):
+        return set(session.scalars(select(Account.identification_hash).where(
+            Account.connection_id == connection_id, Account.owner == owner, Account.enabled, Account.configured)))
+
     def selected_hashes(self, connection_id, owner):
         with self.sessions() as session:
             session.execute(text("BEGIN"))
@@ -263,16 +269,18 @@ class BudgetStore:
             row = session.get(Connection, connection_id)
             if row is None or row.owner != owner or not row.enabled or row.paused:
                 return set()
-            return set(session.scalars(select(Account.identification_hash).where(
-                Account.connection_id == connection_id, Account.owner == owner, Account.enabled, Account.configured)))
+            return self._selected_hashes(session, connection_id, owner)
 
-    def acquisition_version(self, connection_id, owner, *, expected_version=None):
-        """A pause/resume cycle invalidates work begun at an earlier revision."""
+    def acquisition_version(self, connection_id, owner, *, expected_version=None, expected_selection=None):
+        """A pause/resume or account-selection change invalidates work begun at an earlier state."""
         with self.sessions() as session:
             session.execute(text("BEGIN"))
             connection = self._owned_connection(session, owner, connection_id)
             if connection.paused or (expected_version is not None and connection.control_version != expected_version):
                 raise BudgetPausedError("Bank acquisition control changed")
+            if (expected_selection is not None
+                    and self._selected_hashes(session, connection_id, owner) != set(expected_selection)):
+                raise BudgetPausedError(_SELECTION_CHANGED)
             return connection.control_version
 
     def start_attempt(self, connection_id):
@@ -308,7 +316,7 @@ class BudgetStore:
                 Account.connection_id == connection_id, Account.owner == connection.owner,
                 Account.identification_hash == identity_hash, Account.configured, Account.enabled))
             if account is None:
-                raise BudgetStoreError("Bank account selection changed during acquisition")
+                raise BudgetStoreError(_SELECTION_CHANGED)
             row = self._component(session, account.id, operation)
             if row.lease_until is not None and row.lease_until > now:
                 return False
@@ -344,27 +352,30 @@ class BudgetStore:
                     Component.account_id.in_(accounts), Component.attempt_id == attempt_id)):
                 component.attempt_id, component.lease_until = None, None
 
-    def _snapshot_accounts(self, session, connection, snapshot):
+    def _snapshot_accounts(self, session, connection, snapshot, *, expected_selection=None):
         self._owner(session, connection.owner)
         accounts = {a.identification_hash: a for a in session.scalars(select(Account).where(
             Account.connection_id == connection.id, Account.owner == connection.owner, Account.enabled, Account.configured))}
+        if expected_selection is not None and set(accounts) != set(expected_selection):
+            raise BudgetPausedError(_SELECTION_CHANGED)
         observations = (*snapshot.accounts, *snapshot.errors)
         if (len(observations) != len(accounts)
                 or {a.identification_hash for a in observations} != set(accounts)):
-            raise BudgetStoreError("Bank account selection changed during acquisition")
+            raise BudgetStoreError(_SELECTION_CHANGED)
         return accounts
 
-    def commit_snapshot(self, connection_id, snapshot, *, attempt_id=None, expected_version=None):
+    def commit_snapshot(self, connection_id, snapshot, *, attempt_id=None, expected_version=None,
+                        expected_selection=None):
         now = self.clock()
-        if snapshot.valid_until <= now:
-            raise BudgetStoreError("Bank session has expired")
         with self.transaction() as session:
             row = session.get(Connection, connection_id)
             if row is None or not row.enabled:
                 raise BudgetStoreError("Unknown or disabled bank connection")
             if row.paused or (expected_version is not None and row.control_version != expected_version):
                 raise BudgetPausedError("Bank connection is paused")
-            accounts = self._snapshot_accounts(session, row, snapshot)
+            accounts = self._snapshot_accounts(session, row, snapshot, expected_selection=expected_selection)
+            if snapshot.valid_until <= now:
+                raise BudgetStoreError("Bank session has expired")
             for error in snapshot.errors:
                 if error.code != "limit_exceeded":
                     raise BudgetStoreError("Invalid global acquisition failure")
