@@ -192,6 +192,9 @@ class BudgetConnection(Base):
     paused: Mapped[bool] = mapped_column(default=False, server_default=text("0"))
     control_version: Mapped[int] = mapped_column(default=1, server_default=text("1"))
     background_enabled: Mapped[bool] = mapped_column(default=False, server_default=text("0"))
+    credential_mode: Mapped[str] = mapped_column(default="external", server_default=text("'external'"))
+    consent_generation: Mapped[int] = mapped_column(default=0, server_default=text("0"))
+    active_consent_id: Mapped[str | None]
     attention: Mapped[str | None]
     valid_until: Mapped[float | None]
     last_attempt: Mapped[float | None]
@@ -199,6 +202,73 @@ class BudgetConnection(Base):
     next_attempt: Mapped[float]
     failures: Mapped[int]
     last_error: Mapped[str | None]
+
+
+class BudgetConsentFlow(Base):
+    """One browser-bound authorization; codes and session IDs never enter SQLite."""
+
+    __tablename__ = "budget_consent_flows"
+    __table_args__ = (Index("ix_budget_consent_flows_owner_created", "owner", "created_at"),)
+    id: Mapped[str] = mapped_column(primary_key=True)
+    owner: Mapped[str] = mapped_column(ForeignKey("users.username"))
+    connection_id: Mapped[str] = mapped_column(ForeignKey("budget_connections.id"))
+    application_id: Mapped[str]
+    bank_name: Mapped[str]
+    country: Mapped[str]
+    intent: Mapped[str]
+    expected_connection_version: Mapped[int]
+    expected_generation: Mapped[int]
+    state_hash: Mapped[str] = mapped_column(unique=True)
+    nonce_hash: Mapped[str]
+    auth_fingerprint: Mapped[str]
+    binding_revision: Mapped[int]
+    flow_revision: Mapped[int]
+    created_at: Mapped[float]
+    expires_at: Mapped[float]
+    status: Mapped[str]
+    error: Mapped[str | None]
+    callback_at: Mapped[float | None]
+    exchange_at: Mapped[float | None]
+    exchange_binding_revision: Mapped[int | None]
+    exchange_flow_revision: Mapped[int | None]
+    code_ref: Mapped[str | None]
+    code_expires_at: Mapped[float | None]
+    candidate_consent_id: Mapped[str | None]
+
+
+class BudgetConsent(Base):
+    """Owned managed session metadata and an opaque private-file reference."""
+
+    __tablename__ = "budget_consents"
+    id: Mapped[str] = mapped_column(primary_key=True)
+    owner: Mapped[str] = mapped_column(ForeignKey("users.username"))
+    connection_id: Mapped[str] = mapped_column(ForeignKey("budget_connections.id"))
+    application_id: Mapped[str]
+    bank_name: Mapped[str]
+    country: Mapped[str]
+    provenance: Mapped[str]
+    status: Mapped[str]
+    capsule_ref: Mapped[str]
+    valid_until: Mapped[float | None]
+    generation: Mapped[int]
+    metadata_json: Mapped[str]
+    created_at: Mapped[float]
+
+
+class BudgetConsentAudit(Base):
+    """Private local transitions, never a shared audit or provider payload."""
+
+    __tablename__ = "budget_consent_audit"
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    owner: Mapped[str] = mapped_column(ForeignKey("users.username"))
+    connection_id: Mapped[str] = mapped_column(ForeignKey("budget_connections.id"))
+    flow_id: Mapped[str] = mapped_column(ForeignKey("budget_consent_flows.id"))
+    actor: Mapped[str]
+    origin: Mapped[str]
+    action: Mapped[str]
+    old_value_json: Mapped[str]
+    new_value_json: Mapped[str]
+    changed_at: Mapped[float]
 
 
 class BudgetAccount(Base):

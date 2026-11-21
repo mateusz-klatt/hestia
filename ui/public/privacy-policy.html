@@ -167,8 +167,12 @@
         <strong>Do not enter bank passwords, PINs or one-time banking codes into Hestia.</strong>
         Hestia uses its own application key and the resulting authorised access session, not your
         online-banking login credentials. The application key and session identifiers are kept in
-        files on the server that only the system account running Hestia can read; the deployment
-        is intended to mount them read-only, and they are not stored in the database.</p>
+        files on the server that only the system account running Hestia can read. Externally
+        provisioned credentials can be mounted read-only; browser-created sessions are written to
+        a private persistent directory. The database keeps opaque file references rather than the
+        credentials themselves. A browser authorisation return code is staged in a private file
+        for a short-lived, single-use exchange. Failed or retired sessions may remain locally until
+        the operator removes them; disconnecting does not erase history.</p>
       <p>For authorised accounts that are explicitly chosen for import or synchronisation, Hestia
         stores the following in its SQLite database on this server. History imported from an
         earlier authorised download can be kept without enabling live synchronisation; importing
@@ -257,7 +261,10 @@
         depends on deployment configuration. Native clients can use an equivalent bearer token.
         Browser local storage remembers the selected dashboard view; user preferences can also be
         stored on the server. Logging out clears the browser's Hestia cookie; it does not erase
-        household records.</p>
+        household records. Connecting a bank additionally creates a necessary per-flow cookie
+        named <code>__Host-hestia_budget_…</code> for up to 15 minutes. It is Secure, HttpOnly and
+        SameSite=Lax, so the bank's return can be tied to the same browser while the main session
+        stays Strict. Login and logout invalidate matching unfinished flows.</p>
       <p>These legal pages contain no JavaScript, external fonts, advertising or analytics resources.
         This does not prevent ordinary hosting/security processing or an existing session cookie
         from being sent with a page request.</p>

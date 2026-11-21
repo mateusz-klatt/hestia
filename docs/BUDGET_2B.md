@@ -4,11 +4,12 @@
 2B.jobs refresh executor/opt-in poller (#172), updated public policies (#173) and 2C
 owner budget screens (#174) are implemented and deployed at migration `0013`. Each
 server feature keeps its own flag; the executor and poller stay separate opt-ins.
-Consent work below (2B.2/2B.3) remains design, without activation. Existing CLI
+Browser consent/renewal and managed credential adoption below (2B.2/2B.3) are now
+implemented behind `HESTIA_BUDGET_CONSENT_ENABLED=1`; remote close remains future work. Existing CLI
 behavior, the 2B.jobs runbook and the budget screens are documented in
 [BUDGET.md](BUDGET.md); its identity, import, selection and quota guarantees remain
-binding. This document does not authorize real SCA, proxy/panel changes or new
-consent routes.
+binding. Production deployment and panel redirect changes were explicitly
+authorised by the operator. A real SCA still starts with the owner's browser action.
 
 ## Scope and delivery order
 
@@ -38,7 +39,8 @@ Implement in separately reviewed pieces, each preserving the 2A full coverage ga
 
 This data-first order delivers useful private data/UI without making callback
 logging a prerequisite for stored reads or already-authorized external sessions.
-Consent endpoints/bridge remain disabled and unregistered until 2B.2/2B.3; refresh
+Consent endpoints are registered with a default-off service; the callback returns
+unavailable until prerequisites and the explicit consent flag are satisfied. Refresh
 returns a fixed unavailable response until its executor is enabled. Capabilities
 make these boundaries visible to 2C. No dependent piece ships with a placeholder
 auth check, and React must never access Enable Banking directly.
@@ -61,6 +63,15 @@ handler requires all of:
 - the authoritative, cut-over SQLite users backend;
 - a currently enabled SQLite user with the exact `admin` role;
 - exact resource ownership, checked again inside the final write transaction.
+
+Narrow cleanup exceptions never grant access: on authoritative SQLite,
+fingerprint/nonce-bound logout invalidation and restart recovery can fence an old
+disabled/demoted owner's flows. After an already durable exchange claim, a known
+provider session may be retained as a minimal UNADOPTED candidate, or an unknown
+delivery terminalised, despite that owner losing authority in flight. Verified
+metadata upgrades, status reads, new exchanges and adoption still require the
+current enabled admin owner. Cleanup never changes the active pointer, account
+choices, quotas or acquisition controls.
 
 Do not infer a financial principal from `whoami: {user:null, role:null}`, the
 calendar's write permission, a supplied owner field, or a JSON-user fallback.
@@ -403,8 +414,10 @@ treated as successful renewal or deletion of old history.
 
 2B targets existing operator-configured connections/application; it cannot
 reassign owner, bank, application, key or legacy secret path through HTTP. Keep
-the existing Enable Banking application, links and localhost redirect. Append the
-production redirect only after the deployed callback passes its activation gates.
+the existing Enable Banking application, key and linked accounts. The operator
+explicitly chose production-only redirects: the panel now lists only
+`https://hestia.klatt.ie/api/budget/enable-banking/callback`; localhost was removed.
+This metadata change does not itself create or adopt a session.
 
 The version-1 configured account list remains a hard allowlist; SCA and web
 selection cannot expand it. Newly discovered identities stay unselected,
@@ -537,48 +550,27 @@ HTTP/consent registration or config loading makes no bank request or import.
 Starting the separately enabled poller/executor may process eligible persisted
 intents; that opt-in behavior is explicit and separately reviewed.
 
-## Callback logging and activation gates
+## Callback deployment decision
 
-Current observations distinguish account-specific deployment facts from protocol
-guarantees. Hestia currently uses `access_log=None`. Fleet's read-only Apache
-inspection found combined access logging (`%r`, which includes query) and an
-inherited referrer policy unsuitable for the callback. Those must change before
-real SCA: exact callback logging must omit query and Referer, and always emit
-`no-referrer`, including errors. Review proxy error handling as well.
-Cover both HTTP/HTTPS vhosts, even though the registered callback is HTTPS.
-A vhost-level header can override the application header: verify the final
-wire response after an exact callback Location override. Include generic aiohttp
-exception handling in the no-URL/query logging tests, not just the route handler.
-Prepare a reviewed Apache drop-in for both vhosts, configtest, reload and canary
-checks. On this host sudo currently requires the operator's interaction; document
-that deployment step rather than asking agents to bypass host privileges.
+On 2026-11-21 the operator explicitly accepted the existing Apache/Cloudflare
+logging setup and plaintext local financial SQLite storage. Proxy changes,
+exhaustive edge-log redaction evidence and extra database encryption are therefore
+**not activation prerequisites**. Do not silently reinstate those gates or change
+Cloudflare/DNS while implementing this flow.
 
-Fleet also observed request-level logging in this Cloudflare account. It has not
-demonstrated a query-redaction configuration. Therefore **do not claim that code
-or state cannot enter Cloudflare logs**, and do not treat disabling the analytics
-beacon or Logpush as proof. One-use state, immediate authenticated exchange and
-the required private RS256 application key reduce exposure; they do not satisfy
-a no-query-logging guarantee. No provider code TTL is assumed.
-Cloudflare documents `ClientRequestURI` as including query and
-`ClientRequestPath` as excluding it. Product-specific redaction/export controls
-exist, so do not generalize this account observation to "Free cannot redact".
-An export transform or hidden UI column is not proof about every retained dataset.
-
-Before real SCA, Home/Holzera must verify the actual edge/proxy configuration with
-unique synthetic canaries on success/error/malformed callback paths, checking
-all available access/security/error/telemetry sinks without real credentials.
-Absence from sampled results alone is not proof; identify dataset, ingestion
-fields, redaction scope, retention and access, and record the configuration evidence.
-If the proxied callback cannot meet the logging requirement, activation stays off
-until a reviewed callback architecture avoids that sink, or the user separately
-decides on a clearly documented residual exposure. A peer's risk assessment is
-not that decision. Do not change Cloudflare security/DNS or invent support for
-fragment/form-post responses to bypass this design gate.
+Hestia still emits `Cache-Control: no-store` and `Referrer-Policy: no-referrer`,
+uses an exact clean 303 redirect, never echoes callback secrets in HTML/JSON and
+logs only fixed error codes or exception class names. Provider code/session
+credentials use owner-private files and opaque SQLite references. Existing
+application authentication, browser binding, owner checks and one-use claims
+remain required. This makes no claim about all records retained by an upstream
+proxy or provider. Hestia uses `access_log=None`; no new access logger is added.
 
 Activation order: reviewed implementation and migrations → privacy/terms updated
 for actual bank processing/retention and processors → backup/staged deployment
-with consent off → authenticated API/bridge/proxy synthetic UAT → registered
-redirect appended while localhost stays → explicit real SCA by the user → explicit
+with consent off → authenticated API/bridge synthetic UAT → enable the reviewed
+consent service with the production-only registered redirect → explicit real SCA
+by the user → explicit
 account allowlist/selection → quota-respecting acquisition. No live data import is
 implied by deployment. Financial history, backups and secret capsules have separate
 retention; published documents must not promise automatic erasure not implemented.
@@ -594,7 +586,7 @@ retention; published documents must not promise automatic erasure not implemente
 | Renewal/storage | Changed UIDs with stable primary hashes, different primary requiring reconciliation, bank invalidates old on SCA, file-fsync/DB-swap crashes, stale worker fence, cancel/logout/login during exchange blocks adoption, external sessions never overwritten/deleted, explicit managed close failure. |
 | 2A regression | Opt-out/pause/kind/audit survives reload and restart; renewal/import never reset quota or API provenance; 14 pages one acquisition; endpoint/shared 429 and longer Retry-After retained; partial responses never delete history. |
 | Executor/poller | One active job per owner/connection, target-aware dedup/busy behavior, CLI lock contention, queue/shutdown/restart recovery, no narrowed-config retirement, no browser-token dependency, owner opt-out/global flag respected, no catch-up burst or HTTP before due. |
-| API/privacy | Reads never trigger acquisition, bounded cursor/filter behavior, private audit not global feed/SSE, public bridge contains no private data, canaries absent from controlled logs, documented edge limitation resolved before activation. |
+| API/privacy | Reads never trigger acquisition, bounded cursor/filter behavior, private audit not global feed/SSE, public bridge contains no private data, no raw secrets in application logs. Existing proxy logging accepted by operator. |
 | Contract/deployment | Route-role/OpenAPI drift checks, regenerated TS types, full backend statement/branch gate and UI checks where changed, migration upgrade/downgrade on private copy, logged-in/out UAT after backup. |
 | Restore/unused consent | Snapshot plus referenced capsules restores consistently; missing capsule blocks acquisition without fallback/data loss; known unadopted candidate remains owner-visible with explicit close; unknown exchange cannot invent a session ID. |
 

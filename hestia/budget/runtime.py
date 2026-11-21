@@ -211,6 +211,9 @@ def run_once(config, *, path=None, clock=time.time, client_factory=EnableBanking
         _, sessions = init_db(target)
         store = BudgetStore(sessions, clock=clock)
         store.configure(config)
+        from .consent_runtime import resolve_config
+
+        config = resolve_config(config, path=target, clock=clock)
         scheduler = BudgetScheduler(store, application_id=config.application_id)
         results = [_run_connection(config, connection, store, scheduler, client_factory, clock, monotonic, sleeper)
                    for connection in config.connections]

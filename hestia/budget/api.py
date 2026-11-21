@@ -124,11 +124,11 @@ def _store(secret):
     return BudgetHTTPStore(sessions, cursor_secret=secret)
 
 
-def _read(owner, operation, query, secret, service):
+def _read(owner, operation, query, secret, service, consent=False):
     result = getattr(_store(secret), operation)(owner, **query)
     if operation == "connections":
         return {"connections": result, "capabilities": {
-            "stored_reads": True, "account_controls": True, "background_selection": True, "consent": False,
+            "stored_reads": True, "account_controls": True, "background_selection": True, "consent": consent,
             "refresh": service is not None and service.accepting,
             "background_polling": service is not None and service.accepting and service.poller}}
     return {operation: result} if operation in ("connections", "accounts", "status", "limits", "jobs") else result
@@ -208,7 +208,8 @@ def _failure(exc, operation):
     return _error(500, "budget_internal_error")
 
 
-def register(app, read_json_body, *, auth_enabled, session_secret):
+def register(app, read_json_body, *, auth_enabled, session_secret, secure_cookie=lambda: False):
+    from . import consent_api
     async def private_headers(request, response):
         if request.path == PREFIX or request.path.startswith(PREFIX + "/"):
             response.headers.update(PRIVATE_HEADERS)
@@ -221,7 +222,7 @@ def register(app, read_json_body, *, auth_enabled, session_secret):
             if request.method == "GET":
                 query = _query(request, operation)
                 service = request.app[JOBS_KEY].service
-                result = await asyncio.to_thread(_read, owner, operation, query, secret, service)
+                result = await asyncio.to_thread(_read, owner, operation, query, secret, service, consent_api.enabled(request.app))
                 return web.json_response(result, headers=PRIVATE_HEADERS)
             _browser(request, owner, secret)
             refresh = operation == "refresh"
@@ -245,6 +246,8 @@ def register(app, read_json_body, *, auth_enabled, session_secret):
 
     app.on_response_prepare.append(private_headers)
     jobs.register(app, JOBS_KEY, auth_enabled=auth_enabled)
+    consent_api.register(app, read_json_body, auth_enabled=auth_enabled, session_secret=session_secret,
+                         secure_cookie=secure_cookie)
     for operation in READS:
         app.router.add_get(PREFIX + "/" + operation, handle, allow_head=False)
     for operation in MUTATIONS:

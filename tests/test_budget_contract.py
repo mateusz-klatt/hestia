@@ -40,7 +40,9 @@ class BudgetRequestContractTests(unittest.TestCase):
              (contract.BudgetConnectionStateRequest, {"connection_id": "local-connection", "paused": False, "expected_version": 1}),
              (contract.BudgetBackgroundSelectionRequest, {"connection_id": "local-connection", "enabled": True, "expected_version": 1}),
              (contract.BudgetRefreshRequest, {"connection_id": "local-connection", "expected_version": 1,
-                                              "account_id": "local-account", "operation": "balances"}))
+                                              "account_id": "local-account", "operation": "balances"}),
+             (contract.BudgetConsentStartRequest, {"connection_id": "local-connection", "expected_version": 1,
+                                                   "intent": "renew"}))
 
     def test_valid_controls_roundtrip_without_coercing_values_or_adding_defaults(self):
         for model, payload in self.CASES:
@@ -76,6 +78,16 @@ class BudgetRequestContractTests(unittest.TestCase):
         for value in ("unknown", "PLN", "credit", None, True, 1):
             with self.subTest(kind=value), self.assertRaises(ValueError):
                 contract.BudgetKindRequest.model_validate({"account_id": "local-account", "kind": value, "expected_version": 1})
+
+    def test_consent_uses_local_flow_ids_and_rejects_caller_credentials(self):
+        value = {"flow_id": "11111111-1111-4111-8111-111111111111"}
+        self.assertEqual(contract.BudgetConsentFlowRequest.model_validate(value).model_dump(), value)
+        for changes in ({"flow_id": "other"}, {"session_id": "secret"}, {"code": "secret"}, {"state": "secret"}):
+            with self.subTest(changes=changes), self.assertRaises(ValueError):
+                contract.BudgetConsentFlowRequest.model_validate({**value, **changes})
+        with self.assertRaises(ValueError):
+            contract.BudgetConsentStartRequest.model_validate({"connection_id": "local", "expected_version": 1,
+                                                               "intent": "business"})
 
 
 class BudgetReadContractTests(unittest.TestCase):
@@ -166,17 +178,24 @@ class BudgetReadContractTests(unittest.TestCase):
 
 
 class BudgetOpenApiTests(unittest.TestCase):
-    def test_only_implemented_routes_are_declared_and_all_require_admin(self):
+    def test_only_implemented_routes_are_declared_with_exact_callback_exception(self):
         document = contract.build_openapi()
         budget = {path: methods for path, methods in document["paths"].items() if path.startswith("/api/budget/")}
         posts = ("account-selection", "account-kind", "connection-state", "background-selection", "refresh")
-        self.assertEqual({path.rsplit("/", 1)[1] for path in budget},
+        consent = {path: methods for path, methods in budget.items() if "/consent/" in path or "/enable-banking/" in path}
+        stored = {path: methods for path, methods in budget.items() if path not in consent}
+        self.assertEqual({path.rsplit("/", 1)[1] for path in stored},
                          {"connections", "accounts", "status", "transactions", "balances", "limits", "jobs", *posts})
-        for path, methods in budget.items():
+        for path, methods in stored.items():
             method = "post" if path.endswith(posts) else "get"
             self.assertEqual(set(methods), {method})
             self.assertEqual(methods[method]["x-required-role"], "admin")
-        self.assertEqual(document["info"]["version"], "0.15.0")
+        self.assertEqual(set(consent), {"/api/budget/consent/" + name for name in
+            ("pending", "status", "start", "complete", "cancel")} | {"/api/budget/enable-banking/callback"})
+        for path, methods in consent.items():
+            for entry in methods.values():
+                self.assertEqual(entry["x-required-role"], "public" if path.endswith("callback") else "admin")
+        self.assertEqual(document["info"]["version"], "0.16.0")
         refresh = budget["/api/budget/refresh"]["post"]
         self.assertEqual(refresh["parameters"][0]["name"], "Idempotency-Key")
         self.assertTrue(refresh["parameters"][0]["required"])
@@ -198,10 +217,12 @@ class BudgetOpenApiTests(unittest.TestCase):
     def test_budget_requests_stay_strict_and_all_typed_response_dependencies_are_tolerant(self):
         schemas = contract.build_openapi()["components"]["schemas"]
         request_names = {model.__name__ for model, _ in BudgetRequestContractTests.CASES}
+        request_names.add("BudgetConsentFlowRequest")
         for name, schema in schemas.items():
             if name in request_names:
                 self.assertIs(schema["additionalProperties"], False)
-                self.assertEqual(schema["properties"]["expected_version"]["minimum"], 1)
+                if name != "BudgetConsentFlowRequest":
+                    self.assertEqual(schema["properties"]["expected_version"]["minimum"], 1)
             elif name.startswith("Budget"):
                 self.assertNotIn("additionalProperties", schema)
         for name in ("BudgetTransaction", "BudgetMoney"):

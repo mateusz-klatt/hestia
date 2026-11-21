@@ -4,17 +4,21 @@ const message = document.getElementById('message');
 const flows = document.getElementById('flows');
 let busy = false;
 const ready = new Set(['staged', 'candidate', 'exchanging']);
+class BridgeError extends Error {}
 async function request(operation, body) {
   const response = await fetch('/api/budget/consent/' + operation, {
     method: body ? 'POST' : 'GET', credentials: 'same-origin', cache: 'no-store',
     headers: body ? { 'Content-Type': 'application/json' } : {},
     ...(body ? { body: JSON.stringify(body) } : {}),
   });
-  if (response.status === 401) throw new Error('Zaloguj się ponownie do Hestii i rozpocznij nowe połączenie z bankiem.');
-  if (!response.ok) throw new Error('Nie udało się zakończyć połączenia. Wróć do budżetu i sprawdź jego stan.');
+  if (response.status === 401) throw new BridgeError('Zaloguj się ponownie do Hestii i rozpocznij nowe połączenie z bankiem.');
+  if (!response.ok) throw new BridgeError('Nie udało się zakończyć połączenia. Wróć do budżetu i sprawdź jego stan.');
   return response.json();
 }
-function showError(error) { message.textContent = error.message; }
+function showError(error) {
+  message.textContent = error instanceof BridgeError ? error.message
+    : 'Nie udało się połączyć z Hestią. Wróć do budżetu i spróbuj ponownie.';
+}
 async function complete(flow) {
   if (busy) return;
   busy = true;

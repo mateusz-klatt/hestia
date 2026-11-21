@@ -469,11 +469,14 @@ class BudgetAPITests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(response.status, status)
             self.assert_private_headers(response)
             self.assertNotIn("PRIVATE", await response.text())
-        for method, operation in (("HEAD", "accounts"), ("POST", "enable-banking/start"),
-                                  ("GET", "enable-banking/callback"), ("HEAD", "jobs")):
+        for method, operation in (("HEAD", "accounts"), ("POST", "enable-banking/start"), ("HEAD", "jobs")):
             response = await self.client.request(method, api.PREFIX + "/" + operation, headers=self.headers(origin=True))
             self.assertIn(response.status, (404, 405))
             self.assert_private_headers(response)
+        response = await self.client.get(api.PREFIX + "/enable-banking/callback", allow_redirects=False)
+        self.assertEqual(response.status, 503)
+        self.assertEqual(await response.json(), {"ok": False, "error": "budget_consent_unavailable"})
+        self.assert_private_headers(response)
         response = await self.client.get(api.PREFIX, headers=self.headers())
         self.assertEqual(response.status, 404)
         self.assert_private_headers(response)

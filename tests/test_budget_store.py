@@ -1,7 +1,7 @@
 """Synthetic durable banking identities, reconciliation and owner isolation."""
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import asdict, replace
 import json
 from pathlib import Path
 import tempfile
@@ -22,6 +22,14 @@ def configuration(accounts=("synthetic-hash",), **changes):
     connection = ConnectionConfig("bank", "owner", "Synthetic Bank", "PL", "/test/session.json", accounts)
     connection = replace(connection, **changes)
     return BudgetConfig(APP, "/test/key.pem", (connection,))
+
+
+def configuration_document(config):
+    """Operator JSON has its own schema; internal credential overlays never cross it."""
+    return {"version": 1, "application_id": config.application_id, "key_file": config.key_file,
+            "connections": [{key: getattr(item, key) for key in
+                ("id", "owner", "bank_name", "country", "session_file", "accounts")} |
+                {"policy": asdict(item.policy)} for item in config.connections]}
 
 
 def prepare_selected(store, config):

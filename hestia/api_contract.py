@@ -60,7 +60,8 @@ from pydantic.json_schema import models_json_schema
 # 0.13.0: private owner-scoped stored budget reads and versioned local controls.
 # 0.14.0: safe account display metadata, separate from currencies observed in API balances.
 # 0.15.0: durable owner refresh jobs, per-connection background opt-in and attention state.
-CONTRACT_VERSION = "0.15.0"
+# 0.16.0: browser-bound production bank consent, renewal and durable managed credentials.
+CONTRACT_VERSION = "0.16.0"
 OPENAPI_PATH = Path(__file__).resolve().parent.parent / "docs" / "api" / "openapi.json"
 
 # De-duplicated string literals (SonarPython S1192): the OpenAPI content-type, the paths reused
@@ -1044,6 +1045,79 @@ class BudgetRefreshRequest(BaseModel):
     operation: BudgetOperation | None = None
 
 
+class BudgetConsentStartRequest(BaseModel):
+    """Start one browser-bound consent for an explicitly configured connection."""
+
+    model_config = _STRICT
+    connection_id: BudgetId
+    expected_version: BudgetVersion
+    intent: Literal["connect", "renew"]
+
+
+class BudgetConsentFlowRequest(BaseModel):
+    model_config = _STRICT
+    flow_id: Annotated[str, Field(pattern=r"^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$")]
+
+
+class BudgetConsentFlow(BaseModel):
+    """Safe local browser-flow state; no provider identifiers or credentials."""
+
+    model_config = _READ
+    id: str
+    connection_id: str
+    intent: Literal["connect", "renew"]
+    status: str
+    error: str | None
+    created_at: float
+    expires_at: float
+    candidate_consent_id: str | None
+
+
+class BudgetConsent(BaseModel):
+    model_config = _READ
+    id: str
+    connection_id: str
+    provenance: Literal["hestia_created"]
+    status: Literal["UNADOPTED", "ACTIVE", "RETIRED"]
+    valid_until: float | None
+    generation: int
+    created_at: float
+
+
+class BudgetConsentPending(BaseModel):
+    model_config = _READ
+    pending: list[BudgetConsentFlow]
+
+
+class BudgetConsents(BaseModel):
+    model_config = _READ
+    consents: list[BudgetConsent]
+
+
+class BudgetConsentStarted(BaseModel):
+    model_config = _READ
+    ok: Literal[True]
+    flow_id: str
+    authorization_url: str
+    expires_at: float
+
+
+class BudgetConsentCompleted(BaseModel):
+    model_config = _READ
+    ok: Literal[True]
+    flow_id: str
+    status: str = Field(description="adopted, reconciliation_required or exchange_uncertain; never replay an uncertain exchange.")
+    consent: BudgetConsent | None = None
+    error: str | None = None
+
+
+class BudgetConsentCanceled(BaseModel):
+    model_config = _READ
+    ok: Literal[True]
+    flow_id: str
+    status: str = Field(description="canceled, or the unchanged terminal flow status when cancellation is no longer applicable.")
+
+
 class BudgetComponentStatus(BaseModel):
     """Independent API freshness and effective component/shared retry policy."""
 
@@ -1362,6 +1436,8 @@ class BudgetConflict(BudgetError):
 
 _BUDGET_MODELS = (BudgetSelectionRequest, BudgetKindRequest, BudgetConnectionStateRequest,
                   BudgetBackgroundSelectionRequest, BudgetRefreshRequest,
+                  BudgetConsentStartRequest, BudgetConsentFlowRequest, BudgetConsentPending,
+                  BudgetConsents, BudgetConsentStarted, BudgetConsentCompleted, BudgetConsentCanceled,
                   BudgetConnections, BudgetAccounts, BudgetStatus, BudgetTransactions,
                   BudgetBalances, BudgetLimits, BudgetJobs, BudgetAccountSaved, BudgetConnectionSaved,
                   BudgetRefreshAccepted, BudgetError, BudgetConflict)
@@ -1375,6 +1451,12 @@ def _ref(name: str) -> dict:
 # "public" = no auth). A test pins each value to web._required_role / web._is_public_route — so a
 # mislabelled role fails CI rather than misleading a client.
 _PATH_ROLES = {
+    ("GET", "/api/budget/enable-banking/callback"): "public",
+    ("GET", "/api/budget/consent/pending"): "admin",
+    ("GET", "/api/budget/consent/status"): "admin",
+    ("POST", "/api/budget/consent/start"): "admin",
+    ("POST", "/api/budget/consent/complete"): "admin",
+    ("POST", "/api/budget/consent/cancel"): "admin",
     ("POST", "/api/control"): "operator",
     ("POST", "/api/ir"): "operator",
     ("POST", "/api/scene"): "operator",
@@ -1969,6 +2051,47 @@ def _budget_paths():
                                 "requestBody": {"required": True, "content": {_APP_JSON: {"schema": _ref(request)}}},
                                 "responses": responses}}
     paths[_P_BUDGET_REFRESH] = {"post": _refresh_operation()}
+    paths.update(_consent_paths())
+    return paths
+
+
+def _consent_paths():
+    paths = {}
+    prefix = "/api/budget/consent/"
+    operations = (
+        ("pending", "get", "getBudgetConsentPending", None, "BudgetConsentPending"),
+        ("status", "get", "getBudgetConsents", None, "BudgetConsents"),
+        ("start", "post", "startBudgetConsent", "BudgetConsentStartRequest", "BudgetConsentStarted"),
+        ("complete", "post", "completeBudgetConsent", "BudgetConsentFlowRequest", "BudgetConsentCompleted"),
+        ("cancel", "post", "cancelBudgetConsent", "BudgetConsentFlowRequest", "BudgetConsentCanceled"),
+    )
+    for name, method, operation, request, response in operations:
+        responses = _budget_responses(response)
+        if name == "complete":
+            responses["202"] = {"description": "Known candidate awaits verification/adoption, or exchange is uncertain. "
+                "Repeating complete never repeats POST /sessions. No acquisition quota is reset.",
+                "content": {_APP_JSON: {"schema": _ref(response)}}}
+        responses["429"] = {"description": "Durable consent throttle or provider cooldown; no automatic new consent.",
+                             "content": {_APP_JSON: {"schema": _ref("BudgetError")}}}
+        entry = {"operationId": operation, "summary": "Browser-bound bank consent: " + name,
+                 "description": "Default-off. Requires the SQLite admin owner and signed browser cookie; mutations "
+                     "also require exact Origin and JSON. Each flow has a Secure HttpOnly SameSite=Lax binding cookie. "
+                     "Owner reads and cancel never contact a bank. Start uses GET /aspsps and POST /auth; complete "
+                     "claims one POST /sessions before delivery, verifies GET /sessions and adopts under version fences. "
+                     "Configured accounts, selections, history, pauses and acquisition debits are preserved.",
+                 "responses": responses}
+        if request:
+            entry["requestBody"] = {"required": True, "content": {_APP_JSON: {"schema": _ref(request)}}}
+        paths[prefix + name] = {method: entry}
+    paths["/api/budget/enable-banking/callback"] = {"get": {
+        "operationId": "stageBudgetConsentCallback", "summary": "Stage a browser-bound one-time bank code",
+        "description": "Public exact GET only; state plus the matching per-flow HttpOnly cookie are mandatory. "
+            "No provider request, adoption or account selection occurs. The code is kept in a private short-lived file. "
+            "The fixed clean completion page restores the Strict Hestia session for an owner-only POST.",
+        "parameters": [_budget_query("state", required=True), _budget_query("code"), _budget_query("error"),
+                       _budget_query("error_description")],
+        "responses": {"303": {"description": "Fixed redirect to /budget/connect/complete without query or fragment"},
+                      **{key: value for key, value in _budget_responses("BudgetError").items() if key != "200"}}}}
     return paths
 
 
