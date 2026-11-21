@@ -236,8 +236,10 @@ function Editor({ row, categories, text, kindText, saving, onSave, onCancel }: E
   const kinds = kindChoicesFor(row.credit_debit_indicator);
   const [kind, setKind] = useState<KindChoice>(row.annotation.mode === "manual"
     ? kindChoice(row.annotation.kind, row.credit_debit_indicator) : "auto");
-  // An archived category stays selectable only for the entry that already uses or shows it.
-  const kept = new Set([row.annotation.category_id, row.effective.category_id]);
+  // An archived category stays selectable only as this entry's current classification: the category it shows now,
+  // or its own manual choice unless the bank changed the entry since. Assigning any other archived category is refused.
+  const manual = row.annotation.mode === "manual" && !row.annotation.stale ? row.annotation.category_id : null;
+  const kept = new Set([manual, row.effective.category_id]);
   const offered = categories.filter((item) => !item.archived || kept.has(item.id));
   // "Automatic" hands both category and type back to rules. Choosing a type is a manual decision, so the category
   // visibly becomes the one the entry shows now (or explicitly none) instead of a hidden automatic state.

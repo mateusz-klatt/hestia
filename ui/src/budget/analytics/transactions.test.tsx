@@ -212,6 +212,15 @@ describe("period entries", () => {
     expect(api.annotate).toHaveBeenLastCalledWith(expect.objectContaining({ entry_reference: "e2", mode: "auto", kind: "auto" }));
   });
 
+  it("never offers an archived category from a stale manual choice that the entry no longer shows", async () => {
+    const api = fakeApi([entry("e1", { annotation: { version: 4, mode: "manual", category_id: "cat-old", kind: "expense", stale: true },
+      effective: { category_id: "cat-food", kind: "expense", source: "rule", rule_id: "rule-1" } })]);
+    await show(api);
+    await click(button("Change"));
+    const options = [...select("Category", host.querySelector(".budget-entry-editor") ?? host).options].map((option) => option.value);
+    expect(options).toEqual(["auto", "none", "cat:cat-food"]);
+  });
+
   it("offers only types that fit the entry's direction and drops an incompatible stored one to automatic", async () => {
     const api = fakeApi([entry("out"), entry("in", { credit_debit_indicator: "CRDT",
       annotation: { version: 2, mode: "manual", category_id: null, kind: "expense", stale: false } })]);
