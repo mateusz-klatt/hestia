@@ -1,13 +1,14 @@
 # Budget 2B: private HTTP API and Enable Banking consent lifecycle
 
-**Status:** 2B.1 private stored API/controls and 2B.jobs refresh executor/opt-in
-poller are implemented and default off; consent work below remains design, without
-activation. Production baseline: `8eae689` (#170–171), SQLite at `0012`, all budget
-tables empty, every budget flag unset. 2B.jobs adds migration `0013`. Existing CLI
-behavior and the 2B.jobs runbook are documented in [BUDGET.md](BUDGET.md); its
-identity, import, selection and quota guarantees remain binding. This document does
-not authorize real SCA, bank requests, data import, proxy/panel changes or
-activation of financial HTTP endpoints or unattended acquisition.
+**Status:** 2B.1 private stored API/controls (#170), safe account labels (#171),
+2B.jobs refresh executor/opt-in poller (#172), updated public policies (#173) and 2C
+owner budget screens (#174) are implemented and deployed at migration `0013`. Each
+server feature keeps its own flag; the executor and poller stay separate opt-ins.
+Consent work below (2B.2/2B.3) remains design, without activation. Existing CLI
+behavior, the 2B.jobs runbook and the budget screens are documented in
+[BUDGET.md](BUDGET.md); its identity, import, selection and quota guarantees remain
+binding. This document does not authorize real SCA, proxy/panel changes or new
+consent routes.
 
 ## Scope and delivery order
 
@@ -27,9 +28,9 @@ Implement in separately reviewed pieces, each preserving the 2A full coverage ga
 2. **2B.jobs:** separately reviewed durable executor and opt-in poller, reusing
    explicitly configured external sessions under 2A limits. No new SCA/callback is
    needed to use those already-authorized sessions; their live use is not implied.
-3. **2C:** React budget screens, account choices, freshness/renewal and UAT, first
-   using the stored-data API and existing external sessions. Before this piece,
-   add and review safe account display metadata as described below.
+3. **2C (implemented):** React budget screens, account choices, freshness and UAT,
+   using the stored-data API, jobs and existing external sessions, with the safe
+   account display metadata described below. Renewal actions arrive with 2B.3.
 4. **2B.2:** private consent storage, bounded control-plane client, single-use flow,
    Strict-cookie callback bridge and synthetic end-to-end harness.
 5. **2B.3:** generation-fenced session adoption, renewal/close semantics,
