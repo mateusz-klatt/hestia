@@ -167,7 +167,8 @@ lease and cooldowns stay in force, and it is not replayed.
 
 1. Deploy with all budget flags unset; back up the SQLite database first.
 2. Update the privacy policy/terms for bank data, then enable and verify
-   `HESTIA_BUDGET_HTTP_ENABLED` on its own (see the 2B.1 checks above).
+   `HESTIA_BUDGET_HTTP_ENABLED` on its own (see the 2B.1 checks above). If HTTP was
+   verified before step 4, turn it off again for that step.
 3. Stop every competing acquisition for the same application, bank and accounts
    (including the PoC). Hestia cannot see their requests: carry verified recent
    attempts into conservative quota state or wait a full rolling window and any
@@ -179,13 +180,16 @@ lease and cooldowns stay in force, and it is not replayed.
    selections and per-connection opt-ins (CLI, audited). Only then enable HTTP.
    Never repeat that initial selection step once the owner can use the budget
    screens: it would overwrite later deselections made there. Later changes go
-   through the screens or the versioned CLI controls.
+   through the versioned screen controls, or as explicit operator changes made
+   only after checking the owner's current choices (the CLI sends no version).
 5. Set `HESTIA_BUDGET_JOBS_ENABLED=1`, restart, and run one owner refresh for one
    connection. Check the job outcome, `/api/budget/limits` and that the logs
    contain no financial values.
-6. Only then set `HESTIA_BUDGET_POLLER_ENABLED=1` and opt in each connection with
-   `background-selection`. To stop unattended work, opt out, pause the connection,
-   or unset the poller flag and restart.
+6. Only after that verification set `HESTIA_BUDGET_POLLER_ENABLED=1`. The poller
+   honours the opt-ins persisted at that moment; never re-apply the staged choices
+   from step 4, which would undo a later opt-out made in the screens. To stop
+   unattended work, opt out, pause the connection, or unset the poller flag and
+   restart.
 
 ## Budget screens (2C)
 
@@ -216,9 +220,11 @@ admin owns the configured connections. Each admin sees only their own budget.
   a validated date range and paging. Amounts are exact decimal strings; nothing
   is summed across currencies. Provider-declared currency and currencies seen in
   current balances are shown separately.
-- **Privacy in the browser:** financial data stay in page memory only. They are
-  cleared when the session ends, another user signs in, the admin role is lost or
-  the budget is disabled. Browser storage holds only general interface
+- **Privacy in the browser:** financial data stay in page memory only. The screen
+  does not watch the session continuously: it clears everything immediately when
+  any budget response reports lost access or a disabled budget, or when the
+  identity check on reload shows another user or a lost admin role. Signing out
+  in the same tab reloads the page. Browser storage holds only general interface
   preferences, such as the last chosen tab, never budget data.
 
 ## Acquisition and durability
