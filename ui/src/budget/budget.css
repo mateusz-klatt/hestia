@@ -1,0 +1,38 @@
+.budget-app { margin-block: 1.5rem 3rem; display: grid; gap: 1rem; }
+.budget-header { display: flex; justify-content: space-between; align-items: center; gap: 1rem; }
+.budget-header h2 { font-family: Georgia, serif; font-size: clamp(1.6rem, 4vw, 2.2rem); font-weight: 500; margin: .2rem 0; }
+.budget-header p, .budget-muted { color: var(--fg-soft); margin: .2rem 0; font-size: .85rem; }
+.budget-app button, .budget-app select { font: inherit; min-height: 2.4rem; }
+.budget-primary { background: color-mix(in srgb, var(--accent) 75%, #000); color: #fff; border-color: var(--accent); font-weight: 600; }
+.budget-status { color: var(--fg-soft); }
+.budget-notice { border-inline-start: 3px solid var(--accent); padding: .5rem .75rem; background: var(--accent-soft); }
+.budget-connection { border: 1px solid var(--border); border-radius: .7rem; padding: .9rem 1rem; background: var(--surface); display: grid; gap: .6rem; }
+.budget-connection > header { display: flex; justify-content: space-between; align-items: center; gap: .75rem; flex-wrap: wrap; }
+.budget-connection h3 { margin: 0; font-size: 1.15rem; font-weight: 600; }
+.budget-connection h3 small { color: var(--muted); font-weight: 400; }
+.budget-actions { display: flex; gap: .4rem; flex-wrap: wrap; }
+.budget-facts { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: .3rem .9rem; font-size: .8rem; color: var(--fg-soft); }
+.budget-warn { color: var(--accent); font-weight: 600; }
+.budget-toggle { display: inline-flex; align-items: center; gap: .4rem; font-size: .85rem; }
+.budget-accounts { list-style: none; margin: 0; padding: 0; display: grid; gap: .4rem; }
+.budget-account { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 2fr) auto auto; align-items: center; gap: .5rem .9rem; padding: .45rem 0; border-top: 1px solid var(--border); }
+.budget-account.is-excluded .budget-account-name { opacity: .55; }
+.budget-account-name { text-align: start; border: none; background: transparent; padding: 0; font-weight: 600; overflow-wrap: anywhere; cursor: pointer; }
+.budget-kind { display: inline-flex; align-items: center; gap: .4rem; font-size: .8rem; color: var(--fg-soft); }
+.budget-detail { border: 1px solid var(--border); border-radius: .7rem; padding: .9rem 1rem; background: var(--surface); }
+.budget-detail > header { display: flex; justify-content: space-between; align-items: center; }
+.budget-detail h3 { margin: 0; }
+.budget-balances { list-style: none; padding: 0; display: grid; gap: .3rem; }
+.budget-balances li { display: flex; justify-content: space-between; gap: 1rem; }
+.budget-range { display: flex; gap: .6rem; align-items: end; flex-wrap: wrap; margin-bottom: .6rem; }
+.budget-range label { display: grid; gap: .2rem; font-size: .8rem; color: var(--fg-soft); }
+.budget-transactions { width: 100%; border-collapse: collapse; font-size: .85rem; }
+.budget-transactions td { padding: .35rem .3rem; border-top: 1px solid var(--border); vertical-align: top; overflow-wrap: anywhere; }
+.budget-transactions td:first-child { white-space: nowrap; color: var(--fg-soft); }
+.budget-transactions td:last-child { text-align: end; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.budget-transactions .is-credit { color: var(--ok, #2e7d32); }
+@media (max-width: 640px) {
+  .budget-account { grid-template-columns: 1fr; }
+}
+.budget-presets { display: flex; gap: .4rem; flex-wrap: wrap; margin-bottom: .5rem; }
+.budget-archived { margin-block: .4rem; font-size: .85rem; color: var(--fg-soft); }
