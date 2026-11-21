@@ -499,6 +499,34 @@ describe("consent lifecycle guards", () => {
   });
 });
 
+describe("bank navigation commit timing", () => {
+  it("blocks navigation as soon as the hidden view commits, before passive effects run", async () => {
+    const api = fakeApi();
+    const navigate = vi.fn<(url: string) => void>();
+    api.connections.mockImplementation(() => ok({ connections: [connection], capabilities: { ...capabilities, consent: true } }));
+    const late = deferred<Loaded<BudgetApi["consentStart"]>>();
+    api.consentStart.mockImplementation(() => late.promise);
+    await act(async () => { root.render(<Budget active api={api} principal="owner" navigate={navigate} />); await Promise.resolve(); });
+    await settle();
+    await click(button("Connect bank"));
+    await new Promise<void>((done, reject) => {
+      const timer = setTimeout(() => { reject(new Error("hide commit not observed")); }, 2000);
+      const observer = new MutationObserver(() => {
+        if (host.textContent !== "") return;
+        observer.disconnect();
+        clearTimeout(timer);
+        late.settle({ ok: true, data: { flow_id: "old", authorization_url: "https://bank.example.test/start?old", expires_at: 9 } });
+        setTimeout(done, 20);
+      });
+      observer.observe(host, { childList: true, subtree: true });
+      // A normal (non-act) render, as a real tab switch would schedule it.
+      root.render(<Budget active={false} api={api} principal="owner" navigate={navigate} />);
+    });
+    expect(host.textContent).toBe("");
+    expect(navigate).not.toHaveBeenCalled();
+  });
+});
+
 describe("download limits", () => {
   const soon = Date.now() / 1000 + 6 * 3600;
   function limitsFor(): Loaded<BudgetApi["limits"]> {

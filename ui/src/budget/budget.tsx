@@ -1,6 +1,6 @@
 // Owner-private budget view (2C). Reads only the stored-data API; the "refresh" action queues a server job
 // under the server's quotas and never talks to a bank from the browser. Data live only in component state.
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { currentLocale } from "../i18n";
 import { budgetApi } from "./api";
@@ -163,9 +163,10 @@ export function Budget({ active, api = budgetApi, pollMs = 2000, principal,
   const epoch = useRef(0);
   const [revision, setRevision] = useState(0);
   // Bumped whenever the view is hidden or the principal changes; a pending bank start must not navigate then.
+  // A layout effect runs in the same commit as the DOM change, so no promise continuation can slip in between.
   const lifecycle = useRef(0);
   const activeRef = useRef(active);
-  useEffect(() => {
+  useLayoutEffect(() => {
     activeRef.current = active;
     lifecycle.current += 1;
   }, [active, principal]);
