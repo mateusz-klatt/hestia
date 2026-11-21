@@ -429,13 +429,13 @@ export function Budget({ active, api = budgetApi, pollMs = 2000, principal,
         </div>
       ) : null}
       {shownView === "month" ? (
-        <MonthView key={focusMonth ?? "current"} api={api} accounts={accounts} text={monthText} locale={locale} revision={revision}
+        <MonthView key={focusMonth ?? "current"} api={api} accounts={accounts} connections={connections} text={monthText} locale={locale} revision={revision}
           onAccessLoss={barrier} initialMonth={focusMonth} />
       ) : shownView === "year" ? (
-        <YearView api={api} accounts={accounts} text={yearText} locale={locale} revision={revision} onAccessLoss={barrier}
+        <YearView api={api} accounts={accounts} connections={connections} text={yearText} locale={locale} revision={revision} onAccessLoss={barrier}
           onOpenMonth={(month) => { setFocusMonth(month); setView("month"); }} />
       ) : shownView === "rules" ? (
-        <CategoriesView api={api} accounts={accounts} text={rulesText} revision={revision} onAccessLoss={barrier} />
+        <CategoriesView api={api} accounts={accounts} connections={connections} text={rulesText} revision={revision} onAccessLoss={barrier} />
       ) : (
         <>
         {connections.length === 0 ? <p className="budget-status">{text.empty}</p> : null}

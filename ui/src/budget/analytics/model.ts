@@ -1,7 +1,8 @@
 // Spending analytics (2D) helpers. Every total is computed by the server per currency and arrives as a decimal
 // STRING; the browser never adds, subtracts, converts or mixes amounts. Periods are "YYYY-MM" or "YYYY".
 import type { components } from "../../api/openapi";
-import type { BudgetCapabilities } from "../model";
+import type { BudgetAccount, BudgetCapabilities, BudgetConnection } from "../model";
+import { accountLabel } from "../model";
 
 type Schemas = components["schemas"];
 
@@ -132,16 +133,28 @@ export function transferDecision(pair: TransferPair, action: TransferAction): Tr
 /** The result of a decision; the view re-reads the period rather than patching rows from it. */
 export type TransferDecisionResult = Schemas["BudgetAnalyticsDecisionSaved"];
 
-/** The actions the owner can take on a pair; a pair with a leg outside the selection cannot be accepted. */
+/** Whether the two legs still form a valid own transfer as shown: both selected, same currency, equal amount (a textual
+ *  comparison of the server's canonical decimals, never arithmetic) and at most three days apart. A bank correction
+ *  can break this for a pair decided earlier; such a pair can only be undone. */
+export function legsMatch(pair: TransferPair): boolean {
+  const { debit, credit } = pair;
+  return debit.selected && credit.selected && debit.amount !== null && debit.currency !== null
+    && debit.amount === credit.amount && debit.currency === credit.currency
+    && pair.date_distance !== null && pair.date_distance <= 3;
+}
+
+/** The actions the owner can take on a pair; a pair with a leg outside the selection, or legs that no longer match,
+ *  cannot be accepted. */
 export function transferActions(pair: TransferPair): TransferAction[] {
   const decided = pair.id !== null;
+  const acceptable = !pair.boundary && legsMatch(pair);
   switch (pair.status) {
-    case "suggested": return pair.boundary ? ["reject"] : ["accept", "reject"];
-    case "review": return pair.boundary ? ["undo"] : ["accept", "undo"];
+    case "suggested": return acceptable ? ["accept", "reject"] : ["reject"];
+    case "review": return acceptable ? ["accept", "undo"] : ["undo"];
     case "boundary": return decided ? ["undo"] : ["reject"];
     case "accepted": return decided ? ["undo"] : [];
     case "rejected":
-    case "undone": return pair.boundary ? [] : ["accept"];
+    case "undone": return acceptable ? ["accept"] : [];
     default: return [];
   }
 }
@@ -207,6 +220,17 @@ export function validCategoryName(name: string): boolean {
 
 const MONTH = /^(\d{4})-(0[1-9]|1[0-2])$/;
 const ZERO = /^-?0+(?:\.0+)?$/;
+
+/** An account's name across banks: the bank first, then the account's own label (product and masked suffix, or a
+ *  numbered fallback that is only unique within its bank). */
+export function accountName(accounts: readonly BudgetAccount[], connections: readonly BudgetConnection[], id: string,
+  fallback: string): string {
+  const account = accounts.find((item) => item.id === id);
+  if (account === undefined) return fallback;
+  const label = accountLabel(account, accounts.filter((item) => item.connection === account.connection).indexOf(account), fallback);
+  const bank = connections.find((item) => item.id === account.connection)?.bank_name;
+  return bank === undefined ? label : `${bank} · ${label}`;
+}
 
 /** True only when the server explicitly offers the analytics views. */
 export function hasAnalytics(capabilities: BudgetCapabilities | null): boolean {

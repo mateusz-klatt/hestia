@@ -3,9 +3,9 @@
 import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import type { BudgetResult } from "../api";
-import type { BudgetAccount } from "../model";
-import { accountLabel, formatAmount } from "../model";
-import { isZero, staleAccounts } from "./model";
+import type { BudgetAccount, BudgetConnection } from "../model";
+import { formatAmount } from "../model";
+import { accountName, isZero, staleAccounts } from "./model";
 import type { AnalyticsCategoryTotal, AnalyticsOverview, AnalyticsTotals } from "./model";
 
 export const overviewLabels = {
@@ -56,6 +56,7 @@ export interface OverviewProps {
   /** The period still running (today falls inside it). */
   current: boolean;
   accounts: readonly BudgetAccount[];
+  connections?: readonly BudgetConnection[] | undefined;
   text: OverviewLabels;
   locale: string;
   /** Bumped after every completed budget reload or saved decision; the period is read again. */
@@ -67,7 +68,7 @@ export interface OverviewProps {
   details?: ((data: AnalyticsOverview) => ReactNode) | undefined;
 }
 
-export function OverviewPanel({ overview, period, current, accounts, text, locale, revision, onAccessLoss,
+export function OverviewPanel({ overview, period, current, accounts, connections = [], text, locale, revision, onAccessLoss,
   onCurrencies, details }: OverviewProps) {
   const [shown, setShown] = useState<Shown>({ state: "loading" });
   // Every period change or reload takes a new generation; an older answer can never replace a newer period.
@@ -89,11 +90,7 @@ export function OverviewPanel({ overview, period, current, accounts, text, local
   }, [overview, period, revision, onAccessLoss, onCurrencies]);
   useEffect(() => () => { generation.current += 1; }, []);
 
-  const name = (id: string) => {
-    const account = accounts.find((item) => item.id === id);
-    if (account === undefined) return text.account;
-    return accountLabel(account, accounts.filter((item) => item.connection === account.connection).indexOf(account), text.account);
-  };
+  const name = (id: string) => accountName(accounts, connections, id, text.account);
 
   if (shown.state === "loading") return <p className="budget-muted" role="status">{text.loading}</p>;
   if (shown.state === "error") return <p className="budget-notice" role="alert">{text.error}</p>;

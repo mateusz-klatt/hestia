@@ -2,9 +2,8 @@
 // only from a fresh server preview showing what it would change, and manual choices always win over rules.
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { BudgetApi, BudgetResult } from "../api";
-import type { BudgetAccount } from "../model";
-import { accountLabel } from "../model";
-import { ANALYTICS_ERROR, CATEGORY_NAME_MAX, KIND_CHOICES, RELOAD_ERRORS, labelOf, RULE_FIELDS, RULE_OPERATORS, RULE_PRIORITY_MAX, RULE_VALUE_MAX, ruleCandidate,
+import type { BudgetAccount, BudgetConnection } from "../model";
+import { ANALYTICS_ERROR, CATEGORY_NAME_MAX, KIND_CHOICES, RELOAD_ERRORS, accountName as nameOf, labelOf, RULE_FIELDS, RULE_OPERATORS, RULE_PRIORITY_MAX, RULE_VALUE_MAX, ruleCandidate,
   validCandidate, validCategoryName } from "./model";
 import type { AnalyticsCategory, AnalyticsRule, KindChoice, RuleCandidate, RulePreview } from "./model";
 
@@ -52,12 +51,13 @@ type Listed<T> = T[] | "loading" | "error";
 export interface CategoriesViewProps {
   api: Pick<BudgetApi, "categories" | "createCategory" | "updateCategory" | "rules" | "previewRule" | "saveRule">;
   accounts: readonly BudgetAccount[];
+  connections?: readonly BudgetConnection[] | undefined;
   text: RulesLabels;
   revision: number;
   onAccessLoss: Loss;
 }
 
-export function CategoriesView({ api, accounts, text, revision, onAccessLoss }: CategoriesViewProps) {
+export function CategoriesView({ api, accounts, connections = [], text, revision, onAccessLoss }: CategoriesViewProps) {
   const [categories, setCategories] = useState<Listed<AnalyticsCategory>>("loading");
   const [rules, setRules] = useState<Listed<AnalyticsRule>>("loading");
   const [changes, setChanges] = useState(0);
@@ -95,7 +95,7 @@ export function CategoriesView({ api, accounts, text, revision, onAccessLoss }: 
   return (
     <section className="budget-month" aria-label={`${text.categories} · ${text.rules}`}>
       <CategoriesPanel categories={categories} api={api} run={run} text={text} onSaved={reload} epoch={epoch} />
-      <RulesPanel rules={rules} categories={shown} accounts={accounts} api={api} run={run} text={text} onSaved={reload} epoch={epoch} />
+      <RulesPanel rules={rules} categories={shown} accounts={accounts} connections={connections} api={api} run={run} text={text} onSaved={reload} epoch={epoch} />
     </section>
   );
 }
@@ -199,6 +199,7 @@ interface RulesProps {
   rules: Listed<AnalyticsRule>;
   categories: readonly AnalyticsCategory[];
   accounts: readonly BudgetAccount[];
+  connections: readonly BudgetConnection[];
   api: Pick<BudgetApi, "previewRule" | "saveRule">;
   run: Run;
   text: RulesLabels;
@@ -207,7 +208,7 @@ interface RulesProps {
   epoch: number;
 }
 
-function RulesPanel({ rules, categories, accounts, api, run, text, onSaved, epoch }: RulesProps) {
+function RulesPanel({ rules, categories, accounts, connections, api, run, text, onSaved, epoch }: RulesProps) {
   const [editing, setEditing] = useState<RuleCandidate | null>(null);
   const [preview, setPreview] = useState<RulePreview | null>(null);
   const [busy, setBusy] = useState(false);
@@ -218,11 +219,7 @@ function RulesPanel({ rules, categories, accounts, api, run, text, onSaved, epoc
   // A reload discards pending answers and any preview taken before it.
   useEffect(() => { draft.current += 1; setBusy(false); setPreview(null); }, [epoch]);
   const categoryName = (id: string | null) => (id === null ? null : categories.find((item) => item.id === id)?.name ?? null);
-  const accountName = (id: string) => {
-    const account = accounts.find((item) => item.id === id);
-    if (account === undefined) return text.account;
-    return accountLabel(account, accounts.filter((item) => item.connection === account.connection).indexOf(account), text.account);
-  };
+  const accountName = (id: string) => nameOf(accounts, connections, id, text.account);
 
   const open = (rule: AnalyticsRule | null) => {
     draft.current += 1;

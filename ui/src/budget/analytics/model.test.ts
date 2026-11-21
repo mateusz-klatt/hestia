@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { annotationRequest, counterparty, currentMonth, kindChoice, kindChoicesFor, hasAnalytics, isMonth, isZero, monthLabel, shiftMonth, transferActions, transferDecision } from "./model";
-import { entry, pair } from "./fixtures";
+import { accountName, annotationRequest, counterparty, currentMonth, kindChoice, kindChoicesFor, legsMatch, hasAnalytics, isMonth, isZero, monthLabel, shiftMonth, transferActions, transferDecision } from "./model";
+import { entry, leg, pair } from "./fixtures";
+import { account, connection } from "../fixtures";
 
 const capabilities = { stored_reads: true, account_controls: true, refresh: false, background_selection: true,
   background_polling: false, consent: false, analytics: false };
@@ -91,6 +92,28 @@ describe("analytics decisions", () => {
         .toMatchObject({ action: "accept", source: "manual", expected_version: 5 });
     }
     expect(transferDecision(pair({ status: "rejected", source: "heuristic" }), "reject")).toMatchObject({ source: "heuristic" });
+  });
+
+  it("offers acceptance only while both legs still match", () => {
+    expect(legsMatch(pair())).toBe(true);
+    for (const broken of [pair({ credit: leg("acc-2", "in-1", { amount: "1200.01" }) }), pair({ credit: leg("acc-2", "in-1", { currency: "EUR" }) }),
+      pair({ date_distance: 4 }), pair({ date_distance: null }), pair({ credit: leg("acc-2", "in-1", { selected: false }) }),
+      pair({ debit: leg("acc-1", "out-1", { amount: null, currency: null }) })]) {
+      expect(legsMatch(broken)).toBe(false);
+    }
+    const changed = { credit: leg("acc-2", "in-1", { amount: "100.01" }) };
+    expect(transferActions(pair({ ...changed, id: "d", status: "review" }))).toEqual(["undo"]);
+    expect(transferActions(pair({ ...changed, id: "d", status: "undone" }))).toEqual([]);
+    expect(transferActions(pair({ ...changed }))).toEqual(["reject"]);
+  });
+
+  it("names an account with its bank so equal fallback labels stay distinguishable", () => {
+    const accounts = [account({ id: "a", connection: "bank" }), account({ id: "b", connection: "other" })];
+    const connections = [connection, { ...connection, id: "other", bank_name: "Other Synthetic Bank" }];
+    expect(accountName(accounts, connections, "a", "Account")).toBe("Synthetic Bank · Account 1");
+    expect(accountName(accounts, connections, "b", "Account")).toBe("Other Synthetic Bank · Account 1");
+    expect(accountName(accounts, [], "a", "Account")).toBe("Account 1");
+    expect(accountName(accounts, connections, "missing", "Account")).toBe("Account");
   });
 
   it("cannot undo a pair nobody decided on", () => {

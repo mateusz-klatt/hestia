@@ -2,9 +2,9 @@
 // explicit versioned decision at a time. Ambiguous pairs are shown side by side and nothing is picked for the owner.
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { BudgetApi } from "../api";
-import type { BudgetAccount } from "../model";
-import { accountLabel, formatAmount } from "../model";
-import { ANALYTICS_ERROR, RELOAD_ERRORS, TRANSFER_QUEUES, labelOf, transferActions, transferDecision } from "./model";
+import type { BudgetAccount, BudgetConnection } from "../model";
+import { formatAmount } from "../model";
+import { ANALYTICS_ERROR, RELOAD_ERRORS, TRANSFER_QUEUES, accountName, labelOf, legsMatch, transferActions, transferDecision } from "./model";
 import type { TransferAction, TransferLeg, TransferPair, TransferQueue } from "./model";
 
 export const transferLabels = {
@@ -18,6 +18,7 @@ export const transferLabels = {
     ambiguous: "Fits more than one pair: confirm the right one and mark the others as not transfers.",
     stale: "The bank changed one side after your decision; check it again.",
     boundary: "One side is on an account excluded from the budget.",
+    mismatch: "The two sides no longer match (amount, currency or dates differ), so this pair can only be undone.",
     excludedAccount: "excluded account", account: "Account",
     scanLimited: "The search stopped at its limit; some possible pairs may be missing.",
     empty: "Nothing here for this month.", loading: "Loading transfers…", error: "Transfers could not be loaded.",
@@ -35,6 +36,7 @@ export const transferLabels = {
     ambiguous: "Pasuje do więcej niż jednej pary: potwierdź właściwą, a pozostałe oznacz jako „to nie przelew”.",
     stale: "Bank zmienił jedną stronę po Twojej decyzji; sprawdź ją ponownie.",
     boundary: "Jedna strona jest na koncie wykluczonym z budżetu.",
+    mismatch: "Strony już do siebie nie pasują (kwota, waluta lub daty się różnią), więc tę parę można tylko cofnąć.",
     excludedAccount: "konto wykluczone", account: "Konto",
     scanLimited: "Wyszukiwanie zatrzymało się na limicie; części możliwych par może brakować.",
     empty: "Brak pozycji w tym miesiącu.", loading: "Wczytywanie przelewów…", error: "Nie udało się wczytać przelewów.",
@@ -52,6 +54,7 @@ export interface TransfersProps {
   api: Pick<BudgetApi, "transfers" | "decideTransfer">;
   period: string;
   accounts: readonly BudgetAccount[];
+  connections?: readonly BudgetConnection[] | undefined;
   text: TransferLabels;
   locale: string;
   revision: number;
@@ -63,7 +66,7 @@ export interface TransfersProps {
 const pairKey = (pair: TransferPair) =>
   `${pair.debit.account_id}/${pair.debit.entry_reference}>${pair.credit.account_id}/${pair.credit.entry_reference}`;
 
-export function TransfersPanel({ api, period, accounts, text, locale, revision, onAccessLoss, onChanged }: TransfersProps) {
+export function TransfersPanel({ api, period, accounts, connections = [], text, locale, revision, onAccessLoss, onChanged }: TransfersProps) {
   const [queue, setQueue] = useState<TransferQueue>("suggested");
   const [page, setPage] = useState<Page>(LOADING);
   const [busy, setBusy] = useState<string | null>(null);
@@ -118,9 +121,7 @@ export function TransfersPanel({ api, period, accounts, text, locale, revision, 
   }, [api, onAccessLoss, onChanged, text]);
 
   const side = (item: TransferLeg, indicator: "DBIT" | "CRDT") => {
-    const account = accounts.find((value) => value.id === item.account_id);
-    const name = account === undefined ? text.account
-      : accountLabel(account, accounts.filter((value) => value.connection === account.connection).indexOf(account), text.account);
+    const name = accountName(accounts, connections, item.account_id, text.account);
     return (
       <span className="budget-leg">
         <span>{item.selected ? name : `${name} (${text.excludedAccount})`}</span>
@@ -160,6 +161,7 @@ export function TransfersPanel({ api, period, accounts, text, locale, revision, 
                   {pair.ambiguous ? <span className="budget-warn">{text.ambiguous}</span> : null}
                   {pair.stale ? <span className="budget-warn">{text.stale}</span> : null}
                   {pair.boundary ? <span>{text.boundary}</span> : null}
+                  {!pair.boundary && !legsMatch(pair) ? <span className="budget-warn">{text.mismatch}</span> : null}
                   {transferActions(pair).map((action) => (
                     <button type="button" key={action} className={action === "accept" ? "budget-primary" : undefined}
                       disabled={busy !== null} onClick={() => { void decide(pair, action); }}>{text.actions[action]}</button>

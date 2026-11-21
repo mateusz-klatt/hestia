@@ -4,7 +4,7 @@ import { createRoot } from "react-dom/client";
 import type { Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BudgetResult } from "../api";
-import { account } from "../fixtures";
+import { account, connection } from "../fixtures";
 import { overviewOf, staleFreshness, totals } from "./fixtures";
 import type { AnalyticsOverview, AnalyticsScope } from "./model";
 import { OverviewPanel, overviewLabels } from "./overview";
@@ -164,6 +164,18 @@ describe("period overview", () => {
     expect(host.querySelectorAll('[aria-label="Incomplete data"]')).toHaveLength(2);
     expect(host.textContent).not.toContain("Not counted");
     expect(host.textContent).toContain("3 accounts in the budget · change");
+  });
+
+  it("names outdated accounts with their bank", async () => {
+    const overview = (period: string) => Promise.resolve<Answer>({ ok: true, data: rich(period, { scope: scope({
+      freshness: [{ account_id: "acc-2", transactions: staleFreshness, balances: staleFreshness }] }) }) });
+    await act(async () => {
+      root.render(<OverviewPanel overview={overview} period="2026-11" current accounts={accounts} connections={[connection]}
+        text={overviewLabels.en} locale="en" revision={0} onAccessLoss={() => false} />);
+      await Promise.resolve();
+    });
+    await settle();
+    expect(host.querySelector("[role=note]")?.textContent).toContain("Synthetic Bank · Account 2");
   });
 
   it("reads the shown period again after a reload", async () => {

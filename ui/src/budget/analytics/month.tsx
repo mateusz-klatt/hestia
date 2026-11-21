@@ -2,7 +2,7 @@
 // totals shown always come from the server after the change.
 import { useCallback, useState } from "react";
 import type { BudgetApi } from "../api";
-import type { BudgetAccount } from "../model";
+import type { BudgetAccount, BudgetConnection } from "../model";
 import { currentMonth, isMonth, monthLabel, shiftMonth } from "./model";
 import { OverviewPanel, overviewLabels } from "./overview";
 import type { OverviewLabels } from "./overview";
@@ -24,6 +24,7 @@ export interface MonthLabels {
 export interface MonthViewProps {
   api: Pick<BudgetApi, "overview" | "analyticsTransactions" | "categories" | "annotate" | "transfers" | "decideTransfer">;
   accounts: readonly BudgetAccount[];
+  connections?: readonly BudgetConnection[] | undefined;
   text: MonthLabels;
   locale: string;
   /** Bumped after every completed budget reload. */
@@ -35,7 +36,7 @@ export interface MonthViewProps {
   today?: () => Date;
 }
 
-export function MonthView({ api, accounts, text, locale, revision, onAccessLoss, initialMonth,
+export function MonthView({ api, accounts, connections = [], text, locale, revision, onAccessLoss, initialMonth,
   today = () => new Date() }: MonthViewProps) {
   const latest = currentMonth(today());
   const [month, setMonth] = useState(initialMonth !== undefined && isMonth(initialMonth) && initialMonth < latest ? initialMonth : latest);
@@ -51,11 +52,11 @@ export function MonthView({ api, accounts, text, locale, revision, onAccessLoss,
         <button type="button" aria-label={text.next} disabled={month >= latest}
           onClick={() => { setMonth((value) => (isMonth(value) && value < latest ? shiftMonth(value, 1) : value)); }}>▶</button>
       </nav>
-      <OverviewPanel overview={overview} period={month} current={month === latest} accounts={accounts} text={text.overview}
+      <OverviewPanel overview={overview} period={month} current={month === latest} accounts={accounts} connections={connections} text={text.overview}
         locale={locale} revision={revision + changes} onAccessLoss={onAccessLoss} onCurrencies={setCurrencies} />
-      <TransfersPanel api={api} period={month} accounts={accounts} text={text.transfers} locale={locale}
+      <TransfersPanel api={api} period={month} accounts={accounts} connections={connections} text={text.transfers} locale={locale}
         revision={revision + changes} onAccessLoss={onAccessLoss} onChanged={changed} />
-      <TransactionsPanel api={api} period={month} currencies={currencies} accounts={accounts} text={text.entries}
+      <TransactionsPanel api={api} period={month} currencies={currencies} accounts={accounts} connections={connections} text={text.entries}
         locale={locale} revision={revision + changes} onAccessLoss={onAccessLoss} onChanged={changed} />
     </section>
   );

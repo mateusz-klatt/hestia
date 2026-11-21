@@ -2,10 +2,10 @@
 // at a time; a correction is an explicit, versioned decision, and a conflict reloads instead of overwriting.
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { BudgetApi } from "../api";
-import type { BudgetAccount } from "../model";
-import { accountLabel, formatAmount, transactionDate, transactionText } from "../model";
+import type { BudgetAccount, BudgetConnection } from "../model";
+import { formatAmount, transactionDate, transactionText } from "../model";
 import { ANALYTICS_ERROR, EFFECTIVE_KINDS, NO_FILTER, RELOAD_ERRORS, UNCATEGORISED, annotationRequest, counterparty,
-  currentChoice, kindChoice, kindChoicesFor, labelOf } from "./model";
+  accountName as nameOf, currentChoice, kindChoice, kindChoicesFor, labelOf } from "./model";
 import type { AnalyticsCategory, AnalyticsTransaction, CategoryChoice, KindChoice, TransactionFilter } from "./model";
 
 const kindsEn = { auto: "Automatic", expense: "Expense", income: "Income", refund: "Refund", excluded: "Leave out of the budget",
@@ -17,7 +17,7 @@ export const transactionLabels = {
   en: {
     title: "Transactions", currency: "Currency", category: "Category", kind: "Type", search: "Search", apply: "Apply",
     all: "All", uncategorised: "Uncategorised", automatic: "Automatic (rules)", kinds: kindsEn,
-    edit: "Change", save: "Save", cancel: "Cancel", total: (count: number) => `${String(count)} entries`,
+    edit: "Change", save: "Save", cancel: "Cancel", archived: "archived", total: (count: number) => `${String(count)} entries`,
     manual: "set by you", rule: "by rule", stale: "the bank changed this entry; check your choice",
     transfer: { none: "", suggested: "possible own transfer", accepted: "own transfer", review: "own transfer to re-check",
       boundary: "other side on an excluded account", rejected: "", undone: "" },
@@ -29,7 +29,7 @@ export const transactionLabels = {
   pl: {
     title: "Transakcje", currency: "Waluta", category: "Kategoria", kind: "Rodzaj", search: "Szukaj", apply: "Zastosuj",
     all: "Wszystkie", uncategorised: "Bez kategorii", automatic: "Automatycznie (reguły)", kinds: kindsPl,
-    edit: "Zmień", save: "Zapisz", cancel: "Anuluj", total: (count: number) => `Pozycji: ${String(count)}`,
+    edit: "Zmień", save: "Zapisz", cancel: "Anuluj", archived: "archiwalna", total: (count: number) => `Pozycji: ${String(count)}`,
     manual: "ustawione przez Ciebie", rule: "z reguły", stale: "bank zmienił tę pozycję; sprawdź swój wybór",
     transfer: { none: "", suggested: "możliwy przelew własny", accepted: "przelew własny",
       review: "przelew własny do sprawdzenia", boundary: "druga strona na koncie wykluczonym", rejected: "", undone: "" },
@@ -50,6 +50,7 @@ export interface TransactionsProps {
   period: string;
   currencies: readonly string[];
   accounts: readonly BudgetAccount[];
+  connections?: readonly BudgetConnection[] | undefined;
   text: TransactionLabels;
   locale: string;
   revision: number;
@@ -60,7 +61,8 @@ export interface TransactionsProps {
 
 const rowKey = (row: AnalyticsTransaction) => `${row.account_id}/${row.entry_reference}`;
 
-export function TransactionsPanel({ api, period, currencies, accounts, text, locale, revision, onAccessLoss, onChanged }: TransactionsProps) {
+export function TransactionsPanel({ api, period, currencies, accounts, connections = [], text, locale, revision, onAccessLoss,
+  onChanged }: TransactionsProps) {
   const [filter, setFilter] = useState<TransactionFilter>(NO_FILTER);
   const [draft, setDraft] = useState<TransactionFilter>(NO_FILTER);
   const [page, setPage] = useState<Page>(LOADING);
@@ -125,11 +127,7 @@ export function TransactionsPanel({ api, period, currencies, accounts, text, loc
 
   const categoryName = (id: string | null) => (id === null ? text.uncategorised
     : categories.find((item) => item.id === id)?.name ?? text.uncategorised);
-  const accountName = (id: string) => {
-    const account = accounts.find((item) => item.id === id);
-    if (account === undefined) return text.account;
-    return accountLabel(account, accounts.filter((item) => item.connection === account.connection).indexOf(account), text.account);
-  };
+  const accountName = (id: string) => nameOf(accounts, connections, id, text.account);
   const kindText = (kind: string) => labelOf(text.kinds, kind);
 
   return (
@@ -257,7 +255,9 @@ function Editor({ row, categories, text, kindText, saving, onSave, onCancel }: E
         <select value={category} disabled={saving} onChange={(event) => { chooseCategory(event.currentTarget.value); }}>
           <option value="auto">{text.automatic}</option>
           <option value="none">{text.uncategorised}</option>
-          {offered.map((item) => <option key={item.id} value={`cat:${item.id}`}>{item.name}</option>)}
+          {offered.map((item) => (
+            <option key={item.id} value={`cat:${item.id}`}>{item.archived ? `${item.name} (${text.archived})` : item.name}</option>
+          ))}
         </select>
       </label>
       <label>{text.kind}

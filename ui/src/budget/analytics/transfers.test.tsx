@@ -124,6 +124,14 @@ describe("own-transfer queue", () => {
       expected_version: 3, expected_debit_fingerprint: "pfp-now-out", expected_credit_fingerprint: "pfp-now-in" }));
   });
 
+  it("offers only undo for a pair whose legs no longer match after a bank correction", async () => {
+    const api = fakeApi([pair({ id: "dec-5", version: 2, status: "review", stale: true, credit: leg("acc-2", "in-1", { amount: "1200.01" }) })]);
+    await show(api);
+    await click("To re-check");
+    expect(buttons()).toEqual(["Undo"]);
+    expect(host.textContent).toContain("no longer match");
+  });
+
   it("lets the owner re-accept an undone pair explicitly, as a manual decision", async () => {
     const undone = pair({ id: "dec-3", version: 6, status: "undone", source: "heuristic" });
     const api = fakeApi([undone]);

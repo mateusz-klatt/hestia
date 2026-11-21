@@ -194,8 +194,9 @@ describe("period entries", () => {
     await click(button("Change", first));
     let editor = first.querySelector(".budget-entry-editor") ?? host;
     expect(select("Category", editor).value).toBe("auto");
-    // The archived category the entry currently shows stays available for it.
+    // The archived category the entry currently shows stays available for it, marked as archived.
     expect([...select("Category", editor).options].map((option) => option.value)).toContain("cat:cat-old");
+    expect([...select("Category", editor).options].find((option) => option.value === "cat:cat-old")?.textContent).toBe("Synthetic Old (archived)");
     await choose(select("Type", editor), "excluded");
     expect(select("Category", editor).value).toBe("cat:cat-old");
     await submit(first.querySelector(".budget-entry-editor"));

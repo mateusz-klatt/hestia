@@ -2,7 +2,7 @@
 // Choosing a month opens it in the month view; nothing is added up in the browser.
 import { useCallback, useState } from "react";
 import type { BudgetApi } from "../api";
-import type { BudgetAccount } from "../model";
+import type { BudgetAccount, BudgetConnection } from "../model";
 import { formatAmount } from "../model";
 import { currentMonth, isZero } from "./model";
 import type { AnalyticsOverview } from "./model";
@@ -23,6 +23,7 @@ export interface YearLabels {
 export interface YearViewProps {
   api: Pick<BudgetApi, "overview">;
   accounts: readonly BudgetAccount[];
+  connections?: readonly BudgetConnection[] | undefined;
   text: YearLabels;
   locale: string;
   revision: number;
@@ -38,7 +39,8 @@ function monthName(month: string, locale: string): string {
   return new Intl.DateTimeFormat(locale, { month: "long", timeZone: "UTC" }).format(new Date(Date.UTC(year, index - 1, 15)));
 }
 
-export function YearView({ api, accounts, text, locale, revision, onAccessLoss, onOpenMonth, today = () => new Date() }: YearViewProps) {
+export function YearView({ api, accounts, connections = [], text, locale, revision, onAccessLoss, onOpenMonth,
+  today = () => new Date() }: YearViewProps) {
   const latest = currentMonth(today()).slice(0, 4);
   const [year, setYear] = useState(latest);
   const overview = useCallback((period: string) => api.overview(period), [api]);
@@ -84,7 +86,7 @@ export function YearView({ api, accounts, text, locale, revision, onAccessLoss, 
         <button type="button" aria-label={text.next} disabled={year >= latest}
           onClick={() => { setYear((value) => (value < latest ? String(Number(value) + 1).padStart(4, "0") : value)); }}>▶</button>
       </nav>
-      <OverviewPanel overview={overview} period={year} current={year === latest} accounts={accounts} text={text.overview}
+      <OverviewPanel overview={overview} period={year} current={year === latest} accounts={accounts} connections={connections} text={text.overview}
         locale={locale} revision={revision} onAccessLoss={onAccessLoss} details={details} />
     </section>
   );
