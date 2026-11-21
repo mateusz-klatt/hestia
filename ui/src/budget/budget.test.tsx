@@ -49,6 +49,10 @@ function fakeApi(accounts: BudgetAccount[] = [account({ display })]) {
     transactions: vi.fn<BudgetApi["transactions"]>(() => ok(page([]))),
     balances: vi.fn<BudgetApi["balances"]>(() => ok(balancesData)),
     limits: vi.fn<BudgetApi["limits"]>(() => ok({ limits: [] })),
+    consentStatus: vi.fn<BudgetApi["consentStatus"]>(() => ok({ consents: [] })),
+    consentPending: vi.fn<BudgetApi["consentPending"]>(() => ok({ pending: [] })),
+    consentStart: vi.fn<BudgetApi["consentStart"]>(),
+    consentCancel: vi.fn<BudgetApi["consentCancel"]>(),
     setSelected: vi.fn<BudgetApi["setSelected"]>(),
     setKind: vi.fn<BudgetApi["setKind"]>(),
     setPaused: vi.fn<BudgetApi["setPaused"]>(),
@@ -340,6 +344,99 @@ describe("access barrier and version-aware reads", () => {
     });
     await settle();
     expect(host.querySelector<HTMLInputElement>(".budget-account input[type=checkbox]")?.checked).toBe(false);
+  });
+});
+
+describe("bank consent", () => {
+  const consentCaps = { ...capabilities, consent: true };
+  async function renderConsent(api: ReturnType<typeof fakeApi>, navigate = vi.fn<(url: string) => void>()) {
+    api.connections.mockImplementation(() => ok({ connections: [connection], capabilities: consentCaps }));
+    await act(async () => {
+      root.render(<Budget active api={api} pollMs={5} principal="owner" navigate={navigate} completeUrl="/synthetic/complete" />);
+      await Promise.resolve();
+    });
+    await settle();
+    return navigate;
+  }
+  function flowOf(id: string, status: string) {
+    return { id, connection_id: "bank", intent: "renew" as const, status, error: null, created_at: 1, expires_at: 2,
+      candidate_consent_id: null };
+  }
+
+  it("is absent until the server offers consent", async () => {
+    const api = fakeApi();
+    await render(api, true, "owner");
+    expect(host.textContent).not.toContain("Connect bank");
+    expect(api.consentStatus).not.toHaveBeenCalled();
+  });
+
+  it("starts a connect flow, then leaves only for the HTTPS authorization URL", async () => {
+    const api = fakeApi();
+    api.consentStart.mockImplementation(() => ok({ flow_id: "flow-1", authorization_url: "https://bank.example.test/auth?x=1", expires_at: 9 }));
+    const navigate = await renderConsent(api);
+    expect(host.textContent).toContain("Hestia never sees your banking password");
+    await click(button("Connect bank"));
+    expect(api.consentStart).toHaveBeenCalledWith(expect.objectContaining({ id: "bank", control_version: 4 }), "connect");
+    expect(navigate).toHaveBeenCalledWith("https://bank.example.test/auth?x=1");
+    expect(button("Opening the bank").disabled).toBe(true);
+  });
+
+  it("uses renew for a connection that has worked before and refuses a non-HTTPS URL", async () => {
+    const api = fakeApi();
+    api.consentStart.mockImplementation(() => ok({ flow_id: "flow-1", authorization_url: "javascript:alert(1)", expires_at: 9 }));
+    api.connections.mockImplementation(() => ok({ connections: [{ ...connection, last_success: 5 }], capabilities: consentCaps }));
+    const navigate = vi.fn<(url: string) => void>();
+    await act(async () => { root.render(<Budget active api={api} pollMs={5} principal="owner" navigate={navigate} />); await Promise.resolve(); });
+    await settle();
+    await click(button("Renew bank consent"));
+    expect(api.consentStart).toHaveBeenCalledWith(expect.anything(), "renew");
+    expect(navigate).not.toHaveBeenCalled();
+    expect(host.textContent).toContain("invalid address; nothing was opened");
+    expect(button("Renew bank consent").disabled).toBe(false);
+  });
+
+  it.each([[409, "budget_version_conflict", "changed elsewhere"], [409, "budget_consent_in_progress", "already in progress"],
+    [429, "budget_rate_limited", "already in progress"], [503, "budget_consent_unavailable", "Could not start"]])(
+    "explains a %s %s start refusal without leaving the page", async (status, error, text) => {
+      const api = fakeApi();
+      api.consentStart.mockImplementation(() => fail(status, error));
+      const navigate = await renderConsent(api);
+      await click(button("Connect bank"));
+      expect(host.textContent).toContain(text);
+      expect(navigate).not.toHaveBeenCalled();
+    });
+
+  it("shows consent validity, a waiting candidate and unfinished flows with finish and cancel", async () => {
+    const api = fakeApi();
+    api.consentStatus.mockImplementation(() => ok({ consents: [
+      { id: "c1", connection_id: "bank", provenance: "hestia_created", status: "ACTIVE", valid_until: 1_810_000_000, generation: 2, created_at: 1 },
+      { id: "c2", connection_id: "bank", provenance: "hestia_created", status: "UNADOPTED", valid_until: null, generation: 3, created_at: 2 },
+      { id: "c0", connection_id: "bank", provenance: "hestia_created", status: "RETIRED", valid_until: 1, generation: 1, created_at: 0 },
+    ] }));
+    api.consentPending.mockImplementation(() => ok({ pending: [flowOf("flow-ready", "staged"), flowOf("flow-old", "expired")] }));
+    api.consentCancel.mockImplementation(() => ok({ flow_id: "flow-ready", status: "canceled" }));
+    await renderConsent(api);
+    expect(host.textContent).toContain("Consent from Hestia valid until");
+    expect(host.textContent).toContain("A new consent is waiting to be finished");
+    const banner = host.querySelector(".budget-pending");
+    expect(banner?.textContent).toContain("Synthetic Bank");
+    expect(banner?.querySelector("a")?.getAttribute("href")).toBe("/synthetic/complete");
+    expect(banner?.querySelectorAll("li")).toHaveLength(1);
+    expect(host.textContent).not.toContain("flow-ready");
+    expect(host.textContent).not.toContain("generation");
+    const cancel = [...(banner?.querySelectorAll("button") ?? [])].find((item) => item.textContent === "Cancel");
+    if (cancel === undefined) throw new Error("cancel missing");
+    await click(cancel);
+    expect(api.consentCancel).toHaveBeenCalledWith("flow-ready");
+    expect(host.querySelector(".budget-pending")).toBeNull();
+  });
+
+  it("clears everything when a consent read reports lost access", async () => {
+    const api = fakeApi();
+    api.consentPending.mockImplementation(() => fail(401, "budget_http_401"));
+    await renderConsent(api);
+    expect(host.textContent).toContain("Only the budget's owner");
+    expect(host.textContent).not.toContain("Synthetic Current");
   });
 });
 

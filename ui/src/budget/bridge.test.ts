@@ -150,6 +150,25 @@ describe("static consent completion bridge", () => {
     expect(message()).toContain("Bank został połączony");
   });
 
+  function respondOnce(response: () => Promise<Response>): void {
+    vi.mocked(fetch as Fetch).mockImplementationOnce((url, init = {}) => {
+      calls.push({ url, init });
+      return response();
+    });
+  }
+
+  it.each([
+    ["a rejected request", () => Promise.reject(new TypeError("Failed to fetch: synthetic network detail"))],
+    ["a body that is not JSON", () => Promise.resolve(new Response("<html>not json</html>", { status: 200 }))],
+    ["a response without a pending list", () => Promise.resolve(new Response('{"unexpected":true}', { status: 200 }))],
+  ])("shows a fixed Polish message for %s instead of raw error text", async (_name, response) => {
+    respondOnce(response);
+    await load();
+    expect(message()).toBe("Nie udało się połączyć z Hestią. Wróć do budżetu i spróbuj ponownie.");
+    expect(message()).not.toMatch(/fetch|JSON|undefined|synthetic/i);
+    expect(buttons()).toHaveLength(0);
+  });
+
   it("explains no pending flow, a lost session and other failures without exposing details", async () => {
     reply("pending", { status: 200, body: { pending: [] } });
     await load();

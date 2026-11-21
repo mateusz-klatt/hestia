@@ -7,9 +7,10 @@ import { budgetApi } from "./api";
 import type { BudgetApi, BudgetResult } from "./api";
 import { ACTIVE_JOB, KINDS, accountLabel, effectiveState, formatAmount, freshness, hasActiveJob, idempotencyKey,
   isAccessLoss, isComponentLimit, latestJob, limitState, newer, otherObservedCurrencies, presetRange,
-  transactionDate, transactionText, validRange, when } from "./model";
+  READY_FLOW, consentIntent, safeAuthorizationUrl, transactionDate, transactionText, validRange, when } from "./model";
 import type { BudgetAccount, BudgetBalances, BudgetCapabilities, BudgetConnection, BudgetJob, BudgetKind,
-  BudgetLimit, BudgetSharedLimit, BudgetTransaction, DateRange, LimitState } from "./model";
+  BudgetConsent, BudgetConsentFlow, BudgetLimit, BudgetSharedLimit, BudgetTransaction, DateRange,
+  LimitState } from "./model";
 import "./budget.css";
 
 const labels = {
@@ -33,6 +34,13 @@ const labels = {
     next: "next possible", conflict: "This changed elsewhere; the latest state was loaded.",
     busy: "A refresh is already in progress for this connection.", pausedError: "Resume the connection first.",
     unavailable: "Refresh is unavailable right now.", saveError: "Could not save. Try again.",
+    connect: "Connect bank", renew: "Renew bank consent", connecting: "Opening the bank…",
+    consentHelp: "You will sign in on your bank's page; Hestia never sees your banking password.",
+    consentActive: "Consent from Hestia valid until", consentWaiting: "A new consent is waiting to be finished",
+    pendingTitle: "Unfinished bank connection", finish: "Finish", cancel: "Cancel",
+    consentError: "Could not start the bank connection. Try again later.",
+    consentBusy: "Another bank connection is already in progress or the limit was reached; try again later.",
+    consentUrl: "The bank returned an invalid address; nothing was opened.",
     limits: "Download limits", limitsHide: "Hide limits", limitsLoading: "Loading limits…",
     limitsError: "Limits could not be loaded.",
     limitsIntro: "Each account and data type is downloaded at most twice a day, at least 12 hours apart; a bank can ask for a longer pause. These are read-only.",
@@ -68,6 +76,13 @@ const labels = {
     next: "następne najwcześniej", conflict: "Zmieniono to w innym miejscu; wczytano aktualny stan.",
     busy: "Dla tego połączenia trwa już odświeżanie.", pausedError: "Najpierw wznów połączenie.",
     unavailable: "Odświeżanie jest teraz niedostępne.", saveError: "Nie udało się zapisać. Spróbuj ponownie.",
+    connect: "Połącz z bankiem", renew: "Odnów zgodę w banku", connecting: "Otwieram stronę banku…",
+    consentHelp: "Zalogujesz się na stronie swojego banku; Hestia nie widzi Twojego hasła do banku.",
+    consentActive: "Zgoda z Hestii ważna do", consentWaiting: "Nowa zgoda czeka na dokończenie",
+    pendingTitle: "Niedokończone połączenie z bankiem", finish: "Dokończ", cancel: "Anuluj",
+    consentError: "Nie udało się rozpocząć połączenia z bankiem. Spróbuj później.",
+    consentBusy: "Trwa już inne połączenie z bankiem albo osiągnięto limit; spróbuj później.",
+    consentUrl: "Bank zwrócił nieprawidłowy adres; niczego nie otwarto.",
     limits: "Limity pobrań", limitsHide: "Ukryj limity", limitsLoading: "Wczytywanie limitów…",
     limitsError: "Nie udało się wczytać limitów.",
     limitsIntro: "Każde konto i rodzaj danych pobieramy najwyżej 2 razy na dobę, co najmniej co 12 godzin; bank może zażądać dłuższej przerwy. To tylko podgląd.",
@@ -118,9 +133,14 @@ export interface BudgetProps {
   active: boolean; api?: BudgetApi; pollMs?: number;
   /** The user this page signed in as; budget data are shown only while the cookie still names them. */
   principal?: string | null;
+  /** Leaves the page for the bank's authorization screen (tests inject a recorder). */
+  navigate?: (url: string) => void;
+  /** Where the standalone completion page lives. */
+  completeUrl?: string;
 }
 
-export function Budget({ active, api = budgetApi, pollMs = 2000, principal }: BudgetProps) {
+export function Budget({ active, api = budgetApi, pollMs = 2000, principal,
+  navigate = (url) => { window.location.assign(url); }, completeUrl = "/budget/connect/complete" }: BudgetProps) {
   const { text, locale } = pick();
   const [load, setLoad] = useState<Load>("loading");
   const [connections, setConnections] = useState<BudgetConnection[]>([]);
@@ -129,6 +149,8 @@ export function Budget({ active, api = budgetApi, pollMs = 2000, principal }: Bu
   const [jobs, setJobs] = useState<BudgetJob[]>([]);
   const [showLimits, setShowLimits] = useState(false);
   const [limits, setLimits] = useState<BudgetLimit[] | null | "error">(null);
+  const [consents, setConsents] = useState<BudgetConsent[]>([]);
+  const [pending, setPending] = useState<BudgetConsentFlow[]>([]);
   const [detail, setDetail] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState<ReadonlySet<string>>(new Set());
@@ -152,7 +174,7 @@ export function Budget({ active, api = budgetApi, pollMs = 2000, principal }: Bu
     epoch.current += 1;
     generation.current += 1;
     setConnections([]); setAccounts([]); setJobs([]); setDetail(null); setCapabilities(null); setBusy(new Set());
-    setLimits(null); setShowLimits(false);
+    setLimits(null); setShowLimits(false); setConsents([]); setPending([]);
     setLoad(disabled ? "disabled" : "denied");
   }, []);
   const barrier = useCallback((result: { ok: boolean; status?: number; error?: string }): boolean => {
@@ -272,6 +294,41 @@ export function Budget({ active, api = budgetApi, pollMs = 2000, principal }: Bu
       (item.id === saved.id && saved.control_version >= item.control_version ? { ...item, ...saved } : item)));
   }, [run]);
 
+  // Consent state is read after every completed reload while the consent feature is available.
+  const consentEnabled = capabilities?.consent === true;
+  useEffect(() => {
+    if (!active || !consentEnabled) return undefined;
+    let cancelled = false;
+    const started = epoch.current;
+    void Promise.all([api.consentStatus(), api.consentPending()]).then(([status, open]) => {
+      if (!alive.current || started !== epoch.current || barrier(status) || barrier(open) || cancelled) return;
+      if (status.ok) setConsents(status.data.consents);
+      if (open.ok) setPending(open.data.pending.filter((flow) => READY_FLOW.has(flow.status)));
+    });
+    return () => { cancelled = true; };
+  }, [active, consentEnabled, revision, api, barrier]);
+
+  const startConsent = useCallback(async (connection: BudgetConnection) => {
+    setNotice(null);
+    const result = await run(`consent:${connection.id}`, () => api.consentStart(connection, consentIntent(connection)));
+    if (result === null) return;
+    if (!result.ok) {
+      setNotice(result.error === "budget_version_conflict" ? text.conflict
+        : result.status === 409 || result.status === 429 ? text.consentBusy : text.consentError);
+      return;
+    }
+    const target = safeAuthorizationUrl(result.data.authorization_url);
+    if (target === null) { setNotice(text.consentUrl); return; }
+    // Keep the button disabled while the browser leaves for the bank.
+    setBusy((current) => new Set(current).add(`consent:${connection.id}`));
+    navigate(target);
+  }, [api, run, navigate, text]);
+
+  const cancelConsent = useCallback(async (flow: BudgetConsentFlow) => {
+    const result = await run(`cancel:${flow.id}`, () => api.consentCancel(flow.id));
+    if (result?.ok === true) setPending((current) => current.filter((item) => item.id !== flow.id));
+  }, [api, run]);
+
   // Limits are read on demand, and again after every completed reload while shown.
   useEffect(() => {
     if (!active || !showLimits) return undefined;
@@ -309,6 +366,21 @@ export function Budget({ active, api = budgetApi, pollMs = 2000, principal }: Bu
       {header}
       {notice === null ? null : <p className="budget-notice" role="alert">{notice}</p>}
       {showLimits ? <p className="budget-muted">{text.limitsIntro}</p> : null}
+      {pending.length === 0 ? null : (
+        <section className="budget-pending" aria-label={text.pendingTitle}>
+          <h3>{text.pendingTitle}</h3>
+          <ul>
+            {pending.map((flow) => (
+              <li key={flow.id}>
+                <span>{connections.find((item) => item.id === flow.connection_id)?.bank_name ?? text.account}</span>
+                <a className="budget-primary" href={completeUrl}>{text.finish}</a>
+                <button type="button" disabled={busy.has(`cancel:${flow.id}`)}
+                  onClick={() => { void cancelConsent(flow); }}>{text.cancel}</button>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
       {connections.length === 0 ? <p className="budget-status">{text.empty}</p> : null}
       {connections.map((connection) => {
         const job = latestJob(jobs, connection.id);
@@ -336,7 +408,18 @@ export function Budget({ active, api = budgetApi, pollMs = 2000, principal }: Bu
               {connection.valid_until === null ? null : <li>{text.validUntil}: {when(connection.valid_until, locale)}</li>}
               <li>{text.lastSuccess}: {when(connection.last_success, locale) ?? text.never}</li>
               {job === null ? null : <li>{jobText(text, job, locale)}</li>}
+              {consentEnabled ? consentFacts(text, consents, connection.id, locale) : null}
             </ul>
+            {consentEnabled ? (
+              <div className="budget-consent">
+                <button type="button" disabled={busy.has(`consent:${connection.id}`)}
+                  onClick={() => { void startConsent(connection); }}>
+                  {busy.has(`consent:${connection.id}`) ? text.connecting
+                    : consentIntent(connection) === "renew" ? text.renew : text.connect}
+                </button>
+                <span className="budget-muted">{text.consentHelp}</span>
+              </div>
+            ) : null}
             {capabilities?.background_selection === true ? (
               <label className="budget-toggle">
                 <input type="checkbox" checked={connection.background_enabled} disabled={busy.has(`background:${connection.id}`)}
@@ -365,6 +448,18 @@ export function Budget({ active, api = budgetApi, pollMs = 2000, principal }: Bu
           onClose={() => { setDetail(null); }} />
       )}
     </section>
+  );
+}
+
+function consentFacts(text: Labels, consents: readonly BudgetConsent[], connectionId: string, locale: string) {
+  const own = consents.filter((consent) => consent.connection_id === connectionId);
+  const active = own.find((consent) => consent.status === "ACTIVE");
+  const waiting = own.some((consent) => consent.status === "UNADOPTED");
+  return (
+    <>
+      {active === undefined ? null : <li>{text.consentActive}: {when(active.valid_until, locale) ?? "—"}</li>}
+      {waiting ? <li className="budget-warn">{text.consentWaiting}</li> : null}
+    </>
   );
 }
 

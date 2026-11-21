@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { account, component, componentLimit, sharedLimit } from "./fixtures";
+import { account, component, componentLimit, connection, sharedLimit } from "./fixtures";
 import type { BudgetAccount, BudgetJob, BudgetTransaction } from "./model";
-import { accountLabel, effectiveState, formatAmount, freshness, hasActiveJob, idempotencyKey, isAccessLoss,
+import { accountLabel, consentIntent, effectiveState, safeAuthorizationUrl, formatAmount, freshness, hasActiveJob, idempotencyKey, isAccessLoss,
   isComponentLimit, latestJob, limitState, newer, otherObservedCurrencies, presetRange, transactionDate,
   transactionText, validRange, when } from "./model";
 
@@ -94,6 +94,22 @@ describe("access loss and version-aware merges", () => {
     const merged = newer(shown, incoming);
     expect(merged.map((item) => [item.id, item.control_version, item.selected])).toEqual([["a", 3, false], ["b", 1, true]]);
     expect(newer([account({ id: "a", control_version: 1 })], [account({ id: "a", control_version: 4 })])[0]?.control_version).toBe(4);
+  });
+});
+
+describe("consent helpers", () => {
+  it("chooses renew only for a connection that has worked before", () => {
+    expect(consentIntent(connection)).toBe("connect");
+    expect(consentIntent({ ...connection, last_success: 5 })).toBe("renew");
+    expect(consentIntent({ ...connection, valid_until: 5 })).toBe("renew");
+    expect(consentIntent({ ...connection, attention: "expired_session" })).toBe("renew");
+    expect(consentIntent({ ...connection, renewal_due: true })).toBe("renew");
+  });
+  it("accepts only plain HTTPS authorization URLs", () => {
+    expect(safeAuthorizationUrl("https://bank.example.test/a?b=c")).toBe("https://bank.example.test/a?b=c");
+    for (const bad of ["http://bank.example.test/", "javascript:alert(1)", "https://user:pw@bank.example.test/", "not a url", 5, null]) {
+      expect(safeAuthorizationUrl(bad)).toBeNull();
+    }
   });
 });
 

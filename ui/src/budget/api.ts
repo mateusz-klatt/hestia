@@ -2,8 +2,8 @@
 // Authorization header (the server rejects bearer mutations). Results are discriminated, never thrown, so a
 // failed call cannot become an unhandled rejection. Nothing here persists financial data in the browser.
 import { apiUrl } from "../api/client";
-import type { BudgetAccount, BudgetCapabilities, BudgetConnection, BudgetJob, BudgetKind, BudgetBalances,
-  BudgetLimit, BudgetOperation, BudgetTransactions } from "./model";
+import type { BudgetAccount, BudgetCapabilities, BudgetConnection, BudgetConsent, BudgetConsentFlow, BudgetJob,
+  BudgetKind, BudgetBalances, BudgetLimit, BudgetOperation, BudgetTransactions, ConsentIntent } from "./model";
 import { idempotencyKey } from "./model";
 
 export type BudgetResult<T> =
@@ -62,6 +62,13 @@ export const budgetApi = {
   balances: (accountId: string) => call<BudgetBalances>(url("balances", { account_id: accountId })),
   /** Stored limits only: no bank request, no way to lift a suspension or deadline from the browser. */
   limits: () => call<{ limits: BudgetLimit[] }>(url("limits")),
+  consentStatus: () => call<{ consents: BudgetConsent[] }>(url("consent/status")),
+  consentPending: () => call<{ pending: BudgetConsentFlow[] }>(url("consent/pending")),
+  /** Starts a bank authorization; the browser then leaves for the returned URL. No bank data is read here. */
+  consentStart: (connection: BudgetConnection, intent: ConsentIntent) =>
+    post<{ flow_id: string; authorization_url: string; expires_at: number }>("consent/start",
+      { connection_id: connection.id, expected_version: connection.control_version, intent }),
+  consentCancel: (flowId: string) => post<{ flow_id: string; status: string }>("consent/cancel", { flow_id: flowId }),
   jobs: (connectionId?: string) => call<{ jobs: BudgetJob[] }>(url("jobs", { connection_id: connectionId })),
   setSelected: (account: BudgetAccount, selected: boolean) =>
     post<{ account: BudgetAccount }>("account-selection",
