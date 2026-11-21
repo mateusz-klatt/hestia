@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 import hashlib
+import random
 import unittest
 
 from hestia.budget.recurring import (
     MAX_DESCRIPTION,
+    MAX_ENTRIES,
     MAX_GAP_DAYS,
     MAX_TEXT,
     MIN_GAP_DAYS,
@@ -199,27 +201,87 @@ class RecurringChargeDetectionTests(unittest.TestCase):
         self.assertEqual(hints[0].account_ids, ("acc-1", "acc-2"))
         self.assertEqual(hints[0].evidence[-1].entry_reference, "ref\x00opaque")
 
+    def test_rejects_same_day_duplicate_skipped_month_and_two_charges_in_one_month(self):
+        same_day_duplicate = [
+            _entry("d1", "2026-01-15"),
+            _entry("d2a", "2026-02-15"),
+            _entry("d2b", "2026-02-15"),
+            _entry("d3", "2026-03-15"),
+        ]
+        skipped_month = [
+            _entry("s1", "2026-01-15"),
+            _entry("s2", "2026-02-15"),
+            _entry("s3", "2026-04-15"),
+        ]
+        two_in_one_month = [
+            _entry("t1", "2026-01-15"),
+            _entry("t2", "2026-01-25"),
+            _entry("t3", "2026-02-15"),
+            _entry("t4", "2026-03-15"),
+        ]
+        for case in (same_day_duplicate, skipped_month, two_in_one_month):
+            self.assertEqual(detect_recurring_charges("owner", case, {"acc-1"}), ())
+
+    def test_output_is_invariant_across_input_permutations(self):
+        base = [
+            _entry("a1", "2026-01-10", account_id="acc-1", amount="29.99", counterparty_name="Alpha Sub"),
+            _entry("a2", "2026-02-10", account_id="acc-2", amount="29.990", counterparty_name="alpha sub"),
+            _entry("a3", "2026-03-10", account_id="acc-1", amount="029.99", counterparty_name="ALPHA SUB"),
+            _entry("b1", "2026-01-20", account_id="acc-2", amount="12", currency="EUR", counterparty_name=None, description="Beta Plan"),
+            _entry("b2", "2026-02-20", account_id="acc-2", amount="12.00", currency="EUR", counterparty_name=None, description="beta plan"),
+            _entry("b3", "2026-03-20", account_id="acc-2", amount="12.0", currency="EUR", counterparty_name=None, description="BETA PLAN"),
+        ]
+        expected = detect_recurring_charges("owner", base, {"acc-1", "acc-2"})
+        self.assertEqual(len(expected), 2)
+        rng = random.Random(20261121)
+        for _ in range(25):
+            shuffled = list(base)
+            rng.shuffle(shuffled)
+            self.assertEqual(detect_recurring_charges("owner", shuffled, {"acc-1", "acc-2"}), expected)
+
     def test_enforces_entry_limit_without_partial_results(self):
         entries = [_entry(f"r{i}", "2026-01-15") for i in range(4)]
         with self.assertRaises(RecurringLimitError) as raised:
             detect_recurring_charges("owner", entries, {"acc-1"}, max_entries=3)
         self.assertEqual(str(raised.exception), "Recurring charge detection limit exceeded")
 
+        # Exact default MAX_ENTRIES (100,000) succeeds; MAX_ENTRIES + 1 raises RecurringLimitError.
+        fp = _fp("limit")
+        def make(count):
+            return (
+                RecurringEntry("owner", "acc-1", f"k{i}", "1", "PLN", "DBIT", "expense",
+                               "2026-01-15", fp, eligible=False)
+                for i in range(count)
+            )
+
+        self.assertEqual(detect_recurring_charges("owner", make(MAX_ENTRIES), {"acc-1"}), ())
+        with self.assertRaises(RecurringLimitError):
+            detect_recurring_charges("owner", make(MAX_ENTRIES + 1), {"acc-1"})
+
     def test_validation_rejects_malformed_and_out_of_scope_inputs_without_echoing_secrets(self):
+        secret_account = "SECRET-ACCOUNT-ID-999"
+        secret_ref = "SECRET-ENTRY-REF-999"
+        secret_fp = _fp("secret-fingerprint-seed")
         secret_merchant = "SECRET-MERCHANT-999"
+        secret_description = "SECRET-DESCRIPTION-999"
         secret_amount = "777777.88"
-        valid = _entry("r1", "2026-01-15", amount=secret_amount, counterparty_name=secret_merchant)
-        # repr=False prevents leaking financial fields in logs/tracebacks
-        for obj in (valid, RecurringOccurrence("acc-1", "r1", "2026-01-15", _fp("x"))):
-            self.assertNotIn(secret_merchant, repr(obj))
-            self.assertNotIn(secret_amount, repr(obj))
+        valid = _entry(secret_ref, "2026-01-15", account_id=secret_account, amount=secret_amount,
+                       counterparty_name=secret_merchant, description=secret_description, fingerprint=secret_fp)
+        occurrence = RecurringOccurrence(secret_account, secret_ref, "2026-01-15", secret_fp)
         hint = detect_recurring_charges(
             "owner",
-            [_entry(f"h{i}", f"2026-0{i}-15", amount=secret_amount, counterparty_name=secret_merchant) for i in (1, 2, 3)],
-            {"acc-1"},
+            [
+                _entry(f"{secret_ref}-{i}", f"2026-0{i}-15", account_id=secret_account, amount=secret_amount,
+                       counterparty_name=secret_merchant, description=secret_description, fingerprint=secret_fp)
+                for i in (1, 2, 3)
+            ],
+            {secret_account},
         )[0]
-        self.assertNotIn(secret_merchant, repr(hint))
-        self.assertNotIn(secret_amount, repr(hint))
+        # repr=False prevents leaking accounts, references, fingerprints, amounts or text in logs/tracebacks
+        for obj in (valid, occurrence, hint):
+            rendered = repr(obj)
+            for secret in (secret_account, secret_ref, secret_fp, secret_merchant, secret_description, secret_amount):
+                self.assertNotIn(secret, rendered)
 
         bad_calls = [
             lambda: detect_recurring_charges("", [], {"acc-1"}),
