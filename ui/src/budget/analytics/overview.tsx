@@ -1,6 +1,7 @@
 // Period overview of the owner's spending (2D). Shows only server-computed per-currency totals for the selected
 // accounts; data live in component state only and every response passes the budget's access barrier.
 import { useEffect, useRef, useState } from "react";
+import type { ReactNode } from "react";
 import type { BudgetResult } from "../api";
 import type { BudgetAccount } from "../model";
 import { accountLabel, formatAmount } from "../model";
@@ -16,15 +17,15 @@ export const overviewLabels = {
     categories: "Spending by category", uncategorised: "Uncategorised", archived: "archived",
     scope: (selected: number, excluded: number) =>
       `${String(selected)} accounts in the budget${excluded > 0 ? ` (${String(excluded)} excluded)` : ""} · change this on the Accounts tab`,
-    current: "This month is still in progress.", partial: "Incomplete data",
+    current: "This period is still in progress.", partial: "Incomplete data",
     stale: "Incomplete data; these accounts are not up to date:",
     suggested: (count: number) => `Possible own transfers to review: ${String(count)}. Until you confirm them they count as spending and income.`,
     review: (count: number) => `Own-transfer decisions to check again after the bank data changed: ${String(count)}.`,
     boundary: (count: number) => `Transfers with one side on an excluded account: ${String(count)}. They count as ordinary spending or income.`,
     scanLimited: "The search for own transfers stopped at its limit; some possible pairs may be missing.",
     notCounted: "Not counted:", uncertain: "uncertain", unresolved: "unrecognised", importUnresolved: "unrecognised from import",
-    empty: "No booked transactions in this month.", loading: "Loading the month…",
-    error: "The month could not be loaded. Try again.", account: "Account",
+    empty: "No booked transactions in this period.", loading: "Loading totals…",
+    error: "The totals could not be loaded. Try again.", account: "Account",
   },
   pl: {
     spending: "Wydatki", gross: "wydatki", refunds: "zwroty",
@@ -34,15 +35,15 @@ export const overviewLabels = {
     categories: "Wydatki według kategorii", uncategorised: "Bez kategorii", archived: "archiwalna",
     scope: (selected: number, excluded: number) =>
       `Kont w budżecie: ${String(selected)}${excluded > 0 ? ` (wykluczone: ${String(excluded)})` : ""} · zmienisz to na karcie Konta`,
-    current: "Ten miesiąc jeszcze trwa.", partial: "Dane niepełne",
+    current: "Ten okres jeszcze trwa.", partial: "Dane niepełne",
     stale: "Dane niepełne; te konta nie są aktualne:",
     suggested: (count: number) => `Możliwe przelewy własne do przejrzenia: ${String(count)}. Dopóki ich nie potwierdzisz, liczą się jako wydatki i wpływy.`,
     review: (count: number) => `Decyzje o przelewach własnych do ponownego sprawdzenia po zmianie danych z banku: ${String(count)}.`,
     boundary: (count: number) => `Przelewy z jedną stroną na koncie wykluczonym: ${String(count)}. Liczą się jako zwykłe wydatki lub wpływy.`,
     scanLimited: "Wyszukiwanie przelewów własnych zatrzymało się na limicie; części możliwych par może brakować.",
     notCounted: "Niewliczone:", uncertain: "niepewne", unresolved: "nierozpoznane", importUnresolved: "nierozpoznane z importu",
-    empty: "Brak zaksięgowanych transakcji w tym miesiącu.", loading: "Wczytywanie miesiąca…",
-    error: "Nie udało się wczytać miesiąca. Spróbuj ponownie.", account: "Konto",
+    empty: "Brak zaksięgowanych transakcji w tym okresie.", loading: "Wczytywanie sum…",
+    error: "Nie udało się wczytać sum. Spróbuj ponownie.", account: "Konto",
   },
 };
 export type OverviewLabels = typeof overviewLabels.en;
@@ -62,10 +63,12 @@ export interface OverviewProps {
   onAccessLoss: (result: { ok: boolean; status?: number; error?: string }) => boolean;
   /** Currencies present in the shown period, for filters elsewhere. */
   onCurrencies?: ((currencies: string[]) => void) | undefined;
+  /** Extra content drawn from the same answer (the year's month table). */
+  details?: ((data: AnalyticsOverview) => ReactNode) | undefined;
 }
 
 export function OverviewPanel({ overview, period, current, accounts, text, locale, revision, onAccessLoss,
-  onCurrencies }: OverviewProps) {
+  onCurrencies, details }: OverviewProps) {
   const [shown, setShown] = useState<Shown>({ state: "loading" });
   // Every period change or reload takes a new generation; an older answer can never replace a newer period.
   const generation = useRef(0);
@@ -94,7 +97,12 @@ export function OverviewPanel({ overview, period, current, accounts, text, local
 
   if (shown.state === "loading") return <p className="budget-muted" role="status">{text.loading}</p>;
   if (shown.state === "error") return <p className="budget-notice" role="alert">{text.error}</p>;
-  return <OverviewBody data={shown.data} current={current} name={name} text={text} locale={locale} />;
+  return (
+    <>
+      <OverviewBody data={shown.data} current={current} name={name} text={text} locale={locale} />
+      {details?.(shown.data)}
+    </>
+  );
 }
 
 interface BodyProps { data: AnalyticsOverview; current: boolean; name: (id: string) => string; text: OverviewLabels; locale: string }

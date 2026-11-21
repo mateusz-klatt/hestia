@@ -13,13 +13,14 @@ import type { BudgetAccount, BudgetBalances, BudgetCapabilities, BudgetConnectio
   LimitState } from "./model";
 import { MonthView, monthLabels } from "./analytics/month";
 import { CategoriesView, rulesLabels } from "./analytics/rules";
+import { YearView, yearLabels } from "./analytics/year";
 import { hasAnalytics } from "./analytics/model";
 import "./budget.css";
 
 const labels = {
   en: {
     title: "Budget", subtitle: "Your private household finances.", reload: "Reload", loading: "Loading budget…",
-    views: { accounts: "Accounts", month: "Month", rules: "Categories and rules" }, viewsLabel: "Budget view",
+    views: { accounts: "Accounts", month: "Month", year: "Year", rules: "Categories and rules" }, viewsLabel: "Budget view",
     disabled: "The budget is not enabled on this server.", denied: "Only the budget's owner can view it.",
     error: "The budget could not be loaded. Try again.", empty: "No bank connections are configured.",
     account: "Account", refresh: "Refresh from bank", refreshing: "Refresh queued…",
@@ -64,7 +65,7 @@ const labels = {
   },
   pl: {
     title: "Budżet", subtitle: "Prywatne finanse domowe.", reload: "Wczytaj ponownie", loading: "Wczytywanie budżetu…",
-    views: { accounts: "Konta", month: "Miesiąc", rules: "Kategorie i reguły" }, viewsLabel: "Widok budżetu",
+    views: { accounts: "Konta", month: "Miesiąc", year: "Rok", rules: "Kategorie i reguły" }, viewsLabel: "Widok budżetu",
     disabled: "Budżet nie jest włączony na tym serwerze.", denied: "Budżet widzi tylko jego właściciel.",
     error: "Nie udało się wczytać budżetu. Spróbuj ponownie.", empty: "Brak skonfigurowanych połączeń z bankiem.",
     account: "Konto", refresh: "Odśwież z banku", refreshing: "Odświeżanie w kolejce…",
@@ -110,14 +111,15 @@ const labels = {
 };
 type Labels = typeof labels.en;
 
-function pick(): { text: Labels; month: typeof monthLabels.en; rules: typeof rulesLabels.en; locale: string } {
+function pick(): { text: Labels; month: typeof monthLabels.en; year: typeof yearLabels.en; rules: typeof rulesLabels.en;
+  locale: string } {
   const locale = currentLocale();
   const pl = locale.startsWith("pl");
-  return { text: pl ? labels.pl : labels.en, month: pl ? monthLabels.pl : monthLabels.en, rules: pl ? rulesLabels.pl : rulesLabels.en,
-    locale };
+  return { text: pl ? labels.pl : labels.en, month: pl ? monthLabels.pl : monthLabels.en, year: pl ? yearLabels.pl : yearLabels.en,
+    rules: pl ? rulesLabels.pl : rulesLabels.en, locale };
 }
 
-type View = "accounts" | "month" | "rules";
+type View = "accounts" | "month" | "year" | "rules";
 
 type Load = "loading" | "ready" | "disabled" | "denied" | "error";
 
@@ -154,7 +156,7 @@ export interface BudgetProps {
 
 export function Budget({ active, api = budgetApi, pollMs = 2000, principal,
   navigate = (url) => { window.location.assign(url); }, completeUrl = "/budget/connect/complete" }: BudgetProps) {
-  const { text, month: monthText, rules: rulesText, locale } = pick();
+  const { text, month: monthText, year: yearText, rules: rulesText, locale } = pick();
   const [load, setLoad] = useState<Load>("loading");
   const [connections, setConnections] = useState<BudgetConnection[]>([]);
   const [capabilities, setCapabilities] = useState<BudgetCapabilities | null>(null);
@@ -166,6 +168,8 @@ export function Budget({ active, api = budgetApi, pollMs = 2000, principal,
   const [pending, setPending] = useState<BudgetConsentFlow[]>([]);
   const [detail, setDetail] = useState<string | null>(null);
   const [view, setView] = useState<View>("accounts");
+  // A month chosen in the year view; the month view opens on it.
+  const [focusMonth, setFocusMonth] = useState<string | undefined>(undefined);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState<ReadonlySet<string>>(new Set());
   const retryKeys = useRef(new Map<string, string>());
@@ -418,15 +422,18 @@ export function Budget({ active, api = budgetApi, pollMs = 2000, principal,
       )}
       {analysis ? (
         <div className="budget-views" role="group" aria-label={text.viewsLabel}>
-          {(["accounts", "month", "rules"] as const).map((item) => (
+          {(["accounts", "month", "year", "rules"] as const).map((item) => (
             <button type="button" key={item} aria-pressed={shownView === item}
-              onClick={() => { setView(item); }}>{text.views[item]}</button>
+              onClick={() => { setView(item); if (item === "month") setFocusMonth(undefined); }}>{text.views[item]}</button>
           ))}
         </div>
       ) : null}
       {shownView === "month" ? (
-        <MonthView api={api} accounts={accounts} text={monthText} locale={locale} revision={revision}
-          onAccessLoss={barrier} />
+        <MonthView key={focusMonth ?? "current"} api={api} accounts={accounts} text={monthText} locale={locale} revision={revision}
+          onAccessLoss={barrier} initialMonth={focusMonth} />
+      ) : shownView === "year" ? (
+        <YearView api={api} accounts={accounts} text={yearText} locale={locale} revision={revision} onAccessLoss={barrier}
+          onOpenMonth={(month) => { setFocusMonth(month); setView("month"); }} />
       ) : shownView === "rules" ? (
         <CategoriesView api={api} text={rulesText} locale={locale} revision={revision} onAccessLoss={barrier} />
       ) : (

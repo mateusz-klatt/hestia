@@ -127,11 +127,11 @@ describe("period overview", () => {
       ? new Promise<Answer>((resolve) => { late = resolve; })
       : Promise.resolve<Answer>({ ok: true, data: overviewOf(period, { currencies: [] }) })));
     await show(overview);
-    expect(host.textContent).toContain("Loading the month");
+    expect(host.textContent).toContain("Loading totals");
     await show(overview, { period: "2026-10", current: false });
     await act(async () => { late({ ok: true, data: rich("2026-11") }); await Promise.resolve(); });
     await settle();
-    expect(host.textContent).toContain("No booked transactions in this month.");
+    expect(host.textContent).toContain("No booked transactions in this period.");
     expect(host.querySelector(".budget-total")).toBeNull();
   });
 
@@ -148,7 +148,7 @@ describe("period overview", () => {
   it("hands every answer to the access barrier and shows nothing it rejected", async () => {
     const onAccessLoss = await show(() => Promise.resolve<Answer>({ ok: false, status: 401, error: "budget_http_401" }), { lost: true });
     expect(onAccessLoss).toHaveBeenCalledWith({ ok: false, status: 401, error: "budget_http_401" });
-    expect(host.textContent).toContain("Loading the month");
+    expect(host.textContent).toContain("Loading totals");
     expect(host.textContent).not.toContain("could not be loaded");
   });
 

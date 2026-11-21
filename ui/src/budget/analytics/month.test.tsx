@@ -35,10 +35,10 @@ afterEach(async () => {
 async function settle(): Promise<void> {
   await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
 }
-async function show(api: ReturnType<typeof fakeApi>): Promise<void> {
+async function show(api: ReturnType<typeof fakeApi>, initialMonth?: string): Promise<void> {
   await act(async () => {
     root.render(<MonthView api={api} accounts={[]} text={monthLabels.en} locale="en" revision={0}
-      onAccessLoss={() => false} today={() => new Date(2026, 10, 21, 12)} />);
+      onAccessLoss={() => false} initialMonth={initialMonth} today={() => new Date(2026, 10, 21, 12)} />);
     await Promise.resolve();
   });
   await settle();
@@ -78,7 +78,22 @@ describe("month view", () => {
     expect(labelled("Next month").disabled).toBe(true);
   });
 
-  it("re-reads the totals and the entries after a saved correction", async () => {
+  it("opens on a month chosen elsewhere, but never on a future or invalid one", async () => {
+    const api = fakeApi();
+    await show(api, "2026-03");
+    expect(api.overview).toHaveBeenLastCalledWith("2026-03");
+    expect(host.querySelector("h3")?.textContent).toBe("March 2026");
+    await act(async () => { root.unmount(); await Promise.resolve(); });
+    root = createRoot(host);
+    await show(api, "2027-01");
+    expect(api.overview).toHaveBeenLastCalledWith("2026-11");
+    await act(async () => { root.unmount(); await Promise.resolve(); });
+    root = createRoot(host);
+    await show(api, "nope");
+    expect(api.overview).toHaveBeenLastCalledWith("2026-11");
+  });
+
+    it("re-reads the totals and the entries after a saved correction", async () => {
     const api = fakeApi();
     await show(api);
     expect(api.overview).toHaveBeenCalledTimes(1);

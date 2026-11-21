@@ -98,3 +98,10 @@
 .budget-rule-editor > p, .budget-rule-editor > .budget-actions, .budget-preview { flex-basis: 100%; }
 .budget-preview { border-inline-start: 3px solid var(--accent); padding: .4rem .75rem; background: var(--accent-soft); display: grid; gap: .3rem; }
 .budget-preview ul { margin: 0; padding-inline-start: 1.1rem; font-size: .85rem; overflow-wrap: anywhere; }
+.budget-year { width: 100%; border-collapse: collapse; font-size: .85rem; border: 1px solid var(--border); border-radius: .7rem; background: var(--surface); }
+.budget-year caption { text-align: start; font-weight: 600; padding: .4rem 0; }
+.budget-year th, .budget-year td { padding: .3rem .5rem; border-top: 1px solid var(--border); text-align: end; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.budget-year th[scope="row"], .budget-year thead th:first-child { text-align: start; }
+.budget-year thead th { color: var(--fg-soft); font-weight: 500; }
+.budget-app .budget-link { border: none; background: transparent; padding: 0; min-height: 0; color: var(--accent); text-decoration: underline; cursor: pointer; font: inherit; }
+@media (max-width: 640px) { .budget-year { display: block; overflow-x: auto; } }

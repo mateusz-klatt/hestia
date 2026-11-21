@@ -29,13 +29,16 @@ export interface MonthViewProps {
   /** Bumped after every completed budget reload. */
   revision: number;
   onAccessLoss: (result: { ok: boolean; status?: number; error?: string }) => boolean;
+  /** The month to open first ("YYYY-MM"); the current month when absent or in the future. */
+  initialMonth?: string | undefined;
   /** Injected clock for tests. */
   today?: () => Date;
 }
 
-export function MonthView({ api, accounts, text, locale, revision, onAccessLoss, today = () => new Date() }: MonthViewProps) {
+export function MonthView({ api, accounts, text, locale, revision, onAccessLoss, initialMonth,
+  today = () => new Date() }: MonthViewProps) {
   const latest = currentMonth(today());
-  const [month, setMonth] = useState(latest);
+  const [month, setMonth] = useState(initialMonth !== undefined && isMonth(initialMonth) && initialMonth < latest ? initialMonth : latest);
   const [changes, setChanges] = useState(0);
   const [currencies, setCurrencies] = useState<string[]>([]);
   const changed = useCallback(() => { setChanges((current) => current + 1); }, []);

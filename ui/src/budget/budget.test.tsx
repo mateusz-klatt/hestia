@@ -895,7 +895,24 @@ describe("analytics views", () => {
     expect(host.querySelector(".budget-month")).toBeNull();
   });
 
-  it("falls back to accounts when a reload withdraws the capability", async () => {
+  it("opens a month chosen in the year view", async () => {
+    const api = fakeApi();
+    api.connections.mockImplementation(() => ok({ connections: [connection], capabilities: analysis }));
+    api.overview.mockImplementation((period) => ok(period.length === 4
+      ? overviewOf(period, { months: [{ month: `${period}-01`, currencies: overviewOf(period).currencies }] })
+      : overviewOf(period)));
+    await render(api);
+    await click(button("Year"));
+    const year = String(new Date().getFullYear());
+    expect(api.overview).toHaveBeenLastCalledWith(year);
+    const open = host.querySelector<HTMLButtonElement>(".budget-year button");
+    if (open === null) throw new Error("month link missing");
+    await click(open);
+    expect(api.overview).toHaveBeenLastCalledWith(`${year}-01`);
+    expect(button("Month").getAttribute("aria-pressed")).toBe("true");
+  });
+
+    it("falls back to accounts when a reload withdraws the capability", async () => {
     const api = fakeApi();
     api.connections.mockImplementation(() => ok({ connections: [connection], capabilities: analysis }));
     await render(api);
