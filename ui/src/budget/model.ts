@@ -16,6 +16,30 @@ export type BudgetKind = Schemas["BudgetKindRequest"]["kind"];
 export type BudgetSharedLimit = Schemas["BudgetSharedLimit"];
 export type BudgetComponentLimit = Schemas["BudgetComponentLimit"];
 export type BudgetLimit = BudgetSharedLimit | BudgetComponentLimit;
+export type BudgetConsent = Schemas["BudgetConsent"];
+export type BudgetConsentFlow = Schemas["BudgetConsentFlow"];
+export type ConsentIntent = Schemas["BudgetConsentStartRequest"]["intent"];
+
+/** Flow states the completion page can still finish (mirrors the server's ready set). */
+export const READY_FLOW = new Set(["staged", "candidate", "exchanging"]);
+
+/** "renew" once the connection has ever had a working session; "connect" otherwise. Informational only. */
+export function consentIntent(connection: BudgetConnection): ConsentIntent {
+  const known = connection.last_success !== null || connection.valid_until !== null || connection.attention !== null
+    || connection.renewal_due;
+  return known ? "renew" : "connect";
+}
+
+/** Only a real HTTPS URL may leave the page for the bank's authorization screen. */
+export function safeAuthorizationUrl(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" && url.username === "" && url.password === "" ? url.href : null;
+  } catch {
+    return null;
+  }
+}
 export type BudgetOperation = "transactions" | "balances";
 
 export const KINDS: readonly BudgetKind[] = ["current", "savings", "credit_card", "other"];

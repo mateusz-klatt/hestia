@@ -43,3 +43,9 @@
 .budget-limits-table td[data-state="suspended"], .budget-limits-table td[data-state="waiting"] { color: var(--accent); }
 .budget-limits-table tr.is-excluded th { opacity: .55; }
 .budget-header .budget-actions { display: flex; gap: .4rem; flex-wrap: wrap; }
+.budget-consent { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; }
+.budget-pending { border: 1px solid var(--accent); border-radius: .7rem; padding: .7rem 1rem; background: var(--accent-soft); }
+.budget-pending h3 { margin: 0 0 .4rem; font-size: 1rem; }
+.budget-pending ul { list-style: none; margin: 0; padding: 0; display: grid; gap: .4rem; }
+.budget-pending li { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; }
+.budget-pending a { padding: .45rem .9rem; border-radius: .4rem; text-decoration: none; }
