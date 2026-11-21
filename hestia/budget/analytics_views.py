@@ -34,6 +34,8 @@ from .views import BudgetHTTPStore
 
 MAX_ROWS = 100_000
 MAX_EDGES = 100_000
+MAX_RECURRING_HINTS = 200
+MAX_RECURRING_EVIDENCE = 24
 CURSOR_TTL = 900
 MAX_CURSOR = 8192
 _DOMAIN = b"hestia/budget/analytics/cursor/v1"
@@ -316,6 +318,55 @@ def _candidates(snapshot, blocked, reserved):
         return (), True
     except TransferInputError:
         raise AnalyticsError() from None
+
+
+def _recurring_hints(snapshot):
+    from .recurring import RecurringEntry, RecurringInputError, detect_recurring_charges
+
+    entries = []
+    for row in snapshot["transactions"]:
+        payload, metadata = row["payload"], row["metadata"] or {}
+        entries.append(RecurringEntry(
+            owner=snapshot["owner"],
+            account_id=row["account_id"],
+            entry_reference=row["entry_reference"],
+            amount=core.canonical_money(payload["amount"]),
+            currency=payload["currency"],
+            direction=payload["credit_debit_indicator"],
+            effective_kind=row["effective"]["kind"],
+            date=core.effective_date(payload),
+            fingerprint=row["financial_fp"],
+            counterparty_name=metadata.get("creditor_name"),
+            description="\n".join(payload["remittance_information"]),
+        ))
+    selected = frozenset(row["id"] for row in snapshot["accounts"] if row["enabled"])
+    try:
+        return detect_recurring_charges(snapshot["owner"], entries, selected, max_entries=MAX_ROWS)
+    except RecurringInputError:
+        raise AnalyticsError() from None
+
+
+def _wire_recurring(hint):
+    evidence = hint.evidence[-MAX_RECURRING_EVIDENCE:]
+    return {
+        "label": hint.label,
+        "label_source": hint.label_source,
+        "amount": hint.amount,
+        "currency": hint.currency,
+        "cadence": hint.cadence,
+        "occurrence_count": hint.occurrence_count,
+        "distinct_months": hint.distinct_months,
+        "first_date": hint.first_date,
+        "last_date": hint.last_date,
+        "min_gap_days": hint.min_gap_days,
+        "max_gap_days": hint.max_gap_days,
+        "account_ids": list(hint.account_ids),
+        "evidence": [
+            {"account_id": item.account_id, "entry_reference": item.entry_reference, "date": item.date}
+            for item in evidence
+        ],
+        "evidence_truncated": len(hint.evidence) > MAX_RECURRING_EVIDENCE,
+    }
 
 
 def _mark_transfer(row, status, identifier):
@@ -627,6 +678,23 @@ class BudgetAnalyticsViews(BudgetAnalyticsStore):
             return {"period": period, "start": start, "end": end, "snapshot_digest": snapshot["digest"],
                     "transfers": deepcopy(page), "filtered_total": len(rows), "next_cursor": next_cursor,
                     "scan_limited": snapshot["_scan_limited"]}
+
+    def recurring(self, owner, *, currency=None):
+        from .recurring import RULE_VERSION
+
+        currency = _currency(currency)
+        with _read_lock, self._read(owner) as session:
+            snapshot = self._projection(session, owner)
+            hints = snapshot.get("_recurring")
+            if hints is None:
+                hints = _recurring_hints(snapshot)
+                snapshot["_recurring"] = hints
+            if currency is not None:
+                hints = tuple(item for item in hints if item.currency == currency)
+            page = hints[:MAX_RECURRING_HINTS]
+            return {"snapshot_digest": snapshot["digest"], "rule_version": RULE_VERSION,
+                    "total_hints": len(hints), "truncated": len(hints) > MAX_RECURRING_HINTS,
+                    "hints": [_wire_recurring(item) for item in page]}
 
 
 def _row_filter(row, category_id, kind, query):

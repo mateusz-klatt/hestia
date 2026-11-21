@@ -78,10 +78,10 @@ class BudgetAnalyticsAPITests(unittest.IsolatedAsyncioTestCase):
                 "annotation": self.annotation(), "rule-preview": self.candidate(), "rule-save": {"preview_id": "unknown"},
                 "transfer-decision": {"action": "undo", "decision_id": "unknown", "expected_version": 1}}
 
-    async def test_all_five_reads_are_private_local_bounded_and_match_wire_models(self):
+    async def test_all_six_reads_are_private_local_bounded_and_match_wire_models(self):
         models = {"overview": api_contract.BudgetAnalyticsOverview, "transactions": api_contract.BudgetAnalyticsTransactions,
                   "categories": api_contract.BudgetAnalyticsCategories, "rules": api_contract.BudgetAnalyticsRules,
-                  "transfers": api_contract.BudgetAnalyticsTransfers}
+                  "transfers": api_contract.BudgetAnalyticsTransfers, "recurring": api_contract.BudgetAnalyticsRecurring}
         before = len(self.rows(db.BudgetAcquisition))
         with mock.patch.object(config, "load_config", side_effect=AssertionError("No configuration read")), \
              mock.patch.object(runtime, "credentials") as credentials, \
@@ -142,6 +142,10 @@ class BudgetAnalyticsAPITests(unittest.IsolatedAsyncioTestCase):
                        {**PERIOD, "limit": "201"}, {**PERIOD, "limit": "-1"},
                        {**PERIOD, "query": "x" * 257}):
             self.assertEqual((await self.get("transactions", params=params)).status, 400)
+        for params in ({"period": "2026-11"}, {"currency": "pln"},
+                       MultiDict([("currency", "PLN"), ("currency", "EUR")])):
+            self.assertEqual((await self.get("recurring", params=params)).status, 400)
+        self.assertEqual((await self.get("recurring", params={"currency": "PLN"})).status, 200)
         for value in ('{"name":"a","name":"b"}', '{', '[]', '{"name":"x","extra":true}'):
             response = await self.client.post(PREFIX + "/category-create", data=value,
                        headers={**self.headers(origin=True), "Content-Type": "application/json"})
@@ -305,6 +309,28 @@ class BudgetAnalyticsAPITests(unittest.IsolatedAsyncioTestCase):
                                                         "expected_version": rejected["version"]})
         self.assertEqual(response.status, 200, await response.text())
         self.assertEqual((await response.json())["decision"]["status"], "undone")
+
+    async def test_recurring_endpoint_returns_validated_hints_and_filters_by_currency(self):
+        charges = tuple(
+            transaction(f"alice-rec-{day}", amount="29.99", currency="PLN", booking_date=day,
+                        remittance_information=["Synthetic Streaming"])
+            for day in ("2026-09-10", "2026-10-10", "2026-11-10")
+        )
+        self.store.commit_snapshot("bank", Snapshot(web._now() + 31536000,
+            (AccountSnapshot(fixture.PRIVATE_A, (), charges),
+             AccountSnapshot("ALICE-SYNTHETIC-CREDIT", (), ())), "2026-01-01", "2026-12-31"))
+        response = await self.get("recurring")
+        self.assertEqual(response.status, 200, await response.text())
+        self.assert_private_headers(response)
+        body = await response.json()
+        api_contract.BudgetAnalyticsRecurring.model_validate(body)
+        self.assertEqual((body["total_hints"], body["truncated"], len(body["hints"])), (1, False, 1))
+        self.assertEqual((body["hints"][0]["label"], body["hints"][0]["amount"], body["hints"][0]["currency"]),
+                         ("Synthetic Streaming", "29.99", "PLN"))
+        self.assertNotIn("fingerprint", json.dumps(body))
+        eur = await self.get("recurring", params={"currency": "EUR"})
+        self.assertEqual(eur.status, 200)
+        self.assertEqual((await eur.json())["total_hints"], 0)
 
 
 if __name__ == "__main__":

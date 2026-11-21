@@ -67,11 +67,14 @@ class ReportTests(ProjectionCase):
         self.assertEqual(len(overview["scope"]["freshness"]), 4)
         transactions = self.store.transactions("owner", "2026")
         transfers = self.store.transfers("owner", "2026")
+        recurring = self.store.recurring("owner")
         self.assertEqual((transactions["filtered_total"], transfers["filtered_total"]), (0, 0))
+        self.assertEqual((recurring["total_hints"], recurring["truncated"], recurring["hints"]), (0, False, []))
         self.assertIsNone(transactions["next_cursor"])
         api_contract.BudgetAnalyticsOverview.model_validate(overview)
         api_contract.BudgetAnalyticsTransactions.model_validate(transactions)
         api_contract.BudgetAnalyticsTransfers.model_validate(transfers)
+        api_contract.BudgetAnalyticsRecurring.model_validate(recurring)
 
     def test_exact_amounts_negative_net_and_separate_currencies(self):
         enormous, tiny = "9" * 80, "0." + "0" * 77 + "1"
@@ -153,6 +156,7 @@ class ReportTests(ProjectionCase):
             self.store.overview("owner", "2026")
             self.store.transactions("owner", "2026")
             self.store.transfers("owner", "2026")
+            self.store.recurring("owner")
         finally:
             event.remove(self.engine, "before_cursor_execute", capture)
         self.assertLessEqual(set(statements), {"SELECT", "BEGIN"})
@@ -510,6 +514,8 @@ class ValidationTests(ProjectionCase):
                 self.assert_invalid(lambda: method("owner", value))
             for value in ("pln", "PLNN", 3, "€"):
                 self.assert_invalid(lambda: method("owner", "2026", currency=value))
+        for value in ("pln", "PLNN", 3, "€"):
+            self.assert_invalid(lambda: self.store.recurring("owner", currency=value))
         for values in ({"kind": "auto"}, {"kind": []}, {"query": 1}, {"query": "x" * 257},
                        {"category_id": []}, {"category_id": ""}, {"category_id": "x" * 129}):
             self.assert_invalid(lambda: self.store.transactions("owner", "2026", **values))
@@ -572,6 +578,76 @@ class ValidationTests(ProjectionCase):
             self.assert_invalid(lambda: self.store.transfers("owner", "2026"))
             with self.sessions.begin() as session:
                 setattr(session.get(db.BudgetTransferDecision, saved["id"]), field, old)
+
+
+class RecurringProjectionTests(ProjectionCase):
+    def test_recurring_hints_respect_currency_transfers_exclusions_selection_cache_and_bounds(self):
+        # 25 monthly charges on PLN via structured counterparty_name -> evidence capped to latest 24.
+        for index in range(25):
+            year = 2024 + (index // 12)
+            month = (index % 12) + 1
+            ref = f"sub-pln-{index:02d}"
+            self.add_transaction("a", ref, amount="49.90", currency="PLN",
+                                 booking_date=f"{year:04d}-{month:02d}-10",
+                                 remittance_information=["ignored fallback"])
+            self.metadata("a", ref, {"creditor_name": "Synthetic Stream"})
+        # 3 monthly charges on EUR via remittance description fallback.
+        for month in ("2026-09-05", "2026-10-05", "2026-11-05"):
+            self.add_transaction("a", f"sub-eur-{month}", amount="9.99", currency="EUR",
+                                 booking_date=month, remittance_information=["Synthetic Cloud"])
+        # 3 monthly charges that will be accepted as own transfers -> must not produce hints.
+        for month in ("2026-09-12", "2026-10-12", "2026-11-12"):
+            self.add_transaction("a", f"xfer-d-{month}", amount="500", booking_date=month,
+                                 remittance_information=["Own move"])
+            self.add_transaction("b", f"xfer-c-{month}", amount="500", credit_debit_indicator="CRDT",
+                                 booking_date=month, remittance_information=["Own move"])
+            self.decide(debit=("a", f"xfer-d-{month}"), credit=("b", f"xfer-c-{month}"))
+        # 3 monthly charges marked excluded -> must not produce hints.
+        for month in ("2026-09-18", "2026-10-18", "2026-11-18"):
+            ref = f"excl-{month}"
+            self.add_transaction("a", ref, amount="15", booking_date=month, remittance_information=["Excluded plan"])
+            self.annotation(account="a", reference=ref, kind="excluded")
+        # Zero amount (including signed -0.00) must not fail recurring or emit a hint.
+        self.add_transaction("a", "zero-signed", amount="-0.00", currency="PLN",
+                             booking_date="2026-11-11", remittance_information=["Zero fee"])
+        # 3 monthly charges on deselected account -> must not produce hints.
+        for month in ("2026-09-20", "2026-10-20", "2026-11-20"):
+            self.add_transaction("c", f"desel-{month}", amount="30", booking_date=month,
+                                 remittance_information=["Deselected plan"])
+        self.select_account("c", False)
+
+        result = self.store.recurring("owner")
+        api_contract.BudgetAnalyticsRecurring.model_validate(result)
+        self.assertEqual((result["total_hints"], result["truncated"], len(result["hints"])), (2, False, 2))
+        eur_hint, pln_hint = result["hints"]
+        self.assertEqual((eur_hint["currency"], eur_hint["label"], eur_hint["label_source"],
+                          eur_hint["amount"], eur_hint["occurrence_count"], eur_hint["evidence_truncated"]),
+                         ("EUR", "Synthetic Cloud", "description", "9.99", 3, False))
+        self.assertEqual((pln_hint["currency"], pln_hint["label"], pln_hint["label_source"],
+                          pln_hint["amount"], pln_hint["occurrence_count"], pln_hint["distinct_months"],
+                          pln_hint["first_date"], pln_hint["last_date"], pln_hint["evidence_truncated"]),
+                         ("PLN", "Synthetic Stream", "counterparty_name", "49.9", 25, 25,
+                          "2024-01-10", "2026-01-10", True))
+        self.assertEqual(len(pln_hint["evidence"]), views.MAX_RECURRING_EVIDENCE)
+        self.assertEqual((pln_hint["evidence"][0]["date"], pln_hint["evidence"][-1]["date"]),
+                         ("2024-02-10", "2026-01-10"))
+        self.assertNotIn("fingerprint", json.dumps(result))
+
+        # Second call hits cached _recurring tuple on the same committed snapshot digest.
+        with mock.patch.object(views, "_recurring_hints", side_effect=AssertionError("expected cached recurring")):
+            eur_only = self.store.recurring("owner", currency="EUR")
+        self.assertEqual((eur_only["snapshot_digest"], eur_only["total_hints"], len(eur_only["hints"])),
+                         (result["snapshot_digest"], 1, 1))
+        self.assertEqual(eur_only["hints"][0]["currency"], "EUR")
+
+        with mock.patch.object(views, "MAX_RECURRING_HINTS", 1):
+            capped = self.store.recurring("owner")
+        self.assertEqual((capped["total_hints"], capped["truncated"], len(capped["hints"])), (2, True, 1))
+
+    def test_corrupt_long_creditor_name_fails_closed_in_recurring(self):
+        self.add_transaction("a", "bad-meta", amount="10", booking_date="2026-11-10")
+        self.metadata("a", "bad-meta", {"creditor_name": "x" * 1025})
+        self.assert_invalid(lambda: self.store.recurring("owner"))
 
 
 if __name__ == "__main__":

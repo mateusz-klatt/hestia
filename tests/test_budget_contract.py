@@ -196,7 +196,7 @@ class BudgetOpenApiTests(unittest.TestCase):
         for path, methods in consent.items():
             for entry in methods.values():
                 self.assertEqual(entry["x-required-role"], "public" if path.endswith("callback") else "admin")
-        analytics_reads = {"overview", "transactions", "categories", "rules", "transfers"}
+        analytics_reads = {"overview", "transactions", "categories", "rules", "transfers", "recurring"}
         analytics_writes = {"category-create", "category-update", "annotation", "rule-preview", "rule-save", "transfer-decision"}
         self.assertEqual(set(analytics), {"/api/budget/analytics/" + name for name in analytics_reads | analytics_writes})
         for path, methods in analytics.items():
@@ -204,7 +204,7 @@ class BudgetOpenApiTests(unittest.TestCase):
             self.assertEqual(set(methods), {method})
             self.assertEqual(methods[method]["x-required-role"], "admin")
             self.assertIn("413", methods[method]["responses"])
-        self.assertEqual(document["info"]["version"], "0.17.0")
+        self.assertEqual(document["info"]["version"], "0.18.0")
         refresh = budget["/api/budget/refresh"]["post"]
         self.assertEqual(refresh["parameters"][0]["name"], "Idempotency-Key")
         self.assertTrue(refresh["parameters"][0]["required"])
@@ -237,8 +237,9 @@ class BudgetOpenApiTests(unittest.TestCase):
                     self.assertEqual(schema["properties"]["expected_version"]["minimum"], 0 if name.startswith("BudgetAnalytics") else 1)
             elif name.startswith("Budget"):
                 self.assertNotIn("additionalProperties", schema)
-        for name in ("BudgetTransaction", "BudgetMoney"):
+        for name in ("BudgetTransaction", "BudgetMoney", "BudgetAnalyticsRecurringHint"):
             self.assertEqual(schemas[name]["properties"]["amount"]["type"], "string")
+        self.assertNotIn("fingerprint", schemas["BudgetAnalyticsRecurringOccurrence"]["properties"])
         for model, _ in BudgetRequestContractTests.CASES:
             self.assertEqual(model.model_config["extra"], "forbid")
         future = deepcopy(COMPONENT)
