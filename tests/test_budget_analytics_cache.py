@@ -151,7 +151,7 @@ class MemoTests(CacheCase):
             session.add(db.BudgetImportUnresolved(batch_id="batch", ordinal=0, reason="synthetic", payload_json="{}"))
         models = (db.BudgetConnection, db.BudgetAccount, db.BudgetTransaction, db.BudgetTransactionMetadata,
                   db.BudgetAccountIdentity, db.BudgetAnnotation, db.BudgetCategory, db.BudgetRule,
-                  db.BudgetTransferDecision, db.BudgetUnresolved, db.BudgetImportBatch, db.BudgetImportUnresolved)
+                  db.BudgetTransferDecision)
         exercised = 0
         with self.sessions() as session:
             for model in models:
@@ -176,7 +176,55 @@ class MemoTests(CacheCase):
                         nested.rollback()
                         self.assertEqual(self.digest(session), before)
                         exercised += 1
-        self.assertGreater(exercised, 40)
+            # The projection only counts unresolved observations, so their presence is what enters the key.
+            for model in (db.BudgetUnresolved, db.BudgetImportUnresolved):
+                with self.subTest(table=model.__table__.name):
+                    before = self.digest(session)
+                    nested = session.begin_nested()
+                    session.execute(model.__table__.delete())
+                    self.assertNotEqual(self.digest(session), before)
+                    nested.rollback()
+        self.assertGreater(exercised, 35)
+
+    def test_excluded_ledger_is_never_scanned_but_still_counted(self):
+        self.add_transaction("d", "excluded", amount="7")
+        self.select_account("d", False)
+        self.assert_current()
+        before = self.digest()
+        self.change_transaction("d", "excluded", amount="8")
+        self.add_transaction("d", "excluded-2", amount="9")
+        self.assertEqual(self.digest(), before)  # the projection never reads these payloads
+        self.change_transaction("d", "excluded", uncertain=True)
+        self.assertNotEqual(self.digest(), before)  # but it does count owner-wide uncertainty
+        self.assertEqual(self.assert_current()["overview"]["scope"]["uncertain_count"], 1)
+
+    def test_owner_and_connection_scope_changes_enter_the_key(self):
+        def move(model, key, owner):
+            with self.sessions.begin() as session:
+                session.get(model, key).owner = owner
+
+        with self.sessions() as session:
+            connection = session.get(db.BudgetAccount, self.accounts["c"]).connection_id
+        self.assert_current()
+        for name, change in (("connection to other owner", lambda: move(db.BudgetConnection, connection, "other")),
+                             ("connection back", lambda: move(db.BudgetConnection, connection, "owner")),
+                             ("account to other owner", lambda: move(db.BudgetAccount, self.accounts["c"], "other")),
+                             ("account back", lambda: move(db.BudgetAccount, self.accounts["c"], "owner"))):
+            with self.subTest(change=name):
+                before = self.digest()
+                change()
+                self.assertNotEqual(self.digest(), before)
+                self.assert_current()
+
+    def test_row_limit_is_enforced_before_any_projection_work(self):
+        self.reads()
+        with mock.patch.object(views, "MAX_ROWS", 2), \
+                mock.patch.object(views, "projection_snapshot", side_effect=AssertionError("projected")):
+            for read in (lambda: self.store.overview("owner", "2026"), lambda: self.store.transactions("owner", "2026"),
+                         lambda: self.store.transfers("owner", "2026")):
+                self.assert_invalid(read, code="budget_analytics_limit", status=413)
+        self.assertEqual(self.computed, 1)
+        self.assertEqual(len(views._cache), 1)
 
     def test_authorization_is_rechecked_before_any_memoised_projection(self):
         self.reads()
