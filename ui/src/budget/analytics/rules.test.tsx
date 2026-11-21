@@ -206,6 +206,22 @@ describe("rules", () => {
     expect(onAccessLoss).toHaveBeenCalledWith({ ok: false, status: 401, error: "budget_http_401" });
   });
 
+  it("will not preview a rule that points at an archived category until another one is chosen", async () => {
+    const api = fakeApi();
+    api.rules.mockImplementation(() => ok({ rules: [{ ...rule, category_id: "cat-old" }] }));
+    await show(api);
+    await click(button("Edit"));
+    const form = section("Rules").querySelector("form");
+    if (form === null) throw new Error("editor missing");
+    expect((field(form, "Category") as HTMLSelectElement).selectedOptions[0]?.textContent).toBe("Synthetic Old (archived)");
+    expect(form.querySelector('[role="alert"]')?.textContent).toContain("This category is archived");
+    expect(button("Preview", form).disabled).toBe(true);
+    await choose(field(form, "Category") as HTMLSelectElement, "cat-food");
+    expect(form.querySelector('[role="alert"]')).toBeNull();
+    expect(button("Preview", form).disabled).toBe(false);
+    expect([...(field(form, "Category") as HTMLSelectElement).options].map((option) => option.value)).toEqual(["", "cat-food"]);
+  });
+
   it("locks the rule form while a preview is asked for and drops an answer that arrives after a reload", async () => {
     let late: (value: BudgetResult<{ preview: RulePreview }>) => void = () => undefined;
     const api = fakeApi();
