@@ -260,6 +260,73 @@ describe("async lifecycle guards", () => {
   });
 });
 
+describe("access barrier and version-aware reads", () => {
+  it("clears at once when any reload response, including jobs, reports lost access", async () => {
+    const api = fakeApi();
+    await render(api, true, "owner");
+    api.jobs.mockImplementation(() => fail(401, "budget_http_401"));
+    await click(button("Reload"));
+    expect(host.textContent).toContain("Only the budget's owner");
+    expect(host.textContent).not.toContain("Synthetic Current");
+  });
+
+  it("clears on an unauthorized poll without waiting for a hanging reload", async () => {
+    const api = fakeApi();
+    api.jobs.mockImplementationOnce(() => ok({ jobs: [job()] })).mockImplementation(() => fail(401, "budget_http_401"));
+    await render(api, true, "owner");
+    const hanging = deferred<Loaded<BudgetApi["connections"]>>();
+    api.connections.mockImplementation(() => hanging.promise);
+    for (let round = 0; round < 20 && !host.textContent.includes("Only the budget's owner"); round += 1) await settle(10);
+    expect(host.textContent).toContain("Only the budget's owner");
+    expect(host.textContent).not.toContain("Synthetic Current");
+    await act(async () => { hanging.settle({ ok: true, data: { connections: [connection], capabilities } }); await Promise.resolve(); });
+    await settle();
+    expect(host.textContent).not.toContain("Synthetic Current");
+  });
+
+  it("clears every loaded balance and row when the detail pagination reports lost access", async () => {
+    const api = fakeApi();
+    api.transactions.mockImplementation((_id, options = {}) => (options.cursor === undefined
+      ? ok(page([tx("loaded-before-401")], "opaque-page")) : fail(401, "budget_http_401")));
+    api.balances.mockImplementation(() => ok({ ...balancesData, balances: [{ name: "Balance", balance_type: "CLBD",
+      balance_amount: { amount: "123.45", currency: "PLN" }, reference_date: null }], balances_total: 1 }));
+    await render(api, true, "owner");
+    await click(button("Synthetic Current"));
+    expect(host.textContent).toContain("123.45 PLN");
+    await click(button("Load more"));
+    expect(host.textContent).toContain("Only the budget's owner");
+    expect(host.textContent).not.toContain("loaded-before-401");
+    expect(host.textContent).not.toContain("123.45");
+  });
+
+  it("clears when the same user is no longer an admin", async () => {
+    const api = fakeApi();
+    await render(api, true, "owner");
+    api.whoami.mockImplementation(() => ok({ user: "owner", role: "viewer" }));
+    await click(button("Reload"));
+    expect(host.textContent).toContain("Only the budget's owner");
+    expect(host.textContent).not.toContain("Synthetic Current");
+  });
+
+  it("never lets a delayed post-pause read roll back a newer selection", async () => {
+    const api = fakeApi();
+    api.setPaused.mockImplementation(() => ok({ connection: { ...connection, paused: true, control_version: 5 } }));
+    api.setSelected.mockImplementation(() => ok({ account: account({ display, selected: false, control_version: 2 }) }));
+    await render(api, true, "owner");
+    const old = deferred<Loaded<BudgetApi["accounts"]>>();
+    api.accounts.mockImplementationOnce(() => old.promise);
+    await click(button("Pause"));
+    await click(host.querySelector<HTMLInputElement>(".budget-account input[type=checkbox]") ?? host);
+    expect(host.querySelector<HTMLInputElement>(".budget-account input[type=checkbox]")?.checked).toBe(false);
+    await act(async () => {
+      old.settle({ ok: true, data: { accounts: [account({ display, selected: true, paused: true, active: false, control_version: 1 })] } });
+      await Promise.resolve();
+    });
+    await settle();
+    expect(host.querySelector<HTMLInputElement>(".budget-account input[type=checkbox]")?.checked).toBe(false);
+  });
+});
+
 describe("refresh jobs", () => {
   it("keeps one key across a lost response, then polls until the job settles and reloads", async () => {
     const api = fakeApi();

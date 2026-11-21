@@ -112,6 +112,21 @@ export function otherObservedCurrencies(account: BudgetAccount): string[] {
   return (account.observed_balance_currencies ?? []).filter((currency) => currency !== declared);
 }
 
+/** A refusal that means "not this owner any more" (signed out, other role) or "feature disabled". */
+export function isAccessLoss(result: { ok: boolean; status?: number; error?: string }): boolean {
+  return !result.ok && (result.status === 401 || result.status === 403 || result.error === "budget_disabled");
+}
+
+/** Merge a freshly read list without letting it roll back an entity the page already shows at a newer
+ *  control version (a save that landed while an older read was in flight). Membership follows `incoming`. */
+export function newer<T extends { id: string; control_version: number }>(current: readonly T[], incoming: readonly T[]): T[] {
+  const shown = new Map(current.map((item) => [item.id, item]));
+  return incoming.map((item) => {
+    const existing = shown.get(item.id);
+    return existing !== undefined && existing.control_version > item.control_version ? existing : item;
+  });
+}
+
 export function hasActiveJob(jobs: readonly BudgetJob[]): boolean {
   return jobs.some((job) => ACTIVE_JOB.has(job.status));
 }

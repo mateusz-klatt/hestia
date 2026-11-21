@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { account, component } from "./fixtures";
 import type { BudgetAccount, BudgetJob, BudgetTransaction } from "./model";
-import { accountLabel, formatAmount, freshness, hasActiveJob, idempotencyKey, latestJob, otherObservedCurrencies,
-  presetRange, transactionDate, transactionText, validRange, when } from "./model";
+import { accountLabel, formatAmount, freshness, hasActiveJob, idempotencyKey, isAccessLoss, latestJob, newer,
+  otherObservedCurrencies, presetRange, transactionDate, transactionText, validRange, when } from "./model";
 
 function job(changes: Partial<BudgetJob> = {}): BudgetJob {
   return { id: "job", connection_id: "bank", account_id: null, operation: null, source: "manual", status: "queued",
@@ -75,6 +75,24 @@ describe("labels, dates and ranges", () => {
     expect(freshness({ ...component, last_success: 5, stale: false })).toBe("fresh");
     expect(freshness({ ...component, last_success: 5, stale: true })).toBe("stale");
     expect(freshness({ ...component, suspended: true })).toBe("suspended");
+  });
+});
+
+describe("access loss and version-aware merges", () => {
+  it("recognises lost principal and disabled feature only", () => {
+    expect(isAccessLoss({ ok: false, status: 401, error: "x" })).toBe(true);
+    expect(isAccessLoss({ ok: false, status: 403, error: "x" })).toBe(true);
+    expect(isAccessLoss({ ok: false, status: 404, error: "budget_disabled" })).toBe(true);
+    expect(isAccessLoss({ ok: false, status: 404, error: "budget_not_found" })).toBe(false);
+    expect(isAccessLoss({ ok: false, status: 500, error: "x" })).toBe(false);
+    expect(isAccessLoss({ ok: true })).toBe(false);
+  });
+  it("keeps a newer shown version and follows the incoming membership", () => {
+    const shown = [account({ id: "a", control_version: 3, selected: false }), account({ id: "gone", control_version: 9 })];
+    const incoming = [account({ id: "a", control_version: 2, selected: true }), account({ id: "b", control_version: 1 })];
+    const merged = newer(shown, incoming);
+    expect(merged.map((item) => [item.id, item.control_version, item.selected])).toEqual([["a", 3, false], ["b", 1, true]]);
+    expect(newer([account({ id: "a", control_version: 1 })], [account({ id: "a", control_version: 4 })])[0]?.control_version).toBe(4);
   });
 });
 

@@ -5,8 +5,9 @@ import { createRoot } from "react-dom/client";
 import { currentLocale } from "../i18n";
 import { budgetApi } from "./api";
 import type { BudgetApi, BudgetResult } from "./api";
-import { ACTIVE_JOB, KINDS, accountLabel, formatAmount, freshness, hasActiveJob, idempotencyKey, latestJob,
-  otherObservedCurrencies, presetRange, transactionDate, transactionText, validRange, when } from "./model";
+import { ACTIVE_JOB, KINDS, accountLabel, formatAmount, freshness, hasActiveJob, idempotencyKey, isAccessLoss,
+  latestJob, newer, otherObservedCurrencies, presetRange, transactionDate, transactionText, validRange,
+  when } from "./model";
 import type { BudgetAccount, BudgetBalances, BudgetCapabilities, BudgetConnection, BudgetJob, BudgetKind,
   BudgetTransaction, DateRange } from "./model";
 import "./budget.css";
@@ -129,30 +130,46 @@ export function Budget({ active, api = budgetApi, pollMs = 2000, principal }: Bu
     return () => { alive.current = false; generation.current += 1; };
   }, []);
 
+  /** The single access barrier: any endpoint reporting a lost principal or a disabled feature clears every
+   *  private value at once and invalidates all pending loads, polls and saves. */
+  const invalidate = useCallback((disabled: boolean) => {
+    epoch.current += 1;
+    generation.current += 1;
+    setConnections([]); setAccounts([]); setJobs([]); setDetail(null); setCapabilities(null); setBusy(new Set());
+    setLoad(disabled ? "disabled" : "denied");
+  }, []);
+  const barrier = useCallback((result: { ok: boolean; status?: number; error?: string }): boolean => {
+    if (!isAccessLoss(result)) return false;
+    if (alive.current) invalidate(!result.ok && result.error === "budget_disabled");
+    return true;
+  }, [invalidate]);
+
   const reload = useCallback(async () => {
     const token = ++generation.current;
-    const [connected, listed, queued, me] = await Promise.all([api.connections(), api.accounts(), api.jobs(),
-      principal === undefined ? Promise.resolve(null) : api.whoami()]);
+    // Each response passes the barrier as soon as it arrives; a slow sibling cannot delay clearing.
+    const watch = <T,>(request: Promise<BudgetResult<T>>) => request.then((result) => {
+      if (token === generation.current) barrier(result);
+      return result;
+    });
+    const [connected, listed, queued, me] = await Promise.all([watch(api.connections()), watch(api.accounts()),
+      watch(api.jobs()), principal === undefined ? Promise.resolve(null) : watch(api.whoami())]);
     if (!alive.current || token !== generation.current) return;
-    const switched = me !== null && (!me.ok || me.data.user !== principal);
-    if (!connected.ok || switched) {
-      const denied = switched || (!connected.ok && (connected.status === 401 || connected.status === 403));
-      const disabled = !switched && !connected.ok && connected.error === "budget_disabled";
-      if (denied || disabled) {
-        // Another principal, a signed-out session or a disabled feature must not keep earlier data in memory.
-        epoch.current += 1;
-        setConnections([]); setAccounts([]); setJobs([]); setDetail(null); setCapabilities(null);
-      }
-      setLoad(disabled ? "disabled" : denied ? "denied" : "error");
+    if (me !== null && me.ok && (me.data.user !== principal || me.data.role !== "admin")) {
+      // The cookie now names someone else, or the owner lost the admin role: nothing private may stay.
+      invalidate(false);
       return;
     }
-    setConnections(connected.data.connections);
+    if (!connected.ok || !listed.ok || (me !== null && !me.ok)) {
+      setLoad("error");
+      return;
+    }
+    setConnections((current) => newer(current, connected.data.connections));
     setCapabilities(connected.data.capabilities);
-    if (listed.ok) setAccounts(listed.data.accounts);
+    setAccounts((current) => newer(current, listed.data.accounts));
     if (queued.ok) setJobs(queued.data.jobs);
-    setLoad(listed.ok ? "ready" : "error");
+    setLoad("ready");
     setRevision((current) => current + 1);
-  }, [api, principal]);
+  }, [api, principal, barrier, invalidate]);
 
   useEffect(() => {
     if (active) void reload();
@@ -168,8 +185,7 @@ export function Budget({ active, api = budgetApi, pollMs = 2000, principal }: Bu
       void api.jobs().then((result) => {
         if (cancelled || !alive.current) return;
         if (!result.ok) {
-          if (result.status === 401 || result.status === 403 || result.error === "budget_disabled") void reload();
-          else setPollTick((current) => current + 1);
+          if (!barrier(result)) setPollTick((current) => current + 1);
           return;
         }
         setJobs(result.data.jobs);
@@ -177,7 +193,7 @@ export function Budget({ active, api = budgetApi, pollMs = 2000, principal }: Bu
       });
     }, pollMs);
     return () => { cancelled = true; clearTimeout(timer); };
-  }, [polling, jobs, pollTick, api, pollMs, reload]);
+  }, [polling, jobs, pollTick, api, pollMs, reload, barrier]);
 
   /** Runs one mutation; null when the view was unmounted or its data cleared while it was in flight. */
   const run = useCallback(async <T,>(key: string, action: () => Promise<BudgetResult<T>>): Promise<BudgetResult<T> | null> => {
@@ -185,14 +201,14 @@ export function Budget({ active, api = budgetApi, pollMs = 2000, principal }: Bu
     setBusy((current) => new Set(current).add(key));
     setNotice(null);
     const result = await action();
-    if (!alive.current || started !== epoch.current) return null;
+    if (!alive.current || started !== epoch.current || barrier(result)) return null;
     setBusy((current) => { const next = new Set(current); next.delete(key); return next; });
     if (!result.ok) {
       setNotice(failureText(text, result.error));
-      if (result.error === "budget_version_conflict" || result.status === 401 || result.status === 403) await reload();
+      if (result.error === "budget_version_conflict") await reload();
     }
     return result;
-  }, [reload, text]);
+  }, [reload, barrier, text]);
 
   const refresh = useCallback(async (connection: BudgetConnection) => {
     // Reuse the key only to retry a request whose outcome is unknown (network failure).
@@ -222,9 +238,10 @@ export function Budget({ active, api = budgetApi, pollMs = 2000, principal }: Bu
       // Pause changes every account's `active` flag; re-read accounts within the same data epoch.
       const started = epoch.current;
       const listed = await api.accounts();
-      if (alive.current && started === epoch.current && listed.ok) setAccounts(listed.data.accounts);
+      if (!alive.current || started !== epoch.current || barrier(listed)) return;
+      if (listed.ok) setAccounts((current) => newer(current, listed.data.accounts));
     }
-  }, [api, run]);
+  }, [api, run, barrier]);
 
   const saveAccount = useCallback(async (key: string, action: () => Promise<BudgetResult<{ account: BudgetAccount }>>) => {
     const result = await run(key, action);
@@ -299,7 +316,8 @@ export function Budget({ active, api = budgetApi, pollMs = 2000, principal }: Bu
       })}
       {opened === null ? null : (
         <AccountDetail account={opened} label={accountLabel(opened, accounts.filter((a) => a.connection === opened.connection).indexOf(opened), text.account)}
-          api={api} text={text} locale={locale} revision={revision} onClose={() => { setDetail(null); }} />
+          api={api} text={text} locale={locale} revision={revision} onAccessLoss={barrier}
+          onClose={() => { setDetail(null); }} />
       )}
     </section>
   );
@@ -341,6 +359,8 @@ function AccountRow({ account, index, text, busy, onOpen, onSelect, onKind }: Ro
 
 interface DetailProps {
   account: BudgetAccount; label: string; api: BudgetApi; text: Labels; locale: string; revision: number;
+  /** Reports a lost principal/disabled response so the whole view clears, not just this panel. */
+  onAccessLoss: (result: { ok: boolean; status?: number; error?: string }) => boolean;
   onClose: () => void;
 }
 
@@ -348,7 +368,7 @@ interface Ledger { rows: BudgetTransaction[]; cursor: string | null; uncertain: 
 
 const EMPTY_LEDGER: Ledger = { rows: [], cursor: null, uncertain: 0, failed: false, loading: true };
 
-function AccountDetail({ account, label, api, text, locale, revision, onClose }: DetailProps) {
+function AccountDetail({ account, label, api, text, locale, revision, onAccessLoss, onClose }: DetailProps) {
   const panel = useRef<HTMLElement>(null);
   useEffect(() => {
     // The detail renders below every connection; bring it into view when another account is opened.
@@ -368,16 +388,17 @@ function AccountDetail({ account, label, api, text, locale, revision, onClose }:
     setLedger(EMPTY_LEDGER);
     setBalances(null);
     void api.balances(account.id).then((result) => {
-      if (token === generation.current) setBalances(result.ok ? result.data : null);
+      if (token !== generation.current || onAccessLoss(result)) return;
+      setBalances(result.ok ? result.data : null);
     });
     void api.transactions(account.id, { dateFrom: range.from, dateTo: range.to }).then((result) => {
-      if (token !== generation.current) return;
+      if (token !== generation.current || onAccessLoss(result)) return;
       setLedger(result.ok
         ? { rows: result.data.transactions, cursor: result.data.next_cursor, uncertain: result.data.uncertain_total,
             failed: false, loading: false }
         : { ...EMPTY_LEDGER, failed: true, loading: false });
     });
-  }, [api, account.id, range, revision]);
+  }, [api, account.id, range, revision, onAccessLoss]);
   useEffect(() => () => { generation.current += 1; }, []);
 
   const more = useCallback(async () => {
@@ -386,12 +407,12 @@ function AccountDetail({ account, label, api, text, locale, revision, onClose }:
     if (cursor === null) return;
     setLedger((current) => ({ ...current, loading: true }));
     const result = await api.transactions(account.id, { cursor, dateFrom: range.from, dateTo: range.to });
-    if (token !== generation.current) return;
+    if (token !== generation.current || onAccessLoss(result)) return;
     setLedger((current) => (result.ok
       ? { rows: [...current.rows, ...result.data.transactions], cursor: result.data.next_cursor,
           uncertain: result.data.uncertain_total, failed: false, loading: false }
       : { ...current, failed: true, loading: false }));
-  }, [api, account.id, range, ledger.cursor]);
+  }, [api, account.id, range, ledger.cursor, onAccessLoss]);
 
   const apply = (next: DateRange) => { setDraft(next); if (validRange(next)) setRange(next); };
   return (
