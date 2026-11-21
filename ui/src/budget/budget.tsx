@@ -5,11 +5,11 @@ import { createRoot } from "react-dom/client";
 import { currentLocale } from "../i18n";
 import { budgetApi } from "./api";
 import type { BudgetApi, BudgetResult } from "./api";
-import { ACTIVE_JOB, KINDS, accountLabel, formatAmount, freshness, hasActiveJob, idempotencyKey, isAccessLoss,
-  latestJob, newer, otherObservedCurrencies, presetRange, transactionDate, transactionText, validRange,
-  when } from "./model";
+import { ACTIVE_JOB, KINDS, accountLabel, effectiveState, formatAmount, freshness, hasActiveJob, idempotencyKey,
+  isAccessLoss, isComponentLimit, latestJob, limitState, newer, otherObservedCurrencies, presetRange,
+  transactionDate, transactionText, validRange, when } from "./model";
 import type { BudgetAccount, BudgetBalances, BudgetCapabilities, BudgetConnection, BudgetJob, BudgetKind,
-  BudgetTransaction, DateRange } from "./model";
+  BudgetLimit, BudgetSharedLimit, BudgetTransaction, DateRange, LimitState } from "./model";
 import "./budget.css";
 
 const labels = {
@@ -33,6 +33,13 @@ const labels = {
     next: "next possible", conflict: "This changed elsewhere; the latest state was loaded.",
     busy: "A refresh is already in progress for this connection.", pausedError: "Resume the connection first.",
     unavailable: "Refresh is unavailable right now.", saveError: "Could not save. Try again.",
+    limits: "Download limits", limitsHide: "Hide limits", limitsLoading: "Loading limits…",
+    limitsError: "Limits could not be loaded.",
+    limitsIntro: "Each account and data type is downloaded at most twice a day, at least 12 hours apart; a bank can ask for a longer pause. These are read-only.",
+    scopes: { application: "All banks", provider: "This bank", connection: "This connection" },
+    sharedFree: "Shared limits: no restriction", limitReady: "available now", limitFrom: "from",
+    limitRunning: "download in progress", limitSuspended: "suspended — needs the operator",
+    limitRetry: "bank asked for a pause until", lastTry: "last attempt", excluded: "excluded",
     lastRefresh: "Last refresh", observed: "balances seen in", badRange: "The start date must not be after the end date.",
     presets: { "30": "Last 30 days", "90": "Last 90 days", year: "This year", all: "All" },
     archivedHelp: "Earlier imported balance snapshots (metadata only, not current funds)",
@@ -61,6 +68,13 @@ const labels = {
     next: "następne najwcześniej", conflict: "Zmieniono to w innym miejscu; wczytano aktualny stan.",
     busy: "Dla tego połączenia trwa już odświeżanie.", pausedError: "Najpierw wznów połączenie.",
     unavailable: "Odświeżanie jest teraz niedostępne.", saveError: "Nie udało się zapisać. Spróbuj ponownie.",
+    limits: "Limity pobrań", limitsHide: "Ukryj limity", limitsLoading: "Wczytywanie limitów…",
+    limitsError: "Nie udało się wczytać limitów.",
+    limitsIntro: "Każde konto i rodzaj danych pobieramy najwyżej 2 razy na dobę, co najmniej co 12 godzin; bank może zażądać dłuższej przerwy. To tylko podgląd.",
+    scopes: { application: "Wszystkie banki", provider: "Ten bank", connection: "To połączenie" },
+    sharedFree: "Wspólne limity: bez ograniczeń", limitReady: "dostępne teraz", limitFrom: "od",
+    limitRunning: "pobieranie w toku", limitSuspended: "wstrzymane — wymaga decyzji operatora",
+    limitRetry: "bank prosi o przerwę do", lastTry: "ostatnia próba", excluded: "wykluczone",
     lastRefresh: "Ostatnie odświeżenie", observed: "salda widziane w", badRange: "Data początkowa nie może być późniejsza niż końcowa.",
     presets: { "30": "Ostatnie 30 dni", "90": "Ostatnie 90 dni", year: "Ten rok", all: "Wszystko" },
     archivedHelp: "Wcześniej zaimportowane migawki sald (tylko metadane, nie bieżące środki)",
@@ -113,6 +127,8 @@ export function Budget({ active, api = budgetApi, pollMs = 2000, principal }: Bu
   const [capabilities, setCapabilities] = useState<BudgetCapabilities | null>(null);
   const [accounts, setAccounts] = useState<BudgetAccount[]>([]);
   const [jobs, setJobs] = useState<BudgetJob[]>([]);
+  const [showLimits, setShowLimits] = useState(false);
+  const [limits, setLimits] = useState<BudgetLimit[] | null | "error">(null);
   const [detail, setDetail] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState<ReadonlySet<string>>(new Set());
@@ -136,6 +152,7 @@ export function Budget({ active, api = budgetApi, pollMs = 2000, principal }: Bu
     epoch.current += 1;
     generation.current += 1;
     setConnections([]); setAccounts([]); setJobs([]); setDetail(null); setCapabilities(null); setBusy(new Set());
+    setLimits(null); setShowLimits(false);
     setLoad(disabled ? "disabled" : "denied");
   }, []);
   const barrier = useCallback((result: { ok: boolean; status?: number; error?: string }): boolean => {
@@ -148,14 +165,15 @@ export function Budget({ active, api = budgetApi, pollMs = 2000, principal }: Bu
     const token = ++generation.current;
     // Each response passes the barrier as soon as it arrives; a slow sibling cannot delay clearing.
     const watch = <T,>(request: Promise<BudgetResult<T>>) => request.then((result) => {
-      if (token === generation.current) barrier(result);
+      // A lost-access answer clears the view even when a newer load has started since.
+      barrier(result);
       return result;
     });
     // A successful whoami naming someone else, or the owner without the admin role, is also a loss of access
     // and clears at once, without waiting for the other responses.
     const identity = principal === undefined ? Promise.resolve(null) : watch(api.whoami()).then((result) => {
       if (result.ok && (result.data.user !== principal || result.data.role !== "admin")
-          && alive.current && token === generation.current) invalidate(false);
+          && alive.current) invalidate(false);
       return result;
     });
     const [connected, listed, queued, me] = await Promise.all([watch(api.connections()), watch(api.accounts()),
@@ -185,9 +203,10 @@ export function Budget({ active, api = budgetApi, pollMs = 2000, principal }: Bu
     let cancelled = false;
     const timer = setTimeout(() => {
       void api.jobs().then((result) => {
-        if (cancelled || !alive.current) return;
+        // The access barrier runs first: even a poll whose timer was superseded must clear on lost access.
+        if (!alive.current || barrier(result) || cancelled) return;
         if (!result.ok) {
-          if (!barrier(result)) setPollTick((current) => current + 1);
+          setPollTick((current) => current + 1);
           return;
         }
         setJobs(result.data.jobs);
@@ -253,11 +272,31 @@ export function Budget({ active, api = budgetApi, pollMs = 2000, principal }: Bu
       (item.id === saved.id && saved.control_version >= item.control_version ? { ...item, ...saved } : item)));
   }, [run]);
 
+  // Limits are read on demand, and again after every completed reload while shown.
+  useEffect(() => {
+    if (!active || !showLimits) return undefined;
+    let cancelled = false;
+    const started = epoch.current;
+    void api.limits().then((result) => {
+      // Barrier before the local discard: hiding the panel must not swallow a lost-access answer.
+      if (!alive.current || started !== epoch.current || barrier(result) || cancelled) return;
+      setLimits(result.ok ? result.data.limits : "error");
+    });
+    return () => { cancelled = true; };
+  }, [active, showLimits, revision, api, barrier]);
+
   if (!active) return null;
   const header = (
     <header className="budget-header">
       <div><h2>{text.title}</h2><p>{text.subtitle}</p></div>
-      <button type="button" onClick={() => { void reload(); }}>{text.reload}</button>
+      <div className="budget-actions">
+        {load === "ready" ? (
+          <button type="button" aria-pressed={showLimits} onClick={() => { setShowLimits((current) => !current); }}>
+            {showLimits ? text.limitsHide : text.limits}
+          </button>
+        ) : null}
+        <button type="button" onClick={() => { void reload(); }}>{text.reload}</button>
+      </div>
     </header>
   );
   if (load !== "ready") {
@@ -269,6 +308,7 @@ export function Budget({ active, api = budgetApi, pollMs = 2000, principal }: Bu
     <section className="budget-app">
       {header}
       {notice === null ? null : <p className="budget-notice" role="alert">{notice}</p>}
+      {showLimits ? <p className="budget-muted">{text.limitsIntro}</p> : null}
       {connections.length === 0 ? <p className="budget-status">{text.empty}</p> : null}
       {connections.map((connection) => {
         const job = latestJob(jobs, connection.id);
@@ -313,6 +353,9 @@ export function Budget({ active, api = budgetApi, pollMs = 2000, principal }: Bu
                   onKind={(kind) => { void saveAccount(`kind:${account.id}`, () => api.setKind(account, kind)); }} />
               ))}
             </ul>
+            {showLimits ? (
+              <LimitsPanel connectionId={connection.id} accounts={owned} limits={limits} text={text} locale={locale} />
+            ) : null}
           </article>
         );
       })}
@@ -321,6 +364,67 @@ export function Budget({ active, api = budgetApi, pollMs = 2000, principal }: Bu
           api={api} text={text} locale={locale} revision={revision} onAccessLoss={barrier}
           onClose={() => { setDetail(null); }} />
       )}
+    </section>
+  );
+}
+
+function stateText(text: Labels, state: LimitState, locale: string): string {
+  switch (state.kind) {
+    case "suspended": return text.limitSuspended;
+    case "running": return text.limitRunning;
+    case "waiting": return `${state.retry ? text.limitRetry : text.limitFrom} ${when(state.until, locale) ?? ""}`;
+    default: return text.limitReady;
+  }
+}
+
+interface LimitsProps {
+  connectionId: string; accounts: BudgetAccount[]; limits: BudgetLimit[] | null | "error"; text: Labels; locale: string;
+}
+
+/** Read-only view of stored limits for one connection; there is deliberately no way to lift any of them here. */
+function LimitsPanel({ connectionId, accounts, limits, text, locale }: LimitsProps) {
+  if (limits === null) return <p className="budget-muted" role="status">{text.limitsLoading}</p>;
+  if (limits === "error") return <p className="budget-notice" role="alert">{text.limitsError}</p>;
+  const now = Date.now() / 1000;
+  const own = limits.filter((limit) => limit.connection === connectionId);
+  const shared = own.filter((limit): limit is BudgetSharedLimit => !isComponentLimit(limit));
+  const blocked = shared.map((limit) => [limit, limitState(limit, now)] as const).filter(([, state]) => state.kind !== "ready");
+  const component = (accountId: string, operation: "transactions" | "balances") =>
+    own.find((limit) => isComponentLimit(limit) && limit.account === accountId && limit.operation === operation);
+  return (
+    <section className="budget-limits" aria-label={text.limits}>
+      <ul className="budget-facts">
+        {blocked.length === 0 ? <li>{text.sharedFree}</li> : blocked.map(([limit, state]) => (
+          <li key={limit.scope} className="budget-warn">
+            {(text.scopes as Record<string, string>)[limit.scope] ?? limit.scope}: {stateText(text, state, locale)}
+          </li>
+        ))}
+      </ul>
+      <table className="budget-limits-table">
+        <thead><tr><th scope="col">{text.account}</th><th scope="col">{text.transactions}</th><th scope="col">{text.balances}</th></tr></thead>
+        <tbody>
+          {accounts.map((account, index) => (
+            <tr key={account.id} className={account.selected ? undefined : "is-excluded"}>
+              <th scope="row">
+                {accountLabel(account, index, text.account)}
+                {account.selected ? null : <small> ({text.excluded})</small>}
+              </th>
+              {(["transactions", "balances"] as const).map((operation) => {
+                const limit = component(account.id, operation);
+                if (limit === undefined || !isComponentLimit(limit)) return <td key={operation}>—</td>;
+                const state = effectiveState(limit, shared, now);
+                const last = when(limit.last_attempt, locale);
+                return (
+                  <td key={operation} data-state={state.kind}>
+                    {stateText(text, state, locale)}
+                    {last === null ? null : <small className="budget-muted"><br />{text.lastTry}: {last}</small>}
+                  </td>
+                );
+              })}
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </section>
   );
 }
@@ -390,11 +494,11 @@ function AccountDetail({ account, label, api, text, locale, revision, onAccessLo
     setLedger(EMPTY_LEDGER);
     setBalances(null);
     void api.balances(account.id).then((result) => {
-      if (token !== generation.current || onAccessLoss(result)) return;
+      if (onAccessLoss(result) || token !== generation.current) return;
       setBalances(result.ok ? result.data : null);
     });
     void api.transactions(account.id, { dateFrom: range.from, dateTo: range.to }).then((result) => {
-      if (token !== generation.current || onAccessLoss(result)) return;
+      if (onAccessLoss(result) || token !== generation.current) return;
       setLedger(result.ok
         ? { rows: result.data.transactions, cursor: result.data.next_cursor, uncertain: result.data.uncertain_total,
             failed: false, loading: false }
@@ -409,7 +513,7 @@ function AccountDetail({ account, label, api, text, locale, revision, onAccessLo
     if (cursor === null) return;
     setLedger((current) => ({ ...current, loading: true }));
     const result = await api.transactions(account.id, { cursor, dateFrom: range.from, dateTo: range.to });
-    if (token !== generation.current || onAccessLoss(result)) return;
+    if (onAccessLoss(result) || token !== generation.current) return;
     setLedger((current) => (result.ok
       ? { rows: [...current.rows, ...result.data.transactions], cursor: result.data.next_cursor,
           uncertain: result.data.uncertain_total, failed: false, loading: false }
