@@ -22,6 +22,8 @@ export type ConsentIntent = Schemas["BudgetConsentStartRequest"]["intent"];
 
 /** Flow states the completion page can still finish (mirrors the server's ready set). */
 export const READY_FLOW = new Set(["staged", "candidate", "exchanging"]);
+/** Flow states that still block a new start and can be cancelled (mirrors the server's active set). */
+export const OPEN_FLOW = new Set(["created", "started", ...READY_FLOW]);
 
 /** "renew" once the connection has ever had a working session; "connect" otherwise. Informational only. */
 export function consentIntent(connection: BudgetConnection): ConsentIntent {
