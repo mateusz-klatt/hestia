@@ -13,7 +13,7 @@ import json
 import re
 import time
 
-from .config import ConnectionConfig
+from .config import ConnectionConfig, MAX_HISTORY_DAYS, MIN_HISTORY_DAYS
 from .client import BudgetAPIError, ProviderDiagnostic
 from .bank_metadata import BankMetadata, MetadataCollector
 
@@ -350,9 +350,11 @@ def fetch_snapshot(client, session_id: str, connection: ConnectionConfig, *, tod
     ``wanted(primary, operation)`` excludes components before any of that, so a
     targeted refresh records nothing for components it did not request.
     """
-    if type(today) is not date or today.toordinal() <= 364:
+    days = getattr(connection, "max_history_days", MAX_HISTORY_DAYS)
+    if (type(days) is not int or not MIN_HISTORY_DAYS <= days <= MAX_HISTORY_DAYS
+            or type(today) is not date or today.toordinal() <= days):
         raise BudgetDataError()
-    start, end = (today - timedelta(days=364)).isoformat(), today.isoformat()
+    start, end = (today - timedelta(days=days)).isoformat(), today.isoformat()
     bank_accounts = {}
     expiry, hashes = _session_state(client, session_id, connection, _current_time(now), bank_accounts)
     if on_session is not None:
