@@ -479,7 +479,7 @@ export function Budget({ active, api = budgetApi, pollMs = 2000, principal,
               ) : null}
               {capabilities?.background_selection === true ? (
                 <label className="budget-toggle">
-                  <input type="checkbox" checked={connection.background_enabled} disabled={busy.has(`background:${connection.id}`)}
+                  <input name="background_enabled" type="checkbox" checked={connection.background_enabled} disabled={busy.has(`background:${connection.id}`)}
                     onChange={(event) => { const enabled = event.currentTarget.checked; void saveConnection(`background:${connection.id}`, () => api.setBackground(connection, enabled)); }} />
                   {text.background}
                   {capabilities.background_polling ? null : <span className="budget-muted"> ({text.backgroundOff})</span>}
@@ -611,13 +611,13 @@ function AccountRow({ account, index, text, busy, onOpen, onSelect, onKind }: Ro
         : <span className="budget-muted">{text.observed}: {otherObservedCurrencies(account).join(", ")}</span>}
       <span className="budget-muted">{text.transactions}: {state("transactions")} · {text.balances}: {state("balances")}</span>
       <label className="budget-toggle">
-        <input type="checkbox" checked={account.selected} disabled={!account.configured || busy.has(`select:${account.id}`)}
+        <input name="selected" type="checkbox" checked={account.selected} disabled={!account.configured || busy.has(`select:${account.id}`)}
           onChange={(event) => { onSelect(event.currentTarget.checked); }} />
         {text.selected}
       </label>
       <label className="budget-kind">
         <span>{text.kind}</span>
-        <select value={kind} disabled={busy.has(`kind:${account.id}`)}
+        <select name="account_kind" value={kind} disabled={busy.has(`kind:${account.id}`)}
           onChange={(event) => { if (event.currentTarget.value !== "") onKind(event.currentTarget.value as BudgetKind); }}>
           <option value="" disabled>{text.kindUnknown}</option>
           {KINDS.map((item) => <option key={item} value={item}>{text.kinds[item]}</option>)}
@@ -719,9 +719,9 @@ function AccountDetail({ account, label, api, text, locale, revision, onAccessLo
         ))}
       </div>
       <form className="budget-range" onSubmit={(event) => { event.preventDefault(); apply(draft); }}>
-        <label>{text.from}<input type="date" value={draft.from} max={draft.to || undefined}
+        <label>{text.from}<input name="date_from" type="date" value={draft.from} max={draft.to || undefined}
           onChange={(event) => { setDraft({ ...draft, from: event.currentTarget.value }); }} /></label>
-        <label>{text.to}<input type="date" value={draft.to} min={draft.from || undefined}
+        <label>{text.to}<input name="date_to" type="date" value={draft.to} min={draft.from || undefined}
           onChange={(event) => { setDraft({ ...draft, to: event.currentTarget.value }); }} /></label>
         <button type="submit">{text.filter}</button>
       </form>

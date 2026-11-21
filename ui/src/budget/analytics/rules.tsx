@@ -161,7 +161,7 @@ function CategoriesPanel({ categories, api, run, text, onSaved, epoch }: Categor
                   }
                 }}>
                   <label>{text.name}
-                    <input maxLength={CATEGORY_NAME_MAX} value={renaming.name}
+                    <input name="category_name" maxLength={CATEGORY_NAME_MAX} value={renaming.name}
                       onChange={(event) => { setRenaming({ id: category.id, name: event.currentTarget.value }); }} />
                   </label>
                   <button type="submit" className="budget-primary" disabled={busy || !validCategoryName(renaming.name)}>{text.save}</button>
@@ -187,7 +187,7 @@ function CategoriesPanel({ categories, api, run, text, onSaved, epoch }: Categor
         if (validCategoryName(draft)) void save(() => api.createCategory({ name: draft.trim() }), () => { setDraft(""); });
       }}>
         <label>{text.name}
-          <input maxLength={CATEGORY_NAME_MAX} value={draft} onChange={(event) => { setDraft(event.currentTarget.value); }} />
+          <input name="category_name" maxLength={CATEGORY_NAME_MAX} value={draft} onChange={(event) => { setDraft(event.currentTarget.value); }} />
         </label>
         <button type="submit" disabled={busy || !validCategoryName(draft)}>{text.add}</button>
       </form>
@@ -301,21 +301,21 @@ function RulesPanel({ rules, categories, accounts, connections, api, run, text, 
       ) : (
         <form className="budget-rule-editor" onSubmit={(event) => { event.preventDefault(); void ask(); }}>
           <label>{text.field}
-            <select value={editing.field} disabled={busy} onChange={(event) => { change({ field: event.currentTarget.value as RuleCandidate["field"] }); }}>
+            <select name="field" value={editing.field} disabled={busy} onChange={(event) => { change({ field: event.currentTarget.value as RuleCandidate["field"] }); }}>
               {RULE_FIELDS.map((field) => <option key={field} value={field}>{text.fields[field]}</option>)}
             </select>
           </label>
           <label>{text.operator}
-            <select aria-label={text.operators.contains} value={editing.operator} disabled={busy}
+            <select name="operator" aria-label={text.operators.contains} value={editing.operator} disabled={busy}
               onChange={(event) => { change({ operator: event.currentTarget.value as RuleCandidate["operator"] }); }}>
               {RULE_OPERATORS.map((operator) => <option key={operator} value={operator}>{text.operators[operator]}</option>)}
             </select>
           </label>
           <label>{text.value}
-            <input maxLength={RULE_VALUE_MAX} value={editing.value} disabled={busy} onChange={(event) => { change({ value: event.currentTarget.value }); }} />
+            <input name="value" maxLength={RULE_VALUE_MAX} value={editing.value} disabled={busy} onChange={(event) => { change({ value: event.currentTarget.value }); }} />
           </label>
           <label>{text.category}
-            <select value={editing.category_id ?? ""} disabled={busy} onChange={(event) => { change({ category_id: event.currentTarget.value || null }); }}>
+            <select name="category_id" value={editing.category_id ?? ""} disabled={busy} onChange={(event) => { change({ category_id: event.currentTarget.value || null }); }}>
               <option value="">{text.keep}</option>
               {categories.filter((item) => !item.archived || item.id === editing.category_id).map((item) => (
                 <option key={item.id} value={item.id}>{item.archived ? `${item.name} (${text.archived})` : item.name}</option>
@@ -323,16 +323,16 @@ function RulesPanel({ rules, categories, accounts, connections, api, run, text, 
             </select>
           </label>
           <label>{text.kind}
-            <select value={editing.kind} disabled={busy} onChange={(event) => { change({ kind: event.currentTarget.value as KindChoice }); }}>
+            <select name="kind" value={editing.kind} disabled={busy} onChange={(event) => { change({ kind: event.currentTarget.value as KindChoice }); }}>
               {KIND_CHOICES.map((kind) => <option key={kind} value={kind}>{text.kinds[kind]}</option>)}
             </select>
           </label>
           <label>{text.priority}
-            <input type="number" min={0} max={RULE_PRIORITY_MAX} step={1} value={editing.priority} disabled={busy}
+            <input name="priority" type="number" min={0} max={RULE_PRIORITY_MAX} step={1} value={editing.priority} disabled={busy}
               onChange={(event) => { change({ priority: event.currentTarget.valueAsNumber }); }} />
           </label>
           <label className="budget-toggle">
-            <input type="checkbox" checked={editing.enabled} disabled={busy} onChange={(event) => { change({ enabled: event.currentTarget.checked }); }} />
+            <input name="enabled" type="checkbox" checked={editing.enabled} disabled={busy} onChange={(event) => { change({ enabled: event.currentTarget.checked }); }} />
             {text.enabled}
           </label>
           {editing.category_id === null && editing.kind === "auto" ? <p className="budget-muted">{text.nothingToDo}</p> : null}

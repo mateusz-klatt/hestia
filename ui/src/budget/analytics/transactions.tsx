@@ -135,26 +135,26 @@ export function TransactionsPanel({ api, period, currencies, accounts, connectio
       <h4>{text.title}</h4>
       <form className="budget-range" onSubmit={(event) => { event.preventDefault(); setFilter(draft); }}>
         <label>{text.currency}
-          <select value={draft.currency} onChange={(event) => { setDraft({ ...draft, currency: event.currentTarget.value }); }}>
+          <select name="currency" value={draft.currency} onChange={(event) => { setDraft({ ...draft, currency: event.currentTarget.value }); }}>
             <option value="">{text.all}</option>
             {currencies.map((currency) => <option key={currency} value={currency}>{currency}</option>)}
           </select>
         </label>
         <label>{text.category}
-          <select value={draft.category} onChange={(event) => { setDraft({ ...draft, category: event.currentTarget.value }); }}>
+          <select name="category" value={draft.category} onChange={(event) => { setDraft({ ...draft, category: event.currentTarget.value }); }}>
             <option value="">{text.all}</option>
             <option value={UNCATEGORISED}>{text.uncategorised}</option>
             {categories.filter((item) => !item.archived).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
           </select>
         </label>
         <label>{text.kind}
-          <select value={draft.kind} onChange={(event) => { setDraft({ ...draft, kind: event.currentTarget.value }); }}>
+          <select name="kind" value={draft.kind} onChange={(event) => { setDraft({ ...draft, kind: event.currentTarget.value }); }}>
             <option value="">{text.all}</option>
             {EFFECTIVE_KINDS.map((kind) => <option key={kind} value={kind}>{kindText(kind)}</option>)}
           </select>
         </label>
         <label>{text.search}
-          <input type="search" maxLength={100} value={draft.query}
+          <input name="query" type="search" maxLength={100} value={draft.query}
             onChange={(event) => { setDraft({ ...draft, query: event.currentTarget.value }); }} />
         </label>
         <button type="submit">{text.apply}</button>
@@ -252,7 +252,7 @@ function Editor({ row, categories, text, kindText, saving, onSave, onCancel }: E
   return (
     <form className="budget-entry-editor" onSubmit={(event) => { event.preventDefault(); onSave(decode(category), kind); }}>
       <label>{text.category}
-        <select value={category} disabled={saving} onChange={(event) => { chooseCategory(event.currentTarget.value); }}>
+        <select name="category_id" value={category} disabled={saving} onChange={(event) => { chooseCategory(event.currentTarget.value); }}>
           <option value="auto">{text.automatic}</option>
           <option value="none">{text.uncategorised}</option>
           {offered.map((item) => (
@@ -261,7 +261,7 @@ function Editor({ row, categories, text, kindText, saving, onSave, onCancel }: E
         </select>
       </label>
       <label>{text.kind}
-        <select value={kind} disabled={saving}
+        <select name="kind" value={kind} disabled={saving}
           onChange={(event) => { chooseKind(kindChoice(event.currentTarget.value, row.credit_debit_indicator)); }}>
           {kinds.map((item) => <option key={item} value={item}>{kindText(item)}</option>)}
         </select>
