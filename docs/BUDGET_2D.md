@@ -148,6 +148,8 @@ that same entry. Disabling an existing rule may retain its archived category;
 creating or re-enabling a rule still requires an active category.
 Stale manual annotations remain marked for review and use safe default
 classification until reconfirmed. Valid accepted transfers outrank rules.
+Entries currently classified as excluded, manually or by an owner rule, generate
+no new transfer suggestions or ambiguity edges; existing decisions and reservations remain unchanged.
 
 Lists use encrypted cursors bound to owner, filters and the complete projection.
 A changed snapshot returns 409 `budget_analytics_stale_cursor`; restart paging.

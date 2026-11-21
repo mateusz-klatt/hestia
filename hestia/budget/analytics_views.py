@@ -284,7 +284,8 @@ def _candidates(snapshot, blocked, reserved):
         field = "creditor_accounts" if payload["credit_debit_indicator"] == "DBIT" else "debtor_accounts"
         entries.append(TransferEntry(snapshot["owner"], row["account_id"], row["entry_reference"],
                       core.canonical_money(payload["amount"]), payload["currency"], payload["credit_debit_indicator"],
-                      core.effective_date(payload), row["transfer_fp"], _identity_pairs(metadata.get(field, []))))
+                      core.effective_date(payload), row["transfer_fp"], _identity_pairs(metadata.get(field, [])),
+                      eligible=row["effective"]["kind"] != "excluded"))
     selected = {row["id"] for row in snapshot["accounts"] if row["enabled"]}
     own = {key: _identity_pairs(value) for key, value in snapshot["identities"].items() if key in selected}
     try:
