@@ -737,3 +737,13 @@ no-store/no-referrer responses and fixed diagnostics without raw secrets.
 
 Verified against the public documentation on 2026-11-20. Tests use synthetic
 records; production account data and credentials are not test fixtures.
+
+
+## Local reports and classifications
+
+Migration 0015 and `HESTIA_BUDGET_ANALYTICS_ENABLED=1` add owner-private month/year
+reports, categories, manual classifications, previewed rules and reviewed own-account
+transfers. The feature is off by default and makes no additional provider requests.
+Structured account evidence is stored separately from display labels and original
+ledger records. See [BUDGET_2D.md](BUDGET_2D.md) for configuration, exact totals,
+conflicts, optional evidence import and operational limits.

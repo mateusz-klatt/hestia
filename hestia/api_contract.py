@@ -61,7 +61,8 @@ from pydantic.json_schema import models_json_schema
 # 0.14.0: safe account display metadata, separate from currencies observed in API balances.
 # 0.15.0: durable owner refresh jobs, per-connection background opt-in and attention state.
 # 0.16.0: browser-bound production bank consent, renewal and durable managed credentials.
-CONTRACT_VERSION = "0.16.0"
+# 0.17.0: owner-private budget reports, classifications, rule previews and transfer decisions.
+CONTRACT_VERSION = "0.17.0"
 OPENAPI_PATH = Path(__file__).resolve().parent.parent / "docs" / "api" / "openapi.json"
 
 # De-duplicated string literals (SonarPython S1192): the OpenAPI content-type, the paths reused
@@ -1205,6 +1206,7 @@ class BudgetCapabilities(BaseModel):
     background_selection: bool
     background_polling: bool
     consent: bool
+    analytics: bool = False
 
 
 class BudgetConnections(BaseModel):
@@ -1434,6 +1436,355 @@ class BudgetConflict(BudgetError):
     current: BudgetAccount | BudgetConnection
 
 
+# Owner-private analytics requests are strict; read values remain forward compatible.
+BudgetAnalyticsVersion = Annotated[int, Field(ge=0)]
+BudgetAnalyticsFingerprint = Annotated[str, Field(pattern=r"^[a-f0-9]{64}$")]
+BudgetAnalyticsReference = Annotated[str, Field(min_length=1, max_length=1024)]
+BudgetAnalyticsKind = Literal["auto", "expense", "income", "refund", "excluded"]
+
+
+class BudgetAnalyticsCategoryCreateRequest(BaseModel):
+    model_config = _STRICT
+    name: Annotated[str, Field(min_length=1, max_length=80)]
+
+
+class BudgetAnalyticsCategoryUpdateRequest(BudgetAnalyticsCategoryCreateRequest):
+    category_id: BudgetId
+    archived: bool
+    expected_version: BudgetAnalyticsVersion
+
+
+class BudgetAnalyticsAnnotationRequest(BaseModel):
+    model_config = _STRICT
+    account_id: BudgetId
+    entry_reference: BudgetAnalyticsReference
+    mode: Literal["auto", "manual"]
+    category_id: BudgetId | None
+    kind: BudgetAnalyticsKind
+    expected_version: BudgetAnalyticsVersion
+    expected_fingerprint: BudgetAnalyticsFingerprint
+
+
+class BudgetAnalyticsRulePreviewRequest(BaseModel):
+    model_config = _STRICT
+    rule_id: BudgetId | None
+    expected_version: BudgetAnalyticsVersion
+    field: Literal["description", "counterparty_name", "mcc"]
+    operator: Literal["contains", "equals"]
+    value: Annotated[str, Field(min_length=1, max_length=256)]
+    category_id: BudgetId | None
+    kind: BudgetAnalyticsKind
+    priority: Annotated[int, Field(ge=0, le=10000)]
+    enabled: bool
+
+
+class BudgetAnalyticsRuleSaveRequest(BaseModel):
+    model_config = _STRICT
+    preview_id: BudgetId
+
+
+class BudgetAnalyticsLegRequest(BaseModel):
+    model_config = _STRICT
+    account_id: BudgetId
+    entry_reference: BudgetAnalyticsReference
+
+
+class BudgetAnalyticsTransferDecisionRequest(BaseModel):
+    model_config = _STRICT
+    decision_id: BudgetId | None = None
+    debit: BudgetAnalyticsLegRequest | None = None
+    credit: BudgetAnalyticsLegRequest | None = None
+    action: Literal["accept", "reject", "undo"]
+    expected_version: BudgetAnalyticsVersion
+    source: Literal["account_identity", "heuristic", "manual"] = "manual"
+    expected_debit_fingerprint: BudgetAnalyticsFingerprint | None = None
+    expected_credit_fingerprint: BudgetAnalyticsFingerprint | None = None
+
+
+class BudgetAnalyticsCategory(BaseModel):
+    model_config = _READ
+    id: str
+    name: str
+    archived: bool
+    version: int
+    created_at: float
+    updated_at: float
+
+
+class BudgetAnalyticsCategorySaved(BudgetAnalyticsCategory):
+    changed: bool
+
+
+class BudgetAnalyticsCategories(BaseModel):
+    model_config = _READ
+    categories: list[BudgetAnalyticsCategory]
+
+
+class BudgetAnalyticsCategoryResult(BaseModel):
+    model_config = _READ
+    ok: Literal[True]
+    category: BudgetAnalyticsCategorySaved
+
+
+class BudgetAnalyticsAnnotationSaved(BaseModel):
+    model_config = _READ
+    account_id: str
+    entry_reference: str
+    mode: str
+    category_id: str | None
+    kind: str
+    ledger_fingerprint: str
+    version: int
+    updated_at: float | None
+    changed: bool
+
+
+class BudgetAnalyticsAnnotationResult(BaseModel):
+    model_config = _READ
+    ok: Literal[True]
+    annotation: BudgetAnalyticsAnnotationSaved
+
+
+class BudgetAnalyticsRule(BaseModel):
+    model_config = _READ
+    id: str
+    field: str
+    operator: str
+    value: str
+    category_id: str | None
+    kind: str
+    priority: int
+    enabled: bool
+    version: int
+    created_at: float
+    updated_at: float
+
+
+class BudgetAnalyticsRuleSaved(BudgetAnalyticsRule):
+    changed: bool
+
+
+class BudgetAnalyticsRules(BaseModel):
+    model_config = _READ
+    rules: list[BudgetAnalyticsRule]
+
+
+class BudgetAnalyticsRuleResult(BaseModel):
+    model_config = _READ
+    ok: Literal[True]
+    rule: BudgetAnalyticsRuleSaved
+
+
+class BudgetAnalyticsPreviewExample(BaseModel):
+    model_config = _READ
+    account_id: str
+    entry_reference: str
+
+
+class BudgetAnalyticsPreview(BaseModel):
+    model_config = _READ
+    preview_id: str
+    expires_at: float
+    affected_count: int
+    examples: list[BudgetAnalyticsPreviewExample]
+
+
+class BudgetAnalyticsPreviewResult(BaseModel):
+    model_config = _READ
+    ok: Literal[True]
+    preview: BudgetAnalyticsPreview
+
+
+class BudgetAnalyticsAnnotation(BaseModel):
+    model_config = _READ
+    version: int
+    mode: str
+    category_id: str | None
+    kind: str
+    stale: bool
+
+
+class BudgetAnalyticsEffective(BaseModel):
+    model_config = _READ
+    kind: str
+    category_id: str | None
+    source: str
+    rule_id: str | None
+
+
+class BudgetAnalyticsMetadata(BaseModel):
+    model_config = _READ
+    creditor_name: str | None
+    debtor_name: str | None
+    mcc: str | None
+
+
+class BudgetAnalyticsTransactionTransfer(BaseModel):
+    model_config = _READ
+    status: str
+    decision_id: str | None
+    candidate_count: int
+    ambiguous: bool
+
+
+class BudgetAnalyticsTransaction(BudgetTransaction):
+    account_id: str
+    fingerprint: str
+    transfer_fingerprint: str
+    annotation: BudgetAnalyticsAnnotation
+    effective: BudgetAnalyticsEffective
+    metadata: BudgetAnalyticsMetadata | None
+    transfer: BudgetAnalyticsTransactionTransfer
+
+
+class BudgetAnalyticsPeriod(BaseModel):
+    model_config = _READ
+    period: str
+    start: str
+    end: str
+    snapshot_digest: str
+
+
+class BudgetAnalyticsTransactions(BudgetAnalyticsPeriod):
+    transactions: list[BudgetAnalyticsTransaction]
+    filtered_total: int
+    next_cursor: str | None
+
+
+class BudgetAnalyticsCurrency(BaseModel):
+    """Exact decimal strings in one currency; net_spending is expenses minus refunds."""
+    model_config = _READ
+    currency: str
+    gross_debits: str
+    gross_credits: str
+    expenses: str
+    income: str
+    refunds: str
+    unclassified_credit: str
+    excluded_debits: str
+    excluded_credits: str
+    transfer_debits: str
+    transfer_credits: str
+    net_spending: str
+
+
+class BudgetAnalyticsMonth(BaseModel):
+    model_config = _READ
+    month: str
+    currencies: list[BudgetAnalyticsCurrency]
+
+
+class BudgetAnalyticsCategoryTotal(BaseModel):
+    model_config = _READ
+    category_id: str | None
+    name: str | None
+    archived: bool
+    currency: str
+    expenses: str
+    refunds: str
+    net_spending: str
+
+
+class BudgetAnalyticsFreshness(BaseModel):
+    model_config = _READ
+    account_id: str
+    transactions: BudgetComponentStatus
+    balances: BudgetComponentStatus
+
+
+class BudgetAnalyticsScope(BaseModel):
+    model_config = _READ
+    selected_accounts: int
+    excluded_accounts: int
+    uncertain_count: int
+    unresolved_count: int
+    import_unresolved_count: int
+    freshness: list[BudgetAnalyticsFreshness]
+
+
+class BudgetAnalyticsTransferSummary(BaseModel):
+    model_config = _READ
+    suggested: int
+    accepted: int
+    review: int
+    rejected: int
+    boundary: int
+    scan_limited: bool
+
+
+class BudgetAnalyticsOverview(BudgetAnalyticsPeriod):
+    scope: BudgetAnalyticsScope
+    currencies: list[BudgetAnalyticsCurrency]
+    months: list[BudgetAnalyticsMonth]
+    categories: list[BudgetAnalyticsCategoryTotal]
+    transfer_summary: BudgetAnalyticsTransferSummary
+
+
+class BudgetAnalyticsLeg(BaseModel):
+    model_config = _READ
+    account_id: str
+    entry_reference: str
+    fingerprint: str | None
+    amount: str | None
+    currency: str | None
+    date: str | None
+    selected: bool
+
+
+class BudgetAnalyticsTransfer(BaseModel):
+    model_config = _READ
+    id: str | None
+    version: int
+    status: str
+    source: str
+    debit: BudgetAnalyticsLeg
+    credit: BudgetAnalyticsLeg
+    date_distance: int | None
+    ambiguous: bool
+    stale: bool
+    boundary: bool
+
+
+class BudgetAnalyticsTransfers(BudgetAnalyticsPeriod):
+    transfers: list[BudgetAnalyticsTransfer]
+    filtered_total: int
+    next_cursor: str | None
+    scan_limited: bool
+
+
+class BudgetAnalyticsDecisionSaved(BaseModel):
+    model_config = _READ
+    id: str
+    debit_account_id: str
+    debit_ref: str
+    credit_account_id: str
+    credit_ref: str
+    source: str
+    status: str
+    debit_fingerprint: str
+    credit_fingerprint: str
+    rule_version: int
+    version: int
+    created_at: float
+    updated_at: float
+    changed: bool
+
+
+class BudgetAnalyticsDecisionResult(BaseModel):
+    model_config = _READ
+    ok: Literal[True]
+    decision: BudgetAnalyticsDecisionSaved
+
+
+_ANALYTICS_MODELS = (BudgetAnalyticsCategoryCreateRequest, BudgetAnalyticsCategoryUpdateRequest,
+                     BudgetAnalyticsAnnotationRequest, BudgetAnalyticsRulePreviewRequest,
+                     BudgetAnalyticsRuleSaveRequest, BudgetAnalyticsTransferDecisionRequest,
+                     BudgetAnalyticsCategories, BudgetAnalyticsCategoryResult, BudgetAnalyticsAnnotationResult,
+                     BudgetAnalyticsRules, BudgetAnalyticsRuleResult, BudgetAnalyticsPreviewResult,
+                     BudgetAnalyticsOverview, BudgetAnalyticsTransactions, BudgetAnalyticsTransfers,
+                     BudgetAnalyticsDecisionResult)
+
+
 _BUDGET_MODELS = (BudgetSelectionRequest, BudgetKindRequest, BudgetConnectionStateRequest,
                   BudgetBackgroundSelectionRequest, BudgetRefreshRequest,
                   BudgetConsentStartRequest, BudgetConsentFlowRequest, BudgetConsentPending,
@@ -1451,6 +1802,18 @@ def _ref(name: str) -> dict:
 # "public" = no auth). A test pins each value to web._required_role / web._is_public_route — so a
 # mislabelled role fails CI rather than misleading a client.
 _PATH_ROLES = {
+    ("GET", "/api/budget/analytics/overview"): "admin",
+    ("GET", "/api/budget/analytics/transactions"): "admin",
+    ("GET", "/api/budget/analytics/categories"): "admin",
+    ("GET", "/api/budget/analytics/rules"): "admin",
+    ("GET", "/api/budget/analytics/transfers"): "admin",
+    ("POST", "/api/budget/analytics/category-create"): "admin",
+    ("POST", "/api/budget/analytics/category-update"): "admin",
+    ("POST", "/api/budget/analytics/annotation"): "admin",
+    ("POST", "/api/budget/analytics/rule-preview"): "admin",
+    ("POST", "/api/budget/analytics/rule-save"): "admin",
+    ("POST", "/api/budget/analytics/transfer-decision"): "admin",
+
     ("GET", "/api/budget/enable-banking/callback"): "public",
     ("GET", "/api/budget/consent/pending"): "admin",
     ("GET", "/api/budget/consent/status"): "admin",
@@ -1508,7 +1871,7 @@ def _component_schemas() -> dict:
         [(model, "validation")
          for model in (*_CONTROL_MODELS, ControlSuccess, ControlError, *_COMMAND_MODELS,
                        *_READ_MODELS, *_AUTH_MODELS, *_AUTOMATION_MODELS, *_EVENT_MODELS,
-                       *_USER_MODELS, *_CALENDAR_MODELS, *_BUDGET_MODELS)],
+                       *_USER_MODELS, *_CALENDAR_MODELS, *_BUDGET_MODELS, *_ANALYTICS_MODELS)],
         ref_template="#/components/schemas/{model}",
     )
     schemas = combined.get("$defs", {})
@@ -2052,7 +2415,55 @@ def _budget_paths():
                                 "responses": responses}}
     paths[_P_BUDGET_REFRESH] = {"post": _refresh_operation()}
     paths.update(_consent_paths())
+    paths.update(_analytics_paths())
     return paths
+
+
+def _analytics_paths():
+    prefix = "/api/budget/analytics/"
+    period = _budget_query("period", required=True, schema={"type": "string", "pattern": r"^[0-9]{4}(?:-[0-9]{2})?$"},
+                           description="Inclusive calendar month or year, 1900 through 9999.")
+    currency = _budget_query("currency", schema={"type": "string", "pattern": "^[A-Z]{3}$"})
+    page = [_budget_query("limit", schema={"type": "integer", "minimum": 1, "maximum": 200, "default": 50}),
+            _budget_query("cursor", schema={"type": "string", "minLength": 1, "maxLength": 8192},
+                          description="Opaque cursor bound to the current projection. A changed snapshot returns 409.")]
+    reads = (
+        ("overview", "getBudgetAnalyticsOverview", "BudgetAnalyticsOverview", [period, currency]),
+        ("transactions", "getBudgetAnalyticsTransactions", "BudgetAnalyticsTransactions",
+         [period, currency, _budget_query("category_id", description="Category ID, or uncategorised for no category."),
+          _budget_query("kind"), _budget_query("query", schema={"type": "string", "minLength": 1, "maxLength": 256}), *page]),
+        ("categories", "getBudgetAnalyticsCategories", "BudgetAnalyticsCategories", []),
+        ("rules", "getBudgetAnalyticsRules", "BudgetAnalyticsRules", []),
+        ("transfers", "getBudgetAnalyticsTransfers", "BudgetAnalyticsTransfers",
+         [period, currency, _budget_query("status", schema={"type": "string", "enum":
+             ["suggested", "accepted", "review", "boundary", "rejected", "undone"], "default": "suggested"}), *page]),
+    )
+    paths = {prefix + path: {"get": {"operationId": operation, "summary": "Read owner-private local budget analytics",
+              "parameters": parameters, "responses": _analytics_responses(model)}}
+             for path, operation, model, parameters in reads}
+    writes = (
+        ("category-create", "createBudgetAnalyticsCategory", "BudgetAnalyticsCategoryCreateRequest", "BudgetAnalyticsCategoryResult"),
+        ("category-update", "updateBudgetAnalyticsCategory", "BudgetAnalyticsCategoryUpdateRequest", "BudgetAnalyticsCategoryResult"),
+        ("annotation", "annotateBudgetAnalyticsTransaction", "BudgetAnalyticsAnnotationRequest", "BudgetAnalyticsAnnotationResult"),
+        ("rule-preview", "previewBudgetAnalyticsRule", "BudgetAnalyticsRulePreviewRequest", "BudgetAnalyticsPreviewResult"),
+        ("rule-save", "saveBudgetAnalyticsRule", "BudgetAnalyticsRuleSaveRequest", "BudgetAnalyticsRuleResult"),
+        ("transfer-decision", "decideBudgetAnalyticsTransfer", "BudgetAnalyticsTransferDecisionRequest", "BudgetAnalyticsDecisionResult"),
+    )
+    for path, operation, request, model in writes:
+        paths[prefix + path] = {"post": {"operationId": operation, "summary": "Save an owner-private local classification",
+            "description": "Requires the exact admin owner, browser cookie and configured HTTPS Origin. "
+                           "Version and source fingerprints prevent stale changes. No bank request is made.",
+            "requestBody": {"required": True, "content": {_APP_JSON: {"schema": _ref(request)}}},
+            "responses": _analytics_responses(model)}}
+    return paths
+
+
+def _analytics_responses(model):
+    responses = _budget_responses(model)
+    responses["409"]["description"] = "Version, financial source, reserved transfer leg, preview or cursor changed; reload and review."
+    responses["413"] = {"description": "Explicit analytics processing or owner configuration limit; no partial totals.",
+                        "content": {_APP_JSON: {"schema": _ref("BudgetError")}}}
+    return responses
 
 
 def _consent_paths():

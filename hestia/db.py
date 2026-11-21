@@ -25,7 +25,7 @@ from threading import RLock
 
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import URL, Engine, ForeignKey, Index, UniqueConstraint, create_engine, event, text
+from sqlalchemy import URL, Engine, ForeignKey, ForeignKeyConstraint, Index, Text, UniqueConstraint, create_engine, event, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
 DEFAULT_DB_PATH = "/data/hestia.db"
@@ -442,6 +442,131 @@ class BudgetTransaction(Base):
     uncertain: Mapped[bool]
     source: Mapped[str] = mapped_column(default="api", server_default=text("'api'"))
     api_observed_at: Mapped[float | None]
+
+
+class BudgetAccountIdentity(Base):
+    __tablename__ = "budget_account_identity"
+    account_id: Mapped[str] = mapped_column(ForeignKey("budget_accounts.id"), primary_key=True)
+    owner: Mapped[str] = mapped_column(ForeignKey("users.username"))
+    identities_json: Mapped[str]
+    source: Mapped[str]
+    observed_at: Mapped[float]
+    version: Mapped[int]
+
+
+class BudgetTransactionMetadata(Base):
+    __tablename__ = "budget_transaction_metadata"
+    __table_args__ = (ForeignKeyConstraint(["account_id", "entry_reference"],
+                                           ["budget_transactions.account_id", "budget_transactions.entry_reference"]),)
+    account_id: Mapped[str] = mapped_column(primary_key=True)
+    entry_reference: Mapped[str] = mapped_column(primary_key=True)
+    owner: Mapped[str] = mapped_column(ForeignKey("users.username"))
+    ledger_fingerprint: Mapped[str]
+    payload_json: Mapped[str]
+    provenance_json: Mapped[str] = mapped_column(Text, default="{}", server_default=text("'{}'"))
+    source: Mapped[str]
+    observed_at: Mapped[float]
+    version: Mapped[int]
+
+
+class BudgetCategory(Base):
+    __tablename__ = "budget_categories"
+    __table_args__ = (UniqueConstraint("owner", "name_key"),)
+    id: Mapped[str] = mapped_column(primary_key=True)
+    owner: Mapped[str] = mapped_column(ForeignKey("users.username"))
+    name: Mapped[str]
+    name_key: Mapped[str]
+    archived: Mapped[bool]
+    version: Mapped[int]
+    created_at: Mapped[float]
+    updated_at: Mapped[float]
+
+
+class BudgetAnnotation(Base):
+    __tablename__ = "budget_annotations"
+    __table_args__ = (ForeignKeyConstraint(["account_id", "entry_reference"],
+                                           ["budget_transactions.account_id", "budget_transactions.entry_reference"]),)
+    account_id: Mapped[str] = mapped_column(primary_key=True)
+    entry_reference: Mapped[str] = mapped_column(primary_key=True)
+    owner: Mapped[str] = mapped_column(ForeignKey("users.username"))
+    mode: Mapped[str]
+    category_id: Mapped[str | None] = mapped_column(ForeignKey("budget_categories.id"))
+    kind: Mapped[str]
+    ledger_fingerprint: Mapped[str]
+    version: Mapped[int]
+    updated_at: Mapped[float]
+
+
+class BudgetRule(Base):
+    __tablename__ = "budget_rules"
+    id: Mapped[str] = mapped_column(primary_key=True)
+    owner: Mapped[str] = mapped_column(ForeignKey("users.username"))
+    field: Mapped[str]
+    operator: Mapped[str]
+    value: Mapped[str]
+    category_id: Mapped[str | None] = mapped_column(ForeignKey("budget_categories.id"))
+    kind: Mapped[str]
+    priority: Mapped[int]
+    enabled: Mapped[bool]
+    version: Mapped[int]
+    created_at: Mapped[float]
+    updated_at: Mapped[float]
+
+
+class BudgetRulePreview(Base):
+    __tablename__ = "budget_rule_previews"
+    id: Mapped[str] = mapped_column(primary_key=True)
+    owner: Mapped[str] = mapped_column(ForeignKey("users.username"))
+    candidate_json: Mapped[str]
+    snapshot_digest: Mapped[str]
+    created_at: Mapped[float]
+    expires_at: Mapped[float]
+    saved_rule_id: Mapped[str | None] = mapped_column(ForeignKey("budget_rules.id"))
+    saved_version: Mapped[int | None]
+
+
+class BudgetTransferDecision(Base):
+    __tablename__ = "budget_transfer_decisions"
+    __table_args__ = (UniqueConstraint("owner", "debit_account_id", "debit_ref", "credit_account_id", "credit_ref"),
+                      ForeignKeyConstraint(["debit_account_id", "debit_ref"],
+                                           ["budget_transactions.account_id", "budget_transactions.entry_reference"]),
+                      ForeignKeyConstraint(["credit_account_id", "credit_ref"],
+                                           ["budget_transactions.account_id", "budget_transactions.entry_reference"]))
+    id: Mapped[str] = mapped_column(primary_key=True)
+    owner: Mapped[str] = mapped_column(ForeignKey("users.username"))
+    debit_account_id: Mapped[str]
+    debit_ref: Mapped[str]
+    credit_account_id: Mapped[str]
+    credit_ref: Mapped[str]
+    source: Mapped[str]
+    status: Mapped[str]
+    debit_fingerprint: Mapped[str]
+    credit_fingerprint: Mapped[str]
+    rule_version: Mapped[int]
+    version: Mapped[int]
+    created_at: Mapped[float]
+    updated_at: Mapped[float]
+
+
+class BudgetTransferLeg(Base):
+    __tablename__ = "budget_transfer_legs"
+    __table_args__ = (ForeignKeyConstraint(["account_id", "entry_reference"],
+                                           ["budget_transactions.account_id", "budget_transactions.entry_reference"]),)
+    account_id: Mapped[str] = mapped_column(primary_key=True)
+    entry_reference: Mapped[str] = mapped_column(primary_key=True)
+    decision_id: Mapped[str] = mapped_column(ForeignKey("budget_transfer_decisions.id"))
+
+
+class BudgetAnalyticsAudit(Base):
+    __tablename__ = "budget_analytics_audit"
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    owner: Mapped[str] = mapped_column(ForeignKey("users.username"))
+    subject_type: Mapped[str]
+    subject_id: Mapped[str]
+    action: Mapped[str]
+    before_json: Mapped[str]
+    after_json: Mapped[str]
+    changed_at: Mapped[float]
 
 
 class BudgetUnresolved(Base):

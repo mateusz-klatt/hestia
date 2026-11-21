@@ -1,0 +1,395 @@
+"""Owner-private classifications and transfer decisions, separate from bank records."""
+from __future__ import annotations
+
+from datetime import date
+import hmac
+import json
+import math
+import re
+import unicodedata
+import uuid
+
+from sqlalchemy import delete, func, select
+
+from ..db import BudgetAccount as Account, BudgetAccountIdentity as Identity
+from ..db import BudgetAnnotation as Annotation, BudgetAnalyticsAudit as Audit, BudgetCategory as Category
+from ..db import BudgetConnection as Connection, BudgetRule as Rule, BudgetRulePreview as Preview
+from ..db import BudgetTransaction as Transaction, BudgetTransactionMetadata as Metadata
+from ..db import BudgetTransferDecision as Decision, BudgetTransferLeg as Leg
+from .analytics_core import (AnalyticsError, KINDS, compare_money, compatible_kind, effective_date,
+                             financial_fingerprint, pair_fingerprint, rule_matches)
+from .views import BudgetHTTPStore
+
+_HASH = re.compile(r"[a-f0-9]{64}\Z", re.ASCII)
+_RULE_FIELDS = frozenset({"rule_id", "expected_version", "field", "operator", "value", "category_id", "kind", "priority", "enabled"})
+_CATEGORY_FIELDS = ("id", "name", "archived", "version", "created_at", "updated_at")
+_RULE_OUTPUT = ("id", "field", "operator", "value", "category_id", "kind", "priority", "enabled", "version", "created_at", "updated_at")
+_ANNOTATION_FIELDS = ("account_id", "entry_reference", "mode", "category_id", "kind", "ledger_fingerprint", "version", "updated_at")
+_DECISION_FIELDS = ("id", "debit_account_id", "debit_ref", "credit_account_id", "credit_ref", "source", "status",
+                    "debit_fingerprint", "credit_fingerprint", "rule_version", "version", "created_at", "updated_at")
+
+
+def _json(value):
+    return json.dumps(value, sort_keys=True, ensure_ascii=True, allow_nan=False, separators=(",", ":"))
+
+
+def _dict(row, fields):
+    return {key: getattr(row, key) for key in fields}
+
+
+def _text(value, limit=80):
+    if (not isinstance(value, str) or not value.strip() or len(value) > limit
+            or any(unicodedata.category(char) in ("Cc", "Cf", "Cs") for char in value)):
+        raise AnalyticsError()
+    return unicodedata.normalize("NFC", value.strip())
+
+
+def _version(current, expected):
+    if type(expected) is not int or expected < 0:
+        raise AnalyticsError()
+    if expected != current:
+        raise AnalyticsError("budget_analytics_conflict", 409)
+
+
+def _fingerprint(current, expected):
+    if not isinstance(expected, str) or not _HASH.fullmatch(expected):
+        raise AnalyticsError()
+    if not hmac.compare_digest(current, expected):
+        raise AnalyticsError("budget_analytics_source_changed", 409)
+
+
+class BudgetAnalyticsStore(BudgetHTTPStore):
+    def _now(self):
+        now = self.clock()
+        if type(now) not in (int, float) or not math.isfinite(now) or now < 0:
+            raise AnalyticsError("budget_analytics_unavailable", 503)
+        return now
+
+    @staticmethod
+    def _owned(session, model, owner, identifier):
+        if not isinstance(identifier, str) or not identifier:
+            raise AnalyticsError()
+        row = session.get(model, identifier)
+        if row is None or row.owner != owner:
+            raise AnalyticsError("budget_analytics_not_found", 404)
+        return row
+
+    def _category(self, session, owner, identifier):
+        if identifier is None:
+            return None
+        row = self._owned(session, Category, owner, identifier)
+        if row.archived:
+            raise AnalyticsError()
+        return row
+
+    def _transaction(self, session, owner, account_id, reference, *, selected=True):
+        if not isinstance(reference, str) or not 1 <= len(reference) <= 1024:
+            raise AnalyticsError()
+        account, _ = self._owned_account(session, owner, account_id)
+        row = session.get(Transaction, (account_id, reference))
+        if row is None:
+            raise AnalyticsError("budget_analytics_not_found", 404)
+        try:
+            payload = json.loads(row.payload_json)
+        except (ValueError, TypeError):
+            raise AnalyticsError() from None
+        fingerprint = financial_fingerprint(payload)
+        if selected and (not account.enabled or row.uncertain or payload["status"] != "BOOK"
+                         or effective_date(payload) is None):
+            raise AnalyticsError()
+        return row, payload, fingerprint
+
+    def _analytics_audit(self, session, owner, subject_type, subject_id, action, before, after):
+        session.add(Audit(owner=owner, subject_type=subject_type, subject_id=subject_id, action=action,
+                          before_json=_json(before), after_json=_json(after), changed_at=self._now()))
+
+    def categories(self, owner):
+        with self._read(owner) as session:
+            return [_dict(row, _CATEGORY_FIELDS) for row in session.scalars(select(Category).where(Category.owner == owner)
+                                                                           .order_by(Category.name_key, Category.id))]
+
+    def create_category(self, owner, name):
+        name = " ".join(_text(name).split())
+        key = name.casefold()
+        with self.transaction() as session:
+            self._owner(session, owner)
+            prior = session.scalar(select(Category).where(Category.owner == owner, Category.name_key == key))
+            if prior is not None:
+                if prior.name != name:
+                    raise AnalyticsError("budget_analytics_conflict", 409)
+                return {**_dict(prior, _CATEGORY_FIELDS), "changed": False}
+            if session.scalar(select(func.count()).select_from(Category).where(Category.owner == owner)) >= 100:
+                raise AnalyticsError("budget_analytics_limit", 413)
+            now = self._now()
+            row = Category(id=str(uuid.uuid4()), owner=owner, name=name, name_key=key, archived=False, version=1,
+                           created_at=now, updated_at=now)
+            session.add(row)
+            session.flush()
+            result = _dict(row, _CATEGORY_FIELDS)
+            self._analytics_audit(session, owner, "category", row.id, "create", None, result)
+            return {**result, "changed": True}
+
+    def update_category(self, owner, identifier, *, name, archived, expected_version):
+        name = " ".join(_text(name).split())
+        if type(archived) is not bool:
+            raise AnalyticsError()
+        with self.transaction() as session:
+            self._owner(session, owner)
+            row = self._owned(session, Category, owner, identifier)
+            _version(row.version, expected_version)
+            other = session.scalar(select(Category).where(Category.owner == owner, Category.name_key == name.casefold(),
+                                                          Category.id != row.id))
+            if other is not None:
+                raise AnalyticsError("budget_analytics_conflict", 409)
+            before = _dict(row, _CATEGORY_FIELDS)
+            if (row.name, row.archived) == (name, archived):
+                return {**before, "changed": False}
+            row.name, row.name_key, row.archived = name, name.casefold(), archived
+            row.version += 1
+            row.updated_at = self._now()
+            result = _dict(row, _CATEGORY_FIELDS)
+            self._analytics_audit(session, owner, "category", row.id, "update", before, result)
+            return {**result, "changed": True}
+
+    def annotate(self, owner, account_id, entry_reference, *, mode, category_id, kind, expected_version,
+                 expected_fingerprint):
+        if (mode not in ("auto", "manual") or not isinstance(kind, str) or kind not in KINDS
+                or (mode == "auto" and (category_id is not None or kind != "auto"))):
+            raise AnalyticsError()
+        with self.transaction() as session:
+            self._owner(session, owner)
+            _, payload, fingerprint = self._transaction(session, owner, account_id, entry_reference)
+            _fingerprint(fingerprint, expected_fingerprint)
+            self._category(session, owner, category_id)
+            if not compatible_kind(kind, payload):
+                raise AnalyticsError()
+            row = session.get(Annotation, (account_id, entry_reference))
+            if row is not None and row.owner != owner:
+                raise AnalyticsError("budget_analytics_not_found", 404)
+            _version(0 if row is None else row.version, expected_version)
+            before = None if row is None else _dict(row, _ANNOTATION_FIELDS)
+            desired = mode, category_id, kind, fingerprint
+            if row is None and mode == "auto":
+                return {"account_id": account_id, "entry_reference": entry_reference, "mode": "auto",
+                        "category_id": None, "kind": "auto", "ledger_fingerprint": fingerprint, "version": 0,
+                        "updated_at": None, "changed": False}
+            if row is not None and (row.mode, row.category_id, row.kind, row.ledger_fingerprint) == desired:
+                return {**before, "changed": False}
+            if row is None:
+                row = Annotation(account_id=account_id, entry_reference=entry_reference, owner=owner, version=0)
+                session.add(row)
+            row.mode, row.category_id, row.kind, row.ledger_fingerprint = desired
+            row.version += 1
+            row.updated_at = self._now()
+            session.flush()
+            result = _dict(row, _ANNOTATION_FIELDS)
+            self._analytics_audit(session, owner, "annotation", _json([account_id, entry_reference]), "set", before, result)
+            return {**result, "changed": True}
+
+    def rules(self, owner):
+        with self._read(owner) as session:
+            return [_dict(row, _RULE_OUTPUT) for row in session.scalars(select(Rule).where(Rule.owner == owner)
+                                                                       .order_by(Rule.priority, Rule.id))]
+
+    def _rule_candidate(self, session, owner, value):
+        if not isinstance(value, dict) or set(value) != _RULE_FIELDS:
+            raise AnalyticsError()
+        value = dict(value)
+        if (value["field"] not in ("description", "counterparty_name", "mcc")
+                or value["operator"] not in ("contains", "equals") or not isinstance(value["kind"], str) or value["kind"] not in KINDS
+                or type(value["priority"]) is not int or not 0 <= value["priority"] <= 10000
+                or type(value["enabled"]) is not bool):
+            raise AnalyticsError()
+        value["value"] = _text(value["value"], 256)
+        self._category(session, owner, value["category_id"])
+        row = None if value["rule_id"] is None else self._owned(session, Rule, owner, value["rule_id"])
+        _version(0 if row is None else row.version, value["expected_version"])
+        return value, row
+
+    @staticmethod
+    def _snapshot(session, owner):
+        # Import after module initialization: the read projection subclasses this store.
+        from .analytics_views import projection_snapshot
+        return projection_snapshot(session, owner)
+
+    @staticmethod
+    def _proposed(rows, rules):
+        affected, examples = 0, []
+        for row in rows:
+            if row["annotation"]["mode"] == "manual" or row["effective"].get("source") == "transfer":
+                continue
+            effective = {"kind": "expense" if row["payload"]["credit_debit_indicator"] == "DBIT" else "unclassified_credit",
+                         "category_id": None, "rule_id": None}
+            for rule in rules:
+                if rule_matches(rule, row["payload"], row["metadata"]):
+                    effective = {"kind": effective["kind"] if rule["kind"] == "auto" else rule["kind"],
+                                 "category_id": rule["category_id"], "rule_id": rule["id"]}
+                    break
+            current = row.get("base_effective", row["effective"])
+            if any(current.get(key) != effective[key] for key in effective):
+                affected += 1
+                if len(examples) < 20:
+                    examples.append({"account_id": row["account_id"], "entry_reference": row["entry_reference"]})
+        return affected, examples
+
+    def preview_rule(self, owner, candidate):
+        with self.transaction() as session:
+            self._owner(session, owner)
+            candidate, _ = self._rule_candidate(session, owner, candidate)
+            now = self._now()
+            session.execute(delete(Preview).where(Preview.owner == owner, Preview.saved_rule_id.is_(None),
+                                                  Preview.expires_at <= now))
+            count = session.scalar(select(func.count()).select_from(Preview).where(Preview.owner == owner,
+                                                                                    Preview.saved_rule_id.is_(None)))
+            if count >= 100:
+                raise AnalyticsError("budget_analytics_limit", 413)
+            snapshot = self._snapshot(session, owner)
+            candidate["_proposed_id"] = candidate["rule_id"] or str(uuid.uuid4())
+            proposed = {**candidate, "id": candidate["_proposed_id"]}
+            rules = [rule for rule in snapshot["rules"] if rule["id"] != proposed["id"]] + [proposed]
+            rules.sort(key=lambda row: (row["priority"], row["id"]))
+            affected, examples = self._proposed(snapshot["transactions"], rules)
+            preview = Preview(id=str(uuid.uuid4()), owner=owner, candidate_json=_json(candidate),
+                              snapshot_digest=snapshot["digest"], created_at=now, expires_at=now + 900)
+            session.add(preview)
+            return {"preview_id": preview.id, "expires_at": preview.expires_at,
+                    "affected_count": affected, "examples": examples}
+
+    def save_rule(self, owner, preview_id):
+        with self.transaction() as session:
+            self._owner(session, owner)
+            preview = self._owned(session, Preview, owner, preview_id)
+            if preview.saved_rule_id is not None:
+                row = self._owned(session, Rule, owner, preview.saved_rule_id)
+                return {**_dict(row, _RULE_OUTPUT), "changed": False}
+            if preview.expires_at <= self._now():
+                raise AnalyticsError("budget_analytics_preview_expired", 409)
+            snapshot = self._snapshot(session, owner)
+            if preview.snapshot_digest != snapshot["digest"]:
+                raise AnalyticsError("budget_analytics_stale_preview", 409)
+            candidate = json.loads(preview.candidate_json)
+            proposed_id = candidate.pop("_proposed_id")
+            candidate, row = self._rule_candidate(session, owner, candidate)
+            before = None if row is None else _dict(row, _RULE_OUTPUT)
+            fields = ("field", "operator", "value", "category_id", "kind", "priority", "enabled")
+            changed = row is None or any(getattr(row, key) != candidate[key] for key in fields)
+            if row is None:
+                if session.scalar(select(func.count()).select_from(Rule).where(Rule.owner == owner)) >= 100:
+                    raise AnalyticsError("budget_analytics_limit", 413)
+                now = self._now()
+                row = Rule(id=proposed_id, owner=owner, version=0, created_at=now)
+                session.add(row)
+            if changed:
+                for key in fields:
+                    setattr(row, key, candidate[key])
+                row.version += 1
+                row.updated_at = self._now()
+            session.flush()
+            result = _dict(row, _RULE_OUTPUT)
+            preview.saved_rule_id, preview.saved_version = row.id, row.version
+            if changed:
+                self._analytics_audit(session, owner, "rule", row.id, "save", before, result)
+            return {**result, "changed": changed}
+
+    @staticmethod
+    def _evidence(session, owner, row, payload, fingerprint):
+        metadata = session.get(Metadata, (row.account_id, row.entry_reference))
+        data = (json.loads(metadata.payload_json) if metadata is not None and metadata.owner == owner
+                and metadata.ledger_fingerprint == fingerprint else None)
+        accounts = session.scalars(select(Account.id).join(Connection).where(Account.owner == owner, Connection.owner == owner))
+        owned = {account: [] for account in accounts}
+        identities = session.execute(select(Identity).join(Account).join(Connection).where(
+            Identity.owner == owner, Account.owner == owner, Connection.owner == owner))
+        owned.update({identity.account_id: json.loads(identity.identities_json) for identity, in identities})
+        return pair_fingerprint(row.account_id, row.entry_reference, payload, data, owned), data, owned
+
+    @staticmethod
+    def _verify_source(owner, debit_row, debit_payload, debit_meta, credit_row, credit_payload, credit_meta, owned, source):
+        from .transfer_match import TransferEntry, TransferInputError, TransferMatchLimitError, match_transfers
+        entries = []
+        for row, payload, metadata in ((debit_row, debit_payload, debit_meta), (credit_row, credit_payload, credit_meta)):
+            field = "creditor_accounts" if payload["credit_debit_indicator"] == "DBIT" else "debtor_accounts"
+            counterparties = () if metadata is None else tuple((value["scheme"], value["identification"])
+                                                              for value in metadata.get(field, []))
+            entries.append(TransferEntry(owner=owner, account_id=row.account_id, entry_reference=row.entry_reference,
+                           amount=payload["amount"], currency=payload["currency"], direction=payload["credit_debit_indicator"],
+                           date=effective_date(payload), fingerprint=pair_fingerprint(row.account_id, row.entry_reference,
+                           payload, metadata, owned), counterparty_accounts=counterparties))
+        identities = {account: tuple((value["scheme"], value["identification"]) for value in values)
+                      for account, values in owned.items()}
+        try:
+            candidates = match_transfers(owner, entries, identities)
+        except (TransferInputError, TransferMatchLimitError):
+            raise AnalyticsError() from None
+        if len(candidates) != 1 or candidates[0].source != source:
+            raise AnalyticsError()
+
+    def decide_transfer(self, owner, *, decision_id=None, debit=None, credit=None, action, expected_version,
+                        expected_debit_fingerprint=None, expected_credit_fingerprint=None, source="manual"):
+        if action not in ("accept", "reject", "undo") or source not in ("account_identity", "heuristic", "manual"):
+            raise AnalyticsError()
+        with self.transaction() as session:
+            self._owner(session, owner)
+            row = None if decision_id is None else self._owned(session, Decision, owner, decision_id)
+            if row is None:
+                if not isinstance(debit, dict) or not isinstance(credit, dict) or any(
+                        set(leg) != {"account_id", "entry_reference"} for leg in (debit, credit)):
+                    raise AnalyticsError()
+                row = session.scalar(select(Decision).where(Decision.owner == owner,
+                    Decision.debit_account_id == debit["account_id"], Decision.debit_ref == debit["entry_reference"],
+                    Decision.credit_account_id == credit["account_id"], Decision.credit_ref == credit["entry_reference"]))
+            else:
+                stored = ({"account_id": row.debit_account_id, "entry_reference": row.debit_ref},
+                          {"account_id": row.credit_account_id, "entry_reference": row.credit_ref})
+                if (debit is not None and debit != stored[0]) or (credit is not None and credit != stored[1]):
+                    raise AnalyticsError("budget_analytics_conflict", 409)
+                debit, credit = stored
+            _version(0 if row is None else row.version, expected_version)
+            if action == "undo" and row is None:
+                raise AnalyticsError("budget_analytics_not_found", 404)
+            debit_row, debit_payload, debit_financial = self._transaction(session, owner, debit["account_id"], debit["entry_reference"], selected=action != "undo")
+            credit_row, credit_payload, credit_financial = self._transaction(session, owner, credit["account_id"], credit["entry_reference"], selected=action != "undo")
+            if action != "undo":
+                debit_fp, debit_meta, owned = self._evidence(session, owner, debit_row, debit_payload, debit_financial)
+                credit_fp, credit_meta, _ = self._evidence(session, owner, credit_row, credit_payload, credit_financial)
+                _fingerprint(debit_fp, expected_debit_fingerprint)
+                _fingerprint(credit_fp, expected_credit_fingerprint)
+                if (debit_row.account_id == credit_row.account_id or debit_payload["credit_debit_indicator"] != "DBIT"
+                        or credit_payload["credit_debit_indicator"] != "CRDT"
+                        or compare_money(debit_payload["amount"], "0") <= 0
+                        or compare_money(debit_payload["amount"], credit_payload["amount"]) != 0
+                        or debit_payload["currency"] != credit_payload["currency"]
+                        or abs((date.fromisoformat(effective_date(debit_payload)) - date.fromisoformat(effective_date(credit_payload))).days) > 3):
+                    raise AnalyticsError()
+                if source != "manual":
+                    self._verify_source(owner, debit_row, debit_payload, debit_meta, credit_row, credit_payload, credit_meta, owned, source)
+            else:
+                debit_fp, credit_fp = row.debit_fingerprint, row.credit_fingerprint
+                source = row.source
+            before = None if row is None else _dict(row, _DECISION_FIELDS)
+            status = {"accept": "accepted", "reject": "rejected", "undo": "undone"}[action]
+            if row is not None and (row.status, row.debit_fingerprint, row.credit_fingerprint, row.source) == (status, debit_fp, credit_fp, source):
+                return {**before, "changed": False}
+            if row is None:
+                now = self._now()
+                row = Decision(id=str(uuid.uuid4()), owner=owner, debit_account_id=debit_row.account_id,
+                      debit_ref=debit_row.entry_reference, credit_account_id=credit_row.account_id,
+                      credit_ref=credit_row.entry_reference, source=source, rule_version=1, version=0,
+                      status=status, debit_fingerprint=debit_fp, credit_fingerprint=credit_fp,
+                      created_at=now, updated_at=now)
+                session.add(row)
+                session.flush()
+            session.execute(delete(Leg).where(Leg.decision_id == row.id))
+            if status == "accepted":
+                for leg in (debit_row, credit_row):
+                    prior = session.get(Leg, (leg.account_id, leg.entry_reference))
+                    if prior is not None:
+                        raise AnalyticsError("budget_analytics_leg_reserved", 409)
+                    session.add(Leg(account_id=leg.account_id, entry_reference=leg.entry_reference, decision_id=row.id))
+            row.status, row.source, row.debit_fingerprint, row.credit_fingerprint = status, source, debit_fp, credit_fp
+            row.version += 1
+            row.updated_at = self._now()
+            session.flush()
+            result = _dict(row, _DECISION_FIELDS)
+            self._analytics_audit(session, owner, "transfer", row.id, action, before, result)
+            return {**result, "changed": True}

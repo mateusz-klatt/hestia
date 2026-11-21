@@ -453,6 +453,9 @@ class TolerantResponseContractTests(unittest.TestCase):
     the emitted artifact ONLY on request-side schemas, never on anything a client decodes."""
 
     REQUEST_ONLY = {
+        "BudgetAnalyticsCategoryCreateRequest", "BudgetAnalyticsCategoryUpdateRequest",
+        "BudgetAnalyticsAnnotationRequest", "BudgetAnalyticsRulePreviewRequest", "BudgetAnalyticsRuleSaveRequest",
+        "BudgetAnalyticsTransferDecisionRequest", "BudgetAnalyticsLegRequest",
         "AddUserRequest", "ChangePasswordRequest", "ControlCover", "ControlLevel", "ControlRequest",
         "ControlSwitch", "ControlThermostat", "ControlThermostatPower", "IrRequest", "LoginRequest",
         "NameRequest", "ResetPasswordRequest", "RoomIconRequest", "RuleInput", "SceneRequest",
