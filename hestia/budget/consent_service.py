@@ -7,8 +7,10 @@ replace the local managed pointer, under the ordinary acquisition lock.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from collections import Counter
 import hashlib
 import hmac
+import json
 import math
 import re
 import secrets
@@ -18,10 +20,11 @@ from urllib.parse import urlsplit
 from sqlalchemy import text
 
 from .client import BudgetAPIError
+from .bank_metadata import normalize_account_identity
 from .config import BudgetConfigError, _read_secret
 from .consent_client import EnableBankingConsentClient, PSUContext
 from .consent_control import BudgetConsentControlStore
-from .consent_store import BudgetConsentError
+from .consent_store import BudgetConsentError, _EVIDENCE, _UIDS, _IDENTITY_LIMIT, _account_hashes, _identity_evidence
 from .normalize import BudgetDataError, _account_uids, _uid, _valid_until
 from .runtime import BudgetBusyError, budget_lock
 from .store import BudgetNotFound
@@ -74,6 +77,28 @@ def _error(exc):
     return code if isinstance(code, str) and code in {"authorization", "network", "rate_limit", "invalid_response", "invalid_session",
                            "expired_session", "session_mismatch", "account_selection", "unavailable",
                            "acquisition_timeout", "deferred"} else "internal_error"
+
+
+def _post_identity_evidence(response, country, observed_at, *, allowed_hashes):
+    rows = response.get("accounts")
+    if not isinstance(rows, list) or len(rows) > _IDENTITY_LIMIT:
+        return {}
+    valid = []
+    for row in rows:
+        try:
+            if not isinstance(row, dict):
+                continue
+            uid = _uid(row.get("uid"), "account_selection")
+            primary = row.get("identification_hash")
+            _account_hashes([primary])
+            valid.append((uid, primary, row))
+        except (BudgetDataError, BudgetConsentError):
+            continue
+    uid_counts, hash_counts = Counter(row[0] for row in valid), Counter(row[1] for row in valid)
+    evidence = {uid: {"identification_hash": primary, "identities": list(normalize_account_identity(row, country=country)),
+                      "observed_at": observed_at} for uid, primary, row in valid
+                if primary in allowed_hashes and uid_counts[uid] == 1 and hash_counts[primary] == 1}
+    return _identity_evidence(evidence, observed_at)
 
 
 class BudgetConsentService:
@@ -250,7 +275,7 @@ class BudgetConsentService:
     def status(self, owner):
         return self.store.managed(owner)
 
-    def _verify(self, response, connection, selected):
+    def _verify(self, response, connection, selected, *, identity_evidence=None):
         if not isinstance(response, dict) or response.get("status") != "AUTHORIZED":
             raise BudgetDataError("invalid_session")
         bank = response.get("aspsp")
@@ -266,7 +291,11 @@ class BudgetConsentService:
             raise BudgetDataError("account_selection")
         if not selected <= set(connection.accounts):
             raise BudgetDataError("account_selection")
-        return expiry, {"account_hashes": sorted(hashes)}
+        metadata = {"account_hashes": sorted(hashes)}
+        if identity_evidence:
+            retained = {row["identification_hash"] for row in identity_evidence.values()}
+            metadata[_UIDS] = {primary: uid for primary, uid in hashes.items() if primary in retained}
+        return expiry, metadata
 
     def _result(self, flow, status, candidate=None, error=None):
         result = {"flow_id": flow["id"], "status": status}
@@ -293,15 +322,18 @@ class BudgetConsentService:
             if candidate is None:
                 client = self._client(flow, nonce)
                 code = self.files.get(flow["code_ref"], "code")
+                selected_before_post = set()
 
                 def claim():
-                    nonlocal attempted
+                    nonlocal attempted, selected_before_post
+                    selected_before_post = self.store.consent_selected_hashes(owner, flow["connection_id"])
                     self.store.claim_exchange(owner, flow_id, auth_fingerprint, _token_hash(nonce))
                     attempted = True
 
                 try:
                     response = self._request(client, flow, nonce, connection, "POST", "/sessions", deadline=deadline,
                                              body=code, psu=psu, before_send=claim)
+                    observed_at = self.clock()
                 except Exception:
                     if attempted:
                         self._discard(flow["code_ref"])
@@ -309,8 +341,13 @@ class BudgetConsentService:
                 self._discard(flow["code_ref"])
                 session_id = _uid(response.get("session_id") if isinstance(response, dict) else None, "invalid_session")
                 ref = self.files.put("session", {"session_id": session_id})
+                metadata = {"account_hashes": []}
+                evidence = _post_identity_evidence(response, connection.country, observed_at,
+                                                   allowed_hashes=selected_before_post)
+                if evidence:
+                    metadata[_EVIDENCE] = evidence
                 candidate = self.store.record_candidate(owner, flow_id, capsule_ref=ref, valid_until=None,
-                                                         metadata={"account_hashes": []})
+                                                         metadata=metadata)
             if candidate["valid_until"] is None:
                 self._guard(flow, nonce)
                 session = self.files.get(candidate["capsule_ref"], "session")
@@ -320,7 +357,9 @@ class BudgetConsentService:
                 self._guard(flow, nonce)
                 self._remaining(deadline)
                 selected = self.store.consent_selected_hashes(owner, flow["connection_id"])
-                expiry, metadata = self._verify(response, connection, selected)
+                evidence = json.loads(candidate["metadata_json"]).get(_EVIDENCE)
+                options = {"identity_evidence": evidence} if evidence else {}
+                expiry, metadata = self._verify(response, connection, selected, **options)
                 candidate = self.store.record_candidate(owner, flow_id, capsule_ref=candidate["capsule_ref"],
                                                          valid_until=expiry, metadata=metadata)
             self._remaining(deadline)

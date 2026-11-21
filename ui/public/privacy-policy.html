@@ -179,8 +179,10 @@
         and synchronising are separate choices.</p>
       <ul>
         <li><strong>Account references:</strong> a local identifier and the hashed account
-          identifier issued by Enable Banking. Full account numbers and account-holder names from
-          the bank's list of accounts are not stored as account details.</li>
+          identifier issued by Enable Banking. For local transfer matching, a separate metadata
+          record can also keep structured account identifiers supplied by the bank, including full
+          IBAN or supported domestic account numbers. These numbers are not shown as account labels.
+          Account-holder names from the bank's list of accounts are not stored as account details.</li>
         <li><strong>Optional account labels:</strong> the bank's product name, the account currency
           and the last four characters of the account identifier, so that the owner can recognise
           accounts. Product names that look like account numbers or identifiers are not stored.</li>
@@ -191,7 +193,15 @@
           lines supplied by the bank. Hestia keeps these lines as the bank sends them: they can
           contain names of shops or people, account numbers and other payment identifiers, and
           Hestia does not filter them. Entries that the bank reports ambiguously are kept apart as
-          uncertain observations instead of being merged.</li>
+          uncertain observations instead of being merged. A separate metadata record can keep bank-supplied
+          creditor/debtor names and account identifiers, merchant category codes, and the source and
+          observation time of each retained field. Missing account numbers do not prevent review of
+          possible transfers with equal amounts and nearby dates.</li>
+        <li><strong>Budget analysis:</strong> owner-defined categories, transaction classifications,
+          literal matching rules and their previews, accepted/rejected/undone transfer relationships,
+          source fingerprints and a private history of classification changes. These are kept apart
+          from the original bank records. Suggested transfers change totals only after the owner
+          accepts them. Reports cover the owner's current account selection.</li>
         <li><strong>Origin and timing:</strong> whether data came from the bank interface or from an
           operator-imported copy of an earlier authorised download, and when they were observed,
           fetched and imported.</li>
@@ -216,8 +226,8 @@
         its database, files and backups. Budget pages and responses are delivered through the same
         Cloudflare and Apache reverse proxy as the rest of the application. The reverse proxy's
         access logs record requested addresses including their query part; for budget requests
-        these contain Hestia's local identifiers, date filters and an encrypted paging token, not
-        amounts, descriptions or bank identifiers. Hestia itself keeps no web access log and
+        these can contain Hestia's local identifiers, date/category filters, an encrypted paging token
+        and any transaction search text entered by the owner. Hestia itself keeps no web access log and
         records budget errors only by error type. The SQLite database,
         its write-ahead log and backups are not encrypted by Hestia; they are protected by server
         file permissions and access controls.</p>

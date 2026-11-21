@@ -128,6 +128,211 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/budget/analytics/annotation": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Save an owner-private local classification
+         * @description Requires the exact admin owner, browser cookie and configured HTTPS Origin. Version and source fingerprints prevent stale changes. No bank request is made.
+         */
+        post: operations["annotateBudgetAnalyticsTransaction"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/budget/analytics/categories": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read owner-private local budget analytics */
+        get: operations["getBudgetAnalyticsCategories"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/budget/analytics/category-create": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Save an owner-private local classification
+         * @description Requires the exact admin owner, browser cookie and configured HTTPS Origin. Version and source fingerprints prevent stale changes. No bank request is made.
+         */
+        post: operations["createBudgetAnalyticsCategory"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/budget/analytics/category-update": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Save an owner-private local classification
+         * @description Requires the exact admin owner, browser cookie and configured HTTPS Origin. Version and source fingerprints prevent stale changes. No bank request is made.
+         */
+        post: operations["updateBudgetAnalyticsCategory"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/budget/analytics/overview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read owner-private local budget analytics */
+        get: operations["getBudgetAnalyticsOverview"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/budget/analytics/rule-preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Save an owner-private local classification
+         * @description Requires the exact admin owner, browser cookie and configured HTTPS Origin. Version and source fingerprints prevent stale changes. No bank request is made.
+         */
+        post: operations["previewBudgetAnalyticsRule"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/budget/analytics/rule-save": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Save an owner-private local classification
+         * @description Requires the exact admin owner, browser cookie and configured HTTPS Origin. Version and source fingerprints prevent stale changes. No bank request is made.
+         */
+        post: operations["saveBudgetAnalyticsRule"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/budget/analytics/rules": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read owner-private local budget analytics */
+        get: operations["getBudgetAnalyticsRules"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/budget/analytics/transactions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read owner-private local budget analytics */
+        get: operations["getBudgetAnalyticsTransactions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/budget/analytics/transfer-decision": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Save an owner-private local classification
+         * @description Requires the exact admin owner, browser cookie and configured HTTPS Origin. Version and source fingerprints prevent stale changes. No bank request is made.
+         */
+        post: operations["decideBudgetAnalyticsTransfer"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/budget/analytics/transfers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read owner-private local budget analytics */
+        get: operations["getBudgetAnalyticsTransfers"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/budget/background-selection": {
         parameters: {
             query?: never;
@@ -1119,6 +1324,605 @@ export interface components {
             /** Accounts */
             accounts: components["schemas"]["BudgetAccount"][];
         };
+        /** BudgetAnalyticsAnnotation */
+        BudgetAnalyticsAnnotation: {
+            /** Category Id */
+            category_id: string | null;
+            /** Kind */
+            kind: string;
+            /** Mode */
+            mode: string;
+            /** Stale */
+            stale: boolean;
+            /** Version */
+            version: number;
+        };
+        /** BudgetAnalyticsAnnotationRequest */
+        BudgetAnalyticsAnnotationRequest: {
+            /** Account Id */
+            account_id: string;
+            /** Category Id */
+            category_id: string | null;
+            /** Entry Reference */
+            entry_reference: string;
+            /** Expected Fingerprint */
+            expected_fingerprint: string;
+            /** Expected Version */
+            expected_version: number;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "auto" | "expense" | "income" | "refund" | "excluded";
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "auto" | "manual";
+        };
+        /** BudgetAnalyticsAnnotationResult */
+        BudgetAnalyticsAnnotationResult: {
+            annotation: components["schemas"]["BudgetAnalyticsAnnotationSaved"];
+            /**
+             * Ok
+             * @constant
+             */
+            ok: true;
+        };
+        /** BudgetAnalyticsAnnotationSaved */
+        BudgetAnalyticsAnnotationSaved: {
+            /** Account Id */
+            account_id: string;
+            /** Category Id */
+            category_id: string | null;
+            /** Changed */
+            changed: boolean;
+            /** Entry Reference */
+            entry_reference: string;
+            /** Kind */
+            kind: string;
+            /** Ledger Fingerprint */
+            ledger_fingerprint: string;
+            /** Mode */
+            mode: string;
+            /** Updated At */
+            updated_at: number | null;
+            /** Version */
+            version: number;
+        };
+        /** BudgetAnalyticsCategories */
+        BudgetAnalyticsCategories: {
+            /** Categories */
+            categories: components["schemas"]["BudgetAnalyticsCategory"][];
+        };
+        /** BudgetAnalyticsCategory */
+        BudgetAnalyticsCategory: {
+            /** Archived */
+            archived: boolean;
+            /** Created At */
+            created_at: number;
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Updated At */
+            updated_at: number;
+            /** Version */
+            version: number;
+        };
+        /** BudgetAnalyticsCategoryCreateRequest */
+        BudgetAnalyticsCategoryCreateRequest: {
+            /** Name */
+            name: string;
+        };
+        /** BudgetAnalyticsCategoryResult */
+        BudgetAnalyticsCategoryResult: {
+            category: components["schemas"]["BudgetAnalyticsCategorySaved"];
+            /**
+             * Ok
+             * @constant
+             */
+            ok: true;
+        };
+        /** BudgetAnalyticsCategorySaved */
+        BudgetAnalyticsCategorySaved: {
+            /** Archived */
+            archived: boolean;
+            /** Changed */
+            changed: boolean;
+            /** Created At */
+            created_at: number;
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Updated At */
+            updated_at: number;
+            /** Version */
+            version: number;
+        };
+        /** BudgetAnalyticsCategoryTotal */
+        BudgetAnalyticsCategoryTotal: {
+            /** Archived */
+            archived: boolean;
+            /** Category Id */
+            category_id: string | null;
+            /** Currency */
+            currency: string;
+            /** Expenses */
+            expenses: string;
+            /** Name */
+            name: string | null;
+            /** Net Spending */
+            net_spending: string;
+            /** Refunds */
+            refunds: string;
+        };
+        /** BudgetAnalyticsCategoryUpdateRequest */
+        BudgetAnalyticsCategoryUpdateRequest: {
+            /** Archived */
+            archived: boolean;
+            /** Category Id */
+            category_id: string;
+            /** Expected Version */
+            expected_version: number;
+            /** Name */
+            name: string;
+        };
+        /**
+         * BudgetAnalyticsCurrency
+         * @description Exact decimal strings in one currency; net_spending is expenses minus refunds.
+         */
+        BudgetAnalyticsCurrency: {
+            /** Currency */
+            currency: string;
+            /** Excluded Credits */
+            excluded_credits: string;
+            /** Excluded Debits */
+            excluded_debits: string;
+            /** Expenses */
+            expenses: string;
+            /** Gross Credits */
+            gross_credits: string;
+            /** Gross Debits */
+            gross_debits: string;
+            /** Income */
+            income: string;
+            /** Net Spending */
+            net_spending: string;
+            /** Refunds */
+            refunds: string;
+            /** Transfer Credits */
+            transfer_credits: string;
+            /** Transfer Debits */
+            transfer_debits: string;
+            /** Unclassified Credit */
+            unclassified_credit: string;
+        };
+        /** BudgetAnalyticsDecisionResult */
+        BudgetAnalyticsDecisionResult: {
+            decision: components["schemas"]["BudgetAnalyticsDecisionSaved"];
+            /**
+             * Ok
+             * @constant
+             */
+            ok: true;
+        };
+        /** BudgetAnalyticsDecisionSaved */
+        BudgetAnalyticsDecisionSaved: {
+            /** Changed */
+            changed: boolean;
+            /** Created At */
+            created_at: number;
+            /** Credit Account Id */
+            credit_account_id: string;
+            /** Credit Fingerprint */
+            credit_fingerprint: string;
+            /** Credit Ref */
+            credit_ref: string;
+            /** Debit Account Id */
+            debit_account_id: string;
+            /** Debit Fingerprint */
+            debit_fingerprint: string;
+            /** Debit Ref */
+            debit_ref: string;
+            /** Id */
+            id: string;
+            /** Rule Version */
+            rule_version: number;
+            /** Source */
+            source: string;
+            /** Status */
+            status: string;
+            /** Updated At */
+            updated_at: number;
+            /** Version */
+            version: number;
+        };
+        /** BudgetAnalyticsEffective */
+        BudgetAnalyticsEffective: {
+            /** Category Id */
+            category_id: string | null;
+            /** Kind */
+            kind: string;
+            /** Rule Id */
+            rule_id: string | null;
+            /** Source */
+            source: string;
+        };
+        /** BudgetAnalyticsFreshness */
+        BudgetAnalyticsFreshness: {
+            /** Account Id */
+            account_id: string;
+            balances: components["schemas"]["BudgetComponentStatus"];
+            transactions: components["schemas"]["BudgetComponentStatus"];
+        };
+        /** BudgetAnalyticsLeg */
+        BudgetAnalyticsLeg: {
+            /** Account Id */
+            account_id: string;
+            /** Amount */
+            amount: string | null;
+            /** Currency */
+            currency: string | null;
+            /** Date */
+            date: string | null;
+            /** Entry Reference */
+            entry_reference: string;
+            /** Fingerprint */
+            fingerprint: string | null;
+            /** Selected */
+            selected: boolean;
+        };
+        /** BudgetAnalyticsLegRequest */
+        BudgetAnalyticsLegRequest: {
+            /** Account Id */
+            account_id: string;
+            /** Entry Reference */
+            entry_reference: string;
+        };
+        /** BudgetAnalyticsMetadata */
+        BudgetAnalyticsMetadata: {
+            /** Creditor Name */
+            creditor_name: string | null;
+            /** Debtor Name */
+            debtor_name: string | null;
+            /** Mcc */
+            mcc: string | null;
+        };
+        /** BudgetAnalyticsMonth */
+        BudgetAnalyticsMonth: {
+            /** Currencies */
+            currencies: components["schemas"]["BudgetAnalyticsCurrency"][];
+            /** Month */
+            month: string;
+        };
+        /** BudgetAnalyticsOverview */
+        BudgetAnalyticsOverview: {
+            /** Categories */
+            categories: components["schemas"]["BudgetAnalyticsCategoryTotal"][];
+            /** Currencies */
+            currencies: components["schemas"]["BudgetAnalyticsCurrency"][];
+            /** End */
+            end: string;
+            /** Months */
+            months: components["schemas"]["BudgetAnalyticsMonth"][];
+            /** Period */
+            period: string;
+            scope: components["schemas"]["BudgetAnalyticsScope"];
+            /** Snapshot Digest */
+            snapshot_digest: string;
+            /** Start */
+            start: string;
+            transfer_summary: components["schemas"]["BudgetAnalyticsTransferSummary"];
+        };
+        /** BudgetAnalyticsPreview */
+        BudgetAnalyticsPreview: {
+            /** Affected Count */
+            affected_count: number;
+            /** Examples */
+            examples: components["schemas"]["BudgetAnalyticsPreviewExample"][];
+            /** Expires At */
+            expires_at: number;
+            /** Preview Id */
+            preview_id: string;
+        };
+        /** BudgetAnalyticsPreviewExample */
+        BudgetAnalyticsPreviewExample: {
+            /** Account Id */
+            account_id: string;
+            /** Entry Reference */
+            entry_reference: string;
+        };
+        /** BudgetAnalyticsPreviewResult */
+        BudgetAnalyticsPreviewResult: {
+            /**
+             * Ok
+             * @constant
+             */
+            ok: true;
+            preview: components["schemas"]["BudgetAnalyticsPreview"];
+        };
+        /** BudgetAnalyticsRule */
+        BudgetAnalyticsRule: {
+            /** Category Id */
+            category_id: string | null;
+            /** Created At */
+            created_at: number;
+            /** Enabled */
+            enabled: boolean;
+            /** Field */
+            field: string;
+            /** Id */
+            id: string;
+            /** Kind */
+            kind: string;
+            /** Operator */
+            operator: string;
+            /** Priority */
+            priority: number;
+            /** Updated At */
+            updated_at: number;
+            /** Value */
+            value: string;
+            /** Version */
+            version: number;
+        };
+        /** BudgetAnalyticsRulePreviewRequest */
+        BudgetAnalyticsRulePreviewRequest: {
+            /** Category Id */
+            category_id: string | null;
+            /** Enabled */
+            enabled: boolean;
+            /** Expected Version */
+            expected_version: number;
+            /**
+             * Field
+             * @enum {string}
+             */
+            field: "description" | "counterparty_name" | "mcc";
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "auto" | "expense" | "income" | "refund" | "excluded";
+            /**
+             * Operator
+             * @enum {string}
+             */
+            operator: "contains" | "equals";
+            /** Priority */
+            priority: number;
+            /** Rule Id */
+            rule_id: string | null;
+            /** Value */
+            value: string;
+        };
+        /** BudgetAnalyticsRuleResult */
+        BudgetAnalyticsRuleResult: {
+            /**
+             * Ok
+             * @constant
+             */
+            ok: true;
+            rule: components["schemas"]["BudgetAnalyticsRuleSaved"];
+        };
+        /** BudgetAnalyticsRuleSaveRequest */
+        BudgetAnalyticsRuleSaveRequest: {
+            /** Preview Id */
+            preview_id: string;
+        };
+        /** BudgetAnalyticsRuleSaved */
+        BudgetAnalyticsRuleSaved: {
+            /** Category Id */
+            category_id: string | null;
+            /** Changed */
+            changed: boolean;
+            /** Created At */
+            created_at: number;
+            /** Enabled */
+            enabled: boolean;
+            /** Field */
+            field: string;
+            /** Id */
+            id: string;
+            /** Kind */
+            kind: string;
+            /** Operator */
+            operator: string;
+            /** Priority */
+            priority: number;
+            /** Updated At */
+            updated_at: number;
+            /** Value */
+            value: string;
+            /** Version */
+            version: number;
+        };
+        /** BudgetAnalyticsRules */
+        BudgetAnalyticsRules: {
+            /** Rules */
+            rules: components["schemas"]["BudgetAnalyticsRule"][];
+        };
+        /** BudgetAnalyticsScope */
+        BudgetAnalyticsScope: {
+            /** Excluded Accounts */
+            excluded_accounts: number;
+            /** Freshness */
+            freshness: components["schemas"]["BudgetAnalyticsFreshness"][];
+            /** Import Unresolved Count */
+            import_unresolved_count: number;
+            /** Selected Accounts */
+            selected_accounts: number;
+            /** Uncertain Count */
+            uncertain_count: number;
+            /** Unresolved Count */
+            unresolved_count: number;
+        };
+        /** BudgetAnalyticsTransaction */
+        BudgetAnalyticsTransaction: {
+            /** Account Id */
+            account_id: string;
+            /** Amount */
+            amount: string;
+            annotation: components["schemas"]["BudgetAnalyticsAnnotation"];
+            /** Api Observed At */
+            api_observed_at: number | null;
+            /** Booking Date */
+            booking_date: string | null;
+            /**
+             * Credit Debit Indicator
+             * @enum {string}
+             */
+            credit_debit_indicator: "CRDT" | "DBIT";
+            /** Currency */
+            currency: string;
+            effective: components["schemas"]["BudgetAnalyticsEffective"];
+            /** Entry Reference */
+            entry_reference: string;
+            /** Fingerprint */
+            fingerprint: string;
+            metadata: components["schemas"]["BudgetAnalyticsMetadata"] | null;
+            /** Observed At */
+            observed_at: number;
+            /** Remittance Information */
+            remittance_information: string[];
+            /**
+             * Source
+             * @description Currently api or offline_import; clients must handle future values.
+             */
+            source: string;
+            /**
+             * Status
+             * @constant
+             */
+            status: "BOOK";
+            /** Transaction Date */
+            transaction_date: string | null;
+            transfer: components["schemas"]["BudgetAnalyticsTransactionTransfer"];
+            /** Transfer Fingerprint */
+            transfer_fingerprint: string;
+            /** Value Date */
+            value_date: string | null;
+        };
+        /** BudgetAnalyticsTransactionTransfer */
+        BudgetAnalyticsTransactionTransfer: {
+            /** Ambiguous */
+            ambiguous: boolean;
+            /** Candidate Count */
+            candidate_count: number;
+            /** Decision Id */
+            decision_id: string | null;
+            /** Status */
+            status: string;
+        };
+        /** BudgetAnalyticsTransactions */
+        BudgetAnalyticsTransactions: {
+            /** End */
+            end: string;
+            /** Filtered Total */
+            filtered_total: number;
+            /** Next Cursor */
+            next_cursor: string | null;
+            /** Period */
+            period: string;
+            /** Snapshot Digest */
+            snapshot_digest: string;
+            /** Start */
+            start: string;
+            /** Transactions */
+            transactions: components["schemas"]["BudgetAnalyticsTransaction"][];
+        };
+        /** BudgetAnalyticsTransfer */
+        BudgetAnalyticsTransfer: {
+            /** Ambiguous */
+            ambiguous: boolean;
+            /** Boundary */
+            boundary: boolean;
+            credit: components["schemas"]["BudgetAnalyticsLeg"];
+            /** Date Distance */
+            date_distance: number | null;
+            debit: components["schemas"]["BudgetAnalyticsLeg"];
+            /** Id */
+            id: string | null;
+            /** Source */
+            source: string;
+            /** Stale */
+            stale: boolean;
+            /** Status */
+            status: string;
+            /** Version */
+            version: number;
+        };
+        /** BudgetAnalyticsTransferDecisionRequest */
+        BudgetAnalyticsTransferDecisionRequest: {
+            /**
+             * Action
+             * @enum {string}
+             */
+            action: "accept" | "reject" | "undo";
+            /** @default null */
+            credit: components["schemas"]["BudgetAnalyticsLegRequest"] | null;
+            /** @default null */
+            debit: components["schemas"]["BudgetAnalyticsLegRequest"] | null;
+            /**
+             * Decision Id
+             * @default null
+             */
+            decision_id: string | null;
+            /**
+             * Expected Credit Fingerprint
+             * @default null
+             */
+            expected_credit_fingerprint: string | null;
+            /**
+             * Expected Debit Fingerprint
+             * @default null
+             */
+            expected_debit_fingerprint: string | null;
+            /** Expected Version */
+            expected_version: number;
+            /**
+             * Source
+             * @default manual
+             * @enum {string}
+             */
+            source: "account_identity" | "heuristic" | "manual";
+        };
+        /** BudgetAnalyticsTransferSummary */
+        BudgetAnalyticsTransferSummary: {
+            /** Accepted */
+            accepted: number;
+            /** Boundary */
+            boundary: number;
+            /** Rejected */
+            rejected: number;
+            /** Review */
+            review: number;
+            /** Scan Limited */
+            scan_limited: boolean;
+            /** Suggested */
+            suggested: number;
+        };
+        /** BudgetAnalyticsTransfers */
+        BudgetAnalyticsTransfers: {
+            /** End */
+            end: string;
+            /** Filtered Total */
+            filtered_total: number;
+            /** Next Cursor */
+            next_cursor: string | null;
+            /** Period */
+            period: string;
+            /** Scan Limited */
+            scan_limited: boolean;
+            /** Snapshot Digest */
+            snapshot_digest: string;
+            /** Start */
+            start: string;
+            /** Transfers */
+            transfers: components["schemas"]["BudgetAnalyticsTransfer"][];
+        };
         /**
          * BudgetArchivedBalances
          * @description Historical import metadata; archived values are not combined with live balances.
@@ -1178,6 +1982,8 @@ export interface components {
         BudgetCapabilities: {
             /** Account Controls */
             account_controls: boolean;
+            /** Analytics */
+            analytics?: boolean;
             /** Background Polling */
             background_polling: boolean;
             /** Background Selection */
@@ -3287,6 +4093,1065 @@ export interface operations {
             };
             /** @description SQLite session users required */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description budget configuration unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+        };
+    };
+    annotateBudgetAnalyticsTransaction: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BudgetAnalyticsAnnotationRequest"];
+            };
+        };
+        responses: {
+            /** @description owner-scoped stored state; no bank request */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetAnalyticsAnnotationResult"];
+                };
+            };
+            /** @description invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description session required; middleware may return an empty body */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description admin owner or browser-origin requirement failed; middleware may return an empty body */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description unknown, disabled or foreign resource */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Version, financial source, reserved transfer leg, preview or cursor changed; reload and review. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Explicit analytics processing or owner configuration limit; no partial totals. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description budget configuration unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+        };
+    };
+    getBudgetAnalyticsCategories: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description owner-scoped stored state; no bank request */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetAnalyticsCategories"];
+                };
+            };
+            /** @description invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description session required; middleware may return an empty body */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description admin owner or browser-origin requirement failed; middleware may return an empty body */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description unknown, disabled or foreign resource */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Version, financial source, reserved transfer leg, preview or cursor changed; reload and review. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Explicit analytics processing or owner configuration limit; no partial totals. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description budget configuration unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+        };
+    };
+    createBudgetAnalyticsCategory: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BudgetAnalyticsCategoryCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description owner-scoped stored state; no bank request */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetAnalyticsCategoryResult"];
+                };
+            };
+            /** @description invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description session required; middleware may return an empty body */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description admin owner or browser-origin requirement failed; middleware may return an empty body */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description unknown, disabled or foreign resource */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Version, financial source, reserved transfer leg, preview or cursor changed; reload and review. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Explicit analytics processing or owner configuration limit; no partial totals. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description budget configuration unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+        };
+    };
+    updateBudgetAnalyticsCategory: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BudgetAnalyticsCategoryUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description owner-scoped stored state; no bank request */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetAnalyticsCategoryResult"];
+                };
+            };
+            /** @description invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description session required; middleware may return an empty body */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description admin owner or browser-origin requirement failed; middleware may return an empty body */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description unknown, disabled or foreign resource */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Version, financial source, reserved transfer leg, preview or cursor changed; reload and review. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Explicit analytics processing or owner configuration limit; no partial totals. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description budget configuration unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+        };
+    };
+    getBudgetAnalyticsOverview: {
+        parameters: {
+            query: {
+                /** @description Inclusive calendar month or year, 1900 through 9999. */
+                period: string;
+                currency?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description owner-scoped stored state; no bank request */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetAnalyticsOverview"];
+                };
+            };
+            /** @description invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description session required; middleware may return an empty body */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description admin owner or browser-origin requirement failed; middleware may return an empty body */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description unknown, disabled or foreign resource */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Version, financial source, reserved transfer leg, preview or cursor changed; reload and review. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Explicit analytics processing or owner configuration limit; no partial totals. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description budget configuration unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+        };
+    };
+    previewBudgetAnalyticsRule: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BudgetAnalyticsRulePreviewRequest"];
+            };
+        };
+        responses: {
+            /** @description owner-scoped stored state; no bank request */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetAnalyticsPreviewResult"];
+                };
+            };
+            /** @description invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description session required; middleware may return an empty body */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description admin owner or browser-origin requirement failed; middleware may return an empty body */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description unknown, disabled or foreign resource */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Version, financial source, reserved transfer leg, preview or cursor changed; reload and review. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Explicit analytics processing or owner configuration limit; no partial totals. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description budget configuration unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+        };
+    };
+    saveBudgetAnalyticsRule: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BudgetAnalyticsRuleSaveRequest"];
+            };
+        };
+        responses: {
+            /** @description owner-scoped stored state; no bank request */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetAnalyticsRuleResult"];
+                };
+            };
+            /** @description invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description session required; middleware may return an empty body */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description admin owner or browser-origin requirement failed; middleware may return an empty body */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description unknown, disabled or foreign resource */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Version, financial source, reserved transfer leg, preview or cursor changed; reload and review. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Explicit analytics processing or owner configuration limit; no partial totals. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description budget configuration unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+        };
+    };
+    getBudgetAnalyticsRules: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description owner-scoped stored state; no bank request */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetAnalyticsRules"];
+                };
+            };
+            /** @description invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description session required; middleware may return an empty body */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description admin owner or browser-origin requirement failed; middleware may return an empty body */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description unknown, disabled or foreign resource */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Version, financial source, reserved transfer leg, preview or cursor changed; reload and review. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Explicit analytics processing or owner configuration limit; no partial totals. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description budget configuration unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+        };
+    };
+    getBudgetAnalyticsTransactions: {
+        parameters: {
+            query: {
+                /** @description Inclusive calendar month or year, 1900 through 9999. */
+                period: string;
+                currency?: string;
+                /** @description Category ID, or uncategorised for no category. */
+                category_id?: string;
+                kind?: string;
+                query?: string;
+                limit?: number;
+                /** @description Opaque cursor bound to the current projection. A changed snapshot returns 409. */
+                cursor?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description owner-scoped stored state; no bank request */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetAnalyticsTransactions"];
+                };
+            };
+            /** @description invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description session required; middleware may return an empty body */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description admin owner or browser-origin requirement failed; middleware may return an empty body */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description unknown, disabled or foreign resource */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Version, financial source, reserved transfer leg, preview or cursor changed; reload and review. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Explicit analytics processing or owner configuration limit; no partial totals. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description budget configuration unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+        };
+    };
+    decideBudgetAnalyticsTransfer: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BudgetAnalyticsTransferDecisionRequest"];
+            };
+        };
+        responses: {
+            /** @description owner-scoped stored state; no bank request */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetAnalyticsDecisionResult"];
+                };
+            };
+            /** @description invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description session required; middleware may return an empty body */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description admin owner or browser-origin requirement failed; middleware may return an empty body */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description unknown, disabled or foreign resource */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Version, financial source, reserved transfer leg, preview or cursor changed; reload and review. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Explicit analytics processing or owner configuration limit; no partial totals. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description budget configuration unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+        };
+    };
+    getBudgetAnalyticsTransfers: {
+        parameters: {
+            query: {
+                /** @description Inclusive calendar month or year, 1900 through 9999. */
+                period: string;
+                currency?: string;
+                status?: "suggested" | "accepted" | "review" | "boundary" | "rejected" | "undone";
+                limit?: number;
+                /** @description Opaque cursor bound to the current projection. A changed snapshot returns 409. */
+                cursor?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description owner-scoped stored state; no bank request */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetAnalyticsTransfers"];
+                };
+            };
+            /** @description invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description session required; middleware may return an empty body */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description admin owner or browser-origin requirement failed; middleware may return an empty body */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description unknown, disabled or foreign resource */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Version, financial source, reserved transfer leg, preview or cursor changed; reload and review. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Explicit analytics processing or owner configuration limit; no partial totals. */
+            413: {
                 headers: {
                     [name: string]: unknown;
                 };

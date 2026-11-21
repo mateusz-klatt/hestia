@@ -16,6 +16,8 @@ from ..db import BudgetAccountAudit as AccountAudit
 from ..db import BudgetConnectionAudit as ConnectionAudit
 from ..db import BudgetComponent as Component
 from .account_metadata import BudgetMetadataError, apply_account_metadata
+from .bank_metadata import apply_bank_metadata
+from .analytics_reconcile import reconcile_transfers
 
 ACCOUNT_KINDS = frozenset({"current", "savings", "credit_card", "other"})
 OPERATIONS = ("transactions", "balances")
@@ -367,6 +369,8 @@ class BudgetStore:
                                                observation, now, attempt_id)
                 completed += good
                 errors += bad
+                apply_bank_metadata(session, accounts[observation.identification_hash].id,
+                                    getattr(observation, "bank_metadata", None), source="api", observed_at=now)
             row.valid_until = snapshot.valid_until
             codes = {safe_error(getattr(observation, op + "_error")) for observation in snapshot.accounts
                      for op in OPERATIONS if getattr(observation, op + "_error", None) is not None}
@@ -381,6 +385,7 @@ class BudgetStore:
             elif completed == len(accounts) * len(OPERATIONS):
                 row.last_success = now
                 row.failures, row.last_error = 0, None
+            reconcile_transfers(session, row.owner, now)
 
     @staticmethod
     def _component_error(component, code):
@@ -489,6 +494,11 @@ class BudgetStore:
                 report = {**json.loads(batch.report_json), "duplicate": True}
                 for field in ("inserted", "updated", "preserved_api", "stale", "unresolved", "unchanged"):
                     report[field] = 0
+                bank = apply_bank_metadata(session, account.id, getattr(snapshot, "bank_metadata", None),
+                                           source="offline_import", observed_at=snapshot.fetched_at)
+                if bank is not None:
+                    metadata["bank_metadata"] = bank
+                reconcile_transfers(session, item.owner, self.clock())
                 return {**report, **metadata}
             self._restore_api_conflicts(session, account.id)
             batch = ImportBatch(id=str(uuid.uuid4()), fingerprint=snapshot.digest,
@@ -511,6 +521,11 @@ class BudgetStore:
                                                  reason=reason, payload_json=_json(tx)))
                     report["unresolved"] += 1
             batch.report_json = _json(report)
+            bank = apply_bank_metadata(session, account.id, getattr(snapshot, "bank_metadata", None),
+                                       source="offline_import", observed_at=snapshot.fetched_at)
+            if bank is not None:
+                metadata["bank_metadata"] = bank
+            reconcile_transfers(session, item.owner, self.clock())
             return {**report, **metadata}
 
     @staticmethod

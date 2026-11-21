@@ -128,6 +128,7 @@ def _read(owner, operation, query, secret, service, consent=False):
     result = getattr(_store(secret), operation)(owner, **query)
     if operation == "connections":
         return {"connections": result, "capabilities": {
+            "analytics": os.environ.get("HESTIA_BUDGET_ANALYTICS_ENABLED") == "1",
             "stored_reads": True, "account_controls": True, "background_selection": True, "consent": consent,
             "refresh": service is not None and service.accepting,
             "background_polling": service is not None and service.accepting and service.poller}}
@@ -209,7 +210,7 @@ def _failure(exc, operation):
 
 
 def register(app, read_json_body, *, auth_enabled, session_secret, secure_cookie=lambda: False):
-    from . import consent_api
+    from . import analytics_api, consent_api
     async def private_headers(request, response):
         if request.path == PREFIX or request.path.startswith(PREFIX + "/"):
             response.headers.update(PRIVATE_HEADERS)
@@ -247,6 +248,7 @@ def register(app, read_json_body, *, auth_enabled, session_secret, secure_cookie
     app.on_response_prepare.append(private_headers)
     consent_api.register(app, read_json_body, auth_enabled=auth_enabled, session_secret=session_secret,
                          secure_cookie=secure_cookie)
+    analytics_api.register(app, read_json_body, auth_enabled=auth_enabled, session_secret=session_secret)
     jobs.register(app, JOBS_KEY, auth_enabled=auth_enabled)
     for operation in READS:
         app.router.add_get(PREFIX + "/" + operation, handle, allow_head=False)

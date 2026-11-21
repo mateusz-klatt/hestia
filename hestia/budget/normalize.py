@@ -15,6 +15,7 @@ import time
 
 from .config import ConnectionConfig
 from .client import BudgetAPIError
+from .bank_metadata import BankMetadata, MetadataCollector
 
 MAX_PAGES = 1000
 MAX_TRANSACTIONS = 100_000
@@ -47,6 +48,7 @@ class AccountSnapshot:
     transactions: tuple[dict, ...] | None
     balances_error: str | None = None
     transactions_error: str | None = None
+    bank_metadata: BankMetadata | None = None
 
 
 @dataclass(frozen=True)
@@ -196,7 +198,7 @@ def _in_window(transaction, start, end):
     return stamp is None or start <= stamp <= end
 
 
-def _normalized_records(rows, budget):
+def _normalized_records(rows, budget, metadata=None):
     if not isinstance(rows, list):
         raise BudgetDataError()
     budget["remaining"] -= len(rows)
@@ -205,6 +207,8 @@ def _normalized_records(rows, budget):
     for row in rows:
         transaction = normalize_transaction(row)
         _charge(transaction, budget)
+        if metadata is not None:
+            metadata.add(row, transaction)
         yield transaction
 
 
@@ -245,7 +249,7 @@ def _budget_exhausted(budget):
     return budget["remaining"] <= 0 or budget["bytes"] <= 0
 
 
-def _transactions(client, uid, start, end, budget):
+def _transactions(client, uid, start, end, budget, metadata=None):
     result, references, seen = [], {}, set()
     key = None
     for _ in range(MAX_PAGES):
@@ -255,7 +259,7 @@ def _transactions(client, uid, start, end, budget):
         if key is not None:
             query["continuation_key"] = key
         page = _object(client.get(f"/accounts/{uid}/transactions", query=query))
-        for transaction in _normalized_records(page.get("transactions"), budget):
+        for transaction in _normalized_records(page.get("transactions"), budget, metadata):
             _append_unique(transaction, result, references)
         key = _continuation_key(page, seen)
         if key is None:
@@ -275,7 +279,7 @@ def _current_time(now):
     return now
 
 
-def _session_state(client, session_id, connection, now):
+def _session_state(client, session_id, connection, now, bank_accounts=None):
     session_id = _uid(session_id, "invalid_session")
     session = _object(client.get(f"/sessions/{session_id}"))
     if session.get("status") != "AUTHORIZED":
@@ -285,6 +289,10 @@ def _session_state(client, session_id, connection, now):
         raise BudgetDataError("session_mismatch")
     expiry = _valid_until(_object(session.get("access")).get("valid_until"), now)
     hashes = _account_uids(session, connection.accounts)
+    if bank_accounts is not None:
+        bank_accounts.update({item["identification_hash"]: {key: item[key] for key in ("account_id", "all_account_ids")
+                                                         if key in item}
+                              for item in session["accounts_data"]})
     return expiry, hashes
 
 
@@ -314,13 +322,17 @@ def _component(primary, operation, budget, before_component, fetch, wanted=None)
         return None, exc.code
 
 
-def _selected_account(client, primary, uid, start, end, budget, before_component, wanted=None):
+def _selected_account(client, primary, uid, start, end, budget, before_component, wanted=None, bank_account=None, country=None):
+    metadata = MetadataCollector(bank_account, country=country)
     transactions, transactions_error = _component(
         primary, "transactions", budget, before_component,
-        lambda: _transactions(client, uid, start, end, budget), wanted)
+        lambda: _transactions(client, uid, start, end, budget, metadata), wanted)
     balances, balances_error = _component(
         primary, "balances", budget, before_component, lambda: _balances(client, uid, budget), wanted)
-    return AccountSnapshot(primary, balances, transactions, balances_error, transactions_error)
+    if transactions is None:
+        metadata.rows.clear()
+    return AccountSnapshot(primary, balances, transactions, balances_error, transactions_error,
+                           metadata.finish(context={"identification_hash": primary}))
 
 
 def fetch_snapshot(client, session_id: str, connection: ConnectionConfig, *, today: date, now=None,
@@ -337,7 +349,8 @@ def fetch_snapshot(client, session_id: str, connection: ConnectionConfig, *, tod
     if type(today) is not date or today.toordinal() <= 364:
         raise BudgetDataError()
     start, end = (today - timedelta(days=364)).isoformat(), today.isoformat()
-    expiry, hashes = _session_state(client, session_id, connection, _current_time(now))
+    bank_accounts = {}
+    expiry, hashes = _session_state(client, session_id, connection, _current_time(now), bank_accounts)
     if on_session is not None:
         on_session(expiry)
     accounts, errors, budget = [], [], {"remaining": MAX_TRANSACTIONS, "bytes": MAX_NORMALIZED_BYTES}
@@ -347,5 +360,5 @@ def fetch_snapshot(client, session_id: str, connection: ConnectionConfig, *, tod
             errors.append(AccountFailure(primary, "limit_exceeded"))
             continue
         accounts.append(_selected_account(client, primary, hashes[primary], start, end, budget, before_component,
-                                          wanted))
+                                          wanted, bank_accounts.get(primary), connection.country))
     return Snapshot(expiry, tuple(accounts), start, end, tuple(errors))

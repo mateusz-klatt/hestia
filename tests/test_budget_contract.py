@@ -13,7 +13,7 @@ from tests.test_budget_store import configuration, prepare_selected, snapshot, t
 
 
 CAPABILITIES = {"stored_reads": True, "account_controls": True, "refresh": False,
-                "background_selection": True, "background_polling": False, "consent": False}
+                "background_selection": True, "background_polling": False, "consent": False, "analytics": False}
 COMPONENT = {"last_attempt": None, "last_success": None, "last_error": None, "failures": 0,
              "next_attempt": 0, "state": "never", "retry_at": None, "suspended": False,
              "stale": True, "age_seconds": None, "stale_after_seconds": 86400}
@@ -183,7 +183,8 @@ class BudgetOpenApiTests(unittest.TestCase):
         budget = {path: methods for path, methods in document["paths"].items() if path.startswith("/api/budget/")}
         posts = ("account-selection", "account-kind", "connection-state", "background-selection", "refresh")
         consent = {path: methods for path, methods in budget.items() if "/consent/" in path or "/enable-banking/" in path}
-        stored = {path: methods for path, methods in budget.items() if path not in consent}
+        analytics = {path: methods for path, methods in budget.items() if "/analytics/" in path}
+        stored = {path: methods for path, methods in budget.items() if path not in consent and path not in analytics}
         self.assertEqual({path.rsplit("/", 1)[1] for path in stored},
                          {"connections", "accounts", "status", "transactions", "balances", "limits", "jobs", *posts})
         for path, methods in stored.items():
@@ -195,7 +196,15 @@ class BudgetOpenApiTests(unittest.TestCase):
         for path, methods in consent.items():
             for entry in methods.values():
                 self.assertEqual(entry["x-required-role"], "public" if path.endswith("callback") else "admin")
-        self.assertEqual(document["info"]["version"], "0.16.0")
+        analytics_reads = {"overview", "transactions", "categories", "rules", "transfers"}
+        analytics_writes = {"category-create", "category-update", "annotation", "rule-preview", "rule-save", "transfer-decision"}
+        self.assertEqual(set(analytics), {"/api/budget/analytics/" + name for name in analytics_reads | analytics_writes})
+        for path, methods in analytics.items():
+            method = "get" if path.rsplit("/", 1)[1] in analytics_reads else "post"
+            self.assertEqual(set(methods), {method})
+            self.assertEqual(methods[method]["x-required-role"], "admin")
+            self.assertIn("413", methods[method]["responses"])
+        self.assertEqual(document["info"]["version"], "0.17.0")
         refresh = budget["/api/budget/refresh"]["post"]
         self.assertEqual(refresh["parameters"][0]["name"], "Idempotency-Key")
         self.assertTrue(refresh["parameters"][0]["required"])
@@ -218,11 +227,14 @@ class BudgetOpenApiTests(unittest.TestCase):
         schemas = contract.build_openapi()["components"]["schemas"]
         request_names = {model.__name__ for model, _ in BudgetRequestContractTests.CASES}
         request_names.add("BudgetConsentFlowRequest")
+        request_names.update({"BudgetAnalyticsCategoryCreateRequest", "BudgetAnalyticsCategoryUpdateRequest",
+                              "BudgetAnalyticsAnnotationRequest", "BudgetAnalyticsRulePreviewRequest",
+                              "BudgetAnalyticsRuleSaveRequest", "BudgetAnalyticsTransferDecisionRequest", "BudgetAnalyticsLegRequest"})
         for name, schema in schemas.items():
             if name in request_names:
                 self.assertIs(schema["additionalProperties"], False)
-                if name != "BudgetConsentFlowRequest":
-                    self.assertEqual(schema["properties"]["expected_version"]["minimum"], 1)
+                if "expected_version" in schema["properties"]:
+                    self.assertEqual(schema["properties"]["expected_version"]["minimum"], 0 if name.startswith("BudgetAnalytics") else 1)
             elif name.startswith("Budget"):
                 self.assertNotIn("additionalProperties", schema)
         for name in ("BudgetTransaction", "BudgetMoney"):

@@ -12,6 +12,7 @@ from sqlalchemy.exc import IntegrityError
 
 from ..db import BudgetAccount as Account, BudgetConnection as Connection
 from ..db import BudgetConsent as Consent, BudgetConsentAudit as Audit, BudgetConsentFlow as Flow
+from .bank_metadata import _identities_patch, apply_account_identity
 from .job_store import BudgetJobStore, BudgetUsersRequired
 from .store import BudgetNotFound, BudgetStoreError, _json
 
@@ -20,6 +21,10 @@ _ACTIVE = ("created", "started", "staged", "exchanging", "candidate")
 _ERRORS = frozenset({"authorization", "network", "rate_limit", "invalid_response", "invalid_session",
                      "session_mismatch", "account_selection", "unavailable", "exchange_uncertain",
                      "binding_invalid", "expired", "control_changed", "canceled", "internal_error"})
+_IDENTITY_LIMIT = 1000
+_IDENTITY_BYTES = 256 * 1024
+_EVIDENCE = "account_identity_evidence"
+_UIDS = "account_uids"
 
 
 class BudgetConsentError(BudgetStoreError):
@@ -50,6 +55,92 @@ def _account_hashes(values):
             or len(set(values)) != len(values)):
         raise BudgetConsentError("budget_consent_invalid_request", 400)
     return set(values)
+
+
+def _evidence_row(uid, row, now):
+    try:
+        _reference(uid)
+        if not isinstance(row, dict) or set(row) != {"identification_hash", "identities", "observed_at"}:
+            return None
+        _account_hashes([row["identification_hash"]])
+        identities = _identities_patch(row["identities"])
+        observed = row["observed_at"]
+        if (not identities or type(observed) not in (int, float) or not math.isfinite(observed)
+                or not 0 <= observed <= now):
+            return None
+        return {"identification_hash": row["identification_hash"], "identities": list(identities), "observed_at": observed}
+    except (BudgetConsentError, OverflowError):
+        return None
+
+
+def _identity_evidence(raw, now):
+    """Optional normalized evidence is bounded and never makes a valid consent fail."""
+    if not isinstance(raw, dict) or len(raw) > _IDENTITY_LIMIT:
+        return {}
+    result, size = {}, 0
+    for uid, value in raw.items():
+        row = _evidence_row(uid, value, now)
+        if row is not None:
+            size += len(_json([uid, row]))
+            if size > _IDENTITY_BYTES:
+                return {}
+            result[uid] = row
+    return result
+
+
+def _account_uid_map(raw, hashes):
+    if not isinstance(raw, dict) or len(raw) > _IDENTITY_LIMIT:
+        return {}
+    result = {}
+    for primary, uid in raw.items():
+        try:
+            _reference(uid)
+            if primary in hashes:
+                result[primary] = uid
+        except BudgetConsentError:
+            continue
+    return result
+
+
+def _candidate_metadata(metadata, valid_until, now):
+    if (not isinstance(metadata, dict) or "account_hashes" not in metadata
+            or set(metadata) - {"account_hashes", _EVIDENCE, _UIDS}):
+        raise BudgetConsentError("budget_consent_invalid_request", 400)
+    hashes = _account_hashes(metadata["account_hashes"])
+    if valid_until is None and hashes:
+        raise BudgetConsentError("budget_consent_invalid_request", 400)
+    result = {"account_hashes": sorted(hashes)}
+    evidence = _identity_evidence(metadata.get(_EVIDENCE), now)
+    mapping = _account_uid_map(metadata.get(_UIDS), hashes)
+    if evidence:
+        result[_EVIDENCE] = evidence
+    if mapping:
+        result[_UIDS] = mapping
+    return result
+
+
+def _retain_evidence(metadata, prior):
+    for key in (_EVIDENCE, _UIDS):
+        if key in prior:
+            if key in metadata and metadata[key] != prior[key]:
+                raise BudgetConsentError()
+            metadata[key] = prior[key]
+    return _json(metadata)
+
+
+def _adopt_identity_evidence(session, candidate, accounts, now):
+    metadata = json.loads(candidate.metadata_json)
+    evidence = _identity_evidence(metadata.get(_EVIDENCE), now)
+    mapping = _account_uid_map(metadata.get(_UIDS), metadata["account_hashes"])
+    changed = False
+    for account in accounts:
+        row = evidence.get(mapping.get(account.identification_hash))
+        if row is not None and row["identification_hash"] == account.identification_hash:
+            outcome = apply_account_identity(session, account.id, row["identities"], "api", row["observed_at"])
+            changed = outcome == "updated" or changed
+    if changed:
+        from .analytics_reconcile import reconcile_transfers
+        reconcile_transfers(session, candidate.owner, now)
 
 
 class BudgetConsentStore(BudgetJobStore):
@@ -292,12 +383,8 @@ class BudgetConsentStore(BudgetJobStore):
         if valid_until is not None and (type(valid_until) not in (int, float)
                 or not math.isfinite(valid_until) or valid_until <= self.clock()):
             raise BudgetConsentError("budget_consent_invalid_request", 400)
-        if not isinstance(metadata, dict) or set(metadata) != {"account_hashes"}:
-            raise BudgetConsentError("budget_consent_invalid_request", 400)
-        hashes = _account_hashes(metadata["account_hashes"])
-        if valid_until is None and hashes:
-            raise BudgetConsentError("budget_consent_invalid_request", 400)
-        normalized = _json({"account_hashes": sorted(hashes)})
+        metadata = _candidate_metadata(metadata, valid_until, self.clock())
+        normalized = _json(metadata)
         with self.transaction() as session:
             flow = (self._cleanup_flow(session, owner, flow_id) if valid_until is None
                     else self._flow(session, owner, flow_id))
@@ -305,6 +392,7 @@ class BudgetConsentStore(BudgetJobStore):
                 raise BudgetConsentError()
             if flow.candidate_consent_id is not None:
                 prior = self._candidate(session, flow)
+                normalized = _retain_evidence(metadata, json.loads(prior.metadata_json))
                 if prior.capsule_ref == capsule_ref and prior.valid_until is None and valid_until is not None:
                     prior.valid_until, prior.metadata_json = valid_until, normalized
                     self._transition(session, flow, flow.status, flow.error, action="candidate_verified")
@@ -335,8 +423,9 @@ class BudgetConsentStore(BudgetJobStore):
                 raise BudgetConsentError()
             connection = self._owned_connection(session, owner, flow.connection_id)
             self._fence(flow, connection)
-            actual = set(session.scalars(select(Account.identification_hash).where(Account.owner == owner,
+            accounts = list(session.scalars(select(Account).where(Account.owner == owner,
                          Account.connection_id == connection.id, Account.enabled, Account.configured)))
+            actual = {account.identification_hash for account in accounts}
             candidate = self._candidate(session, flow)
             if (candidate is None or actual != selected
                     or not actual <= set(json.loads(candidate.metadata_json)["account_hashes"])
@@ -353,6 +442,7 @@ class BudgetConsentStore(BudgetJobStore):
                         or prior.generation != connection.consent_generation):
                     raise BudgetConsentError()
                 prior.status = "RETIRED"
+            _adopt_identity_evidence(session, candidate, accounts, self.clock())
             connection.consent_generation += 1
             connection.control_version += 1
             connection.credential_mode = "managed"
