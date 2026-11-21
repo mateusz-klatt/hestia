@@ -6,6 +6,7 @@ import type { BudgetApi, BudgetResult } from "./api";
 import { Budget } from "./budget";
 import { account, componentLimit, connection, sharedLimit } from "./fixtures";
 import type { BudgetAccount, BudgetBalances, BudgetJob, BudgetTransaction, BudgetTransactions } from "./model";
+import type { MonthSummary } from "./analysis/model";
 
 type Settle<T> = (value: BudgetResult<T>) => void;
 
@@ -40,6 +41,12 @@ const balancesData = {
   freshness: account().components.balances, archived_imports: [] as BudgetBalances["archived_imports"], archived_has_more: false,
 };
 
+function monthOf(month: string): MonthSummary {
+  return { month, accounts: { selected: 1, excluded: 0 }, partial: false, stale_account_ids: [],
+    currencies: [{ currency: "PLN", income: "100", spending: "40.5", net: "59.5", income_count: 1, spending_count: 2 }],
+    not_counted: { pending: 0, uncertain: 0, unresolved: 0 } };
+}
+
 function fakeApi(accounts: BudgetAccount[] = [account({ display })]) {
   return {
     whoami: vi.fn<BudgetApi["whoami"]>(() => ok({ user: "owner", role: "admin" })),
@@ -58,6 +65,7 @@ function fakeApi(accounts: BudgetAccount[] = [account({ display })]) {
     setPaused: vi.fn<BudgetApi["setPaused"]>(),
     setBackground: vi.fn<BudgetApi["setBackground"]>(),
     refresh: vi.fn<BudgetApi["refresh"]>(),
+    summary: vi.fn<BudgetApi["summary"]>((month) => ok(monthOf(month))),
   } satisfies BudgetApi;
 }
 
@@ -838,5 +846,56 @@ describe("account detail", () => {
     expect(host.textContent).toContain("could not be loaded");
     await click(button("Close"));
     expect(host.querySelector(".budget-detail")).toBeNull();
+  });
+});
+
+describe("analysis views", () => {
+  const analysis = { ...capabilities, analysis: true };
+
+  it("offers no month view until the server enables analysis", async () => {
+    const api = fakeApi();
+    await render(api);
+    expect(host.textContent).toContain("Synthetic Current ••0001");
+    expect(host.querySelector(".budget-views")).toBeNull();
+    expect(api.summary).not.toHaveBeenCalled();
+  });
+
+  it("switches between accounts and the month view", async () => {
+    const api = fakeApi();
+    api.connections.mockImplementation(() => ok({ connections: [connection], capabilities: analysis }));
+    await render(api);
+    await click(button("Month"));
+    expect(api.summary).toHaveBeenCalledTimes(1);
+    expect(host.querySelector(".budget-total")?.textContent).toContain("40.50 PLN");
+    expect(host.textContent).not.toContain("Synthetic Current ••0001");
+    expect(button("Month").getAttribute("aria-pressed")).toBe("true");
+    await click(button("Accounts"));
+    expect(host.textContent).toContain("Synthetic Current ••0001");
+    expect(host.querySelector(".budget-month")).toBeNull();
+  });
+
+  it("clears everything when the month read reports lost access, and reopens on accounts", async () => {
+    const api = fakeApi();
+    api.connections.mockImplementation(() => ok({ connections: [connection], capabilities: analysis }));
+    await render(api);
+    api.summary.mockImplementation(() => fail(401, "budget_http_401"));
+    await click(button("Month"));
+    expect(host.textContent).toContain("Only the budget's owner");
+    expect(host.textContent).not.toContain("PLN");
+    api.summary.mockImplementation((month) => ok(monthOf(month)));
+    await click(button("Reload"));
+    expect(host.textContent).toContain("Synthetic Current ••0001");
+    expect(host.querySelector(".budget-month")).toBeNull();
+  });
+
+  it("falls back to accounts when a reload withdraws the capability", async () => {
+    const api = fakeApi();
+    api.connections.mockImplementation(() => ok({ connections: [connection], capabilities: analysis }));
+    await render(api);
+    await click(button("Month"));
+    api.connections.mockImplementation(() => ok({ connections: [connection], capabilities }));
+    await click(button("Reload"));
+    expect(host.querySelector(".budget-views")).toBeNull();
+    expect(host.textContent).toContain("Synthetic Current ••0001");
   });
 });

@@ -5,6 +5,7 @@ import { apiUrl } from "../api/client";
 import type { BudgetAccount, BudgetCapabilities, BudgetConnection, BudgetConsent, BudgetConsentFlow, BudgetJob,
   BudgetKind, BudgetBalances, BudgetLimit, BudgetOperation, BudgetTransactions, ConsentIntent } from "./model";
 import { idempotencyKey } from "./model";
+import type { MonthSummary } from "./analysis/model";
 
 export type BudgetResult<T> =
   | { ok: true; data: T }
@@ -70,6 +71,8 @@ export const budgetApi = {
       { connection_id: connection.id, expected_version: connection.control_version, intent }),
   consentCancel: (flowId: string) => post<{ flow_id: string; status: string }>("consent/cancel", { flow_id: flowId }),
   jobs: (connectionId?: string) => call<{ jobs: BudgetJob[] }>(url("jobs", { connection_id: connectionId })),
+  /** Server-computed per-currency totals of one calendar month ("YYYY-MM") for the selected accounts. */
+  summary: (month: string) => call<MonthSummary>(url("summary", { month })),
   setSelected: (account: BudgetAccount, selected: boolean) =>
     post<{ account: BudgetAccount }>("account-selection",
       { account_id: account.id, selected, expected_version: account.control_version }),

@@ -11,11 +11,14 @@ import { ACTIVE_JOB, KINDS, accountLabel, effectiveState, formatAmount, freshnes
 import type { BudgetAccount, BudgetBalances, BudgetCapabilities, BudgetConnection, BudgetJob, BudgetKind,
   BudgetConsent, BudgetConsentFlow, BudgetLimit, BudgetSharedLimit, BudgetTransaction, DateRange,
   LimitState } from "./model";
+import { MonthView, monthLabels } from "./analysis/month";
+import { hasAnalysis } from "./analysis/model";
 import "./budget.css";
 
 const labels = {
   en: {
     title: "Budget", subtitle: "Your private household finances.", reload: "Reload", loading: "Loading budget…",
+    views: { accounts: "Accounts", month: "Month" }, viewsLabel: "Budget view",
     disabled: "The budget is not enabled on this server.", denied: "Only the budget's owner can view it.",
     error: "The budget could not be loaded. Try again.", empty: "No bank connections are configured.",
     account: "Account", refresh: "Refresh from bank", refreshing: "Refresh queued…",
@@ -60,6 +63,7 @@ const labels = {
   },
   pl: {
     title: "Budżet", subtitle: "Prywatne finanse domowe.", reload: "Wczytaj ponownie", loading: "Wczytywanie budżetu…",
+    views: { accounts: "Konta", month: "Miesiąc" }, viewsLabel: "Widok budżetu",
     disabled: "Budżet nie jest włączony na tym serwerze.", denied: "Budżet widzi tylko jego właściciel.",
     error: "Nie udało się wczytać budżetu. Spróbuj ponownie.", empty: "Brak skonfigurowanych połączeń z bankiem.",
     account: "Konto", refresh: "Odśwież z banku", refreshing: "Odświeżanie w kolejce…",
@@ -105,10 +109,13 @@ const labels = {
 };
 type Labels = typeof labels.en;
 
-function pick(): { text: Labels; locale: string } {
+function pick(): { text: Labels; month: typeof monthLabels.en; locale: string } {
   const locale = currentLocale();
-  return { text: locale.startsWith("pl") ? labels.pl : labels.en, locale };
+  const pl = locale.startsWith("pl");
+  return { text: pl ? labels.pl : labels.en, month: pl ? monthLabels.pl : monthLabels.en, locale };
 }
+
+type View = "accounts" | "month";
 
 type Load = "loading" | "ready" | "disabled" | "denied" | "error";
 
@@ -145,7 +152,7 @@ export interface BudgetProps {
 
 export function Budget({ active, api = budgetApi, pollMs = 2000, principal,
   navigate = (url) => { window.location.assign(url); }, completeUrl = "/budget/connect/complete" }: BudgetProps) {
-  const { text, locale } = pick();
+  const { text, month: monthText, locale } = pick();
   const [load, setLoad] = useState<Load>("loading");
   const [connections, setConnections] = useState<BudgetConnection[]>([]);
   const [capabilities, setCapabilities] = useState<BudgetCapabilities | null>(null);
@@ -156,6 +163,7 @@ export function Budget({ active, api = budgetApi, pollMs = 2000, principal,
   const [consents, setConsents] = useState<BudgetConsent[]>([]);
   const [pending, setPending] = useState<BudgetConsentFlow[]>([]);
   const [detail, setDetail] = useState<string | null>(null);
+  const [view, setView] = useState<View>("accounts");
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState<ReadonlySet<string>>(new Set());
   const retryKeys = useRef(new Map<string, string>());
@@ -186,7 +194,7 @@ export function Budget({ active, api = budgetApi, pollMs = 2000, principal,
     epoch.current += 1;
     generation.current += 1;
     setConnections([]); setAccounts([]); setJobs([]); setDetail(null); setCapabilities(null); setBusy(new Set());
-    setLimits(null); setShowLimits(false); setConsents([]); setPending([]);
+    setLimits(null); setShowLimits(false); setConsents([]); setPending([]); setView("accounts");
     setLoad(disabled ? "disabled" : "denied");
   }, []);
   const barrier = useCallback((result: { ok: boolean; status?: number; error?: string }): boolean => {
@@ -381,6 +389,9 @@ export function Budget({ active, api = budgetApi, pollMs = 2000, principal,
     return <section className="budget-app">{header}<p className="budget-status" role="status">{message}</p></section>;
   }
   const opened = accounts.find((account) => account.id === detail) ?? null;
+  const analysis = hasAnalysis(capabilities);
+  // The month view exists only while the server offers analysis; otherwise the accounts view is shown.
+  const shownView: View = analysis ? view : "accounts";
   return (
     <section className="budget-app">
       {header}
@@ -403,71 +414,86 @@ export function Budget({ active, api = budgetApi, pollMs = 2000, principal,
           </ul>
         </section>
       )}
-      {connections.length === 0 ? <p className="budget-status">{text.empty}</p> : null}
-      {connections.map((connection) => {
-        const job = latestJob(jobs, connection.id);
-        const owned = accounts.filter((account) => account.connection === connection.id);
-        const refreshing = busy.has(`refresh:${connection.id}`) || (job !== null && ACTIVE_JOB.has(job.status));
-        return (
-          <article className="budget-connection" key={connection.id} aria-label={connection.bank_name}>
-            <header>
-              <h3>{connection.bank_name} <small>{connection.country}</small></h3>
-              <div className="budget-actions">
-                {capabilities?.refresh === true ? (
-                  <button type="button" className="budget-primary" disabled={refreshing || connection.paused}
-                    onClick={() => { void refresh(connection); }}>{refreshing ? text.refreshing : text.refresh}</button>
-                ) : <span className="budget-muted">{text.refreshOff}</span>}
-                <button type="button" disabled={busy.has(`pause:${connection.id}`)}
-                  onClick={() => { void saveConnection(`pause:${connection.id}`, () => api.setPaused(connection, !connection.paused)); }}>
-                  {connection.paused ? text.resume : text.pause}
-                </button>
-              </div>
-            </header>
-            <ul className="budget-facts">
-              {connection.paused ? <li className="budget-warn">{text.paused}</li> : null}
-              {connection.attention === null ? null : <li className="budget-warn">{text.attention}</li>}
-              {connection.renewal_due ? <li className="budget-warn">{text.renewal}</li> : null}
-              {connection.valid_until === null ? null : <li>{text.validUntil}: {when(connection.valid_until, locale)}</li>}
-              <li>{text.lastSuccess}: {when(connection.last_success, locale) ?? text.never}</li>
-              {job === null ? null : <li>{jobText(text, job, locale)}</li>}
-              {consentEnabled ? consentFacts(text, consents, connection.id, locale) : null}
-            </ul>
-            {consentEnabled ? (
-              <div className="budget-consent">
-                <button type="button" disabled={busy.has(`consent:${connection.id}`)}
-                  onClick={() => { void startConsent(connection); }}>
-                  {busy.has(`consent:${connection.id}`) ? text.connecting
-                    : consentIntent(connection) === "renew" ? text.renew : text.connect}
-                </button>
-                <span className="budget-muted">{text.consentHelp}</span>
-              </div>
-            ) : null}
-            {capabilities?.background_selection === true ? (
-              <label className="budget-toggle">
-                <input type="checkbox" checked={connection.background_enabled} disabled={busy.has(`background:${connection.id}`)}
-                  onChange={(event) => { const enabled = event.currentTarget.checked; void saveConnection(`background:${connection.id}`, () => api.setBackground(connection, enabled)); }} />
-                {text.background}
-                {capabilities.background_polling ? null : <span className="budget-muted"> ({text.backgroundOff})</span>}
-              </label>
-            ) : null}
-            <ul className="budget-accounts">
-              {owned.map((account, index) => (
-                <AccountRow key={account.id} account={account} index={index} text={text} busy={busy}
-                  onOpen={() => { setDetail(account.id); }}
-                  onSelect={(selected) => { void saveAccount(`select:${account.id}`, () => api.setSelected(account, selected)); }}
-                  onKind={(kind) => { void saveAccount(`kind:${account.id}`, () => api.setKind(account, kind)); }} />
-              ))}
-            </ul>
-            {showLimits ? (
-              <LimitsPanel connectionId={connection.id} accounts={owned} limits={limits} text={text} locale={locale} />
-            ) : null}
-          </article>
-        );
-      })}
-      {opened === null ? null : (
-        <AccountDetail account={opened} label={accountLabel(opened, accounts.filter((a) => a.connection === opened.connection).indexOf(opened), text.account)}
-          api={api} text={text} locale={locale} revision={revision} onAccessLoss={barrier}
-          onClose={() => { setDetail(null); }} />
+      {analysis ? (
+        <div className="budget-views" role="group" aria-label={text.viewsLabel}>
+          {(["accounts", "month"] as const).map((item) => (
+            <button type="button" key={item} aria-pressed={shownView === item}
+              onClick={() => { setView(item); }}>{text.views[item]}</button>
+          ))}
+        </div>
+      ) : null}
+      {shownView === "month" ? (
+        <MonthView summary={api.summary} accounts={accounts} text={monthText} locale={locale} revision={revision}
+          onAccessLoss={barrier} />
+      ) : (
+        <>
+        {connections.length === 0 ? <p className="budget-status">{text.empty}</p> : null}
+        {connections.map((connection) => {
+          const job = latestJob(jobs, connection.id);
+          const owned = accounts.filter((account) => account.connection === connection.id);
+          const refreshing = busy.has(`refresh:${connection.id}`) || (job !== null && ACTIVE_JOB.has(job.status));
+          return (
+            <article className="budget-connection" key={connection.id} aria-label={connection.bank_name}>
+              <header>
+                <h3>{connection.bank_name} <small>{connection.country}</small></h3>
+                <div className="budget-actions">
+                  {capabilities?.refresh === true ? (
+                    <button type="button" className="budget-primary" disabled={refreshing || connection.paused}
+                      onClick={() => { void refresh(connection); }}>{refreshing ? text.refreshing : text.refresh}</button>
+                  ) : <span className="budget-muted">{text.refreshOff}</span>}
+                  <button type="button" disabled={busy.has(`pause:${connection.id}`)}
+                    onClick={() => { void saveConnection(`pause:${connection.id}`, () => api.setPaused(connection, !connection.paused)); }}>
+                    {connection.paused ? text.resume : text.pause}
+                  </button>
+                </div>
+              </header>
+              <ul className="budget-facts">
+                {connection.paused ? <li className="budget-warn">{text.paused}</li> : null}
+                {connection.attention === null ? null : <li className="budget-warn">{text.attention}</li>}
+                {connection.renewal_due ? <li className="budget-warn">{text.renewal}</li> : null}
+                {connection.valid_until === null ? null : <li>{text.validUntil}: {when(connection.valid_until, locale)}</li>}
+                <li>{text.lastSuccess}: {when(connection.last_success, locale) ?? text.never}</li>
+                {job === null ? null : <li>{jobText(text, job, locale)}</li>}
+                {consentEnabled ? consentFacts(text, consents, connection.id, locale) : null}
+              </ul>
+              {consentEnabled ? (
+                <div className="budget-consent">
+                  <button type="button" disabled={busy.has(`consent:${connection.id}`)}
+                    onClick={() => { void startConsent(connection); }}>
+                    {busy.has(`consent:${connection.id}`) ? text.connecting
+                      : consentIntent(connection) === "renew" ? text.renew : text.connect}
+                  </button>
+                  <span className="budget-muted">{text.consentHelp}</span>
+                </div>
+              ) : null}
+              {capabilities?.background_selection === true ? (
+                <label className="budget-toggle">
+                  <input type="checkbox" checked={connection.background_enabled} disabled={busy.has(`background:${connection.id}`)}
+                    onChange={(event) => { const enabled = event.currentTarget.checked; void saveConnection(`background:${connection.id}`, () => api.setBackground(connection, enabled)); }} />
+                  {text.background}
+                  {capabilities.background_polling ? null : <span className="budget-muted"> ({text.backgroundOff})</span>}
+                </label>
+              ) : null}
+              <ul className="budget-accounts">
+                {owned.map((account, index) => (
+                  <AccountRow key={account.id} account={account} index={index} text={text} busy={busy}
+                    onOpen={() => { setDetail(account.id); }}
+                    onSelect={(selected) => { void saveAccount(`select:${account.id}`, () => api.setSelected(account, selected)); }}
+                    onKind={(kind) => { void saveAccount(`kind:${account.id}`, () => api.setKind(account, kind)); }} />
+                ))}
+              </ul>
+              {showLimits ? (
+                <LimitsPanel connectionId={connection.id} accounts={owned} limits={limits} text={text} locale={locale} />
+              ) : null}
+            </article>
+          );
+        })}
+        {opened === null ? null : (
+          <AccountDetail account={opened} label={accountLabel(opened, accounts.filter((a) => a.connection === opened.connection).indexOf(opened), text.account)}
+            api={api} text={text} locale={locale} revision={revision} onAccessLoss={barrier}
+              onClose={() => { setDetail(null); }} />
+          )}
+        </>
       )}
     </section>
   );
