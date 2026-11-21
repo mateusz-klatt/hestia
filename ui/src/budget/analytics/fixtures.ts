@@ -1,6 +1,7 @@
 // Synthetic analytics fixtures only; no real account, transaction or bank data.
 import { component } from "../fixtures";
-import type { AnalyticsCategory, AnalyticsOverview, AnnotationSaved, TransferDecisionResult, AnalyticsTotals, AnalyticsTransaction, AnalyticsTransactions, TransferLeg, TransferList,
+import type { AnalyticsCategory, AnalyticsOverview, AnalyticsRecurring, AnalyticsRecurringHint, AnnotationSaved,
+  TransferDecisionResult, AnalyticsTotals, AnalyticsTransaction, AnalyticsTransactions, TransferLeg, TransferList,
   TransferPair } from "./model";
 
 export function totals(currency: string, changes: Partial<AnalyticsTotals> = {}): AnalyticsTotals {
@@ -73,4 +74,24 @@ export function decisionOf(changes: Partial<TransferDecisionResult> = {}): Trans
   return { id: "dec-new", version: 1, status: "accepted", source: "heuristic", changed: true, rule_version: 1,
     debit_account_id: "acc-1", debit_ref: "out-1", debit_fingerprint: "pfp-out-1", credit_account_id: "acc-2", credit_ref: "in-1",
     credit_fingerprint: "pfp-in-1", created_at: 1, updated_at: 1, ...changes };
+}
+
+export function recurringHint(changes: Partial<AnalyticsRecurringHint> = {}): AnalyticsRecurringHint {
+  return {
+    label: "Synthetic Stream", label_source: "counterparty_name", amount: "49.99", currency: "PLN", cadence: "monthly",
+    occurrence_count: 3, distinct_months: 3, first_date: "2026-09-05", last_date: "2026-11-05",
+    min_gap_days: 30, max_gap_days: 31, account_ids: ["acc-1"],
+    evidence: [
+      { account_id: "acc-1", entry_reference: "rec-1", date: "2026-09-05" },
+      { account_id: "acc-1", entry_reference: "rec-2", date: "2026-10-05" },
+      { account_id: "acc-1", entry_reference: "rec-3", date: "2026-11-05" },
+    ],
+    evidence_truncated: false, ...changes,
+  };
+}
+
+export function recurringOf(hints: AnalyticsRecurringHint[] = [], changes: Partial<AnalyticsRecurring> = {}): AnalyticsRecurring {
+  return {
+    snapshot_digest: "synthetic-digest", rule_version: 1, total_hints: hints.length, truncated: false, hints, ...changes,
+  };
 }

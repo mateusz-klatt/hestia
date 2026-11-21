@@ -20,6 +20,10 @@ export type AnalyticsTransferSummary = Schemas["BudgetAnalyticsTransferSummary"]
 
 export type AnalyticsOverview = Schemas["BudgetAnalyticsOverview"];
 
+export type AnalyticsRecurring = Schemas["BudgetAnalyticsRecurring"];
+export type AnalyticsRecurringHint = Schemas["BudgetAnalyticsRecurringHint"];
+export type AnalyticsRecurringOccurrence = Schemas["BudgetAnalyticsRecurringOccurrence"];
+
 /** The owner's explicit kind choice; "auto" returns the entry to rules and defaults. */
 export type KindChoice = "auto" | "expense" | "income" | "refund" | "excluded";
 export const KIND_CHOICES: readonly KindChoice[] = ["auto", "expense", "income", "refund", "excluded"];
@@ -333,4 +337,19 @@ export function monthLabel(month: string, locale: string): string {
   if (match === null) return month;
   const date = new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, 15));
   return new Intl.DateTimeFormat(locale, { month: "long", year: "numeric", timeZone: "UTC" }).format(date);
+}
+
+/** Sorted distinct currencies observed in recurring-charge hints. */
+export function recurringCurrencies(hints: readonly AnalyticsRecurringHint[]): string[] {
+  return [...new Set(hints.map((hint) => hint.currency))].sort((a, b) => a.localeCompare(b));
+}
+
+/** Polish integer pluralization: 1 -> one, 2–4 (not 12–14) -> few, all others -> many. */
+export function pluralPl(count: number, one: string, few: string, many: string): string {
+  const n = Math.abs(Math.trunc(count));
+  if (n === 1) return one;
+  const mod10 = n % 10;
+  const mod100 = n % 100;
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return few;
+  return many;
 }
