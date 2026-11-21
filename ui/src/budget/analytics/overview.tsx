@@ -1,15 +1,15 @@
-// Month overview of the owner's spending (2D). Shows only server-computed per-currency totals for the selected
+// Period overview of the owner's spending (2D). Shows only server-computed per-currency totals for the selected
 // accounts; data live in component state only and every response passes the budget's access barrier.
 import { useEffect, useRef, useState } from "react";
 import type { BudgetResult } from "../api";
 import type { BudgetAccount } from "../model";
 import { accountLabel, formatAmount } from "../model";
-import { currentMonth, isMonth, isZero, monthLabel, shiftMonth } from "./model";
+import { isZero } from "./model";
 import type { AnalyticsCategoryTotal, AnalyticsOverview, AnalyticsTotals } from "./model";
 
 export const overviewLabels = {
   en: {
-    previous: "Previous month", next: "Next month", spending: "Spending", gross: "gross", refunds: "refunds",
+    spending: "Spending", gross: "gross", refunds: "refunds",
     income: "Income", unclassified: "To classify", unclassifiedHelp: "incoming payments not yet marked as income or refund",
     internal: "Own transfers", internalOut: "out", internalIn: "in", internalHelp: "not counted as spending or income",
     categories: "Spending by category", uncategorised: "Uncategorised", entries: "entries",
@@ -24,7 +24,7 @@ export const overviewLabels = {
     error: "The month could not be loaded. Try again.", account: "Account",
   },
   pl: {
-    previous: "Poprzedni miesiąc", next: "Następny miesiąc", spending: "Wydatki", gross: "brutto", refunds: "zwroty",
+    spending: "Wydatki", gross: "brutto", refunds: "zwroty",
     income: "Wpływy", unclassified: "Do sklasyfikowania", unclassifiedHelp: "wpływy jeszcze nieoznaczone jako dochód ani zwrot",
     internal: "Przelewy własne", internalOut: "wyszło", internalIn: "weszło", internalHelp: "nie liczą się do wydatków ani wpływów",
     categories: "Wydatki według kategorii", uncategorised: "Bez kategorii", entries: "poz.",
@@ -45,32 +45,39 @@ type Shown = { state: "loading" } | { state: "error" } | { state: "ready"; data:
 
 export interface OverviewProps {
   overview: (period: string) => Promise<BudgetResult<AnalyticsOverview>>;
+  period: string;
+  /** The period still running (today falls inside it). */
+  current: boolean;
   accounts: readonly BudgetAccount[];
   text: OverviewLabels;
   locale: string;
-  /** Bumped after every completed budget reload; the shown month is read again. */
+  /** Bumped after every completed budget reload or saved decision; the period is read again. */
   revision: number;
   onAccessLoss: (result: { ok: boolean; status?: number; error?: string }) => boolean;
-  /** Injected clock for tests. */
-  today?: () => Date;
+  /** Currencies present in the shown period, for filters elsewhere. */
+  onCurrencies?: ((currencies: string[]) => void) | undefined;
 }
 
-export function MonthOverview({ overview, accounts, text, locale, revision, onAccessLoss, today = () => new Date() }: OverviewProps) {
-  const latest = currentMonth(today());
-  const [month, setMonth] = useState(latest);
+export function OverviewPanel({ overview, period, current, accounts, text, locale, revision, onAccessLoss,
+  onCurrencies }: OverviewProps) {
   const [shown, setShown] = useState<Shown>({ state: "loading" });
-  // Every month change or reload takes a new generation; an older answer can never replace a newer month.
+  // Every period change or reload takes a new generation; an older answer can never replace a newer period.
   const generation = useRef(0);
 
   useEffect(() => {
     const token = ++generation.current;
     setShown({ state: "loading" });
-    void overview(month).then((result) => {
+    void overview(period).then((result) => {
       if (onAccessLoss(result) || token !== generation.current) return;
       // Never show totals labelled with a period other than the one asked for.
-      setShown(result.ok && result.data.period === month ? { state: "ready", data: result.data } : { state: "error" });
+      if (result.ok && result.data.period === period) {
+        setShown({ state: "ready", data: result.data });
+        onCurrencies?.(result.data.totals.map((total) => total.currency));
+      } else {
+        setShown({ state: "error" });
+      }
     });
-  }, [overview, month, revision, onAccessLoss]);
+  }, [overview, period, revision, onAccessLoss, onCurrencies]);
   useEffect(() => () => { generation.current += 1; }, []);
 
   const name = (id: string) => {
@@ -79,19 +86,9 @@ export function MonthOverview({ overview, accounts, text, locale, revision, onAc
     return accountLabel(account, accounts.filter((item) => item.connection === account.connection).indexOf(account), text.account);
   };
 
-  return (
-    <section className="budget-month" aria-label={monthLabel(month, locale)}>
-      <nav className="budget-month-nav">
-        <button type="button" aria-label={text.previous} onClick={() => { setMonth((value) => shiftMonth(value, -1)); }}>◀</button>
-        <h3>{monthLabel(month, locale)}</h3>
-        <button type="button" aria-label={text.next} disabled={month >= latest}
-          onClick={() => { setMonth((value) => (isMonth(value) && value < latest ? shiftMonth(value, 1) : value)); }}>▶</button>
-      </nav>
-      {shown.state === "loading" ? <p className="budget-muted" role="status">{text.loading}</p> : null}
-      {shown.state === "error" ? <p className="budget-notice" role="alert">{text.error}</p> : null}
-      {shown.state === "ready" ? <OverviewBody data={shown.data} current={month === latest} name={name} text={text} locale={locale} /> : null}
-    </section>
-  );
+  if (shown.state === "loading") return <p className="budget-muted" role="status">{text.loading}</p>;
+  if (shown.state === "error") return <p className="budget-notice" role="alert">{text.error}</p>;
+  return <OverviewBody data={shown.data} current={current} name={name} text={text} locale={locale} />;
 }
 
 interface BodyProps { data: AnalyticsOverview; current: boolean; name: (id: string) => string; text: OverviewLabels; locale: string }

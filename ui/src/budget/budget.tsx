@@ -11,7 +11,7 @@ import { ACTIVE_JOB, KINDS, accountLabel, effectiveState, formatAmount, freshnes
 import type { BudgetAccount, BudgetBalances, BudgetCapabilities, BudgetConnection, BudgetJob, BudgetKind,
   BudgetConsent, BudgetConsentFlow, BudgetLimit, BudgetSharedLimit, BudgetTransaction, DateRange,
   LimitState } from "./model";
-import { MonthOverview, overviewLabels } from "./analytics/overview";
+import { MonthView, monthLabels } from "./analytics/month";
 import { hasAnalytics } from "./analytics/model";
 import "./budget.css";
 
@@ -109,10 +109,10 @@ const labels = {
 };
 type Labels = typeof labels.en;
 
-function pick(): { text: Labels; month: typeof overviewLabels.en; locale: string } {
+function pick(): { text: Labels; month: typeof monthLabels.en; locale: string } {
   const locale = currentLocale();
   const pl = locale.startsWith("pl");
-  return { text: pl ? labels.pl : labels.en, month: pl ? overviewLabels.pl : overviewLabels.en, locale };
+  return { text: pl ? labels.pl : labels.en, month: pl ? monthLabels.pl : monthLabels.en, locale };
 }
 
 type View = "accounts" | "month";
@@ -423,7 +423,7 @@ export function Budget({ active, api = budgetApi, pollMs = 2000, principal,
         </div>
       ) : null}
       {shownView === "month" ? (
-        <MonthOverview overview={api.overview} accounts={accounts} text={monthText} locale={locale} revision={revision}
+        <MonthView api={api} accounts={accounts} text={monthText} locale={locale} revision={revision}
           onAccessLoss={barrier} />
       ) : (
         <>

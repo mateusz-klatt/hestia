@@ -7,7 +7,7 @@ import type { BudgetResult } from "../api";
 import { account } from "../fixtures";
 import { overviewOf, totals } from "./fixtures";
 import type { AnalyticsOverview } from "./model";
-import { MonthOverview, overviewLabels } from "./overview";
+import { OverviewPanel, overviewLabels } from "./overview";
 
 type Answer = BudgetResult<AnalyticsOverview>;
 
@@ -48,34 +48,24 @@ async function settle(): Promise<void> {
   await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
 }
 
-async function show(overview: (period: string) => Promise<Answer>, options: { revision?: number; lost?: boolean } = {}) {
+async function show(overview: (period: string) => Promise<Answer>,
+  options: { period?: string; current?: boolean; revision?: number; lost?: boolean; onCurrencies?: (currencies: string[]) => void } = {}) {
   const onAccessLoss = vi.fn(() => options.lost === true);
   await act(async () => {
-    root.render(<MonthOverview overview={overview} accounts={accounts} text={overviewLabels.en} locale="en"
-      revision={options.revision ?? 0} onAccessLoss={onAccessLoss} today={() => new Date(2026, 10, 21, 12)} />);
+    root.render(<OverviewPanel overview={overview} period={options.period ?? "2026-11"} current={options.current ?? true}
+      accounts={accounts} text={overviewLabels.en} locale="en" revision={options.revision ?? 0} onAccessLoss={onAccessLoss}
+      onCurrencies={options.onCurrencies} />);
     await Promise.resolve();
   });
   await settle();
   return onAccessLoss;
 }
 
-function button(label: string): HTMLButtonElement {
-  const found = host.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`);
-  if (found === null) throw new Error(`button ${label} missing`);
-  return found;
-}
-
-async function press(label: string): Promise<void> {
-  await act(async () => { button(label).click(); await Promise.resolve(); });
-  await settle();
-}
-
-describe("month overview", () => {
+describe("period overview", () => {
   it("shows server totals per currency without adding, subtracting or converting anything", async () => {
     const overview = vi.fn((period: string) => Promise.resolve<Answer>({ ok: true, data: rich(period) }));
     await show(overview);
     expect(overview).toHaveBeenCalledWith("2026-11");
-    expect(host.querySelector("h3")?.textContent).toBe("November 2026");
     const cards = [...host.querySelectorAll<HTMLElement>(".budget-total")];
     expect(cards.map((card) => card.getAttribute("aria-label"))).toEqual(["EUR", "PLN"]);
     const [eur, pln] = cards;
@@ -91,7 +81,6 @@ describe("month overview", () => {
     expect(host.textContent).toContain("still in progress");
     expect(host.textContent).toContain("Not counted: 2 pending · 1 unrecognised");
     expect(host.textContent).not.toContain("uncertain");
-    expect(button("Next month").disabled).toBe(true);
   });
 
   it("lists categories under their own currency with an explicit uncategorised row", async () => {
@@ -114,30 +103,23 @@ describe("month overview", () => {
       "Own-transfer decisions to check again after the bank data changed: 1."]);
   });
 
-  it("moves between months and never past the current one", async () => {
-    const overview = vi.fn((period: string) => Promise.resolve<Answer>({ ok: true, data: rich(period) }));
-    await show(overview);
-    await press("Previous month");
-    expect(overview).toHaveBeenLastCalledWith("2026-10");
-    expect(host.querySelector("h3")?.textContent).toBe("October 2026");
+  it("reports the shown currencies and says nothing about progress for a closed month", async () => {
+    const onCurrencies = vi.fn();
+    await show((period) => Promise.resolve<Answer>({ ok: true, data: rich(period) }), { current: false, onCurrencies });
+    expect(onCurrencies).toHaveBeenCalledWith(["EUR", "PLN"]);
     expect(host.textContent).not.toContain("still in progress");
-    expect(button("Next month").disabled).toBe(false);
-    await press("Next month");
-    expect(overview).toHaveBeenLastCalledWith("2026-11");
-    expect(button("Next month").disabled).toBe(true);
   });
 
-  it("drops a late answer for a month that is no longer shown", async () => {
+  it("drops a late answer for a period that is no longer shown", async () => {
     let late: (value: Answer) => void = () => undefined;
     const overview = vi.fn((period: string) => (period === "2026-11"
       ? new Promise<Answer>((resolve) => { late = resolve; })
       : Promise.resolve<Answer>({ ok: true, data: overviewOf(period, { totals: [] }) })));
     await show(overview);
     expect(host.textContent).toContain("Loading the month");
-    await press("Previous month");
+    await show(overview, { period: "2026-10", current: false });
     await act(async () => { late({ ok: true, data: rich("2026-11") }); await Promise.resolve(); });
     await settle();
-    expect(host.querySelector("h3")?.textContent).toBe("October 2026");
     expect(host.textContent).toContain("No booked transactions in this month.");
     expect(host.querySelector(".budget-total")).toBeNull();
   });
@@ -148,7 +130,7 @@ describe("month overview", () => {
     await show(overview);
     expect(host.textContent).toContain("could not be loaded");
     expect(host.querySelector(".budget-total")).toBeNull();
-    await press("Previous month");
+    await show(overview, { period: "2026-10" });
     expect(host.textContent).toContain("could not be loaded");
   });
 

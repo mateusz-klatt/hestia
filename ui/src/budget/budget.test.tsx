@@ -60,6 +60,9 @@ function fakeApi(accounts: BudgetAccount[] = [account({ display })]) {
     setBackground: vi.fn<BudgetApi["setBackground"]>(),
     refresh: vi.fn<BudgetApi["refresh"]>(),
     overview: vi.fn<BudgetApi["overview"]>((period) => ok(overviewOf(period))),
+    analyticsTransactions: vi.fn<BudgetApi["analyticsTransactions"]>(() => ok({ transactions: [], total: 0, next_cursor: null })),
+    categories: vi.fn<BudgetApi["categories"]>(() => ok({ categories: [] })),
+    annotate: vi.fn<BudgetApi["annotate"]>(),
   } satisfies BudgetApi;
 }
 

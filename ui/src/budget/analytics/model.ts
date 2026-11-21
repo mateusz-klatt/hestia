@@ -48,6 +48,73 @@ export interface AnalyticsOverview {
   transfer_summary: AnalyticsTransferSummary;
 }
 
+/** The owner's explicit kind choice; "auto" returns the entry to rules and defaults. */
+export type KindChoice = "auto" | "expense" | "income" | "refund" | "excluded";
+export const KIND_CHOICES: readonly KindChoice[] = ["auto", "expense", "income", "refund", "excluded"];
+
+export interface AnalyticsAnnotation {
+  mode: "auto" | "manual";
+  kind: KindChoice;
+  category_id: string | null;
+  version: number;
+  /** The bank entry changed after this decision was made; it needs the owner's look. */
+  stale: boolean;
+}
+
+export interface AnalyticsTransaction {
+  account_id: string;
+  entry_reference: string;
+  fingerprint: string;
+  amount: string;
+  currency: string;
+  credit_debit_indicator: "CRDT" | "DBIT";
+  status: string;
+  booking_date: string | null;
+  value_date: string | null;
+  transaction_date: string | null;
+  remittance_information: string[];
+  counterparty_name: string | null;
+  annotation: AnalyticsAnnotation | null;
+  effective: { category_id: string | null; kind: string; source: "manual" | "rule" | "uncategorised" };
+  transfer_state: "none" | "suggested" | "accepted" | "review" | "rejected";
+}
+
+export interface AnalyticsTransactions { transactions: AnalyticsTransaction[]; total: number; next_cursor: string | null }
+
+export interface AnalyticsCategory { id: string; name: string; archived: boolean; version: number }
+
+export interface TransactionFilter { currency: string; category: string; kind: string; query: string }
+export const NO_FILTER: TransactionFilter = { currency: "", category: "", kind: "", query: "" };
+/** Filter value for entries without a category (the server's explicit uncategorised bucket). */
+export const UNCATEGORISED = "uncategorised";
+
+export interface AnnotationRequest {
+  account_id: string;
+  entry_reference: string;
+  mode: "auto" | "manual";
+  category_id: string | null;
+  kind: KindChoice;
+  /** 0 creates the first annotation; otherwise the version the owner saw. */
+  expected_version: number;
+}
+
+/** The owner's category choice in the editor: automatic (rules), explicitly none, or a category id. */
+export type CategoryChoice = { mode: "auto" } | { mode: "manual"; category_id: string | null };
+
+export function annotationRequest(row: AnalyticsTransaction, category: CategoryChoice, kind: KindChoice): AnnotationRequest {
+  return {
+    account_id: row.account_id, entry_reference: row.entry_reference, mode: category.mode,
+    category_id: category.mode === "manual" ? category.category_id : null, kind,
+    expected_version: row.annotation?.version ?? 0,
+  };
+}
+
+/** The editor's starting choice: what the owner set before, or automatic. */
+export function currentChoice(row: AnalyticsTransaction): CategoryChoice {
+  const annotation = row.annotation;
+  return annotation === null || annotation.mode === "auto" ? { mode: "auto" } : { mode: "manual", category_id: annotation.category_id };
+}
+
 const MONTH = /^(\d{4})-(0[1-9]|1[0-2])$/;
 const ZERO = /^-?0+(?:\.0+)?$/;
 

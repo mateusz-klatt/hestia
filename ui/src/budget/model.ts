@@ -82,11 +82,11 @@ export function accountLabel(account: BudgetAccount, index: number, fallback: st
 }
 
 /** The single display date of a transaction: booking date, falling back to value then transaction date. */
-export function transactionDate(transaction: BudgetTransaction): string | null {
+export function transactionDate(transaction: Pick<BudgetTransaction, "booking_date" | "value_date" | "transaction_date">): string | null {
   return transaction.booking_date ?? transaction.value_date ?? transaction.transaction_date ?? null;
 }
 
-export function transactionText(transaction: BudgetTransaction): string {
+export function transactionText(transaction: Pick<BudgetTransaction, "remittance_information">): string {
   return transaction.remittance_information.filter((line) => line.trim() !== "").join(" · ");
 }
 

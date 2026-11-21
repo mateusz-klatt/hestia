@@ -1,5 +1,5 @@
 // Synthetic analytics fixtures only; no real account, transaction or bank data.
-import type { AnalyticsOverview, AnalyticsTotals } from "./model";
+import type { AnalyticsCategory, AnalyticsOverview, AnalyticsTotals, AnalyticsTransaction } from "./model";
 
 export function totals(currency: string, changes: Partial<AnalyticsTotals> = {}): AnalyticsTotals {
   return {
@@ -18,3 +18,17 @@ export function overviewOf(period: string, changes: Partial<AnalyticsOverview> =
     ...changes,
   };
 }
+
+export function entry(reference: string, changes: Partial<AnalyticsTransaction> = {}): AnalyticsTransaction {
+  return {
+    account_id: "acc-1", entry_reference: reference, fingerprint: `fp-${reference}`, amount: "12.5", currency: "PLN",
+    credit_debit_indicator: "DBIT", status: "BOOK", booking_date: "2026-11-03", value_date: null, transaction_date: null,
+    remittance_information: [`Synthetic shop ${reference}`], counterparty_name: null, annotation: null,
+    effective: { category_id: null, kind: "expense", source: "uncategorised" }, transfer_state: "none", ...changes,
+  };
+}
+
+export const categoryList: AnalyticsCategory[] = [
+  { id: "cat-food", name: "Synthetic Food", archived: false, version: 1 },
+  { id: "cat-old", name: "Synthetic Old", archived: true, version: 3 },
+];
