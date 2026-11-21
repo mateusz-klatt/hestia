@@ -1559,6 +1559,154 @@
         "title": "BudgetAnalyticsPreviewResult",
         "type": "object"
       },
+      "BudgetAnalyticsRecurring": {
+        "properties": {
+          "hints": {
+            "items": {
+              "$ref": "#/components/schemas/BudgetAnalyticsRecurringHint"
+            },
+            "title": "Hints",
+            "type": "array"
+          },
+          "rule_version": {
+            "title": "Rule Version",
+            "type": "integer"
+          },
+          "snapshot_digest": {
+            "title": "Snapshot Digest",
+            "type": "string"
+          },
+          "total_hints": {
+            "title": "Total Hints",
+            "type": "integer"
+          },
+          "truncated": {
+            "title": "Truncated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "snapshot_digest",
+          "rule_version",
+          "total_hints",
+          "truncated",
+          "hints"
+        ],
+        "title": "BudgetAnalyticsRecurring",
+        "type": "object"
+      },
+      "BudgetAnalyticsRecurringHint": {
+        "properties": {
+          "account_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Account Ids",
+            "type": "array"
+          },
+          "amount": {
+            "title": "Amount",
+            "type": "string"
+          },
+          "cadence": {
+            "const": "monthly",
+            "title": "Cadence",
+            "type": "string"
+          },
+          "currency": {
+            "title": "Currency",
+            "type": "string"
+          },
+          "distinct_months": {
+            "title": "Distinct Months",
+            "type": "integer"
+          },
+          "evidence": {
+            "items": {
+              "$ref": "#/components/schemas/BudgetAnalyticsRecurringOccurrence"
+            },
+            "title": "Evidence",
+            "type": "array"
+          },
+          "evidence_truncated": {
+            "title": "Evidence Truncated",
+            "type": "boolean"
+          },
+          "first_date": {
+            "title": "First Date",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "label_source": {
+            "enum": [
+              "counterparty_name",
+              "description"
+            ],
+            "title": "Label Source",
+            "type": "string"
+          },
+          "last_date": {
+            "title": "Last Date",
+            "type": "string"
+          },
+          "max_gap_days": {
+            "title": "Max Gap Days",
+            "type": "integer"
+          },
+          "min_gap_days": {
+            "title": "Min Gap Days",
+            "type": "integer"
+          },
+          "occurrence_count": {
+            "title": "Occurrence Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "label",
+          "label_source",
+          "amount",
+          "currency",
+          "cadence",
+          "occurrence_count",
+          "distinct_months",
+          "first_date",
+          "last_date",
+          "min_gap_days",
+          "max_gap_days",
+          "account_ids",
+          "evidence",
+          "evidence_truncated"
+        ],
+        "title": "BudgetAnalyticsRecurringHint",
+        "type": "object"
+      },
+      "BudgetAnalyticsRecurringOccurrence": {
+        "properties": {
+          "account_id": {
+            "title": "Account Id",
+            "type": "string"
+          },
+          "date": {
+            "title": "Date",
+            "type": "string"
+          },
+          "entry_reference": {
+            "title": "Entry Reference",
+            "type": "string"
+          }
+        },
+        "required": [
+          "account_id",
+          "entry_reference",
+          "date"
+        ],
+        "title": "BudgetAnalyticsRecurringOccurrence",
+        "type": "object"
+      },
       "BudgetAnalyticsRule": {
         "properties": {
           "category_id": {
@@ -7272,7 +7420,7 @@
   "info": {
     "description": "Local cloud-free smart-home control API. Generated from hestia/api_contract.py \u2014 do not edit by hand; run `python -m hestia.api_contract`.",
     "title": "hestia API",
-    "version": "0.17.0"
+    "version": "0.18.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -8201,6 +8349,117 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/BudgetAnalyticsOverview"
+                }
+              }
+            },
+            "description": "owner-scoped stored state; no bank request"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "session required; middleware may return an empty body"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "admin owner or browser-origin requirement failed; middleware may return an empty body"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "unknown, disabled or foreign resource"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Version, financial source, reserved transfer leg, preview or cursor changed; reload and review."
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Explicit analytics processing or owner configuration limit; no partial totals."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "budget configuration unavailable"
+          }
+        },
+        "summary": "Read owner-private local budget analytics",
+        "x-required-role": "admin"
+      }
+    },
+    "/api/budget/analytics/recurring": {
+      "get": {
+        "operationId": "getBudgetAnalyticsRecurring",
+        "parameters": [
+          {
+            "description": "",
+            "in": "query",
+            "name": "currency",
+            "required": false,
+            "schema": {
+              "pattern": "^[A-Z]{3}$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetAnalyticsRecurring"
                 }
               }
             },

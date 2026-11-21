@@ -62,7 +62,8 @@ from pydantic.json_schema import models_json_schema
 # 0.15.0: durable owner refresh jobs, per-connection background opt-in and attention state.
 # 0.16.0: browser-bound production bank consent, renewal and durable managed credentials.
 # 0.17.0: owner-private budget reports, classifications, rule previews and transfer decisions.
-CONTRACT_VERSION = "0.17.0"
+# 0.18.0: owner-private read-only recurring-charge hints under /api/budget/analytics/recurring.
+CONTRACT_VERSION = "0.18.0"
 OPENAPI_PATH = Path(__file__).resolve().parent.parent / "docs" / "api" / "openapi.json"
 
 # De-duplicated string literals (SonarPython S1192): the OpenAPI content-type, the paths reused
@@ -1776,13 +1777,47 @@ class BudgetAnalyticsDecisionResult(BaseModel):
     decision: BudgetAnalyticsDecisionSaved
 
 
+class BudgetAnalyticsRecurringOccurrence(BaseModel):
+    model_config = _READ
+    account_id: str
+    entry_reference: str
+    date: str
+
+
+class BudgetAnalyticsRecurringHint(BaseModel):
+    model_config = _READ
+    label: str
+    label_source: Literal["counterparty_name", "description"]
+    amount: str
+    currency: str
+    cadence: Literal["monthly"]
+    occurrence_count: int
+    distinct_months: int
+    first_date: str
+    last_date: str
+    min_gap_days: int
+    max_gap_days: int
+    account_ids: list[str]
+    evidence: list[BudgetAnalyticsRecurringOccurrence]
+    evidence_truncated: bool
+
+
+class BudgetAnalyticsRecurring(BaseModel):
+    model_config = _READ
+    snapshot_digest: str
+    rule_version: int
+    total_hints: int
+    truncated: bool
+    hints: list[BudgetAnalyticsRecurringHint]
+
+
 _ANALYTICS_MODELS = (BudgetAnalyticsCategoryCreateRequest, BudgetAnalyticsCategoryUpdateRequest,
                      BudgetAnalyticsAnnotationRequest, BudgetAnalyticsRulePreviewRequest,
                      BudgetAnalyticsRuleSaveRequest, BudgetAnalyticsTransferDecisionRequest,
                      BudgetAnalyticsCategories, BudgetAnalyticsCategoryResult, BudgetAnalyticsAnnotationResult,
                      BudgetAnalyticsRules, BudgetAnalyticsRuleResult, BudgetAnalyticsPreviewResult,
                      BudgetAnalyticsOverview, BudgetAnalyticsTransactions, BudgetAnalyticsTransfers,
-                     BudgetAnalyticsDecisionResult)
+                     BudgetAnalyticsDecisionResult, BudgetAnalyticsRecurring)
 
 
 _BUDGET_MODELS = (BudgetSelectionRequest, BudgetKindRequest, BudgetConnectionStateRequest,
@@ -1807,6 +1842,7 @@ _PATH_ROLES = {
     ("GET", "/api/budget/analytics/categories"): "admin",
     ("GET", "/api/budget/analytics/rules"): "admin",
     ("GET", "/api/budget/analytics/transfers"): "admin",
+    ("GET", "/api/budget/analytics/recurring"): "admin",
     ("POST", "/api/budget/analytics/category-create"): "admin",
     ("POST", "/api/budget/analytics/category-update"): "admin",
     ("POST", "/api/budget/analytics/annotation"): "admin",
@@ -2437,6 +2473,7 @@ def _analytics_paths():
         ("transfers", "getBudgetAnalyticsTransfers", "BudgetAnalyticsTransfers",
          [period, currency, _budget_query("status", schema={"type": "string", "enum":
              ["suggested", "accepted", "review", "boundary", "rejected", "undone"], "default": "suggested"}), *page]),
+        ("recurring", "getBudgetAnalyticsRecurring", "BudgetAnalyticsRecurring", [currency]),
     )
     paths = {prefix + path: {"get": {"operationId": operation, "summary": "Read owner-private local budget analytics",
               "parameters": parameters, "responses": _analytics_responses(model)}}

@@ -16,7 +16,7 @@ from .views import BudgetUsersBackendRequired
 
 PREFIX = "/api/budget/analytics"
 FLAG = "HESTIA_BUDGET_ANALYTICS_ENABLED"
-READS = ("overview", "transactions", "categories", "rules", "transfers")
+READS = ("overview", "transactions", "categories", "rules", "transfers", "recurring")
 WRITES = {
     "category-create": (api_contract.BudgetAnalyticsCategoryCreateRequest, "create_category", "category"),
     "category-update": (api_contract.BudgetAnalyticsCategoryUpdateRequest, "update_category", "category"),
@@ -27,7 +27,8 @@ WRITES = {
 }
 _QUERY_FIELDS = {"overview": {"period", "currency"},
                  "transactions": {"period", "currency", "category_id", "kind", "query", "limit", "cursor"},
-                 "transfers": {"period", "currency", "status", "limit", "cursor"}}
+                 "transfers": {"period", "currency", "status", "limit", "cursor"},
+                 "recurring": {"currency"}}
 
 
 def enabled():
@@ -44,7 +45,7 @@ def _query(request, operation):
         if not value or len(value) > maximum:
             raise AnalyticsError()
         values[key] = value
-    if operation in _QUERY_FIELDS and "period" not in values:
+    if "period" in _QUERY_FIELDS.get(operation, ()) and "period" not in values:
         raise AnalyticsError()
     if "limit" in values:
         value = values["limit"]
