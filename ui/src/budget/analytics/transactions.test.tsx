@@ -184,6 +184,47 @@ describe("period entries", () => {
     expect(api.annotate).toHaveBeenLastCalledWith(expect.objectContaining({ mode: "auto", category_id: null, kind: "auto" }));
   });
 
+  it("makes a type choice a manual decision that keeps the entry's current category visibly", async () => {
+    const api = fakeApi([entry("e1", { effective: { category_id: "cat-old", kind: "expense", source: "rule", rule_id: "rule-1" } }),
+      entry("e2")]);
+    await show(api);
+    const [first, second] = [...host.querySelectorAll<HTMLElement>(".budget-entry")];
+    if (first === undefined || second === undefined) throw new Error("rows missing");
+    await click(button("Change", first));
+    let editor = first.querySelector(".budget-entry-editor") ?? host;
+    expect(select("Category", editor).value).toBe("auto");
+    // The archived category the entry currently shows stays available for it.
+    expect([...select("Category", editor).options].map((option) => option.value)).toContain("cat:cat-old");
+    await choose(select("Type", editor), "income");
+    expect(select("Category", editor).value).toBe("cat:cat-old");
+    await submit(first.querySelector(".budget-entry-editor"));
+    expect(api.annotate).toHaveBeenLastCalledWith(expect.objectContaining({ entry_reference: "e1", mode: "manual",
+      category_id: "cat-old", kind: "income" }));
+    await click(button("Change", host.querySelectorAll<HTMLElement>(".budget-entry")[1] ?? host));
+    editor = host.querySelector(".budget-entry-editor") ?? host;
+    await choose(select("Type", editor), "refund");
+    expect(select("Category", editor).value).toBe("none");
+    // Going back to automatic hands the type back to the rules as well.
+    await choose(select("Category", editor), "auto");
+    expect(select("Type", editor).value).toBe("auto");
+    await submit(host.querySelector(".budget-entry-editor"));
+    expect(api.annotate).toHaveBeenLastCalledWith(expect.objectContaining({ entry_reference: "e2", mode: "auto", kind: "auto" }));
+  });
+
+  it("locks the editor while a save is in flight", async () => {
+    let saved: (value: BudgetResult<{ annotation: AnnotationSaved }>) => void = () => undefined;
+    const api = fakeApi();
+    await show(api);
+    api.annotate.mockImplementationOnce(() => new Promise((resolve) => { saved = resolve; }));
+    await click(button("Change"));
+    await submit(host.querySelector(".budget-entry-editor"));
+    const editor = host.querySelector(".budget-entry-editor") ?? host;
+    expect(select("Category", editor).disabled).toBe(true);
+    expect(select("Type", editor).disabled).toBe(true);
+    await act(async () => { saved({ ok: true, data: { annotation: annotationOf() } }); await Promise.resolve(); });
+    await settle();
+  });
+
   it("reloads instead of overwriting after a version conflict and explains other failures", async () => {
     const api = fakeApi();
     const { onChanged } = await show(api);

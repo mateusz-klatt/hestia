@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { counterparty, currentMonth, hasAnalytics, isMonth, isZero, monthLabel, shiftMonth, transferActions, transferDecision } from "./model";
+import { annotationRequest, counterparty, currentMonth, kindChoice, hasAnalytics, isMonth, isZero, monthLabel, shiftMonth, transferActions, transferDecision } from "./model";
 import { entry, pair } from "./fixtures";
 
 const capabilities = { stored_reads: true, account_controls: true, refresh: false, background_selection: true,
@@ -43,6 +43,14 @@ describe("analysis month helpers", () => {
 });
 
 describe("analytics decisions", () => {
+  it("never sends an explicit type with an automatic annotation", () => {
+    const row = entry("a");
+    expect(annotationRequest(row, { mode: "auto" }, "income")).toMatchObject({ mode: "auto", category_id: null, kind: "auto" });
+    expect(annotationRequest(row, { mode: "manual", category_id: null }, "income")).toMatchObject({ mode: "manual", kind: "income" });
+    expect(kindChoice("refund")).toBe("refund");
+    expect(kindChoice("future_kind")).toBe("auto");
+  });
+
   it("names the other party from the bank metadata by direction", () => {
     const metadata = { creditor_name: "Synthetic Payee", debtor_name: "Synthetic Payer", mcc: null };
     expect(counterparty(entry("a", { metadata }))).toBe("Synthetic Payee");
@@ -63,8 +71,15 @@ describe("analytics decisions", () => {
     expect(transferActions(pair({ status: "undone", id: "d", boundary: true }))).toEqual([]);
   });
 
-  it("records re-accepting a rejected or undone pair as the owner's manual choice", () => {
+  it("records reconfirming a review, rejected or undone pair as the owner's manual choice", () => {
     expect(transferDecision(pair({ source: "heuristic" }), "accept")).toMatchObject({ source: "heuristic" });
+    // The shown source of a pair to re-check is historical; the current evidence may say otherwise in either direction.
+    for (const source of ["heuristic", "account_identity"]) {
+      expect(transferDecision(pair({ id: "d", version: 2, status: "review", source,
+        debit: { ...pair().debit, fingerprint: "pfp-now-out" }, credit: { ...pair().credit, fingerprint: "pfp-now-in" } }), "accept"))
+        .toMatchObject({ source: "manual", decision_id: "d", expected_version: 2, expected_debit_fingerprint: "pfp-now-out",
+          expected_credit_fingerprint: "pfp-now-in" });
+    }
     for (const status of ["rejected", "undone"] as const) {
       expect(transferDecision(pair({ id: "d", version: 5, status, source: "account_identity" }), "accept"))
         .toMatchObject({ action: "accept", source: "manual", expected_version: 5 });

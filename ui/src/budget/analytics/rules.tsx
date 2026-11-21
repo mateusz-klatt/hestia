@@ -59,10 +59,13 @@ export function CategoriesView({ api, accounts, text, revision, onAccessLoss }: 
   const [categories, setCategories] = useState<Listed<AnalyticsCategory>>("loading");
   const [rules, setRules] = useState<Listed<AnalyticsRule>>("loading");
   const [changes, setChanges] = useState(0);
-  // Every reload takes a new generation: lists and saves from an older one are dropped.
+  // Every reload takes a new generation: lists and saves from an older one are dropped, and the panels drop any
+  // preview or pending state that belonged to the previous one.
   const generation = useRef(0);
+  const [epoch, setEpoch] = useState(0);
   useEffect(() => {
     const token = ++generation.current;
+    setEpoch(token);
     setCategories("loading");
     setRules("loading");
     void api.categories().then((result) => {
@@ -89,8 +92,8 @@ export function CategoriesView({ api, accounts, text, revision, onAccessLoss }: 
   const shown = Array.isArray(categories) ? categories : [];
   return (
     <section className="budget-month" aria-label={`${text.categories} · ${text.rules}`}>
-      <CategoriesPanel categories={categories} api={api} run={run} text={text} onSaved={reload} />
-      <RulesPanel rules={rules} categories={shown} accounts={accounts} api={api} run={run} text={text} onSaved={reload} />
+      <CategoriesPanel categories={categories} api={api} run={run} text={text} onSaved={reload} epoch={epoch} />
+      <RulesPanel rules={rules} categories={shown} accounts={accounts} api={api} run={run} text={text} onSaved={reload} epoch={epoch} />
     </section>
   );
 }
@@ -111,20 +114,24 @@ interface CategoriesProps {
   run: Run;
   text: RulesLabels;
   onSaved: () => void;
+  /** Changes with every reload of the view. */
+  epoch: number;
 }
 
-function CategoriesPanel({ categories, api, run, text, onSaved }: CategoriesProps) {
+function CategoriesPanel({ categories, api, run, text, onSaved, epoch }: CategoriesProps) {
   const [draft, setDraft] = useState("");
   const [renaming, setRenaming] = useState<{ id: string; name: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  // A reload settles whatever was pending: its answer is discarded, so its controls must not stay locked.
+  useEffect(() => { setBusy(false); }, [epoch]);
 
   const save = async (action: () => Promise<BudgetResult<{ category: AnalyticsCategory }>>, done: () => void) => {
     setBusy(true);
     setNotice(null);
     const result = await run(action);
-    if (result === null) return;
     setBusy(false);
+    if (result === null) return;
     if (!result.ok) { setNotice(failure(text, result.error)); return; }
     done();
     onSaved();
@@ -194,13 +201,20 @@ interface RulesProps {
   run: Run;
   text: RulesLabels;
   onSaved: () => void;
+  /** Changes with every reload of the view. */
+  epoch: number;
 }
 
-function RulesPanel({ rules, categories, accounts, api, run, text, onSaved }: RulesProps) {
+function RulesPanel({ rules, categories, accounts, api, run, text, onSaved, epoch }: RulesProps) {
   const [editing, setEditing] = useState<RuleCandidate | null>(null);
   const [preview, setPreview] = useState<RulePreview | null>(null);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  // Each edit of the form takes a new draft revision; a preview answer is shown only for the exact draft it was
+  // asked for, so a late answer can never make an older rule savable under a newer form.
+  const draft = useRef(0);
+  // A reload discards pending answers and any preview taken before it.
+  useEffect(() => { draft.current += 1; setBusy(false); setPreview(null); }, [epoch]);
   const categoryName = (id: string | null) => (id === null ? null : categories.find((item) => item.id === id)?.name ?? null);
   const accountName = (id: string) => {
     const account = accounts.find((item) => item.id === id);
@@ -208,37 +222,46 @@ function RulesPanel({ rules, categories, accounts, api, run, text, onSaved }: Ru
     return accountLabel(account, accounts.filter((item) => item.connection === account.connection).indexOf(account), text.account);
   };
 
-  const open = (rule: AnalyticsRule | null) => { setEditing(ruleCandidate(rule)); setPreview(null); setNotice(null); };
+  const open = (rule: AnalyticsRule | null) => {
+    draft.current += 1;
+    setEditing(ruleCandidate(rule));
+    setPreview(null);
+    setNotice(null);
+  };
   // Any change to the rule invalidates the preview: only what was previewed can be saved.
   const change = (changes: Partial<RuleCandidate>) => {
+    draft.current += 1;
     setEditing((current) => (current === null ? null : { ...current, ...changes }));
     setPreview(null);
   };
+  const close = () => { draft.current += 1; setEditing(null); setPreview(null); };
 
   const ask = async () => {
     if (editing === null || !validCandidate(editing)) return;
+    const asked = draft.current;
     setBusy(true);
     setNotice(null);
     const result = await run(() => api.previewRule({ ...editing, value: editing.value.trim() }));
-    if (result === null) return;
     setBusy(false);
+    // Dropped: access was lost, the view reloaded, or the form changed since this preview was asked for.
+    if (result === null || asked !== draft.current) return;
     if (!result.ok) { setNotice(failure(text, result.error)); return; }
     setPreview(result.data.preview);
   };
   const commit = async () => {
     if (preview === null) return;
+    const asked = draft.current;
     setBusy(true);
     setNotice(null);
     const result = await run(() => api.saveRule(preview.preview_id));
-    if (result === null) return;
     setBusy(false);
+    if (result === null || asked !== draft.current) return;
     if (!result.ok) {
       setNotice(failure(text, result.error));
       if (PREVIEW_GONE.has(result.error)) setPreview(null);
       return;
     }
-    setEditing(null);
-    setPreview(null);
+    close();
     onSaved();
   };
 
@@ -272,43 +295,43 @@ function RulesPanel({ rules, categories, accounts, api, run, text, onSaved }: Ru
       ) : (
         <form className="budget-rule-editor" onSubmit={(event) => { event.preventDefault(); void ask(); }}>
           <label>{text.field}
-            <select value={editing.field} onChange={(event) => { change({ field: event.currentTarget.value as RuleCandidate["field"] }); }}>
+            <select value={editing.field} disabled={busy} onChange={(event) => { change({ field: event.currentTarget.value as RuleCandidate["field"] }); }}>
               {RULE_FIELDS.map((field) => <option key={field} value={field}>{text.fields[field]}</option>)}
             </select>
           </label>
           <label>{text.operator}
-            <select aria-label={text.operators.contains} value={editing.operator}
+            <select aria-label={text.operators.contains} value={editing.operator} disabled={busy}
               onChange={(event) => { change({ operator: event.currentTarget.value as RuleCandidate["operator"] }); }}>
               {RULE_OPERATORS.map((operator) => <option key={operator} value={operator}>{text.operators[operator]}</option>)}
             </select>
           </label>
           <label>{text.value}
-            <input maxLength={RULE_VALUE_MAX} value={editing.value} onChange={(event) => { change({ value: event.currentTarget.value }); }} />
+            <input maxLength={RULE_VALUE_MAX} value={editing.value} disabled={busy} onChange={(event) => { change({ value: event.currentTarget.value }); }} />
           </label>
           <label>{text.category}
-            <select value={editing.category_id ?? ""} onChange={(event) => { change({ category_id: event.currentTarget.value || null }); }}>
+            <select value={editing.category_id ?? ""} disabled={busy} onChange={(event) => { change({ category_id: event.currentTarget.value || null }); }}>
               <option value="">{text.keep}</option>
               {categories.filter((item) => !item.archived || item.id === editing.category_id)
                 .map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
             </select>
           </label>
           <label>{text.kind}
-            <select value={editing.kind} onChange={(event) => { change({ kind: event.currentTarget.value as KindChoice }); }}>
+            <select value={editing.kind} disabled={busy} onChange={(event) => { change({ kind: event.currentTarget.value as KindChoice }); }}>
               {KIND_CHOICES.map((kind) => <option key={kind} value={kind}>{text.kinds[kind]}</option>)}
             </select>
           </label>
           <label>{text.priority}
-            <input type="number" min={0} max={RULE_PRIORITY_MAX} step={1} value={editing.priority}
+            <input type="number" min={0} max={RULE_PRIORITY_MAX} step={1} value={editing.priority} disabled={busy}
               onChange={(event) => { change({ priority: event.currentTarget.valueAsNumber }); }} />
           </label>
           <label className="budget-toggle">
-            <input type="checkbox" checked={editing.enabled} onChange={(event) => { change({ enabled: event.currentTarget.checked }); }} />
+            <input type="checkbox" checked={editing.enabled} disabled={busy} onChange={(event) => { change({ enabled: event.currentTarget.checked }); }} />
             {text.enabled}
           </label>
           {editing.category_id === null && editing.kind === "auto" ? <p className="budget-muted">{text.nothingToDo}</p> : null}
           <div className="budget-actions">
             <button type="submit" disabled={busy || !validCandidate(editing)}>{text.preview}</button>
-            <button type="button" disabled={busy} onClick={() => { setEditing(null); setPreview(null); }}>{text.cancel}</button>
+            <button type="button" disabled={busy} onClick={close}>{text.cancel}</button>
           </div>
           {preview === null ? null : (
             <div className="budget-preview" role="region" aria-label={text.preview}>

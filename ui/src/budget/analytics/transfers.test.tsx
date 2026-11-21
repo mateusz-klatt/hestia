@@ -113,6 +113,17 @@ describe("own-transfer queue", () => {
       expected_debit_fingerprint: null, expected_credit_fingerprint: null, expected_version: 4 });
   });
 
+  it("reconfirms a pair to re-check as a manual decision with the current fingerprints", async () => {
+    const review = pair({ id: "dec-4", version: 3, status: "review", source: "account_identity", stale: true,
+      debit: leg("acc-1", "out-1", { fingerprint: "pfp-now-out" }), credit: leg("acc-2", "in-1", { fingerprint: "pfp-now-in" }) });
+    const api = fakeApi([review]);
+    await show(api);
+    await click("To re-check");
+    await click("Confirm transfer");
+    expect(api.decideTransfer).toHaveBeenCalledWith(expect.objectContaining({ action: "accept", source: "manual", decision_id: "dec-4",
+      expected_version: 3, expected_debit_fingerprint: "pfp-now-out", expected_credit_fingerprint: "pfp-now-in" }));
+  });
+
   it("lets the owner re-accept an undone pair explicitly, as a manual decision", async () => {
     const undone = pair({ id: "dec-3", version: 6, status: "undone", source: "heuristic" });
     const api = fakeApi([undone]);

@@ -233,21 +233,31 @@ function decode(value: string): CategoryChoice {
 
 function Editor({ row, categories, text, kindText, saving, onSave, onCancel }: EditorProps) {
   const [category, setCategory] = useState(encode(currentChoice(row)));
-  const [kind, setKind] = useState<KindChoice>(kindChoice(row.annotation.kind));
-  const chosen = row.annotation.category_id;
-  // An archived category stays selectable only for the entry that already uses it.
-  const offered = categories.filter((item) => !item.archived || item.id === chosen);
+  const [kind, setKind] = useState<KindChoice>(row.annotation.mode === "manual" ? kindChoice(row.annotation.kind) : "auto");
+  // An archived category stays selectable only for the entry that already uses or shows it.
+  const kept = new Set([row.annotation.category_id, row.effective.category_id]);
+  const offered = categories.filter((item) => !item.archived || kept.has(item.id));
+  // "Automatic" hands both category and type back to rules. Choosing a type is a manual decision, so the category
+  // visibly becomes the one the entry shows now (or explicitly none) instead of a hidden automatic state.
+  const chooseKind = (value: KindChoice) => {
+    setKind(value);
+    if (value !== "auto" && category === "auto") setCategory(encode({ mode: "manual", category_id: row.effective.category_id }));
+  };
+  const chooseCategory = (value: string) => {
+    setCategory(value);
+    if (value === "auto") setKind("auto");
+  };
   return (
     <form className="budget-entry-editor" onSubmit={(event) => { event.preventDefault(); onSave(decode(category), kind); }}>
       <label>{text.category}
-        <select value={category} onChange={(event) => { setCategory(event.currentTarget.value); }}>
+        <select value={category} disabled={saving} onChange={(event) => { chooseCategory(event.currentTarget.value); }}>
           <option value="auto">{text.automatic}</option>
           <option value="none">{text.uncategorised}</option>
           {offered.map((item) => <option key={item.id} value={`cat:${item.id}`}>{item.name}</option>)}
         </select>
       </label>
       <label>{text.kind}
-        <select value={kind} onChange={(event) => { setKind(event.currentTarget.value as KindChoice); }}>
+        <select value={kind} disabled={saving} onChange={(event) => { chooseKind(kindChoice(event.currentTarget.value)); }}>
           {KIND_CHOICES.map((item) => <option key={item} value={item}>{kindText(item)}</option>)}
         </select>
       </label>

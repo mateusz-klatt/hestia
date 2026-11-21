@@ -206,6 +206,46 @@ describe("rules", () => {
     expect(onAccessLoss).toHaveBeenCalledWith({ ok: false, status: 401, error: "budget_http_401" });
   });
 
+  it("locks the rule form while a preview is asked for and drops an answer that arrives after a reload", async () => {
+    let late: (value: BudgetResult<{ preview: RulePreview }>) => void = () => undefined;
+    const api = fakeApi();
+    await show(api);
+    await click(button("Edit"));
+    const form = section("Rules").querySelector("form");
+    if (form === null) throw new Error("editor missing");
+    api.previewRule.mockImplementationOnce(() => new Promise((resolve) => { late = resolve; }));
+    await act(async () => { form.requestSubmit(); await Promise.resolve(); });
+    await settle();
+    // While the preview is pending the rule cannot be edited, so the answer always matches the form.
+    expect((field(form, "text") as HTMLInputElement).disabled).toBe(true);
+    expect((field(form, "Category") as HTMLSelectElement).disabled).toBe(true);
+    expect(button("Cancel", form).disabled).toBe(true);
+    await show(api, { revision: 1 });
+    await act(async () => { late({ ok: true, data: { preview } }); await Promise.resolve(); });
+    await settle();
+    expect(host.querySelector('[role="region"]')).toBeNull();
+    expect(button("Preview").disabled).toBe(false);
+    expect((field(section("Rules"), "text") as HTMLInputElement).disabled).toBe(false);
+  });
+
+  it("releases a category save that was pending when the view reloaded", async () => {
+    let late: (value: BudgetResult<{ category: typeof category }>) => void = () => undefined;
+    const api = fakeApi();
+    await show(api);
+    api.createCategory.mockImplementationOnce(() => new Promise((resolve) => { late = resolve; }));
+    const add = [...section("Categories").querySelectorAll("form")].at(-1);
+    await type(add?.querySelector("input"), "Synthetic Pending");
+    await act(async () => { add?.requestSubmit(); await Promise.resolve(); });
+    await settle();
+    expect(button("Rename", section("Categories")).disabled).toBe(true);
+    await show(api, { revision: 1 });
+    await act(async () => { late({ ok: true, data: { category } }); await Promise.resolve(); });
+    await settle();
+    expect(button("Rename", section("Categories")).disabled).toBe(false);
+    expect(button("Add category", section("Categories")).disabled).toBe(false);
+    expect(api.categories).toHaveBeenCalledTimes(2);
+  });
+
   it("drops a save that finishes after the view reloaded", async () => {
     let late: (value: BudgetResult<{ rule: RuleSaved }>) => void = () => undefined;
     const api = fakeApi();
@@ -220,5 +260,8 @@ describe("rules", () => {
     await act(async () => { late({ ok: true, data: { rule: saved } }); await Promise.resolve(); });
     await settle();
     expect(api.rules).toHaveBeenCalledTimes(2);
+    // The reload discarded the preview the save belonged to; the form is usable again and nothing was reloaded twice.
+    expect(host.querySelector('[role="region"]')).toBeNull();
+    expect(button("Preview").disabled).toBe(false);
   });
 });

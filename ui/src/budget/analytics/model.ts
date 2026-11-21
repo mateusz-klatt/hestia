@@ -147,10 +147,11 @@ export interface AnnotationRequest {
 /** The owner's category choice in the editor: automatic (rules), explicitly none, or a category id. */
 export type CategoryChoice = { mode: "auto" } | { mode: "manual"; category_id: string | null };
 
+/** "auto" resets both category and type to rules and defaults; any explicit type is part of a manual decision. */
 export function annotationRequest(row: AnalyticsTransaction, category: CategoryChoice, kind: KindChoice): AnnotationRequest {
   return {
     account_id: row.account_id, entry_reference: row.entry_reference, mode: category.mode,
-    category_id: category.mode === "manual" ? category.category_id : null, kind,
+    category_id: category.mode === "manual" ? category.category_id : null, kind: category.mode === "manual" ? kind : "auto",
     expected_fingerprint: row.fingerprint, expected_version: row.annotation.version,
   };
 }
@@ -252,9 +253,10 @@ export function transferDecision(pair: TransferPair, action: TransferAction): Tr
     return { action, source, decision_id: pair.id, debit: null, credit: null, expected_debit_fingerprint: null,
       expected_credit_fingerprint: null, expected_version: pair.version };
   }
-  // Re-accepting a rejected or undone pair is the owner's explicit override: it is recorded as manual, while the
-  // pair's historical source stays untouched on the server.
-  const reaccept = action === "accept" && (pair.status === "rejected" || pair.status === "undone");
+  // Confirming a pair again (to re-check after the bank data changed, or rejected or undone) is the owner's explicit
+  // reconfirmation with the current fingerprints: it is recorded as manual, because the pair's shown source is
+  // historical and the current evidence may differ. Only a fresh suggestion is sent with its verified source.
+  const reaccept = action === "accept" && (pair.status === "review" || pair.status === "rejected" || pair.status === "undone");
   return {
     action, source: reaccept ? "manual" : source, decision_id: pair.id, expected_version: pair.version,
     debit: { account_id: pair.debit.account_id, entry_reference: pair.debit.entry_reference },
