@@ -39,7 +39,9 @@ const labels = {
     consentActive: "Consent from Hestia valid until", consentWaiting: "A new consent is waiting to be finished",
     pendingTitle: "Unfinished bank connection", finish: "Finish", cancel: "Cancel",
     consentError: "Could not start the bank connection. Try again later.",
-    consentBusy: "Another bank connection is already in progress or the limit was reached; try again later.",
+    consentInProgress: "A connection to this bank is already unfinished; finish or cancel it below.",
+    consentRateLimited: "Too many attempts for this bank; wait a minute and try again.",
+    consentContext: "The connection cannot be started safely from this address; open Hestia at its usual address.",
     consentUrl: "The bank returned an invalid address; nothing was opened.",
     limits: "Download limits", limitsHide: "Hide limits", limitsLoading: "Loading limits…",
     limitsError: "Limits could not be loaded.",
@@ -81,7 +83,9 @@ const labels = {
     consentActive: "Zgoda z Hestii ważna do", consentWaiting: "Nowa zgoda czeka na dokończenie",
     pendingTitle: "Niedokończone połączenie z bankiem", finish: "Dokończ", cancel: "Anuluj",
     consentError: "Nie udało się rozpocząć połączenia z bankiem. Spróbuj później.",
-    consentBusy: "Trwa już inne połączenie z bankiem albo osiągnięto limit; spróbuj później.",
+    consentInProgress: "Połączenie z tym bankiem jest już niedokończone; dokończ je albo anuluj poniżej.",
+    consentRateLimited: "Zbyt wiele prób dla tego banku; odczekaj minutę i spróbuj ponownie.",
+    consentContext: "Nie można bezpiecznie rozpocząć połączenia z tego adresu; otwórz Hestię pod jej zwykłym adresem.",
     consentUrl: "Bank zwrócił nieprawidłowy adres; niczego nie otwarto.",
     limits: "Limity pobrań", limitsHide: "Ukryj limity", limitsLoading: "Wczytywanie limitów…",
     limitsError: "Nie udało się wczytać limitów.",
@@ -328,8 +332,9 @@ export function Budget({ active, api = budgetApi, pollMs = 2000, principal,
     // Leave for the bank only if this is still the same visible budget for the same principal.
     if (result === null || !activeRef.current || lifecycle.current !== ticket) return;
     if (!result.ok) {
-      setNotice(result.error === "budget_version_conflict" ? text.conflict
-        : result.status === 409 || result.status === 429 ? text.consentBusy : text.consentError);
+      setNotice(consentFailureText(text, result.error));
+      // An unfinished flow already exists: reload so its banner (finish / cancel) appears.
+      if (result.error === "budget_consent_in_progress") await reload();
       return;
     }
     const target = safeAuthorizationUrl(result.data.authorization_url);
@@ -337,7 +342,7 @@ export function Budget({ active, api = budgetApi, pollMs = 2000, principal,
     // Keep the button disabled while the browser leaves for the bank.
     setBusy((current) => new Set(current).add(`consent:${connection.id}`));
     navigate(target);
-  }, [api, run, navigate, text]);
+  }, [api, run, navigate, reload, text]);
 
   const cancelConsent = useCallback(async (flow: BudgetConsentFlow) => {
     const result = await run(`cancel:${flow.id}`, () => api.consentCancel(flow.id));
@@ -464,6 +469,16 @@ export function Budget({ active, api = budgetApi, pollMs = 2000, principal,
       )}
     </section>
   );
+}
+
+function consentFailureText(text: Labels, error: string): string {
+  switch (error) {
+    case "budget_version_conflict": return text.conflict;
+    case "budget_consent_in_progress": return text.consentInProgress;
+    case "budget_consent_rate_limited": return text.consentRateLimited;
+    case "budget_consent_psu_context_required": return text.consentContext;
+    default: return text.consentError;
+  }
 }
 
 function consentFacts(text: Labels, consents: readonly BudgetConsent[], connectionId: string, locale: string) {

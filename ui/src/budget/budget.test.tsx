@@ -395,8 +395,9 @@ describe("bank consent", () => {
     expect(button("Renew bank consent").disabled).toBe(false);
   });
 
-  it.each([[409, "budget_version_conflict", "changed elsewhere"], [409, "budget_consent_in_progress", "already in progress"],
-    [429, "budget_rate_limited", "already in progress"], [503, "budget_consent_unavailable", "Could not start"]])(
+  it.each([[409, "budget_version_conflict", "changed elsewhere"], [409, "budget_consent_in_progress", "already unfinished"],
+    [429, "budget_consent_rate_limited", "wait a minute"], [409, "budget_consent_psu_context_required", "usual address"],
+    [503, "budget_consent_unavailable", "Could not start"], [409, "budget_consent_something_new", "Could not start"]])(
     "explains a %s %s start refusal without leaving the page", async (status, error, text) => {
       const api = fakeApi();
       api.consentStart.mockImplementation(() => fail(status, error));
@@ -405,6 +406,20 @@ describe("bank consent", () => {
       expect(host.textContent).toContain(text);
       expect(navigate).not.toHaveBeenCalled();
     });
+
+  it("reloads after an in-progress refusal so the unfinished flow's banner appears", async () => {
+    const api = fakeApi();
+    api.consentStart.mockImplementation(() => fail(409, "budget_consent_in_progress"));
+    await renderConsent(api);
+    expect(host.querySelector(".budget-pending")).toBeNull();
+    api.consentPending.mockImplementation(() => ok({ pending: [flowOf("flow-open", "staged")] }));
+    const before = api.connections.mock.calls.length;
+    await click(button("Connect bank"));
+    await settle();
+    expect(api.connections.mock.calls.length).toBeGreaterThan(before);
+    expect(host.querySelector(".budget-pending")?.textContent).toContain("Synthetic Bank");
+    expect(host.textContent).toContain("already unfinished");
+  });
 
   it("shows consent validity, a waiting candidate and unfinished flows with finish and cancel", async () => {
     const api = fakeApi();
