@@ -176,6 +176,36 @@ class BudgetSelectionRaceTests(AdvancingTime, unittest.TestCase):
         self.assert_clean_deferral(job, debit_count=2)
         self.assertEqual(len(bank.calls), 3)
 
+    def test_selection_change_after_fetch_wins_over_expired_snapshot_at_commit(self):
+        self.seed_first()
+        original_fetch = runtime.fetch_snapshot
+
+        def fetch_then_select_and_expire(*args, **kwargs):
+            result = original_fetch(*args, **kwargs)
+            self.select_account("second", True)
+            self.now = result.valid_until
+            return result
+
+        bank = SyntheticBank(self.config)
+        with mock.patch.object(runtime, "fetch_snapshot", side_effect=fetch_then_select_and_expire):
+            job = self.run_job(bank, key="selection-race-key-0010")
+        self.assert_clean_deferral(job, debit_count=2)
+        self.assertEqual(len(bank.calls), 3)
+
+    def test_aba_selection_toggle_returning_to_same_set_commits_cleanly(self):
+        """Set-based fencing intentionally lets A -> B -> A commit the unchanged final selection."""
+        self.seed_first()
+
+        def toggle_on_then_off():
+            self.select_account("second", True)
+            self.select_account("second", False)
+
+        bank = self.mutating_bank("/transactions", toggle_on_then_off)
+        job = self.run_job(bank, key="selection-race-key-0011")
+        self.assertEqual((job["status"], job["error"]), ("updated", None))
+        self.assertEqual(len(self.rows(db.BudgetAcquisition)), 2)
+        self.assertEqual({row.entry_reference for row in self.rows(db.BudgetTransaction)}, {"seed-only", "ref-1"})
+
     def test_deselecting_all_accounts_between_can_start_and_selected_hashes_defers_before_credentials(self):
         self.seed_first()
         scheduler = BudgetScheduler(self.store, application_id=APP)

@@ -367,8 +367,6 @@ class BudgetStore:
     def commit_snapshot(self, connection_id, snapshot, *, attempt_id=None, expected_version=None,
                         expected_selection=None):
         now = self.clock()
-        if snapshot.valid_until <= now:
-            raise BudgetStoreError("Bank session has expired")
         with self.transaction() as session:
             row = session.get(Connection, connection_id)
             if row is None or not row.enabled:
@@ -376,6 +374,8 @@ class BudgetStore:
             if row.paused or (expected_version is not None and row.control_version != expected_version):
                 raise BudgetPausedError("Bank connection is paused")
             accounts = self._snapshot_accounts(session, row, snapshot, expected_selection=expected_selection)
+            if snapshot.valid_until <= now:
+                raise BudgetStoreError("Bank session has expired")
             for error in snapshot.errors:
                 if error.code != "limit_exceeded":
                     raise BudgetStoreError("Invalid global acquisition failure")
