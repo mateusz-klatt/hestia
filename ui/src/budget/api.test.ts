@@ -51,6 +51,24 @@ describe("budget api", () => {
     expect(JSON.parse(sent(fetchMock, 6).init.body as string)).toEqual({
       category_id: "cat-food", currency: "PLN", monthly_limit: "500.5", warning_percent: 80, enabled: true, expected_version: 0,
     });
+    await budgetApi.mortgages();
+    expect(sent(fetchMock, 7).url.pathname).toMatch(/\/api\/budget\/analytics\/mortgages$/);
+    expect(sent(fetchMock, 7).url.search).toBe("");
+    await budgetApi.saveMortgage({
+      schedule_id: null, label: "Synthetic Loan", amount: "2450.5", currency: "PLN", due_day: 10,
+      start_date: "2026-01-01", end_date: null, remind_days_before: 5, destination_kind: "owner_inbox",
+      enabled: true, expected_version: 0,
+    });
+    expect(sent(fetchMock, 8).url.pathname).toMatch(/\/api\/budget\/analytics\/mortgage-save$/);
+    expect(sent(fetchMock, 8).init.method).toBe("POST");
+    expect(JSON.parse(sent(fetchMock, 8).init.body as string)).toMatchObject({
+      schedule_id: null, label: "Synthetic Loan", destination_kind: "owner_inbox", expected_version: 0,
+    });
+    await budgetApi.setMortgagePayment({ schedule_id: "mtg-1", month: "2026-11", paid: true, expected_version: 1 });
+    expect(sent(fetchMock, 9).url.pathname).toMatch(/\/api\/budget\/analytics\/mortgage-payment-set$/);
+    expect(JSON.parse(sent(fetchMock, 9).init.body as string)).toEqual({
+      schedule_id: "mtg-1", month: "2026-11", paid: true, expected_version: 1,
+    });
   });
 
   it("sends refresh with its idempotency key, JSON body and no Authorization header", async () => {

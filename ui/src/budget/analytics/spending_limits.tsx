@@ -25,7 +25,8 @@ export const spendingLimitsLabels = {
     configuredTitle: "Configured limits",
     noLimits: "No monthly spending limits configured yet.",
     noLimitsForCurrency: (currency: string) => `No spending limits configured in ${currency}.`,
-    noCategoriesHint: "Create at least one active category in “Categories and rules” before adding a spending limit.",
+    noCategoriesHint: "Create at least one active category before adding a spending limit.",
+    openCategoriesLink: "Open Categories and rules",
     newLimit: "New limit",
     edit: "Edit",
     save: "Save limit",
@@ -73,7 +74,8 @@ export const spendingLimitsLabels = {
     configuredTitle: "Skonfigurowane limity",
     noLimits: "Nie skonfigurowano jeszcze miesięcznych limitów wydatków.",
     noLimitsForCurrency: (currency: string) => `Brak limitów wydatków w walucie ${currency}.`,
-    noCategoriesHint: "Najpierw utwórz aktywną kategorię w zakładce „Kategorie i reguły”, aby dodać limit.",
+    noCategoriesHint: "Najpierw utwórz aktywną kategorię, aby dodać limit wydatków.",
+    openCategoriesLink: "Przejdź do: Kategorie i reguły",
     newLimit: "Nowy limit",
     edit: "Edytuj",
     save: "Zapisz limit",
@@ -130,6 +132,7 @@ export interface SpendingLimitsViewProps {
   locale: string;
   revision: number;
   onAccessLoss: Loss;
+  onOpenRules?: (() => void) | undefined;
   initialMonth?: string | undefined;
   today?: () => Date;
 }
@@ -291,13 +294,14 @@ function LimitEditor({ draft, categories, currencySuggestions, existingKeys, bus
   );
 }
 
-export function SpendingLimitsView({ api, accounts, text, locale, revision, onAccessLoss, initialMonth,
+export function SpendingLimitsView({ api, accounts, text, locale, revision, onAccessLoss, onOpenRules, initialMonth,
   today = () => new Date() }: SpendingLimitsViewProps) {
   const latest = currentMonth(today());
   const [month, setMonth] = useState(
     initialMonth !== undefined && isMonth(initialMonth) && initialMonth < latest ? initialMonth : latest);
   const [currency, setCurrency] = useState("");
   const [currencies, setCurrencies] = useState<string[]>([]);
+  const [allLimitKeys, setAllLimitKeys] = useState<ReadonlySet<string>>(new Set());
   const [shown, setShown] = useState<Shown>({ state: "loading" });
   const [categories, setCategories] = useState<AnalyticsCategory[]>([]);
   const [changes, setChanges] = useState(0);
@@ -320,9 +324,15 @@ export function SpendingLimitsView({ api, accounts, text, locale, revision, onAc
       setShown({ state: "ready", data: result.data });
       if (currency === "") {
         setCurrencies(limitCurrencies(result.data.limits));
+        setAllLimitKeys(new Set(result.data.limits.map((item) => `${item.category_id}/${item.currency}`)));
       } else {
         setCurrencies((current) => (current.includes(currency) ? current
           : [...current, currency].sort((a, b) => a.localeCompare(b))));
+        setAllLimitKeys((current) => {
+          const next = new Set(current);
+          for (const item of result.data.limits) next.add(`${item.category_id}/${item.currency}`);
+          return next;
+        });
       }
     });
     void api.categories().then((result) => {
@@ -348,6 +358,7 @@ export function SpendingLimitsView({ api, accounts, text, locale, revision, onAc
       setNotice(saveFailure(text, result.error));
       return;
     }
+    setAllLimitKeys((current) => new Set([...current, `${request.category_id}/${request.currency}`]));
     if (closeEditor) {
       setEditing(null);
       if (currency !== "" && request.currency !== currency) setCurrency("");
@@ -358,7 +369,6 @@ export function SpendingLimitsView({ api, accounts, text, locale, revision, onAc
   const categoryMap = new Map(categories.map((item) => [item.id, item]));
   const activeCategories = categories.filter((item) => !item.archived);
   const limits = shown.state === "ready" ? shown.data.limits : [];
-  const existingKeys = new Set(limits.map((item) => `${item.category_id}/${item.currency}`));
   const suggestions = limitCurrencies(limits, accounts);
   const defaultCurrency = currency !== "" ? currency : (suggestions[0] ?? "PLN");
   const showCurrencies = currencies.length > 1 || currency !== "";
@@ -401,19 +411,20 @@ export function SpendingLimitsView({ api, accounts, text, locale, revision, onAc
   return (
     <section className="budget-month" aria-label={text.title}>
       <nav className="budget-month-nav">
-        <button type="button" aria-label={text.previous} onClick={() => { setMonth((value) => shiftMonth(value, -1)); }}>◀</button>
+        <button type="button" aria-label={text.previous} disabled={busy}
+          onClick={() => { setMonth((value) => shiftMonth(value, -1)); }}>◀</button>
         <h3>{monthLabel(month, locale)}</h3>
-        <button type="button" aria-label={text.next} disabled={month >= latest}
+        <button type="button" aria-label={text.next} disabled={busy || month >= latest}
           onClick={() => { setMonth((value) => (isMonth(value) && value < latest ? shiftMonth(value, 1) : value)); }}>▶</button>
       </nav>
       <p className="budget-muted">{text.intro}</p>
       {showCurrencies ? (
         <div className="budget-views" role="group" aria-label={text.currencyFilter}>
-          <button type="button" aria-pressed={currency === ""} onClick={() => { setCurrency(""); }}>
+          <button type="button" disabled={busy} aria-pressed={currency === ""} onClick={() => { setCurrency(""); }}>
             {text.allCurrencies}
           </button>
           {currencies.map((code) => (
-            <button type="button" key={code} aria-pressed={currency === code} onClick={() => { setCurrency(code); }}>
+            <button type="button" key={code} disabled={busy} aria-pressed={currency === code} onClick={() => { setCurrency(code); }}>
               {code}
             </button>
           ))}
@@ -433,11 +444,21 @@ export function SpendingLimitsView({ api, accounts, text, locale, revision, onAc
               ) : null}
             </div>
             {editing === null && activeCategories.length === 0 ? (
-              <p className="budget-muted">{text.noCategoriesHint}</p>
+              <p className="budget-muted">
+                {text.noCategoriesHint}
+                {onOpenRules === undefined ? null : (
+                  <>
+                    {" "}
+                    <button type="button" className="budget-link" disabled={busy} onClick={onOpenRules}>
+                      {text.openCategoriesLink}
+                    </button>
+                  </>
+                )}
+              </p>
             ) : null}
             {editing === null ? null : (
               <LimitEditor draft={editing} categories={categories} currencySuggestions={suggestions}
-                existingKeys={existingKeys} busy={busy} text={text}
+                existingKeys={allLimitKeys} busy={busy} text={text}
                 onChange={(patch) => { setEditing((current) => (current === null ? null : { ...current, ...patch })); }}
                 onSubmit={(request) => { void submit(request, true); }}
                 onCancel={() => { setEditing(null); }} />

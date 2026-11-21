@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { accountName, annotationRequest, canPair, canonicalAmount, counterparty, currentMonth, daysBetween, kindChoice, kindChoicesFor,
-  legsMatch, hasAnalytics, isMonth, isZero, limitCurrencies, manualPairRequest, monthLabel, pairCandidates, pairDate, pairPeriods,
-  parseWarningPercent, pluralPl, recurringCurrencies, shiftMonth, transferActions, transferDecision, validCurrency,
-  validLimitAmount } from "./model";
+  legsMatch, hasAnalytics, isMonth, isZero, limitCurrencies, manualPairRequest, monthLabel, mortgageCurrencies,
+  pairCandidates, pairDate, pairPeriods, parseIntInRange, parseWarningPercent, pluralPl, recurringCurrencies,
+  shiftMonth, transferActions, transferDecision, validCurrency, validIsoDate, validLimitAmount,
+  validMortgageLabel } from "./model";
 import type { AnalyticsTransaction } from "./model";
-import { entry, leg, pair, recurringHint, spendingLimit } from "./fixtures";
+import { entry, leg, mortgageSchedule, pair, recurringHint, spendingLimit } from "./fixtures";
 import { account, connection } from "../fixtures";
 
 const capabilities = { stored_reads: true, account_controls: true, refresh: false, background_selection: true,
@@ -285,5 +286,28 @@ describe("analytics decisions", () => {
       [spendingLimit({ currency: "EUR" }), spendingLimit({ id: "lim-2", currency: "PLN" })],
       [account({ display: { product: "Synthetic", currency: "USD", masked_suffix: "0001", source: "api", observed_at: 1, imported_at: 2 } })],
     )).toEqual(["EUR", "PLN", "USD"]);
+  });
+
+  it("validates mortgage labels (including NFC length), integer bounds and real calendar dates", () => {
+    expect(validMortgageLabel("Synthetic Loan")).toBe(true);
+    expect(validMortgageLabel("   ")).toBe(false);
+    expect(validMortgageLabel("bad\nline")).toBe(false);
+    // U+0958 decomposes under NFC to 2 code units (200 -> 400 > 256).
+    expect(validMortgageLabel("\u0958".repeat(200))).toBe(false);
+    expect(validMortgageLabel("\u0958".repeat(128))).toBe(true);
+    expect(parseIntInRange("1", 1, 31)).toBe(1);
+    expect(parseIntInRange("31", 1, 31)).toBe(31);
+    expect(parseIntInRange("0", 1, 31)).toBeNull();
+    expect(parseIntInRange("0", 0, 31)).toBe(0);
+    expect(parseIntInRange("32", 0, 31)).toBeNull();
+    expect(parseIntInRange("5.5", 0, 31)).toBeNull();
+    expect(validIsoDate("2024-02-29")).toBe(true);
+    expect(validIsoDate("2026-02-29")).toBe(false);
+    expect(validIsoDate("2026-02-30")).toBe(false);
+    expect(validIsoDate("not-a-date")).toBe(false);
+    expect(mortgageCurrencies(
+      [mortgageSchedule({ currency: "EUR" })],
+      [account({ display: { product: "Synthetic", currency: "PLN", masked_suffix: "0001", source: "api", observed_at: 1, imported_at: 2 } })],
+    )).toEqual(["EUR", "PLN"]);
   });
 });

@@ -6,8 +6,8 @@ import type { BudgetApi, BudgetResult } from "./api";
 import { Budget } from "./budget";
 import { account, componentLimit, connection, sharedLimit } from "./fixtures";
 import type { BudgetAccount, BudgetBalances, BudgetJob, BudgetTransaction, BudgetTransactions } from "./model";
-import { entriesOf, overviewOf, recurringHint, recurringOf, spendingLimit, spendingLimitsOf,
-  spendingLimitStatus, transfersOf } from "./analytics/fixtures";
+import { entriesOf, mortgageReminder, mortgageSchedule, mortgagesOf, overviewOf, recurringHint, recurringOf,
+  spendingLimit, spendingLimitsOf, spendingLimitStatus, transfersOf } from "./analytics/fixtures";
 
 type Settle<T> = (value: BudgetResult<T>) => void;
 
@@ -74,6 +74,9 @@ function fakeApi(accounts: BudgetAccount[] = [account({ display })]) {
     recurring: vi.fn<BudgetApi["recurring"]>(() => ok(recurringOf([]))),
     spendingLimits: vi.fn<BudgetApi["spendingLimits"]>((period) => ok(spendingLimitsOf(period))),
     saveSpendingLimit: vi.fn<BudgetApi["saveSpendingLimit"]>(),
+    mortgages: vi.fn<BudgetApi["mortgages"]>(() => ok(mortgagesOf())),
+    saveMortgage: vi.fn<BudgetApi["saveMortgage"]>(),
+    setMortgagePayment: vi.fn<BudgetApi["setMortgagePayment"]>(),
   } satisfies BudgetApi;
 }
 
@@ -891,9 +894,26 @@ describe("analytics views", () => {
     expect(api.spendingLimits).toHaveBeenCalledTimes(1);
     expect(host.textContent).toContain("Synthetic Food");
     expect(button("Spending limits").getAttribute("aria-pressed")).toBe("true");
+    await click(button("Open Categories and rules"));
+    expect(button("Categories and rules").getAttribute("aria-pressed")).toBe("true");
+    api.mortgages.mockImplementation(() => ok(mortgagesOf([mortgageSchedule()], [mortgageReminder()])));
+    await click(button("Mortgages"));
+    expect(api.mortgages).toHaveBeenCalledTimes(1);
+    expect(host.textContent).toContain("Synthetic Home Loan");
+    expect(button("Mortgages").getAttribute("aria-pressed")).toBe("true");
     await click(button("Accounts"));
     expect(host.textContent).toContain("Synthetic Current ••0001");
     expect(host.querySelector(".budget-month")).toBeNull();
+  });
+
+  it("clears the whole budget when the mortgages read reports lost access", async () => {
+    const api = fakeApi();
+    api.connections.mockImplementation(() => ok({ connections: [connection], capabilities: analysis }));
+    api.mortgages.mockImplementation(() => fail(403, "budget_forbidden"));
+    await render(api);
+    await click(button("Mortgages"));
+    expect(host.textContent).toContain("Only the budget's owner");
+    expect(host.querySelector(".budget-views")).toBeNull();
   });
 
   it("clears the whole budget when the spending limits read reports lost access", async () => {
