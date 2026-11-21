@@ -2,7 +2,8 @@
 // STRING; the browser never adds, subtracts, converts or mixes amounts. Periods are "YYYY-MM" or "YYYY".
 import type { BudgetCapabilities, BudgetComponentStatus, BudgetTransaction } from "../model";
 
-// Hand-written from the agreed analytics contract until the generated OpenAPI types land in openapi.ts.
+// Mirrors the generated BudgetAnalytics* schemas field for field; replace with Schemas[...] aliases once the
+// contract lands in openapi.ts on master. Server enums arrive as plain strings, so lookups always have a fallback.
 
 export interface AnalyticsTotals {
   currency: string;
@@ -73,33 +74,44 @@ export const KIND_CHOICES: readonly KindChoice[] = ["auto", "expense", "income",
 /** Effective kinds the server reports and filters by. */
 export const EFFECTIVE_KINDS = ["expense", "income", "refund", "unclassified_credit", "transfer", "excluded"] as const;
 
+/** Every entry carries one: mode "auto" with version 0 until the owner decides. */
 export interface AnalyticsAnnotation {
   version: number;
-  mode: "auto" | "manual";
+  mode: string;
   category_id: string | null;
-  kind: KindChoice;
+  kind: string;
   /** The bank entry changed after this decision was made; it needs the owner's look. */
   stale: boolean;
 }
 
+export interface AnnotationSaved {
+  account_id: string;
+  entry_reference: string;
+  category_id: string | null;
+  kind: string;
+  mode: string;
+  ledger_fingerprint: string;
+  changed: boolean;
+  updated_at: number | null;
+  version: number;
+}
+
 export type TransferStatus = "suggested" | "accepted" | "review" | "boundary" | "rejected" | "undone";
 
-export interface AnalyticsTransaction extends Pick<BudgetTransaction, "amount" | "currency" | "credit_debit_indicator" | "status"
+export interface AnalyticsTransaction extends Pick<BudgetTransaction, "amount" | "currency" | "credit_debit_indicator"
   | "booking_date" | "value_date" | "transaction_date" | "remittance_information" | "source" | "observed_at" | "api_observed_at"> {
+  status: "BOOK";
   account_id: string;
   entry_reference: string;
   /** Financial fingerprint: an annotation is accepted only for the entry as the owner saw it. */
   fingerprint: string;
   transfer_fingerprint: string;
-  annotation: AnalyticsAnnotation | null;
-  effective: {
-    kind: (typeof EFFECTIVE_KINDS)[number];
-    category_id: string | null;
-    source: "default" | "manual" | "rule" | "transfer";
-    rule_id: string | null;
-  };
+  annotation: AnalyticsAnnotation;
+  /** kind: expense, income, refund, excluded, unclassified_credit or transfer; source: default, manual, rule or transfer. */
+  effective: { kind: string; category_id: string | null; source: string; rule_id: string | null };
   metadata: { creditor_name: string | null; debtor_name: string | null; mcc: string | null } | null;
-  transfer: { status: "none" | TransferStatus; decision_id: string | null; candidate_count: number; ambiguous: boolean };
+  /** status: none, suggested, accepted, review, boundary, rejected or undone. */
+  transfer: { status: string; decision_id: string | null; candidate_count: number; ambiguous: boolean };
 }
 
 export interface AnalyticsTransactions {
@@ -112,7 +124,8 @@ export interface AnalyticsTransactions {
   next_cursor: string | null;
 }
 
-export interface AnalyticsCategory { id: string; name: string; archived: boolean; version: number }
+export interface AnalyticsCategory { id: string; name: string; archived: boolean; version: number; created_at: number; updated_at: number }
+export interface CategorySaved extends AnalyticsCategory { changed: boolean }
 
 export interface TransactionFilter { currency: string; category: string; kind: string; query: string }
 export const NO_FILTER: TransactionFilter = { currency: "", category: "", kind: "", query: "" };
@@ -138,14 +151,24 @@ export function annotationRequest(row: AnalyticsTransaction, category: CategoryC
   return {
     account_id: row.account_id, entry_reference: row.entry_reference, mode: category.mode,
     category_id: category.mode === "manual" ? category.category_id : null, kind,
-    expected_fingerprint: row.fingerprint, expected_version: row.annotation?.version ?? 0,
+    expected_fingerprint: row.fingerprint, expected_version: row.annotation.version,
   };
 }
 
 /** The editor's starting choice: what the owner set before, or automatic. */
 export function currentChoice(row: AnalyticsTransaction): CategoryChoice {
   const annotation = row.annotation;
-  return annotation === null || annotation.mode === "auto" ? { mode: "auto" } : { mode: "manual", category_id: annotation.category_id };
+  return annotation.mode === "manual" ? { mode: "manual", category_id: annotation.category_id } : { mode: "auto" };
+}
+
+/** A label for a server enum value; an unknown value is shown as it came. */
+export function labelOf(labels: Readonly<Record<string, string>>, value: string): string {
+  return labels[value] ?? value;
+}
+
+/** A server kind string as an editor choice; anything unknown falls back to automatic. */
+export function kindChoice(kind: string): KindChoice {
+  return (KIND_CHOICES as readonly string[]).includes(kind) ? kind as KindChoice : "auto";
 }
 
 /** The other party's name as the bank reported it: the creditor of a payment, the debtor of an incoming one. */
@@ -171,14 +194,18 @@ export interface TransferLeg {
   selected: boolean;
 }
 
+export type TransferSource = "account_identity" | "heuristic" | "manual";
+const TRANSFER_SOURCES: readonly string[] = ["account_identity", "heuristic", "manual"];
+
 export interface TransferPair {
   /** null while the pair is only a suggestion nobody has decided on. */
   id: string | null;
   /** 0 before the first decision. */
   version: number;
-  status: TransferStatus;
+  /** One of TransferStatus. */
+  status: string;
   /** account_identity: matched by account number; heuristic: equal amount within 3 days; manual: the owner's pairing. */
-  source: "account_identity" | "heuristic" | "manual";
+  source: string;
   debit: TransferLeg;
   credit: TransferLeg;
   date_distance: number | null;
@@ -206,25 +233,30 @@ export type TransferAction = "accept" | "reject" | "undo";
 export const TRANSFER_QUEUES = ["suggested", "review", "boundary", "accepted", "rejected", "undone"] as const;
 export type TransferQueue = (typeof TRANSFER_QUEUES)[number];
 
-export type TransferDecisionRequest =
-  | {
-    action: "accept" | "reject";
-    source: TransferPair["source"];
-    debit: { account_id: string; entry_reference: string };
-    credit: { account_id: string; entry_reference: string };
-    expected_debit_fingerprint: string | null;
-    expected_credit_fingerprint: string | null;
-    expected_version: number;
-  }
-  | { action: "undo"; decision_id: string; expected_version: number };
+/** Every field is always sent; legs and fingerprints are null for undo, which names the decision instead. */
+export interface TransferDecisionRequest {
+  action: TransferAction;
+  source: TransferSource;
+  decision_id: string | null;
+  debit: { account_id: string; entry_reference: string } | null;
+  credit: { account_id: string; entry_reference: string } | null;
+  expected_debit_fingerprint: string | null;
+  expected_credit_fingerprint: string | null;
+  expected_version: number;
+}
 
 export function transferDecision(pair: TransferPair, action: TransferAction): TransferDecisionRequest | null {
-  if (action === "undo") return pair.id === null ? null : { action, decision_id: pair.id, expected_version: pair.version };
+  const source: TransferSource = TRANSFER_SOURCES.includes(pair.source) ? pair.source as TransferSource : "manual";
+  if (action === "undo") {
+    if (pair.id === null) return null;
+    return { action, source, decision_id: pair.id, debit: null, credit: null, expected_debit_fingerprint: null,
+      expected_credit_fingerprint: null, expected_version: pair.version };
+  }
   // Re-accepting a rejected or undone pair is the owner's explicit override: it is recorded as manual, while the
   // pair's historical source stays untouched on the server.
   const reaccept = action === "accept" && (pair.status === "rejected" || pair.status === "undone");
   return {
-    action, source: reaccept ? "manual" : pair.source, expected_version: pair.version,
+    action, source: reaccept ? "manual" : source, decision_id: pair.id, expected_version: pair.version,
     debit: { account_id: pair.debit.account_id, entry_reference: pair.debit.entry_reference },
     credit: { account_id: pair.credit.account_id, entry_reference: pair.credit.entry_reference },
     expected_debit_fingerprint: pair.debit.fingerprint, expected_credit_fingerprint: pair.credit.fingerprint,
@@ -232,7 +264,12 @@ export function transferDecision(pair: TransferPair, action: TransferAction): Tr
 }
 
 /** The result of a decision; the view re-reads the period rather than patching rows from it. */
-export interface TransferDecisionResult { id: string; version: number; status: TransferStatus }
+export interface TransferDecisionResult {
+  id: string; version: number; status: string; source: string; changed: boolean; rule_version: number;
+  debit_account_id: string; debit_ref: string; debit_fingerprint: string;
+  credit_account_id: string; credit_ref: string; credit_fingerprint: string;
+  created_at: number; updated_at: number;
+}
 
 /** The actions the owner can take on a pair; a pair with a leg outside the selection cannot be accepted. */
 export function transferActions(pair: TransferPair): TransferAction[] {
@@ -244,6 +281,7 @@ export function transferActions(pair: TransferPair): TransferAction[] {
     case "accepted": return decided ? ["undo"] : [];
     case "rejected":
     case "undone": return pair.boundary ? [] : ["accept"];
+    default: return [];
   }
 }
 
@@ -274,14 +312,17 @@ export const RULE_OPERATORS: readonly RuleOperator[] = ["contains", "equals"];
 export interface AnalyticsRule {
   id: string;
   version: number;
-  field: RuleField;
-  operator: RuleOperator;
+  field: string;
+  operator: string;
   value: string;
   category_id: string | null;
-  kind: KindChoice;
+  kind: string;
   priority: number;
   enabled: boolean;
+  created_at: number;
+  updated_at: number;
 }
+export interface RuleSaved extends AnalyticsRule { changed: boolean }
 
 /** A rule as proposed for preview; nothing changes until the previewed rule is saved. */
 export interface RuleCandidate {
@@ -297,15 +338,8 @@ export interface RuleCandidate {
   enabled: boolean;
 }
 
-export interface RulePreviewExample {
-  account_id: string;
-  entry_reference: string;
-  date: string | null;
-  amount: string;
-  currency: string;
-  credit_debit_indicator: "CRDT" | "DBIT";
-  description: string;
-}
+/** Only the keys of an affected entry; the preview carries no amounts, dates or descriptions. */
+export interface RulePreviewExample { account_id: string; entry_reference: string }
 
 export interface RulePreview { preview_id: string; affected_count: number; examples: RulePreviewExample[]; expires_at: number }
 
@@ -314,8 +348,10 @@ export function ruleCandidate(rule: AnalyticsRule | null): RuleCandidate {
     return { rule_id: null, expected_version: 0, field: "description", operator: "contains", value: "", category_id: null,
       kind: "auto", priority: 100, enabled: true };
   }
-  return { rule_id: rule.id, expected_version: rule.version, field: rule.field, operator: rule.operator, value: rule.value,
-    category_id: rule.category_id, kind: rule.kind, priority: rule.priority, enabled: rule.enabled };
+  const field = (RULE_FIELDS as readonly string[]).includes(rule.field) ? rule.field as RuleField : "description";
+  const operator = (RULE_OPERATORS as readonly string[]).includes(rule.operator) ? rule.operator as RuleOperator : "contains";
+  return { rule_id: rule.id, expected_version: rule.version, field, operator, value: rule.value,
+    category_id: rule.category_id, kind: kindChoice(rule.kind), priority: rule.priority, enabled: rule.enabled };
 }
 
 /** A candidate the server could accept: a trimmed non-empty value within limits and an integer priority in range. */

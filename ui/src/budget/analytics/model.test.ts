@@ -74,6 +74,9 @@ describe("analytics decisions", () => {
 
   it("cannot undo a pair nobody decided on", () => {
     expect(transferDecision(pair(), "undo")).toBeNull();
-    expect(transferDecision(pair({ id: "d", version: 3 }), "undo")).toEqual({ action: "undo", decision_id: "d", expected_version: 3 });
+    expect(transferDecision(pair({ id: "d", version: 3 }), "undo")).toEqual({ action: "undo", source: "heuristic", decision_id: "d",
+      debit: null, credit: null, expected_debit_fingerprint: null, expected_credit_fingerprint: null, expected_version: 3 });
+    expect(transferDecision(pair({ id: "d", source: "future_source" }), "undo")).toMatchObject({ source: "manual" });
+    expect(transferActions(pair({ status: "future_status" }))).toEqual([]);
   });
 });

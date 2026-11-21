@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BudgetApi, BudgetResult } from "../api";
 import { account } from "../fixtures";
 import { annotationOf, categoryList, entriesOf, entry } from "./fixtures";
-import type { AnalyticsAnnotation, AnalyticsTransaction, AnalyticsTransactions } from "./model";
+import type { AnalyticsTransaction, AnalyticsTransactions, AnnotationSaved } from "./model";
 import { TransactionsPanel, transactionLabels } from "./transactions";
 
 function ok<T>(data: T): Promise<BudgetResult<T>> { return Promise.resolve({ ok: true, data }); }
@@ -239,7 +239,7 @@ describe("period entries", () => {
   });
 
   it("drops a late save once the list has moved to another period", async () => {
-    let saved: (value: BudgetResult<{ annotation: AnalyticsAnnotation }>) => void = () => undefined;
+    let saved: (value: BudgetResult<{ annotation: AnnotationSaved }>) => void = () => undefined;
     const api = fakeApi();
     const first = await show(api);
     api.annotate.mockImplementationOnce(() => new Promise((resolve) => { saved = resolve; }));

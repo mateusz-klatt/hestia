@@ -1,6 +1,6 @@
 // Synthetic analytics fixtures only; no real account, transaction or bank data.
 import { component } from "../fixtures";
-import type { AnalyticsAnnotation, AnalyticsCategory, AnalyticsOverview, AnalyticsTotals, AnalyticsTransaction, AnalyticsTransactions, TransferLeg, TransferList,
+import type { AnalyticsCategory, AnalyticsOverview, AnnotationSaved, TransferDecisionResult, AnalyticsTotals, AnalyticsTransaction, AnalyticsTransactions, TransferLeg, TransferList,
   TransferPair } from "./model";
 
 export function totals(currency: string, changes: Partial<AnalyticsTotals> = {}): AnalyticsTotals {
@@ -31,15 +31,16 @@ export function entry(reference: string, changes: Partial<AnalyticsTransaction> 
     account_id: "acc-1", entry_reference: reference, fingerprint: `fp-${reference}`, transfer_fingerprint: `tfp-${reference}`,
     amount: "12.5", currency: "PLN", credit_debit_indicator: "DBIT", status: "BOOK", booking_date: "2026-11-03",
     value_date: null, transaction_date: null, remittance_information: [`Synthetic shop ${reference}`], source: "api",
-    observed_at: 1, api_observed_at: 1, annotation: null, metadata: null,
+    observed_at: 1, api_observed_at: 1, annotation: { version: 0, mode: "auto", category_id: null, kind: "auto", stale: false },
+    metadata: null,
     effective: { kind: "expense", category_id: null, source: "default", rule_id: null },
     transfer: { status: "none", decision_id: null, candidate_count: 0, ambiguous: false }, ...changes,
   };
 }
 
 export const categoryList: AnalyticsCategory[] = [
-  { id: "cat-food", name: "Synthetic Food", archived: false, version: 1 },
-  { id: "cat-old", name: "Synthetic Old", archived: true, version: 3 },
+  { id: "cat-food", name: "Synthetic Food", archived: false, version: 1, created_at: 1, updated_at: 1 },
+  { id: "cat-old", name: "Synthetic Old", archived: true, version: 3, created_at: 1, updated_at: 2 },
 ];
 
 export function leg(account: string, reference: string, changes: Partial<TransferLeg> = {}): TransferLeg {
@@ -63,6 +64,13 @@ export function transfersOf(period: string, rows: TransferPair[] = [], cursor: s
     filtered_total: rows.length, next_cursor: cursor, scan_limited: limited };
 }
 
-export function annotationOf(changes: Partial<AnalyticsAnnotation> = {}): AnalyticsAnnotation {
-  return { version: 1, mode: "manual", category_id: "cat-food", kind: "expense", stale: false, ...changes };
+export function annotationOf(changes: Partial<AnnotationSaved> = {}): AnnotationSaved {
+  return { account_id: "acc-1", entry_reference: "e1", version: 1, mode: "manual", category_id: "cat-food", kind: "expense",
+    ledger_fingerprint: "fp-e1", changed: true, updated_at: 1, ...changes };
+}
+
+export function decisionOf(changes: Partial<TransferDecisionResult> = {}): TransferDecisionResult {
+  return { id: "dec-new", version: 1, status: "accepted", source: "heuristic", changed: true, rule_version: 1,
+    debit_account_id: "acc-1", debit_ref: "out-1", debit_fingerprint: "pfp-out-1", credit_account_id: "acc-2", credit_ref: "in-1",
+    credit_fingerprint: "pfp-in-1", created_at: 1, updated_at: 1, ...changes };
 }

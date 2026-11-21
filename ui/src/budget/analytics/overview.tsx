@@ -10,7 +10,7 @@ import type { AnalyticsCategoryTotal, AnalyticsOverview, AnalyticsTotals } from 
 
 export const overviewLabels = {
   en: {
-    spending: "Spending", gross: "expenses", refunds: "refunds",
+    spending: "Spending", gross: "before refunds", refunds: "refunds",
     income: "Income", unclassified: "To classify", unclassifiedHelp: "incoming payments not yet marked as income or refund",
     transfers: "Own transfers", transferOut: "out", transferIn: "in", transfersHelp: "not counted as spending or income",
     excluded: "Left out by you", excludedOut: "out", excludedIn: "in",
@@ -28,7 +28,7 @@ export const overviewLabels = {
     error: "The totals could not be loaded. Try again.", account: "Account",
   },
   pl: {
-    spending: "Wydatki", gross: "wydatki", refunds: "zwroty",
+    spending: "Wydatki", gross: "przed zwrotami", refunds: "zwroty",
     income: "Wpływy", unclassified: "Do sklasyfikowania", unclassifiedHelp: "wpływy jeszcze nieoznaczone jako dochód ani zwrot",
     transfers: "Przelewy własne", transferOut: "wyszło", transferIn: "weszło", transfersHelp: "nie liczą się do wydatków ani wpływów",
     excluded: "Pominięte przez Ciebie", excludedOut: "wyszło", excludedIn: "weszło",

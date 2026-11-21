@@ -5,7 +5,7 @@ import type { Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BudgetApi, BudgetResult } from "../api";
 import { account } from "../fixtures";
-import { leg, pair, transfersOf } from "./fixtures";
+import { decisionOf, leg, pair, transfersOf } from "./fixtures";
 import type { TransferList, TransferPair } from "./model";
 import { TransfersPanel, transferLabels } from "./transfers";
 
@@ -15,7 +15,7 @@ function fail<T>(status: number, error: string): Promise<BudgetResult<T>> { retu
 function fakeApi(rows: TransferPair[] = [pair()]) {
   return {
     transfers: vi.fn<BudgetApi["transfers"]>((period) => ok(transfersOf(period, rows))),
-    decideTransfer: vi.fn<BudgetApi["decideTransfer"]>(() => ok({ decision: { id: "dec-new", version: 1, status: "accepted" } })),
+    decideTransfer: vi.fn<BudgetApi["decideTransfer"]>(() => ok({ decision: decisionOf() })),
   } satisfies Pick<BudgetApi, "transfers" | "decideTransfer">;
 }
 
@@ -84,8 +84,8 @@ describe("own-transfer queue", () => {
     const api = fakeApi([pair({ source: "account_identity" })]);
     const { onChanged } = await show(api);
     await click("Confirm transfer");
-    expect(api.decideTransfer).toHaveBeenCalledWith({ action: "accept", source: "account_identity", expected_version: 0,
-      debit: { account_id: "acc-1", entry_reference: "out-1" }, credit: { account_id: "acc-2", entry_reference: "in-1" },
+    expect(api.decideTransfer).toHaveBeenCalledWith({ action: "accept", source: "account_identity", decision_id: null,
+      expected_version: 0, debit: { account_id: "acc-1", entry_reference: "out-1" }, credit: { account_id: "acc-2", entry_reference: "in-1" },
       expected_debit_fingerprint: "pfp-out-1", expected_credit_fingerprint: "pfp-in-1" });
     expect(onChanged).toHaveBeenCalledTimes(1);
   });
@@ -109,7 +109,8 @@ describe("own-transfer queue", () => {
     expect(host.textContent).toContain("same day");
     expect(buttons()).toEqual(["Undo"]);
     await click("Undo");
-    expect(api.decideTransfer).toHaveBeenCalledWith({ action: "undo", decision_id: "dec-1", expected_version: 4 });
+    expect(api.decideTransfer).toHaveBeenCalledWith({ action: "undo", source: "manual", decision_id: "dec-1", debit: null, credit: null,
+      expected_debit_fingerprint: null, expected_credit_fingerprint: null, expected_version: 4 });
   });
 
   it("lets the owner re-accept an undone pair explicitly, as a manual decision", async () => {

@@ -5,7 +5,7 @@ import type { BudgetApi } from "../api";
 import type { BudgetAccount } from "../model";
 import { accountLabel, formatAmount, transactionDate, transactionText } from "../model";
 import { ANALYTICS_ERROR, EFFECTIVE_KINDS, KIND_CHOICES, NO_FILTER, RELOAD_ERRORS, UNCATEGORISED, annotationRequest, counterparty,
-  currentChoice } from "./model";
+  currentChoice, kindChoice, labelOf } from "./model";
 import type { AnalyticsCategory, AnalyticsTransaction, CategoryChoice, KindChoice, TransactionFilter } from "./model";
 
 const kindsEn = { auto: "Automatic", expense: "Expense", income: "Income", refund: "Refund", excluded: "Leave out of the budget",
@@ -130,7 +130,7 @@ export function TransactionsPanel({ api, period, currencies, accounts, text, loc
     if (account === undefined) return text.account;
     return accountLabel(account, accounts.filter((item) => item.connection === account.connection).indexOf(account), text.account);
   };
-  const kindText = (kind: string) => (text.kinds as Record<string, string>)[kind] ?? kind;
+  const kindText = (kind: string) => labelOf(text.kinds, kind);
 
   return (
     <section className="budget-entries" aria-label={text.title}>
@@ -171,7 +171,7 @@ export function TransactionsPanel({ api, period, currencies, accounts, text, loc
           <ul className="budget-entry-list">
             {page.rows.map((row) => {
               const key = rowKey(row);
-              const transfer = text.transfer[row.transfer.status];
+              const transfer = labelOf(text.transfer, row.transfer.status === "none" ? "" : row.transfer.status);
               return (
                 <li key={key} className="budget-entry">
                   <div className="budget-entry-main">
@@ -190,7 +190,7 @@ export function TransactionsPanel({ api, period, currencies, accounts, text, loc
                     {row.effective.source === "rule" ? <span>{text.rule}</span> : null}
                     {transfer === "" ? null : <span className="budget-chip">{transfer}</span>}
                     {row.transfer.ambiguous ? <span className="budget-warn">{text.ambiguous}</span> : null}
-                    {row.annotation?.stale === true ? <span className="budget-warn">{text.stale}</span> : null}
+                    {row.annotation.stale ? <span className="budget-warn">{text.stale}</span> : null}
                     {editing === key ? null : (
                       <button type="button" disabled={busy !== null} onClick={() => { setEditing(key); setNotice(null); }}>{text.edit}</button>
                     )}
@@ -233,8 +233,8 @@ function decode(value: string): CategoryChoice {
 
 function Editor({ row, categories, text, kindText, saving, onSave, onCancel }: EditorProps) {
   const [category, setCategory] = useState(encode(currentChoice(row)));
-  const [kind, setKind] = useState<KindChoice>(row.annotation?.kind ?? "auto");
-  const chosen = row.annotation?.category_id ?? null;
+  const [kind, setKind] = useState<KindChoice>(kindChoice(row.annotation.kind));
+  const chosen = row.annotation.category_id;
   // An archived category stays selectable only for the entry that already uses it.
   const offered = categories.filter((item) => !item.archived || item.id === chosen);
   return (

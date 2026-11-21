@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { BudgetApi } from "../api";
 import type { BudgetAccount } from "../model";
 import { accountLabel, formatAmount } from "../model";
-import { ANALYTICS_ERROR, RELOAD_ERRORS, TRANSFER_QUEUES, transferActions, transferDecision } from "./model";
+import { ANALYTICS_ERROR, RELOAD_ERRORS, TRANSFER_QUEUES, labelOf, transferActions, transferDecision } from "./model";
 import type { TransferAction, TransferLeg, TransferPair, TransferQueue } from "./model";
 
 export const transferLabels = {
@@ -155,7 +155,7 @@ export function TransfersPanel({ api, period, accounts, text, locale, revision, 
               <li key={key} className="budget-entry budget-pair">
                 <div className="budget-pair-legs">{side(pair.debit, "DBIT")}<span aria-hidden="true">→</span>{side(pair.credit, "CRDT")}</div>
                 <div className="budget-entry-facts">
-                  <span className="budget-chip">{text.sources[pair.source]}</span>
+                  <span className="budget-chip">{labelOf(text.sources, pair.source)}</span>
                   {pair.date_distance === null ? null : <span>{text.days(pair.date_distance)}</span>}
                   {pair.ambiguous ? <span className="budget-warn">{text.ambiguous}</span> : null}
                   {pair.stale ? <span className="budget-warn">{text.stale}</span> : null}

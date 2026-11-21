@@ -81,7 +81,7 @@ describe("period overview", () => {
     expect(eur?.textContent).not.toContain("Own transfers");
     expect(eur?.textContent).not.toContain("Left out");
     expect(pln?.textContent).toContain("123,456,789,012,345,678,901,234,567,890.009999 PLN");
-    expect(pln?.textContent).toContain("expenses 123,456,789,012,345,678,901,234,567,890.01 PLN · refunds 0.000001 PLN");
+    expect(pln?.textContent).toContain("before refunds 123,456,789,012,345,678,901,234,567,890.01 PLN · refunds 0.000001 PLN");
     expect(pln?.textContent).toContain("To classify12.30 PLN");
     expect(pln?.textContent).toContain("out 1,200.00 PLN · in 1,200.00 PLN");
     expect(pln?.textContent).toContain("Left out by youout 5.00 PLN · in 0.00 PLN");

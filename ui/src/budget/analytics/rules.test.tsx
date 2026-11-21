@@ -5,26 +5,30 @@ import type { Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BudgetApi, BudgetResult } from "../api";
 import { categoryList } from "./fixtures";
-import type { AnalyticsRule, RulePreview } from "./model";
+import type { AnalyticsRule, RulePreview, RuleSaved } from "./model";
+import { account } from "../fixtures";
 import { CategoriesView, rulesLabels } from "./rules";
 
 function ok<T>(data: T): Promise<BudgetResult<T>> { return Promise.resolve({ ok: true, data }); }
 function fail<T>(status: number, error: string): Promise<BudgetResult<T>> { return Promise.resolve({ ok: false, status, error }); }
 
 const rule: AnalyticsRule = { id: "rule-1", version: 2, field: "counterparty_name", operator: "contains", value: "Synthetic Grocer",
-  category_id: "cat-food", kind: "expense", priority: 50, enabled: false };
+  category_id: "cat-food", kind: "expense", priority: 50, enabled: false, created_at: 1, updated_at: 2 };
+const saved: RuleSaved = { ...rule, changed: true };
 const preview: RulePreview = { preview_id: "preview-1", affected_count: 23, expires_at: 2_000_000_000, examples: [
-  { account_id: "acc-1", entry_reference: "e1", date: "2026-11-03", amount: "12.5", currency: "PLN", credit_debit_indicator: "DBIT",
-    description: "Synthetic Grocer 1" }] };
+  { account_id: "acc-1", entry_reference: "synthetic-ref-1" }, { account_id: "gone", entry_reference: "synthetic-ref-2" }] };
+const accounts = [account({ id: "acc-1", display: { product: "Synthetic Current", currency: "PLN", masked_suffix: "0001",
+  source: "offline_import", observed_at: 1, imported_at: 2 } })];
+const category = { id: "cat-new", name: "Synthetic New", archived: false, version: 1, created_at: 1, updated_at: 1, changed: true };
 
 function fakeApi() {
   return {
     categories: vi.fn<BudgetApi["categories"]>(() => ok({ categories: categoryList })),
-    createCategory: vi.fn<BudgetApi["createCategory"]>(() => ok({ category: { id: "cat-new", name: "Synthetic New", archived: false, version: 1 } })),
-    updateCategory: vi.fn<BudgetApi["updateCategory"]>(() => ok({ category: { id: "cat-food", name: "Synthetic Food", archived: false, version: 2 } })),
+    createCategory: vi.fn<BudgetApi["createCategory"]>(() => ok({ category })),
+    updateCategory: vi.fn<BudgetApi["updateCategory"]>(() => ok({ category: { ...category, id: "cat-food", version: 2 } })),
     rules: vi.fn<BudgetApi["rules"]>(() => ok({ rules: [rule] })),
     previewRule: vi.fn<BudgetApi["previewRule"]>(() => ok({ preview })),
-    saveRule: vi.fn<BudgetApi["saveRule"]>(() => ok({ rule })),
+    saveRule: vi.fn<BudgetApi["saveRule"]>(() => ok({ rule: saved })),
   } satisfies Pick<BudgetApi, "categories" | "createCategory" | "updateCategory" | "rules" | "previewRule" | "saveRule">;
 }
 
@@ -46,7 +50,7 @@ async function settle(): Promise<void> {
 async function show(api: ReturnType<typeof fakeApi>, options: { revision?: number; lost?: boolean } = {}) {
   const onAccessLoss = vi.fn((result: { ok: boolean }) => options.lost === true && !result.ok);
   await act(async () => {
-    root.render(<CategoriesView api={api} text={rulesLabels.en} locale="en" revision={options.revision ?? 0} onAccessLoss={onAccessLoss} />);
+    root.render(<CategoriesView api={api} accounts={accounts} text={rulesLabels.en} revision={options.revision ?? 0} onAccessLoss={onAccessLoss} />);
     await Promise.resolve();
   });
   await settle();
@@ -157,8 +161,8 @@ describe("rules", () => {
       value: "Synthetic Shop", category_id: "cat-food", kind: "auto", priority: 100, enabled: true });
     const region = host.querySelector('[role="region"]');
     expect(region?.textContent).toContain("apply to 23 entries");
-    expect(region?.textContent).toContain("Synthetic Grocer 1");
-    expect(region?.textContent).toContain("−12.50 PLN");
+    expect([...region?.querySelectorAll("li") ?? []].map((item) => item.textContent)).toEqual([
+      "Synthetic Current ••0001 · entry synthetic-ref-1", "Account · entry synthetic-ref-2"]);
     await choose(field(form, "Type") as HTMLSelectElement, "expense");
     expect(host.querySelector('[role="region"]')).toBeNull();
     await act(async () => { form.requestSubmit(); await Promise.resolve(); });
@@ -203,7 +207,7 @@ describe("rules", () => {
   });
 
   it("drops a save that finishes after the view reloaded", async () => {
-    let late: (value: BudgetResult<{ rule: AnalyticsRule }>) => void = () => undefined;
+    let late: (value: BudgetResult<{ rule: RuleSaved }>) => void = () => undefined;
     const api = fakeApi();
     await show(api);
     await click(button("Edit"));
@@ -213,7 +217,7 @@ describe("rules", () => {
     api.saveRule.mockImplementationOnce(() => new Promise((resolve) => { late = resolve; }));
     await click(button("Save rule"));
     await show(api, { revision: 1 });
-    await act(async () => { late({ ok: true, data: { rule } }); await Promise.resolve(); });
+    await act(async () => { late({ ok: true, data: { rule: saved } }); await Promise.resolve(); });
     await settle();
     expect(api.rules).toHaveBeenCalledTimes(2);
   });

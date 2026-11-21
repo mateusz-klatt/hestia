@@ -2,8 +2,9 @@
 // only from a fresh server preview showing what it would change, and manual choices always win over rules.
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { BudgetApi, BudgetResult } from "../api";
-import { formatAmount } from "../model";
-import { ANALYTICS_ERROR, CATEGORY_NAME_MAX, KIND_CHOICES, RELOAD_ERRORS, RULE_FIELDS, RULE_OPERATORS, RULE_PRIORITY_MAX, RULE_VALUE_MAX, ruleCandidate,
+import type { BudgetAccount } from "../model";
+import { accountLabel } from "../model";
+import { ANALYTICS_ERROR, CATEGORY_NAME_MAX, KIND_CHOICES, RELOAD_ERRORS, labelOf, RULE_FIELDS, RULE_OPERATORS, RULE_PRIORITY_MAX, RULE_VALUE_MAX, ruleCandidate,
   validCandidate, validCategoryName } from "./model";
 import type { AnalyticsCategory, AnalyticsRule, KindChoice, RuleCandidate, RulePreview } from "./model";
 
@@ -19,6 +20,7 @@ export const rulesLabels = {
     kinds: { auto: "No type change", expense: "Expense", income: "Income", refund: "Refund", excluded: "Leave out of the budget" },
     priority: "Priority", enabled: "Enabled", disabled: "disabled", preview: "Preview", back: "Change the rule",
     saveRule: "Save rule", affects: (count: number) => `This rule would apply to ${String(count)} entries, for example:`,
+    reference: "entry", account: "Account",
     nothingToDo: "Choose a category or a type for the rule.",
     loading: "Loading…", error: "Could not be loaded.", conflict: "This changed elsewhere; the latest state was loaded.",
     expired: "The preview expired or the data changed; preview the rule again.", saveError: "Could not save. Try again.",
@@ -34,6 +36,7 @@ export const rulesLabels = {
     kinds: { auto: "Bez zmiany rodzaju", expense: "Wydatek", income: "Wpływ", refund: "Zwrot", excluded: "Pomiń w budżecie" },
     priority: "Priorytet", enabled: "Włączona", disabled: "wyłączona", preview: "Podgląd", back: "Popraw regułę",
     saveRule: "Zapisz regułę", affects: (count: number) => `Reguła obejmie pozycji: ${String(count)}, na przykład:`,
+    reference: "pozycja", account: "Konto",
     nothingToDo: "Wybierz kategorię albo rodzaj dla reguły.",
     loading: "Wczytywanie…", error: "Nie udało się wczytać.", conflict: "Zmieniono to w innym miejscu; wczytano aktualny stan.",
     expired: "Podgląd wygasł albo dane się zmieniły; zrób podgląd reguły ponownie.", saveError: "Nie udało się zapisać. Spróbuj ponownie.",
@@ -46,13 +49,13 @@ type Listed<T> = T[] | "loading" | "error";
 
 export interface CategoriesViewProps {
   api: Pick<BudgetApi, "categories" | "createCategory" | "updateCategory" | "rules" | "previewRule" | "saveRule">;
+  accounts: readonly BudgetAccount[];
   text: RulesLabels;
-  locale: string;
   revision: number;
   onAccessLoss: Loss;
 }
 
-export function CategoriesView({ api, text, locale, revision, onAccessLoss }: CategoriesViewProps) {
+export function CategoriesView({ api, accounts, text, revision, onAccessLoss }: CategoriesViewProps) {
   const [categories, setCategories] = useState<Listed<AnalyticsCategory>>("loading");
   const [rules, setRules] = useState<Listed<AnalyticsRule>>("loading");
   const [changes, setChanges] = useState(0);
@@ -87,7 +90,7 @@ export function CategoriesView({ api, text, locale, revision, onAccessLoss }: Ca
   return (
     <section className="budget-month" aria-label={`${text.categories} · ${text.rules}`}>
       <CategoriesPanel categories={categories} api={api} run={run} text={text} onSaved={reload} />
-      <RulesPanel rules={rules} categories={shown} api={api} run={run} text={text} locale={locale} onSaved={reload} />
+      <RulesPanel rules={rules} categories={shown} accounts={accounts} api={api} run={run} text={text} onSaved={reload} />
     </section>
   );
 }
@@ -186,19 +189,24 @@ function CategoriesPanel({ categories, api, run, text, onSaved }: CategoriesProp
 interface RulesProps {
   rules: Listed<AnalyticsRule>;
   categories: readonly AnalyticsCategory[];
+  accounts: readonly BudgetAccount[];
   api: Pick<BudgetApi, "previewRule" | "saveRule">;
   run: Run;
   text: RulesLabels;
-  locale: string;
   onSaved: () => void;
 }
 
-function RulesPanel({ rules, categories, api, run, text, locale, onSaved }: RulesProps) {
+function RulesPanel({ rules, categories, accounts, api, run, text, onSaved }: RulesProps) {
   const [editing, setEditing] = useState<RuleCandidate | null>(null);
   const [preview, setPreview] = useState<RulePreview | null>(null);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const categoryName = (id: string | null) => (id === null ? null : categories.find((item) => item.id === id)?.name ?? null);
+  const accountName = (id: string) => {
+    const account = accounts.find((item) => item.id === id);
+    if (account === undefined) return text.account;
+    return accountLabel(account, accounts.filter((item) => item.connection === account.connection).indexOf(account), text.account);
+  };
 
   const open = (rule: AnalyticsRule | null) => { setEditing(ruleCandidate(rule)); setPreview(null); setNotice(null); };
   // Any change to the rule invalidates the preview: only what was previewed can be saved.
@@ -247,10 +255,10 @@ function RulesPanel({ rules, categories, api, run, text, locale, onSaved }: Rule
           {rules.map((rule) => (
             <li key={rule.id} className="budget-entry budget-rule">
               <div className="budget-entry-facts">
-                <span>{text.fields[rule.field]} {text.operators[rule.operator]} „{rule.value}”</span>
+                <span>{labelOf(text.fields, rule.field)} {labelOf(text.operators, rule.operator)} „{rule.value}”</span>
                 <span aria-hidden="true">→</span>
                 {categoryName(rule.category_id) === null ? null : <span className="budget-chip">{categoryName(rule.category_id)}</span>}
-                {rule.kind === "auto" ? null : <span className="budget-chip">{text.kinds[rule.kind]}</span>}
+                {rule.kind === "auto" ? null : <span className="budget-chip">{labelOf(text.kinds, rule.kind)}</span>}
                 <span>{text.priority} {rule.priority}</span>
                 {rule.enabled ? null : <span className="budget-warn">{text.disabled}</span>}
                 <button type="button" disabled={busy || editing !== null} onClick={() => { open(rule); }}>{text.edit}</button>
@@ -308,8 +316,7 @@ function RulesPanel({ rules, categories, api, run, text, locale, onSaved }: Rule
               <ul>
                 {preview.examples.map((example) => (
                   <li key={`${example.account_id}/${example.entry_reference}`}>
-                    <span className="budget-muted">{example.date}</span> {example.description}{" "}
-                    <strong>{formatAmount(example.amount, example.currency, locale, example.credit_debit_indicator)}</strong>
+                    {accountName(example.account_id)} · <span className="budget-muted">{text.reference} {example.entry_reference}</span>
                   </li>
                 ))}
               </ul>
