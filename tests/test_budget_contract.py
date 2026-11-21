@@ -13,7 +13,7 @@ from tests.test_budget_store import configuration, prepare_selected, snapshot, t
 
 
 CAPABILITIES = {"stored_reads": True, "account_controls": True, "refresh": False,
-                "background_selection": False, "consent": False}
+                "background_selection": True, "background_polling": False, "consent": False}
 COMPONENT = {"last_attempt": None, "last_success": None, "last_error": None, "failures": 0,
              "next_attempt": 0, "state": "never", "retry_at": None, "suspended": False,
              "stale": True, "age_seconds": None, "stale_after_seconds": 86400}
@@ -21,7 +21,8 @@ ACCOUNT = {"id": "local-account", "connection": "local-connection", "configured"
            "active": False, "paused": False, "control_version": 1, "kind": "unknown",
            "kind_confirmed_at": None, "kind_confirmed_by": None, "kind_confirmation_origin": None,
            "components": {"transactions": COMPONENT, "balances": COMPONENT}}
-CONNECTION = {"id": "local-connection", "enabled": True, "paused": False, "control_version": 1,
+CONNECTION = {"id": "local-connection", "enabled": True, "paused": False, "background_enabled": False,
+              "attention": None, "control_version": 1,
               "bank_name": "Synthetic Bank", "country": "PL", "valid_until": None, "renewal_due": False,
               "last_attempt": None, "last_success": None, "last_error": None}
 TRANSACTION = {"entry_reference": "synthetic-reference", "amount": "12345678901234567890.001",
@@ -36,7 +37,10 @@ BALANCE = {"name": "Synthetic booked balance", "balance_type": "CLBD",
 class BudgetRequestContractTests(unittest.TestCase):
     CASES = ((contract.BudgetSelectionRequest, {"account_id": "local-account", "selected": True, "expected_version": 1}),
              (contract.BudgetKindRequest, {"account_id": "local-account", "kind": "credit_card", "expected_version": 1}),
-             (contract.BudgetConnectionStateRequest, {"connection_id": "local-connection", "paused": False, "expected_version": 1}))
+             (contract.BudgetConnectionStateRequest, {"connection_id": "local-connection", "paused": False, "expected_version": 1}),
+             (contract.BudgetBackgroundSelectionRequest, {"connection_id": "local-connection", "enabled": True, "expected_version": 1}),
+             (contract.BudgetRefreshRequest, {"connection_id": "local-connection", "expected_version": 1,
+                                              "account_id": "local-account", "operation": "balances"}))
 
     def test_valid_controls_roundtrip_without_coercing_values_or_adding_defaults(self):
         for model, payload in self.CASES:
@@ -55,7 +59,7 @@ class BudgetRequestContractTests(unittest.TestCase):
 
     def test_all_controls_reject_unknown_keys_and_invalid_resource_ids(self):
         for model, payload in self.CASES:
-            key = "account_id" if "account_id" in payload else "connection_id"
+            key = "connection_id" if "connection_id" in payload else "account_id"
             for identifier in (None, 1, True, "", "x" * 129, [], {}):
                 with self.subTest(model=model.__name__, identifier=identifier), self.assertRaises(ValueError):
                     model.model_validate({**payload, key: identifier})
@@ -162,17 +166,22 @@ class BudgetReadContractTests(unittest.TestCase):
 
 
 class BudgetOpenApiTests(unittest.TestCase):
-    def test_only_nine_phase_one_routes_are_declared_and_all_require_admin(self):
+    def test_only_implemented_routes_are_declared_and_all_require_admin(self):
         document = contract.build_openapi()
         budget = {path: methods for path, methods in document["paths"].items() if path.startswith("/api/budget/")}
+        posts = ("account-selection", "account-kind", "connection-state", "background-selection", "refresh")
         self.assertEqual({path.rsplit("/", 1)[1] for path in budget},
-                         {"connections", "accounts", "status", "transactions", "balances", "limits",
-                          "account-selection", "account-kind", "connection-state"})
+                         {"connections", "accounts", "status", "transactions", "balances", "limits", "jobs", *posts})
         for path, methods in budget.items():
-            method = "post" if path.endswith(("account-selection", "account-kind", "connection-state")) else "get"
+            method = "post" if path.endswith(posts) else "get"
             self.assertEqual(set(methods), {method})
             self.assertEqual(methods[method]["x-required-role"], "admin")
-        self.assertEqual(document["info"]["version"], "0.14.0")
+        self.assertEqual(document["info"]["version"], "0.15.0")
+        refresh = budget["/api/budget/refresh"]["post"]
+        self.assertEqual(refresh["parameters"][0]["name"], "Idempotency-Key")
+        self.assertTrue(refresh["parameters"][0]["required"])
+        self.assertIn("202", refresh["responses"])
+        self.assertNotIn("200", refresh["responses"])
 
     def test_query_metadata_pins_required_account_dates_limit_and_opaque_cursor(self):
         paths = contract.build_openapi()["paths"]

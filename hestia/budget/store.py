@@ -47,11 +47,12 @@ def _json(value):
     return json.dumps(value, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
 
 
-def _safe_error(code):
+def safe_error(code):
     allowed = {"authorization", "rate_limit", "unavailable", "network", "invalid_response",
                "provider_error", "invalid_data", "configuration", "unsupported_amount", "internal_error",
                "invalid_session", "expired_session", "session_mismatch",
-               "account_selection", "invalid_pagination", "limit_exceeded", "deferred", "acquisition_timeout"}
+               "account_selection", "invalid_pagination", "limit_exceeded", "deferred", "acquisition_timeout",
+               "control_changed", "busy", "interrupted"}
     return code if code in allowed else "invalid_data"
 
 
@@ -169,6 +170,7 @@ class BudgetStore:
 
     def _connection_dict(self, connection):
         return {"id": connection.id, "enabled": connection.enabled, "paused": connection.paused,
+                "background_enabled": connection.background_enabled, "attention": connection.attention,
                 "control_version": connection.control_version, "bank_name": connection.bank_name,
                 "country": connection.country, "valid_until": connection.valid_until,
                 "renewal_due": connection.valid_until is not None and connection.valid_until - self.clock() <= 604800,
@@ -306,7 +308,7 @@ class BudgetStore:
 
     def record_failure(self, connection_id, code, *, attempt_id=None):
         # Do not persist arbitrary exception strings, provider bodies or identifiers.
-        safe_code = _safe_error(code)
+        safe_code = safe_error(code)
         with self.transaction() as session:
             row = session.get(Connection, connection_id)
             row.failures += 1
@@ -354,7 +356,7 @@ class BudgetStore:
                     raise BudgetStoreError("Invalid global acquisition failure")
                 account = accounts[error.identification_hash]
                 # A global resource cap can skip an account without any HTTP.
-                account.last_error = _safe_error(error.code)
+                account.last_error = safe_error(error.code)
             completed, errors = 0, len(snapshot.errors)
             for observation in snapshot.accounts:
                 good, bad = self._import_account(session, accounts[observation.identification_hash],
@@ -391,7 +393,7 @@ class BudgetStore:
         if attempt_id is None:
             component.last_attempt = now
         if error is not None:
-            self._component_error(component, _safe_error(error))
+            self._component_error(component, safe_error(error))
             return 0, 1
         if operation == "balances":
             account.balances_json = _json(data)

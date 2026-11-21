@@ -13,7 +13,7 @@ from pathlib import Path
 from .client import BudgetAPIError, EnableBankingClient
 from .config import BudgetConfigError, credentials
 from .normalize import BudgetDataError, fetch_snapshot
-from .store import BudgetStore, BudgetStoreError, BudgetPausedError
+from .store import OPERATIONS, BudgetStore, BudgetStoreError, BudgetPausedError, safe_error
 from .scheduler import BudgetScheduler, BudgetDeferredError
 
 ACQUISITION_SECONDS = 900
@@ -21,6 +21,10 @@ ACQUISITION_SECONDS = 900
 
 class BudgetBusyError(RuntimeError):
     """Another bank acquisition process holds this database's lock."""
+
+
+class BudgetStopRequested(BudgetDeferredError):
+    """Process shutdown observed between requests; no request is in flight at that point."""
 
 
 def _error_code(exc):
@@ -33,16 +37,28 @@ def _error_code(exc):
     return "invalid_data" if isinstance(exc, BudgetStoreError) else "internal_error"
 
 
-def _snapshot_state(snapshot):
-    complete = sum(getattr(account, op) is not None for account in snapshot.accounts
-                   for op in ("transactions", "balances"))
-    errors = len(snapshot.errors) + sum(getattr(account, op + "_error", None) is not None
-                                       for account in snapshot.accounts for op in ("transactions", "balances"))
-    if errors:
+def _wanted(target, primary, operation):
+    return target is None or (primary, operation) in target
+
+
+def _snapshot_errors(snapshot, target):
+    errors = [error.code for error in snapshot.errors
+              if any(_wanted(target, error.identification_hash, op) for op in OPERATIONS)]
+    return errors + [getattr(account, op + "_error") for account in snapshot.accounts for op in OPERATIONS
+                     if _wanted(target, account.identification_hash, op)
+                     and getattr(account, op + "_error", None) is not None]
+
+
+def _snapshot_state(snapshot, target=None):
+    """Outcome relative to the requested components; untargeted ones are not failures."""
+    wanted = [(account, op) for account in snapshot.accounts for op in OPERATIONS
+              if _wanted(target, account.identification_hash, op)]
+    complete = sum(getattr(account, op) is not None for account, op in wanted)
+    if _snapshot_errors(snapshot, target):
         return "partial" if complete else "failed"
     if not complete:
         return "deferred"
-    return "updated" if complete == len(snapshot.accounts) * 2 else "partial"
+    return "updated" if complete == len(wanted) else "partial"
 
 
 def _monotonic_time(clock):
@@ -58,10 +74,11 @@ def _monotonic_time(clock):
 class AcquisitionClient:
     """One bounded round; every GET rechecks durable limits outside network I/O."""
 
-    def __init__(self, client, scheduler, connection, attempt_id, *, monotonic, sleeper, guard=None):
+    def __init__(self, client, scheduler, connection, attempt_id, *, monotonic, sleeper, guard=None, target=None):
         self.client, self.scheduler, self.connection = client, scheduler, connection
         self.attempt_id, self.monotonic, self.sleeper = attempt_id, monotonic, sleeper
         self.guard = guard if guard is not None else lambda: None
+        self.target = target
         self.deadline = _monotonic_time(monotonic) + ACQUISITION_SECONDS
         self.valid_until = None
         self.primary = self.operation = None
@@ -70,6 +87,8 @@ class AcquisitionClient:
         self.valid_until = valid_until
 
     def begin_component(self, primary, operation):
+        if not _wanted(self.target, primary, operation):
+            return False
         self.guard()
         self.primary, self.operation = primary, operation
         if _monotonic_time(self.monotonic) >= self.deadline:
@@ -84,7 +103,8 @@ class AcquisitionClient:
             if remaining <= 0:
                 raise BudgetAPIError(code="acquisition_timeout", retryable=True)
             delay = self.scheduler.request_wait(self.connection, primary=self.primary, operation=self.operation,
-                                                attempt_id=self.attempt_id, valid_until=self.valid_until)
+                                                attempt_id=self.attempt_id, valid_until=self.valid_until,
+                                                target=self.target)
             if not delay:
                 self.guard()
                 return
@@ -125,33 +145,55 @@ def budget_lock(path):
             fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
-def _run_connection(config, connection, store, scheduler, client_factory, clock, monotonic, sleeper):
+def _guard(store, connection, version, stop):
+    if stop is not None and stop():
+        raise BudgetStopRequested()
+    store.acquisition_version(connection.id, connection.owner, expected_version=version)
+
+
+def acquire(config, connection, store, scheduler, client_factory, clock, monotonic, sleeper, *,
+            target=None, expected_version=None, stop=None):
+    """One bounded round for a full-config connection; returns (state, safe error code or None).
+
+    ``target`` narrows which (primary hash, operation) components may be reserved. Untargeted
+    components are skipped before any reservation, so they consume no debit and record no error.
+    """
     attempt_id = str(uuid.uuid4())
     try:
-        version = store.acquisition_version(connection.id, connection.owner)
-        if not scheduler.can_start(connection):
-            return {"connection": connection.id, "state": "deferred"}
+        version = store.acquisition_version(connection.id, connection.owner, expected_version=expected_version)
+        if not scheduler.can_start(connection, target=target):
+            return "deferred", None
         chosen = store.selected_hashes(connection.id, connection.owner)
         selected = replace(connection, accounts=tuple(h for h in connection.accounts if h in chosen))
         key, session_id = credentials(config, connection)
         client = AcquisitionClient(client_factory(config.application_id, key), scheduler, connection, attempt_id,
-                                   monotonic=monotonic, sleeper=sleeper,
-                                   guard=lambda: store.acquisition_version(connection.id, connection.owner,
-                                                                          expected_version=version))
+                                   monotonic=monotonic, sleeper=sleeper, target=target,
+                                   guard=lambda: _guard(store, connection, version, stop))
         snapshot = fetch_snapshot(client, session_id, selected,
                                   today=datetime.fromtimestamp(clock(), timezone.utc).date(), now=clock(),
                                   before_component=client.begin_component, on_session=client.session_validated)
         store.commit_snapshot(connection.id, snapshot, attempt_id=attempt_id, expected_version=version)
-    except (BudgetDeferredError, BudgetPausedError):
+    except BudgetStopRequested:
         store.release_round(connection.id, attempt_id)
-        state = "deferred"
+        return "interrupted", "interrupted"
+    except BudgetDeferredError:
+        store.release_round(connection.id, attempt_id)
+        return "deferred", None
+    except BudgetPausedError:
+        store.release_round(connection.id, attempt_id)
+        return "deferred", "control_changed"
     except Exception as exc:
         # Storage failure here still escapes to the safe CLI; bank/programming
         # failures must not starve independent connections.
-        store.record_failure(connection.id, _error_code(exc), attempt_id=attempt_id)
-        state = "failed"
-    else:
-        state = _snapshot_state(snapshot)
+        code = _error_code(exc)
+        store.record_failure(connection.id, code, attempt_id=attempt_id)
+        return "failed", safe_error(code)
+    errors = _snapshot_errors(snapshot, target)
+    return _snapshot_state(snapshot, target), safe_error(errors[0]) if errors else None
+
+
+def _run_connection(config, connection, store, scheduler, client_factory, clock, monotonic, sleeper):
+    state, _ = acquire(config, connection, store, scheduler, client_factory, clock, monotonic, sleeper)
     return {"connection": connection.id, "state": state}
 
 

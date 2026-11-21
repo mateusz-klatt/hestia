@@ -191,6 +191,8 @@ class BudgetConnection(Base):
     enabled: Mapped[bool]
     paused: Mapped[bool] = mapped_column(default=False, server_default=text("0"))
     control_version: Mapped[int] = mapped_column(default=1, server_default=text("1"))
+    background_enabled: Mapped[bool] = mapped_column(default=False, server_default=text("0"))
+    attention: Mapped[str | None]
     valid_until: Mapped[float | None]
     last_attempt: Mapped[float | None]
     last_success: Mapped[float | None]
@@ -309,6 +311,39 @@ class BudgetAccountAudit(Base):
     old_value_json: Mapped[str]
     new_value_json: Mapped[str]
     changed_at: Mapped[float]
+
+
+class BudgetJob(Base):
+    """Durable local acquisition intent; debits in budget_acquisitions stay authoritative."""
+
+    __tablename__ = "budget_jobs"
+    __table_args__ = (Index("uq_budget_jobs_active", "connection_id", unique=True,
+                            sqlite_where=text("status IN ('queued', 'running')")),
+                      Index("ix_budget_jobs_owner_created", "owner", "created_at"))
+    id: Mapped[str] = mapped_column(primary_key=True)
+    owner: Mapped[str] = mapped_column(ForeignKey("users.username"))
+    connection_id: Mapped[str] = mapped_column(ForeignKey("budget_connections.id"))
+    source: Mapped[str]
+    account_id: Mapped[str | None] = mapped_column(ForeignKey("budget_accounts.id"))
+    operation: Mapped[str | None]
+    expected_version: Mapped[int]
+    status: Mapped[str]
+    error: Mapped[str | None]
+    next_attempt: Mapped[float | None]
+    created_at: Mapped[float]
+    started_at: Mapped[float | None]
+    finished_at: Mapped[float | None]
+
+
+class BudgetJobRequest(Base):
+    """Owner-scoped idempotency keys; several keys may coalesce into one job."""
+
+    __tablename__ = "budget_job_requests"
+    owner: Mapped[str] = mapped_column(ForeignKey("users.username"), primary_key=True)
+    idempotency_key: Mapped[str] = mapped_column(primary_key=True)
+    digest: Mapped[str]
+    job_id: Mapped[str] = mapped_column(ForeignKey("budget_jobs.id", ondelete="CASCADE"))
+    created_at: Mapped[float]
 
 
 class BudgetConnectionAudit(Base):

@@ -20,6 +20,7 @@ from ..db import BudgetRequestLimit as RequestLimit
 from ..db import BudgetAccountDisplay as AccountDisplay
 from .limits import BudgetLimits, SHARED_SCOPES
 from .scheduler import shared_state
+from .job_store import BudgetJobStore
 from .store import BudgetControlConflict, BudgetNotFound, BudgetStore, BudgetStoreError, OPERATIONS
 
 CURSOR_TTL = 900
@@ -58,7 +59,7 @@ def _date_filter(value):
     return value
 
 
-class BudgetHTTPStore(BudgetStore):
+class BudgetHTTPStore(BudgetJobStore):
     def __init__(self, sessions, *, clock=time.time, cursor_secret: bytes):
         super().__init__(sessions, clock=clock)
         if not isinstance(cursor_secret, bytes) or not cursor_secret:

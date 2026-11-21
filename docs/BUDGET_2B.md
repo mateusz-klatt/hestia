@@ -1,13 +1,13 @@
 # Budget 2B: private HTTP API and Enable Banking consent lifecycle
 
-**Status:** 2B.1 private stored API/controls is implemented and defaults off;
-later executor/poller/consent work below remains design, without activation. Baseline: `7bbd7a9`
-(#166–168). Fleet deployment reports and an independent read-only check agree:
-the running container matches that commit, SQLite is at `0010`, and all eleven
-budget tables are empty. Existing CLI behavior is documented in
-[BUDGET.md](BUDGET.md); its identity, import, selection and quota guarantees remain
-binding. This document does not authorize real SCA, bank requests, data import,
-proxy/panel changes or deployment of financial HTTP endpoints.
+**Status:** 2B.1 private stored API/controls and 2B.jobs refresh executor/opt-in
+poller are implemented and default off; consent work below remains design, without
+activation. Production baseline: `8eae689` (#170–171), SQLite at `0012`, all budget
+tables empty, every budget flag unset. 2B.jobs adds migration `0013`. Existing CLI
+behavior and the 2B.jobs runbook are documented in [BUDGET.md](BUDGET.md); its
+identity, import, selection and quota guarantees remain binding. This document does
+not authorize real SCA, bank requests, data import, proxy/panel changes or
+activation of financial HTTP endpoints or unattended acquisition.
 
 ## Scope and delivery order
 
@@ -514,7 +514,8 @@ it neither deselects accounts nor clears rate suspensions or consumed quota.
 
 ## Proposed persistence and configuration changes
 
-Allocate actual migration IDs only when implementing; do not rewrite 0008–0010.
+Allocate actual migration IDs only when implementing; do not rewrite 0008–0013.
+2B.jobs uses `0013` (jobs, owner idempotency keys, background opt-in, attention).
 
 | State | Required metadata/invariants |
 | --- | --- |
