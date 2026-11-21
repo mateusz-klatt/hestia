@@ -56,6 +56,12 @@ class ConsentAPITests(unittest.IsolatedAsyncioTestCase):
         self.service.callback.return_value = {"status": "staged"}
         self.service.pending.return_value = [{"id": FLOW, "status": "staged"}]
         self.service.status.return_value = []
+        self.service.renewal_reminders.return_value = {
+            "evaluated_at": 1_800_000_000.0,
+            "lead_days": [14, 7, 3, 1],
+            "rule_version": 1,
+            "reminders": [],
+        }
         self.service.complete.return_value = {"flow_id": FLOW, "status": "adopted"}
         self.service.cancel.return_value = {"flow_id": FLOW, "status": "canceled"}
         self.service.invalidate_bindings.return_value = 1
@@ -127,7 +133,7 @@ class ConsentAPITests(unittest.IsolatedAsyncioTestCase):
         cookie = response.cookies[module.cookie_name(FLOW)]
         self.assertEqual((cookie.value, cookie["max-age"], cookie["path"], cookie["samesite"]), (NONCE, "900", "/", "Lax"))
         self.assertTrue(cookie["secure"] and cookie["httponly"])
-        for operation, key in (("pending", "pending"), ("status", "consents")):
+        for operation, key in (("pending", "pending"), ("status", "consents"), ("renewal-reminders", "reminders")):
             response = await self.get(operation)
             self.assertEqual(response.status, 200)
             self.assertIn(key, await response.json())
@@ -534,3 +540,106 @@ class ConsentAPITests(unittest.IsolatedAsyncioTestCase):
             row = session.get(db.BudgetConsentFlow, flow)
             self.assertEqual(row.status, "canceled")
             self.assertEqual(session.get(db.BudgetConsent, row.candidate_consent_id).status, "UNADOPTED")
+
+    async def test_real_renewal_reminders_read_only_owner_scoped_no_bank_calls_and_errors(self):
+        from hestia import api_contract
+        from hestia.budget import renewal_reminders as rr
+
+        fixed_now = 1_800_000_000.0
+        _, calls = self.real_service()
+        real = self.client.server.app[module.KEY].service
+        real.clock = lambda: fixed_now
+        real.store.clock = lambda: fixed_now
+
+        with self.sessions.begin() as session:
+            session.get(db.BudgetConnection, "bank").valid_until = fixed_now + 40 * rr.SECONDS_PER_DAY
+            session.add_all([
+                db.BudgetConnection(id="alice-attention", owner="alice", application_id=self.config.application_id,
+                                    bank_name="Attention Bank", country="PL", enabled=True, paused=False,
+                                    attention="expired_session", valid_until=fixed_now + 45 * rr.SECONDS_PER_DAY,
+                                    next_attempt=0, failures=0),
+                db.BudgetConnection(id="alice-expired", owner="alice", application_id=self.config.application_id,
+                                    bank_name="Expired Bank", country="PL", enabled=True, paused=False,
+                                    valid_until=fixed_now - 3600, next_attempt=0, failures=0),
+                db.BudgetConnection(id="alice-due", owner="alice", application_id=self.config.application_id,
+                                    bank_name="Due Bank", country="PL", enabled=True, paused=True,
+                                    valid_until=fixed_now + 3 * rr.SECONDS_PER_DAY, next_attempt=0, failures=0),
+                db.BudgetConnection(id="alice-unknown", owner="alice", application_id=self.config.application_id,
+                                    bank_name="Unknown Bank", country="PL", enabled=True, paused=False,
+                                    valid_until=None, next_attempt=0, failures=0),
+                db.BudgetConnection(id="alice-disabled", owner="alice", application_id=self.config.application_id,
+                                    bank_name="Disabled Bank", country="PL", enabled=False, paused=False,
+                                    valid_until=fixed_now - 10, next_attempt=0, failures=0),
+            ])
+
+        response = await self.get("renewal-reminders")
+        self.assertEqual(response.status, 200, await response.text())
+        self.private(response)
+        payload = await response.json()
+        parsed = api_contract.BudgetConsentRenewalReminders.model_validate(payload)
+        self.assertEqual(parsed.model_dump(mode="json"), payload)
+        self.assertEqual(payload["evaluated_at"], fixed_now)
+        self.assertEqual(payload["lead_days"], list(rr.DEFAULT_LEAD_DAYS))
+        self.assertEqual(payload["rule_version"], rr.RULE_VERSION)
+        self.assertEqual([row["connection_id"] for row in payload["reminders"]], [
+            "alice-attention", "alice-expired", "alice-due", "bank", "alice-unknown",
+        ])
+        by_id = {row["connection_id"]: row for row in payload["reminders"]}
+        self.assertEqual((by_id["alice-attention"]["status"], by_id["alice-attention"]["active_milestone"],
+                          by_id["alice-attention"]["reminder_due"], by_id["alice-attention"]["attention"]),
+                         ("attention_required", "attention", True, "expired_session"))
+        self.assertEqual((by_id["alice-expired"]["status"], by_id["alice-expired"]["active_milestone"],
+                          by_id["alice-expired"]["days_remaining"]), ("expired", 0, -1))
+        self.assertEqual((by_id["alice-due"]["status"], by_id["alice-due"]["active_milestone"],
+                          by_id["alice-due"]["paused"]), ("due_soon", 3, True))
+        self.assertEqual((by_id["bank"]["status"], by_id["bank"]["reminder_due"]), ("healthy", False))
+        self.assertEqual((by_id["alice-unknown"]["status"], by_id["alice-unknown"]["valid_until"]),
+                         ("unknown_expiry", None))
+        for row in payload["reminders"]:
+            for forbidden in ("destination_target", "session_id", "authorization_url", "capsule_ref", "aspsp_id", "psu_type", "code"):
+                self.assertNotIn(forbidden, row)
+
+        # Strict owner isolation: Bob only sees bob-bank.
+        bob_resp = await self.get("renewal-reminders", headers=self.headers("bob", origin=False))
+        self.assertEqual(bob_resp.status, 200)
+        bob_body = await bob_resp.json()
+        self.assertEqual([row["connection_id"] for row in bob_body["reminders"]], ["bob-bank"])
+
+        # Direct store call without explicit `now` uses store.clock.
+        direct = real.store.renewal_reminders("alice")
+        self.assertEqual(direct["evaluated_at"], fixed_now)
+
+        # Auth, method, query and feature-flag guards fail closed without contacting any bank.
+        for user, status in (("viewer", 403), ("operator", 403), ("disabled", 401)):
+            denied = await self.get("renewal-reminders", headers=self.headers(user, origin=False))
+            self.assertEqual(denied.status, status)
+            await denied.read()
+        bearer = await self.get("renewal-reminders", headers=self.headers(bearer=True, origin=False))
+        self.assertEqual(bearer.status, 403); await bearer.read()
+        query = await self.get("renewal-reminders", params={"days": "7"})
+        self.assertEqual(query.status, 400); await query.read()
+        head = await self.client.head(module.PREFIX + "/renewal-reminders", headers=self.headers(origin=False))
+        self.assertEqual(head.status, 405); await head.read()
+        with mock.patch.dict(os.environ, {module.FLAG: "0"}):
+            off = await self.get("renewal-reminders")
+            self.assertEqual(off.status, 503); await off.read()
+
+        # Invalid evaluation input -> 400; exceeding MAX_CONNECTIONS -> 413.
+        real.clock = lambda: -1.0
+        bad = await self.get("renewal-reminders")
+        self.assertEqual(bad.status, 400)
+        self.assertEqual((await bad.json())["error"], "budget_consent_invalid_request")
+
+        real.clock = lambda: fixed_now
+        with self.sessions.begin() as session:
+            session.add_all([
+                db.BudgetConnection(id=f"alice-cap-{idx:03d}", owner="alice", application_id=self.config.application_id,
+                                    bank_name="Cap Bank", country="PL", enabled=True, paused=False,
+                                    next_attempt=0, failures=0)
+                for idx in range(rr.MAX_CONNECTIONS)
+            ])
+        over = await self.get("renewal-reminders")
+        self.assertEqual(over.status, 413)
+        self.assertEqual((await over.json())["error"], "budget_consent_limit")
+        self.assertEqual(calls, [])
+        self.audit.assert_not_called()

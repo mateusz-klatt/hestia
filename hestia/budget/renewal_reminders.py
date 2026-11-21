@@ -65,7 +65,7 @@ class ConsentRenewalTarget:
     bank_name: str
     valid_until: int | float | None
     destination_kind: str
-    destination_target: str
+    destination_target: str | None = None
     enabled: bool = True
     paused: bool = False
     attention: str | None = None
@@ -85,7 +85,7 @@ class ConsentRenewalReminder:
     paused: bool
     attention: str | None
     destination_kind: str
-    destination_target: str
+    destination_target: str | None
     rule_version: int = RULE_VERSION
 
 
@@ -178,7 +178,7 @@ def _validate_target(owner, item, seen):
     seen.add(connection_id)
     bank_name = _text(item.bank_name, MAX_LABEL)
     valid_until = None if item.valid_until is None else _timestamp(item.valid_until)
-    target = _text(item.destination_target, MAX_LABEL)
+    target = None if item.destination_target is None else _text(item.destination_target, MAX_LABEL)
     attention = _parse_attention(item.attention)
     notified = _parse_notified(item.notified_milestones)
     if not item.enabled:

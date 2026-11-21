@@ -149,6 +149,11 @@ class RenewalRemindersTests(unittest.TestCase):
         self.assertIs(type(at_bound[0].valid_until), int)
         self.assertEqual((at_bound[0].seconds_remaining, at_bound[0].status), (1, "due_soon"))
 
+        # Optional destination_target=None permits evaluation-only callers without storing PII targets.
+        no_target = evaluate_renewal_reminders("owner", NOW, [_target("c-none-target", destination_target=None)])[0]
+        self.assertIsNone(no_target.destination_target)
+        self.assertEqual(no_target.destination_kind, "owner_inbox")
+
     def test_custom_lead_days_permutation_invariance_and_tiebreaking(self):
         targets = [
             _target("conn-b", valid_until=NOW + 5 * SECONDS_PER_DAY),

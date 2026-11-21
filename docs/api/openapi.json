@@ -4539,6 +4539,161 @@
         "title": "BudgetConsentPending",
         "type": "object"
       },
+      "BudgetConsentRenewalReminder": {
+        "description": "Read-only private consent-renewal status derived from stored provider valid_until and attention.",
+        "properties": {
+          "active_milestone": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "const": "attention",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Active Milestone"
+          },
+          "attention": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Attention"
+          },
+          "bank_name": {
+            "title": "Bank Name",
+            "type": "string"
+          },
+          "connection_id": {
+            "title": "Connection Id",
+            "type": "string"
+          },
+          "days_remaining": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Days Remaining"
+          },
+          "destination_kind": {
+            "enum": [
+              "owner_inbox",
+              "owner_push",
+              "owner_email"
+            ],
+            "title": "Destination Kind",
+            "type": "string"
+          },
+          "paused": {
+            "title": "Paused",
+            "type": "boolean"
+          },
+          "reminder_due": {
+            "title": "Reminder Due",
+            "type": "boolean"
+          },
+          "rule_version": {
+            "title": "Rule Version",
+            "type": "integer"
+          },
+          "seconds_remaining": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Seconds Remaining"
+          },
+          "status": {
+            "enum": [
+              "attention_required",
+              "expired",
+              "due_soon",
+              "healthy",
+              "unknown_expiry"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "valid_until": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Valid Until"
+          }
+        },
+        "required": [
+          "connection_id",
+          "bank_name",
+          "valid_until",
+          "seconds_remaining",
+          "days_remaining",
+          "status",
+          "active_milestone",
+          "reminder_due",
+          "paused",
+          "attention",
+          "destination_kind",
+          "rule_version"
+        ],
+        "title": "BudgetConsentRenewalReminder",
+        "type": "object"
+      },
+      "BudgetConsentRenewalReminders": {
+        "description": "Owner-private consent renewal reminders evaluated on demand; no bank requests or delivery.",
+        "properties": {
+          "evaluated_at": {
+            "title": "Evaluated At",
+            "type": "number"
+          },
+          "lead_days": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Lead Days",
+            "type": "array"
+          },
+          "reminders": {
+            "items": {
+              "$ref": "#/components/schemas/BudgetConsentRenewalReminder"
+            },
+            "title": "Reminders",
+            "type": "array"
+          },
+          "rule_version": {
+            "title": "Rule Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "evaluated_at",
+          "lead_days",
+          "rule_version",
+          "reminders"
+        ],
+        "title": "BudgetConsentRenewalReminders",
+        "type": "object"
+      },
       "BudgetConsentStartRequest": {
         "additionalProperties": false,
         "description": "Start one browser-bound consent for an explicitly configured connection.",
@@ -8301,7 +8456,7 @@
   "info": {
     "description": "Local cloud-free smart-home control API. Generated from hestia/api_contract.py \u2014 do not edit by hand; run `python -m hestia.api_contract`.",
     "title": "hestia API",
-    "version": "0.20.0"
+    "version": "0.21.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -11486,6 +11641,116 @@
           }
         },
         "summary": "Browser-bound bank consent: pending",
+        "x-required-role": "admin"
+      }
+    },
+    "/api/budget/consent/renewal-reminders": {
+      "get": {
+        "description": "Default-off. Requires the SQLite admin owner and signed browser cookie; mutations also require exact Origin and JSON. Each flow has a Secure HttpOnly SameSite=Lax binding cookie. Owner reads and cancel never contact a bank. Start uses GET /aspsps and POST /auth; complete claims one POST /sessions before delivery, verifies GET /sessions and adopts under version fences. Configured accounts, selections, history, pauses and acquisition debits are preserved.",
+        "operationId": "getBudgetConsentRenewalReminders",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetConsentRenewalReminders"
+                }
+              }
+            },
+            "description": "owner-scoped stored state; no bank request"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "session required; middleware may return an empty body"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "admin owner or browser-origin requirement failed; middleware may return an empty body"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "unknown, disabled or foreign resource"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "SQLite session users required"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Owner connection evaluation cap exceeded; no partial reminders returned."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Durable consent throttle or provider cooldown; no automatic new consent."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "budget configuration unavailable"
+          }
+        },
+        "summary": "Browser-bound bank consent: renewal-reminders",
         "x-required-role": "admin"
       }
     },
