@@ -1,10 +1,11 @@
 # Budget: read-only Enable Banking foundation
 
-Status: the CLI foundation is deployed; the private 2B.1 HTTP API is opt-in and
-disabled by default. Budget dashboard screens, server acquisition jobs/poller and
-browser bank consent are not implemented in this piece. This module does not make
-payments or categorise expenses. Update public policies before enabling actual
-bank processing or exposing real stored records through the live service.
+Status: deployed at migration `0013` are the CLI foundation, the private HTTP API
+(2B.1), durable refresh jobs with an opt-in poller (2B.jobs) and the owner budget
+screens (2C). Each server feature has its own default-off flag. Browser bank consent
+and renewal (2B.2/2B.3) are not implemented. This module does not make payments or
+categorise expenses. The public privacy policy and terms describe the budget module;
+keep them current before changing what is processed.
 
 ## Decisions
 
@@ -81,7 +82,7 @@ does not itself authorize live import or access to bank credentials.
 Connection capabilities report which of refresh jobs, background selection, background
 polling and browser consent are available. Browser consent stays unavailable: no
 callback/consent/public completion route exists yet. See [BUDGET_2B.md](BUDGET_2B.md)
-for the React and later consent/renewal sequence.
+for the later consent/renewal sequence.
 
 ## Refresh jobs and opt-in background polling (2B.jobs)
 
@@ -166,19 +167,66 @@ lease and cooldowns stay in force, and it is not replayed.
 
 1. Deploy with all budget flags unset; back up the SQLite database first.
 2. Update the privacy policy/terms for bank data, then enable and verify
-   `HESTIA_BUDGET_HTTP_ENABLED` on its own (see the 2B.1 checks above).
+   `HESTIA_BUDGET_HTTP_ENABLED` on its own (see the 2B.1 checks above). If HTTP was
+   verified before step 4, turn it off again for that step.
 3. Stop every competing acquisition for the same application, bank and accounts
    (including the PoC). Hestia cannot see their requests: carry verified recent
    attempts into conservative quota state or wait a full rolling window and any
    longer server cooldown. Waiting until midnight is not a fresh allowance.
 4. Mount only the owner-authorized external session files and key, read-only,
-   owner-only (`0400`/`0600`, process UID), and select accounts explicitly.
+   owner-only (`0400`/`0600`, process UID). With `HESTIA_BUDGET_HTTP_ENABLED`,
+   `HESTIA_BUDGET_JOBS_ENABLED` and `HESTIA_BUDGET_POLLER_ENABLED` actually off in the
+   running process, import history and record the owner's initial account
+   selections (CLI) and per-connection opt-ins using the audited operator controls.
+   Only then enable HTTP.
+   Never repeat that initial selection step once the owner can use the budget
+   screens: it would overwrite later deselections made there. Later changes go
+   through the versioned screen controls, or as explicit operator changes made
+   only after checking the owner's current choices (the CLI sends no version).
 5. Set `HESTIA_BUDGET_JOBS_ENABLED=1`, restart, and run one owner refresh for one
    connection. Check the job outcome, `/api/budget/limits` and that the logs
    contain no financial values.
-6. Only then set `HESTIA_BUDGET_POLLER_ENABLED=1` and opt in each connection with
-   `background-selection`. To stop unattended work, opt out, pause the connection,
-   or unset the poller flag and restart.
+6. Only after that verification set `HESTIA_BUDGET_POLLER_ENABLED=1`. The poller
+   honours the opt-ins persisted at that moment; never re-apply the staged choices
+   from step 4, which would undo a later opt-out made in the screens. To stop
+   unattended work, opt out, pause the connection, or unset the poller flag and
+   restart.
+
+## Budget screens (2C)
+
+Admins see a **💰 Budget** tab only after `GET /api/budget/connections` succeeds for
+them: the HTTP flag is on, users are authoritative in SQLite, and the signed-in
+admin owns the configured connections. Each admin sees only their own budget.
+
+- **Import and selection are separate.** Imported history is stored whether or not
+  an account is selected. *Include in budget* is the owner's persisted, audited
+  choice; configuration reloads, restarts and imports never re-select an excluded
+  account, and newly configured accounts are never selected automatically.
+- **Other controls are independent:** the explicit account type (never inferred
+  from currency or product name), pausing a connection (stops acquisition, keeps
+  history) and *Automatic refresh* per connection. The opt-in takes effect only
+  while the server's poller flag is on; the screen says so otherwise. Each control
+  sends its current version; if it changed elsewhere, the screen reloads the
+  current state instead of overwriting it.
+- **Refresh from bank** appears only while the executor is enabled; otherwise the
+  connection reads *Refreshing is disabled on the server*. A refresh queues a job
+  under the normal quotas. The card shows queued/running and then the outcome:
+  updated, partly updated, not due yet, failed or interrupted, with the next
+  possible start. *Attention* means unattended refresh stopped after an
+  authorization or session problem; a successful manual refresh clears it, and
+  reconnecting may be needed. Reconnect and renewal are not in the screens yet.
+- **Account detail** shows current balances from the bank interface. Earlier
+  imported balance snapshots are listed as metadata only, never as current funds.
+  Transactions are newest first, with 30/90-day, this-year and all-time presets,
+  a validated date range and paging. Amounts are exact decimal strings; nothing
+  is summed across currencies. Provider-declared currency and currencies seen in
+  current balances are shown separately.
+- **Privacy in the browser:** financial data stay in page memory only. The screen
+  does not watch the session continuously: it clears everything immediately when
+  any budget response reports lost access or a disabled budget, or when the
+  identity check on reload shows another user or a lost admin role. Signing out
+  in the same tab reloads the page. Browser storage holds only general interface
+  preferences, such as the last chosen tab, never budget data.
 
 ## Acquisition and durability
 
@@ -575,30 +623,28 @@ importer's clock is rejected rather than silently adjusted.
 
 ## Next slices (not implemented here)
 
-1. React budget screens and synthetic UAT on the stored-data API, jobs and
-   background selection above. See the delivery order in BUDGET_2B.md.
-2. Browser consent and renewal. Reserved
+1. Browser consent and renewal. Reserved
    callback: `https://hestia.klatt.ie/api/budget/enable-banking/callback`; **no route
    exists yet**. Use expiring single-use state bound to user, browser and bank;
    keep callback query secrets out of access logs, referrers and page content.
-3. Reminder seven days before actual provider `valid_until`; an **Odnów** action
+2. Reminder seven days before actual provider `valid_until`; an **Odnów** action
    verifies and adopts a new session without automatically closing external/PoC
    sessions. Some banks invalidate the old consent during new SCA; retaining the
    old local reference does not guarantee it remains usable. No universal 180-day
    assumption. Status already reports renewal due.
-4. Verify ING/BNP field shapes with owner-approved PoC sessions. Do not infer
+3. Verify ING/BNP field shapes with owner-approved PoC sessions. Do not infer
    support for cards, pending entries or statement due dates from bank branding.
-5. Year view and conservative categorisation/subscription hints with manual
+4. Year view and conservative categorisation/subscription hints with manual
    correction. The owner must explicitly choose each account's kind (current,
    savings, credit card or other); CACC or a product name is insufficient.
    Card repayments/internal transfers must not duplicate spending;
    recurring transactions do not prove unused subscriptions. Mortgage due dates
    and forecasts require explicit schedule inputs and freshness indicators.
-6. Decide export, erasure and retention before broader use. Disabling a connection
+5. Decide export, erasure and retention before broader use. Disabling a connection
    stops acquisition and retains history; provider revocation is not local erasure.
-7. Legal-document update, access-control UAT and staged activation after review.
-   No bank data is sent to external AI tools.
-8. Authenticated UI for limit inspection and operator review, preserving the CLI's
+6. Staged live activation follows the runbook above. No bank data is sent to
+   external AI tools.
+7. Authenticated UI for limit inspection and operator review, preserving the CLI's
    deadlines and audit. Do not erase quota history to compensate for a partial result.
 
 ## Sources
