@@ -3,19 +3,26 @@
 The same snapshot digest fences rule previews and encrypted pagination. Transfer
 matching always precedes period filtering; only current, accepted pairs affect
 totals. No configuration, provider, file, secret or acquisition operation runs here.
+
+Reads memoise the projection in process memory under a digest of every source row it
+can depend on, so any committed change yields a new key and nothing is ever invalidated
+by hand. Authorization is checked before every lookup; writes always recompute.
 """
 from __future__ import annotations
 
 import base64
-from collections import defaultdict
+from collections import OrderedDict, defaultdict
+from copy import deepcopy
 from datetime import date
+import hashlib
 import json
 import math
 import os
 import re
+import threading
 
 from cryptography.exceptions import InvalidTag
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 
 from .. import db
 from . import analytics_core as core
@@ -33,6 +40,12 @@ _DOMAIN = b"hestia/budget/analytics/cursor/v1"
 _PAYLOAD_FIELDS = ("amount", "currency", "credit_debit_indicator", "status", "booking_date", "value_date",
                    "transaction_date", "remittance_information")
 _KINDS = frozenset({"expense", "income", "refund", "excluded", "unclassified_credit", "transfer"})
+CACHE_ENTRIES = 4
+_cache = OrderedDict()
+_cache_lock = threading.Lock()
+# One analytics read at a time: CPU-bound reads only interleave under the GIL, and their many short
+# SQLite calls then wait for each other's switch interval. Taken before the read transaction opens.
+_read_lock = threading.Lock()
 _TOTAL_FIELDS = ("gross_debits", "gross_credits", "expenses", "income", "refunds", "unclassified_credit",
                  "excluded_debits", "excluded_credits", "transfer_debits", "transfer_credits")
 
@@ -154,6 +167,7 @@ def _effective(payload, metadata, annotation, categories, rules):
 
 def _records(ledger, identities, metadata, annotations, categories, rules):
     result = []
+    owned = core.owned_identities(identities) if ledger else None
     for row in ledger:
         payload, financial_fp = _payload(row.payload_json)
         key = (row.account_id, row.entry_reference)
@@ -163,7 +177,8 @@ def _records(ledger, identities, metadata, annotations, categories, rules):
         effective = _effective(payload, evidence, annotation, categories, rules)
         result.append({"account_id": row.account_id, "entry_reference": row.entry_reference, "payload": payload,
                        "financial_fp": financial_fp,
-                       "transfer_fp": core.pair_fingerprint(row.account_id, row.entry_reference, payload, evidence, identities),
+                       "transfer_fp": core.pair_fingerprint(row.account_id, row.entry_reference, payload, evidence, identities,
+                                                            financial=financial_fp, owned_ids=owned),
                        "metadata": evidence, "annotation": annotation, "effective": effective,
                        "base_effective": dict(effective), "source": row.source, "observed_at": row.observed_at,
                        "api_observed_at": row.api_observed_at, "uncertain": row.uncertain,
@@ -213,7 +228,8 @@ def projection_snapshot(session, owner):
                 "counts": _scope_counts(session, owner, accounts), "_records": records, "_accounts": accounts}
     semantic = {"version": 1, "owner": owner,
                 "accounts": [{"id": row.id, "enabled": row.enabled} for row in accounts], "identities": identity_state,
-                "ledger": [[row.account_id, row.entry_reference, _json(row.payload_json), row.uncertain, row.source] for row in ledger],
+                "ledger": [[row.account_id, row.entry_reference, record["payload"], row.uncertain, row.source]
+                           for row, record in zip(ledger, records, strict=True)],
                 "metadata": sorted([[row.account_id, row.entry_reference, row.ledger_fingerprint,
                                      _json(row.payload_json), row.version] for row in metadata.values()]),
                 "annotations": sorted([_semantic(_entity(row)) for row in annotations.values()], key=lambda item: (item["account_id"], item["entry_reference"])),
@@ -407,26 +423,98 @@ def _currency(value):
     return value
 
 
+def _source_digest(session, owner):
+    """Digest of every row the projection can read for ``owner``: a superset of its filters, all columns.
+
+    Any committed insert, update or delete in these rows changes the digest. Columns are taken
+    from the table definition, so a column added later enters the key without a code change.
+    """
+    accounts = select(db.BudgetAccount.id).where(db.BudgetAccount.owner == owner)
+    connections = select(db.BudgetAccount.connection_id).where(db.BudgetAccount.owner == owner)
+    batches = select(db.BudgetImportBatch.id).where(db.BudgetImportBatch.account_id.in_(accounts))
+    sources = (
+        (db.BudgetConnection, or_(db.BudgetConnection.owner == owner, db.BudgetConnection.id.in_(connections))),
+        (db.BudgetAccount, db.BudgetAccount.owner == owner),
+        (db.BudgetTransaction, db.BudgetTransaction.account_id.in_(accounts)),
+        (db.BudgetTransactionMetadata, db.BudgetTransactionMetadata.account_id.in_(accounts)),
+        (db.BudgetAccountIdentity, db.BudgetAccountIdentity.account_id.in_(accounts)),
+        (db.BudgetAnnotation, or_(db.BudgetAnnotation.owner == owner, db.BudgetAnnotation.account_id.in_(accounts))),
+        (db.BudgetCategory, db.BudgetCategory.owner == owner),
+        (db.BudgetRule, db.BudgetRule.owner == owner),
+        (db.BudgetTransferDecision, db.BudgetTransferDecision.owner == owner),
+        (db.BudgetUnresolved, db.BudgetUnresolved.account_id.in_(accounts)),
+        (db.BudgetImportBatch, db.BudgetImportBatch.account_id.in_(accounts)),
+        (db.BudgetImportUnresolved, db.BudgetImportUnresolved.batch_id.in_(batches)),
+    )
+    digest = hashlib.sha256(b"hestia/budget/analytics/source/v1")
+
+    def put(value):
+        data = (type(value).__name__ + ":" + repr(value)).encode("utf-8", "surrogatepass")
+        digest.update(len(data).to_bytes(8, "big"))
+        digest.update(data)
+
+    for model, condition in sources:
+        table = model.__table__
+        put(table.name)
+        put([column.name for column in table.columns])
+        for row in session.execute(select(*table.columns).where(condition).order_by(*table.primary_key.columns)):
+            put(tuple(row))
+    return digest.hexdigest()
+
+
+def clear_projection_cache():
+    with _cache_lock:
+        _cache.clear()
+
+
+def _cached(key):
+    with _cache_lock:
+        value = _cache.get(key)
+        if value is not None:
+            _cache.move_to_end(key)
+        return value
+
+
+def _remember(key, value):
+    with _cache_lock:
+        for other in [item for item in _cache if item[:2] == key[:2]]:
+            del _cache[other]  # one projection per database and owner
+        _cache[key] = value
+        while len(_cache) > CACHE_ENTRIES:
+            _cache.popitem(last=False)
+
+
 class BudgetAnalyticsViews(BudgetAnalyticsStore):
     def _projection(self, session, owner):
-        value = projection_snapshot(session, owner)
-        _transfer_projection(value)
+        """Shared, read-only projection for this transaction's committed state; callers never mutate it."""
+        BudgetHTTPStore._owner(session, owner)
+        key = (str(session.get_bind().url), owner, MAX_ROWS, MAX_EDGES, _source_digest(session, owner))
+        value = _cached(key)
+        if value is None:
+            # Callers hold _read_lock, so concurrent readers of one state find this result instead of repeating it.
+            value = projection_snapshot(session, owner)
+            _transfer_projection(value)
+            del value["_accounts"]  # ORM rows never outlive their session
+            _remember(key, value)
         return value
 
     def _freshness(self, session, snapshot, now):
-        connections = {row.id: row for row in session.scalars(select(db.BudgetConnection).where(db.BudgetConnection.owner == snapshot["owner"]))}
+        owner = snapshot["owner"]
+        connections = {row.id: row for row in session.scalars(select(db.BudgetConnection).where(db.BudgetConnection.owner == owner))}
         components = {(row.account_id, row.operation): row for row in session.scalars(select(db.BudgetComponent).join(db.BudgetAccount).where(
-            db.BudgetAccount.owner == snapshot["owner"], db.BudgetAccount.enabled))}
+            db.BudgetAccount.owner == owner, db.BudgetAccount.enabled))}
+        accounts = session.scalars(select(db.BudgetAccount).join(db.BudgetConnection).where(
+            db.BudgetAccount.owner == owner, db.BudgetConnection.owner == owner, db.BudgetAccount.enabled).order_by(db.BudgetAccount.id))
         shared = {key: shared_state(session, row) for key, row in connections.items()}
         return [{"account_id": account.id, **{operation: self._component_status(
             components.get((account.id, operation)), operation, account, connections[account.connection_id], now,
             shared[account.connection_id]) for operation in ("transactions", "balances")}}
-            for account in snapshot["_accounts"] if account.enabled]
+            for account in accounts]
 
     def overview(self, owner, period, *, currency=None):
         start, end = core.parse_period(period)
         currency = _currency(currency)
-        with self._read(owner) as session:
+        with _read_lock, self._read(owner) as session:
             snapshot = self._projection(session, owner)
             rows = _period_rows(snapshot, start, end, currency)
             months = defaultdict(list)
@@ -494,7 +582,7 @@ class BudgetAnalyticsViews(BudgetAnalyticsStore):
         query = None if query is None else query.casefold().strip()
         filters = {"owner": owner, "operation": "transactions", "period": period, "currency": currency,
                    "category_id": category_id, "kind": kind, "query": query, "limit": limit}
-        with self._read(owner) as session:
+        with _read_lock, self._read(owner) as session:
             snapshot = self._projection(session, owner)
             if category_id not in (None, "uncategorised") and category_id not in {row["id"] for row in snapshot["categories"]}:
                 raise AnalyticsError("budget_analytics_not_found", 404)
@@ -502,7 +590,8 @@ class BudgetAnalyticsViews(BudgetAnalyticsStore):
             rows.sort(key=lambda row: (core.effective_date(row["payload"]), row["account_id"], row["entry_reference"]), reverse=True)
             page, next_cursor = self._page(rows, cursor, filters, snapshot["digest"])
             return {"period": period, "start": start, "end": end, "snapshot_digest": snapshot["digest"],
-                    "transactions": [_wire_transaction(row) for row in page], "filtered_total": len(rows), "next_cursor": next_cursor}
+                    "transactions": deepcopy([_wire_transaction(row) for row in page]), "filtered_total": len(rows),
+                    "next_cursor": next_cursor}
 
     def transfers(self, owner, period, *, currency=None, status="suggested", limit=50, cursor=None):
         start, end = core.parse_period(period)
@@ -511,7 +600,7 @@ class BudgetAnalyticsViews(BudgetAnalyticsStore):
             raise AnalyticsError()
         filters = {"owner": owner, "operation": "transfers", "period": period, "currency": currency,
                    "status": status, "limit": limit}
-        with self._read(owner) as session:
+        with _read_lock, self._read(owner) as session:
             snapshot = self._projection(session, owner)
             rows = [row for row in _period_transfers(snapshot, start, end, currency) if row["status"] == status]
             rows.sort(key=lambda row: (max(row["debit"]["date"] or "", row["credit"]["date"] or ""),
@@ -519,7 +608,7 @@ class BudgetAnalyticsViews(BudgetAnalyticsStore):
                                        row["credit"]["account_id"], row["credit"]["entry_reference"]), reverse=True)
             page, next_cursor = self._page(rows, cursor, filters, snapshot["digest"])
             return {"period": period, "start": start, "end": end, "snapshot_digest": snapshot["digest"],
-                    "transfers": page, "filtered_total": len(rows), "next_cursor": next_cursor,
+                    "transfers": deepcopy(page), "filtered_total": len(rows), "next_cursor": next_cursor,
                     "scan_limited": snapshot["_scan_limited"]}
 
 

@@ -4,8 +4,8 @@ from types import SimpleNamespace
 import unittest
 
 from hestia.budget.analytics_core import (AnalyticsError, canonical_money, compare_money, compatible_kind,
-    effective_date, financial_fingerprint, negate_money, pair_fingerprint, parse_period, projection_digest,
-    rule_matches, sum_money)
+    effective_date, financial_fingerprint, negate_money, owned_identities, pair_fingerprint, parse_period,
+    projection_digest, rule_matches, sum_money)
 
 
 def payload(**changes):
@@ -82,6 +82,11 @@ class FingerprintTests(unittest.TestCase):
         self.assertNotEqual(pair_fingerprint("a", "another-ref", payload(), metadata, own), first)
         self.assertNotEqual(pair_fingerprint("a", "ref", payload(), metadata | {"creditor_accounts": [identity("other")]}, own), first)
         self.assertEqual(pair_fingerprint("a", "ref", payload()), pair_fingerprint("a", "ref", payload(), {}, {}))
+        # Values precomputed once per projection give exactly the per-entry result.
+        self.assertEqual(pair_fingerprint("a", "ref", payload(), metadata, own, financial=financial_fingerprint(payload()),
+                                          owned_ids=owned_identities(own)), first)
+        with self.assertRaises(AnalyticsError):
+            owned_identities([identity("own-a")])
         self.assertEqual(pair_fingerprint("a", "ref", payload(), {"creditor_accounts": [identity("own-b"), identity("own-b")]}, own),
                          pair_fingerprint("a", "ref", payload(), {"creditor_accounts": [identity("own-b")]}, own))
         for account, reference, meta, ids in ((None, "ref", {}, {}), ("a", "", {}, {}), ("a", "ref", [], {}),

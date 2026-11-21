@@ -35,6 +35,7 @@ _AMOUNT = re.compile(r"[0-9]+(?:\.[0-9]+)?", re.ASCII)
 _CURRENCY = re.compile(r"[A-Z]{3}", re.ASCII)
 _DATE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", re.ASCII)
 _FINGERPRINT = re.compile(r"[0-9a-f]{64}", re.ASCII)
+_CONTROL = re.compile(r"[\x00-\x1f\x7f]")
 
 
 class TransferInputError(ValueError):
@@ -90,7 +91,7 @@ class _Leg:
 
 def _text(value, maximum=MAX_TEXT):
     if (not isinstance(value, str) or not value.strip() or len(value) > maximum
-            or any(ord(char) < 32 or ord(char) == 127 for char in value)):
+            or _CONTROL.search(value)):
         raise TransferInputError()
     return value
 
