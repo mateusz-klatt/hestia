@@ -295,7 +295,10 @@ def _balances(client, uid, budget):
     return balances
 
 
-def _component(primary, operation, budget, before_component, fetch):
+def _component(primary, operation, budget, before_component, fetch, wanted=None):
+    # Untargeted components are not attempted at all: no budget diagnostic, reservation or HTTP.
+    if wanted is not None and not wanted(primary, operation):
+        return None, None
     if _budget_exhausted(budget):
         return None, "limit_exceeded"
     # Reservation/owner validation precedes HTTP and must remain fatal on error.
@@ -311,23 +314,25 @@ def _component(primary, operation, budget, before_component, fetch):
         return None, exc.code
 
 
-def _selected_account(client, primary, uid, start, end, budget, before_component):
+def _selected_account(client, primary, uid, start, end, budget, before_component, wanted=None):
     transactions, transactions_error = _component(
         primary, "transactions", budget, before_component,
-        lambda: _transactions(client, uid, start, end, budget))
+        lambda: _transactions(client, uid, start, end, budget), wanted)
     balances, balances_error = _component(
-        primary, "balances", budget, before_component, lambda: _balances(client, uid, budget))
+        primary, "balances", budget, before_component, lambda: _balances(client, uid, budget), wanted)
     return AccountSnapshot(primary, balances, transactions, balances_error, transactions_error)
 
 
 def fetch_snapshot(client, session_id: str, connection: ConnectionConfig, *, today: date, now=None,
-                   before_component=None, on_session=None) -> Snapshot:
+                   before_component=None, on_session=None, wanted=None) -> Snapshot:
     """Validate the session, then independently fetch complete components.
 
     A failed component contributes only a safe diagnostic. HTTP401 invalidates
     the entire session; other failures do not discard healthy components.
     before_component reserves once per component; False skips it without error,
     while callback failures propagate before the corresponding HTTP request.
+    ``wanted(primary, operation)`` excludes components before any of that, so a
+    targeted refresh records nothing for components it did not request.
     """
     if type(today) is not date or today.toordinal() <= 364:
         raise BudgetDataError()
@@ -337,8 +342,10 @@ def fetch_snapshot(client, session_id: str, connection: ConnectionConfig, *, tod
         on_session(expiry)
     accounts, errors, budget = [], [], {"remaining": MAX_TRANSACTIONS, "bytes": MAX_NORMALIZED_BYTES}
     for primary in connection.accounts:
-        if _budget_exhausted(budget):
+        requested = wanted is None or any(wanted(primary, operation) for operation in ("transactions", "balances"))
+        if requested and _budget_exhausted(budget):
             errors.append(AccountFailure(primary, "limit_exceeded"))
             continue
-        accounts.append(_selected_account(client, primary, hashes[primary], start, end, budget, before_component))
+        accounts.append(_selected_account(client, primary, hashes[primary], start, end, budget, before_component,
+                                          wanted))
     return Snapshot(expiry, tuple(accounts), start, end, tuple(errors))

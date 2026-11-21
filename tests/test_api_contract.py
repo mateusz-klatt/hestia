@@ -459,6 +459,7 @@ class TolerantResponseContractTests(unittest.TestCase):
         "SetDisabledRequest", "SetRoleRequest", "SettingsUpdate", "WholeHomeRequest",
         "CalendarCreateRequest", "CalendarUpdateRequest", "CalendarDeleteRequest",
         "BudgetSelectionRequest", "BudgetKindRequest", "BudgetConnectionStateRequest",
+        "BudgetBackgroundSelectionRequest", "BudgetRefreshRequest",
     }
 
     def test_strictness_lives_only_on_request_schemas(self):

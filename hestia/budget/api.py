@@ -13,24 +13,31 @@ from aiohttp import web
 from pydantic import ValidationError
 
 from .. import auth, store_sql
-from ..api_contract import BudgetConnectionStateRequest, BudgetKindRequest, BudgetSelectionRequest
+from ..api_contract import (BudgetBackgroundSelectionRequest, BudgetConnectionStateRequest, BudgetKindRequest,
+                            BudgetRefreshRequest, BudgetSelectionRequest)
 from ..db import init_db
+from . import jobs
 from .config import BudgetConfigError
+from .job_store import BudgetJobError, IDEMPOTENCY_KEY
 from .store import BudgetStoreError
 from .views import (BudgetAccessDenied, BudgetControlConflict, BudgetHTTPStore, BudgetNotFound,
                     BudgetQueryError, BudgetUsersBackendRequired)
 
 
 PREFIX = "/api/budget"
-READS = ("connections", "accounts", "status", "transactions", "balances", "limits")
+READS = ("connections", "accounts", "status", "transactions", "balances", "limits", "jobs")
 MUTATIONS = {
     "account-selection": (BudgetSelectionRequest, "set_account_selected", "account", "account_id", "selected"),
     "account-kind": (BudgetKindRequest, "confirm_account_kind", "account", "account_id", "kind"),
     "connection-state": (BudgetConnectionStateRequest, "set_connection_paused", "connection", "connection_id", "paused"),
+    "background-selection": (BudgetBackgroundSelectionRequest, "set_connection_background", "connection",
+                             "connection_id", "enabled"),
+    "refresh": (BudgetRefreshRequest, "enqueue_refresh", "job", "connection_id", None),
 }
+JOBS_KEY = web.AppKey("budget_jobs", object)
 PRIVATE_HEADERS = {"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"}
 log = logging.getLogger("hestia.budget.api")
-_QUERY_FIELDS = {"accounts": {"connection_id"}, "balances": {"account_id"},
+_QUERY_FIELDS = {"accounts": {"connection_id"}, "jobs": {"connection_id"}, "balances": {"account_id"},
                  "transactions": {"account_id", "date_from", "date_to", "limit", "cursor"}}
 
 
@@ -117,12 +124,14 @@ def _store(secret):
     return BudgetHTTPStore(sessions, cursor_secret=secret)
 
 
-def _read(owner, operation, query, secret):
+def _read(owner, operation, query, secret, service):
     result = getattr(_store(secret), operation)(owner, **query)
     if operation == "connections":
-        return {"connections": result, "capabilities": {"stored_reads": True, "account_controls": True,
-                                                        "refresh": False, "background_selection": False, "consent": False}}
-    return {operation: result} if operation in ("connections", "accounts", "status", "limits") else result
+        return {"connections": result, "capabilities": {
+            "stored_reads": True, "account_controls": True, "background_selection": True, "consent": False,
+            "refresh": service is not None and service.accepting,
+            "background_polling": service is not None and service.accepting and service.poller}}
+    return {operation: result} if operation in ("connections", "accounts", "status", "limits", "jobs") else result
 
 
 def _payload(operation, body):
@@ -137,9 +146,28 @@ def _payload(operation, body):
 
 def _write(owner, operation, values, secret):
     _, method, response_key, target, change = MUTATIONS[operation]
-    result = getattr(_store(secret), method)(owner, values[target], values[change],
-                                            expected_version=values["expected_version"], actor=owner, origin="web")
+    if change is None:
+        result = _store(secret).enqueue_refresh(owner, values[target], expected_version=values["expected_version"],
+                                                idempotency_key=values["idempotency_key"],
+                                                account_id=values["account_id"], operation=values["operation"])
+    else:
+        result = getattr(_store(secret), method)(owner, values[target], values[change],
+                                                expected_version=values["expected_version"], actor=owner, origin="web")
     return {"ok": True, response_key: result}
+
+
+def _idempotency_key(request):
+    values = request.headers.getall("Idempotency-Key", [])
+    if len(values) != 1 or not IDEMPOTENCY_KEY.fullmatch(values[0]):
+        raise _Rejected(400, "budget_invalid_request")
+    return values[0]
+
+
+def _executor(request):
+    service = request.app[JOBS_KEY].service
+    if service is None or not service.accepting:
+        raise _Rejected(503, "budget_refresh_unavailable")
+    return service
 
 
 async def _settled_thread(operation):
@@ -170,6 +198,8 @@ def _failure(exc, operation):
         return _error(409, "budget_requires_sqlite_users")
     if isinstance(exc, BudgetNotFound):
         return _error(404, "budget_not_found")
+    if isinstance(exc, BudgetJobError):
+        return _error(exc.status, exc.code)
     if isinstance(exc, (BudgetStoreError, ValidationError)):
         return _error(400, "budget_invalid_request")
     if isinstance(exc, BudgetConfigError):
@@ -190,22 +220,31 @@ def register(app, read_json_body, *, auth_enabled, session_secret):
             secret = _secret(session_secret)
             if request.method == "GET":
                 query = _query(request, operation)
-                result = await asyncio.to_thread(_read, owner, operation, query, secret)
-            else:
-                _browser(request, owner, secret)
-                body, error = await read_json_body(request, 16384, reject_duplicates=True)
-                if error:
-                    return body
-                values = _payload(operation, body)
-                owner = _principal(request, auth_enabled)
-                secret = _secret(session_secret)
-                _browser(request, owner, secret)
-                result = await _settled_thread(lambda: _write(owner, operation, values, secret))
-            return web.json_response(result, headers=PRIVATE_HEADERS)
+                service = request.app[JOBS_KEY].service
+                result = await asyncio.to_thread(_read, owner, operation, query, secret, service)
+                return web.json_response(result, headers=PRIVATE_HEADERS)
+            _browser(request, owner, secret)
+            refresh = operation == "refresh"
+            key = _idempotency_key(request) if refresh else None
+            service = _executor(request) if refresh else None
+            body, error = await read_json_body(request, 16384, reject_duplicates=True)
+            if error:
+                return body
+            values = _payload(operation, body) | ({"idempotency_key": key} if refresh else {})
+            owner = _principal(request, auth_enabled)
+            secret = _secret(session_secret)
+            _browser(request, owner, secret)
+            if refresh:
+                service = _executor(request)
+            result = await _settled_thread(lambda: _write(owner, operation, values, secret))
+            if refresh and result["job"]["created"]:
+                service.wake()
+            return web.json_response(result, status=202 if refresh else 200, headers=PRIVATE_HEADERS)
         except Exception as exc:
             return _failure(exc, operation)
 
     app.on_response_prepare.append(private_headers)
+    jobs.register(app, JOBS_KEY, auth_enabled=auth_enabled)
     for operation in READS:
         app.router.add_get(PREFIX + "/" + operation, handle, allow_head=False)
     for operation in MUTATIONS:

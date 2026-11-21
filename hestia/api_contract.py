@@ -59,7 +59,8 @@ from pydantic.json_schema import models_json_schema
 # 0.12.0: calendar creates require a durable per-draft idempotency key.
 # 0.13.0: private owner-scoped stored budget reads and versioned local controls.
 # 0.14.0: safe account display metadata, separate from currencies observed in API balances.
-CONTRACT_VERSION = "0.14.0"
+# 0.15.0: durable owner refresh jobs, per-connection background opt-in and attention state.
+CONTRACT_VERSION = "0.15.0"
 OPENAPI_PATH = Path(__file__).resolve().parent.parent / "docs" / "api" / "openapi.json"
 
 # De-duplicated string literals (SonarPython S1192): the OpenAPI content-type, the paths reused
@@ -83,6 +84,9 @@ _P_BUDGET_LIMITS = _P_BUDGET + "limits"
 _P_BUDGET_SELECTION = _P_BUDGET + "account-selection"
 _P_BUDGET_KIND = _P_BUDGET + "account-kind"
 _P_BUDGET_CONNECTION_STATE = _P_BUDGET + "connection-state"
+_P_BUDGET_BACKGROUND = _P_BUDGET + "background-selection"
+_P_BUDGET_REFRESH = _P_BUDGET + "refresh"
+_P_BUDGET_JOBS = _P_BUDGET + "jobs"
 _ADMIN_ROLE_DESC = "Requires the admin role."
 _NO_SUCH_USER = "no such user"
 
@@ -1018,6 +1022,28 @@ class BudgetConnectionStateRequest(BaseModel):
     expected_version: BudgetVersion
 
 
+class BudgetBackgroundSelectionRequest(BaseModel):
+    """Opt one owned connection in or out of unattended acquisition; the global flag never implies it."""
+
+    model_config = _STRICT
+    connection_id: BudgetId
+    enabled: bool
+    expected_version: BudgetVersion
+
+
+BudgetOperation = Literal["transactions", "balances"]
+
+
+class BudgetRefreshRequest(BaseModel):
+    """Queue one owner refresh; omitted account/operation means every selected component."""
+
+    model_config = _STRICT
+    connection_id: BudgetId
+    expected_version: BudgetVersion
+    account_id: BudgetId | None = None
+    operation: BudgetOperation | None = None
+
+
 class BudgetComponentStatus(BaseModel):
     """Independent API freshness and effective component/shared retry policy."""
 
@@ -1074,11 +1100,17 @@ class BudgetAccount(BaseModel):
         description="Sorted unique currencies from current stored API balances only; independent of declared display currency.")
 
 
+BudgetAttention = Literal["authorization", "invalid_session", "expired_session", "session_mismatch", "configuration"]
+
+
 class BudgetConnection(BaseModel):
     model_config = _READ
     id: str
     enabled: bool
     paused: bool
+    background_enabled: bool
+    attention: BudgetAttention | None = Field(description="Unattended acquisition stopped until an explicit "
+                                                          "owner refresh succeeds; reconnect may be required.")
     control_version: int
     bank_name: str
     country: str
@@ -1090,13 +1122,14 @@ class BudgetConnection(BaseModel):
 
 
 class BudgetCapabilities(BaseModel):
-    """Only stored reads and local controls are implemented in phase 2B.1."""
+    """Implemented surfaces; refresh/background_polling follow the default-off executor flags."""
 
     model_config = _READ
     stored_reads: bool
     account_controls: bool
     refresh: bool
     background_selection: bool
+    background_polling: bool
     consent: bool
 
 
@@ -1281,6 +1314,41 @@ class BudgetConnectionSaved(BaseModel):
     connection: BudgetConnectionChanged
 
 
+BudgetJobStatus = Literal["queued", "running", "updated", "partial", "failed", "deferred", "interrupted"]
+
+
+class BudgetJob(BaseModel):
+    """A local intent; debits, cadence and Retry-After stay authoritative, never the job."""
+
+    model_config = _READ
+    id: str
+    connection_id: str
+    account_id: str | None
+    operation: BudgetOperation | None
+    source: Literal["manual", "poller"]
+    status: BudgetJobStatus
+    error: str | None
+    next_attempt: float | None
+    created_at: float
+    started_at: float | None
+    finished_at: float | None
+
+
+class BudgetJobChanged(BudgetJob):
+    created: bool
+
+
+class BudgetRefreshAccepted(BaseModel):
+    model_config = _READ
+    ok: Literal[True]
+    job: BudgetJobChanged
+
+
+class BudgetJobs(BaseModel):
+    model_config = _READ
+    jobs: list[BudgetJob]
+
+
 class BudgetError(BaseModel):
     model_config = _READ
     ok: Literal[False]
@@ -1293,9 +1361,10 @@ class BudgetConflict(BudgetError):
 
 
 _BUDGET_MODELS = (BudgetSelectionRequest, BudgetKindRequest, BudgetConnectionStateRequest,
+                  BudgetBackgroundSelectionRequest, BudgetRefreshRequest,
                   BudgetConnections, BudgetAccounts, BudgetStatus, BudgetTransactions,
-                  BudgetBalances, BudgetLimits, BudgetAccountSaved, BudgetConnectionSaved,
-                  BudgetError, BudgetConflict)
+                  BudgetBalances, BudgetLimits, BudgetJobs, BudgetAccountSaved, BudgetConnectionSaved,
+                  BudgetRefreshAccepted, BudgetError, BudgetConflict)
 
 
 def _ref(name: str) -> dict:
@@ -1345,6 +1414,9 @@ _PATH_ROLES = {
     ("POST", _P_BUDGET_SELECTION): "admin",
     ("POST", _P_BUDGET_KIND): "admin",
     ("POST", _P_BUDGET_CONNECTION_STATE): "admin",
+    ("POST", _P_BUDGET_BACKGROUND): "admin",
+    ("POST", _P_BUDGET_REFRESH): "admin",
+    ("GET", _P_BUDGET_JOBS): "admin",
 }
 
 
@@ -1874,6 +1946,8 @@ def _budget_paths():
         (_P_BUDGET_TRANSACTIONS, "getBudgetTransactions", "Stored canonical booked transactions", "BudgetTransactions", transactions),
         (_P_BUDGET_BALANCES, "getBudgetBalances", "Live stored balances and separate archived import metadata", "BudgetBalances", [account]),
         (_P_BUDGET_LIMITS, "getBudgetLimits", "Sanitized stored limits without provider or application keys", "BudgetLimits", []),
+        (_P_BUDGET_JOBS, "getBudgetJobs", "Recent owner refresh jobs, newest first, at most 20", "BudgetJobs",
+         [_budget_query("connection_id", description="Optional owned connection filter.")]),
     )
     paths = {path: {"get": {"operationId": operation, "summary": summary,
                             "description": "Requires an authenticated SQLite admin owner. Reads never contact a bank.",
@@ -1883,6 +1957,7 @@ def _budget_paths():
         (_P_BUDGET_SELECTION, "setBudgetAccountSelection", "Select or deselect one owned account", "BudgetSelectionRequest", "BudgetAccountSaved"),
         (_P_BUDGET_KIND, "setBudgetAccountKind", "Explicitly confirm one owned account's kind", "BudgetKindRequest", "BudgetAccountSaved"),
         (_P_BUDGET_CONNECTION_STATE, "setBudgetConnectionState", "Pause or resume one owned connection locally", "BudgetConnectionStateRequest", "BudgetConnectionSaved"),
+        (_P_BUDGET_BACKGROUND, "setBudgetBackgroundSelection", "Opt one owned connection in or out of unattended acquisition", "BudgetBackgroundSelectionRequest", "BudgetConnectionSaved"),
     )
     for path, operation, summary, request, model in writes:
         responses = _budget_responses(model)
@@ -1893,7 +1968,30 @@ def _budget_paths():
                                 "description": "Requires the exact admin owner and a same-origin browser session; bearer-only mutations are rejected. expected_version is required. Missing versions or stale conflicting changes return 409 with current safe state after owner validation; an already-applied desired state returns 200 with changed=false even after a stale retry. No bank request is made.",
                                 "requestBody": {"required": True, "content": {_APP_JSON: {"schema": _ref(request)}}},
                                 "responses": responses}}
+    paths[_P_BUDGET_REFRESH] = {"post": _refresh_operation()}
     return paths
+
+
+def _refresh_operation():
+    responses = _budget_responses("BudgetRefreshAccepted")
+    accepted = responses.pop("200")
+    accepted["description"] = ("job queued, coalesced with the active job for the same target, or the stored "
+                               "job for a repeated idempotency key; no bank request is made by this call")
+    responses["202"] = accepted
+    responses["409"] = {"description": "budget_version_conflict, budget_idempotency_conflict, "
+                                       "budget_refresh_in_progress, budget_connection_paused or SQLite users required",
+                        "content": {_APP_JSON: {"schema": {"anyOf": [_ref("BudgetError"), _ref("BudgetConflict")]}}}}
+    responses["503"]["description"] = "budget_refresh_unavailable (executor disabled or queue full) or configuration unavailable"
+    key = {"name": "Idempotency-Key", "in": "header", "required": True,
+           "schema": {"type": "string", "pattern": "^[A-Za-z0-9_-]{16,128}$"},
+           "description": "Owner-scoped; repeating it with the same target returns the same job."}
+    return {"operationId": "requestBudgetRefresh", "summary": "Queue one owner refresh under existing quotas",
+            "description": "Requires the exact admin owner and a same-origin browser session; bearer-only requests are "
+                           "rejected. One queued/running job per connection: the same canonical target coalesces, a "
+                           "different one returns 409. Never bypasses persisted debits, cadence or Retry-After.",
+            "parameters": [key],
+            "requestBody": {"required": True, "content": {_APP_JSON: {"schema": _ref("BudgetRefreshRequest")}}},
+            "responses": responses}
 
 
 def _schema_refs(node) -> "set[str]":

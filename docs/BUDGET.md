@@ -78,10 +78,107 @@ as well: its existing vhost header override must not replace the budget policy.
 Use synthetic, separate-database records for HTTP/UAT checks; enabling the flag
 does not itself authorize live import or access to bank credentials.
 
-Connection capabilities explicitly report that refresh jobs, background selection
-and browser consent remain unavailable. No callback/consent/public completion route
-is added in 2B.1. See [BUDGET_2B.md](BUDGET_2B.md) for the separately reviewed
-executor/poller, React and later consent/renewal sequence.
+Connection capabilities report which of refresh jobs, background selection, background
+polling and browser consent are available. Browser consent stays unavailable: no
+callback/consent/public completion route exists yet. See [BUDGET_2B.md](BUDGET_2B.md)
+for the React and later consent/renewal sequence.
+
+## Refresh jobs and opt-in background polling (2B.jobs)
+
+Two independent default-off flags control unattended work. Neither is implied by
+`HESTIA_BUDGET_HTTP_ENABLED`, and neither imports history, copies PoC files or
+creates a bank session.
+
+| Flag | Effect when `1` |
+| --- | --- |
+| `HESTIA_BUDGET_JOBS_ENABLED` | One dedicated worker thread in the Hestia process executes durable refresh jobs. `POST /api/budget/refresh` then accepts work; otherwise it returns `503 budget_refresh_unavailable` and writes nothing. |
+| `HESTIA_BUDGET_POLLER_ENABLED` | Requires the jobs flag. About once a minute (plus up to 10 s jitter) the worker checks stored due state and enqueues at most one intent per eligible connection. |
+
+The executor starts only with authentication enabled, `HESTIA_PERSIST=sqlite`,
+authoritative SQLite users and a readable `HESTIA_BUDGET_CONFIG`; otherwise it
+logs the missing prerequisite by class name and stays disabled. It reads the full
+configuration again for every poll and job, then reconciles it with `configure()`
+under the per-database budget lock, so a job never narrows configuration or retires
+unrelated connections. Jobs share every 2A guarantee: persisted debits before HTTP,
+2 starts per rolling 24 h and 12 h spacing per selected endpoint (or stricter policy),
+Retry-After and suspension, transport pacing, component leases and pause fences.
+A job is a local intent, never an allowance.
+
+`POST /api/budget/refresh` takes `{connection_id, expected_version, account_id?,
+operation?}` and a required `Idempotency-Key` header (16–128 of `A-Z a-z 0-9 _ -`;
+a random UUID works). It returns `202` with the job. The same owner key and target
+returns the same job, even after later control changes; the same key with another
+target is `409 budget_idempotency_conflict`. At most one queued or running job exists
+per connection: a request for the same canonical target coalesces with it (an
+omitted account/operation means the whole connection), and any other target is
+`409 budget_refresh_in_progress`. A paused connection is `409 budget_connection_paused`.
+`expected_version` is always required (missing is `409`), but a stale value still
+replays the job its key already names. A new request never joins a queued job from
+an older control generation: that job finishes `deferred/control_changed` and a new
+one is queued; a running one from an older generation answers `409`.
+`GET /api/budget/jobs` lists the owner's 20 newest jobs (optional `connection_id`).
+Each key is kept for 7 days after it was created; a finished job is kept for 7 days
+after finishing, and as long as any kept key names it. Active jobs are never pruned.
+At most 32 jobs queue at once. A queued automatic (poller) intent runs only while the
+poller flag is still on and the connection is still eligible; otherwise it finishes
+`deferred/background_disabled` before any credential read. The reported
+`next_attempt` includes leases and Retry-After, and is `null` when every requested
+component (or the shared scope) is suspended and needs `limits resume`.
+
+Job outcomes are `updated`, `partial`, `failed`, `deferred` and `interrupted`, each
+with a safe error code and the next stored start time. Components skipped because
+their cadence is not yet due make a whole-connection job `partial` without an
+error, as in `python -m hestia.budget once`; a job with nothing due finishes
+`deferred` before any secret read or HTTP. A job whose connection changed version
+(pause/resume, background opt-in change) finishes `deferred/control_changed`
+without a bank request. If another process (for example the CLI) holds the budget
+lock, the job stays queued and is retried; after 15 minutes of contention it
+finishes `deferred/busy` without consuming any debit.
+
+`POST /api/budget/background-selection` (`{connection_id, enabled,
+expected_version}`, browser-only like the other controls) persists the owner's
+per-connection opt-in with a private audit row and a new control version. The
+poller requires all of: the global flags, that opt-in, an enabled admin owner, a
+configured connection that is not paused, at least one selected account, no active
+job and a due component. Config reload never restores an opt-out. The poller reads
+no key or session file and makes no HTTP request until a component is due, and it
+does not replay missed ticks after downtime.
+
+An `authorization`, `invalid_session`, `expired_session`, `session_mismatch` or
+`configuration` failure sets the connection's `attention` code, and takes precedence
+over any other component error of the same round. Losing the authoritative SQLite
+users marker stops the round at its next reservation, request or commit with
+`configuration`; consumed debits stay. A targeted refresh records no error, debit or
+write for components it did not request. The poller then
+skips that connection until an owner refresh (or an explicit CLI `once` round)
+validates the session and stores data; configuration reloads, status reads and
+poller ticks never clear it. This applies equally to failures from CLI rounds.
+No SCA starts in the background. Fixing a session
+file or key therefore needs one explicit owner refresh, under the normal quota.
+
+Shutdown stops taking jobs and waits up to 5 s. A running acquisition stops at
+its next request boundary with outcome `interrupted`; a request already in flight
+is never reported as cancelled. A job still `running` when the process dies is
+marked `interrupted` by the next worker that holds the budget lock. Its debits,
+lease and cooldowns stay in force, and it is not replayed.
+
+### Activation runbook
+
+1. Deploy with all budget flags unset; back up the SQLite database first.
+2. Update the privacy policy/terms for bank data, then enable and verify
+   `HESTIA_BUDGET_HTTP_ENABLED` on its own (see the 2B.1 checks above).
+3. Stop every competing acquisition for the same application, bank and accounts
+   (including the PoC). Hestia cannot see their requests: carry verified recent
+   attempts into conservative quota state or wait a full rolling window and any
+   longer server cooldown. Waiting until midnight is not a fresh allowance.
+4. Mount only the owner-authorized external session files and key, read-only,
+   owner-only (`0400`/`0600`, process UID), and select accounts explicitly.
+5. Set `HESTIA_BUDGET_JOBS_ENABLED=1`, restart, and run one owner refresh for one
+   connection. Check the job outcome, `/api/budget/limits` and that the logs
+   contain no financial values.
+6. Only then set `HESTIA_BUDGET_POLLER_ENABLED=1` and opt in each connection with
+   `background-selection`. To stop unattended work, opt out, pause the connection,
+   or unset the poller flag and restart.
 
 ## Acquisition and durability
 
@@ -478,9 +575,8 @@ importer's clock is rejected rather than silently adjusted.
 
 ## Next slices (not implemented here)
 
-1. Separately reviewed executor and opt-in background scheduling on explicitly
-   configured external sessions, preserving 2A quota and ownership. Then React
-   budget screens and synthetic UAT. See the delivery order in BUDGET_2B.md.
+1. React budget screens and synthetic UAT on the stored-data API, jobs and
+   background selection above. See the delivery order in BUDGET_2B.md.
 2. Browser consent and renewal. Reserved
    callback: `https://hestia.klatt.ie/api/budget/enable-banking/callback`; **no route
    exists yet**. Use expiring single-use state bound to user, browser and bank;

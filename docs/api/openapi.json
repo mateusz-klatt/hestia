@@ -657,6 +657,34 @@
         "title": "BudgetArchivedBalances",
         "type": "object"
       },
+      "BudgetBackgroundSelectionRequest": {
+        "additionalProperties": false,
+        "description": "Opt one owned connection in or out of unattended acquisition; the global flag never implies it.",
+        "properties": {
+          "connection_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Connection Id",
+            "type": "string"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "expected_version": {
+            "minimum": 1,
+            "title": "Expected Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "connection_id",
+          "enabled",
+          "expected_version"
+        ],
+        "title": "BudgetBackgroundSelectionRequest",
+        "type": "object"
+      },
       "BudgetBalance": {
         "properties": {
           "balance_amount": {
@@ -740,10 +768,14 @@
         "type": "object"
       },
       "BudgetCapabilities": {
-        "description": "Only stored reads and local controls are implemented in phase 2B.1.",
+        "description": "Implemented surfaces; refresh/background_polling follow the default-off executor flags.",
         "properties": {
           "account_controls": {
             "title": "Account Controls",
+            "type": "boolean"
+          },
+          "background_polling": {
+            "title": "Background Polling",
             "type": "boolean"
           },
           "background_selection": {
@@ -768,6 +800,7 @@
           "account_controls",
           "refresh",
           "background_selection",
+          "background_polling",
           "consent"
         ],
         "title": "BudgetCapabilities",
@@ -1036,6 +1069,29 @@
       },
       "BudgetConnection": {
         "properties": {
+          "attention": {
+            "anyOf": [
+              {
+                "enum": [
+                  "authorization",
+                  "invalid_session",
+                  "expired_session",
+                  "session_mismatch",
+                  "configuration"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Unattended acquisition stopped until an explicit owner refresh succeeds; reconnect may be required.",
+            "title": "Attention"
+          },
+          "background_enabled": {
+            "title": "Background Enabled",
+            "type": "boolean"
+          },
           "bank_name": {
             "title": "Bank Name",
             "type": "string"
@@ -1113,6 +1169,8 @@
           "id",
           "enabled",
           "paused",
+          "background_enabled",
+          "attention",
           "control_version",
           "bank_name",
           "country",
@@ -1127,6 +1185,29 @@
       },
       "BudgetConnectionChanged": {
         "properties": {
+          "attention": {
+            "anyOf": [
+              {
+                "enum": [
+                  "authorization",
+                  "invalid_session",
+                  "expired_session",
+                  "session_mismatch",
+                  "configuration"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Unattended acquisition stopped until an explicit owner refresh succeeds; reconnect may be required.",
+            "title": "Attention"
+          },
+          "background_enabled": {
+            "title": "Background Enabled",
+            "type": "boolean"
+          },
           "bank_name": {
             "title": "Bank Name",
             "type": "string"
@@ -1208,6 +1289,8 @@
           "id",
           "enabled",
           "paused",
+          "background_enabled",
+          "attention",
           "control_version",
           "bank_name",
           "country",
@@ -1460,6 +1543,272 @@
         "title": "BudgetError",
         "type": "object"
       },
+      "BudgetJob": {
+        "description": "A local intent; debits, cadence and Retry-After stay authoritative, never the job.",
+        "properties": {
+          "account_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Id"
+          },
+          "connection_id": {
+            "title": "Connection Id",
+            "type": "string"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "number"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "next_attempt": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Attempt"
+          },
+          "operation": {
+            "anyOf": [
+              {
+                "enum": [
+                  "transactions",
+                  "balances"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Operation"
+          },
+          "source": {
+            "enum": [
+              "manual",
+              "poller"
+            ],
+            "title": "Source",
+            "type": "string"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "status": {
+            "enum": [
+              "queued",
+              "running",
+              "updated",
+              "partial",
+              "failed",
+              "deferred",
+              "interrupted"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "connection_id",
+          "account_id",
+          "operation",
+          "source",
+          "status",
+          "error",
+          "next_attempt",
+          "created_at",
+          "started_at",
+          "finished_at"
+        ],
+        "title": "BudgetJob",
+        "type": "object"
+      },
+      "BudgetJobChanged": {
+        "properties": {
+          "account_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Id"
+          },
+          "connection_id": {
+            "title": "Connection Id",
+            "type": "string"
+          },
+          "created": {
+            "title": "Created",
+            "type": "boolean"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "number"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "next_attempt": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Attempt"
+          },
+          "operation": {
+            "anyOf": [
+              {
+                "enum": [
+                  "transactions",
+                  "balances"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Operation"
+          },
+          "source": {
+            "enum": [
+              "manual",
+              "poller"
+            ],
+            "title": "Source",
+            "type": "string"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "status": {
+            "enum": [
+              "queued",
+              "running",
+              "updated",
+              "partial",
+              "failed",
+              "deferred",
+              "interrupted"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "connection_id",
+          "account_id",
+          "operation",
+          "source",
+          "status",
+          "error",
+          "next_attempt",
+          "created_at",
+          "started_at",
+          "finished_at",
+          "created"
+        ],
+        "title": "BudgetJobChanged",
+        "type": "object"
+      },
+      "BudgetJobs": {
+        "properties": {
+          "jobs": {
+            "items": {
+              "$ref": "#/components/schemas/BudgetJob"
+            },
+            "title": "Jobs",
+            "type": "array"
+          }
+        },
+        "required": [
+          "jobs"
+        ],
+        "title": "BudgetJobs",
+        "type": "object"
+      },
       "BudgetKindRequest": {
         "additionalProperties": false,
         "description": "Explicitly confirm an owned account's kind without inferring it from currency.",
@@ -1543,6 +1892,77 @@
           "currency"
         ],
         "title": "BudgetMoney",
+        "type": "object"
+      },
+      "BudgetRefreshAccepted": {
+        "properties": {
+          "job": {
+            "$ref": "#/components/schemas/BudgetJobChanged"
+          },
+          "ok": {
+            "const": true,
+            "title": "Ok",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "job"
+        ],
+        "title": "BudgetRefreshAccepted",
+        "type": "object"
+      },
+      "BudgetRefreshRequest": {
+        "additionalProperties": false,
+        "description": "Queue one owner refresh; omitted account/operation means every selected component.",
+        "properties": {
+          "account_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Account Id"
+          },
+          "connection_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Connection Id",
+            "type": "string"
+          },
+          "expected_version": {
+            "minimum": 1,
+            "title": "Expected Version",
+            "type": "integer"
+          },
+          "operation": {
+            "anyOf": [
+              {
+                "enum": [
+                  "transactions",
+                  "balances"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Operation"
+          }
+        },
+        "required": [
+          "connection_id",
+          "expected_version"
+        ],
+        "title": "BudgetRefreshRequest",
         "type": "object"
       },
       "BudgetSelectionRequest": {
@@ -4789,7 +5209,7 @@
   "info": {
     "description": "Local cloud-free smart-home control API. Generated from hestia/api_contract.py \u2014 do not edit by hand; run `python -m hestia.api_contract`.",
     "title": "hestia API",
-    "version": "0.14.0"
+    "version": "0.15.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -5257,6 +5677,113 @@
         "x-required-role": "admin"
       }
     },
+    "/api/budget/background-selection": {
+      "post": {
+        "description": "Requires the exact admin owner and a same-origin browser session; bearer-only mutations are rejected. expected_version is required. Missing versions or stale conflicting changes return 409 with current safe state after owner validation; an already-applied desired state returns 200 with changed=false even after a stale retry. No bank request is made.",
+        "operationId": "setBudgetBackgroundSelection",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BudgetBackgroundSelectionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetConnectionSaved"
+                }
+              }
+            },
+            "description": "local control saved; changed=false is a no-op"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "session required; middleware may return an empty body"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "admin owner or browser-origin requirement failed; middleware may return an empty body"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "unknown, disabled or foreign resource"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/BudgetError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/BudgetConflict"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "missing version, stale conflicting change or SQLite session users required"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "budget configuration unavailable"
+          }
+        },
+        "summary": "Opt one owned connection in or out of unattended acquisition",
+        "x-required-role": "admin"
+      }
+    },
     "/api/budget/balances": {
       "get": {
         "description": "Requires an authenticated SQLite admin owner. Reads never contact a bank.",
@@ -5558,6 +6085,109 @@
         "x-required-role": "admin"
       }
     },
+    "/api/budget/jobs": {
+      "get": {
+        "description": "Requires an authenticated SQLite admin owner. Reads never contact a bank.",
+        "operationId": "getBudgetJobs",
+        "parameters": [
+          {
+            "description": "Optional owned connection filter.",
+            "in": "query",
+            "name": "connection_id",
+            "required": false,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetJobs"
+                }
+              }
+            },
+            "description": "owner-scoped stored state; no bank request"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "session required; middleware may return an empty body"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "admin owner or browser-origin requirement failed; middleware may return an empty body"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "unknown, disabled or foreign resource"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "SQLite session users required"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "budget configuration unavailable"
+          }
+        },
+        "summary": "Recent owner refresh jobs, newest first, at most 20",
+        "x-required-role": "admin"
+      }
+    },
     "/api/budget/limits": {
       "get": {
         "description": "Requires an authenticated SQLite admin owner. Reads never contact a bank.",
@@ -5646,6 +6276,125 @@
           }
         },
         "summary": "Sanitized stored limits without provider or application keys",
+        "x-required-role": "admin"
+      }
+    },
+    "/api/budget/refresh": {
+      "post": {
+        "description": "Requires the exact admin owner and a same-origin browser session; bearer-only requests are rejected. One queued/running job per connection: the same canonical target coalesces, a different one returns 409. Never bypasses persisted debits, cadence or Retry-After.",
+        "operationId": "requestBudgetRefresh",
+        "parameters": [
+          {
+            "description": "Owner-scoped; repeating it with the same target returns the same job.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "pattern": "^[A-Za-z0-9_-]{16,128}$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BudgetRefreshRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetRefreshAccepted"
+                }
+              }
+            },
+            "description": "job queued, coalesced with the active job for the same target, or the stored job for a repeated idempotency key; no bank request is made by this call"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "session required; middleware may return an empty body"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "admin owner or browser-origin requirement failed; middleware may return an empty body"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "unknown, disabled or foreign resource"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/BudgetError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/BudgetConflict"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "budget_version_conflict, budget_idempotency_conflict, budget_refresh_in_progress, budget_connection_paused or SQLite users required"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "budget_refresh_unavailable (executor disabled or queue full) or configuration unavailable"
+          }
+        },
+        "summary": "Queue one owner refresh under existing quotas",
         "x-required-role": "admin"
       }
     },

@@ -134,7 +134,8 @@ class BudgetAPITests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(body["transactions"][0]["amount"], "12345678901234567890.12345")
         capabilities = (await (await self.get("connections")).json())["capabilities"]
         self.assertEqual(capabilities, {"stored_reads": True, "account_controls": True, "refresh": False,
-                                       "background_selection": False, "consent": False})
+                                       "background_selection": True, "background_polling": False,
+                                       "consent": False})
 
     async def test_display_metadata_and_observed_currencies_are_private_and_not_global_events(self):
         initial = await self.account()
@@ -468,7 +469,8 @@ class BudgetAPITests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(response.status, status)
             self.assert_private_headers(response)
             self.assertNotIn("PRIVATE", await response.text())
-        for method, operation in (("HEAD", "accounts"), ("POST", "refresh"), ("GET", "enable-banking/callback")):
+        for method, operation in (("HEAD", "accounts"), ("POST", "enable-banking/start"),
+                                  ("GET", "enable-banking/callback"), ("HEAD", "jobs")):
             response = await self.client.request(method, api.PREFIX + "/" + operation, headers=self.headers(origin=True))
             self.assertIn(response.status, (404, 405))
             self.assert_private_headers(response)

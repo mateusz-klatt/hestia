@@ -144,17 +144,19 @@ class BudgetScheduler:
             Account.connection_id == config.id, Account.owner == config.owner, Account.enabled, Account.configured,
             Account.identification_hash.in_(config.accounts))))
 
-    def _any_due(self, session, accounts, policy, now):
+    def _any_due(self, session, accounts, policy, now, target=None):
         return any(self._due(session, account, session.get(Component, (account.id, operation)),
-                             operation, policy, now) for account in accounts for operation in OPERATIONS)
+                             operation, policy, now) for account in accounts for operation in OPERATIONS
+                   if target is None or (account.identification_hash, operation) in target)
 
-    def can_start(self, connection):
+    def can_start(self, connection, *, target=None):
+        """Whether any (targeted) selected component is due; never performs HTTP or secret reads."""
         now = self._now()
         with self.store.transaction() as session:
             row = self._connection(session, connection)
             if self._blocked(row, self._shared(session, row), now):
                 return False
-            return self._any_due(session, self._active_accounts(session, connection), connection.policy, now)
+            return self._any_due(session, self._active_accounts(session, connection), connection.policy, now, target)
 
     @staticmethod
     def _validate_attempt(operation, attempt_id):
@@ -198,7 +200,8 @@ class BudgetScheduler:
         if debit is None or component.suspended or max(component.retry_at or 0, component.backoff_until) > now:
             raise BudgetDeferredError()
 
-    def request_wait(self, connection, *, primary=None, operation=None, attempt_id=None, valid_until=None):
+    def request_wait(self, connection, *, primary=None, operation=None, attempt_id=None, valid_until=None,
+                     target=None):
         if (primary is None) != (operation is None):
             raise BudgetStoreError("Invalid component request")
         now = self._now()
@@ -213,7 +216,7 @@ class BudgetScheduler:
                 accounts = self._active_accounts(session, connection)
                 if not accounts:
                     raise BudgetStoreError("Bank account selection changed during acquisition")
-                if not self._any_due(session, accounts, connection.policy, now):
+                if not self._any_due(session, accounts, connection.policy, now, target):
                     raise BudgetDeferredError()
             application = limits[0]
             if application is None:

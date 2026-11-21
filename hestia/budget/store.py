@@ -20,6 +20,8 @@ from .account_metadata import BudgetMetadataError, apply_account_metadata
 ACCOUNT_KINDS = frozenset({"current", "savings", "credit_card", "other"})
 OPERATIONS = ("transactions", "balances")
 STALE_AFTER = {"transactions": 129600, "balances": 86400}
+# Failures that stop unattended acquisition until an explicit owner refresh verifies the session.
+ATTENTION = frozenset({"authorization", "invalid_session", "expired_session", "session_mismatch", "configuration"})
 
 
 class BudgetStoreError(ValueError):
@@ -47,11 +49,12 @@ def _json(value):
     return json.dumps(value, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
 
 
-def _safe_error(code):
+def safe_error(code):
     allowed = {"authorization", "rate_limit", "unavailable", "network", "invalid_response",
                "provider_error", "invalid_data", "configuration", "unsupported_amount", "internal_error",
                "invalid_session", "expired_session", "session_mismatch",
-               "account_selection", "invalid_pagination", "limit_exceeded", "deferred", "acquisition_timeout"}
+               "account_selection", "invalid_pagination", "limit_exceeded", "deferred", "acquisition_timeout",
+               "control_changed", "busy", "interrupted", "background_disabled"}
     return code if code in allowed else "invalid_data"
 
 
@@ -169,6 +172,7 @@ class BudgetStore:
 
     def _connection_dict(self, connection):
         return {"id": connection.id, "enabled": connection.enabled, "paused": connection.paused,
+                "background_enabled": connection.background_enabled, "attention": connection.attention,
                 "control_version": connection.control_version, "bank_name": connection.bank_name,
                 "country": connection.country, "valid_until": connection.valid_until,
                 "renewal_due": connection.valid_until is not None and connection.valid_until - self.clock() <= 604800,
@@ -306,11 +310,13 @@ class BudgetStore:
 
     def record_failure(self, connection_id, code, *, attempt_id=None):
         # Do not persist arbitrary exception strings, provider bodies or identifiers.
-        safe_code = _safe_error(code)
+        safe_code = safe_error(code)
         with self.transaction() as session:
             row = session.get(Connection, connection_id)
             row.failures += 1
             row.last_error = safe_code
+            if safe_code in ATTENTION:
+                row.attention = safe_code
             # Keep the 12-hour pre-HTTP quota reservation, including after a crash
             # or partial fetch. A later explicit run safely retries after restart.
             row.next_attempt = max(row.next_attempt, self.clock() + 21600)
@@ -354,7 +360,7 @@ class BudgetStore:
                     raise BudgetStoreError("Invalid global acquisition failure")
                 account = accounts[error.identification_hash]
                 # A global resource cap can skip an account without any HTTP.
-                account.last_error = _safe_error(error.code)
+                account.last_error = safe_error(error.code)
             completed, errors = 0, len(snapshot.errors)
             for observation in snapshot.accounts:
                 good, bad = self._import_account(session, accounts[observation.identification_hash],
@@ -362,6 +368,13 @@ class BudgetStore:
                 completed += good
                 errors += bad
             row.valid_until = snapshot.valid_until
+            codes = {safe_error(getattr(observation, op + "_error")) for observation in snapshot.accounts
+                     for op in OPERATIONS if getattr(observation, op + "_error", None) is not None}
+            if codes & ATTENTION:
+                # Central, so the CLI and every worker stop unattended retries alike.
+                row.attention = min(codes & ATTENTION)
+            elif completed:
+                row.attention = None
             if errors:
                 row.failures += 1
                 row.last_error = "partial_data" if completed else "account_errors"
@@ -391,7 +404,7 @@ class BudgetStore:
         if attempt_id is None:
             component.last_attempt = now
         if error is not None:
-            self._component_error(component, _safe_error(error))
+            self._component_error(component, safe_error(error))
             return 0, 1
         if operation == "balances":
             account.balances_json = _json(data)
