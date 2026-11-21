@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { account, component, componentLimit, connection, sharedLimit } from "./fixtures";
 import type { BudgetAccount, BudgetJob, BudgetTransaction } from "./model";
-import { accountLabel, consentIntent, effectiveState, safeAuthorizationUrl, formatAmount, freshness, hasActiveJob, idempotencyKey, isAccessLoss,
+import { OPEN_FLOW, READY_FLOW, accountLabel, consentIntent, effectiveState, safeAuthorizationUrl, formatAmount, freshness, hasActiveJob, idempotencyKey, isAccessLoss,
   isComponentLimit, latestJob, limitState, newer, otherObservedCurrencies, presetRange, transactionDate,
   transactionText, validRange, when } from "./model";
 
@@ -110,6 +110,11 @@ describe("consent helpers", () => {
     for (const bad of ["http://bank.example.test/", "javascript:alert(1)", "https://user:pw@bank.example.test/", "not a url", 5, null]) {
       expect(safeAuthorizationUrl(bad)).toBeNull();
     }
+  });
+  it("mirrors the server's active and ready flow states", () => {
+    expect([...OPEN_FLOW].sort()).toEqual(["candidate", "created", "exchanging", "staged", "started"]);
+    expect([...READY_FLOW].every((status) => OPEN_FLOW.has(status))).toBe(true);
+    for (const closed of ["adopted", "canceled", "expired", "failed"]) expect(OPEN_FLOW.has(closed)).toBe(false);
   });
 });
 

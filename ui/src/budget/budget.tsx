@@ -7,7 +7,7 @@ import { budgetApi } from "./api";
 import type { BudgetApi, BudgetResult } from "./api";
 import { ACTIVE_JOB, KINDS, accountLabel, effectiveState, formatAmount, freshness, hasActiveJob, idempotencyKey,
   isAccessLoss, isComponentLimit, latestJob, limitState, newer, otherObservedCurrencies, presetRange,
-  READY_FLOW, consentIntent, safeAuthorizationUrl, transactionDate, transactionText, validRange, when } from "./model";
+  OPEN_FLOW, READY_FLOW, consentIntent, safeAuthorizationUrl, transactionDate, transactionText, validRange, when } from "./model";
 import type { BudgetAccount, BudgetBalances, BudgetCapabilities, BudgetConnection, BudgetJob, BudgetKind,
   BudgetConsent, BudgetConsentFlow, BudgetLimit, BudgetSharedLimit, BudgetTransaction, DateRange,
   LimitState } from "./model";
@@ -37,10 +37,10 @@ const labels = {
     connect: "Connect bank", renew: "Renew bank consent", connecting: "Opening the bank…",
     consentHelp: "You will sign in on your bank's page; Hestia never sees your banking password.",
     consentActive: "Consent from Hestia valid until", consentWaiting: "A new consent is waiting to be finished",
-    pendingTitle: "Unfinished bank connection", finish: "Finish", cancel: "Cancel",
+    pendingTitle: "Unfinished bank connection", finish: "Finish", cancel: "Cancel", atBank: "started at the bank",
     consentError: "Could not start the bank connection. Try again later.",
-    consentInProgress: "A connection to this bank is already unfinished; finish or cancel it below.",
-    consentRateLimited: "Too many attempts for this bank; wait a minute and try again.",
+    consentInProgress: "Another bank connection is already in progress. Finish or cancel it below, or try again in 15 minutes.",
+    consentRateLimited: "Too many connection attempts for this bank. Try again later, within an hour at most.",
     consentContext: "The connection cannot be started safely from this address; open Hestia at its usual address.",
     consentUrl: "The bank returned an invalid address; nothing was opened.",
     limits: "Download limits", limitsHide: "Hide limits", limitsLoading: "Loading limits…",
@@ -81,10 +81,10 @@ const labels = {
     connect: "Połącz z bankiem", renew: "Odnów zgodę w banku", connecting: "Otwieram stronę banku…",
     consentHelp: "Zalogujesz się na stronie swojego banku; Hestia nie widzi Twojego hasła do banku.",
     consentActive: "Zgoda z Hestii ważna do", consentWaiting: "Nowa zgoda czeka na dokończenie",
-    pendingTitle: "Niedokończone połączenie z bankiem", finish: "Dokończ", cancel: "Anuluj",
+    pendingTitle: "Niedokończone połączenie z bankiem", finish: "Dokończ", cancel: "Anuluj", atBank: "rozpoczęte w banku",
     consentError: "Nie udało się rozpocząć połączenia z bankiem. Spróbuj później.",
-    consentInProgress: "Połączenie z tym bankiem jest już niedokończone; dokończ je albo anuluj poniżej.",
-    consentRateLimited: "Zbyt wiele prób dla tego banku; odczekaj minutę i spróbuj ponownie.",
+    consentInProgress: "Trwa już inne połączenie z bankiem. Dokończ je lub anuluj poniżej albo spróbuj ponownie za 15 minut.",
+    consentRateLimited: "Zbyt wiele prób połączenia z tym bankiem. Spróbuj ponownie później, najpóźniej za godzinę.",
     consentContext: "Nie można bezpiecznie rozpocząć połączenia z tego adresu; otwórz Hestię pod jej zwykłym adresem.",
     consentUrl: "Bank zwrócił nieprawidłowy adres; niczego nie otwarto.",
     limits: "Limity pobrań", limitsHide: "Ukryj limity", limitsLoading: "Wczytywanie limitów…",
@@ -320,7 +320,7 @@ export function Budget({ active, api = budgetApi, pollMs = 2000, principal,
     void Promise.all([watch(api.consentStatus()), watch(api.consentPending())]).then(([status, open]) => {
       if (!alive.current || started !== epoch.current || isAccessLoss(status) || isAccessLoss(open) || cancelled) return;
       if (status.ok) setConsents(status.data.consents);
-      if (open.ok) setPending(open.data.pending.filter((flow) => READY_FLOW.has(flow.status)));
+      if (open.ok) setPending(open.data.pending.filter((flow) => OPEN_FLOW.has(flow.status)));
     });
     return () => { cancelled = true; };
   }, [active, consentEnabled, revision, api, barrier]);
@@ -393,7 +393,9 @@ export function Budget({ active, api = budgetApi, pollMs = 2000, principal,
             {pending.map((flow) => (
               <li key={flow.id}>
                 <span>{connections.find((item) => item.id === flow.connection_id)?.bank_name ?? text.account}</span>
-                <a className="budget-primary" href={completeUrl}>{text.finish}</a>
+                {READY_FLOW.has(flow.status)
+                  ? <a className="budget-primary" href={completeUrl}>{text.finish}</a>
+                  : <span className="budget-muted">{text.atBank}</span>}
                 <button type="button" disabled={busy.has(`cancel:${flow.id}`)}
                   onClick={() => { void cancelConsent(flow); }}>{text.cancel}</button>
               </li>

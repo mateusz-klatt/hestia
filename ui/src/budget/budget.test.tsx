@@ -395,8 +395,8 @@ describe("bank consent", () => {
     expect(button("Renew bank consent").disabled).toBe(false);
   });
 
-  it.each([[409, "budget_version_conflict", "changed elsewhere"], [409, "budget_consent_in_progress", "already unfinished"],
-    [429, "budget_consent_rate_limited", "wait a minute"], [409, "budget_consent_psu_context_required", "usual address"],
+  it.each([[409, "budget_version_conflict", "changed elsewhere"], [409, "budget_consent_in_progress", "already in progress"],
+    [429, "budget_consent_rate_limited", "within an hour"], [409, "budget_consent_psu_context_required", "usual address"],
     [503, "budget_consent_unavailable", "Could not start"], [409, "budget_consent_something_new", "Could not start"]])(
     "explains a %s %s start refusal without leaving the page", async (status, error, text) => {
       const api = fakeApi();
@@ -418,7 +418,24 @@ describe("bank consent", () => {
     await settle();
     expect(api.connections.mock.calls.length).toBeGreaterThan(before);
     expect(host.querySelector(".budget-pending")?.textContent).toContain("Synthetic Bank");
-    expect(host.textContent).toContain("already unfinished");
+    expect(host.textContent).toContain("already in progress");
+  });
+
+  it("lists a flow abandoned at the bank with cancel only, so a blocked start can be cleared", async () => {
+    const api = fakeApi();
+    api.consentPending.mockImplementation(() => ok({ pending: [flowOf("flow-left", "started"), flowOf("flow-new", "created"),
+      flowOf("flow-done", "adopted"), flowOf("flow-gone", "canceled")] }));
+    api.consentCancel.mockImplementation(() => ok({ flow_id: "flow-left", status: "canceled" }));
+    await renderConsent(api);
+    const banner = host.querySelector(".budget-pending");
+    expect(banner?.querySelectorAll("li")).toHaveLength(2);
+    expect(banner?.querySelector("a")).toBeNull();
+    expect(banner?.textContent).toContain("started at the bank");
+    const cancel = [...(banner?.querySelectorAll("button") ?? [])].find((item) => item.textContent === "Cancel");
+    if (cancel === undefined) throw new Error("cancel missing");
+    await click(cancel);
+    expect(api.consentCancel).toHaveBeenCalledWith("flow-left");
+    expect(host.querySelectorAll(".budget-pending li")).toHaveLength(1);
   });
 
   it("shows consent validity, a waiting candidate and unfinished flows with finish and cancel", async () => {
