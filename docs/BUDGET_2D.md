@@ -244,3 +244,51 @@ outflow without a known accepted relationship remains spending within that scope
 - **Downgrade warning (0017 → 0016):** take a SQLite backup before downgrading. Dropping
   `budget_category_limits` deletes saved limit rows while preserving historical
   `budget_analytics_audit` entries; a schema rollback cannot restore dropped settings.
+
+## Persisted private mortgage reminder schedules (schema 0018, evaluation-only)
+
+- **Evaluation-only scope:** migration 0018 persists owner-configured mortgage schedules and
+  explicit paid-month marks and evaluates reminder statuses on read. It introduces **no**
+  background notification delivery daemon, **no** outbound email/push delivery, **no** shared
+  calendar writes and **no** bank payment initiation.
+- **Tables (outside `_source_digest`):**
+  - `budget_mortgage_schedules`: owner-private schedules (`UNIQUE(id, owner)`, restrictive
+    `owner -> users.username` FK, DB-level CHECK constraints on lengths, uppercase 3-letter
+    currency, `due_day` 1..31, ISO `start_date`/`end_date` with `end_date >= start_date`,
+    `remind_days_before` 0..31, `destination_kind IN ('owner_inbox', 'owner_push', 'owner_email')`,
+    `enabled IN (0, 1)` and `version >= 1`). Stores **only `destination_kind`** (no email
+    addresses, device tokens or URLs/PII); destination resolution from the owner's profile
+    belongs to a separate future delivery slice. Cap: 100 schedules per owner (including
+    disabled), checked on create only.
+  - `budget_mortgage_payments`: explicit `YYYY-MM` paid-month marks with composite restrictive
+    FK `(schedule_id, owner) -> budget_mortgage_schedules.(id, owner)`, restrictive
+    `owner -> users.username` FK, no `CASCADE` in SQLite or ORM, and DB-level `GLOB` + month
+    `01..12` CHECK. Disabling a schedule never deletes payment rows. Cap: 1,200 payment marks
+    per schedule on mark only; unmarking always remains permitted even at the cap.
+- **Installment boundaries and overdue visibility:** an installment qualifies iff its actual
+  clamped calendar due date (month-end 29/30/31 clamped to the real last day of that month,
+  including leap years, never shifted onto `start_date`/`end_date`) satisfies
+  `start_date <= due_date <= end_date`. A reminder lead window (`remind_days_before`) may
+  become active before `start_date`. Reaching `end_date` stops new installments from being
+  generated, while unpaid overdue installments remain visible until marked paid. Marking a
+  month paid requires a qualifying installment; existing payment marks are preserved if
+  schedule dates are later edited and may still be unmarked.
+- **Routes (OpenAPI `0.20.0`, gated by `HESTIA_BUDGET_ANALYTICS_ENABLED=1`, exact admin owner,
+  `Cache-Control: no-store`, zero bank requests):**
+  - `GET /api/budget/analytics/mortgages`: takes no query parameters; reads the server UTC
+    clock once (`evaluation_date`, `evaluation_timezone: "UTC"`), reads schedules, payments
+    and `ledger_as_of` in one SQLite snapshot, and returns an opaque owner-scoped
+    `schedules_version` digest (which changes on schedule or payment edits).
+  - `POST /api/budget/analytics/mortgage-save`: atomic `BEGIN IMMEDIATE` create
+    (`schedule_id=null`, `expected_version=0`) or update (`expected_version>=1`), strict CAS
+    before no-op, canonical exact positive decimal `amount`.
+  - `POST /api/budget/analytics/mortgage-payment-set`: atomic `BEGIN IMMEDIATE` insert/delete
+    of one `(schedule_id, month)` mark with strict CAS on `schedule.version` (single version
+    bump on change, no-op leaves version and audit unchanged).
+- **Sanitized audit:** `budget_analytics_audit` logs only a strict metadata allowlist
+  (`schedule_id`, versions, `enabled`, `destination_kind`, `month`, `paid`) — never `label`,
+  `amount`, destination targets or raw request bodies, and never writes to shared home audit
+  or SSE.
+- **Backup and downgrade (`0018 → 0017`):** back up SQLite (including schedules and payment
+  marks) before downgrading. Downgrade drops `budget_mortgage_payments` before
+  `budget_mortgage_schedules`, preserving sanitized `budget_analytics_audit` rows.

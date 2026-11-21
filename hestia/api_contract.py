@@ -64,7 +64,8 @@ from pydantic.json_schema import models_json_schema
 # 0.17.0: owner-private budget reports, classifications, rule previews and transfer decisions.
 # 0.18.0: owner-private read-only recurring-charge hints under /api/budget/analytics/recurring.
 # 0.19.0: owner-private persisted monthly category spending limits (migration 0017).
-CONTRACT_VERSION = "0.19.0"
+# 0.20.0: owner-private persisted mortgage reminder schedules and payment marks (migration 0018, evaluation-only).
+CONTRACT_VERSION = "0.20.0"
 OPENAPI_PATH = Path(__file__).resolve().parent.parent / "docs" / "api" / "openapi.json"
 
 # De-duplicated string literals (SonarPython S1192): the OpenAPI content-type, the paths reused
@@ -1872,15 +1873,120 @@ class BudgetAnalyticsSpendingLimits(BudgetAnalyticsPeriod):
     statuses: list[BudgetAnalyticsSpendingLimitStatus]
 
 
+_MORTGAGE_DESTINATION = Literal["owner_inbox", "owner_push", "owner_email"]
+
+
+class BudgetAnalyticsMortgageSaveRequest(BaseModel):
+    """Create (schedule_id=None, expected_version=0) or update one private mortgage schedule.
+    Evaluation-only: stores destination_kind without PII targets and triggers no delivery or payments."""
+    model_config = _STRICT
+    schedule_id: Annotated[str, Field(min_length=1, max_length=128)] | None = None
+    label: Annotated[str, Field(min_length=1, max_length=256)]
+    amount: Annotated[str, Field(min_length=1, max_length=80)]
+    currency: Annotated[str, Field(pattern="^[A-Z]{3}$")]
+    due_day: Annotated[int, Field(ge=1, le=31)]
+    start_date: Annotated[str, Field(pattern=r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$")]
+    end_date: Annotated[str, Field(pattern=r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$")] | None = None
+    remind_days_before: Annotated[int, Field(ge=0, le=31)]
+    destination_kind: _MORTGAGE_DESTINATION
+    enabled: bool
+    expected_version: Annotated[int, Field(ge=0)]
+
+
+class BudgetAnalyticsMortgagePaymentSetRequest(BaseModel):
+    """Mark or unmark one YYYY-MM installment paid on an owned mortgage schedule."""
+    model_config = _STRICT
+    schedule_id: Annotated[str, Field(min_length=1, max_length=128)]
+    month: Annotated[str, Field(pattern=r"^[0-9]{4}-[0-9]{2}$")]
+    paid: bool
+    expected_version: Annotated[int, Field(ge=0)]
+
+
+class BudgetAnalyticsMortgageSchedule(BaseModel):
+    model_config = _READ
+    id: str
+    label: str
+    amount: str
+    currency: str
+    due_day: int
+    start_date: str
+    end_date: str | None
+    remind_days_before: int
+    destination_kind: _MORTGAGE_DESTINATION
+    enabled: bool
+    version: int
+    paid_months: list[str]
+    created_at: float
+    updated_at: float
+
+
+class BudgetAnalyticsMortgageScheduleSaved(BudgetAnalyticsMortgageSchedule):
+    changed: bool
+
+
+class BudgetAnalyticsMortgageScheduleResult(BaseModel):
+    model_config = _READ
+    ok: Literal[True]
+    schedule: BudgetAnalyticsMortgageScheduleSaved
+
+
+class BudgetAnalyticsMortgagePaymentSaved(BaseModel):
+    model_config = _READ
+    schedule_id: str
+    month: str
+    paid: bool
+    version: int
+    paid_months: list[str]
+    changed: bool
+
+
+class BudgetAnalyticsMortgagePaymentResult(BaseModel):
+    model_config = _READ
+    ok: Literal[True]
+    payment: BudgetAnalyticsMortgagePaymentSaved
+
+
+class BudgetAnalyticsMortgageReminder(BaseModel):
+    model_config = _READ
+    schedule_id: str
+    label: str
+    amount: str
+    currency: str
+    due_date: str | None
+    days_until_due: int | None
+    status: Literal["overdue", "due_today", "due_soon", "upcoming", "completed"]
+    reminder_active: bool
+    destination_kind: _MORTGAGE_DESTINATION
+    freshness_stale: bool
+    ledger_as_of: str | None
+    rule_version: int
+
+
+class BudgetAnalyticsMortgages(BaseModel):
+    """Owner-private mortgage reminder schedules evaluated strictly against server UTC today.
+    Evaluation-only: no notification delivery daemon, shared calendar sync or bank payment runs here."""
+    model_config = _READ
+    evaluation_date: str
+    evaluation_timezone: Literal["UTC"]
+    ledger_as_of: str | None
+    schedules_version: str
+    rule_version: int
+    schedules: list[BudgetAnalyticsMortgageSchedule]
+    reminders: list[BudgetAnalyticsMortgageReminder]
+
+
 _ANALYTICS_MODELS = (BudgetAnalyticsCategoryCreateRequest, BudgetAnalyticsCategoryUpdateRequest,
                      BudgetAnalyticsAnnotationRequest, BudgetAnalyticsRulePreviewRequest,
                      BudgetAnalyticsRuleSaveRequest, BudgetAnalyticsTransferDecisionRequest,
-                     BudgetAnalyticsSpendingLimitSaveRequest,
+                     BudgetAnalyticsSpendingLimitSaveRequest, BudgetAnalyticsMortgageSaveRequest,
+                     BudgetAnalyticsMortgagePaymentSetRequest,
                      BudgetAnalyticsCategories, BudgetAnalyticsCategoryResult, BudgetAnalyticsAnnotationResult,
                      BudgetAnalyticsRules, BudgetAnalyticsRuleResult, BudgetAnalyticsPreviewResult,
                      BudgetAnalyticsOverview, BudgetAnalyticsTransactions, BudgetAnalyticsTransfers,
                      BudgetAnalyticsDecisionResult, BudgetAnalyticsRecurring,
-                     BudgetAnalyticsSpendingLimits, BudgetAnalyticsSpendingLimitResult)
+                     BudgetAnalyticsSpendingLimits, BudgetAnalyticsSpendingLimitResult,
+                     BudgetAnalyticsMortgages, BudgetAnalyticsMortgageScheduleResult,
+                     BudgetAnalyticsMortgagePaymentResult)
 
 
 _BUDGET_MODELS = (BudgetSelectionRequest, BudgetKindRequest, BudgetConnectionStateRequest,
@@ -1907,6 +2013,7 @@ _PATH_ROLES = {
     ("GET", "/api/budget/analytics/transfers"): "admin",
     ("GET", "/api/budget/analytics/recurring"): "admin",
     ("GET", "/api/budget/analytics/spending-limits"): "admin",
+    ("GET", "/api/budget/analytics/mortgages"): "admin",
     ("POST", "/api/budget/analytics/category-create"): "admin",
     ("POST", "/api/budget/analytics/category-update"): "admin",
     ("POST", "/api/budget/analytics/annotation"): "admin",
@@ -1914,6 +2021,8 @@ _PATH_ROLES = {
     ("POST", "/api/budget/analytics/rule-save"): "admin",
     ("POST", "/api/budget/analytics/transfer-decision"): "admin",
     ("POST", "/api/budget/analytics/spending-limit-save"): "admin",
+    ("POST", "/api/budget/analytics/mortgage-save"): "admin",
+    ("POST", "/api/budget/analytics/mortgage-payment-set"): "admin",
 
     ("GET", "/api/budget/enable-banking/callback"): "public",
     ("GET", "/api/budget/consent/pending"): "admin",
@@ -2542,6 +2651,7 @@ def _analytics_paths():
              ["suggested", "accepted", "review", "boundary", "rejected", "undone"], "default": "suggested"}), *page]),
         ("recurring", "getBudgetAnalyticsRecurring", "BudgetAnalyticsRecurring", [currency]),
         ("spending-limits", "getBudgetAnalyticsSpendingLimits", "BudgetAnalyticsSpendingLimits", [month, currency]),
+        ("mortgages", "getBudgetAnalyticsMortgages", "BudgetAnalyticsMortgages", []),
     )
     paths = {prefix + path: {"get": {"operationId": operation, "summary": "Read owner-private local budget analytics",
               "parameters": parameters, "responses": _analytics_responses(model)}}
@@ -2554,6 +2664,8 @@ def _analytics_paths():
         ("rule-save", "saveBudgetAnalyticsRule", "BudgetAnalyticsRuleSaveRequest", "BudgetAnalyticsRuleResult"),
         ("transfer-decision", "decideBudgetAnalyticsTransfer", "BudgetAnalyticsTransferDecisionRequest", "BudgetAnalyticsDecisionResult"),
         ("spending-limit-save", "saveBudgetAnalyticsSpendingLimit", "BudgetAnalyticsSpendingLimitSaveRequest", "BudgetAnalyticsSpendingLimitResult"),
+        ("mortgage-save", "saveBudgetAnalyticsMortgage", "BudgetAnalyticsMortgageSaveRequest", "BudgetAnalyticsMortgageScheduleResult"),
+        ("mortgage-payment-set", "setBudgetAnalyticsMortgagePayment", "BudgetAnalyticsMortgagePaymentSetRequest", "BudgetAnalyticsMortgagePaymentResult"),
     )
     for path, operation, request, model in writes:
         paths[prefix + path] = {"post": {"operationId": operation, "summary": "Save an owner-private local classification",

@@ -16,6 +16,7 @@ from hestia.budget.mortgage_reminders import (
     MortgageReminder,
     MortgageSchedule,
     evaluate_mortgage_reminders,
+    installment_due_date,
 )
 
 
@@ -27,7 +28,7 @@ def _schedule(schedule_id="mort-1", **changes):
         "amount": "2450.50",
         "currency": "PLN",
         "due_day": 15,
-        "start_date": "2026-01-01",
+        "start_date": "2026-11-01",
         "destination_kind": "owner_inbox",
         "destination_target": "inbox:owner-private",
         "end_date": None,
@@ -93,20 +94,24 @@ class MortgageRemindersTests(unittest.TestCase):
         self.assertIsNone(stale_none[0].ledger_as_of)
 
     def test_month_end_clamping_leap_year_future_start_and_year_boundaries(self):
-        feb_non_leap = evaluate_mortgage_reminders("owner", "2026-02-26", [_schedule(due_day=31, remind_days_before=3)])
+        feb_non_leap = evaluate_mortgage_reminders(
+            "owner", "2026-02-26", [_schedule(due_day=31, start_date="2026-02-01", remind_days_before=3)]
+        )
         self.assertEqual((feb_non_leap[0].due_date, feb_non_leap[0].days_until_due, feb_non_leap[0].status),
                          ("2026-02-28", 2, "due_soon"))
 
-        feb_leap = evaluate_mortgage_reminders("owner", "2028-02-26", [_schedule(due_day=31, remind_days_before=3)])
+        feb_leap = evaluate_mortgage_reminders(
+            "owner", "2028-02-26", [_schedule(due_day=31, start_date="2028-02-01", remind_days_before=3)]
+        )
         self.assertEqual((feb_leap[0].due_date, feb_leap[0].days_until_due, feb_leap[0].status),
                          ("2028-02-29", 3, "due_soon"))
 
         # Century and 400-year leap clamping plus 30-day month clamping and exact lead-time boundary.
         for today, start, expected_due in (
-            ("2000-02-25", "2000-01-01", "2000-02-29"),
-            ("2024-02-25", "2024-01-01", "2024-02-29"),
-            ("2100-02-25", "2100-01-01", "2100-02-28"),
-            ("2026-04-25", "2026-01-01", "2026-04-30"),
+            ("2000-02-25", "2000-02-01", "2000-02-29"),
+            ("2024-02-25", "2024-02-01", "2024-02-29"),
+            ("2100-02-25", "2100-02-01", "2100-02-28"),
+            ("2026-04-25", "2026-04-01", "2026-04-30"),
         ):
             clamped = evaluate_mortgage_reminders("owner", today, [_schedule(due_day=31, start_date=start)])
             self.assertEqual(clamped[0].due_date, expected_due)
@@ -115,6 +120,16 @@ class MortgageRemindersTests(unittest.TestCase):
         edge_upcoming = evaluate_mortgage_reminders("owner", "2026-11-09", [_schedule(due_day=15, remind_days_before=5)])
         self.assertEqual((edge_soon[0].status, edge_soon[0].reminder_active), ("due_soon", True))
         self.assertEqual((edge_upcoming[0].status, edge_upcoming[0].reminder_active), ("upcoming", False))
+
+        # Reminder lead window may become active before start_date when first due date is within lead days.
+        lead_before_start = evaluate_mortgage_reminders(
+            "owner", "2026-02-27",
+            [_schedule(due_day=2, start_date="2026-03-01", remind_days_before=5, destination_target=None)],
+        )
+        self.assertEqual((lead_before_start[0].due_date, lead_before_start[0].days_until_due,
+                          lead_before_start[0].status, lead_before_start[0].reminder_active,
+                          lead_before_start[0].destination_target),
+                         ("2026-03-02", 3, "due_soon", True, None))
 
         # Valid paid_months outside the schedule [start_date, end_date] window are safely ignored.
         out_of_window_paid = evaluate_mortgage_reminders(
@@ -125,7 +140,8 @@ class MortgageRemindersTests(unittest.TestCase):
         self.assertEqual((out_of_window_paid[0].due_date, out_of_window_paid[0].status), ("2026-06-15", "due_soon"))
 
         year_roll = evaluate_mortgage_reminders(
-            "owner", "2026-12-20", [_schedule(due_day=15, paid_months=frozenset({"2026-12"}))]
+            "owner", "2026-12-20",
+            [_schedule(due_day=15, start_date="2026-12-01", paid_months=frozenset({"2026-12"}))]
         )
         self.assertEqual((year_roll[0].due_date, year_roll[0].status), ("2027-01-15", "upcoming"))
 
@@ -139,10 +155,37 @@ class MortgageRemindersTests(unittest.TestCase):
         )
         self.assertEqual((empty_window[0].due_date, empty_window[0].status), (None, "completed"))
 
-        past_end = evaluate_mortgage_reminders(
-            "owner", "2026-12-01", [_schedule(due_day=15, end_date="2026-11-30")]
+        # End date stops new installments, while unpaid overdue installments remain visible until paid.
+        unpaid_past_end = evaluate_mortgage_reminders(
+            "owner", "2026-12-05",
+            [_schedule(due_day=15, start_date="2026-10-01", end_date="2026-11-30",
+                       paid_months=frozenset({"2026-10"}))]
         )
-        self.assertEqual((past_end[0].due_date, past_end[0].status), (None, "completed"))
+        self.assertEqual((unpaid_past_end[0].due_date, unpaid_past_end[0].days_until_due,
+                          unpaid_past_end[0].status, unpaid_past_end[0].reminder_active),
+                         ("2026-11-15", -20, "overdue", True))
+        paid_past_end = evaluate_mortgage_reminders(
+            "owner", "2026-12-05",
+            [_schedule(due_day=15, start_date="2026-10-01", end_date="2026-11-30",
+                       paid_months=frozenset({"2026-10", "2026-11"}))]
+        )
+        self.assertEqual((paid_past_end[0].due_date, paid_past_end[0].status), (None, "completed"))
+
+        # installment_due_date checks actual clamped due dates against [start_date, end_date].
+        self.assertEqual(installment_due_date(31, "2026-02-28", "2026-04-30", "2026-02"), "2026-02-28")
+        self.assertIsNone(installment_due_date(31, "2026-03-01", "2026-04-30", "2026-02"))
+        self.assertIsNone(installment_due_date(15, "2026-01-20", "2026-03-10", "2026-01"))
+        self.assertEqual(installment_due_date(15, "2026-01-20", "2026-03-10", "2026-02"), "2026-02-15")
+        self.assertIsNone(installment_due_date(15, "2026-01-20", "2026-03-10", "2026-03"))
+        self.assertEqual(installment_due_date(31, "2028-02-01", None, "2028-02"), "2028-02-29")
+        for bad in (
+            lambda: installment_due_date(0, "2026-01-01", None, "2026-01"),
+            lambda: installment_due_date(True, "2026-01-01", None, "2026-01"),
+            lambda: installment_due_date(15, "2026-06-01", "2026-05-01", "2026-06"),
+            lambda: installment_due_date(15, "2026-01-01", None, "2026-13"),
+        ):
+            with self.assertRaises(MortgageInputError):
+                bad()
 
         max_year = evaluate_mortgage_reminders(
             "owner", "9999-12-20",

@@ -196,16 +196,17 @@ class BudgetOpenApiTests(unittest.TestCase):
         for path, methods in consent.items():
             for entry in methods.values():
                 self.assertEqual(entry["x-required-role"], "public" if path.endswith("callback") else "admin")
-        analytics_reads = {"overview", "transactions", "categories", "rules", "transfers", "recurring", "spending-limits"}
+        analytics_reads = {"overview", "transactions", "categories", "rules", "transfers", "recurring",
+                           "spending-limits", "mortgages"}
         analytics_writes = {"category-create", "category-update", "annotation", "rule-preview", "rule-save",
-                            "transfer-decision", "spending-limit-save"}
+                            "transfer-decision", "spending-limit-save", "mortgage-save", "mortgage-payment-set"}
         self.assertEqual(set(analytics), {"/api/budget/analytics/" + name for name in analytics_reads | analytics_writes})
         for path, methods in analytics.items():
             method = "get" if path.rsplit("/", 1)[1] in analytics_reads else "post"
             self.assertEqual(set(methods), {method})
             self.assertEqual(methods[method]["x-required-role"], "admin")
             self.assertIn("413", methods[method]["responses"])
-        self.assertEqual(document["info"]["version"], "0.19.0")
+        self.assertEqual(document["info"]["version"], "0.20.0")
         refresh = budget["/api/budget/refresh"]["post"]
         self.assertEqual(refresh["parameters"][0]["name"], "Idempotency-Key")
         self.assertTrue(refresh["parameters"][0]["required"])
@@ -231,7 +232,8 @@ class BudgetOpenApiTests(unittest.TestCase):
         request_names.update({"BudgetAnalyticsCategoryCreateRequest", "BudgetAnalyticsCategoryUpdateRequest",
                               "BudgetAnalyticsAnnotationRequest", "BudgetAnalyticsRulePreviewRequest",
                               "BudgetAnalyticsRuleSaveRequest", "BudgetAnalyticsTransferDecisionRequest",
-                              "BudgetAnalyticsLegRequest", "BudgetAnalyticsSpendingLimitSaveRequest"})
+                              "BudgetAnalyticsLegRequest", "BudgetAnalyticsSpendingLimitSaveRequest",
+                              "BudgetAnalyticsMortgageSaveRequest", "BudgetAnalyticsMortgagePaymentSetRequest"})
         for name, schema in schemas.items():
             if name in request_names:
                 self.assertIs(schema["additionalProperties"], False)
@@ -239,8 +241,12 @@ class BudgetOpenApiTests(unittest.TestCase):
                     self.assertEqual(schema["properties"]["expected_version"]["minimum"], 0 if name.startswith("BudgetAnalytics") else 1)
             elif name.startswith("Budget"):
                 self.assertNotIn("additionalProperties", schema)
-        for name in ("BudgetTransaction", "BudgetMoney", "BudgetAnalyticsRecurringHint"):
+        for name in ("BudgetTransaction", "BudgetMoney", "BudgetAnalyticsRecurringHint",
+                     "BudgetAnalyticsMortgageSchedule", "BudgetAnalyticsMortgageReminder"):
             self.assertEqual(schemas[name]["properties"]["amount"]["type"], "string")
+        for name in ("BudgetAnalyticsMortgageSaveRequest", "BudgetAnalyticsMortgageSchedule",
+                     "BudgetAnalyticsMortgageReminder"):
+            self.assertNotIn("destination_target", schemas[name]["properties"])
         self.assertEqual(schemas["BudgetAnalyticsSpendingLimit"]["properties"]["monthly_limit"]["type"], "string")
         for field in ("monthly_limit", "expenses", "refunds", "net_spending", "remaining", "over_by"):
             self.assertEqual(schemas["BudgetAnalyticsSpendingLimitStatus"]["properties"][field]["type"], "string")
