@@ -177,7 +177,8 @@ lease and cooldowns stay in force, and it is not replayed.
    owner-only (`0400`/`0600`, process UID). With `HESTIA_BUDGET_HTTP_ENABLED`,
    `HESTIA_BUDGET_JOBS_ENABLED` and `HESTIA_BUDGET_POLLER_ENABLED` actually off in the
    running process, import history and record the owner's initial account
-   selections and per-connection opt-ins (CLI, audited). Only then enable HTTP.
+   selections (CLI) and per-connection opt-ins using the audited operator controls.
+   Only then enable HTTP.
    Never repeat that initial selection step once the owner can use the budget
    screens: it would overwrite later deselections made there. Later changes go
    through the versioned screen controls, or as explicit operator changes made
