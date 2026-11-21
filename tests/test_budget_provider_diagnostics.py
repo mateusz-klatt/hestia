@@ -157,6 +157,11 @@ class ClientDiagnosticTests(unittest.TestCase):
         self.assertIsNone(ProviderDiagnostic.of(BudgetAPIError(code="network", retryable=True)))
         self.assertIsNone(ProviderDiagnostic.of(BudgetDataError("invalid_data")))
         self.assertIsNone(ProviderDiagnostic.of(ValueError(PRIVATE)))
+        self.assertIsNone(ProviderDiagnostic.of(BudgetAPIError(200, "invalid_response")))
+        self.assertIsNone(ProviderDiagnostic.of(BudgetAPIError(204, "network", True)))
+        for status in (300, 400, 500):
+            with self.subTest(status=status):
+                self.assertEqual(ProviderDiagnostic.of(BudgetAPIError(status)), ProviderDiagnostic(status, None))
         self.assertEqual(ProviderDiagnostic.of(BudgetAPIError(404)), ProviderDiagnostic(404, None))
 
 
@@ -197,6 +202,10 @@ class LoopbackServer(threading.Thread):
 def headers(status, length, reason="Error"):
     return (f"HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\n"
             f"Content-Length: {length}\r\nConnection: close\r\n\r\n").encode()
+
+
+def chunked_headers(status):
+    return headers(status, 0).replace(b"Content-Length: 0\r\n", b"Transfer-Encoding: chunked\r\n")
 
 
 class Loopback(AbstractHTTPHandler):
@@ -281,6 +290,51 @@ class SocketDiagnosticTests(unittest.TestCase):
                 self.assertEqual((error.status, error.code, error.provider_error),
                                  (400, "provider_error", "WRONG_TRANSACTIONS_PERIOD"))
                 self.assertLess(elapsed, self.BOUND + 2)
+
+    def test_a_trickled_chunk_size_is_bounded_across_all_socket_receives(self):
+        chunk_size = b"0" * 220 + b"5\r\n"  # Over 11 seconds when trickled, without completing the line.
+
+        def trickle(connection):
+            connection.sendall(chunked_headers(400))
+            for byte in chunk_size:
+                connection.sendall(bytes([byte]))
+                time.sleep(0.05)
+        for raise_errors in (True, False):
+            with self.subTest(raise_errors=raise_errors):
+                error, elapsed = self.exchange(trickle, raise_errors=raise_errors)
+                self.assertEqual((error.status, error.code, error.retryable, error.provider_error),
+                                 (400, "provider_error", False, None))
+                self.assertLess(elapsed, self.BOUND + 2)
+
+    def test_a_prompt_chunked_error_body_with_a_trailer_keeps_its_identifier(self):
+        body = error_body("WRONG_TRANSACTIONS_PERIOD")
+        chunked = f"{len(body):X}\r\n".encode() + body + b"\r\n0\r\nX-Trailer: done\r\n\r\n"
+        for raise_errors in (True, False):
+            with self.subTest(raise_errors=raise_errors):
+                error, elapsed = self.exchange(lambda c: c.sendall(chunked_headers(400) + chunked),
+                                               raise_errors=raise_errors)
+                self.assertEqual((error.status, error.code, error.provider_error),
+                                 (400, "provider_error", "WRONG_TRANSACTIONS_PERIOD"))
+                self.assertLess(elapsed, self.BOUND + 2)
+
+    def test_watchdog_ignores_shutdown_errors_and_is_always_cancelled(self):
+        broken = mock.Mock()
+        broken.shutdown.side_effect = OSError(PRIVATE)
+        module._shutdown_socket(broken)
+        broken.shutdown.assert_called_once_with(socket.SHUT_RDWR)
+
+        client = EnableBankingClient(APP_ID, self.key_pem, monotonic=lambda: 100.0)
+        reader = mock.Mock(socket=mock.Mock())
+        with (mock.patch.object(module, "_DeadlineReader", return_value=reader),
+              mock.patch.object(module.threading, "Timer") as timer_class,
+              mock.patch.object(client, "_read_body", side_effect=OSError(PRIVATE))):
+            read = client._diagnostic_reader(None)
+            with self.assertRaises(OSError):
+                read(Response(error_body("ASPSP_ERROR"), 400), module.MAX_ERROR_RESPONSE)
+        timer = timer_class.return_value
+        self.assertTrue(timer.daemon)
+        timer.start.assert_called_once_with()
+        timer.cancel.assert_called_once_with()
 
     def test_rate_limit_over_a_real_socket_keeps_retry_after_and_scope(self):
         body = error_body("ASPSP_RATE_LIMIT_EXCEEDED")
@@ -374,6 +428,11 @@ class DurableDiagnosticTests(ComponentCase):
         self.acquire(SyntheticBank(self.config))
         self.assertEqual(self.component("transactions"), (None, None, None))
         self.assertEqual(self.connection(), (None, None, None))
+
+    def test_a_2xx_invalid_body_failure_records_no_diagnostic(self):
+        bank = DiagnosticBank(self.config, self.key_pem, transactions=Response(b"not json", 200))
+        self.acquire(bank)
+        self.assertEqual(self.component("transactions"), ("invalid_response", None, None))
 
     def test_a_later_non_http_failure_does_not_keep_a_stale_diagnostic(self):
         self.reserve("transactions", "balances")

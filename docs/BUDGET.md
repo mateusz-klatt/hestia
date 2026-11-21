@@ -303,7 +303,8 @@ fields. A connection keeps them only for a round-level failure; per-request
 detail lives on the component. The error body of a non-429 response is now read
 for this purpose, within a separate 5-second budget (never past the request
 deadline). Before every read the socket timeout is lowered to the time left, so a
-stalled or trickling body cannot hold the worker longer. A failed or slow read
+stalled or trickling body cannot hold the worker longer. A watchdog also caps the
+total read time, and 2xx failures record no diagnostic. A failed or slow read
 leaves the diagnostic empty and never changes the error code, retryability or
 rate scope. The consent control plane does not read error bodies for this.
 The diagnostics are not exposed through the HTTP API; read them from SQLite.

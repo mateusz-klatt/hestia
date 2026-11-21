@@ -11,6 +11,8 @@ import http.client
 import json
 import math
 import re
+import socket
+import threading
 import time
 import uuid
 from dataclasses import dataclass
@@ -82,7 +84,7 @@ class ProviderDiagnostic:
     @classmethod
     def of(cls, error):
         """A diagnostic only when the failure really was an HTTP response; otherwise None."""
-        if not isinstance(error, BudgetAPIError) or error.status is None:
+        if not isinstance(error, BudgetAPIError) or error.status is None or 200 <= error.status < 300:
             return None
         return cls(error.status, error.provider_error)
 
@@ -226,6 +228,13 @@ def _response_socket(response):
     raise BudgetAPIError(code="invalid_response")
 
 
+def _shutdown_socket(sock):
+    try:
+        sock.shutdown(socket.SHUT_RDWR)
+    except OSError:
+        pass
+
+
 class _DeadlineReader:
     def __init__(self, client, response, deadline):
         self.client, self.deadline = client, deadline
@@ -313,7 +322,17 @@ class EnableBankingClient:
         def read(response, maximum):
             # The bound starts when the read does and caps every blocking socket read, not only the gaps.
             bound = self._diagnostic_deadline(deadline)
-            return self._read_body(_DeadlineReader(self, response, bound), maximum, bound)
+            reader = _DeadlineReader(self, response, bound)
+            watchdog = None
+            if reader.socket is not None:
+                watchdog = threading.Timer(self._remaining(bound), _shutdown_socket, args=(reader.socket,))
+                watchdog.daemon = True
+                watchdog.start()
+            try:
+                return self._read_body(reader, maximum, bound)
+            finally:
+                if watchdog is not None:
+                    watchdog.cancel()
         return read
 
     def _diagnostic_deadline(self, deadline):
