@@ -100,6 +100,10 @@ async function submit(form: HTMLFormElement | null): Promise<void> {
   await act(async () => { form?.requestSubmit(); await Promise.resolve(); });
   await settle();
 }
+async function applyCurrencyFilter(): Promise<void> {
+  await choose(select("Currency"), "EUR");
+  await submit(host.querySelector(".budget-range"));
+}
 
 describe("period entries", () => {
   it("lists the server's rows with category, source, kind, transfer and stale facts", async () => {
@@ -324,7 +328,7 @@ describe("period entries", () => {
     expect(host.textContent).not.toContain("november");
   });
 
-  it("drops a late save once the list has moved to another period", async () => {
+  it("reports a late save without restoring an editor from another period", async () => {
     let saved: (value: BudgetResult<{ annotation: AnnotationSaved }>) => void = () => undefined;
     const api = fakeApi();
     const first = await show(api);
@@ -335,8 +339,37 @@ describe("period entries", () => {
     await show(api, { period: "2026-10" });
     await act(async () => { saved({ ok: true, data: { annotation: annotationOf() } }); await Promise.resolve(); });
     await settle();
-    expect(first.onChanged).not.toHaveBeenCalled();
+    expect(first.onChanged).toHaveBeenCalledTimes(1);
     expect(host.querySelector(".budget-entry-editor")).toBeNull();
+  });
+
+  it("reports a successful save after a filter change without restoring stale UI", async () => {
+    let saved: (value: BudgetResult<{ annotation: AnnotationSaved }>) => void = () => undefined;
+    const api = fakeApi();
+    const { onChanged } = await show(api);
+    api.annotate.mockImplementationOnce(() => new Promise((resolve) => { saved = resolve; }));
+    await click(button("Change"));
+    await submit(host.querySelector(".budget-entry-editor"));
+    await applyCurrencyFilter();
+    await act(async () => { saved({ ok: true, data: { annotation: annotationOf() } }); await Promise.resolve(); });
+    await settle();
+    expect(onChanged).toHaveBeenCalledTimes(1);
+    expect(host.querySelector(".budget-entry-editor")).toBeNull();
+    expect(host.querySelector(".budget-notice")).toBeNull();
+  });
+
+  it("drops a failed save after a filter change without notifying or showing a notice", async () => {
+    let saved: (value: BudgetResult<{ annotation: AnnotationSaved }>) => void = () => undefined;
+    const api = fakeApi();
+    const { onChanged } = await show(api);
+    api.annotate.mockImplementationOnce(() => new Promise((resolve) => { saved = resolve; }));
+    await click(button("Change"));
+    await submit(host.querySelector(".budget-entry-editor"));
+    await applyCurrencyFilter();
+    await act(async () => { saved({ ok: false, status: 500, error: "budget_internal_error" }); await Promise.resolve(); });
+    await settle();
+    expect(onChanged).not.toHaveBeenCalled();
+    expect(host.querySelector(".budget-notice")).toBeNull();
   });
 
   it("reports failed and empty reads plainly", async () => {
@@ -561,7 +594,7 @@ describe("manual own-transfer pairing", () => {
     expect(host.textContent).not.toContain("Synthetic Card Repayment");
   });
 
-  it("drops a late confirmation after the panel reloads", async () => {
+  it("reports a late confirmation without restoring a picker after the panel reloads", async () => {
     const debit = pairDebit();
     const api = fakeApi([debit]);
     const { onChanged } = await show(api);
@@ -573,8 +606,41 @@ describe("manual own-transfer pairing", () => {
     await show(api, { revision: 1 });
     await act(async () => { decided({ ok: true, data: { decision: decisionOf() } }); await Promise.resolve(); });
     await settle();
-    expect(onChanged).not.toHaveBeenCalled();
+    expect(onChanged).toHaveBeenCalledTimes(1);
     expect(host.querySelector(".budget-pair-picker")).toBeNull();
+  });
+
+  it("reports a successful confirmation after a filter change without restoring stale UI", async () => {
+    const debit = pairDebit();
+    const api = fakeApi([debit]);
+    const { onChanged } = await show(api);
+    mockPairSearch(api, debit, [pairCredit()]);
+    let decided: (value: BudgetResult<{ decision: TransferDecisionResult }>) => void = () => undefined;
+    api.decideTransfer.mockImplementationOnce(() => new Promise((resolve) => { decided = resolve; }));
+    await click(button(transactionLabels.en.pair));
+    await click(button(transactionLabels.en.pairConfirm));
+    await applyCurrencyFilter();
+    await act(async () => { decided({ ok: true, data: { decision: decisionOf() } }); await Promise.resolve(); });
+    await settle();
+    expect(onChanged).toHaveBeenCalledTimes(1);
+    expect(host.querySelector(".budget-pair-picker")).toBeNull();
+    expect(host.querySelector(".budget-notice")).toBeNull();
+  });
+
+  it("drops a failed confirmation after a filter change without notifying or showing a notice", async () => {
+    const debit = pairDebit();
+    const api = fakeApi([debit]);
+    const { onChanged } = await show(api);
+    mockPairSearch(api, debit, [pairCredit()]);
+    let decided: (value: BudgetResult<{ decision: TransferDecisionResult }>) => void = () => undefined;
+    api.decideTransfer.mockImplementationOnce(() => new Promise((resolve) => { decided = resolve; }));
+    await click(button(transactionLabels.en.pair));
+    await click(button(transactionLabels.en.pairConfirm));
+    await applyCurrencyFilter();
+    await act(async () => { decided({ ok: false, status: 500, error: "budget_internal_error" }); await Promise.resolve(); });
+    await settle();
+    expect(onChanged).not.toHaveBeenCalled();
+    expect(host.querySelector(".budget-notice")).toBeNull();
   });
 
   it("disables row and picker actions while a pair is being confirmed", async () => {
@@ -588,7 +654,7 @@ describe("manual own-transfer pairing", () => {
     await click(button(transactionLabels.en.pairConfirm));
     expect(button(transactionLabels.en.pairConfirm).disabled).toBe(true);
     expect(button(transactionLabels.en.cancel).disabled).toBe(true);
-    expect(button(transactionLabels.en.pair).disabled).toBe(true);
+    expect([...host.querySelectorAll("button")].some((item) => item.textContent === transactionLabels.en.pair)).toBe(false);
     expect(button(transactionLabels.en.edit).disabled).toBe(true);
     await act(async () => { decided({ ok: true, data: { decision: decisionOf() } }); await Promise.resolve(); });
     await settle();
@@ -602,8 +668,10 @@ describe("manual own-transfer pairing", () => {
     const { onChanged } = await show(api);
     mockPairSearch(api, debit, [pairCredit()]);
     await click(button(transactionLabels.en.pair));
+    expect([...host.querySelectorAll("button")].some((item) => item.textContent === transactionLabels.en.pair)).toBe(false);
     await click(button(transactionLabels.en.cancel));
     expect(host.querySelector(".budget-pair-picker")).toBeNull();
+    expect(button(transactionLabels.en.pair)).toBeDefined();
     expect(api.decideTransfer).not.toHaveBeenCalled();
     expect(onChanged).not.toHaveBeenCalled();
   });

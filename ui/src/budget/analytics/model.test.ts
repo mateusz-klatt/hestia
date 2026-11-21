@@ -67,6 +67,14 @@ describe("manual own-transfer pairing", () => {
     }
   });
 
+  it("canonicalizes and matches a 30-digit integer without numeric conversion", () => {
+    const amount = "000123456789012345678901234567890.10";
+    const canonical = "123456789012345678901234567890.1";
+    expect(canonicalAmount(amount)).toBe(canonical);
+    expect(pairCandidates(entry("long-debit", { amount, booking_date: "2026-11-10" }), [credit("long-credit", { amount: canonical })]))
+      .toEqual([credit("long-credit", { amount: canonical })]);
+  });
+
   it("uses booking then value dates and measures absolute UTC day distances", () => {
     expect(pairDate(entry("a", { booking_date: "2026-11-10", value_date: "2026-11-09" }))).toBe("2026-11-10");
     expect(pairDate(entry("b", { booking_date: null, value_date: "2026-11-09" }))).toBe("2026-11-09");
@@ -82,6 +90,13 @@ describe("manual own-transfer pairing", () => {
     expect(pairPeriods("2026-11-29")).toEqual(["2026-11", "2026-12"]);
     expect(pairPeriods("2026-12-31")).toEqual(["2026-12", "2027-01"]);
     expect(pairPeriods("2026-01-01")).toEqual(["2025-12", "2026-01"]);
+  });
+
+  it("handles leap-year and non-leap-year windows across February", () => {
+    expect(pairPeriods("2028-02-28")).toEqual(["2028-02", "2028-03"]);
+    expect(pairPeriods("2028-03-01")).toEqual(["2028-02", "2028-03"]);
+    expect(daysBetween("2028-02-28", "2028-03-01")).toBe(2);
+    expect(daysBetween("2027-02-28", "2027-03-01")).toBe(1);
   });
 
   it("offers only acceptable, deduplicated credits and compares amounts canonically", () => {

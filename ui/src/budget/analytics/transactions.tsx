@@ -185,8 +185,11 @@ export function TransactionsPanel({ api, period, currencies, accounts, connectio
     setNotice(null);
     const result = await api.annotate(annotationRequest(row, category, kind));
     // The access barrier runs first, so a lost session clears even when the list moved on meanwhile.
-    if (onAccessLoss(result) || token !== generation.current) return;
+    const accessLost = onAccessLoss(result);
+    if (!accessLost && result.ok) onChanged();
+    if (token !== generation.current) return;
     setBusy(null);
+    if (accessLost) return;
     if (!result.ok) {
       setNotice(result.error === ANALYTICS_ERROR.sourceChanged ? text.changed
         : RELOAD_ERRORS.has(result.error) ? text.conflict : text.saveError);
@@ -194,7 +197,6 @@ export function TransactionsPanel({ api, period, currencies, accounts, connectio
       return;
     }
     setEditing(null);
-    onChanged();
   }, [api, onAccessLoss, onChanged, text]);
 
   const confirmPair = useCallback(async (debit: AnalyticsTransaction, credit: AnalyticsTransaction) => {
@@ -204,6 +206,7 @@ export function TransactionsPanel({ api, period, currencies, accounts, connectio
     setNotice(null);
     const result = await api.decideTransfer(manualPairRequest(debit, credit));
     const accessLost = onAccessLoss(result);
+    if (!accessLost && result.ok) onChanged();
     if (generationToken !== generation.current || pickerToken !== picker.current) return;
     setBusy(null);
     if (accessLost) return;
@@ -219,7 +222,6 @@ export function TransactionsPanel({ api, period, currencies, accounts, connectio
     }
     picker.current += 1;
     setPairing(null);
-    onChanged();
   }, [api, onAccessLoss, onChanged, text]);
 
   const categoryName = (id: string | null) => (id === null ? text.uncategorised
@@ -289,7 +291,7 @@ export function TransactionsPanel({ api, period, currencies, accounts, connectio
                     {editing === key ? null : (
                       <button type="button" disabled={busy !== null} onClick={() => { closePairs(); setEditing(key); setNotice(null); }}>{text.edit}</button>
                     )}
-                    {canPair(row) ? (
+                    {canPair(row) && pairing !== key ? (
                       <button type="button" disabled={busy !== null} onClick={() => { openPairs(row); }}>{text.pair}</button>
                     ) : null}
                   </div>
