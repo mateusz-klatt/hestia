@@ -18,7 +18,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urlsplit
 from urllib.request import Request
 
-from .client import (API_ORIGIN, TIMEOUT, BudgetAPIError, EnableBankingClient,
+from .client import (API_ORIGIN, TIMEOUT, BudgetAPIError, EnableBankingClient, _DeadlineReader,
                      _UUID, _http_error, _reject_constant, _safe_deadline, _unique_error_fields)
 
 
@@ -180,47 +180,10 @@ def _auth_body(body, now):
     return result
 
 
-def _response_socket(response):
-    # urllib HTTPResponse -> fp/raw/_sock; HTTPError adds one fp wrapper.
-    # Injected in-memory responses need no socket. Bound traversal even for an
-    # invalid/cyclic wrapper, and never inspect or expose its URL or headers.
-    node = response
-    for _ in range(5):
-        if callable(getattr(node, "settimeout", None)):
-            return node
-        following = getattr(node, "fp", None)
-        if following is None:
-            following = getattr(node, "raw", None)
-        if following is None:
-            following = getattr(node, "_sock", None)
-        if following is None:
-            return None
-        node = following
-    raise BudgetAPIError(code="invalid_response")
-
-
-class _DeadlineReader:
-    def __init__(self, client, response, deadline):
-        self.client, self.deadline = client, deadline
-        self.response = response
-        self.socket = _response_socket(response)
-        reader = getattr(response, "read1", None)
-        self.reader = reader if callable(reader) else response.read
-
-    def read1(self, size):
-        # Content-Length completion closes HTTPResponse.fp and its socket before
-        # the base reader's final EOF probe. Never reuse that closed socket.
-        self.socket = _response_socket(self.response)
-        if self.socket is not None:
-            try:
-                self.socket.settimeout(self.client._remaining(self.deadline))
-            except (OSError, ValueError, TypeError):
-                raise BudgetAPIError(code="network", retryable=True) from None
-        return self.reader(size)
-
-
 class EnableBankingConsentClient(EnableBankingClient):
     """Fixed-origin control-plane calls using the acquisition client's bounded primitives."""
+
+    _provider_diagnostics = False
 
     def _read_body(self, response, maximum, deadline):
         return super()._read_body(_DeadlineReader(self, response, deadline), maximum, deadline)

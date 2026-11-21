@@ -150,10 +150,12 @@ def _provider_error(response, read_body):
         return None
 
 
-def _diagnostic_error(response, read_body):
+def _diagnostic_error(response, diagnostic_body):
     # A failed or slow diagnostic read must never change how the HTTP error is classified.
+    if diagnostic_body is None:
+        return None
     try:
-        return _provider_error(response, lambda response, maximum: read_body(response, maximum, short=True))
+        return _provider_error(response, diagnostic_body)
     except BudgetAPIError:
         return None
 
@@ -176,7 +178,7 @@ def _retry_hint(response, clock):
     return RetryHint(deadline, any(hint.suspended for hint in hints)), False
 
 
-def _http_error(status: int, *, response, path, clock, read_body) -> BudgetAPIError:
+def _http_error(status: int, *, response, path, clock, read_body, diagnostic_body=None) -> BudgetAPIError:
     if status == 429:
         hint, unsafe_clock = _retry_hint(response, clock)
         try:
@@ -189,7 +191,7 @@ def _http_error(status: int, *, response, path, clock, read_body) -> BudgetAPIEr
         scope = RateScope.CONNECTION if unsafe_clock else classify_rate_scope(path, provider_code)
         return BudgetAPIError(status, "rate_limit", True, provider_code=provider_code, retry_at=hint.deadline,
                               retry_suspended=hint.suspended, rate_scope=scope, provider_error=provider_error)
-    provider_error = _diagnostic_error(response, read_body)
+    provider_error = _diagnostic_error(response, diagnostic_body)
     if status in {401, 403}:
         return BudgetAPIError(status, "authorization", provider_error=provider_error)
     if status >= 500 or status in {408, 425}:
@@ -203,6 +205,45 @@ def _b64(value: bytes) -> bytes:
 
 def _reject_constant(value):
     raise ValueError("Non-finite JSON value")
+
+
+def _response_socket(response):
+    # urllib HTTPResponse -> fp/raw/_sock; HTTPError adds one fp wrapper.
+    # Injected in-memory responses need no socket. Bound traversal even for an
+    # invalid/cyclic wrapper, and never inspect or expose its URL or headers.
+    node = response
+    for _ in range(5):
+        if callable(getattr(node, "settimeout", None)):
+            return node
+        following = getattr(node, "fp", None)
+        if following is None:
+            following = getattr(node, "raw", None)
+        if following is None:
+            following = getattr(node, "_sock", None)
+        if following is None:
+            return None
+        node = following
+    raise BudgetAPIError(code="invalid_response")
+
+
+class _DeadlineReader:
+    def __init__(self, client, response, deadline):
+        self.client, self.deadline = client, deadline
+        self.response = response
+        self.socket = _response_socket(response)
+        reader = getattr(response, "read1", None)
+        self.reader = reader if callable(reader) else response.read
+
+    def read1(self, size):
+        # Content-Length completion closes HTTPResponse.fp and its socket before
+        # the base reader's final EOF probe. Never reuse that closed socket.
+        self.socket = _response_socket(self.response)
+        if self.socket is not None:
+            try:
+                self.socket.settimeout(self.client._remaining(self.deadline))
+            except (OSError, ValueError, TypeError):
+                raise BudgetAPIError(code="network", retryable=True) from None
+        return self.reader(size)
 
 
 class EnableBankingClient:
@@ -262,9 +303,17 @@ class EnableBankingClient:
             raise BudgetAPIError(code="acquisition_timeout", retryable=True) from None
         return min(TIMEOUT, remaining)
 
-    def _error_reader(self, deadline):
-        def read(response, maximum, *, short=False):
-            return self._read_body(response, maximum, self._diagnostic_deadline(deadline) if short else deadline)
+    # Persisted acquisition diagnostics; the consent control plane keeps its own error handling.
+    _provider_diagnostics = True
+
+    def _diagnostic_reader(self, deadline):
+        if not self._provider_diagnostics:
+            return None
+
+        def read(response, maximum):
+            # The bound starts when the read does and caps every blocking socket read, not only the gaps.
+            bound = self._diagnostic_deadline(deadline)
+            return self._read_body(_DeadlineReader(self, response, bound), maximum, bound)
         return read
 
     def _diagnostic_deadline(self, deadline):
@@ -307,8 +356,10 @@ class EnableBankingClient:
                     raise BudgetAPIError(code="invalid_response")
                 if not 200 <= status < 300:
                     try:
-                        http_error = _http_error(status, response=response, path=path, clock=self._clock,
-                                                read_body=self._error_reader(deadline))
+                        http_error = _http_error(
+                            status, response=response, path=path, clock=self._clock,
+                            read_body=lambda response, maximum: self._read_body(response, maximum, deadline),
+                            diagnostic_body=self._diagnostic_reader(deadline))
                     except BudgetAPIError as exc:
                         http_error = exc
                     raise http_error
@@ -345,7 +396,8 @@ class EnableBankingClient:
                 if status != 429:
                     self._remaining(deadline)
                 error = _http_error(status, response=exc, path=path, clock=self._clock,
-                                    read_body=self._error_reader(deadline))
+                                    read_body=lambda response, maximum: self._read_body(response, maximum, deadline),
+                                    diagnostic_body=self._diagnostic_reader(deadline))
             finally:
                 try:
                     exc.close()

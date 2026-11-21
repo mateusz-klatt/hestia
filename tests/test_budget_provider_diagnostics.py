@@ -3,10 +3,17 @@ from __future__ import annotations
 
 from contextlib import closing
 from dataclasses import replace
+import http.client
 import json
+import socket
 import sqlite3
+import threading
+import time
 import unittest
+from unittest import mock
 from urllib.error import HTTPError
+from urllib.request import (AbstractHTTPHandler, HTTPDefaultErrorHandler, HTTPErrorProcessor, OpenerDirector,
+                            Request)
 
 from alembic import command
 from cryptography.hazmat.primitives.asymmetric import rsa
@@ -16,6 +23,7 @@ from hestia import db
 from hestia.budget import client as module
 from hestia.budget.client import (BudgetAPIError, EnableBankingClient, PROVIDER_ERRORS, ProviderDiagnostic,
                                   UNLISTED_PROVIDER_ERROR, safe_http_status, safe_provider_error)
+from hestia.budget.consent_client import EnableBankingConsentClient
 from hestia.budget.normalize import BudgetDataError
 from hestia.budget.rate_limit import RateScope
 from hestia.budget.store import set_diagnostic
@@ -150,6 +158,154 @@ class ClientDiagnosticTests(unittest.TestCase):
         self.assertIsNone(ProviderDiagnostic.of(BudgetDataError("invalid_data")))
         self.assertIsNone(ProviderDiagnostic.of(ValueError(PRIVATE)))
         self.assertEqual(ProviderDiagnostic.of(BudgetAPIError(404)), ProviderDiagnostic(404, None))
+
+
+class LoopbackServer(threading.Thread):
+    """One scripted HTTP/1.1 exchange on 127.0.0.1; nothing ever leaves the host."""
+
+    def __init__(self, script):
+        super().__init__(daemon=True)
+        self.listener = socket.create_server(("127.0.0.1", 0))
+        self.port, self.script, self.closed = self.listener.getsockname()[1], script, threading.Event()
+
+    def run(self):
+        try:
+            connection, _ = self.listener.accept()
+        except OSError:
+            return
+        with connection:
+            connection.settimeout(30)
+            request = b""
+            while b"\r\n\r\n" not in request:
+                chunk = connection.recv(4096)
+                if not chunk:
+                    return
+                request += chunk
+            try:
+                self.script(connection)
+                while connection.recv(4096):  # Wait until the client closes the response.
+                    pass
+            except OSError:
+                pass
+            self.closed.set()
+
+    def stop(self):
+        self.listener.close()
+        self.join(30)
+
+
+def headers(status, length, reason="Error"):
+    return (f"HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\n"
+            f"Content-Length: {length}\r\nConnection: close\r\n\r\n").encode()
+
+
+class Loopback(AbstractHTTPHandler):
+    """Routes the fixed https origin to a plain-HTTP loopback socket, keeping urllib's real response objects."""
+
+    def __init__(self, port):
+        super().__init__()
+        self.port = port
+
+    def https_open(self, request):
+        port = self.port
+
+        class Connection(http.client.HTTPConnection):
+            def __init__(self, host, **kwargs):
+                super().__init__("127.0.0.1", port, timeout=kwargs.get("timeout"))
+        return self.do_open(Connection, request)
+
+    https_request = AbstractHTTPHandler.do_request_
+
+
+def loopback_opener(port, *, raise_errors):
+    opener = OpenerDirector()
+    opener.add_handler(Loopback(port))
+    if raise_errors:  # urllib's own HTTPError wrapping, as build_opener installs in production
+        opener.add_handler(HTTPDefaultErrorHandler())
+        opener.add_handler(HTTPErrorProcessor())
+    return opener
+
+
+class SocketDiagnosticTests(unittest.TestCase):
+    """The diagnostic bound caps every blocking socket read, through HTTPError and plain responses."""
+
+    BOUND = 0.3
+
+    @classmethod
+    def setUpClass(cls):
+        cls.key_pem = pem(rsa.generate_private_key(public_exponent=65537, key_size=2048))
+
+    def exchange(self, script, *, raise_errors, client_class=EnableBankingClient):
+        server = LoopbackServer(script)
+        server.start()
+        self.addCleanup(server.stop)
+        client = client_class(APP_ID, self.key_pem, opener=loopback_opener(server.port, raise_errors=raise_errors))
+        started = time.monotonic()
+        with mock.patch.object(module, "DIAGNOSTIC_SECONDS", self.BOUND), self.assertRaises(BudgetAPIError) as caught:
+            # A 30 s request deadline: the socket itself would wait that long for a stalled body.
+            client.get(TRANSACTIONS, deadline=time.monotonic() + 30) if client_class is EnableBankingClient else \
+                client._open(client_request(), "/auth", time.monotonic() + 30)
+        elapsed = time.monotonic() - started
+        self.assertTrue(server.closed.wait(10), "the error response must be closed")
+        return caught.exception, elapsed
+
+    def test_a_stalled_error_body_returns_within_the_bound_with_the_same_classification(self):
+        for raise_errors in (True, False):
+            with self.subTest(raise_errors=raise_errors):
+                error, elapsed = self.exchange(lambda c: c.sendall(headers(400, 500)), raise_errors=raise_errors)
+                self.assertEqual((error.status, error.code, error.retryable, error.provider_error),
+                                 (400, "provider_error", False, None))
+                self.assertLess(elapsed, self.BOUND + 2)
+
+    def test_a_slow_drip_error_body_returns_within_the_bound_with_the_same_classification(self):
+        body = error_body("WRONG_TRANSACTIONS_PERIOD")
+
+        def drip(connection):
+            connection.sendall(headers(503, len(body)))
+            for byte in body:
+                connection.sendall(bytes([byte]))
+                time.sleep(0.05)  # About 15 s for the whole body.
+        for raise_errors in (True, False):
+            with self.subTest(raise_errors=raise_errors):
+                error, elapsed = self.exchange(drip, raise_errors=raise_errors)
+                self.assertEqual((error.status, error.code, error.retryable, error.provider_error),
+                                 (503, "unavailable", True, None))
+                self.assertLess(elapsed, self.BOUND + 2)
+
+    def test_a_prompt_error_body_over_a_real_socket_keeps_its_identifier(self):
+        body = error_body("WRONG_TRANSACTIONS_PERIOD")
+        for raise_errors in (True, False):
+            with self.subTest(raise_errors=raise_errors):
+                error, elapsed = self.exchange(lambda c: c.sendall(headers(400, len(body)) + body),
+                                               raise_errors=raise_errors)
+                self.assertEqual((error.status, error.code, error.provider_error),
+                                 (400, "provider_error", "WRONG_TRANSACTIONS_PERIOD"))
+                self.assertLess(elapsed, self.BOUND + 2)
+
+    def test_rate_limit_over_a_real_socket_keeps_retry_after_and_scope(self):
+        body = error_body("ASPSP_RATE_LIMIT_EXCEEDED")
+
+        def limited(connection):
+            connection.sendall(headers(429, len(body)).replace(b"\r\n\r\n", b"\r\nRetry-After: 120\r\n\r\n", 1)
+                               + body)
+        for raise_errors in (True, False):
+            with self.subTest(raise_errors=raise_errors):
+                error, _ = self.exchange(limited, raise_errors=raise_errors)
+                self.assertEqual((error.code, error.retryable, error.provider_code, error.provider_error,
+                                  error.rate_scope),
+                                 ("rate_limit", True, "ASPSP_RATE_LIMIT_EXCEEDED", "ASPSP_RATE_LIMIT_EXCEEDED",
+                                  RateScope.ACCOUNT_ENDPOINT))
+                self.assertIsNotNone(error.retry_at)
+
+    def test_the_consent_control_plane_does_not_read_error_bodies_for_diagnostics(self):
+        body = error_body("WRONG_REQUEST_PARAMETERS")
+        error, _ = self.exchange(lambda c: c.sendall(headers(400, len(body)) + body), raise_errors=True,
+                                 client_class=EnableBankingConsentClient)
+        self.assertEqual((error.status, error.code, error.provider_error), (400, "provider_error", None))
+
+
+def client_request():
+    return Request(module.API_ORIGIN + "/auth", data=b"{}", method="POST")
 
 
 class DiagnosticBank(SyntheticBank):
