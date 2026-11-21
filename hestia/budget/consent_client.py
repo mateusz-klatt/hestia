@@ -202,11 +202,15 @@ def _response_socket(response):
 class _DeadlineReader:
     def __init__(self, client, response, deadline):
         self.client, self.deadline = client, deadline
+        self.response = response
         self.socket = _response_socket(response)
         reader = getattr(response, "read1", None)
         self.reader = reader if callable(reader) else response.read
 
     def read1(self, size):
+        # Content-Length completion closes HTTPResponse.fp and its socket before
+        # the base reader's final EOF probe. Never reuse that closed socket.
+        self.socket = _response_socket(self.response)
         if self.socket is not None:
             try:
                 self.socket.settimeout(self.client._remaining(self.deadline))

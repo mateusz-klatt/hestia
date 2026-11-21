@@ -3,18 +3,30 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import FrozenInstanceError
+from datetime import datetime, timedelta, timezone
 from email.message import Message
 import http.client
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from io import BytesIO
+import ipaddress
 import json
+from pathlib import Path
+import ssl
+import tempfile
+import threading
+import time
 import traceback
 from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, urlsplit
+from urllib.request import HTTPSHandler, ProxyHandler, build_opener
 
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.x509.oid import NameOID
 
 from hestia.budget import client as base
 from hestia.budget import consent_client as module
@@ -381,3 +393,137 @@ class ConsentClientTests(unittest.TestCase):
         self.assertTrue(any(isinstance(handler, base._NoRedirect) for handler in instance._opener.handlers))
         # An empty proxy map registers no protocol handlers, ignoring HTTP(S)_PROXY.
         self.assertFalse(any(type(handler).__name__ == "ProxyHandler" for handler in instance._opener.handlers))
+
+
+class ConsentTLSClientTests(unittest.TestCase):
+    """Real urllib/SSL lifecycle on loopback, trusting only a synthetic certificate."""
+
+    @classmethod
+    def setUpClass(cls):
+        key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        cls.key_pem = pem(key)
+        name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "localhost")])
+        now = datetime.now(timezone.utc)
+        certificate = (x509.CertificateBuilder().subject_name(name).issuer_name(name).public_key(key.public_key())
+                       .serial_number(x509.random_serial_number()).not_valid_before(now - timedelta(days=1))
+                       .not_valid_after(now + timedelta(days=1))
+                       .add_extension(x509.SubjectAlternativeName([x509.DNSName("localhost"),
+                           x509.IPAddress(ipaddress.ip_address("127.0.0.1"))]), critical=False)
+                       .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
+                       .sign(key, hashes.SHA256()))
+        cls.directory = tempfile.TemporaryDirectory(prefix="synthetic-consent-tls-")
+        cls.addClassCleanup(cls.directory.cleanup)
+        root = Path(cls.directory.name)
+        certificate_path, key_path = root / "certificate.pem", root / "synthetic-key.pem"
+        certificate_path.write_bytes(certificate.public_bytes(serialization.Encoding.PEM))
+        key_path.write_bytes(cls.key_pem)
+        key_path.chmod(0o600)
+
+        class Handler(BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.1"
+
+            def log_message(self, *args):
+                pass
+
+            def reply(self):
+                status, framing, body, connection = self.server.reply
+                self.server.calls.append((self.command, self.path))
+                if self.command == "POST":
+                    self.rfile.read(int(self.headers["Content-Length"]))
+                self.send_response(status)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Connection", connection)
+                if framing == "chunked":
+                    self.send_header("Transfer-Encoding", "chunked")
+                elif framing != "eof":
+                    self.send_header("Content-Length", str(len(body)))
+                if status == 429:
+                    self.send_header("Retry-After", "1200")
+                self.end_headers()
+                self.wfile.flush()
+                if framing == "stall":
+                    time.sleep(.4)
+                try:
+                    if framing == "chunked":
+                        midpoint = max(1, len(body) // 2)
+                        for chunk in (body[:midpoint], body[midpoint:]):
+                            self.wfile.write(format(len(chunk), "x").encode() + b"\r\n" + chunk + b"\r\n")
+                        self.wfile.write(b"0\r\n\r\n")
+                    else:
+                        self.wfile.write(body)
+                    self.wfile.flush()
+                except (OSError, ssl.SSLError):
+                    pass  # The deadline test deliberately closes its own client socket.
+                self.close_connection = True
+
+            do_GET = do_POST = do_DELETE = reply
+
+        cls.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        cls.server.daemon_threads = True
+        server_tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        server_tls.load_cert_chain(certificate_path, key_path)
+        cls.server.socket = server_tls.wrap_socket(cls.server.socket, server_side=True)
+        cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
+        cls.thread.start()
+        def close():
+            cls.server.shutdown()
+            cls.server.server_close()
+            cls.thread.join(timeout=2)
+        cls.addClassCleanup(close)
+        cls.client_tls = ssl.create_default_context(cafile=certificate_path)
+
+    def setUp(self):
+        self.server.calls = []
+        self.server.reply = (200, "length", b'{"ok":true}', "close")
+        patcher = patch.object(module, "API_ORIGIN", "https://127.0.0.1:" + str(self.server.server_port))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        opener = build_opener(ProxyHandler({}), base._NoRedirect(), HTTPSHandler(context=self.client_tls))
+        self.client = EnableBankingConsentClient(APP_ID, self.key_pem, opener=opener, clock=lambda: NOW)
+
+    def test_content_length_completion_with_close_or_keepalive_is_not_a_network_failure(self):
+        for connection in ("close", "keep-alive"):
+            with self.subTest(connection=connection):
+                self.server.reply = (200, "length", b'{"ok":true}', connection)
+                self.assertEqual(self.client.get("/aspsps"), {"ok": True})
+        self.assertEqual(self.server.calls, [("GET", "/aspsps")] * 2)
+
+    def test_content_length_post_success_is_read_once_without_repeating_exchange(self):
+        self.server.reply = (200, "length", json.dumps({"session_id": ACCOUNT}).encode(), "close")
+        self.assertEqual(self.client.post("/sessions", {"code": "synthetic-authorization-code"}), {"session_id": ACCOUNT})
+        self.assertEqual(self.server.calls, [("POST", "/sessions")])
+
+    def test_genuine_http_error_preserves_content_length_and_chunked_429_metadata(self):
+        for framing in ("length", "chunked"):
+            with self.subTest(framing=framing):
+                self.server.reply = (429, framing, b'{"error":"ASPSP_RATE_LIMIT_EXCEEDED"}', "close")
+                with self.assertRaises(BudgetAPIError) as caught:
+                    self.client.post("/sessions", {"code": "synthetic-authorization-code"})
+                self.assertEqual((caught.exception.status, caught.exception.code, caught.exception.provider_code,
+                                  caught.exception.retry_at, caught.exception.rate_scope),
+                                 (429, "rate_limit", "ASPSP_RATE_LIMIT_EXCEEDED", NOW + 1200, RateScope.CONNECTION))
+        self.assertEqual(self.server.calls, [("POST", "/sessions")] * 2)
+
+    def test_chunked_and_connection_eof_json_responses_remain_complete(self):
+        for framing in ("chunked", "eof"):
+            with self.subTest(framing=framing):
+                self.server.reply = (200, framing, b'{"ok":true}', "close")
+                self.assertEqual(self.client.get("/aspsps"), {"ok": True})
+        self.assertEqual(len(self.server.calls), 2)
+
+    def test_empty_204_and_truncated_json_are_invalid_responses_not_false_network_errors(self):
+        for status, body in ((204, b""), (200, b'{"incomplete":')):
+            with self.subTest(status=status):
+                self.server.reply = (status, "length", body, "close")
+                with self.assertRaises(BudgetAPIError) as caught:
+                    self.client.delete(SESSION)
+                self.assertEqual((caught.exception.status, caught.exception.code), (status, "invalid_response"))
+
+    def test_genuine_tls_body_read_still_obeys_remaining_deadline(self):
+        self.server.reply = (200, "stall", b'{"ok":true}', "close")
+        started = time.monotonic()
+        with self.assertRaises(BudgetAPIError) as caught:
+            self.client.get("/aspsps", deadline=started + .15)
+        self.assertEqual(caught.exception.code, "acquisition_timeout")
+        self.assertLess(time.monotonic() - started, 1.5)
+        self.assertEqual(self.server.calls, [("GET", "/aspsps")])
