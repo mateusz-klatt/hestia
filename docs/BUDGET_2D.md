@@ -17,8 +17,8 @@ provider expiry or a temporary loss of availability changes freshness labels, no
 historical spending. Deselecting an account removes its entries from reports and
 causes relevant transfer relationships to be reassessed at the scope boundary.
 
-Use canonical BOOK entries keyed by `(account_id, entry_reference)`. Unresolved,
-pending and uncertain observations stay separately counted. No fuzzy identity
+Use canonical BOOK entries keyed by `(account_id, entry_reference)`. Unresolved observations (including pending entries) and uncertain observations
+are counted separately from report totals. No fuzzy identity
 matching or merging of bank records is introduced. Use `booking_date`, falling
 back to `value_date`; an observation timestamp is not a booking date.
 
@@ -85,7 +85,7 @@ Cover exact large/very small decimals, mixed currencies, date boundaries and
 month crossings; unique and ambiguous candidates; different account ownership;
 excluded accounts; duplicate/reordered imports; uncertain/pending entries; card
 purchases versus repayments; refunds; persisted reject/undo/manual override;
-source correction and stale fingerprints; concurrent accepts and restart; full
+source correction, A→B→A review latching and stale fingerprints; concurrent accepts and restart; full
 period totals across multiple UI pages; owner-only API/UI and freshness labels.
 Use synthetic fixtures rather than real household transactions in CI or reviews.
 
@@ -131,9 +131,10 @@ pairing can override conflicting structured evidence after an explicit owner
 choice, while retaining equal amount/currency, opposite directions, distinct
 selected accounts and the inclusive three-day window. Reaccepting a rejected or
 undone pair is an explicit manual action. Undone pairs never automatically return
-as suggestions. A corrected accepted pair stays reserved for review but affects
-no totals until reconfirmed; a pair crossing the current account selection is a
-boundary case and does not hide the selected leg.
+as suggestions. A corrected accepted pair is persistently marked for review during ingestion,
+keeps its legs reserved and affects no totals until reconfirmed. Returning to an
+earlier source value does not reactivate the old decision. A pair crossing the
+current account selection is a boundary case and does not hide the selected leg.
 
 Rules use literal casefolded contains/equals on description, counterparty_name
 or MCC, sorted by priority then stable ID. Preview is mandatory for creation,
@@ -142,6 +143,9 @@ ledger/evidence and local classifications; changed input returns 409
 `budget_analytics_stale_preview`, expiration returns `budget_analytics_preview_expired`.
 Replaying a saved preview returns its saved rule without duplicate creation.
 Manual annotations, including explicitly uncategorised entries, take precedence.
+An archived category can be retained when editing the current classification of
+that same entry. Disabling an existing rule may retain its archived category;
+creating or re-enabling a rule still requires an active category.
 Stale manual annotations remain marked for review and use safe default
 classification until reconfirmed. Valid accepted transfers outrank rules.
 
@@ -180,3 +184,19 @@ hashes and session UIDs do not establish account ownership.
 Recurring subscription hints, spending limits and mortgage schedules are later
 extensions. This slice does not infer a subscription is unwanted, schedule a
 payment or publish financial details in shared calendars.
+
+
+When a new bank consent is adopted, structured identifiers from POST `/sessions`
+are retained only for the account selection captured before that one-time request.
+They are published to account evidence in the same SQLite transaction as adoption,
+only after GET session verification confirms bank, personal access, expiry, primary
+hash-to-UID mapping and all owner/control fences. Pending private evidence survives
+restart; full identifiers of returned extra accounts are discarded. No additional
+bank request is introduced. Earlier consents are not re-exchanged automatically;
+missing identifiers continue to use reviewable heuristic suggestions until an
+ordinary renewal or an authorised import supplies actual account fields.
+
+A boundary indicator describes an existing accepted relationship crossing the
+current selection. New candidates use selected ledger entries only; Hestia does
+not scan excluded transaction history for additional heuristic partners. A selected
+outflow without a known accepted relationship remains spending within that scope.

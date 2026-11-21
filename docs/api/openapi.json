@@ -2530,7 +2530,6 @@
             "type": "boolean"
           },
           "analytics": {
-            "default": false,
             "title": "Analytics",
             "type": "boolean"
           },

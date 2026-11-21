@@ -719,3 +719,17 @@ class UserManagementContractTests(unittest.TestCase):
             self.assertIn(p, paths)
         self.assertEqual(paths["/api/me/password"]["post"]["x-required-role"], "viewer")  # any signed-in user
         self.assertEqual(paths["/api/users"]["get"]["x-required-role"], "admin")
+
+
+class BudgetAnalyticsCompatibilityTests(unittest.TestCase):
+    def test_missing_analytics_capability_defaults_off_and_remains_optional_in_generated_schema(self):
+        older = {key: False for key in ("stored_reads", "account_controls", "refresh", "background_selection",
+                                       "background_polling", "consent")}
+        self.assertFalse(api_contract.BudgetCapabilities.model_validate(older).analytics)
+        self.assertTrue(api_contract.BudgetCapabilities.model_validate({**older, "analytics": True}).analytics)
+        schema = api_contract.build_openapi()["components"]["schemas"]["BudgetCapabilities"]
+        self.assertNotIn("analytics", schema["required"])
+        self.assertNotIn("default", schema["properties"]["analytics"])
+        self.assertEqual(schema["properties"]["analytics"]["type"], "boolean")
+        with self.assertRaises(ValueError):
+            api_contract.BudgetCapabilities.model_validate({**older, "analytics": None})

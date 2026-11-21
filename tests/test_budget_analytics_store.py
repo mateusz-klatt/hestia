@@ -180,6 +180,59 @@ class CategoryTests(AnalyticsCase):
 
 
 class AnnotationTests(AnalyticsCase):
+    def test_kind_edit_retains_current_manual_archived_category_even_under_accepted_transfer(self):
+        category = self.store.create_category("owner", "Archived household category")
+        self.annotation(category_id=category["id"], kind="expense")
+        self.store.update_category("owner", category["id"], name=category["name"], archived=True, expected_version=1)
+        retained = self.annotation(category_id=category["id"], kind="excluded", expected_version=1)
+        self.assertEqual((retained["category_id"], retained["kind"], retained["version"]), (category["id"], "excluded", 2))
+        self.decide()
+        with self.store._read("owner") as session:
+            current = next(row for row in self.store._snapshot(session, "owner")["transactions"]
+                           if (row["account_id"], row["entry_reference"]) == (self.accounts["a"], "debit"))
+        self.assertEqual(current["effective"]["source"], "transfer")
+        self.assertEqual(current["base_effective"]["category_id"], category["id"])
+        retained = self.annotation(category_id=category["id"], kind="expense", expected_version=2)
+        self.assertEqual((retained["category_id"], retained["kind"], retained["version"]), (category["id"], "expense", 3))
+        self.assertTrue(self.store.categories("owner")[0]["archived"])
+
+    def test_kind_override_retains_current_rule_category_after_archival_without_new_assignments(self):
+        category = self.store.create_category("owner", "Rule category")
+        preview = self.store.preview_rule("owner", self.candidate(category_id=category["id"], kind="auto"))
+        self.store.save_rule("owner", preview["preview_id"])
+        self.store.update_category("owner", category["id"], name=category["name"], archived=True, expected_version=1)
+        retained = self.annotation(category_id=category["id"], kind="excluded")
+        self.assertEqual((retained["category_id"], retained["kind"], retained["version"]), (category["id"], "excluded", 1))
+        other = self.store.create_category("owner", "Different archived category")
+        self.store.update_category("owner", other["id"], name=other["name"], archived=True, expected_version=1)
+        with self.assertRaises(AnalyticsError):
+            self.annotation(category_id=other["id"], expected_version=1)
+        foreign = self.store.create_category("other", "Foreign archived category")
+        self.store.update_category("other", foreign["id"], name=foreign["name"], archived=True, expected_version=1)
+        with self.assertRaises(AnalyticsError) as denied:
+            self.annotation(category_id=foreign["id"], expected_version=1)
+        self.assertEqual(denied.exception.status, 404)
+        with self.assertRaises(AnalyticsError):
+            self.store.preview_rule("owner", self.candidate(category_id=category["id"]))
+
+    def test_archived_retention_cannot_bypass_source_version_or_stale_manual_review(self):
+        category = self.store.create_category("owner", "Archived category")
+        original = self.annotation(category_id=category["id"], kind="expense")
+        self.store.update_category("owner", category["id"], name=category["name"], archived=True, expected_version=1)
+        with self.assertRaises(AnalyticsError) as stale_version:
+            self.annotation(category_id=category["id"], kind="excluded", expected_version=0)
+        self.assertEqual((stale_version.exception.code, stale_version.exception.status), ("budget_analytics_conflict", 409))
+        self.change_transaction(amount="101")
+        with self.assertRaises(AnalyticsError) as stale_source:
+            self.annotation(category_id=category["id"], kind="excluded", expected_version=1,
+                            expected_fingerprint=original["ledger_fingerprint"])
+        self.assertEqual((stale_source.exception.code, stale_source.exception.status), ("budget_analytics_source_changed", 409))
+        # The old stored category is stale; the current fallback classification is uncategorised.
+        with self.assertRaises(AnalyticsError):
+            self.annotation(category_id=category["id"], kind="excluded", expected_version=1)
+        row = self.rows(db.BudgetAnnotation)[0]
+        self.assertEqual((row.category_id, row.kind, row.version), (category["id"], "expense", 1))
+
     def test_explicit_uncategorized_is_not_auto_and_bank_payload_control_quota_unchanged(self):
         category = self.store.create_category("owner", "Food")
         before = self.transaction().payload_json
@@ -260,6 +313,22 @@ class AnnotationTests(AnalyticsCase):
             self.store.annotate("owner", self.accounts["a"], "debit", mode="manual", category_id=None, kind="auto",
                                 expected_version=0, expected_fingerprint="0" * 64)
 
+    def test_corrupt_canonical_json_duplicate_keys_and_nonfinite_values_never_create_annotations(self):
+        valid = self.transaction().payload_json
+        expected = self.fingerprint()
+        corrupt = [valid[:-1] + ', "amount": "100"}', valid[:-1] + ', "unused": NaN}']
+        for value in corrupt:
+            with self.subTest(payload=value), self.sessions.begin() as session:
+                session.get(db.BudgetTransaction, (self.accounts["a"], "debit")).payload_json = value
+            with self.assertRaises(AnalyticsError) as invalid:
+                self.store.annotate("owner", self.accounts["a"], "debit", mode="manual", category_id=None,
+                                    kind="expense", expected_version=0, expected_fingerprint=expected)
+            self.assertEqual((invalid.exception.code, invalid.exception.status),
+                             ("budget_analytics_invalid_request", 400))
+            self.assertEqual(self.rows(db.BudgetAnnotation), [])
+            self.assertEqual(self.rows(db.BudgetAnalyticsAudit), [])
+            self.assertEqual(self.transaction().payload_json, value)
+
     def test_opaque_reference_and_annotation_owner_cannot_be_reassigned(self):
         self.add_transaction("a", "opaque\x00ref")
         result = self.annotation(reference="opaque\x00ref")
@@ -272,6 +341,62 @@ class AnnotationTests(AnalyticsCase):
 
 
 class TransferTests(AnalyticsCase):
+    def test_ingested_a_to_b_to_a_stays_review_until_current_version_explicitly_reconfirmed(self):
+        from hestia.budget.analytics_reconcile import reconcile_transfers
+        accepted = self.decide(source="heuristic")
+        original = json.loads(self.transaction().payload_json)
+        self.now += 1
+        with self.store.transaction() as session:
+            debit = session.get(db.BudgetTransaction, (self.accounts["a"], "debit"))
+            debit.payload_json = json.dumps(original | {"amount": "101"})
+            self.assertEqual(reconcile_transfers(session, "owner", self.now), 1)
+        review = self.rows(db.BudgetTransferDecision)[0]
+        self.assertEqual((review.status, review.version, review.updated_at), ("review", 2, self.now))
+        self.assertEqual((review.debit_fingerprint, review.credit_fingerprint),
+                         (accepted["debit_fingerprint"], accepted["credit_fingerprint"]))
+        self.assertEqual(len(self.rows(db.BudgetTransferLeg)), 2)
+        self.now += 1
+        with self.store.transaction() as session:
+            session.get(db.BudgetTransaction, (self.accounts["a"], "debit")).payload_json = json.dumps(original)
+            self.assertEqual(reconcile_transfers(session, "owner", self.now), 0)
+        self.assertEqual(self.pair_fps(), [accepted["debit_fingerprint"], accepted["credit_fingerprint"]])
+        # A new reader sees a persisted latch even though the original fingerprints match again.
+        restarted = BudgetAnalyticsStore(self.sessions, clock=lambda: self.now, cursor_secret=b"synthetic-restart")
+        with restarted._read("owner") as session:
+            snapshot = restarted._snapshot(session, "owner")
+            decision = next(item for item in snapshot["decisions"] if item["id"] == accepted["id"])
+            debit = next(item for item in snapshot["transactions"] if item["entry_reference"] == "debit")
+        self.assertEqual((decision["status"], decision["version"]), ("review", 2))
+        self.assertEqual(debit["effective"]["kind"], "expense")
+        with self.assertRaises(AnalyticsError) as stale:
+            self.decide(decision_id=accepted["id"], expected_version=1, source="heuristic")
+        self.assertEqual((stale.exception.code, stale.exception.status), ("budget_analytics_conflict", 409))
+        confirmed = self.decide(decision_id=accepted["id"], expected_version=2, source="heuristic")
+        self.assertEqual((confirmed["status"], confirmed["version"], confirmed["changed"]), ("accepted", 3, True))
+        self.assertEqual({row.decision_id for row in self.rows(db.BudgetTransferLeg)}, {accepted["id"]})
+        self.assertEqual(len(self.rows(db.BudgetTransferLeg)), 2)
+        with restarted._read("owner") as session:
+            debit = next(item for item in restarted._snapshot(session, "owner")["transactions"]
+                         if item["entry_reference"] == "debit")
+        self.assertEqual(debit["effective"]["kind"], "transfer")
+        self.assertEqual(self.rows(db.BudgetAcquisition), [])
+
+    def test_reject_and_undo_of_persisted_review_release_legs_without_implicit_reacceptance(self):
+        rejected_pair = self.decide()
+        undone_pair = self.decide(debit=("d", "debit-2"), credit=("c", "credit-2"))
+        with self.sessions.begin() as session:
+            for identifier in (rejected_pair["id"], undone_pair["id"]):
+                row = session.get(db.BudgetTransferDecision, identifier)
+                row.status, row.version = "review", 2
+        rejected = self.decide(decision_id=rejected_pair["id"], action="reject", expected_version=2)
+        self.assertEqual((rejected["status"], rejected["version"]), ("rejected", 3))
+        self.assertEqual({row.decision_id for row in self.rows(db.BudgetTransferLeg)}, {undone_pair["id"]})
+        self.store.set_account_selected("owner", self.accounts["c"], False, actor="owner")
+        undone = self.store.decide_transfer("owner", decision_id=undone_pair["id"], action="undo", expected_version=2)
+        self.assertEqual((undone["status"], undone["version"]), ("undone", 3))
+        self.assertEqual(self.rows(db.BudgetTransferLeg), [])
+        self.assertEqual({row.status for row in self.rows(db.BudgetTransferDecision)}, {"rejected", "undone"})
+
     def test_accept_reject_undo_reaccept_reserves_both_legs_and_audits_without_ledger_changes(self):
         before = [(row.account_id, row.entry_reference, row.payload_json) for row in self.rows(db.BudgetTransaction)]
         accepted = self.decide()
@@ -434,6 +559,32 @@ class SchemaTests(AnalyticsCase):
 
 
 class RuleTests(AnalyticsCase):
+    def test_rule_can_be_disabled_with_its_archived_category_but_cannot_enable_or_reassign_it(self):
+        category = self.store.create_category("owner", "Archived rule category")
+        preview = self.store.preview_rule("owner", self.candidate(category_id=category["id"]))
+        rule = self.store.save_rule("owner", preview["preview_id"])
+        before = [(row.account_id, row.entry_reference, row.payload_json) for row in self.rows(db.BudgetTransaction)]
+        self.store.update_category("owner", category["id"], name=category["name"], archived=True, expected_version=1)
+        candidate = self.candidate(rule_id=rule["id"], expected_version=1, category_id=category["id"], enabled=False)
+        disabled_preview = self.store.preview_rule("owner", candidate)
+        self.assertEqual(disabled_preview["affected_count"], 2)
+        disabled = self.store.save_rule("owner", disabled_preview["preview_id"])
+        self.assertEqual((disabled["enabled"], disabled["category_id"], disabled["version"]), (False, category["id"], 2))
+        edited_preview = self.store.preview_rule("owner", candidate | {"expected_version": 2, "value": "different literal"})
+        self.assertEqual(edited_preview["affected_count"], 0)
+        edited = self.store.save_rule("owner", edited_preview["preview_id"])
+        self.assertEqual((edited["enabled"], edited["category_id"], edited["version"]), (False, category["id"], 3))
+        for invalid in (self.candidate(category_id=category["id"], enabled=False),
+                        candidate | {"expected_version": 3, "enabled": True}):
+            with self.subTest(candidate=invalid), self.assertRaises(AnalyticsError):
+                self.store.preview_rule("owner", invalid)
+        different = self.store.create_category("owner", "Other archived category")
+        self.store.update_category("owner", different["id"], name=different["name"], archived=True, expected_version=1)
+        with self.assertRaises(AnalyticsError):
+            self.store.preview_rule("owner", candidate | {"expected_version": 3, "category_id": different["id"]})
+        self.assertEqual([(row.account_id, row.entry_reference, row.payload_json) for row in self.rows(db.BudgetTransaction)], before)
+        self.assertEqual(self.rows(db.BudgetAcquisition), [])
+
     def test_simultaneous_save_and_restart_replay_create_one_rule_and_one_audit(self):
         from concurrent.futures import ThreadPoolExecutor
         preview = self.store.preview_rule("owner", self.candidate())

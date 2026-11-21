@@ -289,6 +289,49 @@ class TransferProjectionTests(ProjectionCase):
             row.version += 1
         self.assertEqual(self.store.transfers("owner", "2026", status="review")["filtered_total"], 1)
 
+    def persisted_review(self, decision_id):
+        # Ingestion persists this transition while keeping original evidence and leg reservations.
+        with self.sessions.begin() as session:
+            decision = session.get(db.BudgetTransferDecision, decision_id)
+            decision.status, decision.version, decision.updated_at = "review", decision.version + 1, self.now
+
+    def test_persisted_review_with_matching_evidence_never_reactivates_and_undo_releases_alternatives(self):
+        self.pair()
+        self.add_transaction("c", "alternative", amount="100", credit_debit_indicator="CRDT")
+        saved = self.decide()
+        self.persisted_review(saved["id"])
+        self.store = BudgetAnalyticsViews(self.sessions, clock=lambda: self.now, cursor_secret=b"synthetic-only")
+        review = self.store.transfers("owner", "2026", status="review")["transfers"][0]
+        current = self.pair_fps()
+        with self.sessions() as session:
+            decision = session.get(db.BudgetTransferDecision, saved["id"])
+            self.assertEqual((decision.debit_fingerprint, decision.credit_fingerprint), tuple(current))
+        self.assertEqual((review["stale"], review["version"]), (True, 2))
+        self.assertEqual(self.store.transfers("owner", "2026", status="accepted")["filtered_total"], 0)
+        self.assertEqual(self.store.transfers("owner", "2026")["filtered_total"], 0)
+        self.assertEqual(self.store.overview("owner", "2026-11")["currencies"][0]["expenses"], "100")
+        self.assertEqual(self.output("debit")["effective"]["source"], "default")
+        self.assertEqual(self.output("debit")["transfer"]["status"], "review")
+        self.assertEqual(len(self.rows(db.BudgetTransferLeg)), 2)
+        self.store.decide_transfer("owner", decision_id=saved["id"], action="undo", expected_version=2)
+        suggestions = self.store.transfers("owner", "2026")["transfers"]
+        self.assertEqual(len(suggestions), 1)
+        self.assertEqual(suggestions[0]["credit"]["entry_reference"], "alternative")
+        self.assertEqual(self.store.transfers("owner", "2026", status="undone")["filtered_total"], 1)
+        self.assertEqual(self.rows(db.BudgetTransferLeg), [])
+
+    def test_persisted_review_requires_explicit_reconfirmation_before_report_exclusion(self):
+        self.pair()
+        saved = self.decide()
+        self.persisted_review(saved["id"])
+        with self.sessions() as session:
+            snapshot = projection_snapshot(session, "owner")
+        self.assertTrue(all(row["effective"]["source"] != "transfer" for row in snapshot["transactions"]))
+        reconfirmed = self.decide(decision_id=saved["id"], expected_version=2)
+        self.assertEqual((reconfirmed["status"], reconfirmed["version"]), ("accepted", 3))
+        self.assertEqual(self.store.transfers("owner", "2026", status="review")["filtered_total"], 0)
+        self.assertEqual(self.store.overview("owner", "2026-11")["currencies"][0]["expenses"], "0")
+
     def test_graph_limit_is_explicit_and_does_not_invalidate_accepted_pairs(self):
         self.pair()
         with mock.patch.object(views, "MAX_EDGES", 0):

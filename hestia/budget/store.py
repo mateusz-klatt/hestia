@@ -17,6 +17,7 @@ from ..db import BudgetConnectionAudit as ConnectionAudit
 from ..db import BudgetComponent as Component
 from .account_metadata import BudgetMetadataError, apply_account_metadata
 from .bank_metadata import apply_bank_metadata
+from .analytics_reconcile import reconcile_transfers
 
 ACCOUNT_KINDS = frozenset({"current", "savings", "credit_card", "other"})
 OPERATIONS = ("transactions", "balances")
@@ -384,6 +385,7 @@ class BudgetStore:
             elif completed == len(accounts) * len(OPERATIONS):
                 row.last_success = now
                 row.failures, row.last_error = 0, None
+            reconcile_transfers(session, row.owner, now)
 
     @staticmethod
     def _component_error(component, code):
@@ -496,6 +498,7 @@ class BudgetStore:
                                            source="offline_import", observed_at=snapshot.fetched_at)
                 if bank is not None:
                     metadata["bank_metadata"] = bank
+                reconcile_transfers(session, item.owner, self.clock())
                 return {**report, **metadata}
             self._restore_api_conflicts(session, account.id)
             batch = ImportBatch(id=str(uuid.uuid4()), fingerprint=snapshot.digest,
@@ -522,6 +525,7 @@ class BudgetStore:
                                        source="offline_import", observed_at=snapshot.fetched_at)
             if bank is not None:
                 metadata["bank_metadata"] = bank
+            reconcile_transfers(session, item.owner, self.clock())
             return {**report, **metadata}
 
     @staticmethod

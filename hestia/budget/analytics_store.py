@@ -18,6 +18,7 @@ from ..db import BudgetTransaction as Transaction, BudgetTransactionMetadata as 
 from ..db import BudgetTransferDecision as Decision, BudgetTransferLeg as Leg
 from .analytics_core import (AnalyticsError, KINDS, compare_money, compatible_kind, effective_date,
                              financial_fingerprint, pair_fingerprint, rule_matches)
+from .client import _reject_constant, _unique_error_fields
 from .views import BudgetHTTPStore
 
 _HASH = re.compile(r"[a-f0-9]{64}\Z", re.ASCII)
@@ -74,12 +75,18 @@ class BudgetAnalyticsStore(BudgetHTTPStore):
             raise AnalyticsError("budget_analytics_not_found", 404)
         return row
 
-    def _category(self, session, owner, identifier):
+    def _category(self, session, owner, identifier, *, retain_key=None):
         if identifier is None:
             return None
         row = self._owned(session, Category, owner, identifier)
         if row.archived:
-            raise AnalyticsError()
+            if retain_key is None:
+                raise AnalyticsError()
+            snapshot = self._snapshot(session, owner)
+            if not any((entry["account_id"], entry["entry_reference"]) == retain_key
+                       and entry.get("base_effective", entry["effective"]).get("category_id") == identifier
+                       for entry in snapshot["transactions"]):
+                raise AnalyticsError()
         return row
 
     def _transaction(self, session, owner, account_id, reference, *, selected=True):
@@ -90,7 +97,8 @@ class BudgetAnalyticsStore(BudgetHTTPStore):
         if row is None:
             raise AnalyticsError("budget_analytics_not_found", 404)
         try:
-            payload = json.loads(row.payload_json)
+            payload = json.loads(row.payload_json, object_pairs_hook=_unique_error_fields,
+                                 parse_constant=_reject_constant)
         except (ValueError, TypeError):
             raise AnalyticsError() from None
         fingerprint = financial_fingerprint(payload)
@@ -160,7 +168,7 @@ class BudgetAnalyticsStore(BudgetHTTPStore):
             self._owner(session, owner)
             _, payload, fingerprint = self._transaction(session, owner, account_id, entry_reference)
             _fingerprint(fingerprint, expected_fingerprint)
-            self._category(session, owner, category_id)
+            self._category(session, owner, category_id, retain_key=(account_id, entry_reference))
             if not compatible_kind(kind, payload):
                 raise AnalyticsError()
             row = session.get(Annotation, (account_id, entry_reference))
@@ -201,9 +209,13 @@ class BudgetAnalyticsStore(BudgetHTTPStore):
                 or type(value["enabled"]) is not bool):
             raise AnalyticsError()
         value["value"] = _text(value["value"], 256)
-        self._category(session, owner, value["category_id"])
         row = None if value["rule_id"] is None else self._owned(session, Rule, owner, value["rule_id"])
         _version(0 if row is None else row.version, value["expected_version"])
+        if row is not None and not value["enabled"] and row.category_id == value["category_id"]:
+            if value["category_id"] is not None:
+                self._owned(session, Category, owner, value["category_id"])
+        else:
+            self._category(session, owner, value["category_id"])
         return value, row
 
     @staticmethod

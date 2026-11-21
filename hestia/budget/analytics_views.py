@@ -251,12 +251,12 @@ def _valid_pair(debit, credit):
 def _decision_view(decision, records, selected, owned):
     debit_key, credit_key = _decision_keys(decision)
     if (debit_key[0] not in owned or credit_key[0] not in owned
-            or decision["status"] not in ("accepted", "rejected", "undone")
+            or decision["status"] not in ("accepted", "review", "rejected", "undone")
             or decision["source"] not in ("account_identity", "heuristic", "manual")):
         raise AnalyticsError()
     debit, credit = records.get(debit_key), records.get(credit_key)
     boundary = debit_key[0] not in selected or credit_key[0] not in selected
-    stale = decision["rule_version"] != 1
+    stale = decision["status"] == "review" or decision["rule_version"] != 1
     for key, row, fingerprint in ((debit_key, debit, decision["debit_fingerprint"]),
                                    (credit_key, credit, decision["credit_fingerprint"])):
         if key[0] in selected and (row is None or not row["eligible"] or row["transfer_fp"] != fingerprint):
@@ -311,7 +311,7 @@ def _accepted_projection(snapshot):
         debit, credit = _decision_keys(decision)
         view = _decision_view(decision, records, selected, owned)
         transfers.append(view)
-        if decision["status"] == "accepted":
+        if decision["status"] in ("accepted", "review"):
             reserved.update((debit, credit))
         else:
             blocked.add((debit, credit))

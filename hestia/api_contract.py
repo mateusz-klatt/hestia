@@ -1206,7 +1206,7 @@ class BudgetCapabilities(BaseModel):
     background_selection: bool
     background_polling: bool
     consent: bool
-    analytics: bool = False
+    analytics: Annotated[bool, Field(default=False, json_schema_extra=_OMIT)] = False
 
 
 class BudgetConnections(BaseModel):

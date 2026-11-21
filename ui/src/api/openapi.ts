@@ -1982,11 +1982,8 @@ export interface components {
         BudgetCapabilities: {
             /** Account Controls */
             account_controls: boolean;
-            /**
-             * Analytics
-             * @default false
-             */
-            analytics: boolean;
+            /** Analytics */
+            analytics?: boolean;
             /** Background Polling */
             background_polling: boolean;
             /** Background Selection */
