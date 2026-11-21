@@ -4,7 +4,7 @@ import { createRoot } from "react-dom/client";
 import type { Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BudgetApi, BudgetResult } from "../api";
-import { categoryList, entriesOf, entry, overviewOf, totals, transfersOf } from "./fixtures";
+import { annotationOf, categoryList, entriesOf, entry, overviewOf, totals, transfersOf } from "./fixtures";
 import { MonthView, monthLabels } from "./month";
 
 function ok<T>(data: T): Promise<BudgetResult<T>> { return Promise.resolve({ ok: true, data }); }
@@ -14,7 +14,7 @@ function fakeApi() {
     overview: vi.fn<BudgetApi["overview"]>((period) => ok(overviewOf(period, { currencies: [totals("EUR"), totals("PLN")] }))),
     analyticsTransactions: vi.fn<BudgetApi["analyticsTransactions"]>((period) => ok(entriesOf(period, [entry("e1")]))),
     categories: vi.fn<BudgetApi["categories"]>(() => ok({ categories: categoryList })),
-    annotate: vi.fn<BudgetApi["annotate"]>(() => ok({ transaction: entry("e1") })),
+    annotate: vi.fn<BudgetApi["annotate"]>(() => ok({ annotation: annotationOf() })),
     transfers: vi.fn<BudgetApi["transfers"]>((period) => ok(transfersOf(period))),
     decideTransfer: vi.fn<BudgetApi["decideTransfer"]>(),
   } satisfies Pick<BudgetApi, "overview" | "analyticsTransactions" | "categories" | "annotate" | "transfers" | "decideTransfer">;

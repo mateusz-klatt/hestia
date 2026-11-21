@@ -4,13 +4,14 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { BudgetApi } from "../api";
 import type { BudgetAccount } from "../model";
 import { accountLabel, formatAmount } from "../model";
-import { TRANSFER_QUEUES, transferActions, transferDecision } from "./model";
+import { ANALYTICS_ERROR, RELOAD_ERRORS, TRANSFER_QUEUES, transferActions, transferDecision } from "./model";
 import type { TransferAction, TransferLeg, TransferPair, TransferQueue } from "./model";
 
 export const transferLabels = {
   en: {
     title: "Own transfers and card repayments",
-    queues: { suggested: "To review", review: "To re-check", boundary: "Excluded account", accepted: "Confirmed", rejected: "Not transfers" },
+    queues: { suggested: "To review", review: "To re-check", boundary: "Excluded account", accepted: "Confirmed", rejected: "Not transfers",
+      undone: "Undone" },
     actions: { accept: "Confirm transfer", reject: "Not a transfer", undo: "Undo" },
     sources: { account_identity: "matched by account number", heuristic: "same amount, dates within 3 days", manual: "paired by you" },
     days: (count: number) => (count === 0 ? "same day" : `${String(count)} ${count === 1 ? "day" : "days"} apart`),
@@ -22,11 +23,12 @@ export const transferLabels = {
     empty: "Nothing here for this month.", loading: "Loading transfers…", error: "Transfers could not be loaded.",
     more: "Load more", conflict: "This changed elsewhere; the latest state was loaded.",
     changed: "The bank data for this pair changed; the latest state was loaded.", saveError: "Could not save. Try again.",
+    reserved: "One of these entries is already in another pair; the latest state was loaded.",
   },
   pl: {
     title: "Przelewy własne i spłaty kart",
     queues: { suggested: "Do przejrzenia", review: "Do ponownego sprawdzenia", boundary: "Konto wykluczone", accepted: "Potwierdzone",
-      rejected: "To nie przelewy" },
+      rejected: "To nie przelewy", undone: "Cofnięte" },
     actions: { accept: "Potwierdź przelew", reject: "To nie przelew", undo: "Cofnij" },
     sources: { account_identity: "zgodny numer konta", heuristic: "ta sama kwota, daty w ciągu 3 dni", manual: "sparowane przez Ciebie" },
     days: (count: number) => (count === 0 ? "ten sam dzień" : `${String(count)} ${count === 1 ? "dzień" : "dni"} różnicy`),
@@ -38,13 +40,13 @@ export const transferLabels = {
     empty: "Brak pozycji w tym miesiącu.", loading: "Wczytywanie przelewów…", error: "Nie udało się wczytać przelewów.",
     more: "Wczytaj więcej", conflict: "Zmieniono to w innym miejscu; wczytano aktualny stan.",
     changed: "Dane z banku dla tej pary się zmieniły; wczytano aktualny stan.", saveError: "Nie udało się zapisać. Spróbuj ponownie.",
+    reserved: "Jedna z tych pozycji jest już w innej parze; wczytano aktualny stan.",
   },
 };
 export type TransferLabels = typeof transferLabels.en;
 
 interface Page { rows: TransferPair[]; cursor: string | null; loading: boolean; failed: boolean; limited: boolean }
 const LOADING: Page = { rows: [], cursor: null, loading: true, failed: false, limited: false };
-const RELOAD_ERRORS = new Set(["budget_version_conflict", "budget_analytics_source_changed"]);
 
 export interface TransfersProps {
   api: Pick<BudgetApi, "transfers" | "decideTransfer">;
@@ -89,6 +91,7 @@ export function TransfersPanel({ api, period, accounts, text, locale, revision, 
     setPage((current) => ({ ...current, loading: true }));
     const result = await api.transfers(period, queue, cursor);
     if (onAccessLoss(result) || token !== generation.current) return;
+    if (!result.ok && result.error === ANALYTICS_ERROR.staleCursor) { setReloads((current) => current + 1); return; }
     setPage((current) => (result.ok
       ? { rows: [...current.rows, ...result.data.transfers], cursor: result.data.next_cursor, loading: false, failed: false,
           limited: current.limited || result.data.scan_limited }
@@ -105,8 +108,9 @@ export function TransfersPanel({ api, period, accounts, text, locale, revision, 
     if (onAccessLoss(result) || token !== generation.current) return;
     setBusy(null);
     if (!result.ok) {
-      setNotice(result.error === "budget_analytics_source_changed" ? text.changed
-        : result.error === "budget_version_conflict" ? text.conflict : text.saveError);
+      setNotice(result.error === ANALYTICS_ERROR.sourceChanged ? text.changed
+        : result.error === ANALYTICS_ERROR.legReserved ? text.reserved
+          : RELOAD_ERRORS.has(result.error) ? text.conflict : text.saveError);
       if (RELOAD_ERRORS.has(result.error)) setReloads((current) => current + 1);
       return;
     }

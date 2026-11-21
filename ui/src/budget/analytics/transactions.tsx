@@ -4,7 +4,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { BudgetApi } from "../api";
 import type { BudgetAccount } from "../model";
 import { accountLabel, formatAmount, transactionDate, transactionText } from "../model";
-import { EFFECTIVE_KINDS, KIND_CHOICES, NO_FILTER, UNCATEGORISED, annotationRequest, counterparty, currentChoice } from "./model";
+import { ANALYTICS_ERROR, EFFECTIVE_KINDS, KIND_CHOICES, NO_FILTER, RELOAD_ERRORS, UNCATEGORISED, annotationRequest, counterparty,
+  currentChoice } from "./model";
 import type { AnalyticsCategory, AnalyticsTransaction, CategoryChoice, KindChoice, TransactionFilter } from "./model";
 
 const kindsEn = { auto: "Automatic", expense: "Expense", income: "Income", refund: "Refund", excluded: "Leave out of the budget",
@@ -23,7 +24,7 @@ export const transactionLabels = {
     ambiguous: "fits several pairs; choose in own transfers",
     more: "Load more", empty: "No entries match.", loading: "Loading entries…", error: "Entries could not be loaded.",
     conflict: "This changed elsewhere; the latest state was loaded.", saveError: "Could not save. Try again.",
-    account: "Account",
+    changed: "The bank changed this entry; the latest state was loaded.", account: "Account",
   },
   pl: {
     title: "Transakcje", currency: "Waluta", category: "Kategoria", kind: "Rodzaj", search: "Szukaj", apply: "Zastosuj",
@@ -35,7 +36,8 @@ export const transactionLabels = {
     ambiguous: "pasuje do kilku par; wybierz w przelewach własnych",
     more: "Wczytaj więcej", empty: "Brak pasujących pozycji.", loading: "Wczytywanie pozycji…",
     error: "Nie udało się wczytać pozycji.", conflict: "Zmieniono to w innym miejscu; wczytano aktualny stan.",
-    saveError: "Nie udało się zapisać. Spróbuj ponownie.", account: "Konto",
+    saveError: "Nie udało się zapisać. Spróbuj ponownie.", changed: "Bank zmienił tę pozycję; wczytano aktualny stan.",
+    account: "Konto",
   },
 };
 export type TransactionLabels = typeof transactionLabels.en;
@@ -95,6 +97,8 @@ export function TransactionsPanel({ api, period, currencies, accounts, text, loc
     setPage((current) => ({ ...current, loading: true }));
     const result = await api.analyticsTransactions(period, filter, cursor);
     if (onAccessLoss(result) || token !== generation.current) return;
+    // The data moved under the cursor: start again from the first page rather than mixing two snapshots.
+    if (!result.ok && result.error === ANALYTICS_ERROR.staleCursor) { setReloads((current) => current + 1); return; }
     setPage((current) => (result.ok
       ? { rows: [...current.rows, ...result.data.transactions], cursor: result.data.next_cursor, total: result.data.filtered_total,
           loading: false, failed: false }
@@ -110,8 +114,9 @@ export function TransactionsPanel({ api, period, currencies, accounts, text, loc
     if (onAccessLoss(result) || token !== generation.current) return;
     setBusy(null);
     if (!result.ok) {
-      setNotice(result.error === "budget_version_conflict" ? text.conflict : text.saveError);
-      if (result.error === "budget_version_conflict") setReloads((current) => current + 1);
+      setNotice(result.error === ANALYTICS_ERROR.sourceChanged ? text.changed
+        : RELOAD_ERRORS.has(result.error) ? text.conflict : text.saveError);
+      if (RELOAD_ERRORS.has(result.error)) setReloads((current) => current + 1);
       return;
     }
     setEditing(null);

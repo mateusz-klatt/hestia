@@ -5,8 +5,8 @@ import type { Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BudgetApi, BudgetResult } from "../api";
 import { account } from "../fixtures";
-import { categoryList, entriesOf, entry } from "./fixtures";
-import type { AnalyticsTransaction, AnalyticsTransactions } from "./model";
+import { annotationOf, categoryList, entriesOf, entry } from "./fixtures";
+import type { AnalyticsAnnotation, AnalyticsTransaction, AnalyticsTransactions } from "./model";
 import { TransactionsPanel, transactionLabels } from "./transactions";
 
 function ok<T>(data: T): Promise<BudgetResult<T>> { return Promise.resolve({ ok: true, data }); }
@@ -19,7 +19,7 @@ function fakeApi(rows: AnalyticsTransaction[] = [entry("e1")]) {
   return {
     analyticsTransactions: vi.fn<BudgetApi["analyticsTransactions"]>(() => ok(pageOf(rows))),
     categories: vi.fn<BudgetApi["categories"]>(() => ok({ categories: categoryList })),
-    annotate: vi.fn<BudgetApi["annotate"]>(() => ok({ transaction: rows[0] ?? entry("x") })),
+    annotate: vi.fn<BudgetApi["annotate"]>(() => ok({ annotation: annotationOf() })),
   } satisfies Pick<BudgetApi, "analyticsTransactions" | "categories" | "annotate">;
 }
 
@@ -187,7 +187,7 @@ describe("period entries", () => {
   it("reloads instead of overwriting after a version conflict and explains other failures", async () => {
     const api = fakeApi();
     const { onChanged } = await show(api);
-    api.annotate.mockImplementationOnce(() => fail(409, "budget_version_conflict"));
+    api.annotate.mockImplementationOnce(() => fail(409, "budget_analytics_conflict"));
     await click(button("Change"));
     await submit(host.querySelector(".budget-entry-editor"));
     expect(host.textContent).toContain("changed elsewhere");
@@ -200,6 +200,21 @@ describe("period entries", () => {
     expect(host.querySelector(".budget-entry-editor")).not.toBeNull();
     await click(button("Cancel"));
     expect(host.querySelector(".budget-entry-editor")).toBeNull();
+  });
+
+  it("reloads with a clear message when the bank changed the entry, and restarts on a stale cursor", async () => {
+    const api = fakeApi();
+    await show(api);
+    api.annotate.mockImplementationOnce(() => fail(409, "budget_analytics_source_changed"));
+    await click(button("Change"));
+    await submit(host.querySelector(".budget-entry-editor"));
+    expect(host.textContent).toContain("The bank changed this entry");
+    expect(api.analyticsTransactions).toHaveBeenCalledTimes(2);
+    api.analyticsTransactions.mockImplementationOnce(() => ok(pageOf([entry("e1")], "cursor-1")))
+      .mockImplementationOnce(() => fail(409, "budget_analytics_stale_cursor"));
+    await show(api, { revision: 1 });
+    await click(button("Load more"));
+    expect(api.analyticsTransactions).toHaveBeenLastCalledWith("2026-11", { currency: "", category: "", kind: "", query: "" });
   });
 
   it("hands list and save answers to the access barrier first", async () => {
@@ -224,7 +239,7 @@ describe("period entries", () => {
   });
 
   it("drops a late save once the list has moved to another period", async () => {
-    let saved: (value: BudgetResult<{ transaction: AnalyticsTransaction }>) => void = () => undefined;
+    let saved: (value: BudgetResult<{ annotation: AnalyticsAnnotation }>) => void = () => undefined;
     const api = fakeApi();
     const first = await show(api);
     api.annotate.mockImplementationOnce(() => new Promise((resolve) => { saved = resolve; }));
@@ -232,7 +247,7 @@ describe("period entries", () => {
     await submit(host.querySelector(".budget-entry-editor"));
     expect(button("Save").disabled).toBe(true);
     await show(api, { period: "2026-10" });
-    await act(async () => { saved({ ok: true, data: { transaction: entry("e1") } }); await Promise.resolve(); });
+    await act(async () => { saved({ ok: true, data: { annotation: annotationOf() } }); await Promise.resolve(); });
     await settle();
     expect(first.onChanged).not.toHaveBeenCalled();
     expect(host.querySelector(".budget-entry-editor")).toBeNull();

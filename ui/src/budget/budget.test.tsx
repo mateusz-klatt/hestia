@@ -65,6 +65,11 @@ function fakeApi(accounts: BudgetAccount[] = [account({ display })]) {
     annotate: vi.fn<BudgetApi["annotate"]>(),
     transfers: vi.fn<BudgetApi["transfers"]>((period) => ok(transfersOf(period))),
     decideTransfer: vi.fn<BudgetApi["decideTransfer"]>(),
+    createCategory: vi.fn<BudgetApi["createCategory"]>(),
+    updateCategory: vi.fn<BudgetApi["updateCategory"]>(),
+    rules: vi.fn<BudgetApi["rules"]>(() => ok({ rules: [] })),
+    previewRule: vi.fn<BudgetApi["previewRule"]>(),
+    saveRule: vi.fn<BudgetApi["saveRule"]>(),
   } satisfies BudgetApi;
 }
 
@@ -868,6 +873,9 @@ describe("analytics views", () => {
     expect(host.querySelector(".budget-total")?.textContent).toContain("40.50 PLN");
     expect(host.textContent).not.toContain("Synthetic Current ••0001");
     expect(button("Month").getAttribute("aria-pressed")).toBe("true");
+    await click(button("Categories and rules"));
+    expect(api.rules).toHaveBeenCalledTimes(1);
+    expect(host.textContent).toContain("No categories yet.");
     await click(button("Accounts"));
     expect(host.textContent).toContain("Synthetic Current ••0001");
     expect(host.querySelector(".budget-month")).toBeNull();

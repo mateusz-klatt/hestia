@@ -202,8 +202,8 @@ export interface TransferList {
 }
 
 export type TransferAction = "accept" | "reject" | "undo";
-/** The queues the owner reviews; "undone" pairs are history, not a queue. */
-export const TRANSFER_QUEUES = ["suggested", "review", "boundary", "accepted", "rejected"] as const;
+/** The queues the owner reviews. Rejected and undone pairs never return as suggestions; the owner may re-accept them. */
+export const TRANSFER_QUEUES = ["suggested", "review", "boundary", "accepted", "rejected", "undone"] as const;
 export type TransferQueue = (typeof TRANSFER_QUEUES)[number];
 
 export type TransferDecisionRequest =
@@ -220,13 +220,19 @@ export type TransferDecisionRequest =
 
 export function transferDecision(pair: TransferPair, action: TransferAction): TransferDecisionRequest | null {
   if (action === "undo") return pair.id === null ? null : { action, decision_id: pair.id, expected_version: pair.version };
+  // Re-accepting a rejected or undone pair is the owner's explicit override: it is recorded as manual, while the
+  // pair's historical source stays untouched on the server.
+  const reaccept = action === "accept" && (pair.status === "rejected" || pair.status === "undone");
   return {
-    action, source: pair.source, expected_version: pair.version,
+    action, source: reaccept ? "manual" : pair.source, expected_version: pair.version,
     debit: { account_id: pair.debit.account_id, entry_reference: pair.debit.entry_reference },
     credit: { account_id: pair.credit.account_id, entry_reference: pair.credit.entry_reference },
     expected_debit_fingerprint: pair.debit.fingerprint, expected_credit_fingerprint: pair.credit.fingerprint,
   };
 }
+
+/** The result of a decision; the view re-reads the period rather than patching rows from it. */
+export interface TransferDecisionResult { id: string; version: number; status: TransferStatus }
 
 /** The actions the owner can take on a pair; a pair with a leg outside the selection cannot be accepted. */
 export function transferActions(pair: TransferPair): TransferAction[] {
@@ -235,10 +241,94 @@ export function transferActions(pair: TransferPair): TransferAction[] {
     case "suggested": return pair.boundary ? ["reject"] : ["accept", "reject"];
     case "review": return pair.boundary ? ["undo"] : ["accept", "undo"];
     case "boundary": return decided ? ["undo"] : ["reject"];
-    case "accepted":
-    case "rejected": return decided ? ["undo"] : [];
-    case "undone": return [];
+    case "accepted": return decided ? ["undo"] : [];
+    case "rejected":
+    case "undone": return pair.boundary ? [] : ["accept"];
   }
+}
+
+/** Analytics refusal codes. A conflict or changed source reloads; a stale or expired preview must be redone. */
+export const ANALYTICS_ERROR = {
+  conflict: "budget_analytics_conflict",
+  sourceChanged: "budget_analytics_source_changed",
+  stalePreview: "budget_analytics_stale_preview",
+  previewExpired: "budget_analytics_preview_expired",
+  legReserved: "budget_analytics_leg_reserved",
+  staleCursor: "budget_analytics_stale_cursor",
+} as const;
+export const RELOAD_ERRORS: ReadonlySet<string> = new Set([ANALYTICS_ERROR.conflict, ANALYTICS_ERROR.sourceChanged,
+  ANALYTICS_ERROR.legReserved, ANALYTICS_ERROR.staleCursor]);
+
+export const CATEGORY_NAME_MAX = 80;
+export const RULE_VALUE_MAX = 256;
+export const RULE_PRIORITY_MAX = 10000;
+
+export interface CategoryCreateRequest { name: string }
+export interface CategoryUpdateRequest { category_id: string; name: string; archived: boolean; expected_version: number }
+
+export type RuleField = "description" | "counterparty_name" | "mcc";
+export type RuleOperator = "contains" | "equals";
+export const RULE_FIELDS: readonly RuleField[] = ["description", "counterparty_name", "mcc"];
+export const RULE_OPERATORS: readonly RuleOperator[] = ["contains", "equals"];
+
+export interface AnalyticsRule {
+  id: string;
+  version: number;
+  field: RuleField;
+  operator: RuleOperator;
+  value: string;
+  category_id: string | null;
+  kind: KindChoice;
+  priority: number;
+  enabled: boolean;
+}
+
+/** A rule as proposed for preview; nothing changes until the previewed rule is saved. */
+export interface RuleCandidate {
+  rule_id: string | null;
+  /** 0 for a new rule, otherwise the version being replaced. */
+  expected_version: number;
+  field: RuleField;
+  operator: RuleOperator;
+  value: string;
+  category_id: string | null;
+  kind: KindChoice;
+  priority: number;
+  enabled: boolean;
+}
+
+export interface RulePreviewExample {
+  account_id: string;
+  entry_reference: string;
+  date: string | null;
+  amount: string;
+  currency: string;
+  credit_debit_indicator: "CRDT" | "DBIT";
+  description: string;
+}
+
+export interface RulePreview { preview_id: string; affected_count: number; examples: RulePreviewExample[]; expires_at: number }
+
+export function ruleCandidate(rule: AnalyticsRule | null): RuleCandidate {
+  if (rule === null) {
+    return { rule_id: null, expected_version: 0, field: "description", operator: "contains", value: "", category_id: null,
+      kind: "auto", priority: 100, enabled: true };
+  }
+  return { rule_id: rule.id, expected_version: rule.version, field: rule.field, operator: rule.operator, value: rule.value,
+    category_id: rule.category_id, kind: rule.kind, priority: rule.priority, enabled: rule.enabled };
+}
+
+/** A candidate the server could accept: a trimmed non-empty value within limits and an integer priority in range. */
+export function validCandidate(candidate: RuleCandidate): boolean {
+  const value = candidate.value.trim();
+  return value !== "" && value.length <= RULE_VALUE_MAX && Number.isInteger(candidate.priority)
+    && candidate.priority >= 0 && candidate.priority <= RULE_PRIORITY_MAX
+    && (candidate.category_id !== null || candidate.kind !== "auto");
+}
+
+export function validCategoryName(name: string): boolean {
+  const trimmed = name.trim();
+  return trimmed !== "" && trimmed.length <= CATEGORY_NAME_MAX;
 }
 
 const MONTH = /^(\d{4})-(0[1-9]|1[0-2])$/;

@@ -58,8 +58,18 @@ describe("analytics decisions", () => {
     expect(transferActions(pair({ status: "boundary" }))).toEqual(["reject"]);
     expect(transferActions(pair({ status: "boundary", id: "d" }))).toEqual(["undo"]);
     expect(transferActions(pair({ status: "accepted", id: "d" }))).toEqual(["undo"]);
-    expect(transferActions(pair({ status: "rejected" }))).toEqual([]);
-    expect(transferActions(pair({ status: "undone", id: "d" }))).toEqual([]);
+    expect(transferActions(pair({ status: "rejected", id: "d" }))).toEqual(["accept"]);
+    expect(transferActions(pair({ status: "undone", id: "d" }))).toEqual(["accept"]);
+    expect(transferActions(pair({ status: "undone", id: "d", boundary: true }))).toEqual([]);
+  });
+
+  it("records re-accepting a rejected or undone pair as the owner's manual choice", () => {
+    expect(transferDecision(pair({ source: "heuristic" }), "accept")).toMatchObject({ source: "heuristic" });
+    for (const status of ["rejected", "undone"] as const) {
+      expect(transferDecision(pair({ id: "d", version: 5, status, source: "account_identity" }), "accept"))
+        .toMatchObject({ action: "accept", source: "manual", expected_version: 5 });
+    }
+    expect(transferDecision(pair({ status: "rejected", source: "heuristic" }), "reject")).toMatchObject({ source: "heuristic" });
   });
 
   it("cannot undo a pair nobody decided on", () => {

@@ -1,6 +1,6 @@
 // Synthetic analytics fixtures only; no real account, transaction or bank data.
 import { component } from "../fixtures";
-import type { AnalyticsCategory, AnalyticsOverview, AnalyticsTotals, AnalyticsTransaction, AnalyticsTransactions, TransferLeg, TransferList,
+import type { AnalyticsAnnotation, AnalyticsCategory, AnalyticsOverview, AnalyticsTotals, AnalyticsTransaction, AnalyticsTransactions, TransferLeg, TransferList,
   TransferPair } from "./model";
 
 export function totals(currency: string, changes: Partial<AnalyticsTotals> = {}): AnalyticsTotals {
@@ -61,4 +61,8 @@ export function entriesOf(period: string, rows: AnalyticsTransaction[] = [], cur
 export function transfersOf(period: string, rows: TransferPair[] = [], cursor: string | null = null, limited = false): TransferList {
   return { period, start: `${period}-01`, end: `${period}-30`, snapshot_digest: "synthetic-digest", transfers: rows,
     filtered_total: rows.length, next_cursor: cursor, scan_limited: limited };
+}
+
+export function annotationOf(changes: Partial<AnalyticsAnnotation> = {}): AnalyticsAnnotation {
+  return { version: 1, mode: "manual", category_id: "cat-food", kind: "expense", stale: false, ...changes };
 }

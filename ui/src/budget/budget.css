@@ -90,3 +90,11 @@
 .budget-pair-legs { display: flex; flex-wrap: wrap; align-items: baseline; gap: .3rem .6rem; font-size: .9rem; }
 .budget-leg { overflow-wrap: anywhere; }
 .budget-leg .is-credit { color: var(--ok, #2e7d32); }
+.budget-rule-editor { display: flex; flex-wrap: wrap; gap: .5rem .7rem; align-items: end; }
+.budget-rule-editor label { display: grid; gap: .2rem; font-size: .8rem; color: var(--fg-soft); }
+.budget-rule-editor input:not([type="checkbox"]) { font: inherit; min-height: 2.4rem; max-width: 100%; }
+.budget-rule-editor input[type="number"] { width: 6rem; }
+.budget-rule-editor .budget-toggle { display: inline-flex; }
+.budget-rule-editor > p, .budget-rule-editor > .budget-actions, .budget-preview { flex-basis: 100%; }
+.budget-preview { border-inline-start: 3px solid var(--accent); padding: .4rem .75rem; background: var(--accent-soft); display: grid; gap: .3rem; }
+.budget-preview ul { margin: 0; padding-inline-start: 1.1rem; font-size: .85rem; overflow-wrap: anywhere; }

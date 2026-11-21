@@ -5,8 +5,9 @@ import { apiUrl } from "../api/client";
 import type { BudgetAccount, BudgetCapabilities, BudgetConnection, BudgetConsent, BudgetConsentFlow, BudgetJob,
   BudgetKind, BudgetBalances, BudgetLimit, BudgetOperation, BudgetTransactions, ConsentIntent } from "./model";
 import { idempotencyKey } from "./model";
-import type { AnalyticsCategory, AnalyticsOverview, AnalyticsTransaction, AnalyticsTransactions, AnnotationRequest,
-  TransactionFilter, TransferDecisionRequest, TransferList, TransferPair, TransferStatus } from "./analytics/model";
+import type { AnalyticsAnnotation, AnalyticsCategory, AnalyticsOverview, AnalyticsRule, AnalyticsTransactions, AnnotationRequest,
+  CategoryCreateRequest, CategoryUpdateRequest, RuleCandidate, RulePreview, TransactionFilter, TransferDecisionRequest,
+  TransferDecisionResult, TransferList, TransferQueue } from "./analytics/model";
 
 export type BudgetResult<T> =
   | { ok: true; data: T }
@@ -82,11 +83,18 @@ export const budgetApi = {
     })),
   categories: () => call<{ categories: AnalyticsCategory[] }>(url("analytics/categories")),
   /** The owner's explicit category/kind decision for one entry, versioned against concurrent edits. */
-  annotate: (request: AnnotationRequest) => post<{ transaction: AnalyticsTransaction }>("analytics/annotation", request),
+  annotate: (request: AnnotationRequest) => post<{ annotation: AnalyticsAnnotation }>("analytics/annotation", request),
   /** Own-transfer pairs of a period in one state; suggestions are never accepted without the owner. */
-  transfers: (period: string, status: TransferStatus, cursor?: string) =>
+  transfers: (period: string, status: TransferQueue, cursor?: string) =>
     call<TransferList>(url("analytics/transfers", { period, status, cursor })),
-  decideTransfer: (request: TransferDecisionRequest) => post<{ transfer: TransferPair }>("analytics/transfer-decision", request),
+  decideTransfer: (request: TransferDecisionRequest) =>
+    post<{ decision: TransferDecisionResult }>("analytics/transfer-decision", request),
+  createCategory: (request: CategoryCreateRequest) => post<{ category: AnalyticsCategory }>("analytics/category-create", request),
+  updateCategory: (request: CategoryUpdateRequest) => post<{ category: AnalyticsCategory }>("analytics/category-update", request),
+  rules: () => call<{ rules: AnalyticsRule[] }>(url("analytics/rules")),
+  /** Shows what a rule would change; nothing is applied until the preview is saved. */
+  previewRule: (candidate: RuleCandidate) => post<{ preview: RulePreview }>("analytics/rule-preview", candidate),
+  saveRule: (previewId: string) => post<{ rule: AnalyticsRule }>("analytics/rule-save", { preview_id: previewId }),
   setSelected: (account: BudgetAccount, selected: boolean) =>
     post<{ account: BudgetAccount }>("account-selection",
       { account_id: account.id, selected, expected_version: account.control_version }),

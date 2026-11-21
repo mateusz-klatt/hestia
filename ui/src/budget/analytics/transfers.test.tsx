@@ -15,7 +15,7 @@ function fail<T>(status: number, error: string): Promise<BudgetResult<T>> { retu
 function fakeApi(rows: TransferPair[] = [pair()]) {
   return {
     transfers: vi.fn<BudgetApi["transfers"]>((period) => ok(transfersOf(period, rows))),
-    decideTransfer: vi.fn<BudgetApi["decideTransfer"]>(() => ok({ transfer: rows[0] ?? pair() })),
+    decideTransfer: vi.fn<BudgetApi["decideTransfer"]>(() => ok({ decision: { id: "dec-new", version: 1, status: "accepted" } })),
   } satisfies Pick<BudgetApi, "transfers" | "decideTransfer">;
 }
 
@@ -112,6 +112,27 @@ describe("own-transfer queue", () => {
     expect(api.decideTransfer).toHaveBeenCalledWith({ action: "undo", decision_id: "dec-1", expected_version: 4 });
   });
 
+  it("lets the owner re-accept an undone pair explicitly, as a manual decision", async () => {
+    const undone = pair({ id: "dec-3", version: 6, status: "undone", source: "heuristic" });
+    const api = fakeApi([undone]);
+    await show(api);
+    await click("Undone");
+    expect(api.transfers).toHaveBeenLastCalledWith("2026-11", "undone");
+    expect(buttons()).toEqual(["Confirm transfer"]);
+    await click("Confirm transfer");
+    expect(api.decideTransfer).toHaveBeenCalledWith(expect.objectContaining({ action: "accept", source: "manual", expected_version: 6 }));
+  });
+
+  it("starts the list again when the server reports a stale cursor", async () => {
+    const api = fakeApi();
+    api.transfers.mockImplementationOnce((period) => ok(transfersOf(period, [pair()], "cursor-1")))
+      .mockImplementationOnce(() => fail(409, "budget_analytics_stale_cursor"));
+    await show(api);
+    await click("Load more");
+    expect(api.transfers).toHaveBeenCalledTimes(3);
+    expect(api.transfers).toHaveBeenLastCalledWith("2026-11", "suggested");
+  });
+
   it("marks stale decisions and boundary pairs, which can only be rejected or undone", async () => {
     const api = fakeApi([
       pair({ id: "dec-2", version: 2, status: "review", stale: true }),
@@ -133,14 +154,18 @@ describe("own-transfer queue", () => {
     await click("Confirm transfer");
     expect(host.textContent).toContain("bank data for this pair changed");
     expect(api.transfers).toHaveBeenCalledTimes(2);
-    api.decideTransfer.mockImplementationOnce(() => fail(409, "budget_version_conflict"));
+    api.decideTransfer.mockImplementationOnce(() => fail(409, "budget_analytics_conflict"));
     await click("Not a transfer");
     expect(host.textContent).toContain("changed elsewhere");
     expect(api.transfers).toHaveBeenCalledTimes(3);
+    api.decideTransfer.mockImplementationOnce(() => fail(409, "budget_analytics_leg_reserved"));
+    await click("Not a transfer");
+    expect(host.textContent).toContain("already in another pair");
+    expect(api.transfers).toHaveBeenCalledTimes(4);
     api.decideTransfer.mockImplementationOnce(() => fail(400, "budget_invalid_request"));
     await click("Not a transfer");
     expect(host.textContent).toContain("Could not save");
-    expect(api.transfers).toHaveBeenCalledTimes(3);
+    expect(api.transfers).toHaveBeenCalledTimes(4);
     expect(onChanged).not.toHaveBeenCalled();
   });
 

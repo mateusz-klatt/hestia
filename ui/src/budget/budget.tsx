@@ -12,13 +12,14 @@ import type { BudgetAccount, BudgetBalances, BudgetCapabilities, BudgetConnectio
   BudgetConsent, BudgetConsentFlow, BudgetLimit, BudgetSharedLimit, BudgetTransaction, DateRange,
   LimitState } from "./model";
 import { MonthView, monthLabels } from "./analytics/month";
+import { CategoriesView, rulesLabels } from "./analytics/rules";
 import { hasAnalytics } from "./analytics/model";
 import "./budget.css";
 
 const labels = {
   en: {
     title: "Budget", subtitle: "Your private household finances.", reload: "Reload", loading: "Loading budget…",
-    views: { accounts: "Accounts", month: "Month" }, viewsLabel: "Budget view",
+    views: { accounts: "Accounts", month: "Month", rules: "Categories and rules" }, viewsLabel: "Budget view",
     disabled: "The budget is not enabled on this server.", denied: "Only the budget's owner can view it.",
     error: "The budget could not be loaded. Try again.", empty: "No bank connections are configured.",
     account: "Account", refresh: "Refresh from bank", refreshing: "Refresh queued…",
@@ -63,7 +64,7 @@ const labels = {
   },
   pl: {
     title: "Budżet", subtitle: "Prywatne finanse domowe.", reload: "Wczytaj ponownie", loading: "Wczytywanie budżetu…",
-    views: { accounts: "Konta", month: "Miesiąc" }, viewsLabel: "Widok budżetu",
+    views: { accounts: "Konta", month: "Miesiąc", rules: "Kategorie i reguły" }, viewsLabel: "Widok budżetu",
     disabled: "Budżet nie jest włączony na tym serwerze.", denied: "Budżet widzi tylko jego właściciel.",
     error: "Nie udało się wczytać budżetu. Spróbuj ponownie.", empty: "Brak skonfigurowanych połączeń z bankiem.",
     account: "Konto", refresh: "Odśwież z banku", refreshing: "Odświeżanie w kolejce…",
@@ -109,13 +110,14 @@ const labels = {
 };
 type Labels = typeof labels.en;
 
-function pick(): { text: Labels; month: typeof monthLabels.en; locale: string } {
+function pick(): { text: Labels; month: typeof monthLabels.en; rules: typeof rulesLabels.en; locale: string } {
   const locale = currentLocale();
   const pl = locale.startsWith("pl");
-  return { text: pl ? labels.pl : labels.en, month: pl ? monthLabels.pl : monthLabels.en, locale };
+  return { text: pl ? labels.pl : labels.en, month: pl ? monthLabels.pl : monthLabels.en, rules: pl ? rulesLabels.pl : rulesLabels.en,
+    locale };
 }
 
-type View = "accounts" | "month";
+type View = "accounts" | "month" | "rules";
 
 type Load = "loading" | "ready" | "disabled" | "denied" | "error";
 
@@ -152,7 +154,7 @@ export interface BudgetProps {
 
 export function Budget({ active, api = budgetApi, pollMs = 2000, principal,
   navigate = (url) => { window.location.assign(url); }, completeUrl = "/budget/connect/complete" }: BudgetProps) {
-  const { text, month: monthText, locale } = pick();
+  const { text, month: monthText, rules: rulesText, locale } = pick();
   const [load, setLoad] = useState<Load>("loading");
   const [connections, setConnections] = useState<BudgetConnection[]>([]);
   const [capabilities, setCapabilities] = useState<BudgetCapabilities | null>(null);
@@ -416,7 +418,7 @@ export function Budget({ active, api = budgetApi, pollMs = 2000, principal,
       )}
       {analysis ? (
         <div className="budget-views" role="group" aria-label={text.viewsLabel}>
-          {(["accounts", "month"] as const).map((item) => (
+          {(["accounts", "month", "rules"] as const).map((item) => (
             <button type="button" key={item} aria-pressed={shownView === item}
               onClick={() => { setView(item); }}>{text.views[item]}</button>
           ))}
@@ -425,6 +427,8 @@ export function Budget({ active, api = budgetApi, pollMs = 2000, principal,
       {shownView === "month" ? (
         <MonthView api={api} accounts={accounts} text={monthText} locale={locale} revision={revision}
           onAccessLoss={barrier} />
+      ) : shownView === "rules" ? (
+        <CategoriesView api={api} text={rulesText} locale={locale} revision={revision} onAccessLoss={barrier} />
       ) : (
         <>
         {connections.length === 0 ? <p className="budget-status">{text.empty}</p> : null}
