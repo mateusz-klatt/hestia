@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { accountName, annotationRequest, counterparty, currentMonth, kindChoice, kindChoicesFor, legsMatch, hasAnalytics, isMonth, isZero, monthLabel, shiftMonth, transferActions, transferDecision } from "./model";
+import { accountName, annotationRequest, canPair, canonicalAmount, counterparty, currentMonth, daysBetween, kindChoice, kindChoicesFor,
+  legsMatch, hasAnalytics, isMonth, isZero, manualPairRequest, monthLabel, pairCandidates, pairDate, pairPeriods, shiftMonth,
+  transferActions, transferDecision } from "./model";
+import type { AnalyticsTransaction } from "./model";
 import { entry, leg, pair } from "./fixtures";
 import { account, connection } from "../fixtures";
 
@@ -41,6 +44,116 @@ describe("analysis month helpers", () => {
     expect(monthLabel("2026-11", "en")).toBe("November 2026");
     expect(monthLabel("2026-11", "pl")).toMatch(/listopad 2026/);
     expect(monthLabel("bad", "en")).toBe("bad");
+  });
+});
+
+describe("manual own-transfer pairing", () => {
+  const credit = (reference: string, changes: Partial<AnalyticsTransaction> = {}) => entry(reference, {
+    account_id: "acc-2", credit_debit_indicator: "CRDT", amount: "0100.00", booking_date: "2026-11-10",
+    effective: { kind: "income", category_id: null, source: "default", rule_id: null }, ...changes,
+  });
+  const debit = () => entry("debit", { amount: "100.00", booking_date: "2026-11-10" });
+  const transfer = { status: "none", decision_id: null, candidate_count: 0, ambiguous: false };
+
+  it("canonicalizes valid decimal strings textually and rejects every other shape", () => {
+    expect(canonicalAmount("0100.50")).toBe("100.5");
+    expect(canonicalAmount("100.00")).toBe("100");
+    expect(canonicalAmount("0.0")).toBe("0");
+    expect(canonicalAmount("000")).toBe("0");
+    expect(canonicalAmount("001.2300")).toBe("1.23");
+    expect(canonicalAmount("10")).toBe("10");
+    for (const invalid of ["", "abc", "-1", "+1", "1.", ".5", "1,2", "1.2.3", " 1", "1e2"]) {
+      expect(canonicalAmount(invalid)).toBeNull();
+    }
+  });
+
+  it("canonicalizes and matches a 30-digit integer without numeric conversion", () => {
+    const amount = "000123456789012345678901234567890.10";
+    const canonical = "123456789012345678901234567890.1";
+    expect(canonicalAmount(amount)).toBe(canonical);
+    expect(pairCandidates(entry("long-debit", { amount, booking_date: "2026-11-10" }), [credit("long-credit", { amount: canonical })]))
+      .toEqual([credit("long-credit", { amount: canonical })]);
+  });
+
+  it("uses booking then value dates and measures absolute UTC day distances", () => {
+    expect(pairDate(entry("a", { booking_date: "2026-11-10", value_date: "2026-11-09" }))).toBe("2026-11-10");
+    expect(pairDate(entry("b", { booking_date: null, value_date: "2026-11-09" }))).toBe("2026-11-09");
+    expect(pairDate(entry("c", { booking_date: null, value_date: null, transaction_date: "2026-11-10" }))).toBeNull();
+    expect(daysBetween("2026-11-10", "2026-11-10")).toBe(0);
+    expect(daysBetween("2026-11-13", "2026-11-10")).toBe(3);
+    expect(daysBetween("2026-12-31", "2027-01-01")).toBe(1);
+  });
+
+  it("covers both months whenever the three-day window crosses a month or year", () => {
+    expect(pairPeriods("2026-11-10")).toEqual(["2026-11"]);
+    expect(pairPeriods("2026-11-02")).toEqual(["2026-10", "2026-11"]);
+    expect(pairPeriods("2026-11-29")).toEqual(["2026-11", "2026-12"]);
+    expect(pairPeriods("2026-12-31")).toEqual(["2026-12", "2027-01"]);
+    expect(pairPeriods("2026-01-01")).toEqual(["2025-12", "2026-01"]);
+  });
+
+  it("handles leap-year and non-leap-year windows across February", () => {
+    expect(pairPeriods("2028-02-28")).toEqual(["2028-02", "2028-03"]);
+    expect(pairPeriods("2028-03-01")).toEqual(["2028-02", "2028-03"]);
+    expect(daysBetween("2028-02-28", "2028-03-01")).toBe(2);
+    expect(daysBetween("2027-02-28", "2027-03-01")).toBe(1);
+  });
+
+  it("offers only acceptable, deduplicated credits and compares amounts canonically", () => {
+    const rows = [
+      credit("ok"), credit("ok"),
+      credit("direction", { credit_debit_indicator: "DBIT" }),
+      credit("currency", { currency: "EUR" }),
+      credit("amount", { amount: "100.01" }),
+      credit("account", { account_id: "acc-1" }),
+      credit("far", { booking_date: "2026-11-14" }),
+      credit("accepted", { transfer: { ...transfer, status: "accepted" } }),
+      credit("review", { transfer: { ...transfer, status: "review" } }),
+      credit("boundary", { transfer: { ...transfer, status: "boundary" } }),
+      credit("kind", { effective: { kind: "transfer", category_id: null, source: "default", rule_id: null } }),
+      credit("date", { booking_date: null, value_date: null, transaction_date: "2026-11-10" }),
+    ];
+    expect(pairCandidates(debit(), rows).map((row) => row.entry_reference)).toEqual(["ok"]);
+    expect(pairCandidates(entry("bad", { amount: "100.00", booking_date: null }), rows)).toEqual([]);
+    expect(pairCandidates(entry("bad", { amount: "not-decimal" }), rows)).toEqual([]);
+  });
+
+  it("orders candidates by distance, date, account and reference", () => {
+    const rows = [
+      credit("later", { account_id: "acc-3", booking_date: "2026-11-11" }),
+      credit("b", { booking_date: "2026-11-09" }),
+      credit("a", { booking_date: "2026-11-09" }),
+      credit("same", { account_id: "acc-3" }),
+      credit("same"),
+    ];
+    expect(pairCandidates(debit(), rows).map((row) => `${row.account_id}/${row.entry_reference}`)).toEqual([
+      "acc-2/same", "acc-3/same", "acc-2/a", "acc-2/b", "acc-3/later",
+    ]);
+  });
+
+  it("offers pairing only for eligible, non-zero debit rows", () => {
+    expect(canPair(debit())).toBe(true);
+    for (const status of ["none", "suggested", "rejected", "undone"] as const) {
+      expect(canPair(debit())).toBe(true);
+      expect(canPair(entry("debit", { transfer: { ...transfer, status } }))).toBe(true);
+    }
+    expect(canPair(credit("credit"))).toBe(false);
+    expect(canPair(entry("zero", { amount: "000.00" }))).toBe(false);
+    expect(canPair(entry("invalid", { amount: "-1" }))).toBe(false);
+    expect(canPair(entry("dateless", { booking_date: null, value_date: null }))).toBe(false);
+    expect(canPair(entry("kind", { effective: { kind: "transfer", category_id: null, source: "default", rule_id: null } }))).toBe(false);
+    for (const status of ["accepted", "review", "boundary"] as const) {
+      expect(canPair(entry("debit", { transfer: { ...transfer, status } }))).toBe(false);
+    }
+  });
+
+  it("builds the exact first manual decision with both shown transfer fingerprints", () => {
+    expect(manualPairRequest(debit(), credit("credit"))).toEqual({
+      action: "accept", source: "manual", decision_id: null, expected_version: 0,
+      debit: { account_id: "acc-1", entry_reference: "debit" },
+      credit: { account_id: "acc-2", entry_reference: "credit" },
+      expected_debit_fingerprint: "tfp-debit", expected_credit_fingerprint: "tfp-credit",
+    });
   });
 });
 

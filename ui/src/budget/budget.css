@@ -81,6 +81,7 @@
 .budget-chip { border: 1px solid var(--border); border-radius: 999px; padding: .05rem .5rem; color: var(--fg); background: var(--bg, transparent); }
 .budget-entry-editor { display: flex; flex-wrap: wrap; gap: .5rem; align-items: end; padding: .4rem 0; }
 .budget-entry-editor label { display: grid; gap: .2rem; font-size: .8rem; color: var(--fg-soft); }
+.budget-pair-picker { display: grid; gap: .4rem; padding: .4rem 0; }
 @media (max-width: 640px) {
   .budget-entry-main { grid-template-columns: minmax(0, 1fr) auto; }
   .budget-entry-main > span:first-child { grid-column: 1 / -1; }
