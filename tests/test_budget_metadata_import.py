@@ -1,7 +1,7 @@
 """Optional account labels enrich offline batches without touching the ledger."""
 from contextlib import redirect_stderr, redirect_stdout
 from copy import deepcopy
-from dataclasses import asdict, replace
+from dataclasses import replace
 from datetime import datetime, timezone
 import io
 import json
@@ -63,7 +63,7 @@ class BudgetMetadataImportTests(unittest.TestCase):
     def invoke(self, raw, *, database=None):
         root = Path(self.directory.name)
         config_path, snapshot_path = root / "PRIVATE-config.json", root / "PRIVATE-snapshot.json"
-        config_path.write_text(json.dumps({"version": 1, **asdict(self.config)}), encoding="utf-8")
+        config_path.write_text(json.dumps(fixtures.configuration_document(self.config)), encoding="utf-8")
         snapshot_path.write_text(json.dumps(raw), encoding="utf-8")
         config_path.chmod(0o600)
         snapshot_path.chmod(0o600)

@@ -1,6 +1,6 @@
 """Operator suspension recovery preserves server deadlines, quota and ownership."""
 from contextlib import redirect_stderr, redirect_stdout
-from dataclasses import asdict, replace
+from dataclasses import replace
 import io
 import json
 from pathlib import Path
@@ -17,7 +17,7 @@ from hestia.budget.limits import BudgetLimits, LIMIT_SCOPES
 from hestia.budget.rate_limit import RateScope
 from hestia.budget.scheduler import BudgetScheduler, provider_key
 from hestia.budget.store import BudgetStore, BudgetStoreError
-from tests.test_budget_store import APP, configuration, prepare_selected, snapshot, transaction
+from tests.test_budget_store import APP, configuration, configuration_document, prepare_selected, snapshot, transaction
 
 
 class BudgetLimitTests(unittest.TestCase):
@@ -36,7 +36,7 @@ class BudgetLimitTests(unittest.TestCase):
         foreign = replace(self.config.connections[0], id="foreign-bank", owner="other", bank_name="Other Bank",
                           accounts=("PRIVATE-foreign-hash",))
         self.config = replace(self.config, connections=(*self.config.connections, foreign))
-        self.config_path.write_text(json.dumps({"version": 1, **asdict(self.config)}), encoding="utf-8")
+        self.config_path.write_text(json.dumps(configuration_document(self.config)), encoding="utf-8")
         self.store = BudgetStore(self.sessions, clock=lambda: self.now)
         prepare_selected(self.store, self.config)
         self.limits = BudgetLimits(self.store, self.config)

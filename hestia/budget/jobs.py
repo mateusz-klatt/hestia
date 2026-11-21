@@ -18,6 +18,7 @@ import time
 
 from .client import EnableBankingClient
 from .config import BudgetConfigError, load_config
+from .consent_runtime import resolve_config
 from .job_store import BudgetJobStore
 from .runtime import BudgetBusyError, acquire, budget_lock
 from .scheduler import BudgetScheduler
@@ -89,11 +90,12 @@ class BudgetJobRunner:
             with budget_lock(self.path):
                 store = self._store()
                 store.configure(config)
+                config = resolve_config(config, path=self.path, clock=self.clock)
                 candidates = set(store.background_candidates())
                 scheduler = BudgetScheduler(store, application_id=config.application_id)
                 added = 0
                 for connection in config.connections:
-                    if connection.id in candidates and scheduler.can_start(connection):
+                    if connection.credential_available and connection.id in candidates and scheduler.can_start(connection):
                         added += store.enqueue_background(connection.id) is not None
                 return added
         except BudgetBusyError:
@@ -131,6 +133,8 @@ class BudgetJobRunner:
             return store.finish(job["id"], "deferred", "background_disabled")
         try:
             store.configure(config)
+            config = resolve_config(config, path=self.path, clock=self.clock)
+            connection = next(item for item in config.connections if item.id == job["connection_id"])
             primary = store.target_hash(job)
         except BudgetNotFound:
             return store.finish(job["id"], "deferred", "account_selection")

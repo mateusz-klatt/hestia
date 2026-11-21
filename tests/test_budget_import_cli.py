@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from contextlib import redirect_stderr, redirect_stdout
 from copy import deepcopy
-from dataclasses import asdict, replace
+from dataclasses import replace
 from datetime import datetime, timezone
 import io
 import json
@@ -19,7 +19,7 @@ from hestia import db
 from hestia.budget import __main__ as cli
 from hestia.budget import runtime
 from hestia.budget.store import BudgetStore
-from tests.test_budget_store import configuration, prepare_selected, snapshot, transaction
+from tests.test_budget_store import configuration, configuration_document, prepare_selected, snapshot, transaction
 from tests.test_budget_import_store import quota_state, seed_retry_state
 
 
@@ -56,7 +56,7 @@ class BudgetImportCLITests(unittest.TestCase):
         self.directory.cleanup()
 
     def write_config(self, config):
-        self.config_path.write_text(json.dumps({"version": 1, **asdict(config)}), encoding="utf-8")
+        self.config_path.write_text(json.dumps(configuration_document(config)), encoding="utf-8")
         self.config_path.chmod(0o600)
 
     def write_import(self, document):

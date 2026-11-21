@@ -39,6 +39,7 @@ from pathlib import Path
 from aiohttp import ClientConnectionError, web
 
 from . import auth, store_sql
+from .budget import consent_api
 from .classifier import DeviceType
 from .automations import rule_vocab
 from .proxy import (INJECT_GAP_SECS, IR_BUTTONS, KLIMA, _CLOSED_SENTINEL, _LOOPBACK, _audit,
@@ -147,7 +148,7 @@ def _is_public_route(method: str, path: str) -> bool:
     if method in ("GET", "HEAD") and path in _PUBLIC_DOCUMENTS:
         return True
     if method == "GET":
-        return path in ("/", "/ui/") or path.startswith("/assets/")
+        return path in ("/", "/ui/") or path in consent_api.PUBLIC_GET or path.startswith("/assets/")
     return method == "POST" and path in ("/api/login", "/api/logout")
 
 
@@ -164,6 +165,11 @@ _PATH_USERS = "/api/users"
 _PATH_WHOLE_HOME = "/api/whole-home"
 _USERNAME_REQUIRED = "username is required"   # shared 400 message across the admin user verbs
 _ROUTE_MIN_ROLE = {
+    ("GET", "/api/budget/consent/pending"): _ADMIN,
+    ("GET", "/api/budget/consent/status"): _ADMIN,
+    ("POST", "/api/budget/consent/start"): _ADMIN,
+    ("POST", "/api/budget/consent/complete"): _ADMIN,
+    ("POST", "/api/budget/consent/cancel"): _ADMIN,
     ("GET", "/api/budget/connections"): _ADMIN,
     ("GET", "/api/budget/accounts"): _ADMIN,
     ("GET", "/api/budget/status"): _ADMIN,
@@ -294,7 +300,6 @@ async def _login(request):
     if not (_AUTH_ENABLED and auth.authenticate(user, password, store_sql.current_users())):
         _audit(_rt(request), user if isinstance(user, str) else "?", "login", result="invalid")
         return _json(HTTPStatus.UNAUTHORIZED, {"ok": False, "error": "invalid credentials"})
-    _audit(_rt(request), user, "login", result="ok")
     token = auth.make_session(user, now=_now(), secret=_SESSION_SECRET)
     body = {"ok": True, "user": user}
     # A native client opts in with {"bearer": true} and stores the returned token (sent back as
@@ -303,15 +308,24 @@ async def _login(request):
     if op.get("bearer") is True:
         body["token"] = token
     resp = _json(HTTPStatus.OK, body)
+    try:
+        await consent_api.auth_transition(request, resp)
+    except Exception as exc:
+        return consent_api._failure(exc, "login_invalidation")
+    _audit(_rt(request), user, "login", result="ok")
     resp.set_cookie(_SESSION_COOKIE, token, max_age=int(auth.SESSION_TTL), httponly=True,
                     samesite="Strict", secure=_COOKIE_SECURE, path="/")
     return resp
 
 
-async def _logout(_request):  # NOSONAR S7503: aiohttp route handlers must be coroutines (the framework awaits them)
+async def _logout(request):
     # Not audited: /api/logout is public (no session lookup in the middleware), so the actor would
     # always be "anonymous" — logout is low-value to attribute. Login (success/failure) is audited.
     resp = _json(HTTPStatus.OK, {"ok": True})
+    try:
+        await consent_api.auth_transition(request, resp)
+    except Exception as exc:
+        return consent_api._failure(exc, "logout_invalidation")
     resp.del_cookie(_SESSION_COOKIE, path="/")
     return resp
 
@@ -1128,7 +1142,7 @@ def make_app(rt):
     app[_RT_KEY] = rt
     register_calendars(app, _read_json_body)
     register_budget(app, _read_json_body, auth_enabled=lambda: _AUTH_ENABLED,
-                    session_secret=lambda: _SESSION_SECRET)
+                    session_secret=lambda: _SESSION_SECRET, secure_cookie=lambda: _COOKIE_SECURE)
     app.router.add_get("/", _ui_index, allow_head=False)                          # the TS app (Vite build)
     app.router.add_get("/assets/{path:[A-Za-z0-9._-]+}", _ui_asset, allow_head=False)
     app.router.add_get("/ui/", _ui_redirect, allow_head=False)                    # retired alias -> /

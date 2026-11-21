@@ -39,10 +39,15 @@ class ConnectionConfig:
     session_file: str
     accounts: tuple[str, ...]
     policy: AcquisitionPolicy = AcquisitionPolicy()
+    credential_available: bool = True
+    consent_generation: int = 0
 
     def __post_init__(self):
         if type(self.policy) is not AcquisitionPolicy:
             raise BudgetConfigError("Invalid acquisition policy")
+        if (type(self.credential_available) is not bool or type(self.consent_generation) is not int
+                or self.consent_generation < 0):
+            raise BudgetConfigError("Invalid credential configuration")
 
 
 @dataclass(frozen=True)
@@ -183,6 +188,8 @@ def _read_secret(path: str, *, max_bytes=None) -> bytes:
 
 def credentials(config: BudgetConfig, connection: ConnectionConfig) -> tuple[bytes, str]:
     """Resolve private local files; PEM interpretation belongs to the API client."""
+    if not connection.credential_available:
+        raise BudgetConfigError("Managed budget credentials are unavailable")
     key = _read_secret(config.key_file)
     try:
         data = json.loads(_read_secret(connection.session_file), object_pairs_hook=_json_object)

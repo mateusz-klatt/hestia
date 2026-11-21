@@ -3,7 +3,8 @@
 Status: deployed at migration `0013` are the CLI foundation, the private HTTP API
 (2B.1), durable refresh jobs with an opt-in poller (2B.jobs) and the owner budget
 screens (2C). Each server feature has its own default-off flag. Browser bank consent
-and renewal (2B.2/2B.3) are not implemented. This module does not make payments or
+and renewal (2B.2/2B.3) are implemented in migration `0014` and require their own
+explicit activation; deployment of `0013` alone does not expose them. This module does not make payments or
 categorise expenses. The public privacy policy and terms describe the budget module;
 keep them current before changing what is processed.
 
@@ -16,8 +17,9 @@ keep them current before changing what is processed.
   data is separate from shared calendars/device permissions. The private HTTP API
   requires that administrator to be the exact owner. CLI status prints counts and freshness, not amounts,
   account hashes, account numbers, descriptions, session IDs or credentials.
-- Reauthorisation replaces the external session file, preserving the connection
-  ID and selected account hashes. Session account UIDs are temporary routing data,
+- CLI reauthorisation can replace an operator-managed external session file.
+  Browser renewal adopts a new private managed file under a generation fence;
+  it preserves external files, connection IDs and selected account hashes. Session account UIDs are temporary routing data,
   not durable identities, and are not stored in the database.
 - `entry_reference` identifies a transaction within one stable account.
   `transaction_id` is a changeable details handle and is **never** a dedup key.
@@ -621,12 +623,78 @@ describe the actual enabled feature and retention practices.
 Keep exporter/importer clocks synchronized; a source timestamp ahead of the
 importer's clock is rejected rather than silently adjusted.
 
+## Browser consent and renewal
+
+Migration `0014` adds durable consent flows and managed session pointers. Existing
+connections remain `external`: their key/session files, account choices, kinds,
+history, pauses, quotas and deadlines are preserved. New sessions are adopted only
+after provider verification and an owner/browser/version check. A failed or
+interrupted code exchange is not replayed automatically.
+
+Keep the same Enable Banking application and key. Its registered redirect is:
+`https://hestia.klatt.ie/api/budget/enable-banking/callback`. Localhost has been
+removed from that production application's redirects by the operator.
+
+To enable the browser flow, pass these environment variables to the container
+(for example in its Compose override), in addition to the existing budget config:
+
+```yaml
+services:
+  hestia:
+    environment:
+      HESTIA_BUDGET_HTTP_ENABLED: "1"
+      HESTIA_BUDGET_CONSENT_ENABLED: "1"
+      HESTIA_BUDGET_PUBLIC_ORIGIN: "https://hestia.klatt.ie"
+      HESTIA_BUDGET_CONSENT_DIR: "/data/budget-consent"
+      HESTIA_COOKIE_SECURE: "1"
+      HESTIA_BUDGET_TRUSTED_PROXY_CIDRS: "127.0.0.1/32,::1/128"
+```
+
+Authentication and authoritative SQLite admin users are required. The existing
+`/data` volume must persist the owner-private consent directory as well as SQLite.
+Do not mount that new directory read-only: Hestia writes private code/session
+files there, atomically, with restrictive permissions. Back it up consistently
+with the database; do not combine an older active pointer with newer capsule files.
+Do not print their contents. No extra encryption key is needed.
+
+The trusted-proxy setting above matches this installation's loopback Apache
+proxy, which removes incoming X-Forwarded-For and regenerates it from its verified
+client address. Do not copy it blindly to another topology. Hestia validates the
+whole forwarded-IP chain and walks it from the trusted peer toward the first
+untrusted address. Unverified private/loopback peers, absent or malformed chains
+provide no PSU IP; a bank requiring that context refuses the flow. Arbitrary
+CF-Connecting-IP, True-Client-IP, Forwarded and Referer headers are not trusted.
+
+The owner starts **Connect/Renew** for an explicitly configured connection and
+signs in on the bank/Enable Banking page. The public callback performs no bank
+request: it stages the bound code and redirects to a clean completion page. The
+completion page uses the owner's Strict Hestia cookie and a same-origin POST to
+finish verification. Opening the callback URL alone cannot adopt a session.
+After logout, another browser or an expired flow, start a fresh connection.
+
+Renewal uses the bank's advertised maximum lifetime and the actual returned
+`valid_until`; no fixed 180-day lifetime is promised. A newly verified session
+must cover all currently selected configured accounts. Additional bank accounts
+are never selected or added to the hard allowlist automatically. An empty local
+selection remains empty. Acquisition stays a separate action under existing
+limits; renewal does not reset debits, pauses, backoffs or suspension. A bank may
+invalidate an old consent during a new SCA even if local adoption later fails.
+
+The flow retains known unadopted sessions for reconciliation. If POST delivery is
+uncertain, Hestia records `exchange_uncertain` and does not reuse the code. If only
+verification/adoption failed, retrying completion uses the known candidate and
+does not create another session. Remote session closure and automated erasure are
+not implemented; old external/PoC sessions are never deleted or overwritten.
+
+The operator accepted the existing Apache/Cloudflare logging and plaintext local
+financial SQLite storage. Proxy changes and additional encryption are not gates
+for this deployment. Hestia still uses private files, owner/browser checks,
+no-store/no-referrer responses and fixed diagnostics without raw secrets.
+
 ## Next slices (not implemented here)
 
-1. Browser consent and renewal. Reserved
-   callback: `https://hestia.klatt.ie/api/budget/enable-banking/callback`; **no route
-   exists yet**. Use expiring single-use state bound to user, browser and bank;
-   keep callback query secrets out of access logs, referrers and page content.
+1. Explicit remote closure of Hestia-created sessions and an owner-facing
+   reconciliation/retention workflow for uncertain or retired consents.
 2. Reminder seven days before actual provider `valid_until`; an **Odnów** action
    verifies and adopts a new session without automatically closing external/PoC
    sessions. Some banks invalidate the old consent during new SCA; retaining the

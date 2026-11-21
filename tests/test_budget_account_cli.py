@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from contextlib import redirect_stderr, redirect_stdout
-from dataclasses import asdict, replace
+from dataclasses import replace
 import io
 import json
 import os
@@ -18,7 +18,7 @@ from hestia.budget import __main__ as cli
 from hestia.budget import runtime
 from hestia.budget.store import ACCOUNT_KINDS, BudgetStore
 from tests.test_budget_import_cli import import_document
-from tests.test_budget_store import configuration
+from tests.test_budget_store import configuration, configuration_document
 
 
 PRIVATE_HASH = "PRIVATE-owned-account-hash"
@@ -48,7 +48,7 @@ class BudgetAccountCLITests(unittest.TestCase):
         self.directory.cleanup()
 
     def write_config(self, config):
-        self.config_path.write_text(json.dumps({"version": 1, **asdict(config)}), encoding="utf-8")
+        self.config_path.write_text(json.dumps(configuration_document(config)), encoding="utf-8")
         self.config_path.chmod(0o600)
 
     def rows(self, model):
