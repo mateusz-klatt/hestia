@@ -1,13 +1,15 @@
 """Atomic snapshots on the existing Hestia SQLite engine, without session secrets."""
 from __future__ import annotations
 
+from datetime import date
 import json
+import re
 import time
 import uuid
 from collections import Counter
 from contextlib import contextmanager
 
-from sqlalchemy import delete, func, select, text
+from sqlalchemy import func, select, text
 
 from ..db import BudgetAccount as Account, BudgetConnection as Connection
 from ..db import BudgetTransaction as Transaction, BudgetUnresolved as Unresolved, User
@@ -26,6 +28,8 @@ STALE_AFTER = {"transactions": 129600, "balances": 86400}
 # Failures that stop unattended acquisition until an explicit owner refresh verifies the session.
 ATTENTION = frozenset({"authorization", "invalid_session", "expired_session", "session_mismatch", "configuration"})
 _SELECTION_CHANGED = "Bank account selection changed during acquisition"
+_INVALID_WINDOW = "Invalid snapshot date window"
+_ISO_DATE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", re.ASCII)
 
 
 class BudgetStoreError(ValueError):
@@ -70,6 +74,33 @@ def set_diagnostic(row, diagnostic=None):
 
 def _ledger_reference(tx):
     return tx["entry_reference"] if (tx["status"] == "BOOK" and (tx["booking_date"] or tx["value_date"])) else None
+
+
+def _iso_date(value):
+    if not isinstance(value, str) or not _ISO_DATE.fullmatch(value):
+        raise BudgetStoreError(_INVALID_WINDOW)
+    try:
+        return date.fromisoformat(value).isoformat()
+    except ValueError:
+        raise BudgetStoreError(_INVALID_WINDOW) from None
+
+
+def _snapshot_window(snapshot):
+    if not hasattr(snapshot, "date_from") and not hasattr(snapshot, "date_to"):
+        return None
+    start = _iso_date(getattr(snapshot, "date_from", None))
+    end = _iso_date(getattr(snapshot, "date_to", None))
+    if start > end:
+        raise BudgetStoreError(_INVALID_WINDOW)
+    return start, end
+
+
+def _effective_date(tx):
+    return tx.get("booking_date") or tx.get("value_date")
+
+
+def _covered(stamp, window):
+    return window is None or stamp is None or window[0] <= stamp <= window[1]
 
 
 class BudgetStore:
@@ -366,6 +397,7 @@ class BudgetStore:
 
     def commit_snapshot(self, connection_id, snapshot, *, attempt_id=None, expected_version=None,
                         expected_selection=None):
+        window = _snapshot_window(snapshot)
         now = self.clock()
         with self.transaction() as session:
             row = session.get(Connection, connection_id)
@@ -385,7 +417,7 @@ class BudgetStore:
             completed, errors = 0, len(snapshot.errors)
             for observation in snapshot.accounts:
                 good, bad = self._import_account(session, accounts[observation.identification_hash],
-                                               observation, now, attempt_id)
+                                               observation, now, attempt_id, window)
                 completed += good
                 errors += bad
                 apply_bank_metadata(session, accounts[observation.identification_hash].id,
@@ -415,7 +447,7 @@ class BudgetStore:
         component.failures += 1
         component.attempt_id, component.lease_until = None, None
 
-    def _apply_component(self, session, account, observation, operation, now, attempt_id):
+    def _apply_component(self, session, account, observation, operation, now, attempt_id, window=None):
         data = getattr(observation, operation)
         error = getattr(observation, operation + "_error", None)
         if data is None and error is None:
@@ -436,14 +468,14 @@ class BudgetStore:
         if operation == "balances":
             account.balances_json = _json(data)
         else:
-            self._import_transactions(session, account, data, now)
+            self._import_transactions(session, account, data, now, window)
         component.last_success, component.last_error, component.failures = now, None, 0
         set_diagnostic(component)
         component.attempt_id, component.lease_until = None, None
         return 1, 0
 
-    def _import_account(self, session, account, observation, now, attempt_id):
-        results = [self._apply_component(session, account, observation, operation, now, attempt_id)
+    def _import_account(self, session, account, observation, now, attempt_id, window=None):
+        results = [self._apply_component(session, account, observation, operation, now, attempt_id, window)
                    for operation in OPERATIONS]
         completed = sum(good for good, _ in results)
         errors = sum(bad for _, bad in results)
@@ -458,19 +490,40 @@ class BudgetStore:
             account.observed_at = now
         return completed, errors
 
-    def _import_transactions(self, session, account, transactions, now):
-        session.execute(delete(Unresolved).where(Unresolved.account_id == account.id))
-        ordinal = 0
-        references = Counter(filter(None, map(_ledger_reference, transactions)))
-        for tx in transactions:
+    def _import_transactions(self, session, account, transactions, now, window=None):
+        kept = []
+        for row in session.scalars(select(Unresolved).where(Unresolved.account_id == account.id)):
+            payload = json.loads(row.payload_json)
+            if _covered(_effective_date(payload), window):
+                session.delete(row)
+            else:
+                kept.append((row.ordinal, payload))
+        session.flush()
+        ordinal = max((item[0] for item in kept), default=-1) + 1
+        kept_payloads = {_json(payload) for _, payload in kept}
+        kept_refs = Counter(filter(None, (_ledger_reference(payload) for _, payload in kept)))
+        incoming = [tx for tx in transactions
+                    if not (tx["entry_reference"] is not None and not _covered(_effective_date(tx), window)
+                            and _json(tx) in kept_payloads)]
+        references = kept_refs + Counter(filter(None, map(_ledger_reference, incoming)))
+        for tx in incoming:
             conflict = tx["entry_reference"] is not None and references[tx["entry_reference"]] > 1
-            ordinal = self._import_transaction(session, account.id, tx, conflict, ordinal, now)
+            ordinal = self._import_transaction(session, account.id, tx, conflict, ordinal, now, window)
 
     @staticmethod
-    def _import_transaction(session, account_id, tx, conflict, ordinal, now):
+    def _uncertain_outside_window(existing, window):
+        if existing is None or not existing.uncertain or window is None:
+            return False
+        return not _covered(_effective_date(json.loads(existing.payload_json)), window)
+
+    @staticmethod
+    def _import_transaction(session, account_id, tx, conflict, ordinal, now, window=None):
         ref = tx["entry_reference"]
+        existing = None if ref is None else session.get(Transaction, (account_id, ref))
+        if not conflict and _ledger_reference(tx) is not None and BudgetStore._uncertain_outside_window(existing, window):
+            conflict = True
         if conflict:
-            prior = session.get(Transaction, (account_id, ref))
+            prior = existing
             if prior is None:
                 # A durable uncertain head also protects references that have
                 # never had a canonical entry from an older offline backfill.
@@ -484,7 +537,6 @@ class BudgetStore:
             session.add(Unresolved(account_id=account_id, ordinal=ordinal,
                                    payload_json=_json(tx), observed_at=now))
             return ordinal + 1
-        existing = session.get(Transaction, (account_id, ref))
         if existing is None:
             session.add(Transaction(account_id=account_id, entry_reference=ref,
                                     payload_json=_json(tx), observed_at=now, uncertain=False,

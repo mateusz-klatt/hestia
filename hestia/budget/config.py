@@ -30,6 +30,10 @@ class AcquisitionPolicy:
                 raise BudgetConfigError("Invalid acquisition policy")
 
 
+MIN_HISTORY_DAYS = 1
+MAX_HISTORY_DAYS = 364
+
+
 @dataclass(frozen=True)
 class ConnectionConfig:
     id: str
@@ -41,6 +45,7 @@ class ConnectionConfig:
     policy: AcquisitionPolicy = AcquisitionPolicy()
     credential_available: bool = True
     consent_generation: int = 0
+    max_history_days: int = MAX_HISTORY_DAYS
 
     def __post_init__(self):
         if type(self.policy) is not AcquisitionPolicy:
@@ -48,6 +53,8 @@ class ConnectionConfig:
         if (type(self.credential_available) is not bool or type(self.consent_generation) is not int
                 or self.consent_generation < 0):
             raise BudgetConfigError("Invalid credential configuration")
+        if type(self.max_history_days) is not int or not MIN_HISTORY_DAYS <= self.max_history_days <= MAX_HISTORY_DAYS:
+            raise BudgetConfigError("Invalid max_history_days")
 
 
 @dataclass(frozen=True)
@@ -118,10 +125,11 @@ def parse_config(raw) -> BudgetConfig:
     connections, identifiers = [], set()
     for item in data["connections"]:
         fields = {"id", "owner", "bank_name", "country", "session_file", "accounts"}
-        if isinstance(item, dict) and "policy" in item:
-            fields.add("policy")
+        if isinstance(item, dict):
+            fields |= set(item) & {"policy", "max_history_days"}
         item = _object(item, fields, "connection")
         policy = _policy(item.get("policy", {}))
+        max_history_days = item.get("max_history_days", MAX_HISTORY_DAYS)
         identifier = _text(item["id"], "connection identifier")
         if not _ID.fullmatch(identifier) or identifier in identifiers:
             raise BudgetConfigError("Invalid or duplicate connection identifier")
@@ -141,7 +149,8 @@ def parse_config(raw) -> BudgetConfig:
                 raise BudgetConfigError("Duplicate account hash")
             hashes.add(account_hash)
             accounts.append(account_hash)
-        connections.append(ConnectionConfig(identifier, owner, bank_name, country, session_file, tuple(accounts), policy))
+        connections.append(ConnectionConfig(identifier, owner, bank_name, country, session_file, tuple(accounts),
+                                            policy, max_history_days=max_history_days))
     return BudgetConfig(application_id, key_file, tuple(connections))
 
 
