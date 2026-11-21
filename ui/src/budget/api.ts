@@ -5,6 +5,9 @@ import { apiUrl } from "../api/client";
 import type { BudgetAccount, BudgetCapabilities, BudgetConnection, BudgetConsent, BudgetConsentFlow, BudgetJob,
   BudgetKind, BudgetBalances, BudgetLimit, BudgetOperation, BudgetTransactions, ConsentIntent } from "./model";
 import { idempotencyKey } from "./model";
+import type { AnalyticsCategory, AnalyticsOverview, AnalyticsRule, AnalyticsTransactions, AnnotationRequest, AnnotationSaved,
+  CategoryCreateRequest, CategorySaved, CategoryUpdateRequest, RuleCandidate, RulePreview, RuleSaved, TransactionFilter,
+  TransferDecisionRequest, TransferDecisionResult, TransferList, TransferQueue } from "./analytics/model";
 
 export type BudgetResult<T> =
   | { ok: true; data: T }
@@ -70,6 +73,28 @@ export const budgetApi = {
       { connection_id: connection.id, expected_version: connection.control_version, intent }),
   consentCancel: (flowId: string) => post<{ flow_id: string; status: string }>("consent/cancel", { flow_id: flowId }),
   jobs: (connectionId?: string) => call<{ jobs: BudgetJob[] }>(url("jobs", { connection_id: connectionId })),
+  /** Server-computed per-currency totals of one period ("YYYY-MM" or "YYYY") for the selected accounts. */
+  overview: (period: string, currency?: string) =>
+    call<AnalyticsOverview>(url("analytics/overview", { period, currency })),
+  /** One server-bounded page of a period's entries; empty filter values are omitted. */
+  analyticsTransactions: (period: string, filter: TransactionFilter, cursor?: string) =>
+    call<AnalyticsTransactions>(url("analytics/transactions", {
+      period, currency: filter.currency, category_id: filter.category, kind: filter.kind, query: filter.query, cursor,
+    })),
+  categories: () => call<{ categories: AnalyticsCategory[] }>(url("analytics/categories")),
+  /** The owner's explicit category/kind decision for one entry, versioned against concurrent edits. */
+  annotate: (request: AnnotationRequest) => post<{ annotation: AnnotationSaved }>("analytics/annotation", request),
+  /** Own-transfer pairs of a period in one state; suggestions are never accepted without the owner. */
+  transfers: (period: string, status: TransferQueue, cursor?: string) =>
+    call<TransferList>(url("analytics/transfers", { period, status, cursor })),
+  decideTransfer: (request: TransferDecisionRequest) =>
+    post<{ decision: TransferDecisionResult }>("analytics/transfer-decision", request),
+  createCategory: (request: CategoryCreateRequest) => post<{ category: CategorySaved }>("analytics/category-create", request),
+  updateCategory: (request: CategoryUpdateRequest) => post<{ category: CategorySaved }>("analytics/category-update", request),
+  rules: () => call<{ rules: AnalyticsRule[] }>(url("analytics/rules")),
+  /** Shows what a rule would change; nothing is applied until the preview is saved. */
+  previewRule: (candidate: RuleCandidate) => post<{ preview: RulePreview }>("analytics/rule-preview", candidate),
+  saveRule: (previewId: string) => post<{ rule: RuleSaved }>("analytics/rule-save", { preview_id: previewId }),
   setSelected: (account: BudgetAccount, selected: boolean) =>
     post<{ account: BudgetAccount }>("account-selection",
       { account_id: account.id, selected, expected_version: account.control_version }),

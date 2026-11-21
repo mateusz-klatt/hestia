@@ -6,6 +6,7 @@ import type { BudgetApi, BudgetResult } from "./api";
 import { Budget } from "./budget";
 import { account, componentLimit, connection, sharedLimit } from "./fixtures";
 import type { BudgetAccount, BudgetBalances, BudgetJob, BudgetTransaction, BudgetTransactions } from "./model";
+import { entriesOf, overviewOf, transfersOf } from "./analytics/fixtures";
 
 type Settle<T> = (value: BudgetResult<T>) => void;
 
@@ -18,7 +19,7 @@ function deferred<T>(): { promise: Promise<BudgetResult<T>>; settle: Settle<T> }
 }
 
 const capabilities = { stored_reads: true, account_controls: true, refresh: true, background_selection: true,
-  background_polling: false, consent: false };
+  background_polling: false, consent: false, analytics: false };
 const display = { product: "Synthetic Current", currency: "PLN", masked_suffix: "0001", source: "offline_import",
   observed_at: 1, imported_at: 2 };
 
@@ -58,6 +59,17 @@ function fakeApi(accounts: BudgetAccount[] = [account({ display })]) {
     setPaused: vi.fn<BudgetApi["setPaused"]>(),
     setBackground: vi.fn<BudgetApi["setBackground"]>(),
     refresh: vi.fn<BudgetApi["refresh"]>(),
+    overview: vi.fn<BudgetApi["overview"]>((period) => ok(overviewOf(period))),
+    analyticsTransactions: vi.fn<BudgetApi["analyticsTransactions"]>((period) => ok(entriesOf(period))),
+    categories: vi.fn<BudgetApi["categories"]>(() => ok({ categories: [] })),
+    annotate: vi.fn<BudgetApi["annotate"]>(),
+    transfers: vi.fn<BudgetApi["transfers"]>((period) => ok(transfersOf(period))),
+    decideTransfer: vi.fn<BudgetApi["decideTransfer"]>(),
+    createCategory: vi.fn<BudgetApi["createCategory"]>(),
+    updateCategory: vi.fn<BudgetApi["updateCategory"]>(),
+    rules: vi.fn<BudgetApi["rules"]>(() => ok({ rules: [] })),
+    previewRule: vi.fn<BudgetApi["previewRule"]>(),
+    saveRule: vi.fn<BudgetApi["saveRule"]>(),
   } satisfies BudgetApi;
 }
 
@@ -838,5 +850,76 @@ describe("account detail", () => {
     expect(host.textContent).toContain("could not be loaded");
     await click(button("Close"));
     expect(host.querySelector(".budget-detail")).toBeNull();
+  });
+});
+
+describe("analytics views", () => {
+  const analysis = { ...capabilities, analytics: true };
+
+  it("offers no month view until the server enables analytics", async () => {
+    const api = fakeApi();
+    await render(api);
+    expect(host.textContent).toContain("Synthetic Current ••0001");
+    expect(host.querySelector(".budget-views")).toBeNull();
+    expect(api.overview).not.toHaveBeenCalled();
+  });
+
+  it("switches between accounts and the month view", async () => {
+    const api = fakeApi();
+    api.connections.mockImplementation(() => ok({ connections: [connection], capabilities: analysis }));
+    await render(api);
+    await click(button("Month"));
+    expect(api.overview).toHaveBeenCalledTimes(1);
+    expect(host.querySelector(".budget-total")?.textContent).toContain("40.50 PLN");
+    expect(host.textContent).not.toContain("Synthetic Current ••0001");
+    expect(button("Month").getAttribute("aria-pressed")).toBe("true");
+    await click(button("Categories and rules"));
+    expect(api.rules).toHaveBeenCalledTimes(1);
+    expect(host.textContent).toContain("No categories yet.");
+    await click(button("Accounts"));
+    expect(host.textContent).toContain("Synthetic Current ••0001");
+    expect(host.querySelector(".budget-month")).toBeNull();
+  });
+
+  it("clears everything when the month read reports lost access, and reopens on accounts", async () => {
+    const api = fakeApi();
+    api.connections.mockImplementation(() => ok({ connections: [connection], capabilities: analysis }));
+    await render(api);
+    api.overview.mockImplementation(() => fail(401, "budget_http_401"));
+    await click(button("Month"));
+    expect(host.textContent).toContain("Only the budget's owner");
+    expect(host.textContent).not.toContain("PLN");
+    api.overview.mockImplementation((period) => ok(overviewOf(period)));
+    await click(button("Reload"));
+    expect(host.textContent).toContain("Synthetic Current ••0001");
+    expect(host.querySelector(".budget-month")).toBeNull();
+  });
+
+  it("opens a month chosen in the year view", async () => {
+    const api = fakeApi();
+    api.connections.mockImplementation(() => ok({ connections: [connection], capabilities: analysis }));
+    api.overview.mockImplementation((period) => ok(period.length === 4
+      ? overviewOf(period, { months: [{ month: `${period}-01`, currencies: overviewOf(period).currencies }] })
+      : overviewOf(period)));
+    await render(api);
+    await click(button("Year"));
+    const year = String(new Date().getFullYear());
+    expect(api.overview).toHaveBeenLastCalledWith(year);
+    const open = host.querySelector<HTMLButtonElement>(".budget-year button");
+    if (open === null) throw new Error("month link missing");
+    await click(open);
+    expect(api.overview).toHaveBeenLastCalledWith(`${year}-01`);
+    expect(button("Month").getAttribute("aria-pressed")).toBe("true");
+  });
+
+    it("falls back to accounts when a reload withdraws the capability", async () => {
+    const api = fakeApi();
+    api.connections.mockImplementation(() => ok({ connections: [connection], capabilities: analysis }));
+    await render(api);
+    await click(button("Month"));
+    api.connections.mockImplementation(() => ok({ connections: [connection], capabilities }));
+    await click(button("Reload"));
+    expect(host.querySelector(".budget-views")).toBeNull();
+    expect(host.textContent).toContain("Synthetic Current ••0001");
   });
 });
