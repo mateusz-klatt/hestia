@@ -299,6 +299,21 @@ describe("access barrier and version-aware reads", () => {
     expect(host.textContent).not.toContain("123.45");
   });
 
+  it.each([["someone-else", "admin"], ["owner", "viewer"]])(
+    "clears at once when whoami names %s as %s while another read still hangs", async (user, role) => {
+      const api = fakeApi();
+      await render(api, true, "owner");
+      const hanging = deferred<Loaded<BudgetApi["connections"]>>();
+      api.connections.mockImplementation(() => hanging.promise);
+      api.whoami.mockImplementation(() => ok({ user, role }));
+      await click(button("Reload"));
+      expect(host.textContent).toContain("Only the budget's owner");
+      expect(host.textContent).not.toContain("Synthetic Current");
+      await act(async () => { hanging.settle({ ok: true, data: { connections: [connection], capabilities } }); await Promise.resolve(); });
+      await settle();
+      expect(host.textContent).not.toContain("Synthetic Current");
+    });
+
   it("clears when the same user is no longer an admin", async () => {
     const api = fakeApi();
     await render(api, true, "owner");

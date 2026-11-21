@@ -151,14 +151,16 @@ export function Budget({ active, api = budgetApi, pollMs = 2000, principal }: Bu
       if (token === generation.current) barrier(result);
       return result;
     });
+    // A successful whoami naming someone else, or the owner without the admin role, is also a loss of access
+    // and clears at once, without waiting for the other responses.
+    const identity = principal === undefined ? Promise.resolve(null) : watch(api.whoami()).then((result) => {
+      if (result.ok && (result.data.user !== principal || result.data.role !== "admin")
+          && alive.current && token === generation.current) invalidate(false);
+      return result;
+    });
     const [connected, listed, queued, me] = await Promise.all([watch(api.connections()), watch(api.accounts()),
-      watch(api.jobs()), principal === undefined ? Promise.resolve(null) : watch(api.whoami())]);
+      watch(api.jobs()), identity]);
     if (!alive.current || token !== generation.current) return;
-    if (me !== null && me.ok && (me.data.user !== principal || me.data.role !== "admin")) {
-      // The cookie now names someone else, or the owner lost the admin role: nothing private may stay.
-      invalidate(false);
-      return;
-    }
     if (!connected.ok || !listed.ok || (me !== null && !me.ok)) {
       setLoad("error");
       return;
