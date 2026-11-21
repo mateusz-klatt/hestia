@@ -4152,75 +4152,12 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Fixed redirect to /budget/connect/complete without query or fragment */
+            /** @description Success and failure both redirect to /budget/connect/complete without query or fragment. Failure bodies contain only a fixed safe error code; an invalid or foreign browser never consumes another browser's flow. */
             303: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content?: never;
-            };
-            /** @description invalid request */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BudgetError"];
-                };
-            };
-            /** @description session required; middleware may return an empty body */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BudgetError"];
-                };
-            };
-            /** @description admin owner or browser-origin requirement failed; middleware may return an empty body */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BudgetError"];
-                };
-            };
-            /** @description unknown, disabled or foreign resource */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BudgetError"];
-                };
-            };
-            /** @description SQLite session users required */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BudgetError"];
-                };
-            };
-            /** @description internal error */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BudgetError"];
-                };
-            };
-            /** @description budget configuration unavailable */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BudgetError"];
-                };
             };
         };
     };

@@ -245,8 +245,8 @@ process/host UID and owner-only modes. Reuse only the specific sessions the owne
 authorizes for Hestia. Before live import or unattended acquisition: update
 privacy/terms, verify mounted secrets, back up, obtain account selection and
 explicitly enable the relevant flags. API deployment alone neither copies PoC
-files nor imports records. Callback-specific logging gates apply later to SCA,
-not to this external-session data path.
+files nor imports records. Callback deployment follows the operator's explicit
+decision recorded below; proxy logging changes are not an activation gate.
 
 External-session cutover must coordinate every tool using the same application/
 bank/account context: Hestia's local debits cannot see recent PoC requests, and
@@ -528,14 +528,15 @@ it neither deselects accounts nor clears rate suspensions or consumed quota.
 
 ## Proposed persistence and configuration changes
 
-Allocate actual migration IDs only when implementing; do not rewrite 0008–0013.
+Migration `0014` implements browser flows, managed sessions and private transition
+audit. Do not rewrite 0008–0013.
 2B.jobs uses `0013` (jobs, owner idempotency keys, background opt-in, attention).
 
 | State | Required metadata/invariants |
 | --- | --- |
 | Account/connection control versions | Optimistic revision; durable pause and audit attribution, without replacing 2A selection/kind fields. |
 | Consent flow | Local ID; owner/connection/app/bank/expected generation; hashed state/browser/session binding; flow/binding revision and revocation; expiry; status and single-use callback/exchange claims; opaque capsule references; safe error. No raw code/state/session IDs. |
-| Consent session | Local ID, owner/connection, provenance, generation, candidate/unadopted/active/retired/close-pending/closed/uncertain status, actual validity and opaque capsule reference. |
+| Consent session | Local ID, owner/connection, provenance, generation, UNADOPTED/ACTIVE/RETIRED status, actual validity and opaque capsule reference. Remote close states are future work. |
 | Consent control audit | Owner/actor/origin, intent, local target IDs, before/after safe states and time; append atomically with local transitions. No financial or provider payloads. |
 | Refresh job | Owner-scoped idempotency key, target local account/operation, expected generation, status and safe outcomes; existing acquisition debits remain authoritative. |
 

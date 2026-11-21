@@ -245,9 +245,9 @@ def register(app, read_json_body, *, auth_enabled, session_secret, secure_cookie
             return _failure(exc, operation)
 
     app.on_response_prepare.append(private_headers)
-    jobs.register(app, JOBS_KEY, auth_enabled=auth_enabled)
     consent_api.register(app, read_json_body, auth_enabled=auth_enabled, session_secret=session_secret,
                          secure_cookie=secure_cookie)
+    jobs.register(app, JOBS_KEY, auth_enabled=auth_enabled)
     for operation in READS:
         app.router.add_get(PREFIX + "/" + operation, handle, allow_head=False)
     for operation in MUTATIONS:

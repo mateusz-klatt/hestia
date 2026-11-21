@@ -6981,77 +6981,7 @@
         ],
         "responses": {
           "303": {
-            "description": "Fixed redirect to /budget/connect/complete without query or fragment"
-          },
-          "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/BudgetError"
-                }
-              }
-            },
-            "description": "invalid request"
-          },
-          "401": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/BudgetError"
-                }
-              }
-            },
-            "description": "session required; middleware may return an empty body"
-          },
-          "403": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/BudgetError"
-                }
-              }
-            },
-            "description": "admin owner or browser-origin requirement failed; middleware may return an empty body"
-          },
-          "404": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/BudgetError"
-                }
-              }
-            },
-            "description": "unknown, disabled or foreign resource"
-          },
-          "409": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/BudgetError"
-                }
-              }
-            },
-            "description": "SQLite session users required"
-          },
-          "500": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/BudgetError"
-                }
-              }
-            },
-            "description": "internal error"
-          },
-          "503": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/BudgetError"
-                }
-              }
-            },
-            "description": "budget configuration unavailable"
+            "description": "Success and failure both redirect to /budget/connect/complete without query or fragment. Failure bodies contain only a fixed safe error code; an invalid or foreign browser never consumes another browser's flow."
           }
         },
         "summary": "Stage a browser-bound one-time bank code",

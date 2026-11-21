@@ -2090,8 +2090,9 @@ def _consent_paths():
             "The fixed clean completion page restores the Strict Hestia session for an owner-only POST.",
         "parameters": [_budget_query("state", required=True), _budget_query("code"), _budget_query("error"),
                        _budget_query("error_description")],
-        "responses": {"303": {"description": "Fixed redirect to /budget/connect/complete without query or fragment"},
-                      **{key: value for key, value in _budget_responses("BudgetError").items() if key != "200"}}}}
+        "responses": {"303": {"description": "Success and failure both redirect to /budget/connect/complete "
+            "without query or fragment. Failure bodies contain only a fixed safe error code; an invalid "
+            "or foreign browser never consumes another browser's flow."}}}}
     return paths
 
 

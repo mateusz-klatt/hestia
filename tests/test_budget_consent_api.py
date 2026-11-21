@@ -177,7 +177,10 @@ class ConsentAPITests(unittest.IsolatedAsyncioTestCase):
                    {"state": STATE, "error": "x" * 1025}, {"state": STATE, "code": "bad\ncode"}]
         for query in queries:
             response = await self.client.get(module.CALLBACK, params=query, allow_redirects=False)
-            self.assertEqual(response.status, 400, await response.text())
+            self.assertEqual(response.status, 303, await response.text())
+            self.assertEqual(response.headers["Location"], module.COMPLETE)
+            self.assertEqual((await response.json())["error"], "budget_consent_invalid_request")
+            self.private(response)
             self.assertNotIn(PRIVATE, await response.text())
         self.service.callback.assert_not_called()
         with self.assertRaises(BudgetConsentError):
@@ -269,8 +272,11 @@ class ConsentAPITests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status, 403); await response.read()
         self.service.callback.side_effect = RuntimeError(PRIVATE)
         with self.assertLogs(api.log, level="ERROR") as logged:
-            response = await self.client.get(module.CALLBACK, params={"state": STATE, "code": PRIVATE})
-            self.assertEqual(response.status, 500)
+            response = await self.client.get(module.CALLBACK, params={"state": STATE, "code": PRIVATE}, allow_redirects=False)
+            self.assertEqual(response.status, 303)
+            self.assertEqual(response.headers["Location"], module.COMPLETE)
+            self.assertEqual((await response.json())["error"], "budget_internal_error")
+            self.private(response)
             self.assertNotIn(PRIVATE, await response.text())
         self.assertNotIn(PRIVATE, "".join(logged.output))
 
@@ -341,8 +347,11 @@ class ConsentAPITests(unittest.IsolatedAsyncioTestCase):
             before = self.factory.call_count
             client = await self.new_client()
             self.assertEqual(self.factory.call_count, before)
-            response = await client.get(module.CALLBACK, params={"state": STATE, "code": PRIVATE})
-            self.assertEqual(response.status, 503); await response.read()
+            response = await client.get(module.CALLBACK, params={"state": STATE, "code": PRIVATE}, allow_redirects=False)
+            self.assertEqual(response.status, 303)
+            self.assertEqual(response.headers["Location"], module.COMPLETE)
+            self.assertEqual((await response.json())["error"], "budget_consent_unavailable")
+            self.private(response)
             response = await client.post("/api/logout")
             self.assertEqual(response.status, 200); await response.read()
         self.factory.side_effect = RuntimeError(PRIVATE)
@@ -448,6 +457,48 @@ class ConsentAPITests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(calls.count(("POST", "/sessions")), 1)
         with self.sessions() as session:
             self.assertEqual(session.get(db.BudgetConnection, "bank").consent_generation, 1)
+
+    async def test_callback_failures_always_redirect_cleanly_without_consuming_the_bound_flow(self):
+        provider, calls = self.real_service()
+        with mock.patch.object(consent_service, "_read_secret", return_value=b"synthetic-key-no-real-secret"):
+            started = await self.post("start", {"connection_id": "bank", "expected_version": 1, "intent": "connect"})
+        self.assertEqual(started.status, 200)
+        flow = (await started.json())["flow_id"]
+        nonce = started.cookies[module.cookie_name(flow)].value
+        bound = {"Cookie": module.cookie_name(flow) + "=" + nonce}
+        valid = {"state": provider.state, "code": PRIVATE}
+        cases = (({**valid, "unknown": PRIVATE}, bound, "budget_consent_invalid_request"),
+                 ([("state", provider.state), ("state", provider.state), ("code", PRIVATE)], bound,
+                  "budget_consent_invalid_request"),
+                 (valid, {"Cookie": "unrelated=foreign-browser"}, "budget_consent_invalid_request"),
+                 (valid, {"Cookie": module.cookie_name(flow) + "=" + "x" * 43}, "budget_consent_binding_invalid"),
+                 ({**valid, "state": "u" * 43}, bound, "budget_not_found"))
+        for query, headers, error in cases:
+            with self.subTest(error=error, headers=headers):
+                response = await self.client.get(module.CALLBACK, params=query, headers=headers, allow_redirects=False)
+                self.assertEqual(response.status, 303, await response.text())
+                self.assertEqual(response.headers["Location"], module.COMPLETE)
+                self.assertEqual(await response.json(), {"ok": False, "error": error})
+                self.private(response)
+                self.assertNotIn(PRIVATE, str(response.headers))
+                self.assertNotIn(PRIVATE, await response.text())
+                self.assertNotIn(provider.state, str(response.headers))
+                with self.sessions() as session:
+                    row = session.get(db.BudgetConsentFlow, flow)
+                    self.assertEqual((row.status, row.callback_at), ("started", None))
+        # A valid bound refusal consumes only its own flow; it also leaves a clean URL.
+        response = await self.client.get(module.CALLBACK, params={"state": provider.state, "error": "access_denied",
+                    "error_description": PRIVATE}, headers=bound, allow_redirects=False)
+        self.assertEqual(response.status, 303)
+        self.assertEqual(response.headers["Location"], module.COMPLETE)
+        self.private(response)
+        self.assertNotIn(PRIVATE, await response.text())
+        with self.sessions() as session:
+            row = session.get(db.BudgetConsentFlow, flow)
+            self.assertEqual((row.status, row.error), ("failed", "authorization"))
+            self.assertIsNone(session.get(db.BudgetConnection, "bank").active_consent_id)
+        self.assertEqual(calls, [("GET", "/aspsps"), ("POST", "/auth")])
+        self.assertFalse((self.root / "real-synthetic-capsules").exists())
 
     async def test_real_logout_fences_inflight_exchange_and_retains_known_session_without_adoption(self):
         entered, release = threading.Event(), threading.Event()

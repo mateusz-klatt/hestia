@@ -216,7 +216,10 @@ def register(app, read_json_body, *, auth_enabled, session_secret, secure_cookie
             await api._settled_thread(lambda: service.callback(nonce=nonce, **values))
             return web.Response(status=303, headers={**api.PRIVATE_HEADERS, "Location": COMPLETE})
         except Exception as exc:
-            return _failure(exc, "callback")
+            response = _failure(exc, "callback")
+            response.set_status(303)
+            response.headers["Location"] = COMPLETE
+            return response
 
     async def bridge(request):
         name = "complete.js" if request.path == SCRIPT else "complete.html"
