@@ -747,3 +747,99 @@ class RuleTests(AnalyticsCase):
         self.assertEqual(self.store.rules("owner"), [])
         self.assertIsNone(self.rows(db.BudgetRulePreview)[0].saved_rule_id)
         self.assertTrue(self.store.save_rule("owner", preview["preview_id"])["changed"])
+
+
+class SpendingLimitStoreTests(AnalyticsCase):
+    def save(self, category_id, **changes):
+        values = {"currency": "PLN", "monthly_limit": "500.00", "warning_percent": 80,
+                  "enabled": True, "expected_version": 0, **changes}
+        return self.store.save_spending_limit("owner", category_id=category_id, **values)
+
+    def test_create_cas_noop_update_archived_and_audit(self):
+        cat = self.store.create_category("owner", "Groceries")
+        foreign = self.store.create_category("other", "Other Groceries")
+        created = self.save(cat["id"], monthly_limit="0500.50")
+        self.assertEqual((created["monthly_limit"], created["version"], created["changed"]), ("500.5", 1, True))
+        self.assertEqual(len(self.rows(db.BudgetAnalyticsAudit)), 3)  # 2 categories + 1 limit
+        self.assertEqual(self.rows(db.Audit), [])
+
+        # Strict CAS: expected_version=0 on existing row fails with 409 (no silent upsert),
+        # and wrong version fails BEFORE no-op detection.
+        for bad_version in (0, 2):
+            with self.assertRaises(AnalyticsError) as conflict:
+                self.save(cat["id"], monthly_limit="500.5", expected_version=bad_version)
+            self.assertEqual((conflict.exception.code, conflict.exception.status), ("budget_analytics_conflict", 409))
+        with self.assertRaises(AnalyticsError) as missing_cas:
+            self.save(cat["id"], currency="EUR", expected_version=1)
+        self.assertEqual((missing_cas.exception.code, missing_cas.exception.status), ("budget_analytics_conflict", 409))
+
+        # Exact no-op (after canonicalization) keeps version, updated_at and audit unchanged.
+        self.now += 50
+        noop = self.save(cat["id"], monthly_limit="0500.500", expected_version=1)
+        self.assertEqual((noop["changed"], noop["version"], noop["updated_at"]), (False, 1, created["updated_at"]))
+        self.assertEqual(len(self.rows(db.BudgetAnalyticsAudit)), 3)
+
+        # Update increments version and writes audit.
+        updated = self.save(cat["id"], monthly_limit="600", warning_percent=75, expected_version=1)
+        self.assertEqual((updated["changed"], updated["version"], updated["monthly_limit"], updated["warning_percent"]),
+                         (True, 2, "600", 75))
+        self.assertEqual(updated["updated_at"], self.now)
+        self.assertEqual(len(self.rows(db.BudgetAnalyticsAudit)), 4)
+
+        # Foreign or unknown category -> 404.
+        for bad_cat in (foreign["id"], "unknown-category"):
+            with self.assertRaises(AnalyticsError) as nf:
+                self.save(bad_cat)
+            self.assertEqual((nf.exception.code, nf.exception.status), ("budget_analytics_not_found", 404))
+
+        # Archiving category keeps existing enabled limit intact; disabling is allowed,
+        # re-enabling or creating new limits on archived category is refused.
+        self.store.update_category("owner", cat["id"], name="Groceries", archived=True, expected_version=1)
+        with self.assertRaises(AnalyticsError) as archived_new:
+            self.save(cat["id"], currency="EUR", expected_version=0)
+        self.assertEqual(archived_new.exception.status, 400)
+        disabled = self.save(cat["id"], monthly_limit="600", warning_percent=75, enabled=False, expected_version=2)
+        self.assertEqual((disabled["enabled"], disabled["version"], disabled["changed"]), (False, 3, True))
+        with self.assertRaises(AnalyticsError) as archived_reenable:
+            self.save(cat["id"], monthly_limit="600", warning_percent=75, enabled=True, expected_version=3)
+        self.assertEqual(archived_reenable.exception.status, 400)
+
+    def test_cap_validation_and_rollback(self):
+        cat = self.store.create_category("owner", "Dining")
+        bad_inputs = (
+            {"category_id": ""}, {"category_id": "uncategorised"}, {"category_id": "x" * 129},
+            {"currency": "pln"}, {"currency": "PLNN"}, {"monthly_limit": "0"}, {"monthly_limit": "0.00"},
+            {"monthly_limit": "-5"}, {"monthly_limit": "1e2"}, {"monthly_limit": "1" * 81},
+            {"monthly_limit": 100}, {"warning_percent": True}, {"warning_percent": 0},
+            {"warning_percent": 100}, {"enabled": 1}, {"expected_version": True}, {"expected_version": -1},
+        )
+        for bad in bad_inputs:
+            values = {"category_id": cat["id"], "currency": "PLN", "monthly_limit": "100",
+                      "warning_percent": 80, "enabled": True, "expected_version": 0, **bad}
+            with self.subTest(bad=bad), self.assertRaises(AnalyticsError) as exc:
+                self.store.save_spending_limit("owner", **values)
+            self.assertEqual(exc.exception.status, 400)
+
+        # Rollback on audit failure leaves no saved row.
+        with mock.patch.object(self.store, "_analytics_audit", side_effect=RuntimeError("synthetic-disk-error")):
+            with self.assertRaises(RuntimeError):
+                self.save(cat["id"])
+        self.assertEqual(self.rows(db.BudgetCategoryLimit), [])
+
+        # Cap 200 counts all owner limits (including disabled) on create only;
+        # update, disable and no-op still succeed at 200 rows.
+        first = self.save(cat["id"], currency="AAA")
+        with self.sessions.begin() as session:
+            for index in range(199):
+                c1 = chr(66 + (index // 26))
+                c2 = chr(65 + (index % 26))
+                session.add(db.BudgetCategoryLimit(
+                    id=str(uuid.uuid4()), owner="owner", category_id=cat["id"], currency=f"Z{c1}{c2}",
+                    monthly_limit="100", warning_percent=80, enabled=bool(index % 2), version=1,
+                    created_at=self.now, updated_at=self.now))
+        with self.assertRaises(AnalyticsError) as cap:
+            self.save(cat["id"], currency="PLN")
+        self.assertEqual((cap.exception.code, cap.exception.status), ("budget_analytics_limit", 413))
+        self.assertFalse(self.save(cat["id"], currency="AAA", monthly_limit="500", expected_version=1)["changed"])
+        disabled = self.save(cat["id"], currency="AAA", monthly_limit="500", enabled=False, expected_version=1)
+        self.assertEqual((disabled["enabled"], disabled["version"], disabled["id"]), (False, 2, first["id"]))

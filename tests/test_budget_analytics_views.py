@@ -68,13 +68,16 @@ class ReportTests(ProjectionCase):
         transactions = self.store.transactions("owner", "2026")
         transfers = self.store.transfers("owner", "2026")
         recurring = self.store.recurring("owner")
+        limits = self.store.spending_limits("owner", "2026-02")
         self.assertEqual((transactions["filtered_total"], transfers["filtered_total"]), (0, 0))
         self.assertEqual((recurring["total_hints"], recurring["truncated"], recurring["hints"]), (0, False, []))
+        self.assertEqual((limits["limits"], limits["statuses"]), ([], []))
         self.assertIsNone(transactions["next_cursor"])
         api_contract.BudgetAnalyticsOverview.model_validate(overview)
         api_contract.BudgetAnalyticsTransactions.model_validate(transactions)
         api_contract.BudgetAnalyticsTransfers.model_validate(transfers)
         api_contract.BudgetAnalyticsRecurring.model_validate(recurring)
+        api_contract.BudgetAnalyticsSpendingLimits.model_validate(limits)
 
     def test_exact_amounts_negative_net_and_separate_currencies(self):
         enormous, tiny = "9" * 80, "0." + "0" * 77 + "1"
@@ -157,6 +160,7 @@ class ReportTests(ProjectionCase):
             self.store.transactions("owner", "2026")
             self.store.transfers("owner", "2026")
             self.store.recurring("owner")
+            self.store.spending_limits("owner", "2026-11")
         finally:
             event.remove(self.engine, "before_cursor_execute", capture)
         self.assertLessEqual(set(statements), {"SELECT", "BEGIN"})
@@ -648,6 +652,73 @@ class RecurringProjectionTests(ProjectionCase):
         self.add_transaction("a", "bad-meta", amount="10", booking_date="2026-11-10")
         self.metadata("a", "bad-meta", {"creditor_name": "x" * 1025})
         self.assert_invalid(lambda: self.store.recurring("owner"))
+
+
+class SpendingLimitsProjectionTests(ProjectionCase):
+    def test_monthly_evaluation_limits_version_cache_independence_currency_and_archived(self):
+        food = self.store.create_category("owner", "Food")
+        old = self.store.create_category("owner", "Archived Cat")
+        self.add_transaction("a", "f1", amount="85.50", currency="PLN", booking_date="2026-11-05")
+        self.add_transaction("a", "f2", amount="5.50", currency="PLN", credit_debit_indicator="CRDT",
+                             booking_date="2026-11-06")
+        self.add_transaction("a", "e1", amount="60", currency="EUR", booking_date="2026-11-07")
+        self.annotation(account="a", reference="f1", category_id=food["id"], kind="expense")
+        self.annotation(account="a", reference="f2", category_id=food["id"], kind="refund")
+        self.annotation(account="a", reference="e1", category_id=food["id"], kind="expense")
+
+        lim_pln = self.store.save_spending_limit("owner", category_id=food["id"], currency="PLN",
+                                                 monthly_limit="100", warning_percent=80, enabled=True, expected_version=0)
+        self.store.save_spending_limit("owner", category_id=food["id"], currency="EUR",
+                                       monthly_limit="50", warning_percent=80, enabled=False, expected_version=0)
+        self.store.save_spending_limit("owner", category_id=old["id"], currency="PLN",
+                                       monthly_limit="200", warning_percent=80, enabled=True, expected_version=0)
+        # Archiving category leaves enabled limit active and visible with archived=True even at 0 spend.
+        self.store.update_category("owner", old["id"], name="Archived Cat", archived=True, expected_version=1)
+
+        first = self.store.spending_limits("owner", "2026-11")
+        api_contract.BudgetAnalyticsSpendingLimits.model_validate(first)
+        self.assertEqual((len(first["limits"]), len(first["statuses"])), (3, 2))
+        by_cat = {row["category_id"]: row for row in first["statuses"]}
+        self.assertEqual((by_cat[food["id"]]["net_spending"], by_cat[food["id"]]["remaining"],
+                          by_cat[food["id"]]["status"], by_cat[food["id"]]["archived"], by_cat[food["id"]]["name"]),
+                         ("80", "20", "approaching", False, "Food"))
+        self.assertEqual((by_cat[old["id"]]["net_spending"], by_cat[old["id"]]["status"],
+                          by_cat[old["id"]]["archived"], by_cat[old["id"]]["name"]),
+                         ("0", "within", True, "Archived Cat"))
+
+        # Currency filter filters limits & statuses while preserving owner-wide limits_version.
+        eur_only = self.store.spending_limits("owner", "2026-11", currency="EUR")
+        self.assertEqual((len(eur_only["limits"]), eur_only["statuses"], eur_only["limits_version"]),
+                         (1, [], first["limits_version"]))
+
+        # Updating a limit changes limits_version without changing snapshot_digest or recomputing projection.
+        self.store.save_spending_limit("owner", category_id=food["id"], currency="PLN",
+                                       monthly_limit="75", warning_percent=80, enabled=True,
+                                       expected_version=lim_pln["version"])
+        with mock.patch.object(views, "projection_snapshot", side_effect=AssertionError("projection cache should hold")):
+            second = self.store.spending_limits("owner", "2026-11")
+        self.assertEqual(second["snapshot_digest"], first["snapshot_digest"])
+        self.assertNotEqual(second["limits_version"], first["limits_version"])
+        self.assertEqual(next(r for r in second["statuses"] if r["category_id"] == food["id"])["status"], "exceeded")
+
+        # Strict monthly period validation (rejects YYYY) and invalid currency.
+        for bad_period in ("2026", "2026-13", 202611, None):
+            self.assert_invalid(lambda: self.store.spending_limits("owner", bad_period))
+        self.assert_invalid(lambda: self.store.spending_limits("owner", "2026-11", currency="pln"))
+
+    def test_corrupt_limit_amount_or_foreign_category_fails_closed(self):
+        cat = self.store.create_category("owner", "Food")
+        saved = self.store.save_spending_limit("owner", category_id=cat["id"], currency="PLN",
+                                               monthly_limit="100", warning_percent=80, enabled=True, expected_version=0)
+        with self.sessions.begin() as session:
+            session.get(db.BudgetCategoryLimit, saved["id"]).monthly_limit = "not-a-decimal"
+        self.assert_invalid(lambda: self.store.spending_limits("owner", "2026-11"))
+        other_cat = self.store.create_category("other", "Foreign")
+        with self.sessions.begin() as session:
+            row = session.get(db.BudgetCategoryLimit, saved["id"])
+            row.monthly_limit = "100"
+            row.category_id = other_cat["id"]
+        self.assert_invalid(lambda: self.store.spending_limits("owner", "2026-11"))
 
 
 if __name__ == "__main__":

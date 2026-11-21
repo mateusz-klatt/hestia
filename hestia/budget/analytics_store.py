@@ -13,17 +13,23 @@ from sqlalchemy import delete, func, select
 
 from ..db import BudgetAccount as Account, BudgetAccountIdentity as Identity
 from ..db import BudgetAnnotation as Annotation, BudgetAnalyticsAudit as Audit, BudgetCategory as Category
+from ..db import BudgetCategoryLimit as CategoryLimitRow
 from ..db import BudgetConnection as Connection, BudgetRule as Rule, BudgetRulePreview as Preview
 from ..db import BudgetTransaction as Transaction, BudgetTransactionMetadata as Metadata
 from ..db import BudgetTransferDecision as Decision, BudgetTransferLeg as Leg
 from .analytics_core import (AnalyticsError, KINDS, compare_money, compatible_kind, effective_date,
                              financial_fingerprint, pair_fingerprint, rule_matches)
 from .client import _reject_constant, _unique_error_fields
+from .spending_limits import SpendingLimitInputError, _format_scaled, _parse_amount
 from .views import BudgetHTTPStore
 
+MAX_CATEGORY_LIMITS = 200
 _HASH = re.compile(r"[a-f0-9]{64}\Z", re.ASCII)
+_CURRENCY = re.compile(r"[A-Z]{3}\Z", re.ASCII)
 _RULE_FIELDS = frozenset({"rule_id", "expected_version", "field", "operator", "value", "category_id", "kind", "priority", "enabled"})
 _CATEGORY_FIELDS = ("id", "name", "archived", "version", "created_at", "updated_at")
+_CATEGORY_LIMIT_FIELDS = ("id", "category_id", "currency", "monthly_limit", "warning_percent", "enabled",
+                          "version", "created_at", "updated_at")
 _RULE_OUTPUT = ("id", "field", "operator", "value", "category_id", "kind", "priority", "enabled", "version", "created_at", "updated_at")
 _ANNOTATION_FIELDS = ("account_id", "entry_reference", "mode", "category_id", "kind", "ledger_fingerprint", "version", "updated_at")
 _DECISION_FIELDS = ("id", "debit_account_id", "debit_ref", "credit_account_id", "credit_ref", "source", "status",
@@ -157,6 +163,60 @@ class BudgetAnalyticsStore(BudgetHTTPStore):
             row.updated_at = self._now()
             result = _dict(row, _CATEGORY_FIELDS)
             self._analytics_audit(session, owner, "category", row.id, "update", before, result)
+            return {**result, "changed": True}
+
+    @staticmethod
+    def _validate_limit_write(category_id, currency, monthly_limit, warning_percent, enabled, expected_version):
+        if (not isinstance(category_id, str) or not 1 <= len(category_id) <= 128
+                or not category_id.strip() or category_id == "uncategorised"
+                or not isinstance(currency, str) or not _CURRENCY.fullmatch(currency)
+                or type(warning_percent) is not int or not 1 <= warning_percent <= 99
+                or type(enabled) is not bool or type(expected_version) is not int or expected_version < 0):
+            raise AnalyticsError()
+        try:
+            canonical = _format_scaled(*_parse_amount(monthly_limit, positive=True))
+        except SpendingLimitInputError:
+            raise AnalyticsError() from None
+        return canonical
+
+    def save_spending_limit(self, owner, *, category_id, currency, monthly_limit, warning_percent, enabled,
+                            expected_version):
+        """Atomically create or update one owner-private monthly category spending limit."""
+        canonical = self._validate_limit_write(category_id, currency, monthly_limit, warning_percent,
+                                               enabled, expected_version)
+        with self.transaction() as session:
+            self._owner(session, owner)
+            category = self._owned(session, Category, owner, category_id)
+            row = session.scalar(select(CategoryLimitRow).where(
+                CategoryLimitRow.owner == owner, CategoryLimitRow.category_id == category_id,
+                CategoryLimitRow.currency == currency))
+            _version(0 if row is None else row.version, expected_version)
+            if category.archived and (row is None or enabled):
+                raise AnalyticsError()
+            if row is not None and (row.monthly_limit, row.warning_percent, row.enabled) == (
+                    canonical, warning_percent, enabled):
+                return {**_dict(row, _CATEGORY_LIMIT_FIELDS), "changed": False}
+            now = self._now()
+            if row is None:
+                count = session.scalar(select(func.count()).select_from(CategoryLimitRow).where(
+                    CategoryLimitRow.owner == owner))
+                if count >= MAX_CATEGORY_LIMITS:
+                    raise AnalyticsError("budget_analytics_limit", 413)
+                row = CategoryLimitRow(id=str(uuid.uuid4()), owner=owner, category_id=category_id, currency=currency,
+                                       monthly_limit=canonical, warning_percent=warning_percent, enabled=enabled,
+                                       version=1, created_at=now, updated_at=now)
+                session.add(row)
+                session.flush()
+                result = _dict(row, _CATEGORY_LIMIT_FIELDS)
+                self._analytics_audit(session, owner, "category_limit", row.id, "create", None, result)
+                return {**result, "changed": True}
+            before = _dict(row, _CATEGORY_LIMIT_FIELDS)
+            row.monthly_limit, row.warning_percent, row.enabled = canonical, warning_percent, enabled
+            row.version += 1
+            row.updated_at = now
+            session.flush()
+            result = _dict(row, _CATEGORY_LIMIT_FIELDS)
+            self._analytics_audit(session, owner, "category_limit", row.id, "update", before, result)
             return {**result, "changed": True}
 
     def annotate(self, owner, account_id, entry_reference, *, mode, category_id, kind, expected_version,

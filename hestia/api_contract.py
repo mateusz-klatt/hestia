@@ -63,7 +63,8 @@ from pydantic.json_schema import models_json_schema
 # 0.16.0: browser-bound production bank consent, renewal and durable managed credentials.
 # 0.17.0: owner-private budget reports, classifications, rule previews and transfer decisions.
 # 0.18.0: owner-private read-only recurring-charge hints under /api/budget/analytics/recurring.
-CONTRACT_VERSION = "0.18.0"
+# 0.19.0: owner-private persisted monthly category spending limits (migration 0017).
+CONTRACT_VERSION = "0.19.0"
 OPENAPI_PATH = Path(__file__).resolve().parent.parent / "docs" / "api" / "openapi.json"
 
 # De-duplicated string literals (SonarPython S1192): the OpenAPI content-type, the paths reused
@@ -1811,13 +1812,75 @@ class BudgetAnalyticsRecurring(BaseModel):
     hints: list[BudgetAnalyticsRecurringHint]
 
 
+class BudgetAnalyticsSpendingLimitSaveRequest(BaseModel):
+    model_config = _STRICT
+    category_id: Annotated[str, Field(min_length=1, max_length=128)]
+    currency: Annotated[str, Field(pattern="^[A-Z]{3}$")]
+    monthly_limit: Annotated[str, Field(min_length=1, max_length=80)]
+    warning_percent: Annotated[int, Field(ge=1, le=99)]
+    enabled: bool
+    expected_version: Annotated[int, Field(ge=0)]
+
+
+class BudgetAnalyticsSpendingLimit(BaseModel):
+    model_config = _READ
+    id: str
+    category_id: str
+    currency: str
+    monthly_limit: str
+    warning_percent: int
+    enabled: bool
+    version: int
+    created_at: float
+    updated_at: float
+
+
+class BudgetAnalyticsSpendingLimitSaved(BudgetAnalyticsSpendingLimit):
+    changed: bool
+
+
+class BudgetAnalyticsSpendingLimitResult(BaseModel):
+    model_config = _READ
+    ok: Literal[True]
+    limit: BudgetAnalyticsSpendingLimitSaved
+
+
+class BudgetAnalyticsSpendingLimitStatus(BaseModel):
+    model_config = _READ
+    period: str
+    category_id: str
+    name: str | None
+    archived: bool
+    currency: str
+    monthly_limit: str
+    expenses: str
+    refunds: str
+    net_spending: str
+    remaining: str
+    over_by: str
+    percent_used_floor: int
+    warning_percent: int
+    status: Literal["within", "approaching", "at_limit", "exceeded"]
+
+
+class BudgetAnalyticsSpendingLimits(BudgetAnalyticsPeriod):
+    """Monthly category spending limits and evaluated statuses; ``snapshot_digest`` versions
+    the ledger/classification projection while ``limits_version`` versions the owner's saved limits."""
+    limits_version: str
+    rule_version: int
+    limits: list[BudgetAnalyticsSpendingLimit]
+    statuses: list[BudgetAnalyticsSpendingLimitStatus]
+
+
 _ANALYTICS_MODELS = (BudgetAnalyticsCategoryCreateRequest, BudgetAnalyticsCategoryUpdateRequest,
                      BudgetAnalyticsAnnotationRequest, BudgetAnalyticsRulePreviewRequest,
                      BudgetAnalyticsRuleSaveRequest, BudgetAnalyticsTransferDecisionRequest,
+                     BudgetAnalyticsSpendingLimitSaveRequest,
                      BudgetAnalyticsCategories, BudgetAnalyticsCategoryResult, BudgetAnalyticsAnnotationResult,
                      BudgetAnalyticsRules, BudgetAnalyticsRuleResult, BudgetAnalyticsPreviewResult,
                      BudgetAnalyticsOverview, BudgetAnalyticsTransactions, BudgetAnalyticsTransfers,
-                     BudgetAnalyticsDecisionResult, BudgetAnalyticsRecurring)
+                     BudgetAnalyticsDecisionResult, BudgetAnalyticsRecurring,
+                     BudgetAnalyticsSpendingLimits, BudgetAnalyticsSpendingLimitResult)
 
 
 _BUDGET_MODELS = (BudgetSelectionRequest, BudgetKindRequest, BudgetConnectionStateRequest,
@@ -1843,12 +1906,14 @@ _PATH_ROLES = {
     ("GET", "/api/budget/analytics/rules"): "admin",
     ("GET", "/api/budget/analytics/transfers"): "admin",
     ("GET", "/api/budget/analytics/recurring"): "admin",
+    ("GET", "/api/budget/analytics/spending-limits"): "admin",
     ("POST", "/api/budget/analytics/category-create"): "admin",
     ("POST", "/api/budget/analytics/category-update"): "admin",
     ("POST", "/api/budget/analytics/annotation"): "admin",
     ("POST", "/api/budget/analytics/rule-preview"): "admin",
     ("POST", "/api/budget/analytics/rule-save"): "admin",
     ("POST", "/api/budget/analytics/transfer-decision"): "admin",
+    ("POST", "/api/budget/analytics/spending-limit-save"): "admin",
 
     ("GET", "/api/budget/enable-banking/callback"): "public",
     ("GET", "/api/budget/consent/pending"): "admin",
@@ -2463,6 +2528,8 @@ def _analytics_paths():
     page = [_budget_query("limit", schema={"type": "integer", "minimum": 1, "maximum": 200, "default": 50}),
             _budget_query("cursor", schema={"type": "string", "minLength": 1, "maxLength": 8192},
                           description="Opaque cursor bound to the current projection. A changed snapshot returns 409.")]
+    month = _budget_query("period", required=True, schema={"type": "string", "pattern": r"^[0-9]{4}-[0-9]{2}$"},
+                          description="Inclusive calendar month YYYY-MM, 1900 through 9999.")
     reads = (
         ("overview", "getBudgetAnalyticsOverview", "BudgetAnalyticsOverview", [period, currency]),
         ("transactions", "getBudgetAnalyticsTransactions", "BudgetAnalyticsTransactions",
@@ -2474,6 +2541,7 @@ def _analytics_paths():
          [period, currency, _budget_query("status", schema={"type": "string", "enum":
              ["suggested", "accepted", "review", "boundary", "rejected", "undone"], "default": "suggested"}), *page]),
         ("recurring", "getBudgetAnalyticsRecurring", "BudgetAnalyticsRecurring", [currency]),
+        ("spending-limits", "getBudgetAnalyticsSpendingLimits", "BudgetAnalyticsSpendingLimits", [month, currency]),
     )
     paths = {prefix + path: {"get": {"operationId": operation, "summary": "Read owner-private local budget analytics",
               "parameters": parameters, "responses": _analytics_responses(model)}}
@@ -2485,6 +2553,7 @@ def _analytics_paths():
         ("rule-preview", "previewBudgetAnalyticsRule", "BudgetAnalyticsRulePreviewRequest", "BudgetAnalyticsPreviewResult"),
         ("rule-save", "saveBudgetAnalyticsRule", "BudgetAnalyticsRuleSaveRequest", "BudgetAnalyticsRuleResult"),
         ("transfer-decision", "decideBudgetAnalyticsTransfer", "BudgetAnalyticsTransferDecisionRequest", "BudgetAnalyticsDecisionResult"),
+        ("spending-limit-save", "saveBudgetAnalyticsSpendingLimit", "BudgetAnalyticsSpendingLimitSaveRequest", "BudgetAnalyticsSpendingLimitResult"),
     )
     for path, operation, request, model in writes:
         paths[prefix + path] = {"post": {"operationId": operation, "summary": "Save an owner-private local classification",

@@ -217,3 +217,30 @@ A boundary indicator describes an existing accepted relationship crossing the
 current selection. New candidates use selected ledger entries only; Hestia does
 not scan excluded transaction history for additional heuristic partners. A selected
 outflow without a known accepted relationship remains spending within that scope.
+
+## Recurring hints and persisted category limits (schema 0017)
+
+- `GET /api/budget/analytics/recurring` (optional `currency`) exposes bounded,
+  evidence-backed monthly recurring-charge hints from selected eligible expenses,
+  omitting accepted own transfers, excluded entries and internal fingerprints.
+- Migration 0017 adds the owner-private `budget_category_limits` table (`(owner, category_id, currency)` unique,
+  restrictive foreign keys, `category_id NOT NULL` — uncategorised limits are not supported in 0017,
+  and CHECK constraints on `version`, `warning_percent`, `enabled` and `monthly_limit` length).
+  Monthly limits are ongoing organisational settings: editing a limit applies to
+  historical month evaluations as well (effective-dated limits are a future extension).
+- `GET /api/budget/analytics/spending-limits?period=YYYY-MM` (optional `currency`) reads
+  saved limits and the memoised projection in one SQLite read transaction, returning both
+  `snapshot_digest` (ledger/classifications) and `limits_version` (saved limits digest).
+  Disabled limits appear in `limits` only; `statuses` evaluates enabled limits without FX.
+- `POST /api/budget/analytics/spending-limit-save` atomically creates or updates one
+  `(category_id, currency)` limit under `BEGIN IMMEDIATE` with strict CAS (`expected_version=0`
+  for create, `>=1` for update; no silent upsert). Retrying after a lost response may return
+  409 `budget_analytics_conflict`: recover by reloading limits and comparing the saved state.
+  Archiving a category leaves existing enabled limits active and evaluable; creating or
+  re-enabling a limit requires an active owned category while disabling an existing limit on
+  an archived category remains permitted. The 200-limit cap per owner counts all saved rows
+  (including disabled) on create only; updates, disables and no-ops remain allowed at the cap.
+  Changes are recorded only in `budget_analytics_audit`, outside shared home audit and SSE.
+- **Downgrade warning (0017 → 0016):** take a SQLite backup before downgrading. Dropping
+  `budget_category_limits` deletes saved limit rows while preserving historical
+  `budget_analytics_audit` entries; a schema rollback cannot restore dropped settings.

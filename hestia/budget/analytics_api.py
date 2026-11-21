@@ -16,7 +16,7 @@ from .views import BudgetUsersBackendRequired
 
 PREFIX = "/api/budget/analytics"
 FLAG = "HESTIA_BUDGET_ANALYTICS_ENABLED"
-READS = ("overview", "transactions", "categories", "rules", "transfers", "recurring")
+READS = ("overview", "transactions", "categories", "rules", "transfers", "recurring", "spending-limits")
 WRITES = {
     "category-create": (api_contract.BudgetAnalyticsCategoryCreateRequest, "create_category", "category"),
     "category-update": (api_contract.BudgetAnalyticsCategoryUpdateRequest, "update_category", "category"),
@@ -24,11 +24,13 @@ WRITES = {
     "rule-preview": (api_contract.BudgetAnalyticsRulePreviewRequest, "preview_rule", "preview"),
     "rule-save": (api_contract.BudgetAnalyticsRuleSaveRequest, "save_rule", "rule"),
     "transfer-decision": (api_contract.BudgetAnalyticsTransferDecisionRequest, "decide_transfer", "decision"),
+    "spending-limit-save": (api_contract.BudgetAnalyticsSpendingLimitSaveRequest, "save_spending_limit", "limit"),
 }
 _QUERY_FIELDS = {"overview": {"period", "currency"},
                  "transactions": {"period", "currency", "category_id", "kind", "query", "limit", "cursor"},
                  "transfers": {"period", "currency", "status", "limit", "cursor"},
-                 "recurring": {"currency"}}
+                 "recurring": {"currency"},
+                 "spending-limits": {"period", "currency"}}
 
 
 def enabled():
@@ -63,7 +65,7 @@ def _store(secret):
 
 
 def _read(owner, operation, query, secret):
-    result = getattr(_store(secret), operation)(owner, **query)
+    result = getattr(_store(secret), operation.replace("-", "_"))(owner, **query)
     return {operation: result} if operation in ("categories", "rules") else result
 
 

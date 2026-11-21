@@ -27,7 +27,7 @@ from sqlalchemy import func, or_, select
 from .. import db
 from . import analytics_core as core
 from .analytics_core import AnalyticsError
-from .analytics_store import BudgetAnalyticsStore
+from .analytics_store import BudgetAnalyticsStore, _CATEGORY_LIMIT_FIELDS, _dict
 from .client import _reject_constant, _unique_error_fields
 from .scheduler import shared_state
 from .views import BudgetHTTPStore
@@ -369,6 +369,54 @@ def _wire_recurring(hint):
     }
 
 
+def _limits_version(rows):
+    return core.projection_digest([
+        "category-limits-v1",
+        [[row["id"], row["category_id"], row["currency"], row["monthly_limit"],
+          row["warning_percent"], row["enabled"], row["version"]] for row in rows],
+    ])
+
+
+def _spending_limit_statuses(owner, period, limit_rows, category_totals, categories):
+    from .spending_limits import (CategoryLimit, CategorySpending, SpendingLimitInputError,
+                                  evaluate_spending_limits)
+
+    limits = [
+        CategoryLimit(owner=owner, category_id=row["category_id"], currency=row["currency"],
+                      monthly_limit=row["monthly_limit"], enabled=row["enabled"],
+                      warning_percent=row["warning_percent"])
+        for row in limit_rows
+    ]
+    spending = [
+        CategorySpending(owner=owner, category_id=row["category_id"], currency=row["currency"],
+                         expenses=row["expenses"], refunds=row["refunds"], archived=row["archived"])
+        for row in category_totals
+    ]
+    try:
+        evaluated = evaluate_spending_limits(owner, period, limits, spending)
+    except SpendingLimitInputError:
+        raise AnalyticsError() from None
+    return [
+        {
+            "period": item.period,
+            "category_id": item.category_id,
+            "name": categories[item.category_id]["name"],
+            "archived": categories[item.category_id]["archived"],
+            "currency": item.currency,
+            "monthly_limit": item.monthly_limit,
+            "expenses": item.expenses,
+            "refunds": item.refunds,
+            "net_spending": item.net_spending,
+            "remaining": item.remaining,
+            "over_by": item.over_by,
+            "percent_used_floor": item.percent_used_floor,
+            "warning_percent": item.warning_percent,
+            "status": item.status,
+        }
+        for item in evaluated
+    ]
+
+
 def _mark_transfer(row, status, identifier):
     priority = {"none": 0, "rejected": 1, "undone": 1, "suggested": 2, "boundary": 3, "review": 4, "accepted": 5}
     if priority[status] > priority[row["transfer"]["status"]]:
@@ -695,6 +743,30 @@ class BudgetAnalyticsViews(BudgetAnalyticsStore):
             return {"snapshot_digest": snapshot["digest"], "rule_version": RULE_VERSION,
                     "total_hints": len(hints), "truncated": len(hints) > MAX_RECURRING_HINTS,
                     "hints": [_wire_recurring(item) for item in page]}
+
+    def spending_limits(self, owner, period, *, currency=None):
+        from .spending_limits import RULE_VERSION
+
+        if not isinstance(period, str) or len(period) != 7:
+            raise AnalyticsError()
+        start, end = core.parse_period(period)
+        currency = _currency(currency)
+        with _read_lock, self._read(owner) as session:
+            snapshot = self._projection(session, owner)
+            categories = {row["id"]: row for row in snapshot["categories"]}
+            all_limits = [_dict(row, _CATEGORY_LIMIT_FIELDS) for row in session.scalars(
+                select(db.BudgetCategoryLimit).where(db.BudgetCategoryLimit.owner == owner)
+                .order_by(db.BudgetCategoryLimit.currency, db.BudgetCategoryLimit.category_id,
+                          db.BudgetCategoryLimit.id))]
+            if any(row["category_id"] not in categories for row in all_limits):
+                raise AnalyticsError()
+            limits_version = _limits_version(all_limits)
+            filtered = all_limits if currency is None else [row for row in all_limits if row["currency"] == currency]
+            totals = _category_totals(_period_rows(snapshot, start, end, currency), snapshot["categories"])
+            statuses = _spending_limit_statuses(owner, period, filtered, totals, categories)
+            return {"period": period, "start": start, "end": end, "snapshot_digest": snapshot["digest"],
+                    "limits_version": limits_version, "rule_version": RULE_VERSION,
+                    "limits": filtered, "statuses": statuses}
 
 
 def _row_filter(row, category_id, kind, query):

@@ -167,6 +167,57 @@ class DbSchemaTests(unittest.TestCase):
         finally:
             engine.dispose()
 
+    def test_migration_0017_constraints_and_downgrade_preserve_audit(self):
+        engine = db.make_engine(self.path)
+        try:
+            with engine.begin() as conn:
+                command.upgrade(db._alembic_config(conn), "0016")
+            with engine.begin() as conn:
+                conn.exec_driver_sql("INSERT INTO users (username, password_hash, role) VALUES ('owner', 'h', 'admin')")
+                conn.exec_driver_sql(
+                    "INSERT INTO budget_categories (id, owner, name, name_key, archived, version, created_at, updated_at) "
+                    "VALUES ('cat-1', 'owner', 'Food', 'food', 0, 1, 100.0, 100.0)")
+                conn.exec_driver_sql(
+                    "INSERT INTO budget_analytics_audit (owner, subject_type, subject_id, action, before_json, after_json, changed_at) "
+                    "VALUES ('owner', 'category_limit', 'lim-1', 'create', 'null', '{}', 100.0)")
+            with engine.begin() as conn:
+                command.upgrade(db._alembic_config(conn), "0017")
+            self.assertIn("budget_category_limits", set(inspect(engine).get_table_names()))
+            with engine.begin() as conn:
+                conn.exec_driver_sql(
+                    "INSERT INTO budget_category_limits "
+                    "(id, owner, category_id, currency, monthly_limit, warning_percent, enabled, version, created_at, updated_at) "
+                    "VALUES ('lim-1', 'owner', 'cat-1', 'PLN', '500', 80, 1, 1, 100.0, 100.0)")
+            bad_rows = (
+                ("lim-dup", "owner", "cat-1", "PLN", "100", 80, 1, 1),
+                ("lim-v0", "owner", "cat-1", "EUR", "100", 80, 1, 0),
+                ("lim-w0", "owner", "cat-1", "EUR", "100", 0, 1, 1),
+                ("lim-w100", "owner", "cat-1", "EUR", "100", 100, 1, 1),
+                ("lim-en2", "owner", "cat-1", "EUR", "100", 80, 2, 1),
+                ("lim-empty", "owner", "cat-1", "EUR", "", 80, 1, 1),
+                ("lim-long", "owner", "cat-1", "EUR", "1" * 81, 80, 1, 1),
+                ("lim-fk", "owner", "missing", "EUR", "100", 80, 1, 1),
+            )
+            for row in bad_rows:
+                with self.subTest(row=row[0]), self.assertRaises(Exception):
+                    with engine.begin() as conn:
+                        conn.exec_driver_sql(
+                            "INSERT INTO budget_category_limits "
+                            "(id, owner, category_id, currency, monthly_limit, warning_percent, enabled, version, created_at, updated_at) "
+                            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 100.0, 100.0)", row)
+            # Restrictive FK prevents deleting a referenced category.
+            with self.assertRaises(Exception):
+                with engine.begin() as conn:
+                    conn.exec_driver_sql("DELETE FROM budget_categories WHERE id='cat-1'")
+            with engine.begin() as conn:
+                command.downgrade(db._alembic_config(conn), "0016")
+            self.assertNotIn("budget_category_limits", set(inspect(engine).get_table_names()))
+            with engine.connect() as conn:
+                audit_count = conn.exec_driver_sql("SELECT COUNT(*) FROM budget_analytics_audit").scalar()
+            self.assertEqual(audit_count, 1)
+        finally:
+            engine.dispose()
+
 
 class SessionScopeTests(unittest.TestCase):
     def setUp(self):
