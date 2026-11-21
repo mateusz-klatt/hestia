@@ -83,7 +83,7 @@ class CategoryLimitStatus:
 
 
 def _text(value, maximum=MAX_TEXT):
-    if not isinstance(value, str) or not value.strip() or len(value) > maximum or _CONTROL.search(value):
+    if not isinstance(value, str) or len(value) > maximum or not value.strip() or _CONTROL.search(value):
         raise SpendingLimitInputError()
     return value
 

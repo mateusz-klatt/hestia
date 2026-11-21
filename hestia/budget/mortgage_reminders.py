@@ -84,7 +84,7 @@ class MortgageReminder:
 
 
 def _text(value, maximum=MAX_TEXT):
-    if not isinstance(value, str) or not value.strip() or len(value) > maximum or _CONTROL.search(value):
+    if not isinstance(value, str) or len(value) > maximum or not value.strip() or _CONTROL.search(value):
         raise MortgageInputError()
     return value
 
@@ -213,7 +213,8 @@ def evaluate_mortgage_reminders(owner: str, today: str, schedules: Iterable[Mort
 
     Evaluates each enabled schedule starting from the calendar month of
     ``max(today, start_date)``, advancing past months explicitly listed in
-    ``paid_months``. Only owner-private notification destinations are accepted;
+    ``paid_months`` (valid ``paid_months`` outside the schedule window are safely
+    ignored). Only owner-private notification destinations are accepted;
     shared calendars are rejected. Disabled schedules are still validated for
     ownership, privacy and duplicate IDs before being excluded from active reminders.
     """
