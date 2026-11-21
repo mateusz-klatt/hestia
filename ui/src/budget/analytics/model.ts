@@ -111,6 +111,73 @@ export type TransferQueue = (typeof TRANSFER_QUEUES)[number];
 /** Every field is always sent; legs and fingerprints are null for undo, which names the decision instead. */
 export type TransferDecisionRequest = Schemas["BudgetAnalyticsTransferDecisionRequest"];
 
+/** A non-negative decimal with insignificant zeroes removed, or null when it is not a decimal string. */
+export function canonicalAmount(value: string): string | null {
+  if (!/^\d+(\.\d+)?$/.test(value)) return null;
+  const [integer = "", fraction = ""] = value.split(".");
+  const whole = integer.replace(/^0+(?=\d)/, "");
+  const decimal = fraction.replace(/0+$/, "");
+  return decimal === "" ? whole : `${whole}.${decimal}`;
+}
+
+/** The date used by transfer matching: the booking date, falling back to the value date. */
+export function pairDate(row: AnalyticsTransaction): string | null {
+  return row.booking_date ?? row.value_date;
+}
+
+/** The absolute whole-day distance between two YYYY-MM-DD dates. */
+export function daysBetween(a: string, b: string): number {
+  const day = (value: string) => Date.UTC(Number(value.slice(0, 4)), Number(value.slice(5, 7)) - 1, Number(value.slice(8, 10)));
+  return Math.abs(day(a) - day(b)) / 86_400_000;
+}
+
+/** The ordered YYYY-MM keys touched by the three days either side of a YYYY-MM-DD date. */
+export function pairPeriods(date: string): string[] {
+  const time = Date.UTC(Number(date.slice(0, 4)), Number(date.slice(5, 7)) - 1, Number(date.slice(8, 10)));
+  const first = new Date(time - 3 * 86_400_000).toISOString().slice(0, 7);
+  const last = new Date(time + 3 * 86_400_000).toISOString().slice(0, 7);
+  return first === last ? [first] : [first, last];
+}
+
+/** Credit rows the server could pair with this debit, deduplicated and nearest first. */
+export function pairCandidates(debit: AnalyticsTransaction, rows: readonly AnalyticsTransaction[]): AnalyticsTransaction[] {
+  const amount = canonicalAmount(debit.amount);
+  const date = pairDate(debit);
+  if (amount === null || date === null) return [];
+  const unique = new Map<string, AnalyticsTransaction>();
+  for (const row of rows) {
+    const candidateDate = pairDate(row);
+    if (row.credit_debit_indicator !== "CRDT" || row.account_id === debit.account_id || row.currency !== debit.currency
+      || canonicalAmount(row.amount) !== amount || candidateDate === null || daysBetween(date, candidateDate) > 3
+      || row.effective.kind === "transfer" || ["accepted", "review", "boundary"].includes(row.transfer.status)) continue;
+    const key = `${row.account_id}/${row.entry_reference}`;
+    if (!unique.has(key)) unique.set(key, row);
+  }
+  return [...unique.values()].sort((a, b) => {
+    const aDate = pairDate(a) ?? "";
+    const bDate = pairDate(b) ?? "";
+    return daysBetween(date, aDate) - daysBetween(date, bDate) || aDate.localeCompare(bDate)
+      || a.account_id.localeCompare(b.account_id) || a.entry_reference.localeCompare(b.entry_reference);
+  });
+}
+
+/** Whether an entry is an eligible debit for an explicit manual own-transfer pair. */
+export function canPair(row: AnalyticsTransaction): boolean {
+  const amount = canonicalAmount(row.amount);
+  return row.credit_debit_indicator === "DBIT" && amount !== null && amount !== "0" && pairDate(row) !== null
+    && row.effective.kind !== "transfer" && ["none", "suggested", "rejected", "undone"].includes(row.transfer.status);
+}
+
+/** A first, explicit manual acceptance of two entries with their currently shown transfer fingerprints. */
+export function manualPairRequest(debit: AnalyticsTransaction, credit: AnalyticsTransaction): TransferDecisionRequest {
+  return {
+    action: "accept", source: "manual", decision_id: null, expected_version: 0,
+    debit: { account_id: debit.account_id, entry_reference: debit.entry_reference },
+    credit: { account_id: credit.account_id, entry_reference: credit.entry_reference },
+    expected_debit_fingerprint: debit.transfer_fingerprint, expected_credit_fingerprint: credit.transfer_fingerprint,
+  };
+}
+
 export function transferDecision(pair: TransferPair, action: TransferAction): TransferDecisionRequest | null {
   const source: TransferSource = TRANSFER_SOURCES.includes(pair.source) ? pair.source as TransferSource : "manual";
   if (action === "undo") {
@@ -166,6 +233,7 @@ export const ANALYTICS_ERROR = {
   stalePreview: "budget_analytics_stale_preview",
   previewExpired: "budget_analytics_preview_expired",
   legReserved: "budget_analytics_leg_reserved",
+  invalidRequest: "budget_analytics_invalid_request",
   staleCursor: "budget_analytics_stale_cursor",
 } as const;
 export const RELOAD_ERRORS: ReadonlySet<string> = new Set([ANALYTICS_ERROR.conflict, ANALYTICS_ERROR.sourceChanged,

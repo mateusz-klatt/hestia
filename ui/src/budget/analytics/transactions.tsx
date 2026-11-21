@@ -4,8 +4,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { BudgetApi } from "../api";
 import type { BudgetAccount, BudgetConnection } from "../model";
 import { formatAmount, transactionDate, transactionText } from "../model";
-import { ANALYTICS_ERROR, EFFECTIVE_KINDS, NO_FILTER, RELOAD_ERRORS, UNCATEGORISED, annotationRequest, counterparty,
-  accountName as nameOf, currentChoice, kindChoice, kindChoicesFor, labelOf } from "./model";
+import { ANALYTICS_ERROR, EFFECTIVE_KINDS, NO_FILTER, RELOAD_ERRORS, UNCATEGORISED, annotationRequest, canPair, counterparty,
+  accountName as nameOf, currentChoice, daysBetween, kindChoice, kindChoicesFor, labelOf, manualPairRequest, pairCandidates,
+  pairDate, pairPeriods } from "./model";
 import type { AnalyticsCategory, AnalyticsTransaction, CategoryChoice, KindChoice, TransactionFilter } from "./model";
 
 const kindsEn = { auto: "Automatic", expense: "Expense", income: "Income", refund: "Refund", excluded: "Leave out of the budget",
@@ -25,6 +26,14 @@ export const transactionLabels = {
     more: "Load more", empty: "No entries match.", loading: "Loading entries…", error: "Entries could not be loaded.",
     conflict: "This changed elsewhere; the latest state was loaded.", saveError: "Could not save. Try again.",
     changed: "The bank changed this entry; the latest state was loaded.", account: "Account",
+    pair: "Pair as own transfer", pairTitle: "Matching credits within 3 days", pairLoading: "Looking for matching entries…",
+    pairEmpty: "No matching credit within 3 days on another account.",
+    pairLimited: "Only part of the period was searched; some entries may be missing.", pairError: "Matching entries could not be loaded.",
+    pairConfirm: "Confirm this pair",
+    pairDays: (count: number) => (count === 0 ? "same day" : `${String(count)} ${count === 1 ? "day" : "days"} apart`),
+    pairReserved: "One of these entries is already in another pair; the latest state was loaded.",
+    pairExisting: "These two entries already have a decision; see the own-transfer queues.",
+    pairInvalid: "These entries cannot be paired (amount, currency, dates or account differ).",
   },
   pl: {
     title: "Transakcje", currency: "Waluta", category: "Kategoria", kind: "Rodzaj", search: "Szukaj", apply: "Zastosuj",
@@ -38,15 +47,25 @@ export const transactionLabels = {
     error: "Nie udało się wczytać pozycji.", conflict: "Zmieniono to w innym miejscu; wczytano aktualny stan.",
     saveError: "Nie udało się zapisać. Spróbuj ponownie.", changed: "Bank zmienił tę pozycję; wczytano aktualny stan.",
     account: "Konto",
+    pair: "Paruj jako przelew własny", pairTitle: "Pasujące wpływy w ciągu 3 dni", pairLoading: "Szukam pasujących pozycji…",
+    pairEmpty: "Brak pasującego wpływu w ciągu 3 dni na innym koncie.",
+    pairLimited: "Przeszukano tylko część okresu; części pozycji może brakować.", pairError: "Nie udało się wczytać pasujących pozycji.",
+    pairConfirm: "Potwierdź tę parę",
+    pairDays: (count: number) => (count === 0 ? "ten sam dzień" : `${String(count)} ${count === 1 ? "dzień" : "dni"} różnicy`),
+    pairReserved: "Jedna z tych pozycji jest już w innej parze; wczytano aktualny stan.",
+    pairExisting: "Te dwie pozycje mają już decyzję; zobacz kolejki przelewów własnych.",
+    pairInvalid: "Tych pozycji nie można sparować (różnią się kwota, waluta, daty lub konto).",
   },
 };
 export type TransactionLabels = typeof transactionLabels.en;
 
 interface Page { rows: AnalyticsTransaction[]; cursor: string | null; total: number; loading: boolean; failed: boolean }
 const LOADING: Page = { rows: [], cursor: null, total: 0, loading: true, failed: false };
+interface PairPage { rows: AnalyticsTransaction[]; loading: boolean; failed: boolean; limited: boolean }
+const PAIR_LOADING: PairPage = { rows: [], loading: true, failed: false, limited: false };
 
 export interface TransactionsProps {
-  api: Pick<BudgetApi, "analyticsTransactions" | "categories" | "annotate">;
+  api: Pick<BudgetApi, "analyticsTransactions" | "categories" | "annotate" | "decideTransfer">;
   period: string;
   currencies: readonly string[];
   accounts: readonly BudgetAccount[];
@@ -68,16 +87,21 @@ export function TransactionsPanel({ api, period, currencies, accounts, connectio
   const [page, setPage] = useState<Page>(LOADING);
   const [categories, setCategories] = useState<AnalyticsCategory[]>([]);
   const [editing, setEditing] = useState<string | null>(null);
+  const [pairing, setPairing] = useState<string | null>(null);
+  const [pairPage, setPairPage] = useState<PairPage>(PAIR_LOADING);
   const [busy, setBusy] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [reloads, setReloads] = useState(0);
   // Every period, filter or reload change takes a new generation; late pages and saves of an older one are dropped.
   const generation = useRef(0);
+  const picker = useRef(0);
 
   useEffect(() => {
     const token = ++generation.current;
+    picker.current += 1;
     setPage(LOADING);
     setEditing(null);
+    setPairing(null);
     setBusy(null);
     void api.categories().then((result) => {
       if (onAccessLoss(result) || token !== generation.current) return;
@@ -90,7 +114,7 @@ export function TransactionsPanel({ api, period, currencies, accounts, connectio
         : { ...LOADING, loading: false, failed: true });
     });
   }, [api, period, filter, revision, reloads, onAccessLoss]);
-  useEffect(() => () => { generation.current += 1; }, []);
+  useEffect(() => () => { generation.current += 1; picker.current += 1; }, []);
 
   const more = useCallback(async () => {
     const token = generation.current;
@@ -107,6 +131,54 @@ export function TransactionsPanel({ api, period, currencies, accounts, connectio
       : { ...current, loading: false, failed: true }));
   }, [api, period, filter, page.cursor, onAccessLoss]);
 
+  const loadPairs = useCallback(async (debit: AnalyticsTransaction, pickerToken: number, generationToken: number) => {
+    const date = pairDate(debit);
+    if (date === null) return;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      if (generationToken !== generation.current || pickerToken !== picker.current) return;
+      setPairPage(PAIR_LOADING);
+      const rows: AnalyticsTransaction[] = [];
+      let limited = false;
+      let restart = false;
+      for (const month of pairPeriods(date)) {
+        let cursor: string | undefined;
+        for (let pageNumber = 0; pageNumber < 10; pageNumber += 1) {
+          const result = await api.analyticsTransactions(month,
+            { currency: debit.currency, category: "", kind: "", query: "" }, cursor, 200);
+          if (onAccessLoss(result) || generationToken !== generation.current || pickerToken !== picker.current) return;
+          if (!result.ok) {
+            if (result.error === ANALYTICS_ERROR.staleCursor && attempt === 0) { restart = true; break; }
+            setPairPage({ rows: [], loading: false, failed: true, limited: false });
+            return;
+          }
+          rows.push(...result.data.transactions);
+          cursor = result.data.next_cursor ?? undefined;
+          if (cursor === undefined) break;
+          if (pageNumber === 9) limited = true;
+        }
+        if (restart) break;
+      }
+      if (restart) continue;
+      setPairPage({ rows, loading: false, failed: false, limited });
+      return;
+    }
+  }, [api, onAccessLoss]);
+
+  const closePairs = useCallback(() => {
+    picker.current += 1;
+    setPairing(null);
+  }, []);
+
+  const openPairs = useCallback((row: AnalyticsTransaction) => {
+    if (!canPair(row)) return;
+    const pickerToken = ++picker.current;
+    setPairing(rowKey(row));
+    setPairPage(PAIR_LOADING);
+    setEditing(null);
+    setNotice(null);
+    void loadPairs(row, pickerToken, generation.current);
+  }, [loadPairs]);
+
   const save = useCallback(async (row: AnalyticsTransaction, category: CategoryChoice, kind: KindChoice) => {
     const token = generation.current;
     setBusy(rowKey(row));
@@ -122,6 +194,31 @@ export function TransactionsPanel({ api, period, currencies, accounts, connectio
       return;
     }
     setEditing(null);
+    onChanged();
+  }, [api, onAccessLoss, onChanged, text]);
+
+  const confirmPair = useCallback(async (debit: AnalyticsTransaction, credit: AnalyticsTransaction) => {
+    const generationToken = generation.current;
+    const pickerToken = picker.current;
+    setBusy(`${rowKey(debit)}>${rowKey(credit)}`);
+    setNotice(null);
+    const result = await api.decideTransfer(manualPairRequest(debit, credit));
+    const accessLost = onAccessLoss(result);
+    if (generationToken !== generation.current || pickerToken !== picker.current) return;
+    setBusy(null);
+    if (accessLost) return;
+    if (!result.ok) {
+      const reserved = result.error === ANALYTICS_ERROR.legReserved;
+      const existing = result.error === ANALYTICS_ERROR.conflict;
+      setNotice(result.error === ANALYTICS_ERROR.sourceChanged ? text.changed
+        : reserved ? text.pairReserved : existing ? text.pairExisting
+          : result.error === ANALYTICS_ERROR.invalidRequest ? text.pairInvalid
+            : RELOAD_ERRORS.has(result.error) ? text.conflict : text.saveError);
+      if (RELOAD_ERRORS.has(result.error)) setReloads((current) => current + 1);
+      return;
+    }
+    picker.current += 1;
+    setPairing(null);
     onChanged();
   }, [api, onAccessLoss, onChanged, text]);
 
@@ -190,12 +287,19 @@ export function TransactionsPanel({ api, period, currencies, accounts, connectio
                     {row.transfer.ambiguous ? <span className="budget-warn">{text.ambiguous}</span> : null}
                     {row.annotation.stale ? <span className="budget-warn">{text.stale}</span> : null}
                     {editing === key ? null : (
-                      <button type="button" disabled={busy !== null} onClick={() => { setEditing(key); setNotice(null); }}>{text.edit}</button>
+                      <button type="button" disabled={busy !== null} onClick={() => { closePairs(); setEditing(key); setNotice(null); }}>{text.edit}</button>
                     )}
+                    {canPair(row) ? (
+                      <button type="button" disabled={busy !== null} onClick={() => { openPairs(row); }}>{text.pair}</button>
+                    ) : null}
                   </div>
                   {editing === key ? (
                     <Editor row={row} categories={categories} text={text} kindText={kindText} saving={busy === key}
                       onSave={(category, kind) => { void save(row, category, kind); }} onCancel={() => { setEditing(null); }} />
+                  ) : null}
+                  {pairing === key ? (
+                    <PairPicker debit={row} page={pairPage} accounts={accounts} connections={connections} text={text} locale={locale}
+                      disabled={busy !== null} onConfirm={(credit) => { void confirmPair(row, credit); }} onCancel={closePairs} />
                   ) : null}
                 </li>
               );
@@ -206,6 +310,55 @@ export function TransactionsPanel({ api, period, currencies, accounts, connectio
       {page.cursor === null ? null
         : <button type="button" disabled={page.loading} onClick={() => { void more(); }}>{text.more}</button>}
     </section>
+  );
+}
+
+interface PairPickerProps {
+  debit: AnalyticsTransaction;
+  page: PairPage;
+  accounts: readonly BudgetAccount[];
+  connections: readonly BudgetConnection[];
+  text: TransactionLabels;
+  locale: string;
+  disabled: boolean;
+  onConfirm: (credit: AnalyticsTransaction) => void;
+  onCancel: () => void;
+}
+
+function PairPicker({ debit, page, accounts, connections, text, locale, disabled, onConfirm, onCancel }: PairPickerProps) {
+  const candidates = pairCandidates(debit, page.rows);
+  const debitDate = pairDate(debit);
+  return (
+    <div className="budget-pair-picker" aria-label={text.pairTitle}>
+      <p className="budget-muted">{text.pairTitle}</p>
+      {page.limited ? <p className="budget-notice" role="note">{text.pairLimited}</p> : null}
+      {page.loading ? <p className="budget-muted" role="status">{text.pairLoading}</p> : null}
+      {page.failed ? <p className="budget-notice" role="alert">{text.pairError}</p> : null}
+      {!page.loading && !page.failed && candidates.length === 0 ? <p className="budget-muted">{text.pairEmpty}</p> : null}
+      {!page.loading && !page.failed && candidates.length > 0 ? (
+        <ul className="budget-entry-list">
+          {candidates.map((credit) => {
+            const creditDate = pairDate(credit);
+            if (debitDate === null || creditDate === null) return null;
+            return (
+              <li key={rowKey(credit)} className="budget-entry">
+                <div className="budget-entry-main">
+                  <span className="budget-muted">{creditDate}</span>
+                  <span className="budget-entry-text">{counterparty(credit) ?? transactionText(credit)}</span>
+                  <strong className="is-credit">{formatAmount(credit.amount, credit.currency, locale, credit.credit_debit_indicator)}</strong>
+                </div>
+                <div className="budget-entry-facts">
+                  <span>{nameOf(accounts, connections, credit.account_id, text.account)}</span>
+                  <span>{text.pairDays(daysBetween(debitDate, creditDate))}</span>
+                  <button type="button" className="budget-primary" disabled={disabled} onClick={() => { onConfirm(credit); }}>{text.pairConfirm}</button>
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      ) : null}
+      <div><button type="button" disabled={disabled} onClick={onCancel}>{text.cancel}</button></div>
+    </div>
   );
 }
 
