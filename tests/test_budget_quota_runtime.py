@@ -312,11 +312,15 @@ class BudgetQuotaRuntimeTests(unittest.TestCase):
                         session.scalar(select(db.BudgetAccount)).enabled = False
         bank.after_get = change
         result = self.acquire(bank)
-        self.assertEqual(result["results"], [{"connection": "bank", "state": "failed"}])
+        expected_state = "failed" if disable_owner else "deferred"
+        self.assertEqual(result["results"], [{"connection": "bank", "state": expected_state}])
         self.assertEqual([path.rsplit("/", 1)[-1] for path, _ in bank.calls[1:]], ["transactions"])
         self.assertEqual(self.rows(db.BudgetTransaction), [])
         self.assertEqual(len(self.rows(db.BudgetAcquisition)), 1)
         self.assertIsNone(self.components()["balances"].last_attempt)
+        if not disable_owner:
+            self.assertEqual(result["status"][0]["failures"], 0)
+            self.assertIsNone(result["status"][0]["last_error"])
 
     def test_disabled_owner_between_pages_stops_http_and_discards_staged_data(self):
         self._change_access_after_first_page(disable_owner=True)
