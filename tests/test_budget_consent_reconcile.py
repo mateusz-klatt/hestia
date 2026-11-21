@@ -64,6 +64,8 @@ class ConsentReconcileTests(unittest.TestCase):
             _consent("c-ext", provenance="external_file", status="UNADOPTED", valid_until=NOW + 100),
             _consent("c-act-cur", status="ACTIVE", valid_until=NOW + 1),
             _consent("c-act-exp", status="ACTIVE", valid_until=NOW),
+            _consent("c-ptr-drift", connection_id="bank-ptr", status="RETIRED", valid_until=NOW + 10),
+            _consent("c-unad-uncertain", status="UNADOPTED", valid_until=NOW - RET - 100),
             _consent("c-unad-prog", status="UNADOPTED", valid_until=NOW + 60),
             _consent("c-unad-orph", status="UNADOPTED", valid_until=NOW + 60),
             _consent("c-unad-orph-conn-mismatch", connection_id="bank-b", status="UNADOPTED", valid_until=None),
@@ -75,7 +77,8 @@ class ConsentReconcileTests(unittest.TestCase):
         ]
         flows = [
             _flow("f-uncertain", status="exchange_uncertain",
-                  created_at=NOW - RET - 1000, expires_at=NOW - RET - 100),
+                  created_at=NOW - RET - 1000, expires_at=NOW - RET - 100,
+                  candidate_consent_id="c-unad-uncertain"),
             _flow("f-stale", status="started", created_at=NOW - 1000, expires_at=NOW),
             _flow("f-cand-live", status="candidate", created_at=NOW - 10, expires_at=NOW + 600,
                   candidate_consent_id="c-unad-prog"),
@@ -84,7 +87,10 @@ class ConsentReconcileTests(unittest.TestCase):
             _flow("f-term-ret", status="adopted", created_at=NOW - RET, expires_at=NOW - RET + 1),
             _flow("f-term-pru", status="canceled", created_at=NOW - RET - 100, expires_at=NOW - RET),
         ]
-        report = classify_consents("owner", NOW, (c for c in consents), (f for f in flows))
+        report = classify_consents(
+            "owner", NOW, (c for c in consents), (f for f in flows),
+            active_consent_ids={"bank-a": "c-act-cur", "bank-ptr": "c-ptr-drift"},
+        )
         self.assertEqual(report.rule_version, RULE_VERSION)
         by_c = {item.consent_id: item for item in report.consents}
         by_f = {item.flow_id: item for item in report.flows}
@@ -103,6 +109,15 @@ class ConsentReconcileTests(unittest.TestCase):
         self.assertEqual((by_c["c-act-exp"].classification, by_c["c-act-exp"].needs_owner_review,
                           by_c["c-act-exp"].remote_close_eligible, by_c["c-act-exp"].local_retire_eligible),
                          ("active_expired", True, False, False))
+        # Defense-in-depth: a live active_consent_id pointer is never marked closable or prunable even if drifted.
+        self.assertEqual((by_c["c-ptr-drift"].classification, by_c["c-ptr-drift"].needs_owner_review,
+                          by_c["c-ptr-drift"].remote_close_eligible, by_c["c-ptr-drift"].local_retire_eligible),
+                         ("active_pointer_mismatch", True, False, False))
+        # Evidence referenced by an exchange_uncertain flow is never auto-prunable or auto-closable.
+        self.assertEqual((by_c["c-unad-uncertain"].classification, by_c["c-unad-uncertain"].needs_owner_review,
+                          by_c["c-unad-uncertain"].remote_close_eligible,
+                          by_c["c-unad-uncertain"].local_retire_eligible),
+                         ("uncertain_flow_evidence", True, False, False))
         self.assertEqual((by_c["c-unad-prog"].classification, by_c["c-unad-prog"].needs_owner_review,
                           by_c["c-unad-prog"].remote_close_eligible),
                          ("unadopted_in_progress", False, False))
@@ -155,6 +170,63 @@ class ConsentReconcileTests(unittest.TestCase):
             retention_days=0,
         )
         self.assertEqual(at_bound.consents[0].classification, "retired_prunable")
+
+    def test_unresolved_flow_evidence_and_retired_pointer_invariants(self):
+        # 1. Expired UNADOPTED/RETIRED consents referenced by exchange_uncertain or stale_active_flow
+        #    must NEVER become local_retire_eligible and MUST require owner review regardless of retention.
+        consents = [
+            _consent("c-unad-unc-exp", status="UNADOPTED", valid_until=NOW - RET - 10),
+            _consent("c-unad-unc-live", status="UNADOPTED", valid_until=NOW + 600),
+            _consent("c-ret-unc-exp", status="RETIRED", valid_until=NOW - RET - 10),
+            _consent("c-unad-stale-exp", status="UNADOPTED", valid_until=NOW - RET - 10),
+            _consent("c-ret-stale-exp", status="RETIRED", valid_until=NOW - RET - 10),
+            _consent("c-ext-unc", provenance="external_file", status="UNADOPTED", valid_until=NOW - RET - 10),
+        ]
+        flows = [
+            _flow("f-unc-1", status="exchange_uncertain", created_at=NOW - RET - 50,
+                  expires_at=NOW - RET - 10, candidate_consent_id="c-unad-unc-exp"),
+            _flow("f-unc-2", status="exchange_uncertain", created_at=NOW - 50,
+                  expires_at=NOW - 10, candidate_consent_id="c-unad-unc-live"),
+            _flow("f-unc-3", status="exchange_uncertain", created_at=NOW - RET - 50,
+                  expires_at=NOW - RET - 10, candidate_consent_id="c-ret-unc-exp"),
+            _flow("f-unc-4", status="exchange_uncertain", created_at=NOW - RET - 50,
+                  expires_at=NOW - RET - 10, candidate_consent_id="c-ext-unc"),
+            _flow("f-stale-1", status="candidate", created_at=NOW - RET - 50,
+                  expires_at=NOW - RET - 10, candidate_consent_id="c-unad-stale-exp"),
+            _flow("f-stale-2", status="exchanging", created_at=NOW - RET - 50,
+                  expires_at=NOW - RET - 10, candidate_consent_id="c-ret-stale-exp"),
+            # Resolved terminal flow referencing a consent does NOT block normal retention.
+            _flow("f-adopted", status="adopted", created_at=NOW - RET - 50,
+                  expires_at=NOW - RET - 10, candidate_consent_id="c-unrelated"),
+        ]
+        report = classify_consents("owner", NOW, consents, flows, retention_days=0)
+        by_c = {item.consent_id: item for item in report.consents}
+        for cid in ("c-unad-unc-exp", "c-unad-unc-live", "c-ret-unc-exp"):
+            self.assertEqual((by_c[cid].classification, by_c[cid].needs_owner_review,
+                              by_c[cid].remote_close_eligible, by_c[cid].local_retire_eligible),
+                             ("uncertain_flow_evidence", True, False, False))
+        self.assertEqual((by_c["c-unad-stale-exp"].classification, by_c["c-unad-stale-exp"].needs_owner_review,
+                          by_c["c-unad-stale-exp"].local_retire_eligible),
+                         ("unadopted_expired_retained", True, False))
+        self.assertEqual((by_c["c-ret-stale-exp"].classification, by_c["c-ret-stale-exp"].needs_owner_review,
+                          by_c["c-ret-stale-exp"].local_retire_eligible),
+                         ("retired_retained", True, False))
+        self.assertEqual((by_c["c-ext-unc"].classification, by_c["c-ext-unc"].remote_close_eligible,
+                          by_c["c-ext-unc"].local_retire_eligible),
+                         ("external_read_only", False, False))
+
+        # 2. Store invariant: RETIRED is only written on successor adoption, so a still-valid RETIRED
+        #    consent is remote_close_eligible=True unless active_consent_ids still points to it.
+        retired_live = _consent("c-ret-1", status="RETIRED", valid_until=NOW + 3600)
+        without_ptr = classify_consents("owner", NOW, [retired_live], []).consents[0]
+        self.assertEqual((without_ptr.classification, without_ptr.remote_close_eligible,
+                          without_ptr.local_retire_eligible),
+                         ("retired_still_valid", True, False))
+        with_ptr = classify_consents("owner", NOW, [retired_live], [],
+                                     active_consent_ids={"bank-a": "c-ret-1"}).consents[0]
+        self.assertEqual((with_ptr.classification, with_ptr.needs_owner_review,
+                          with_ptr.remote_close_eligible, with_ptr.local_retire_eligible),
+                         ("active_pointer_mismatch", True, False, False))
 
     def test_permutation_invariance(self):
         consents = [
@@ -214,6 +286,9 @@ class ConsentReconcileTests(unittest.TestCase):
             lambda: classify_consents("owner", NOW, [], [_flow("dup"), _flow("dup")]),
             lambda: classify_consents("owner", NOW, [], [_flow(created_at=NOW, expires_at=NOW - 1)]),
             lambda: classify_consents("owner", NOW, [], [_flow(candidate_consent_id=" ")]),
+            lambda: classify_consents("owner", NOW, [], [], active_consent_ids=["not-a-mapping"]),
+            lambda: classify_consents("owner", NOW, [], [], active_consent_ids={" ": "c-1"}),
+            lambda: classify_consents("owner", NOW, [], [], active_consent_ids={"bank-a": " "}),
         ]
         for call in bad_calls:
             with self.assertRaises(ConsentReconcileInputError) as exc:
