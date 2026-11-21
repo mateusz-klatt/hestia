@@ -4,10 +4,11 @@ Status: implementation contract for the next analytics slice. The current ledger
 account selection and consent implementation remain the source of truth. No
 analytics endpoint or automatic transaction pairing is claimed by this document.
 
-The operator confirmed all account kinds in the UI and chose 11 of 15 configured
-accounts. Respect the four exclusions. The operator also explicitly authorised
-matching by equal amount and dates within three days when account numbers are
-unavailable. Extra financial-database encryption is not a prerequisite.
+Account kinds and report scope are the owner's explicit choices. Respect selected
+and excluded accounts without changing those choices during classification or
+matching. When account numbers are unavailable, equal amount/currency and dates
+within ±3 calendar days may suggest a transfer, subject to the review and manual
+override contract below. Extra financial-database encryption is not a prerequisite.
 
 ## Scope and exact amounts
 

@@ -1,12 +1,13 @@
 # Budget 2B: private HTTP API and Enable Banking consent lifecycle
 
-**Status:** 2B.1 private stored API/controls (#170), safe account labels (#171),
-2B.jobs refresh executor/opt-in poller (#172), updated public policies (#173) and 2C
-owner budget screens (#174) are implemented and deployed at migration `0013`. Each
-server feature keeps its own flag; the executor and poller stay separate opt-ins.
-Browser consent/renewal and managed credential adoption below (2B.2/2B.3) are now
-implemented behind `HESTIA_BUDGET_CONSENT_ENABLED=1`; remote close remains future work. Existing CLI
-behavior, the 2B.jobs runbook and the budget screens are documented in
+**Status as of 2026-11-21:** migration `0014` is deployed. The private stored
+API/controls, safe account labels, refresh executor/opt-in poller, browser
+consent/renewal and managed credential adoption (2B.2/2B.3) are live. The owner
+React budget screens include read-only download limits and Connect/Renew controls.
+Each server feature remains default-off in a new installation; the executor,
+poller and consent service require separate explicit activation. Remote session
+closure and analytics remain future work. Existing CLI behavior, the 2B.jobs
+runbook and the budget screens are documented in
 [BUDGET.md](BUDGET.md); its identity, import, selection and quota guarantees remain
 binding. Production deployment and panel redirect changes were explicitly
 authorised by the operator. A real SCA still starts with the owner's browser action.
@@ -14,15 +15,16 @@ authorised by the operator. A real SCA still starts with the owner's browser act
 ## Scope and delivery order
 
 2B adds an authenticated API for the configured owner's stored budget, audited
-account controls, and a browser consent/renewal flow. Full React budget screens
-and product UAT are 2C. A small consent-completion bridge belongs to 2B because
+account controls, and a browser consent/renewal flow. Implemented React budget
+screens and product UAT belong to 2C. A small consent-completion bridge belongs to 2B because
 it is required by the existing authentication cookie, not an optional UI feature.
 No payments, bank login/password collection, expense predictions or medical module
 is added. Bank authentication stays on the bank/Enable Banking pages. Reads never
 start acquisition as a side effect. Unattended polling is a separate default-off
 piece below; installing the read API does not start it.
 
-Implement in separately reviewed pieces, each preserving the 2A full coverage gate:
+The implemented delivery sequence preserved the 2A full coverage gate in each
+separately reviewed piece:
 
 1. **2B.1:** HTTP guard, owner-scoped stored reads, web account controls and schemas.
    No public callback or new bank methods enabled in this piece.
@@ -31,16 +33,20 @@ Implement in separately reviewed pieces, each preserving the 2A full coverage ga
    needed to use those already-authorized sessions; their live use is not implied.
 3. **2C (implemented):** React budget screens, account choices, freshness and UAT,
    using the stored-data API, jobs and existing external sessions, with the safe
-   account display metadata described below. Renewal actions arrive with 2B.3.
-4. **2B.2:** private consent storage, bounded control-plane client, single-use flow,
+   account display metadata described below. Read-only limits and browser
+   Connect/Renew actions are now also implemented.
+4. **2B.2 (implemented):** private consent storage, bounded control-plane client, single-use flow,
    Strict-cookie callback bridge and synthetic end-to-end harness.
-5. **2B.3:** generation-fenced session adoption, renewal/close semantics,
-   crash recovery, proxy/privacy runbook and staged activation checks.
+5. **2B.3 (implemented):** generation-fenced session adoption and renewal,
+   crash recovery, proxy/privacy runbook and staged activation checks. Remote
+   close semantics remain a future extension.
 
 This data-first order delivers useful private data/UI without making callback
 logging a prerequisite for stored reads or already-authorized external sessions.
-Consent endpoints are registered with a default-off service; the callback returns
-unavailable until prerequisites and the explicit consent flag are satisfied. Refresh
+Consent endpoints are registered with a default-off service. Private consent
+operations report unavailable until prerequisites and the explicit consent flag
+are satisfied; the public callback always redirects to the fixed clean completion
+page, including on failure. Refresh
 returns a fixed unavailable response until its executor is enabled. Capabilities
 make these boundaries visible to 2C. No dependent piece ships with a placeholder
 auth check, and React must never access Enable Banking directly.
@@ -84,14 +90,14 @@ An administrator cannot read or modify another administrator's budget.
 | Authoritative SQLite users unavailable | `409`, static `budget_requires_sqlite_users`; no fallback. |
 | Unknown or another owner's local resource ID | Identical `404`, including mutation targets. |
 | Missing expected version or a stale version with conflicting intent | `409`; return safe current metadata to its owner. |
-| Feature explicitly disabled | `404`; no activation through a request. |
+| Feature explicitly disabled | Stored budget API: `404`. Unavailable private consent service: `503`; callback failures still use the clean `303` redirect. No activation through a request. |
 
 Classify every non-public route as admin in both `web._ROUTE_MIN_ROLE` and
 `api_contract._PATH_ROLES`; unclassified GET routes currently default to viewer.
 Preserve existing empty middleware `401/403` responses. Handler errors use fixed
 `{ok:false,error:code}` values, never arbitrary exception/provider text.
 
-## Proposed HTTP contract
+## Implemented HTTP contract
 
 All resource IDs below are local opaque IDs. Owner/actor/origin, primary hashes,
 bank session IDs, key paths, callback URLs and provider account UIDs are never
@@ -111,13 +117,16 @@ reject duplicate scalar parameters, unknown fields and invalid enum/boolean type
 | `POST /api/budget/connection-state` | `{connection_id,paused,expected_version}`; pause acquisition without erasing history or silently revoking consent. |
 | `POST /api/budget/background-selection` | In 2B.jobs: `{connection_id,enabled,expected_version}`; audited owner opt-in, separate from the global poller flag and pause. |
 | `POST /api/budget/refresh` | `{connection_id,expected_version,account_id?,operation?}` and required `Idempotency-Key` header. `202` with a durable local job ID, or safe deferred state/deadline. No force/quota bypass. |
-| `POST /api/budget/enable-banking/start` | `{connection_id,intent,expected_version}`, intent `connect`/`renew`; returns local flow ID, trusted HTTPS authorization URL and local expiry. |
+| `POST /api/budget/consent/start` | `{connection_id,intent,expected_version}`, intent `connect`/`renew`; returns local flow ID, trusted HTTPS authorization URL and local expiry. |
 | `GET /api/budget/enable-banking/callback` | Exact public staging route described below. No exchange or financial response. |
 | `GET /budget/connect/complete` | Exact public static completion shell; no secrets or financial data. |
-| `GET /api/budget/enable-banking/pending` | Authenticated owner/browser-scoped pending flow metadata; no code, raw state or session ID. |
-| `POST /api/budget/enable-banking/complete` | `{flow_id}`; authenticated single-use exchange/verification/adoption. |
-| `POST /api/budget/enable-banking/cancel` | `{flow_id}`; local cancellation, not a promise of bank-side revocation. |
-| `POST /api/budget/enable-banking/close` | Owned local consent ID and expected version; explicit close intent, subject to managed-session rules below. |
+| `GET /api/budget/consent/pending` | Authenticated owner/browser-scoped pending flow metadata; no code, raw state or session ID. |
+| `GET /api/budget/consent/status` | Owner-scoped managed consent metadata; no credential references or provider session IDs. |
+| `POST /api/budget/consent/complete` | `{flow_id}`; authenticated single-use exchange/verification/adoption. |
+| `POST /api/budget/consent/cancel` | `{flow_id}`; local cancellation, not a promise of bank-side revocation. |
+
+Remote close has no HTTP route in this release. Its requirements below describe
+future work, not an available browser control.
 
 Exact route names and payloads are the implementation contract; add them to
 strict Pydantic request/tolerant response models, OpenAPI and generated TypeScript
@@ -293,9 +302,10 @@ HttpOnly, SameSite=Lax, short Max-Age, `Path=/` and no Domain. The root path als
 lets login/logout see and expire these cookies; a budget-only cookie path would
 break that invalidation. Use distinct names for bounded concurrent flows.
 Require HTTPS/Secure for consent activation.
-Clear binding cookies on terminal completion/cancel and on logout; successful
-login invalidates old browser bindings rather than reusing a previous login's
-flow. Never recreate a missing binding from state received in a callback.
+Terminal completion/cancel durably invalidates the flow binding; its cookie
+expires at the short Max-Age. Login/logout also expire the browser's flow cookies
+and invalidate old bindings rather than reusing a previous login's flow. Never
+recreate a missing binding from state received in a callback.
 Cancellation/login/logout must also persist flow invalidation and advance its
 binding revision. Cookie deletion alone cannot stop an already-running exchange.
 Do not report successful flow cancellation if invalidation failed; inhibit adoption
@@ -318,8 +328,8 @@ only two flows per owner and one per connection may be outstanding.
 
 ### Callback and completion steps
 
-1. The public allowlist contains only exact GET callback and GET completion-shell
-   routes; no prefix exemption or callback HEAD. Reject duplicate/oversized state,
+1. The public allowlist contains only exact GET callback, GET completion-shell
+   and GET completion-script routes; no prefix exemption or callback HEAD. Reject duplicate/oversized state,
    code and error parameters, invalid combinations and unknown query fields with
    fixed errors. Recognize optional `error_description` only as bounded,
    discard-only input accompanying an error, so legitimate denial is terminal
@@ -445,7 +455,7 @@ primary account set based on matching names or PSU metadata.
 
 ## Durable session adoption, renewal and pause
 
-Introduce a connection generation and opaque active-consent reference. Store
+Migration `0014` adds a connection generation and opaque active-consent reference. Store
 session IDs/codes in versioned owner-only capsules under a fixed private directory
 (0700, files 0400/0600, regular files, no symlink traversal), following 2A's secret
 file boundary. SQLite contains only local references and metadata. Never replace
@@ -500,8 +510,8 @@ prove exclusive ownership.
 
 A known Hestia-created candidate that fails verification, loses its adoption fence
 or needs reconciliation remains `unadopted`, visible only to its initiating owner
-with a safe reason and local consent ID. Preserve its private reference so explicit
-managed close can be requested; do not hide an active unused consent or auto-delete
+with a safe reason and local consent ID. Preserve its private reference for future
+explicit managed close; do not hide an active unused consent or auto-delete
 it. An uncertain exchange with no returned session ID is different: Hestia cannot
 guess/close that remote session and must report the uncertainty honestly.
 
@@ -511,22 +521,22 @@ Local retirement and remote revocation are separate:
   cleanup or renewal. Do not assume their consent is independent from another tool.
 - Hestia-created old sessions become retired locally. Automatic remote cleanup
   stays off until the bank's independence behavior is separately established.
-- Explicit close of a known managed consent pauses acquisition, records intent
+- **Future remote-close contract (not implemented):** explicit close of a known managed consent pauses acquisition, records intent
   before HTTP and attempts DELETE using its private session ID. Retry only under a
   bounded documented close/reconciliation policy; an uncertain response is not
   proof of revocation. A provider absence/closed result may finish the same close
   intent, without deleting local financial history.
-- External-managed connections support local pause; requesting a remote close
+- External-managed connections support local pause. Under the future close contract, a remote-close request
   returns a safe external-management conflict instead of closing another tool's
   session. Closing a provider session is not local erasure or guaranteed bank-side
   revocation. Data retention/erasure is a separate operator action.
 
-Add persisted owner pause separately from the existing config-derived connection
-enabled flag; otherwise `configure()` would undo pause. Reload, restart, refresh
+Persisted owner pause is separate from the config-derived connection enabled
+flag, so `configure()` does not undo pause. Reload, restart, refresh
 and renewal must preserve it. HTTP pause/resume is audited and version-checked;
 it neither deselects accounts nor clears rate suspensions or consumed quota.
 
-## Proposed persistence and configuration changes
+## Persistence and configuration
 
 Migration `0014` implements browser flows, managed sessions and private transition
 audit. Do not rewrite 0008–0013.
@@ -584,12 +594,12 @@ retention; published documents must not promise automatic erasure not implemente
 | Browser/CSRF | Exact Origin/content-type/size/unknown-field matrix; Strict cookie absent on callback but present on same-origin complete; wrong/missing nonce, same-user second browser, logout/relogin and any mutation Authorization header rejected. Two ready flows require explicit selection. |
 | One-use flow | Replay, simultaneous callbacks/completions, expired/stale-generation/wrong-bank flow, duplicate/oversized parameters, bank denial, canceled flow; only one POST exchange and no secret echo/log. |
 | Provider failures | POST rejection/timeout/crash with uncertain session creation, invalid/expired/empty/partial/wrong-bank or primary-set session; old local data/pointer preserved without claiming old bank availability. |
-| Renewal/storage | Changed UIDs with stable primary hashes, different primary requiring reconciliation, bank invalidates old on SCA, file-fsync/DB-swap crashes, stale worker fence, cancel/logout/login during exchange blocks adoption, external sessions never overwritten/deleted, explicit managed close failure. |
+| Renewal/storage | Changed UIDs with stable primary hashes, different primary requiring reconciliation, bank invalidates old on SCA, file-fsync/DB-swap crashes, stale worker fence, cancel/logout/login during exchange blocks adoption, external sessions never overwritten/deleted. Explicit managed-close failure tests belong to future close work. |
 | 2A regression | Opt-out/pause/kind/audit survives reload and restart; renewal/import never reset quota or API provenance; 14 pages one acquisition; endpoint/shared 429 and longer Retry-After retained; partial responses never delete history. |
 | Executor/poller | One active job per owner/connection, target-aware dedup/busy behavior, CLI lock contention, queue/shutdown/restart recovery, no narrowed-config retirement, no browser-token dependency, owner opt-out/global flag respected, no catch-up burst or HTTP before due. |
 | API/privacy | Reads never trigger acquisition, bounded cursor/filter behavior, private audit not global feed/SSE, public bridge contains no private data, no raw secrets in application logs. Existing proxy logging accepted by operator. |
 | Contract/deployment | Route-role/OpenAPI drift checks, regenerated TS types, full backend statement/branch gate and UI checks where changed, migration upgrade/downgrade on private copy, logged-in/out UAT after backup. |
-| Restore/unused consent | Snapshot plus referenced capsules restores consistently; missing capsule blocks acquisition without fallback/data loss; known unadopted candidate remains owner-visible with explicit close; unknown exchange cannot invent a session ID. |
+| Restore/unused consent | Snapshot plus referenced capsules restores consistently; missing capsule blocks acquisition without fallback/data loss; known unadopted candidate remains owner-visible for reconciliation and future explicit close; unknown exchange cannot invent a session ID. |
 
 Codex owns the design, integration and implementation sequencing. Home reviews
 auth/callback/UI contracts and performs browser/proxy/edge UAT. Holzera owns the
