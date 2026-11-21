@@ -399,6 +399,60 @@ describe("download limits", () => {
   });
 });
 
+describe("lost access always wins over local discards", () => {
+  const ledger = () => ok(page([tx("private-loaded-ledger")]));
+  const balance = () => ok({ ...balancesData, balances: [{ name: "Balance", balance_type: "CLBD",
+    balance_amount: { amount: "123.45", currency: "PLN" }, reference_date: null }], balances_total: 1 });
+
+  it.each([[401, "budget_http_401"], [403, "budget_http_403"], [404, "budget_disabled"]])(
+    "a late limits %s still clears loaded financial data after Hide limits", async (status, error) => {
+      const api = fakeApi();
+      const pending = deferred<Loaded<BudgetApi["limits"]>>();
+      api.limits.mockImplementation(() => pending.promise);
+      api.transactions.mockImplementation(ledger);
+      api.balances.mockImplementation(balance);
+      await render(api, true, "owner");
+      await click(button("Synthetic Current"));
+      expect(host.textContent).toContain("123.45 PLN");
+      await click(button("Download limits"));
+      await click(button("Hide limits"));
+      await act(async () => { pending.settle({ ok: false, status, error }); await Promise.resolve(); });
+      await settle();
+      expect(host.textContent).not.toContain("private-loaded-ledger");
+      expect(host.textContent).not.toContain("123.45");
+      expect(host.textContent).not.toContain("Synthetic Current");
+      expect(host.textContent).toContain(status === 404 ? "not enabled" : "Only the budget's owner");
+    });
+
+  it("a late 401 for a previously opened account still clears the view", async () => {
+    const api = fakeApi([account({ display }), account({ id: "local-b", display: { ...display, product: "Synthetic Savings", masked_suffix: "0002" } })]);
+    const late = deferred<Loaded<BudgetApi["transactions"]>>();
+    api.transactions.mockImplementation((accountId) => (accountId === "local-a" ? late.promise : ledger()));
+    await render(api, true, "owner");
+    await click(button("Synthetic Current"));
+    await click(button("Synthetic Savings"));
+    expect(host.textContent).toContain("private-loaded-ledger");
+    await act(async () => { late.settle({ ok: false, status: 401, error: "budget_http_401" }); await Promise.resolve(); });
+    await settle();
+    expect(host.textContent).not.toContain("private-loaded-ledger");
+    expect(host.textContent).toContain("Only the budget's owner");
+  });
+
+  it("a late 401 from an older reload still clears the view", async () => {
+    const api = fakeApi();
+    await render(api, true, "owner");
+    const old = deferred<Loaded<BudgetApi["jobs"]>>();
+    api.jobs.mockImplementationOnce(() => old.promise);
+    await click(button("Reload"));
+    await click(button("Reload"));
+    expect(host.textContent).toContain("Synthetic Current");
+    await act(async () => { old.settle({ ok: false, status: 401, error: "budget_http_401" }); await Promise.resolve(); });
+    await settle();
+    expect(host.textContent).not.toContain("Synthetic Current");
+    expect(host.textContent).toContain("Only the budget's owner");
+  });
+});
+
 describe("refresh jobs", () => {
   it("keeps one key across a lost response, then polls until the job settles and reloads", async () => {
     const api = fakeApi();

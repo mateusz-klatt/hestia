@@ -165,14 +165,15 @@ export function Budget({ active, api = budgetApi, pollMs = 2000, principal }: Bu
     const token = ++generation.current;
     // Each response passes the barrier as soon as it arrives; a slow sibling cannot delay clearing.
     const watch = <T,>(request: Promise<BudgetResult<T>>) => request.then((result) => {
-      if (token === generation.current) barrier(result);
+      // A lost-access answer clears the view even when a newer load has started since.
+      barrier(result);
       return result;
     });
     // A successful whoami naming someone else, or the owner without the admin role, is also a loss of access
     // and clears at once, without waiting for the other responses.
     const identity = principal === undefined ? Promise.resolve(null) : watch(api.whoami()).then((result) => {
       if (result.ok && (result.data.user !== principal || result.data.role !== "admin")
-          && alive.current && token === generation.current) invalidate(false);
+          && alive.current) invalidate(false);
       return result;
     });
     const [connected, listed, queued, me] = await Promise.all([watch(api.connections()), watch(api.accounts()),
@@ -202,9 +203,10 @@ export function Budget({ active, api = budgetApi, pollMs = 2000, principal }: Bu
     let cancelled = false;
     const timer = setTimeout(() => {
       void api.jobs().then((result) => {
-        if (cancelled || !alive.current) return;
+        // The access barrier runs first: even a poll whose timer was superseded must clear on lost access.
+        if (!alive.current || barrier(result) || cancelled) return;
         if (!result.ok) {
-          if (!barrier(result)) setPollTick((current) => current + 1);
+          setPollTick((current) => current + 1);
           return;
         }
         setJobs(result.data.jobs);
@@ -276,7 +278,8 @@ export function Budget({ active, api = budgetApi, pollMs = 2000, principal }: Bu
     let cancelled = false;
     const started = epoch.current;
     void api.limits().then((result) => {
-      if (cancelled || !alive.current || started !== epoch.current || barrier(result)) return;
+      // Barrier before the local discard: hiding the panel must not swallow a lost-access answer.
+      if (!alive.current || started !== epoch.current || barrier(result) || cancelled) return;
       setLimits(result.ok ? result.data.limits : "error");
     });
     return () => { cancelled = true; };
@@ -491,11 +494,11 @@ function AccountDetail({ account, label, api, text, locale, revision, onAccessLo
     setLedger(EMPTY_LEDGER);
     setBalances(null);
     void api.balances(account.id).then((result) => {
-      if (token !== generation.current || onAccessLoss(result)) return;
+      if (onAccessLoss(result) || token !== generation.current) return;
       setBalances(result.ok ? result.data : null);
     });
     void api.transactions(account.id, { dateFrom: range.from, dateTo: range.to }).then((result) => {
-      if (token !== generation.current || onAccessLoss(result)) return;
+      if (onAccessLoss(result) || token !== generation.current) return;
       setLedger(result.ok
         ? { rows: result.data.transactions, cursor: result.data.next_cursor, uncertain: result.data.uncertain_total,
             failed: false, loading: false }
@@ -510,7 +513,7 @@ function AccountDetail({ account, label, api, text, locale, revision, onAccessLo
     if (cursor === null) return;
     setLedger((current) => ({ ...current, loading: true }));
     const result = await api.transactions(account.id, { cursor, dateFrom: range.from, dateTo: range.to });
-    if (token !== generation.current || onAccessLoss(result)) return;
+    if (onAccessLoss(result) || token !== generation.current) return;
     setLedger((current) => (result.ok
       ? { rows: [...current.rows, ...result.data.transactions], cursor: result.data.next_cursor,
           uncertain: result.data.uncertain_total, failed: false, loading: false }
