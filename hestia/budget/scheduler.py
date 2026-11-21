@@ -14,7 +14,7 @@ from ..db import BudgetComponent as Component, BudgetConnection as Connection
 from ..db import BudgetRequestLimit as RequestLimit
 from .normalize import BudgetDataError
 from .rate_limit import RateScope
-from .store import BudgetStoreError, OPERATIONS
+from .store import BudgetPausedError, BudgetStoreError, OPERATIONS, _SELECTION_CHANGED
 
 WINDOW = 86400
 LEASE_SECONDS = 900
@@ -100,7 +100,7 @@ class BudgetScheduler:
                                                         Account.owner == config.owner,
                                                         Account.identification_hash == primary))
         if account is None or (active and (primary not in config.accounts or not account.enabled or not account.configured)):
-            raise BudgetStoreError("Bank account selection changed during acquisition")
+            raise BudgetStoreError(_SELECTION_CHANGED)
         return account
 
     @staticmethod
@@ -163,11 +163,17 @@ class BudgetScheduler:
         if operation not in OPERATIONS or not isinstance(attempt_id, str) or not attempt_id or len(attempt_id) > 128:
             raise BudgetStoreError("Invalid component acquisition")
 
-    def reserve_component(self, connection, primary, operation, *, attempt_id, valid_until):
+    def _check_selection(self, session, connection, expected_selection):
+        if (expected_selection is not None
+                and self.store._selected_hashes(session, connection.id, connection.owner) != set(expected_selection)):
+            raise BudgetPausedError(_SELECTION_CHANGED)
+
+    def reserve_component(self, connection, primary, operation, *, attempt_id, valid_until, expected_selection=None):
         self._validate_attempt(operation, attempt_id)
         now = self._now()
         with self.store.transaction() as session:
             row = self._connection(session, connection)
+            self._check_selection(session, connection, expected_selection)
             account = self._account(session, connection, primary)
             if not _valid_until(valid_until, now) or self._blocked(row, self._shared(session, row), now):
                 return False
@@ -201,12 +207,13 @@ class BudgetScheduler:
             raise BudgetDeferredError()
 
     def request_wait(self, connection, *, primary=None, operation=None, attempt_id=None, valid_until=None,
-                     target=None):
+                     target=None, expected_selection=None):
         if (primary is None) != (operation is None):
             raise BudgetStoreError("Invalid component request")
         now = self._now()
         with self.store.transaction() as session:
             row = self._connection(session, connection)
+            self._check_selection(session, connection, expected_selection)
             limits = self._shared(session, row)
             if self._blocked(row, limits, now):
                 raise BudgetDeferredError()
@@ -215,7 +222,7 @@ class BudgetScheduler:
             else:
                 accounts = self._active_accounts(session, connection)
                 if not accounts:
-                    raise BudgetStoreError("Bank account selection changed during acquisition")
+                    raise BudgetStoreError(_SELECTION_CHANGED)
                 if not self._any_due(session, accounts, connection.policy, now, target):
                     raise BudgetDeferredError()
             application = limits[0]

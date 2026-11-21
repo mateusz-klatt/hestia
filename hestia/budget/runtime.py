@@ -13,7 +13,7 @@ from pathlib import Path
 from .client import BudgetAPIError, EnableBankingClient, ProviderDiagnostic
 from .config import BudgetConfigError, credentials
 from .normalize import BudgetDataError, fetch_snapshot
-from .store import ATTENTION, OPERATIONS, BudgetStore, BudgetStoreError, BudgetPausedError, safe_error
+from .store import ATTENTION, OPERATIONS, BudgetStore, BudgetStoreError, BudgetPausedError, _SELECTION_CHANGED, safe_error
 from .scheduler import BudgetScheduler, BudgetDeferredError
 
 ACQUISITION_SECONDS = 900
@@ -76,11 +76,13 @@ def _monotonic_time(clock):
 class AcquisitionClient:
     """One bounded round; every GET rechecks durable limits outside network I/O."""
 
-    def __init__(self, client, scheduler, connection, attempt_id, *, monotonic, sleeper, guard=None, target=None):
+    def __init__(self, client, scheduler, connection, attempt_id, *, monotonic, sleeper, guard=None, target=None,
+                 expected_selection=None):
         self.client, self.scheduler, self.connection = client, scheduler, connection
         self.attempt_id, self.monotonic, self.sleeper = attempt_id, monotonic, sleeper
         self.guard = guard if guard is not None else lambda: None
         self.target = target
+        self.expected_selection = expected_selection
         self.deadline = _monotonic_time(monotonic) + ACQUISITION_SECONDS
         self.valid_until = None
         self.primary = self.operation = None
@@ -96,7 +98,8 @@ class AcquisitionClient:
         if _monotonic_time(self.monotonic) >= self.deadline:
             return False
         return self.scheduler.reserve_component(self.connection, primary, operation,
-                                                attempt_id=self.attempt_id, valid_until=self.valid_until)
+                                                attempt_id=self.attempt_id, valid_until=self.valid_until,
+                                                expected_selection=self.expected_selection)
 
     def _request_slot(self):
         while True:
@@ -106,7 +109,7 @@ class AcquisitionClient:
                 raise BudgetAPIError(code="acquisition_timeout", retryable=True)
             delay = self.scheduler.request_wait(self.connection, primary=self.primary, operation=self.operation,
                                                 attempt_id=self.attempt_id, valid_until=self.valid_until,
-                                                target=self.target)
+                                                target=self.target, expected_selection=self.expected_selection)
             if not delay:
                 self.guard()
                 return
@@ -147,10 +150,11 @@ def budget_lock(path):
             fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
-def _guard(store, connection, version, stop):
+def _guard(store, connection, version, stop, selection=None):
     if stop is not None and stop():
         raise BudgetStopRequested()
-    store.acquisition_version(connection.id, connection.owner, expected_version=version)
+    store.acquisition_version(connection.id, connection.owner, expected_version=version,
+                              expected_selection=selection)
 
 
 def acquire(config, connection, store, scheduler, client_factory, clock, monotonic, sleeper, *,
@@ -165,17 +169,21 @@ def acquire(config, connection, store, scheduler, client_factory, clock, monoton
         version = store.acquisition_version(connection.id, connection.owner, expected_version=expected_version)
         if not scheduler.can_start(connection, target=target):
             return "deferred", None
-        chosen = store.selected_hashes(connection.id, connection.owner)
+        chosen = frozenset(store.selected_hashes(connection.id, connection.owner))
+        if not chosen:
+            raise BudgetPausedError(_SELECTION_CHANGED)
         selected = replace(connection, accounts=tuple(h for h in connection.accounts if h in chosen))
         key, session_id = credentials(config, connection)
         client = AcquisitionClient(client_factory(config.application_id, key), scheduler, connection, attempt_id,
                                    monotonic=monotonic, sleeper=sleeper, target=target,
-                                   guard=lambda: _guard(store, connection, version, stop))
+                                   guard=lambda: _guard(store, connection, version, stop, chosen),
+                                   expected_selection=chosen)
         snapshot = fetch_snapshot(client, session_id, selected,
                                   today=datetime.fromtimestamp(clock(), timezone.utc).date(), now=clock(),
                                   before_component=client.begin_component, on_session=client.session_validated,
                                   wanted=None if target is None else lambda primary, op: _wanted(target, primary, op))
-        store.commit_snapshot(connection.id, snapshot, attempt_id=attempt_id, expected_version=version)
+        store.commit_snapshot(connection.id, snapshot, attempt_id=attempt_id, expected_version=version,
+                              expected_selection=chosen)
     except BudgetStopRequested:
         store.release_round(connection.id, attempt_id)
         return "interrupted", "interrupted"

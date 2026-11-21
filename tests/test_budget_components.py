@@ -417,10 +417,14 @@ class ComponentRuntimeTests(ComponentCase):
             return result
         bank.get = change_access
         result = self.acquire(bank)
-        self.assertEqual(result["results"], [{"connection": "bank", "state": "failed"}])
+        expected_state = "failed" if disable_owner else "deferred"
+        self.assertEqual(result["results"], [{"connection": "bank", "state": expected_state}])
         self.assertEqual([path for path, _ in bank.calls], [f"/sessions/{APP}"])
         self.assertTrue(all(part["last_attempt"] is None for part in self.components().values()))
         self.assertTrue(all(part["attempt_id"] is None for part in self.components().values()))
+        if not disable_owner:
+            self.assertEqual(self.state()["failures"], 0)
+            self.assertIsNone(self.state()["last_error"])
 
     def test_component_callback_rechecks_owner_before_any_endpoint_http(self):
         self._deny_after_session(disable_owner=True)
