@@ -10,18 +10,17 @@ import json
 import re
 import uuid
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, exists, func, select
 from sqlalchemy.exc import IntegrityError
 
 from ..db import AppMeta, BudgetAccount as Account, BudgetConnection as Connection
 from ..db import BudgetComponent as Component, BudgetConnectionAudit as ConnectionAudit
 from ..db import BudgetJob as Job, BudgetJobRequest as JobRequest
 from .scheduler import shared_state
-from .store import OPERATIONS, BudgetNotFound, BudgetStore, BudgetStoreError, _json, safe_error
+from .store import ATTENTION, OPERATIONS, BudgetNotFound, BudgetStore, BudgetStoreError, _json, safe_error
 
 ACTIVE = ("queued", "running")
 OUTCOMES = frozenset({"updated", "partial", "failed", "deferred", "interrupted"})
-ATTENTION = frozenset({"authorization", "invalid_session", "expired_session", "session_mismatch", "configuration"})
 IDEMPOTENCY_KEY = re.compile(r"[A-Za-z0-9_-]{16,128}", re.ASCII)
 MAX_QUEUED = 32
 RETENTION_SECONDS = 7 * 86400
@@ -56,13 +55,32 @@ class BudgetQueueFull(BudgetJobError):
     code = "budget_refresh_unavailable"
 
 
+class BudgetUsersRequired(BudgetStoreError):
+    """The SQLite users backend stopped being authoritative; no reservation, request or commit proceeds."""
+
+    configuration = True
+
+    def __init__(self):
+        super().__init__("Budget jobs require authoritative SQLite users")
+
+
 def _digest(connection_id, account_id, operation):
     raw = json.dumps([_DIGEST_DOMAIN, connection_id, account_id, operation], separators=(",", ":"))
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
 class BudgetJobStore(BudgetStore):
-    """Jobs bind to one owner/connection; at most one queued/running job per connection."""
+    """Jobs bind to one owner/connection; at most one queued/running job per connection.
+
+    Every owner check, including those the scheduler makes before reservations and requests and
+    the one inside commit, also requires the authoritative SQLite users marker.
+    """
+
+    @staticmethod
+    def _owner(session, username):
+        if session.get(AppMeta, "users_authoritative") is None:
+            raise BudgetUsersRequired()
+        BudgetStore._owner(session, username)
 
     @staticmethod
     def _job_dict(job):
@@ -110,6 +128,8 @@ class BudgetJobStore(BudgetStore):
         try:
             with self.transaction() as session:
                 connection = self._owned_connection(session, owner, connection_id)
+                # A version must always be present and valid; a stale one may still replay its own key.
+                self._check_version(connection, expected_version, False, self._connection_dict(connection), "web")
                 prior = session.get(JobRequest, (owner, idempotency_key))
                 if prior is not None:
                     if prior.digest != digest:
@@ -133,6 +153,13 @@ class BudgetJobStore(BudgetStore):
     @staticmethod
     def _active_or_new(session, connection, account_id, operation, source, now):
         active = session.scalar(select(Job).where(Job.connection_id == connection.id, Job.status.in_(ACTIVE)))
+        if active is not None and active.expected_version != connection.control_version:
+            # An intent from an older control generation can never run; never coalesce into it.
+            if active.status == "running":
+                raise BudgetRefreshBusy()
+            active.status, active.error, active.finished_at = "deferred", "control_changed", now
+            session.flush()
+            active = None
         if active is not None:
             if (active.account_id, active.operation) != (account_id, operation):
                 raise BudgetRefreshBusy()
@@ -154,12 +181,9 @@ class BudgetJobStore(BudgetStore):
                 connection = session.get(Connection, connection_id)
                 if not self._eligible(session, connection):
                     return None
-                if session.scalar(select(Job.id).where(Job.connection_id == connection.id,
-                                                       Job.status.in_(ACTIVE))) is not None:
-                    return None
-                job, _ = self._active_or_new(session, connection, None, None, "poller", now)
-                return self._job_dict(job)
-        except (IntegrityError, BudgetQueueFull):
+                job, created = self._active_or_new(session, connection, None, None, "poller", now)
+                return self._job_dict(job) if created else None
+        except (IntegrityError, BudgetJobError):
             return None
 
     def _eligible(self, session, connection):
@@ -174,6 +198,11 @@ class BudgetJobStore(BudgetStore):
         return session.scalar(select(func.count()).select_from(Account).where(
             Account.connection_id == connection.id, Account.owner == connection.owner,
             Account.enabled, Account.configured)) > 0
+
+    def background_eligible(self, connection_id):
+        """Re-checked when a poller intent starts, before any credential read."""
+        with self.sessions() as session:
+            return self._eligible(session, session.get(Connection, connection_id))
 
     def background_candidates(self):
         """Connection IDs whose stored controls allow unattended work; due-ness is checked separately."""
@@ -215,9 +244,13 @@ class BudgetJobStore(BudgetStore):
             return account.identification_hash
 
     def next_attempt(self, connection_id, target):
-        """Earliest stored start time for any targeted selected component, or None without one."""
+        """Earliest stored start for any targeted selected component, or None when none can start
+        without an operator action (every candidate or the shared scope is suspended)."""
         with self.sessions() as session:
             connection = session.get(Connection, connection_id)
+            if connection is None:
+                return None
+            shared = shared_state(session, connection)
             floors = []
             for account in session.scalars(select(Account).where(Account.connection_id == connection_id,
                                                                  Account.enabled, Account.configured)):
@@ -225,11 +258,14 @@ class BudgetJobStore(BudgetStore):
                     if target is not None and (account.identification_hash, operation) not in target:
                         continue
                     component = session.get(Component, (account.id, operation))
-                    floors.append(0 if component is None else
-                                  max(component.next_attempt, component.retry_at or 0, component.backoff_until))
-            if connection is None or not floors:
+                    if component is None:
+                        floors.append(0)
+                    elif not component.suspended:
+                        floors.append(max(component.next_attempt, component.retry_at or 0, component.backoff_until,
+                                          component.lease_until or 0))
+            if shared["suspended"] or not floors:
                 return None
-            return max(min(floors), shared_state(session, connection)["next_attempt"])
+            return max(min(floors), shared["next_attempt"])
 
     def finish(self, job_id, status, error=None, *, next_attempt=None):
         if status not in OUTCOMES:
@@ -263,11 +299,16 @@ class BudgetJobStore(BudgetStore):
             return self._job_dict(job)
 
     def prune(self):
+        """Each key lives RETENTION_SECONDS after creation; a terminal job as long after finishing,
+        and never while a retained key still points at it. Active jobs and their keys are kept."""
         cutoff = self.clock() - RETENTION_SECONDS
         with self.transaction() as session:
-            old = select(Job.id).where(Job.status.not_in(ACTIVE), Job.created_at < cutoff)
-            session.execute(delete(JobRequest).where(JobRequest.job_id.in_(old)))
-            return session.execute(delete(Job).where(Job.status.not_in(ACTIVE), Job.created_at < cutoff)).rowcount
+            terminal = select(Job.id).where(Job.status.not_in(ACTIVE))
+            session.execute(delete(JobRequest).where(JobRequest.created_at < cutoff, JobRequest.job_id.in_(terminal)))
+            referenced = exists().where(JobRequest.job_id == Job.id)
+            return session.execute(delete(Job).where(Job.status.not_in(ACTIVE),
+                                                     func.coalesce(Job.finished_at, Job.created_at) < cutoff,
+                                                     ~referenced)).rowcount
 
     def jobs(self, owner, connection_id=None):
         with self.sessions() as session:

@@ -49,9 +49,11 @@ class BudgetJobRunner:
     """Synchronous job core; every call holds the per-database budget lock only for its own work."""
 
     def __init__(self, path, *, clock=time.time, monotonic=time.monotonic, sleeper=time.sleep,
-                 client_factory=EnableBankingClient, config_loader=load_config):
+                 client_factory=EnableBankingClient, config_loader=load_config, poller=False):
         self.path, self.clock, self.monotonic, self.sleeper = path, clock, monotonic, sleeper
         self.client_factory, self.config_loader = client_factory, config_loader
+        # Poller intents only ever run while unattended acquisition is enabled in this process.
+        self.poller = poller
         self.stopping = threading.Event()
 
     def _config(self):
@@ -80,6 +82,8 @@ class BudgetJobRunner:
 
     def poll(self):
         """Enqueue at most one intent per eligible, due connection; never reads secrets or calls a bank."""
+        if not self.poller:
+            return 0
         config = self._config()
         try:
             with budget_lock(self.path):
@@ -122,6 +126,9 @@ class BudgetJobRunner:
         connection = next((item for item in config.connections if item.id == job["connection_id"]), None)
         if connection is None:
             return store.finish(job["id"], "deferred", "configuration")
+        if job["source"] == "poller" and not (self.poller and store.background_eligible(connection.id)):
+            # A queued automatic intent never outlives disabling the poller, an opt-out or attention.
+            return store.finish(job["id"], "deferred", "background_disabled")
         try:
             store.configure(config)
             primary = store.target_hash(job)
@@ -225,14 +232,14 @@ def build_service(*, auth_enabled, path=None):
     if not auth_enabled() or os.environ.get("HESTIA_PERSIST", "json").lower() != "sqlite":
         log.error("Budget jobs require authentication and SQLite users; executor stays disabled")
         return None
-    runner = BudgetJobRunner(db_path() if path is None else path)
+    runner = BudgetJobRunner(db_path() if path is None else path, poller=_flag(POLLER_FLAG))
     try:
         runner.check()
     except Exception as exc:
         # Never let an optional financial feature abort the home-automation web server's startup.
         log.error("Budget jobs disabled (%s)", type(exc).__name__)
         return None
-    return BudgetJobService(runner, poller=_flag(POLLER_FLAG))
+    return BudgetJobService(runner, poller=runner.poller)
 
 
 class ServiceSlot:

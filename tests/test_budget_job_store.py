@@ -32,7 +32,8 @@ class JobStoreCase(unittest.TestCase):
         _, self.sessions = db.init_db(self.path)
         with self.sessions.begin() as session:
             session.add_all([db.User(username="owner", password_hash="unused", role="admin"),
-                             db.User(username="other", password_hash="unused", role="admin")])
+                             db.User(username="other", password_hash="unused", role="admin"),
+                             db.AppMeta(key="users_authoritative", value="1")])
         self.now = 1_000_000.0
         self.store = BudgetJobStore(self.sessions, clock=lambda: self.now)
         first = configuration(accounts=("hash-a", "hash-b"))
@@ -72,6 +73,11 @@ class EnqueueTests(JobStoreCase):
         self.now += 5
         replay = self.enqueue(expected_version=99)
         self.assertEqual((replay["id"], replay["created"]), (job["id"], False))
+        with self.assertRaises(BudgetControlConflict):
+            self.enqueue(expected_version=None)
+        for invalid in (0, "1", True):
+            with self.subTest(version=invalid), self.assertRaises(BudgetStoreError):
+                self.enqueue(expected_version=invalid)
         with self.assertRaises(BudgetIdempotencyConflict) as raised:
             self.enqueue(operation="balances")
         self.assertEqual((raised.exception.status, raised.exception.code), (409, "budget_idempotency_conflict"))
@@ -97,6 +103,31 @@ class EnqueueTests(JobStoreCase):
             self.store.claim_next()
             with self.assertRaises(BudgetRefreshBusy):
                 self.enqueue(OTHER_KEY, operation="balances")
+
+    def test_a_new_intent_never_coalesces_into_an_older_generation(self):
+        old = self.enqueue()
+        for paused in (True, False):
+            self.store.set_connection_paused("owner", "bank", paused, actor="owner", origin="web",
+                                             expected_version=self.version())
+        self.now += 1
+        fresh = self.enqueue(OTHER_KEY)
+        self.assertTrue(fresh["created"])
+        self.assertNotEqual(fresh["id"], old["id"])
+        stale = self.store.jobs("owner")[1]
+        self.assertEqual((stale["id"], stale["status"], stale["error"]), (old["id"], "deferred", "control_changed"))
+        self.assertEqual(self.enqueue(expected_version=1)["id"], old["id"], "old key still replays its own job")
+        self.store.claim_next()
+        self.store.set_connection_paused("owner", "bank", True, actor="owner", origin="web",
+                                         expected_version=self.version())
+        self.store.set_connection_paused("owner", "bank", False, actor="owner", origin="web",
+                                         expected_version=self.version())
+        with self.assertRaises(BudgetRefreshBusy):
+            self.enqueue("synthetic-refresh-key-0003")
+        self.assertEqual(self.job_status(fresh["id"]), "running", "a running stale job is never rewritten")
+
+    def job_status(self, job_id):
+        with self.sessions() as session:
+            return session.get(db.BudgetJob, job_id).status
 
     def test_versions_pause_and_validation(self):
         with self.assertRaises(BudgetControlConflict) as raised:
@@ -316,6 +347,28 @@ class LifecycleTests(JobStoreCase):
         self.assertEqual([row.id for row in self.rows(db.BudgetJob)], [active["id"]])
         self.assertEqual([row.job_id for row in self.rows(db.BudgetJobRequest)], [active["id"]])
 
+    def test_retention_keeps_every_key_and_its_job_for_the_documented_period(self):
+        week = job_store.RETENTION_SECONDS
+        first = self.enqueue()
+        self.now += week - 1
+        self.enqueue(OTHER_KEY)
+        self.store.claim_next()
+        self.store.finish(first["id"], "updated")
+        self.now += 2
+        self.assertEqual(self.store.prune(), 0)
+        self.assertEqual([row.idempotency_key for row in self.rows(db.BudgetJobRequest)], [OTHER_KEY])
+        self.assertEqual(self.enqueue(OTHER_KEY)["id"], first["id"])
+        self.now += week - 2
+        self.assertEqual(self.store.prune(), 0, "the job finished less than a week ago")
+        self.now += 2
+        self.assertEqual(self.store.prune(), 1)
+        self.assertEqual((self.rows(db.BudgetJob), self.rows(db.BudgetJobRequest)), ([], []))
+        active = self.enqueue("synthetic-refresh-key-0003")
+        self.now += 3 * week
+        self.assertEqual(self.store.prune(), 0, "active jobs and their keys are never pruned")
+        self.assertEqual([row.id for row in self.rows(db.BudgetJob)], [active["id"]])
+        self.assertEqual(len(self.rows(db.BudgetJobRequest)), 1)
+
     def test_target_hash_and_next_attempt(self):
         whole = {"account_id": None, "owner": "owner", "connection_id": "bank"}
         self.assertIsNone(self.store.target_hash(whole))
@@ -324,7 +377,9 @@ class LifecycleTests(JobStoreCase):
                     {**whole, "account_id": self.accounts["hash-a"], "connection_id": "other-bank"}):
             with self.subTest(job=job), self.assertRaises(BudgetNotFound):
                 self.store.target_hash(job)
-        self.assertEqual(self.store.next_attempt("bank", None), 0)
+        with self.sessions.begin() as session:
+            session.execute(db.BudgetComponent.__table__.delete())
+        self.assertEqual(self.store.next_attempt("bank", None), 0, "never-attempted components are due now")
         with self.store.transaction() as session:
             first = self.store._component(session, self.accounts["hash-a"], "transactions")
             first.next_attempt, first.retry_at, first.backoff_until = 500.0, 900.0, 0
@@ -338,14 +393,31 @@ class LifecycleTests(JobStoreCase):
         with self.sessions.begin() as session:
             session.get(db.BudgetConnection, "bank").next_attempt = 2000.0
         self.assertEqual(self.store.next_attempt("bank", target), 2000.0)
-
-    def test_users_authoritative_marker(self):
-        with self.sessions() as session:
-            self.assertFalse(BudgetJobStore.users_authoritative(session))
+        with self.store.transaction() as session:
+            self.store._component(session, self.accounts["hash-b"], "balances").lease_until = 5000.0
+        self.assertEqual(self.store.next_attempt("bank", target), 2000.0, "the other component starts earlier")
+        lease_only = frozenset({("hash-b", "balances")})
+        self.assertEqual(self.store.next_attempt("bank", lease_only), 5000.0)
+        with self.store.transaction() as session:
+            self.store._component(session, self.accounts["hash-a"], "transactions").suspended = True
+        self.assertEqual(self.store.next_attempt("bank", target), 5000.0, "suspended components need an operator")
+        self.assertIsNone(self.store.next_attempt("bank", frozenset({("hash-a", "transactions")})))
         with self.sessions.begin() as session:
-            session.add(db.AppMeta(key="users_authoritative", value="1"))
+            session.add(db.BudgetRequestLimit(scope="connection", key="bank", suspended=True, next_attempt=0))
+        self.assertIsNone(self.store.next_attempt("bank", lease_only))
+
+    def test_users_authoritative_marker_guards_every_owner_check(self):
         with self.sessions() as session:
             self.assertTrue(BudgetJobStore.users_authoritative(session))
+        with self.sessions.begin() as session:
+            session.delete(session.get(db.AppMeta, "users_authoritative"))
+        with self.sessions() as session:
+            self.assertFalse(BudgetJobStore.users_authoritative(session))
+        for operation in (self.enqueue, lambda: self.store.acquisition_version("bank", "owner"),
+                          lambda: self.store.configure(self.config)):
+            with self.assertRaises(job_store.BudgetUsersRequired) as raised:
+                operation()
+            self.assertTrue(raised.exception.configuration)
 
 
 class MigrationTests(JobStoreCase):

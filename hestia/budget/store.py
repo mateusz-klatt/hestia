@@ -20,6 +20,8 @@ from .account_metadata import BudgetMetadataError, apply_account_metadata
 ACCOUNT_KINDS = frozenset({"current", "savings", "credit_card", "other"})
 OPERATIONS = ("transactions", "balances")
 STALE_AFTER = {"transactions": 129600, "balances": 86400}
+# Failures that stop unattended acquisition until an explicit owner refresh verifies the session.
+ATTENTION = frozenset({"authorization", "invalid_session", "expired_session", "session_mismatch", "configuration"})
 
 
 class BudgetStoreError(ValueError):
@@ -52,7 +54,7 @@ def safe_error(code):
                "provider_error", "invalid_data", "configuration", "unsupported_amount", "internal_error",
                "invalid_session", "expired_session", "session_mismatch",
                "account_selection", "invalid_pagination", "limit_exceeded", "deferred", "acquisition_timeout",
-               "control_changed", "busy", "interrupted"}
+               "control_changed", "busy", "interrupted", "background_disabled"}
     return code if code in allowed else "invalid_data"
 
 
@@ -313,6 +315,8 @@ class BudgetStore:
             row = session.get(Connection, connection_id)
             row.failures += 1
             row.last_error = safe_code
+            if safe_code in ATTENTION:
+                row.attention = safe_code
             # Keep the 12-hour pre-HTTP quota reservation, including after a crash
             # or partial fetch. A later explicit run safely retries after restart.
             row.next_attempt = max(row.next_attempt, self.clock() + 21600)
@@ -364,6 +368,13 @@ class BudgetStore:
                 completed += good
                 errors += bad
             row.valid_until = snapshot.valid_until
+            codes = {safe_error(getattr(observation, op + "_error")) for observation in snapshot.accounts
+                     for op in OPERATIONS if getattr(observation, op + "_error", None) is not None}
+            if codes & ATTENTION:
+                # Central, so the CLI and every worker stop unattended retries alike.
+                row.attention = min(codes & ATTENTION)
+            elif completed:
+                row.attention = None
             if errors:
                 row.failures += 1
                 row.last_error = "partial_data" if completed else "account_errors"

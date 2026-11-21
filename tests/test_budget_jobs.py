@@ -51,7 +51,7 @@ class RunnerCase(AdvancingTime, unittest.TestCase):
         self.loaded = self.config
         self.runner = BudgetJobRunner(self.path, clock=lambda: self.now, monotonic=self.monotonic,
                                       sleeper=self.sleep, client_factory=self.factory,
-                                      config_loader=lambda: self.loaded)
+                                      config_loader=lambda: self.loaded, poller=True)
         patcher = mock.patch.object(runtime, "credentials", return_value=(FAKE_KEY, APP))
         self.credentials = patcher.start()
         self.addCleanup(patcher.stop)
@@ -126,6 +126,86 @@ class ManualJobTests(RunnerCase):
         done = self.runner.step()
         self.assertEqual((done["status"], done["error"]), ("partial", "provider_error"))
         self.assertIsNone(self.connection().attention)
+
+    def test_authorization_component_error_wins_over_an_earlier_unrelated_failure(self):
+        get = self.bank.get
+
+        def mixed(path, query=None):
+            if path == f"/accounts/{ACCOUNT_UID}/transactions":
+                raise BudgetAPIError(400, "provider_error")
+            if path == f"/accounts/{ACCOUNT_UID}/balances":
+                raise BudgetAPIError(403, "authorization")
+            return get(path, query)
+        self.bank.get = mixed
+        self.enqueue()
+        done = self.runner.step()
+        self.assertEqual((done["status"], done["error"]), ("partial", "authorization"))
+        self.assertEqual(self.connection().attention, "authorization")
+        self.opt_in()
+        self.now += 2 * DAY
+        self.assertEqual(self.runner.poll(), 0)
+
+    def test_targeted_refresh_records_nothing_for_untargeted_components(self):
+        from hestia.budget import normalize
+
+        self.enqueue(account_id=self.accounts["hash-a"], operation="transactions")
+        with mock.patch.object(normalize, "MAX_TRANSACTIONS", 1):
+            done = self.runner.step()
+        self.assertEqual((done["status"], done["error"]), ("updated", None))
+        with self.sessions() as session:
+            components = {(row.account_id, row.operation): row for row in session.scalars(select(db.BudgetComponent))}
+            accounts = {row.identification_hash: row for row in session.scalars(select(db.BudgetAccount))}
+            connection = session.get(db.BudgetConnection, "bank")
+        for key, row in components.items():
+            if key != (self.accounts["hash-a"], "transactions"):
+                self.assertEqual((row.last_error, row.failures, row.last_success), (None, 0, None), key)
+        self.assertEqual((accounts["hash-a"].last_error, accounts["hash-b"].last_error), (None, None))
+        self.assertIsNone(connection.last_success, "a targeted success is not a full connection refresh")
+        self.assertEqual(self.debits(), [("hash-a", "transactions")])
+
+    def test_losing_the_users_marker_mid_round_stops_requests_and_publication(self):
+        get = self.bank.get
+
+        def revoke(path, query=None):
+            result = get(path, query)
+            with self.sessions.begin() as session:
+                marker = session.get(db.AppMeta, "users_authoritative")
+                if marker is not None:
+                    session.delete(marker)
+            return result
+        self.bank.get = revoke
+        self.enqueue()
+        done = self.runner.step()
+        self.assertEqual((done["status"], done["error"]), ("failed", "configuration"))
+        self.assertEqual(self.paths(), [f"/sessions/{APP}"])
+        self.assertEqual((self.debits(), self.rows(db.BudgetTransaction)), ([], []))
+        self.assertEqual(self.connection().attention, "configuration")
+
+    def test_cli_round_failures_set_attention_centrally(self):
+        get = self.bank.get
+
+        def denied(path, query=None):
+            raise BudgetAPIError(401, "authorization")
+        self.bank.get = denied
+        self.opt_in()
+        with mock.patch.object(runtime, "credentials", return_value=(FAKE_KEY, APP)):
+            runtime.run_once(self.config, path=self.path, clock=lambda: self.now, monotonic=self.monotonic,
+                             sleeper=self.sleep, client_factory=self.factory)
+        self.assertEqual(self.connection().attention, "authorization")
+        self.now += 7 * DAY
+        self.assertEqual(self.runner.poll(), 0, "no unattended retry after a CLI authorization failure")
+        self.bank.get = get
+        runtime.run_once(self.config, path=self.path, clock=lambda: self.now, monotonic=self.monotonic,
+                         sleeper=self.sleep, client_factory=self.factory)
+        self.assertIsNone(self.connection().attention, "an explicit successful CLI round verifies the session")
+
+    def test_begin_component_refuses_untargeted_components_without_reserving(self):
+        scheduler = mock.Mock()
+        client = runtime.AcquisitionClient(mock.Mock(), scheduler, self.config.connections[0], "attempt",
+                                           monotonic=self.monotonic, sleeper=self.sleep,
+                                           target=frozenset({("hash-a", "balances")}))
+        self.assertFalse(client.begin_component("hash-a", "transactions"))
+        scheduler.reserve_component.assert_not_called()
 
     def test_lock_contention_keeps_job_queued_then_defers_a_stale_one_without_debits(self):
         job = self.enqueue()
@@ -239,6 +319,27 @@ class PollerTests(RunnerCase):
         self.assertEqual(self.runner.poll(), 1, "no catch-up burst after downtime")
         self.assertEqual(self.runner.poll(), 0)
 
+    def test_queued_poller_intents_never_run_after_the_poller_is_disabled(self):
+        self.opt_in()
+        self.assertEqual(self.runner.poll(), 1)
+        self.runner.poller = False
+        self.loaded = None
+        self.assertEqual(self.runner.poll(), 0, "a disabled poller reads no configuration")
+        self.loaded = self.config
+        done = self.runner.step()
+        self.assertEqual((done["source"], done["status"], done["error"]), ("poller", "deferred", "background_disabled"))
+        self.assertEqual((self.bank.calls, self.credentials.call_count, self.debits()), ([], 0, []))
+        self.enqueue()
+        self.assertEqual(self.runner.step()["status"], "updated", "owner refreshes stay available")
+        self.runner.poller = True
+        self.now += DAY
+        self.assertEqual(self.runner.poll(), 1)
+        with self.sessions.begin() as session:
+            session.get(db.BudgetConnection, "bank").attention = "authorization"
+        calls = len(self.bank.calls)
+        self.assertEqual(self.runner.step()["error"], "background_disabled")
+        self.assertEqual(len(self.bank.calls), calls)
+
     def test_refresh_coalesces_with_a_queued_poller_intent(self):
         self.opt_in()
         self.runner.poll()
@@ -283,7 +384,8 @@ class PollerTests(RunnerCase):
                 else:
                     self.store.set_connection_background("owner", "bank", False, actor="owner", origin="web",
                                                          expected_version=version)
-                self.assertEqual(self.runner.step()["error"], "control_changed")
+                self.assertEqual(self.runner.step()["error"], "background_disabled",
+                                 "eligibility is rechecked before any credential read")
                 self.assertEqual(self.runner.poll(), 0)
                 if change == "pause":
                     self.store.set_connection_paused("owner", "bank", False, actor="owner", origin="web",

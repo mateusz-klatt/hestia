@@ -13,7 +13,7 @@ from pathlib import Path
 from .client import BudgetAPIError, EnableBankingClient
 from .config import BudgetConfigError, credentials
 from .normalize import BudgetDataError, fetch_snapshot
-from .store import OPERATIONS, BudgetStore, BudgetStoreError, BudgetPausedError, safe_error
+from .store import ATTENTION, OPERATIONS, BudgetStore, BudgetStoreError, BudgetPausedError, safe_error
 from .scheduler import BudgetScheduler, BudgetDeferredError
 
 ACQUISITION_SECONDS = 900
@@ -28,6 +28,8 @@ class BudgetStopRequested(BudgetDeferredError):
 
 
 def _error_code(exc):
+    if getattr(exc, "configuration", False):
+        return "configuration"
     if isinstance(exc, BudgetAPIError):
         return "configuration" if exc.code == "invalid_configuration" else exc.code
     if isinstance(exc, BudgetConfigError):
@@ -171,7 +173,8 @@ def acquire(config, connection, store, scheduler, client_factory, clock, monoton
                                    guard=lambda: _guard(store, connection, version, stop))
         snapshot = fetch_snapshot(client, session_id, selected,
                                   today=datetime.fromtimestamp(clock(), timezone.utc).date(), now=clock(),
-                                  before_component=client.begin_component, on_session=client.session_validated)
+                                  before_component=client.begin_component, on_session=client.session_validated,
+                                  wanted=None if target is None else lambda primary, op: _wanted(target, primary, op))
         store.commit_snapshot(connection.id, snapshot, attempt_id=attempt_id, expected_version=version)
     except BudgetStopRequested:
         store.release_round(connection.id, attempt_id)
@@ -188,8 +191,10 @@ def acquire(config, connection, store, scheduler, client_factory, clock, monoton
         code = _error_code(exc)
         store.record_failure(connection.id, code, attempt_id=attempt_id)
         return "failed", safe_error(code)
-    errors = _snapshot_errors(snapshot, target)
-    return _snapshot_state(snapshot, target), safe_error(errors[0]) if errors else None
+    errors = [safe_error(code) for code in _snapshot_errors(snapshot, target)]
+    # A session/authorization failure must win over an unrelated earlier component error.
+    error = next((code for code in errors if code in ATTENTION), errors[0] if errors else None)
+    return _snapshot_state(snapshot, target), error
 
 
 def _run_connection(config, connection, store, scheduler, client_factory, clock, monotonic, sleeper):

@@ -112,8 +112,18 @@ target is `409 budget_idempotency_conflict`. At most one queued or running job e
 per connection: a request for the same canonical target coalesces with it (an
 omitted account/operation means the whole connection), and any other target is
 `409 budget_refresh_in_progress`. A paused connection is `409 budget_connection_paused`.
+`expected_version` is always required (missing is `409`), but a stale value still
+replays the job its key already names. A new request never joins a queued job from
+an older control generation: that job finishes `deferred/control_changed` and a new
+one is queued; a running one from an older generation answers `409`.
 `GET /api/budget/jobs` lists the owner's 20 newest jobs (optional `connection_id`).
-Terminal jobs and their keys are deleted after 7 days; at most 32 jobs queue at once.
+Each key is kept for 7 days after it was created; a finished job is kept for 7 days
+after finishing, and as long as any kept key names it. Active jobs are never pruned.
+At most 32 jobs queue at once. A queued automatic (poller) intent runs only while the
+poller flag is still on and the connection is still eligible; otherwise it finishes
+`deferred/background_disabled` before any credential read. The reported
+`next_attempt` includes leases and Retry-After, and is `null` when every requested
+component (or the shared scope) is suspended and needs `limits resume`.
 
 Job outcomes are `updated`, `partial`, `failed`, `deferred` and `interrupted`, each
 with a safe error code and the next stored start time. Components skipped because
@@ -135,9 +145,15 @@ no key or session file and makes no HTTP request until a component is due, and i
 does not replay missed ticks after downtime.
 
 An `authorization`, `invalid_session`, `expired_session`, `session_mismatch` or
-`configuration` failure sets the connection's `attention` code. The poller then
-skips that connection until an owner refresh validates the session and stores
-data (`updated` or `partial`); no SCA starts in the background. Fixing a session
+`configuration` failure sets the connection's `attention` code, and takes precedence
+over any other component error of the same round. Losing the authoritative SQLite
+users marker stops the round at its next reservation, request or commit with
+`configuration`; consumed debits stay. A targeted refresh records no error, debit or
+write for components it did not request. The poller then
+skips that connection until an owner refresh (or an explicit CLI `once` round)
+validates the session and stores data; configuration reloads, status reads and
+poller ticks never clear it. This applies equally to failures from CLI rounds.
+No SCA starts in the background. Fixing a session
 file or key therefore needs one explicit owner refresh, under the normal quota.
 
 Shutdown stops taking jobs and waits up to 5 s. A running acquisition stops at
