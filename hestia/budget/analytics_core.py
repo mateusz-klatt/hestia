@@ -137,7 +137,16 @@ def _identities(values):
     return sorted(result)
 
 
-def pair_fingerprint(account_id, ref, payload, metadata=None, own_ids=None):
+def owned_identities(own_ids):
+    """Validated, sorted own identities per account; computed once per projection, not per entry."""
+    if not isinstance(own_ids, dict):
+        raise AnalyticsError()
+    return {account: _identities(values) for account, values in own_ids.items()}
+
+
+def pair_fingerprint(account_id, ref, payload, metadata=None, own_ids=None, *, financial=None, owned_ids=None):
+    """``financial`` may carry ``financial_fingerprint(payload)`` and ``owned_ids`` the result of
+    ``owned_identities(own_ids)``, both already computed by the caller for the same inputs."""
     if not isinstance(account_id, str) or not account_id or not isinstance(ref, str) or not ref:
         raise AnalyticsError()
     metadata = {} if metadata is None else metadata
@@ -147,11 +156,11 @@ def pair_fingerprint(account_id, ref, payload, metadata=None, own_ids=None):
     evidence = {key: _identities(metadata.get(key, [])) for key in ("creditor_accounts", "debtor_accounts")}
     observed = set(evidence["creditor_accounts"] + evidence["debtor_accounts"])
     owned = {}
-    for account, values in own_ids.items():
-        identities = _identities(values)
+    for account, identities in (owned_identities(own_ids) if owned_ids is None else owned_ids).items():
         if account == account_id or observed.intersection(identities):
             owned[account] = identities
-    return projection_digest(["pair-v1", account_id, ref, financial_fingerprint(payload), evidence, owned])
+    financial = financial_fingerprint(payload) if financial is None else financial
+    return projection_digest(["pair-v1", account_id, ref, financial, evidence, owned])
 
 
 def _value(row, key):

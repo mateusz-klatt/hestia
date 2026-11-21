@@ -153,6 +153,19 @@ no new transfer suggestions or ambiguity edges; existing decisions and reservati
 
 Lists use encrypted cursors bound to owner, filters and the complete projection.
 A changed snapshot returns 409 `budget_analytics_stale_cursor`; restart paging.
+
+Reads reuse one projection per committed state. Each GET first rechecks the exact
+admin owner, then hashes every column of every row the projection can read for
+that owner: connections, accounts, ledger, evidence, own identities, annotations,
+categories, rules, decisions and both unresolved tables, plus the row and edge
+limits. A projection computed for that digest is reused; any committed change
+gives a new digest and a fresh computation, so nothing is invalidated by hand.
+Concurrent reads of one state share a single computation, and analytics reads run
+one at a time, because CPU-bound reads only interleave under the GIL. The memo
+lives in the server process's memory only, keeps one state per database and owner
+(at most four), never reaches disk, logs or the browser, and is emptied by a
+restart. Freshness, cursors and paging are still evaluated per request. Writes,
+rule previews and their stale-preview check always compute a fresh projection.
 There are explicit limits of 100,000 selected canonical rows, 100,000 candidate
 comparisons, 100 categories/rules and 100 pending previews per owner. A row-limit
 failure returns 413 without partial totals. A candidate-scan limit is visible as
