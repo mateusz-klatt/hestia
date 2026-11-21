@@ -843,3 +843,56 @@ class SpendingLimitStoreTests(AnalyticsCase):
         self.assertFalse(self.save(cat["id"], currency="AAA", monthly_limit="500", expected_version=1)["changed"])
         disabled = self.save(cat["id"], currency="AAA", monthly_limit="500", enabled=False, expected_version=1)
         self.assertEqual((disabled["enabled"], disabled["version"], disabled["id"]), (False, 2, first["id"]))
+
+    def test_concurrent_same_version_cas_writers_serialize_without_lost_update(self):
+        cat = self.store.create_category("owner", "Utilities")
+
+        def run_race(expected_version, amounts):
+            barrier = threading.Barrier(2)
+            outcomes = []
+            lock = threading.Lock()
+
+            def worker(amount):
+                writer = BudgetAnalyticsStore(self.sessions, clock=lambda: self.now, cursor_secret=b"synthetic-only")
+                barrier.wait(timeout=5)
+                try:
+                    saved = writer.save_spending_limit(
+                        "owner", category_id=cat["id"], currency="PLN",
+                        monthly_limit=amount, warning_percent=80, enabled=True,
+                        expected_version=expected_version,
+                    )
+                    outcome = ("ok", saved)
+                except AnalyticsError as exc:
+                    outcome = ("err", exc.code, exc.status)
+                with lock:
+                    outcomes.append(outcome)
+
+            threads = [threading.Thread(target=worker, args=(amount,)) for amount in amounts]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(timeout=10)
+                self.assertFalse(thread.is_alive())
+            return outcomes
+
+        # Concurrent create (expected_version=0): exactly one succeeds, one gets 409 conflict.
+        create_outcomes = run_race(0, ("400", "450"))
+        winners = [item[1] for item in create_outcomes if item[0] == "ok"]
+        conflicts = [item for item in create_outcomes if item[0] == "err"]
+        self.assertEqual(len(winners), 1)
+        self.assertEqual(conflicts, [("err", "budget_analytics_conflict", 409)])
+        self.assertEqual(winners[0]["version"], 1)
+        self.assertEqual(len(self.rows(db.BudgetCategoryLimit)), 1)
+        self.assertEqual(self.rows(db.BudgetCategoryLimit)[0].monthly_limit, winners[0]["monthly_limit"])
+
+        # Concurrent update at expected_version=1: exactly one advances to version 2, one gets 409 conflict.
+        audit_before = len(self.rows(db.BudgetAnalyticsAudit))
+        update_outcomes = run_race(1, ("700", "900"))
+        update_winners = [item[1] for item in update_outcomes if item[0] == "ok"]
+        update_conflicts = [item for item in update_outcomes if item[0] == "err"]
+        self.assertEqual(len(update_winners), 1)
+        self.assertEqual(update_conflicts, [("err", "budget_analytics_conflict", 409)])
+        self.assertEqual(update_winners[0]["version"], 2)
+        saved_row = self.rows(db.BudgetCategoryLimit)[0]
+        self.assertEqual((saved_row.version, saved_row.monthly_limit), (2, update_winners[0]["monthly_limit"]))
+        self.assertEqual(len(self.rows(db.BudgetAnalyticsAudit)), audit_before + 1)

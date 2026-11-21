@@ -197,6 +197,7 @@ class DbSchemaTests(unittest.TestCase):
                 ("lim-empty", "owner", "cat-1", "EUR", "", 80, 1, 1),
                 ("lim-long", "owner", "cat-1", "EUR", "1" * 81, 80, 1, 1),
                 ("lim-fk", "owner", "missing", "EUR", "100", 80, 1, 1),
+                ("lim-owner-fk", "missing-user", "cat-1", "EUR", "100", 80, 1, 1),
             )
             for row in bad_rows:
                 with self.subTest(row=row[0]), self.assertRaises(Exception):
@@ -205,16 +206,45 @@ class DbSchemaTests(unittest.TestCase):
                             "INSERT INTO budget_category_limits "
                             "(id, owner, category_id, currency, monthly_limit, warning_percent, enabled, version, created_at, updated_at) "
                             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 100.0, 100.0)", row)
-            # Restrictive FK prevents deleting a referenced category.
+            # Restrictive FKs prevent deleting a referenced category or a referenced owner user.
             with self.assertRaises(Exception):
                 with engine.begin() as conn:
                     conn.exec_driver_sql("DELETE FROM budget_categories WHERE id='cat-1'")
+            with engine.begin() as conn:
+                conn.exec_driver_sql("INSERT INTO users (username, password_hash, role) VALUES ('u-lim', 'h', 'admin')")
+                conn.exec_driver_sql(
+                    "INSERT INTO budget_category_limits "
+                    "(id, owner, category_id, currency, monthly_limit, warning_percent, enabled, version, created_at, updated_at) "
+                    "VALUES ('lim-u', 'u-lim', 'cat-1', 'USD', '250', 80, 1, 1, 100.0, 100.0)")
+            with self.assertRaises(Exception):
+                with engine.begin() as conn:
+                    conn.exec_driver_sql("DELETE FROM users WHERE username='u-lim'")
+            with engine.begin() as conn:
+                conn.exec_driver_sql("DELETE FROM budget_category_limits WHERE id='lim-u'")
+                conn.exec_driver_sql("DELETE FROM users WHERE username='u-lim'")
+            # Full roundtrip: 0016 -> 0017 -> 0016 -> 0017 preserves audit and recreates constraints cleanly.
             with engine.begin() as conn:
                 command.downgrade(db._alembic_config(conn), "0016")
             self.assertNotIn("budget_category_limits", set(inspect(engine).get_table_names()))
             with engine.connect() as conn:
                 audit_count = conn.exec_driver_sql("SELECT COUNT(*) FROM budget_analytics_audit").scalar()
             self.assertEqual(audit_count, 1)
+            with engine.begin() as conn:
+                command.upgrade(db._alembic_config(conn), "0017")
+            self.assertIn("budget_category_limits", set(inspect(engine).get_table_names()))
+            with engine.begin() as conn:
+                self.assertEqual(conn.exec_driver_sql("SELECT COUNT(*) FROM budget_category_limits").scalar(), 0)
+                self.assertEqual(conn.exec_driver_sql("SELECT COUNT(*) FROM budget_analytics_audit").scalar(), 1)
+                conn.exec_driver_sql(
+                    "INSERT INTO budget_category_limits "
+                    "(id, owner, category_id, currency, monthly_limit, warning_percent, enabled, version, created_at, updated_at) "
+                    "VALUES ('lim-2', 'owner', 'cat-1', 'PLN', '600', 85, 1, 1, 200.0, 200.0)")
+            with self.assertRaises(Exception):
+                with engine.begin() as conn:
+                    conn.exec_driver_sql(
+                        "INSERT INTO budget_category_limits "
+                        "(id, owner, category_id, currency, monthly_limit, warning_percent, enabled, version, created_at, updated_at) "
+                        "VALUES ('lim-bad', 'owner', 'cat-1', 'EUR', '100', 80, 1, 0, 200.0, 200.0)")
         finally:
             engine.dispose()
 
