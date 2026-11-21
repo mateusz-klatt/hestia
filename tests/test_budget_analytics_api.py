@@ -53,7 +53,7 @@ class BudgetAnalyticsAPITests(unittest.IsolatedAsyncioTestCase):
 
     async def get(self, operation, *, params=None, user="alice", headers=None):
         if params is None:
-            params = PERIOD if operation in ("overview", "transactions", "transfers") else None
+            params = PERIOD if operation in ("overview", "transactions", "transfers", "spending-limits") else None
         return await self.client.get(PREFIX + "/" + operation, params=params,
                                      headers=self.headers(user) if headers is None else headers)
 
@@ -76,12 +76,15 @@ class BudgetAnalyticsAPITests(unittest.IsolatedAsyncioTestCase):
         return {"category-create": {"name": "Synthetic groceries"},
                 "category-update": {"category_id": "unknown", "name": "Synthetic", "archived": False, "expected_version": 0},
                 "annotation": self.annotation(), "rule-preview": self.candidate(), "rule-save": {"preview_id": "unknown"},
-                "transfer-decision": {"action": "undo", "decision_id": "unknown", "expected_version": 1}}
+                "transfer-decision": {"action": "undo", "decision_id": "unknown", "expected_version": 1},
+                "spending-limit-save": {"category_id": "unknown", "currency": "PLN", "monthly_limit": "100",
+                                        "warning_percent": 80, "enabled": True, "expected_version": 0}}
 
-    async def test_all_six_reads_are_private_local_bounded_and_match_wire_models(self):
+    async def test_all_seven_reads_are_private_local_bounded_and_match_wire_models(self):
         models = {"overview": api_contract.BudgetAnalyticsOverview, "transactions": api_contract.BudgetAnalyticsTransactions,
                   "categories": api_contract.BudgetAnalyticsCategories, "rules": api_contract.BudgetAnalyticsRules,
-                  "transfers": api_contract.BudgetAnalyticsTransfers, "recurring": api_contract.BudgetAnalyticsRecurring}
+                  "transfers": api_contract.BudgetAnalyticsTransfers, "recurring": api_contract.BudgetAnalyticsRecurring,
+                  "spending-limits": api_contract.BudgetAnalyticsSpendingLimits}
         before = len(self.rows(db.BudgetAcquisition))
         with mock.patch.object(config, "load_config", side_effect=AssertionError("No configuration read")), \
              mock.patch.object(runtime, "credentials") as credentials, \
@@ -146,6 +149,8 @@ class BudgetAnalyticsAPITests(unittest.IsolatedAsyncioTestCase):
                        MultiDict([("currency", "PLN"), ("currency", "EUR")])):
             self.assertEqual((await self.get("recurring", params=params)).status, 400)
         self.assertEqual((await self.get("recurring", params={"currency": "PLN"})).status, 200)
+        self.assertEqual((await self.get("spending-limits", params={"period": "2026"})).status, 400)
+        self.assertEqual((await self.get("spending-limits", params={"period": "2026-11", "currency": "PLN"})).status, 200)
         for value in ('{"name":"a","name":"b"}', '{', '[]', '{"name":"x","extra":true}'):
             response = await self.client.post(PREFIX + "/category-create", data=value,
                        headers={**self.headers(origin=True), "Content-Type": "application/json"})
@@ -331,6 +336,38 @@ class BudgetAnalyticsAPITests(unittest.IsolatedAsyncioTestCase):
         eur = await self.get("recurring", params={"currency": "EUR"})
         self.assertEqual(eur.status, 200)
         self.assertEqual((await eur.json())["total_hints"], 0)
+
+    async def test_spending_limit_save_and_monthly_evaluation_match_contract(self):
+        category = (await (await self.post("category-create", {"name": "Groceries"})).json())["category"]
+        self.assertEqual((await self.post("annotation", self.annotation(category_id=category["id"]))).status, 200)
+        body = {"category_id": category["id"], "currency": "PLN", "monthly_limit": "12.00",
+                "warning_percent": 80, "enabled": True, "expected_version": 0}
+        # Strict JSON rejects bool-as-int on warning_percent and expected_version.
+        self.assertEqual((await self.post("spending-limit-save", {**body, "warning_percent": True})).status, 400)
+        self.assertEqual((await self.post("spending-limit-save", {**body, "expected_version": False})).status, 400)
+        saved_resp = await self.post("spending-limit-save", body)
+        self.assertEqual(saved_resp.status, 200, await saved_resp.text())
+        saved = await saved_resp.json()
+        api_contract.BudgetAnalyticsSpendingLimitResult.model_validate(saved)
+        self.assertEqual((saved["limit"]["monthly_limit"], saved["limit"]["version"], saved["limit"]["changed"]),
+                         ("12", 1, True))
+        # Retrying create with expected_version=0 returns 409 conflict (no silent upsert).
+        self.assertEqual((await self.post("spending-limit-save", body)).status, 409)
+        view_resp = await self.get("spending-limits", params={"period": "2026-11"})
+        self.assertEqual(view_resp.status, 200, await view_resp.text())
+        self.assert_private_headers(view_resp)
+        view = await view_resp.json()
+        api_contract.BudgetAnalyticsSpendingLimits.model_validate(view)
+        self.assertEqual((len(view["limits"]), len(view["statuses"]), view["statuses"][0]["status"],
+                          view["statuses"][0]["net_spending"], view["statuses"][0]["remaining"]),
+                         (1, 1, "approaching", "10", "2"))
+        # Disable works with current expected_version and removes from statuses while keeping in limits.
+        disabled = await self.post("spending-limit-save", {**body, "enabled": False, "expected_version": 1})
+        self.assertEqual(disabled.status, 200)
+        after = await (await self.get("spending-limits", params={"period": "2026-11"})).json()
+        self.assertEqual((len(after["limits"]), after["statuses"]), (1, []))
+        self.assertNotEqual(after["limits_version"], view["limits_version"])
+        self.assertEqual(after["snapshot_digest"], view["snapshot_digest"])
 
 
 if __name__ == "__main__":

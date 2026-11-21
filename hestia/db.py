@@ -25,7 +25,7 @@ from threading import RLock
 
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import URL, Engine, ForeignKey, ForeignKeyConstraint, Index, Text, UniqueConstraint, create_engine, event, text
+from sqlalchemy import CheckConstraint, URL, Engine, ForeignKey, ForeignKeyConstraint, Index, Text, UniqueConstraint, create_engine, event, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
 DEFAULT_DB_PATH = "/data/hestia.db"
@@ -484,6 +484,31 @@ class BudgetCategory(Base):
     name: Mapped[str]
     name_key: Mapped[str]
     archived: Mapped[bool]
+    version: Mapped[int]
+    created_at: Mapped[float]
+    updated_at: Mapped[float]
+
+
+class BudgetCategoryLimit(Base):
+    """Owner-configured monthly spending limit for one category and currency."""
+
+    __tablename__ = "budget_category_limits"
+    __table_args__ = (
+        UniqueConstraint("owner", "category_id", "currency"),
+        CheckConstraint("version >= 1", name="ck_budget_category_limits_version"),
+        CheckConstraint("warning_percent >= 1 AND warning_percent <= 99",
+                        name="ck_budget_category_limits_warning_percent"),
+        CheckConstraint("enabled IN (0, 1)", name="ck_budget_category_limits_enabled"),
+        CheckConstraint("length(monthly_limit) >= 1 AND length(monthly_limit) <= 80",
+                        name="ck_budget_category_limits_monthly_limit_len"),
+    )
+    id: Mapped[str] = mapped_column(primary_key=True)
+    owner: Mapped[str] = mapped_column(ForeignKey("users.username"))
+    category_id: Mapped[str] = mapped_column(ForeignKey("budget_categories.id"))
+    currency: Mapped[str]
+    monthly_limit: Mapped[str]
+    warning_percent: Mapped[int]
+    enabled: Mapped[bool]
     version: Mapped[int]
     created_at: Mapped[float]
     updated_at: Mapped[float]
