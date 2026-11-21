@@ -5,9 +5,10 @@ import { apiUrl } from "../api/client";
 import type { BudgetAccount, BudgetCapabilities, BudgetConnection, BudgetConsent, BudgetConsentFlow, BudgetJob,
   BudgetKind, BudgetBalances, BudgetLimit, BudgetOperation, BudgetTransactions, ConsentIntent } from "./model";
 import { idempotencyKey } from "./model";
-import type { AnalyticsCategory, AnalyticsOverview, AnalyticsRecurring, AnalyticsRule, AnalyticsSpendingLimits,
-  AnalyticsTransactions, AnnotationRequest, AnnotationSaved, CategoryCreateRequest, CategorySaved,
-  CategoryUpdateRequest, RuleCandidate, RulePreview, RuleSaved, SpendingLimitSaveRequest, SpendingLimitSaved,
+import type { AnalyticsCategory, AnalyticsMortgages, AnalyticsOverview, AnalyticsRecurring, AnalyticsRule,
+  AnalyticsSpendingLimits, AnalyticsTransactions, AnnotationRequest, AnnotationSaved, CategoryCreateRequest,
+  CategorySaved, CategoryUpdateRequest, MortgagePaymentSaved, MortgagePaymentSetRequest, MortgageSaveRequest,
+  MortgageScheduleSaved, RuleCandidate, RulePreview, RuleSaved, SpendingLimitSaveRequest, SpendingLimitSaved,
   TransactionFilter, TransferDecisionRequest, TransferDecisionResult, TransferList, TransferQueue } from "./analytics/model";
 
 export type BudgetResult<T> =
@@ -104,6 +105,14 @@ export const budgetApi = {
   /** Creates (expected_version=0) or updates one monthly category spending limit with strict CAS. */
   saveSpendingLimit: (request: SpendingLimitSaveRequest) =>
     post<{ limit: SpendingLimitSaved }>("analytics/spending-limit-save", request),
+  /** Owner-private mortgage schedules evaluated against server UTC today (evaluation-only). */
+  mortgages: () => call<AnalyticsMortgages>(url("analytics/mortgages")),
+  /** Creates (schedule_id=null, expected_version=0) or updates one private mortgage schedule. */
+  saveMortgage: (request: MortgageSaveRequest) =>
+    post<{ schedule: MortgageScheduleSaved }>("analytics/mortgage-save", request),
+  /** Marks or unmarks one YYYY-MM installment paid on an owned mortgage schedule with strict CAS. */
+  setMortgagePayment: (request: MortgagePaymentSetRequest) =>
+    post<{ payment: MortgagePaymentSaved }>("analytics/mortgage-payment-set", request),
   setSelected: (account: BudgetAccount, selected: boolean) =>
     post<{ account: BudgetAccount }>("account-selection",
       { account_id: account.id, selected, expected_version: account.control_version }),

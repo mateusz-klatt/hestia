@@ -1,9 +1,10 @@
 // Synthetic analytics fixtures only; no real account, transaction or bank data.
 import { component } from "../fixtures";
-import type { AnalyticsCategory, AnalyticsOverview, AnalyticsRecurring, AnalyticsRecurringHint,
-  AnalyticsSpendingLimit, AnalyticsSpendingLimitStatus, AnalyticsSpendingLimits, AnnotationSaved,
-  SpendingLimitSaved, TransferDecisionResult, AnalyticsTotals, AnalyticsTransaction, AnalyticsTransactions,
-  TransferLeg, TransferList, TransferPair } from "./model";
+import type { AnalyticsCategory, AnalyticsMortgageReminder, AnalyticsMortgages, AnalyticsMortgageSchedule,
+  AnalyticsOverview, AnalyticsRecurring, AnalyticsRecurringHint, AnalyticsSpendingLimit, AnalyticsSpendingLimitStatus,
+  AnalyticsSpendingLimits, AnnotationSaved, MortgagePaymentSaved, MortgageScheduleSaved, SpendingLimitSaved,
+  TransferDecisionResult, AnalyticsTotals, AnalyticsTransaction, AnalyticsTransactions, TransferLeg, TransferList,
+  TransferPair } from "./model";
 
 export function totals(currency: string, changes: Partial<AnalyticsTotals> = {}): AnalyticsTotals {
   return {
@@ -123,4 +124,41 @@ export function spendingLimitsOf(period: string, limits: AnalyticsSpendingLimit[
 
 export function spendingLimitSaved(changes: Partial<SpendingLimitSaved> = {}): SpendingLimitSaved {
   return { ...spendingLimit(), changed: true, ...changes };
+}
+
+export function mortgageSchedule(changes: Partial<AnalyticsMortgageSchedule> = {}): AnalyticsMortgageSchedule {
+  return {
+    id: "mtg-1", label: "Synthetic Home Loan", amount: "2450.5", currency: "PLN", due_day: 10,
+    start_date: "2026-01-01", end_date: null, remind_days_before: 5, destination_kind: "owner_inbox",
+    enabled: true, version: 1, paid_months: ["2026-10"], created_at: 1, updated_at: 1, ...changes,
+  };
+}
+
+export function mortgageReminder(changes: Partial<AnalyticsMortgageReminder> = {}): AnalyticsMortgageReminder {
+  return {
+    schedule_id: "mtg-1", label: "Synthetic Home Loan", amount: "2450.5", currency: "PLN",
+    due_date: "2026-11-10", days_until_due: 3, status: "due_soon", reminder_active: true,
+    destination_kind: "owner_inbox", freshness_stale: false, ledger_as_of: "2026-11-06", rule_version: 1,
+    ...changes,
+  };
+}
+
+export function mortgagesOf(schedules: AnalyticsMortgageSchedule[] = [],
+  reminders: AnalyticsMortgageReminder[] = [],
+  changes: Partial<AnalyticsMortgages> = {}): AnalyticsMortgages {
+  return {
+    evaluation_date: "2026-11-07", evaluation_timezone: "UTC", ledger_as_of: "2026-11-06",
+    schedules_version: "synthetic-schedules-v1", rule_version: 1, schedules, reminders, ...changes,
+  };
+}
+
+export function mortgageSaved(changes: Partial<MortgageScheduleSaved> = {}): MortgageScheduleSaved {
+  return { ...mortgageSchedule(), changed: true, ...changes };
+}
+
+export function mortgagePaymentSaved(changes: Partial<MortgagePaymentSaved> = {}): MortgagePaymentSaved {
+  return {
+    schedule_id: "mtg-1", version: 2, month: "2026-11", paid: true, paid_months: ["2026-10", "2026-11"],
+    changed: true, ...changes,
+  };
 }

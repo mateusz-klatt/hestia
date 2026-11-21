@@ -30,6 +30,16 @@ export type AnalyticsSpendingLimits = Schemas["BudgetAnalyticsSpendingLimits"];
 export type SpendingLimitSaveRequest = Schemas["BudgetAnalyticsSpendingLimitSaveRequest"];
 export type SpendingLimitSaved = Schemas["BudgetAnalyticsSpendingLimitSaved"];
 
+export type MortgageDestination = "owner_inbox" | "owner_push" | "owner_email";
+export const MORTGAGE_DESTINATIONS: readonly MortgageDestination[] = ["owner_inbox", "owner_push", "owner_email"];
+export type AnalyticsMortgageSchedule = Schemas["BudgetAnalyticsMortgageSchedule"];
+export type AnalyticsMortgageReminder = Schemas["BudgetAnalyticsMortgageReminder"];
+export type AnalyticsMortgages = Schemas["BudgetAnalyticsMortgages"];
+export type MortgageSaveRequest = Schemas["BudgetAnalyticsMortgageSaveRequest"];
+export type MortgageScheduleSaved = Schemas["BudgetAnalyticsMortgageScheduleSaved"];
+export type MortgagePaymentSetRequest = Schemas["BudgetAnalyticsMortgagePaymentSetRequest"];
+export type MortgagePaymentSaved = Schemas["BudgetAnalyticsMortgagePaymentSaved"];
+
 /** The owner's explicit kind choice; "auto" returns the entry to rules and defaults. */
 export type KindChoice = "auto" | "expense" | "income" | "refund" | "excluded";
 export const KIND_CHOICES: readonly KindChoice[] = ["auto", "expense", "income", "refund", "excluded"];
@@ -255,6 +265,8 @@ export const RULE_VALUE_MAX = 256;
 export const RULE_PRIORITY_MAX = 10000;
 export const SPENDING_LIMIT_AMOUNT_MAX = 80;
 export const DEFAULT_WARNING_PERCENT = 80;
+export const MORTGAGE_LABEL_MAX = 256;
+export const DEFAULT_REMIND_DAYS_BEFORE = 5;
 
 export type CategoryCreateRequest = Schemas["BudgetAnalyticsCategoryCreateRequest"];
 export type CategoryUpdateRequest = Schemas["BudgetAnalyticsCategoryUpdateRequest"];
@@ -387,6 +399,56 @@ export function parseWarningPercent(value: string): number | null {
   if (!WARNING_DIGITS.test(trimmed)) return null;
   const parsed = Number.parseInt(trimmed, 10);
   return parsed >= 1 && parsed <= 99 ? parsed : null;
+}
+
+const INTEGER_DIGITS = /^\d{1,3}$/;
+const ISO_DATE = /^(\d{4})-(\d{2})-(\d{2})$/;
+
+function hasControlChar(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code <= 0x1f || code === 0x7f) return true;
+  }
+  return false;
+}
+
+/** Non-empty schedule label within 256 chars both before and after NFC normalization, without control characters. */
+export function validMortgageLabel(value: string): boolean {
+  const trimmed = value.trim();
+  if (trimmed === "" || trimmed.length > MORTGAGE_LABEL_MAX || hasControlChar(trimmed)) return false;
+  return trimmed.normalize("NFC").length <= MORTGAGE_LABEL_MAX;
+}
+
+/** Exact integer text in [min, max], rejecting decimals and non-digits. */
+export function parseIntInRange(value: string, min: number, max: number): number | null {
+  const trimmed = value.trim();
+  if (!INTEGER_DIGITS.test(trimmed)) return null;
+  const parsed = Number.parseInt(trimmed, 10);
+  return parsed >= min && parsed <= max ? parsed : null;
+}
+
+/** Real calendar ISO date YYYY-MM-DD (rejects impossible dates such as 2026-02-30). */
+export function validIsoDate(value: string): boolean {
+  const match = ISO_DATE.exec(value.trim());
+  if (match === null) return false;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  if (year < 1900 || year > 9999 || month < 1 || month > 12 || day < 1 || day > 31) return false;
+  const check = new Date(Date.UTC(year, month - 1, day));
+  return check.getUTCFullYear() === year && check.getUTCMonth() === month - 1 && check.getUTCDate() === day;
+}
+
+/** Sorted distinct currencies across saved mortgage schedules and optionally known accounts. */
+export function mortgageCurrencies(schedules: readonly AnalyticsMortgageSchedule[],
+  accounts: readonly BudgetAccount[] = []): string[] {
+  const codes = new Set<string>();
+  for (const item of schedules) codes.add(item.currency);
+  for (const account of accounts) {
+    const code = account.display?.currency ?? null;
+    if (code !== null && validCurrency(code)) codes.add(code.trim().toUpperCase());
+  }
+  return [...codes].sort((a, b) => a.localeCompare(b));
 }
 
 /** Polish integer pluralization: 1 -> one, 2–4 (not 12–14) -> few, all others -> many. */

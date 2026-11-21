@@ -149,6 +149,7 @@ describe("SpendingLimitsView", () => {
     api.saveSpendingLimit.mockImplementationOnce(() => inflight.promise);
     await act(async () => { form.requestSubmit(); await Promise.resolve(); });
     expect(button("Save limit", form).disabled).toBe(true);
+    expect(host.querySelector<HTMLButtonElement>('button[aria-label="Previous month"]')?.disabled).toBe(true);
     expect(api.saveSpendingLimit).toHaveBeenCalledWith({
       category_id: "cat-food", currency: "EUR", monthly_limit: "250.50", warning_percent: 75, enabled: true, expected_version: 0,
     });
@@ -216,37 +217,58 @@ describe("SpendingLimitsView", () => {
     // Switch currency PLN -> then previous month (superseding PLN read).
     await click(button("PLN"));
     expect(api.spendingLimits).toHaveBeenLastCalledWith("2026-11", "PLN");
+    // Unfiltered duplicate detection still knows (cat-food, EUR) exists even while filtered to PLN.
+    await act(async () => {
+      first.settle({ ok: true, data: spendingLimitsOf("2026-11", [
+        spendingLimit({ id: "lim-pln", category_id: "cat-old", currency: "PLN", enabled: false, version: 4 }),
+      ], []) });
+      await Promise.resolve();
+    });
+    await click(button("New limit"));
+    const dupForm = host.querySelector("form");
+    await type(dupForm?.querySelector('input[name="limit_currency"]'), "EUR");
+    expect(host.textContent).toContain("already exists");
+    await click(button("Cancel"));
+
+    // Now test stale out-of-order responses + late 401 barrier on month switch.
+    const third = deferred<AnalyticsSpendingLimits>();
+    api.spendingLimits.mockImplementationOnce(() => third.promise);
     if (prevBtn === null) throw new Error("prev month missing");
     await click(prevBtn);
     expect(api.spendingLimits).toHaveBeenLastCalledWith("2026-10", "PLN");
+    await click(button("All currencies"));
+    expect(api.spendingLimits).toHaveBeenLastCalledWith("2026-10", undefined);
 
-    // Newer 2026-10 response settles first.
+    // Newer All-currencies response settles first.
     await act(async () => {
-      second.settle({ ok: true, data: spendingLimitsOf("2026-10", [], []) });
+      third.settle({ ok: true, data: spendingLimitsOf("2026-10", [], []) });
       await Promise.resolve();
     });
-    expect(host.textContent).toContain("No spending limits configured in PLN.");
+    expect(host.textContent).toContain("No monthly spending limits configured yet.");
 
-    // Stale 2026-11 response arrives late with 401 -> still trips access barrier!
+    // Stale PLN response arrives late with 401 -> still trips access barrier!
     await act(async () => {
-      first.settle({ ok: false, status: 401, error: "budget_http_401" });
+      second.settle({ ok: false, status: 401, error: "budget_http_401" });
       await Promise.resolve();
     });
     expect(onAccessLoss).toHaveBeenCalledWith({ ok: false, status: 401, error: "budget_http_401" });
   });
 
-  it("handles empty categories, error state and selecting an active category cleanly", async () => {
+  it("handles empty categories with rules link, error state and selecting an active category cleanly", async () => {
     const api = fakeApi();
+    const onOpenRules = vi.fn();
     api.categories.mockImplementationOnce(() => ok({ categories: [] }));
     api.spendingLimits.mockImplementationOnce((period) => ok(spendingLimitsOf(period, [], [])));
 
     await act(async () => {
       root.render(<SpendingLimitsView api={api} accounts={accounts} text={spendingLimitsLabels.en}
-        locale="en-US" revision={1} onAccessLoss={() => false} today={fixedToday} />);
+        locale="en-US" revision={1} onAccessLoss={() => false} onOpenRules={onOpenRules} today={fixedToday} />);
       await Promise.resolve();
     });
     await settle();
     expect(host.textContent).toContain("Create at least one active category");
+    await click(button("Open Categories and rules"));
+    expect(onOpenRules).toHaveBeenCalledTimes(1);
     expect(host.textContent).toContain("No monthly spending limits configured yet.");
 
     // Error state
