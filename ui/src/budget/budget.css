@@ -61,3 +61,9 @@
 .budget-total dt { color: var(--fg-soft); }
 .budget-total dd { margin: 0; text-align: end; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 .budget-total small { color: var(--fg-soft); }
+.budget-total-detail { grid-column: 1 / -1; font-size: .8rem; color: var(--fg-soft); }
+.budget-categories { width: 100%; border-collapse: collapse; font-size: .85rem; margin-top: .6rem; }
+.budget-categories caption { text-align: start; color: var(--fg-soft); font-size: .8rem; padding-bottom: .2rem; }
+.budget-categories th, .budget-categories td { padding: .3rem .25rem; border-top: 1px solid var(--border); text-align: start; font-weight: 400; overflow-wrap: anywhere; }
+.budget-categories td { text-align: end; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.budget-categories .is-uncategorised th { font-style: italic; }

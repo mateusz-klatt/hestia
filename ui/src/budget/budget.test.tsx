@@ -6,7 +6,7 @@ import type { BudgetApi, BudgetResult } from "./api";
 import { Budget } from "./budget";
 import { account, componentLimit, connection, sharedLimit } from "./fixtures";
 import type { BudgetAccount, BudgetBalances, BudgetJob, BudgetTransaction, BudgetTransactions } from "./model";
-import type { MonthSummary } from "./analysis/model";
+import { overviewOf } from "./analytics/fixtures";
 
 type Settle<T> = (value: BudgetResult<T>) => void;
 
@@ -41,12 +41,6 @@ const balancesData = {
   freshness: account().components.balances, archived_imports: [] as BudgetBalances["archived_imports"], archived_has_more: false,
 };
 
-function monthOf(month: string): MonthSummary {
-  return { month, accounts: { selected: 1, excluded: 0 }, partial: false, stale_account_ids: [],
-    currencies: [{ currency: "PLN", income: "100", spending: "40.5", net: "59.5", income_count: 1, spending_count: 2 }],
-    not_counted: { pending: 0, uncertain: 0, unresolved: 0 } };
-}
-
 function fakeApi(accounts: BudgetAccount[] = [account({ display })]) {
   return {
     whoami: vi.fn<BudgetApi["whoami"]>(() => ok({ user: "owner", role: "admin" })),
@@ -65,7 +59,7 @@ function fakeApi(accounts: BudgetAccount[] = [account({ display })]) {
     setPaused: vi.fn<BudgetApi["setPaused"]>(),
     setBackground: vi.fn<BudgetApi["setBackground"]>(),
     refresh: vi.fn<BudgetApi["refresh"]>(),
-    summary: vi.fn<BudgetApi["summary"]>((month) => ok(monthOf(month))),
+    overview: vi.fn<BudgetApi["overview"]>((period) => ok(overviewOf(period))),
   } satisfies BudgetApi;
 }
 
@@ -849,15 +843,15 @@ describe("account detail", () => {
   });
 });
 
-describe("analysis views", () => {
-  const analysis = { ...capabilities, analysis: true };
+describe("analytics views", () => {
+  const analysis = { ...capabilities, analytics: true };
 
-  it("offers no month view until the server enables analysis", async () => {
+  it("offers no month view until the server enables analytics", async () => {
     const api = fakeApi();
     await render(api);
     expect(host.textContent).toContain("Synthetic Current ••0001");
     expect(host.querySelector(".budget-views")).toBeNull();
-    expect(api.summary).not.toHaveBeenCalled();
+    expect(api.overview).not.toHaveBeenCalled();
   });
 
   it("switches between accounts and the month view", async () => {
@@ -865,7 +859,7 @@ describe("analysis views", () => {
     api.connections.mockImplementation(() => ok({ connections: [connection], capabilities: analysis }));
     await render(api);
     await click(button("Month"));
-    expect(api.summary).toHaveBeenCalledTimes(1);
+    expect(api.overview).toHaveBeenCalledTimes(1);
     expect(host.querySelector(".budget-total")?.textContent).toContain("40.50 PLN");
     expect(host.textContent).not.toContain("Synthetic Current ••0001");
     expect(button("Month").getAttribute("aria-pressed")).toBe("true");
@@ -878,11 +872,11 @@ describe("analysis views", () => {
     const api = fakeApi();
     api.connections.mockImplementation(() => ok({ connections: [connection], capabilities: analysis }));
     await render(api);
-    api.summary.mockImplementation(() => fail(401, "budget_http_401"));
+    api.overview.mockImplementation(() => fail(401, "budget_http_401"));
     await click(button("Month"));
     expect(host.textContent).toContain("Only the budget's owner");
     expect(host.textContent).not.toContain("PLN");
-    api.summary.mockImplementation((month) => ok(monthOf(month)));
+    api.overview.mockImplementation((period) => ok(overviewOf(period)));
     await click(button("Reload"));
     expect(host.textContent).toContain("Synthetic Current ••0001");
     expect(host.querySelector(".budget-month")).toBeNull();

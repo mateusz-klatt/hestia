@@ -11,8 +11,8 @@ import { ACTIVE_JOB, KINDS, accountLabel, effectiveState, formatAmount, freshnes
 import type { BudgetAccount, BudgetBalances, BudgetCapabilities, BudgetConnection, BudgetJob, BudgetKind,
   BudgetConsent, BudgetConsentFlow, BudgetLimit, BudgetSharedLimit, BudgetTransaction, DateRange,
   LimitState } from "./model";
-import { MonthView, monthLabels } from "./analysis/month";
-import { hasAnalysis } from "./analysis/model";
+import { MonthOverview, overviewLabels } from "./analytics/overview";
+import { hasAnalytics } from "./analytics/model";
 import "./budget.css";
 
 const labels = {
@@ -109,10 +109,10 @@ const labels = {
 };
 type Labels = typeof labels.en;
 
-function pick(): { text: Labels; month: typeof monthLabels.en; locale: string } {
+function pick(): { text: Labels; month: typeof overviewLabels.en; locale: string } {
   const locale = currentLocale();
   const pl = locale.startsWith("pl");
-  return { text: pl ? labels.pl : labels.en, month: pl ? monthLabels.pl : monthLabels.en, locale };
+  return { text: pl ? labels.pl : labels.en, month: pl ? overviewLabels.pl : overviewLabels.en, locale };
 }
 
 type View = "accounts" | "month";
@@ -389,7 +389,7 @@ export function Budget({ active, api = budgetApi, pollMs = 2000, principal,
     return <section className="budget-app">{header}<p className="budget-status" role="status">{message}</p></section>;
   }
   const opened = accounts.find((account) => account.id === detail) ?? null;
-  const analysis = hasAnalysis(capabilities);
+  const analysis = hasAnalytics(capabilities);
   // The month view exists only while the server offers analysis; otherwise the accounts view is shown.
   const shownView: View = analysis ? view : "accounts";
   return (
@@ -423,7 +423,7 @@ export function Budget({ active, api = budgetApi, pollMs = 2000, principal,
         </div>
       ) : null}
       {shownView === "month" ? (
-        <MonthView summary={api.summary} accounts={accounts} text={monthText} locale={locale} revision={revision}
+        <MonthOverview overview={api.overview} accounts={accounts} text={monthText} locale={locale} revision={revision}
           onAccessLoss={barrier} />
       ) : (
         <>

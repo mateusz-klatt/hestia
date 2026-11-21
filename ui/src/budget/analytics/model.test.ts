@@ -1,15 +1,20 @@
 import { describe, expect, it } from "vitest";
-import { currentMonth, hasAnalysis, isMonth, monthLabel, shiftMonth } from "./model";
+import { currentMonth, hasAnalytics, isMonth, isZero, monthLabel, shiftMonth } from "./model";
 
 const capabilities = { stored_reads: true, account_controls: true, refresh: false, background_selection: true,
   background_polling: false, consent: false };
 
 describe("analysis month helpers", () => {
-  it("offers analysis only on an explicit true", () => {
-    expect(hasAnalysis(null)).toBe(false);
-    expect(hasAnalysis(capabilities)).toBe(false);
-    expect(hasAnalysis({ ...capabilities, analysis: "yes" } as typeof capabilities)).toBe(false);
-    expect(hasAnalysis({ ...capabilities, analysis: true } as typeof capabilities)).toBe(true);
+  it("offers analytics only on an explicit true", () => {
+    expect(hasAnalytics(null)).toBe(false);
+    expect(hasAnalytics(capabilities)).toBe(false);
+    expect(hasAnalytics({ ...capabilities, analytics: "yes" } as typeof capabilities)).toBe(false);
+    expect(hasAnalytics({ ...capabilities, analytics: true } as typeof capabilities)).toBe(true);
+  });
+
+  it("recognises a zero decimal string without converting it", () => {
+    for (const zero of ["0", "0.00", "-0", "000.000"]) expect(isZero(zero)).toBe(true);
+    for (const other of ["0.000001", "1", "-0.1", "", "0.", "abc"]) expect(isZero(other)).toBe(false);
   });
 
   it("accepts only real YYYY-MM keys", () => {
