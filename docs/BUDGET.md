@@ -293,6 +293,18 @@ Migration 0010 adds independent endpoint scheduling, retaining existing connecti
 deadlines as a shared floor. A failing card endpoint can no longer consume the
 eligibility of a healthy account or its other endpoint.
 
+Migration 0016 keeps a durable diagnostic next to each safe error. A component
+or round failure that came from an HTTP response records `last_http_status` and
+`last_provider_error`. The latter is the response's `ErrorResponse.error` only
+when it is one of the 43 identifiers documented in the Enable Banking ErrorCode
+schema. Any other string becomes `UNLISTED`; `message`, `detail`, headers and
+URLs are never stored. Non-HTTP failures and every later success clear both
+fields. A connection keeps them only for a round-level failure; per-request
+detail lives on the component. The error body of a non-429 response is now read
+for this purpose, under its own 5-second bound. A failed or slow read leaves the
+diagnostic empty and never changes the error code, retryability or rate scope.
+The diagnostics are not exposed through the HTTP API; read them from SQLite.
+
 Status adds `accounts[].components.transactions` and `.balances`, with states,
 age, stale flag and explicit freshness thresholds (36 hours for transactions,
 24 hours for balances). These are acquisition ages; absent bank observation times

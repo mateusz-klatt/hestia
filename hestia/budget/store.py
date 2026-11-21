@@ -17,6 +17,7 @@ from ..db import BudgetConnectionAudit as ConnectionAudit
 from ..db import BudgetComponent as Component
 from .account_metadata import BudgetMetadataError, apply_account_metadata
 from .bank_metadata import apply_bank_metadata
+from .client import safe_http_status, safe_provider_error
 from .analytics_reconcile import reconcile_transfers
 
 ACCOUNT_KINDS = frozenset({"current", "savings", "credit_card", "other"})
@@ -58,6 +59,12 @@ def safe_error(code):
                "account_selection", "invalid_pagination", "limit_exceeded", "deferred", "acquisition_timeout",
                "control_changed", "busy", "interrupted", "background_disabled"}
     return code if code in allowed else "invalid_data"
+
+
+def set_diagnostic(row, diagnostic=None):
+    """Store only a valid status and a documented identifier; None clears both."""
+    row.last_http_status = safe_http_status(getattr(diagnostic, "http_status", None))
+    row.last_provider_error = safe_provider_error(getattr(diagnostic, "provider_error", None))
 
 
 def _ledger_reference(tx):
@@ -310,13 +317,14 @@ class BudgetStore:
             account.last_attempt = now
             return True
 
-    def record_failure(self, connection_id, code, *, attempt_id=None):
+    def record_failure(self, connection_id, code, *, attempt_id=None, diagnostic=None):
         # Do not persist arbitrary exception strings, provider bodies or identifiers.
         safe_code = safe_error(code)
         with self.transaction() as session:
             row = session.get(Connection, connection_id)
             row.failures += 1
             row.last_error = safe_code
+            set_diagnostic(row, diagnostic)
             if safe_code in ATTENTION:
                 row.attention = safe_code
             # Keep the 12-hour pre-HTTP quota reservation, including after a crash
@@ -326,7 +334,7 @@ class BudgetStore:
                 accounts = select(Account.id).where(Account.connection_id == connection_id)
                 for component in session.scalars(select(Component).where(
                         Component.account_id.in_(accounts), Component.attempt_id == attempt_id)):
-                    self._component_error(component, safe_code)
+                    self._component_error(component, safe_code, diagnostic)
 
     def release_round(self, connection_id, attempt_id):
         """Release only this round's markers; immutable debits and floors survive."""
@@ -382,14 +390,17 @@ class BudgetStore:
             if errors:
                 row.failures += 1
                 row.last_error = "partial_data" if completed else "account_errors"
+                set_diagnostic(row)  # The component rows carry the per-request diagnostics.
             elif completed == len(accounts) * len(OPERATIONS):
                 row.last_success = now
                 row.failures, row.last_error = 0, None
+                set_diagnostic(row)
             reconcile_transfers(session, row.owner, now)
 
     @staticmethod
-    def _component_error(component, code):
+    def _component_error(component, code, diagnostic=None):
         component.last_error = code
+        set_diagnostic(component, diagnostic)
         component.failures += 1
         component.attempt_id, component.lease_until = None, None
 
@@ -409,13 +420,14 @@ class BudgetStore:
         if attempt_id is None:
             component.last_attempt = now
         if error is not None:
-            self._component_error(component, safe_error(error))
+            self._component_error(component, safe_error(error), getattr(observation, operation + "_diagnostic", None))
             return 0, 1
         if operation == "balances":
             account.balances_json = _json(data)
         else:
             self._import_transactions(session, account, data, now)
         component.last_success, component.last_error, component.failures = now, None, 0
+        set_diagnostic(component)
         component.attempt_id, component.lease_until = None, None
         return 1, 0
 

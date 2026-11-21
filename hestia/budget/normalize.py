@@ -14,7 +14,7 @@ import re
 import time
 
 from .config import ConnectionConfig
-from .client import BudgetAPIError
+from .client import BudgetAPIError, ProviderDiagnostic
 from .bank_metadata import BankMetadata, MetadataCollector
 
 MAX_PAGES = 1000
@@ -49,6 +49,8 @@ class AccountSnapshot:
     balances_error: str | None = None
     transactions_error: str | None = None
     bank_metadata: BankMetadata | None = None
+    balances_diagnostic: ProviderDiagnostic | None = None
+    transactions_diagnostic: ProviderDiagnostic | None = None
 
 
 @dataclass(frozen=True)
@@ -304,35 +306,37 @@ def _balances(client, uid, budget):
 
 
 def _component(primary, operation, budget, before_component, fetch, wanted=None):
+    """(data, safe error code, HTTP diagnostic); the diagnostic exists only for an HTTP failure."""
     # Untargeted components are not attempted at all: no budget diagnostic, reservation or HTTP.
     if wanted is not None and not wanted(primary, operation):
-        return None, None
+        return None, None, None
     if _budget_exhausted(budget):
-        return None, "limit_exceeded"
+        return None, "limit_exceeded", None
     # Reservation/owner validation precedes HTTP and must remain fatal on error.
     if before_component is not None and not before_component(primary, operation):
-        return None, None
+        return None, None, None
     try:
-        return fetch(), None
+        return fetch(), None, None
     except BudgetAPIError as exc:
         if exc.status == 401:
             raise
-        return None, exc.code
+        return None, exc.code, ProviderDiagnostic.of(exc)
     except BudgetDataError as exc:
-        return None, exc.code
+        return None, exc.code, None
 
 
 def _selected_account(client, primary, uid, start, end, budget, before_component, wanted=None, bank_account=None, country=None):
     metadata = MetadataCollector(bank_account, country=country)
-    transactions, transactions_error = _component(
+    transactions, transactions_error, transactions_diagnostic = _component(
         primary, "transactions", budget, before_component,
         lambda: _transactions(client, uid, start, end, budget, metadata), wanted)
-    balances, balances_error = _component(
+    balances, balances_error, balances_diagnostic = _component(
         primary, "balances", budget, before_component, lambda: _balances(client, uid, budget), wanted)
     if transactions is None:
         metadata.rows.clear()
     return AccountSnapshot(primary, balances, transactions, balances_error, transactions_error,
-                           metadata.finish(context={"identification_hash": primary}))
+                           metadata.finish(context={"identification_hash": primary}),
+                           balances_diagnostic, transactions_diagnostic)
 
 
 def fetch_snapshot(client, session_id: str, connection: ConnectionConfig, *, today: date, now=None,

@@ -13,6 +13,7 @@ import math
 import re
 import time
 import uuid
+from dataclasses import dataclass
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
@@ -29,12 +30,61 @@ MAX_RESPONSE = 8 * 1024 * 1024
 MAX_ERROR_RESPONSE = 64 * 1024
 READ_CHUNK = 64 * 1024
 TIMEOUT = 60
+DIAGNOSTIC_SECONDS = 5
 TOKEN_TTL = 3600
 _UUID = r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
 _UUID_PATTERN = re.compile(_UUID, re.ASCII)
 _READ_PATH = re.compile(rf"(?:/sessions/{_UUID}|/accounts/{_UUID}/(?:balances|transactions))",
                         re.ASCII)
 _QUERY_KEY = re.compile(r"[a-z][a-z0-9_]{0,63}", re.ASCII)
+
+
+# Enable Banking ErrorResponse.error identifiers, verbatim from the ErrorCode schema:
+# https://enablebanking.com/docs/api/reference/#errorcode
+# The documentation does not promise the list is closed, so any other string is kept
+# only as UNLISTED_PROVIDER_ERROR, never as received.
+PROVIDER_ERRORS = frozenset({
+    "ACCESS_DENIED", "ACCOUNT_DOES_NOT_EXIST", "ALREADY_AUTHORIZED", "ASPSP_ACCOUNT_NOT_ACCESSIBLE",
+    "ASPSP_ERROR", "ASPSP_PAYMENT_NOT_ACCESSIBLE", "ASPSP_PSU_ACTION_REQUIRED", "ASPSP_RATE_LIMIT_EXCEEDED",
+    "ASPSP_TIMEOUT", "AUTHORIZATION_NOT_PROVIDED", "CLOSED_SESSION", "DATE_FROM_IN_FUTURE",
+    "DATE_TO_WITHOUT_DATE_FROM", "EXPIRED_AUTHORIZATION_CODE", "EXPIRED_SESSION", "INVALID_ACCOUNT_ID",
+    "INVALID_HOST", "INVALID_PAYMENT", "NO_ACCOUNTS_ADDED", "PAYMENT_LIMIT_EXCEEDED", "PAYMENT_NOT_AUTHORIZED",
+    "PAYMENT_NOT_FINALIZED", "PAYMENT_NOT_FOUND", "PAYMENT_SUBMISSION_NOT_DEFERRED",
+    "PAYMENT_SUBMISSION_NOT_SUPPORTED", "PSU_HEADER_INVALID", "PSU_HEADER_NOT_PROVIDED", "REDIRECT_URI_NOT_ALLOWED",
+    "REVOKED_SESSION", "SESSION_DOES_NOT_EXIST", "TRANSACTION_DOES_NOT_EXIST", "UNAUTHORIZED_ACCESS",
+    "UNAUTHORIZED_IP", "UNTRUSTED_PAYMENT_PARTY", "WEBHOOK_URI_NOT_ALLOWED", "WRONG_ASPSP_PROVIDED",
+    "WRONG_AUTHORIZATION_CODE", "WRONG_CONTINUATION_KEY", "WRONG_CREDENTIALS_PROVIDED", "WRONG_DATE_INTERVAL",
+    "WRONG_REQUEST_PARAMETERS", "WRONG_SESSION_STATUS", "WRONG_TRANSACTIONS_PERIOD",
+})
+UNLISTED_PROVIDER_ERROR = "UNLISTED"
+
+
+def safe_provider_error(value, *, any_string=False):
+    """A documented identifier, UNLISTED for another string from the wire, otherwise None."""
+    if not isinstance(value, str):
+        return None
+    if value in PROVIDER_ERRORS or value == UNLISTED_PROVIDER_ERROR:
+        return value
+    return UNLISTED_PROVIDER_ERROR if any_string else None
+
+
+def safe_http_status(value):
+    return value if type(value) is int and 100 <= value <= 599 else None
+
+
+@dataclass(frozen=True)
+class ProviderDiagnostic:
+    """The last failed HTTP exchange of one acquisition: a status and a fixed identifier, never text."""
+
+    http_status: int | None = None
+    provider_error: str | None = None
+
+    @classmethod
+    def of(cls, error):
+        """A diagnostic only when the failure really was an HTTP response; otherwise None."""
+        if not isinstance(error, BudgetAPIError) or error.status is None:
+            return None
+        return cls(error.status, error.provider_error)
 
 
 class BudgetAPIError(Exception):
@@ -47,12 +97,14 @@ class BudgetAPIError(Exception):
 
     def __init__(self, status: int | None = None, code: str = "provider_error", retryable: bool = False, *,
                  provider_code: str | None = None, retry_at: float | None = None, retry_suspended: bool = False,
-                 rate_scope: RateScope = RateScope.CONNECTION):
-        self.status = status if type(status) is int and 100 <= status <= 599 else None
+                 rate_scope: RateScope = RateScope.CONNECTION, provider_error: str | None = None):
+        self.status = safe_http_status(status)
         self.code = code if isinstance(code, str) and code in self.CODES else "provider_error"
         self.retryable = bool(retryable)
         self.provider_code = (provider_code if isinstance(provider_code, str) and provider_code in self.PROVIDER_CODES
                               else None)
+        # Diagnostic only: never drives classification, retries or rate scope.
+        self.provider_error = safe_provider_error(provider_error)
         self.retry_at = _safe_deadline(retry_at)
         self.retry_suspended = bool(retry_suspended)
         self.rate_scope = (RateScope.ACCOUNT_ENDPOINT if rate_scope == RateScope.ACCOUNT_ENDPOINT
@@ -84,7 +136,7 @@ def _unique_error_fields(pairs):
     return data
 
 
-def _provider_code(response, read_body):
+def _provider_error(response, read_body):
     # ErrorResponse.error is documented; message/detail are deliberately ignored.
     # https://enablebanking.com/docs/api/reference/#errorresponse
     try:
@@ -93,9 +145,16 @@ def _provider_code(response, read_body):
             return None
         data = json.loads(body.decode("utf-8"), object_pairs_hook=_unique_error_fields,
                           parse_constant=_reject_constant)
-        code = data.get("error") if isinstance(data, dict) else None
-        return code if isinstance(code, str) and code in BudgetAPIError.PROVIDER_CODES else None
+        return safe_provider_error(data.get("error"), any_string=True) if isinstance(data, dict) else None
     except (OSError, ValueError, TypeError, AttributeError, http.client.HTTPException, RecursionError):
+        return None
+
+
+def _diagnostic_error(response, read_body):
+    # A failed or slow diagnostic read must never change how the HTTP error is classified.
+    try:
+        return _provider_error(response, lambda response, maximum: read_body(response, maximum, short=True))
+    except BudgetAPIError:
         return None
 
 
@@ -118,22 +177,24 @@ def _retry_hint(response, clock):
 
 
 def _http_error(status: int, *, response, path, clock, read_body) -> BudgetAPIError:
-    if status in {401, 403}:
-        return BudgetAPIError(status, "authorization")
     if status == 429:
         hint, unsafe_clock = _retry_hint(response, clock)
         try:
-            provider_code = _provider_code(response, read_body)
+            provider_error = _provider_error(response, read_body)
         except BudgetAPIError as exc:
             # Keep an already received server deadline if the body arrives late.
             raise BudgetAPIError(status, exc.code, exc.retryable, retry_at=hint.deadline,
                                  retry_suspended=hint.suspended) from None
+        provider_code = provider_error if provider_error in BudgetAPIError.PROVIDER_CODES else None
         scope = RateScope.CONNECTION if unsafe_clock else classify_rate_scope(path, provider_code)
         return BudgetAPIError(status, "rate_limit", True, provider_code=provider_code, retry_at=hint.deadline,
-                              retry_suspended=hint.suspended, rate_scope=scope)
+                              retry_suspended=hint.suspended, rate_scope=scope, provider_error=provider_error)
+    provider_error = _diagnostic_error(response, read_body)
+    if status in {401, 403}:
+        return BudgetAPIError(status, "authorization", provider_error=provider_error)
     if status >= 500 or status in {408, 425}:
-        return BudgetAPIError(status, "unavailable", True)
-    return BudgetAPIError(status, "provider_error")
+        return BudgetAPIError(status, "unavailable", True, provider_error=provider_error)
+    return BudgetAPIError(status, "provider_error", provider_error=provider_error)
 
 
 def _b64(value: bytes) -> bytes:
@@ -201,6 +262,21 @@ class EnableBankingClient:
             raise BudgetAPIError(code="acquisition_timeout", retryable=True) from None
         return min(TIMEOUT, remaining)
 
+    def _error_reader(self, deadline):
+        def read(response, maximum, *, short=False):
+            return self._read_body(response, maximum, self._diagnostic_deadline(deadline) if short else deadline)
+        return read
+
+    def _diagnostic_deadline(self, deadline):
+        # Reading a non-429 error body is diagnostic only, so it gets a short bound of its own.
+        try:
+            bound = self._monotonic() + DIAGNOSTIC_SECONDS
+        except (TypeError, ValueError, OverflowError):
+            return 0.0  # Unusable clock: the read is abandoned and the diagnostic stays empty.
+        if _safe_deadline(bound) is None:
+            return 0.0
+        return bound if _safe_deadline(deadline) is None else min(deadline, bound)
+
     def _read_body(self, response, maximum, deadline):
         reader = getattr(response, "read1", None)
         reader = reader if callable(reader) else response.read
@@ -232,7 +308,7 @@ class EnableBankingClient:
                 if not 200 <= status < 300:
                     try:
                         http_error = _http_error(status, response=response, path=path, clock=self._clock,
-                                                read_body=lambda response, maximum: self._read_body(response, maximum, deadline))
+                                                read_body=self._error_reader(deadline))
                     except BudgetAPIError as exc:
                         http_error = exc
                     raise http_error
@@ -269,7 +345,7 @@ class EnableBankingClient:
                 if status != 429:
                     self._remaining(deadline)
                 error = _http_error(status, response=exc, path=path, clock=self._clock,
-                                    read_body=lambda response, maximum: self._read_body(response, maximum, deadline))
+                                    read_body=self._error_reader(deadline))
             finally:
                 try:
                     exc.close()
