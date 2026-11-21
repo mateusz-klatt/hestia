@@ -8,15 +8,21 @@ import { OverviewPanel, overviewLabels } from "./overview";
 import type { OverviewLabels } from "./overview";
 import { TransactionsPanel, transactionLabels } from "./transactions";
 import type { TransactionLabels } from "./transactions";
+import { TransfersPanel, transferLabels } from "./transfers";
+import type { TransferLabels } from "./transfers";
 
 export const monthLabels = {
-  en: { previous: "Previous month", next: "Next month", overview: overviewLabels.en, entries: transactionLabels.en },
-  pl: { previous: "Poprzedni miesiąc", next: "Następny miesiąc", overview: overviewLabels.pl, entries: transactionLabels.pl },
+  en: { previous: "Previous month", next: "Next month", overview: overviewLabels.en, transfers: transferLabels.en,
+    entries: transactionLabels.en },
+  pl: { previous: "Poprzedni miesiąc", next: "Następny miesiąc", overview: overviewLabels.pl, transfers: transferLabels.pl,
+    entries: transactionLabels.pl },
 };
-export interface MonthLabels { previous: string; next: string; overview: OverviewLabels; entries: TransactionLabels }
+export interface MonthLabels {
+  previous: string; next: string; overview: OverviewLabels; transfers: TransferLabels; entries: TransactionLabels;
+}
 
 export interface MonthViewProps {
-  api: Pick<BudgetApi, "overview" | "analyticsTransactions" | "categories" | "annotate">;
+  api: Pick<BudgetApi, "overview" | "analyticsTransactions" | "categories" | "annotate" | "transfers" | "decideTransfer">;
   accounts: readonly BudgetAccount[];
   text: MonthLabels;
   locale: string;
@@ -44,6 +50,8 @@ export function MonthView({ api, accounts, text, locale, revision, onAccessLoss,
       </nav>
       <OverviewPanel overview={overview} period={month} current={month === latest} accounts={accounts} text={text.overview}
         locale={locale} revision={revision + changes} onAccessLoss={onAccessLoss} onCurrencies={setCurrencies} />
+      <TransfersPanel api={api} period={month} accounts={accounts} text={text.transfers} locale={locale}
+        revision={revision + changes} onAccessLoss={onAccessLoss} onChanged={changed} />
       <TransactionsPanel api={api} period={month} currencies={currencies} accounts={accounts} text={text.entries}
         locale={locale} revision={revision + changes} onAccessLoss={onAccessLoss} onChanged={changed} />
     </section>

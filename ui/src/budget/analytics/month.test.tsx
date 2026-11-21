@@ -4,18 +4,20 @@ import { createRoot } from "react-dom/client";
 import type { Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BudgetApi, BudgetResult } from "../api";
-import { categoryList, entry, overviewOf, totals } from "./fixtures";
+import { categoryList, entriesOf, entry, overviewOf, totals, transfersOf } from "./fixtures";
 import { MonthView, monthLabels } from "./month";
 
 function ok<T>(data: T): Promise<BudgetResult<T>> { return Promise.resolve({ ok: true, data }); }
 
 function fakeApi() {
   return {
-    overview: vi.fn<BudgetApi["overview"]>((period) => ok(overviewOf(period, { totals: [totals("EUR"), totals("PLN")] }))),
-    analyticsTransactions: vi.fn<BudgetApi["analyticsTransactions"]>(() => ok({ transactions: [entry("e1")], total: 1, next_cursor: null })),
+    overview: vi.fn<BudgetApi["overview"]>((period) => ok(overviewOf(period, { currencies: [totals("EUR"), totals("PLN")] }))),
+    analyticsTransactions: vi.fn<BudgetApi["analyticsTransactions"]>((period) => ok(entriesOf(period, [entry("e1")]))),
     categories: vi.fn<BudgetApi["categories"]>(() => ok({ categories: categoryList })),
     annotate: vi.fn<BudgetApi["annotate"]>(() => ok({ transaction: entry("e1") })),
-  } satisfies Pick<BudgetApi, "overview" | "analyticsTransactions" | "categories" | "annotate">;
+    transfers: vi.fn<BudgetApi["transfers"]>((period) => ok(transfersOf(period))),
+    decideTransfer: vi.fn<BudgetApi["decideTransfer"]>(),
+  } satisfies Pick<BudgetApi, "overview" | "analyticsTransactions" | "categories" | "annotate" | "transfers" | "decideTransfer">;
 }
 
 let host: HTMLElement;
@@ -86,5 +88,6 @@ describe("month view", () => {
     expect(api.annotate).toHaveBeenCalledTimes(1);
     expect(api.overview).toHaveBeenCalledTimes(2);
     expect(api.analyticsTransactions).toHaveBeenCalledTimes(2);
+    expect(api.transfers).toHaveBeenCalledTimes(2);
   });
 });

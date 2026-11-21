@@ -5,14 +5,14 @@ import type { Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BudgetApi, BudgetResult } from "../api";
 import { account } from "../fixtures";
-import { categoryList, entry } from "./fixtures";
+import { categoryList, entriesOf, entry } from "./fixtures";
 import type { AnalyticsTransaction, AnalyticsTransactions } from "./model";
 import { TransactionsPanel, transactionLabels } from "./transactions";
 
 function ok<T>(data: T): Promise<BudgetResult<T>> { return Promise.resolve({ ok: true, data }); }
 function fail<T>(status: number, error: string): Promise<BudgetResult<T>> { return Promise.resolve({ ok: false, status, error }); }
 function pageOf(rows: AnalyticsTransaction[], cursor: string | null = null): AnalyticsTransactions {
-  return { transactions: rows, total: rows.length + (cursor === null ? 0 : 10), next_cursor: cursor };
+  return entriesOf("2026-11", rows, cursor);
 }
 
 function fakeApi(rows: AnalyticsTransaction[] = [entry("e1")]) {
@@ -85,11 +85,14 @@ async function submit(form: HTMLFormElement | null): Promise<void> {
 describe("period entries", () => {
   it("lists the server's rows with category, source, kind, transfer and stale facts", async () => {
     const api = fakeApi([
-      entry("e1", { counterparty_name: "Synthetic Grocer", effective: { category_id: "cat-food", kind: "expense", source: "rule" } }),
-      entry("e2", { credit_debit_indicator: "CRDT", amount: "40", effective: { category_id: null, kind: "unclassified_credit", source: "uncategorised" },
-        transfer_state: "suggested" }),
+      entry("e1", { metadata: { creditor_name: "Synthetic Grocer", debtor_name: "Synthetic Owner", mcc: "5411" },
+        effective: { category_id: "cat-food", kind: "expense", source: "rule", rule_id: "rule-1" } }),
+      entry("e2", { credit_debit_indicator: "CRDT", amount: "40", metadata: { creditor_name: "Synthetic Owner", debtor_name: null, mcc: null },
+        effective: { category_id: null, kind: "unclassified_credit", source: "default", rule_id: null },
+        transfer: { status: "suggested", decision_id: null, candidate_count: 2, ambiguous: true } }),
       entry("e3", { annotation: { mode: "manual", kind: "refund", category_id: "cat-old", version: 2, stale: true },
-        effective: { category_id: "cat-old", kind: "refund", source: "manual" }, transfer_state: "review" }),
+        effective: { category_id: "cat-old", kind: "refund", source: "manual", rule_id: null },
+        transfer: { status: "review", decision_id: "dec-1", candidate_count: 1, ambiguous: false } }),
     ]);
     await show(api);
     expect(api.analyticsTransactions).toHaveBeenCalledWith("2026-11", { currency: "", category: "", kind: "", query: "" });
@@ -104,6 +107,8 @@ describe("period entries", () => {
     expect(rows[1]).toContain("Uncategorised");
     expect(rows[1]).toContain("To classify");
     expect(rows[1]).toContain("possible own transfer");
+    expect(rows[1]).toContain("fits several pairs");
+    expect(rows[1]).not.toContain("Synthetic Owner");
     expect(rows[2]).toContain("Synthetic Old");
     expect(rows[2]).toContain("Refund");
     expect(rows[2]).toContain("set by you");
@@ -154,7 +159,7 @@ describe("period entries", () => {
     await choose(select("Type", editor), "expense");
     await submit(host.querySelector(".budget-entry-editor"));
     expect(api.annotate).toHaveBeenCalledWith({ account_id: "acc-1", entry_reference: "e1", mode: "manual",
-      category_id: "cat-food", kind: "expense", expected_version: 0 });
+      category_id: "cat-food", kind: "expense", expected_fingerprint: "fp-e1", expected_version: 0 });
     expect(onChanged).toHaveBeenCalledTimes(1);
     expect(host.querySelector(".budget-entry-editor")).toBeNull();
   });

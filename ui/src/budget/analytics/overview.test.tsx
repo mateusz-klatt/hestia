@@ -5,26 +5,32 @@ import type { Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BudgetResult } from "../api";
 import { account } from "../fixtures";
-import { overviewOf, totals } from "./fixtures";
-import type { AnalyticsOverview } from "./model";
+import { overviewOf, staleFreshness, totals } from "./fixtures";
+import type { AnalyticsOverview, AnalyticsScope } from "./model";
 import { OverviewPanel, overviewLabels } from "./overview";
 
 type Answer = BudgetResult<AnalyticsOverview>;
 
+const baseScope = overviewOf("2026-11").scope;
+function scope(changes: Partial<AnalyticsScope>): AnalyticsScope {
+  return { ...baseScope, ...changes };
+}
+
 function rich(period: string, changes: Partial<AnalyticsOverview> = {}): AnalyticsOverview {
   return overviewOf(period, {
-    totals: [
-      totals("EUR", { spending_gross: "89.9", net_spending: "89.9" }),
-      totals("PLN", { spending_gross: "123456789012345678901234567890.01", refunds: "0.000001",
+    currencies: [
+      totals("EUR", { expenses: "89.9", net_spending: "89.9" }),
+      totals("PLN", { expenses: "123456789012345678901234567890.01", refunds: "0.000001",
         net_spending: "123456789012345678901234567890.009999", income: "8450", unclassified_credit: "12.3",
-        internal_out: "1200", internal_in: "1200" }),
+        transfer_debits: "1200", transfer_credits: "1200", excluded_debits: "5", excluded_credits: "0" }),
     ],
     categories: [
-      { currency: "PLN", category_id: "cat-food", name: "Synthetic Food", amount: "300", count: 4 },
-      { currency: "PLN", category_id: null, name: null, amount: "50", count: 2 },
-      { currency: "EUR", category_id: "cat-travel", name: "Synthetic Travel", amount: "89.9", count: 1 },
+      { currency: "PLN", category_id: "cat-food", name: "Synthetic Food", archived: false, expenses: "310", refunds: "10", net_spending: "300" },
+      { currency: "PLN", category_id: "cat-old", name: "Synthetic Old", archived: true, expenses: "7", refunds: "0", net_spending: "7" },
+      { currency: "PLN", category_id: null, name: null, archived: false, expenses: "50", refunds: "0", net_spending: "50" },
+      { currency: "EUR", category_id: "cat-travel", name: "Synthetic Travel", archived: false, expenses: "89.9", refunds: "0", net_spending: "89.9" },
     ],
-    scope: { selected: 2, excluded: 1, partial: false, stale_account_ids: [], pending: 2, uncertain: 0, unresolved: 1 },
+    scope: scope({ selected_accounts: 2, excluded_accounts: 1, uncertain_count: 0, unresolved_count: 2, import_unresolved_count: 1 }),
     ...changes,
   });
 }
@@ -70,37 +76,42 @@ describe("period overview", () => {
     expect(cards.map((card) => card.getAttribute("aria-label"))).toEqual(["EUR", "PLN"]);
     const [eur, pln] = cards;
     expect(eur?.textContent).toContain("89.90 EUR");
-    expect(eur?.textContent).not.toContain("gross");
+    expect(eur?.textContent).not.toContain("refunds");
     expect(eur?.textContent).not.toContain("To classify");
     expect(eur?.textContent).not.toContain("Own transfers");
+    expect(eur?.textContent).not.toContain("Left out");
     expect(pln?.textContent).toContain("123,456,789,012,345,678,901,234,567,890.009999 PLN");
-    expect(pln?.textContent).toContain("gross 123,456,789,012,345,678,901,234,567,890.01 PLN · refunds 0.000001 PLN");
+    expect(pln?.textContent).toContain("expenses 123,456,789,012,345,678,901,234,567,890.01 PLN · refunds 0.000001 PLN");
     expect(pln?.textContent).toContain("To classify12.30 PLN");
     expect(pln?.textContent).toContain("out 1,200.00 PLN · in 1,200.00 PLN");
+    expect(pln?.textContent).toContain("Left out by youout 5.00 PLN · in 0.00 PLN");
     expect(host.textContent).toContain("2 accounts in the budget (1 excluded)");
     expect(host.textContent).toContain("still in progress");
-    expect(host.textContent).toContain("Not counted: 2 pending · 1 unrecognised");
+    expect(host.textContent).toContain("Not counted: 2 unrecognised · 1 unrecognised from import");
     expect(host.textContent).not.toContain("uncertain");
+    expect(host.querySelector('[aria-label="Incomplete data"]')).toBeNull();
   });
 
-  it("lists categories under their own currency with an explicit uncategorised row", async () => {
+  it("lists categories under their own currency, marking archived ones and the uncategorised row", async () => {
     await show((period) => Promise.resolve<Answer>({ ok: true, data: rich(period) }));
     const pln = host.querySelector('[aria-label="Spending by category PLN"]');
     expect([...pln?.querySelectorAll("tr") ?? []].map((row) => row.textContent)).toEqual([
-      "Synthetic Food300.00 PLN4 entries", "Uncategorised50.00 PLN2 entries"]);
+      "Synthetic Food300.00 PLN", "Synthetic Old (archived)7.00 PLN", "Uncategorised50.00 PLN"]);
     expect(pln?.querySelector(".is-uncategorised")).not.toBeNull();
     const eur = host.querySelector('[aria-label="Spending by category EUR"]');
     expect(eur?.textContent).toContain("Synthetic Travel");
     expect(eur?.textContent).not.toContain("Synthetic Food");
   });
 
-  it("says how many own transfers wait for review and that they still count", async () => {
-    await show((period) => Promise.resolve<Answer>({ ok: true,
-      data: rich(period, { transfer_summary: { suggested: 3, review: 1, accepted: 5 } }) }));
+  it("explains transfers to review, re-check, boundary cases and a limited scan", async () => {
+    await show((period) => Promise.resolve<Answer>({ ok: true, data: rich(period, {
+      transfer_summary: { suggested: 3, review: 1, accepted: 5, rejected: 2, boundary: 4, scan_limited: true } }) }));
     const notes = [...host.querySelectorAll("[role=note]")].map((note) => note.textContent);
     expect(notes).toEqual([
       "Possible own transfers to review: 3. Until you confirm them they count as spending and income.",
-      "Own-transfer decisions to check again after the bank data changed: 1."]);
+      "Own-transfer decisions to check again after the bank data changed: 1.",
+      "Transfers with one side on an excluded account: 4. They count as ordinary spending or income.",
+      "The search for own transfers stopped at its limit; some possible pairs may be missing."]);
   });
 
   it("reports the shown currencies and says nothing about progress for a closed month", async () => {
@@ -114,7 +125,7 @@ describe("period overview", () => {
     let late: (value: Answer) => void = () => undefined;
     const overview = vi.fn((period: string) => (period === "2026-11"
       ? new Promise<Answer>((resolve) => { late = resolve; })
-      : Promise.resolve<Answer>({ ok: true, data: overviewOf(period, { totals: [] }) })));
+      : Promise.resolve<Answer>({ ok: true, data: overviewOf(period, { currencies: [] }) })));
     await show(overview);
     expect(host.textContent).toContain("Loading the month");
     await show(overview, { period: "2026-10", current: false });
@@ -141,16 +152,21 @@ describe("period overview", () => {
     expect(host.textContent).not.toContain("could not be loaded");
   });
 
-  it("names outdated accounts and marks a partial month", async () => {
-    await show((period) => Promise.resolve<Answer>({ ok: true, data: rich(period, {
-      scope: { selected: 2, excluded: 0, partial: true, stale_account_ids: ["acc-1", "gone"], pending: 0, uncertain: 0, unresolved: 0 } }) }));
+  it("names outdated or suspended accounts and marks the totals as incomplete", async () => {
+    const suspended = { ...staleFreshness, stale: false, suspended: true };
+    await show((period) => Promise.resolve<Answer>({ ok: true, data: rich(period, { scope: scope({
+      selected_accounts: 3, excluded_accounts: 0, freshness: [
+        { account_id: "acc-1", transactions: staleFreshness, balances: staleFreshness },
+        { account_id: "acc-2", transactions: { ...staleFreshness, stale: false }, balances: staleFreshness },
+        { account_id: "gone", transactions: suspended, balances: suspended }] }) }) }));
     expect(host.querySelector("[role=note]")?.textContent).toContain("Synthetic Card ••0002, Account");
-    expect(host.querySelectorAll('[aria-label="Incomplete month"]')).toHaveLength(2);
+    expect(host.querySelector("[role=note]")?.textContent).not.toContain("Account 2");
+    expect(host.querySelectorAll('[aria-label="Incomplete data"]')).toHaveLength(2);
     expect(host.textContent).not.toContain("Not counted");
-    expect(host.textContent).toContain("2 accounts in the budget · change");
+    expect(host.textContent).toContain("3 accounts in the budget · change");
   });
 
-  it("reads the shown month again after a budget reload", async () => {
+  it("reads the shown period again after a reload", async () => {
     const overview = vi.fn((period: string) => Promise.resolve<Answer>({ ok: true, data: rich(period) }));
     await show(overview);
     await show(overview, { revision: 1 });

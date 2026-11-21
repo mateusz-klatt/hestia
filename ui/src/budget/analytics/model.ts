@@ -1,85 +1,116 @@
 // Spending analytics (2D) helpers. Every total is computed by the server per currency and arrives as a decimal
 // STRING; the browser never adds, subtracts, converts or mixes amounts. Periods are "YYYY-MM" or "YYYY".
-import type { BudgetCapabilities } from "../model";
+import type { BudgetCapabilities, BudgetComponentStatus, BudgetTransaction } from "../model";
 
-// Provisional shapes until the server contract is generated into openapi.ts.
+// Hand-written from the agreed analytics contract until the generated OpenAPI types land in openapi.ts.
+
 export interface AnalyticsTotals {
   currency: string;
-  debits: string;
-  credits: string;
-  spending_gross: string;
-  refunds: string;
-  net_spending: string;
+  gross_debits: string;
+  gross_credits: string;
+  expenses: string;
   income: string;
+  refunds: string;
   unclassified_credit: string;
-  internal_in: string;
-  internal_out: string;
+  excluded_debits: string;
+  excluded_credits: string;
+  transfer_debits: string;
+  transfer_credits: string;
+  /** expenses − refunds, computed by the server. */
+  net_spending: string;
 }
 
-export interface AnalyticsMonth { month: string; partial: boolean; totals: AnalyticsTotals[] }
-
 export interface AnalyticsCategoryTotal {
-  currency: string;
   category_id: string | null;
   name: string | null;
-  amount: string;
-  count: number;
+  archived: boolean;
+  currency: string;
+  expenses: string;
+  refunds: string;
+  net_spending: string;
+}
+
+export interface AnalyticsFreshness {
+  account_id: string;
+  transactions: BudgetComponentStatus;
+  balances: BudgetComponentStatus;
 }
 
 export interface AnalyticsScope {
-  selected: number;
-  excluded: number;
-  partial: boolean;
-  stale_account_ids: string[];
-  pending: number;
-  uncertain: number;
-  unresolved: number;
+  selected_accounts: number;
+  excluded_accounts: number;
+  uncertain_count: number;
+  unresolved_count: number;
+  import_unresolved_count: number;
+  freshness: AnalyticsFreshness[];
 }
 
-export interface AnalyticsTransferSummary { suggested: number; review: number; accepted: number }
+export interface AnalyticsTransferSummary {
+  suggested: number;
+  accepted: number;
+  review: number;
+  rejected: number;
+  boundary: number;
+  /** The candidate scan stopped at its bound; some pairs may be missing. */
+  scan_limited: boolean;
+}
 
 export interface AnalyticsOverview {
   period: string;
-  currency: string | null;
-  totals: AnalyticsTotals[];
-  months: AnalyticsMonth[];
-  categories: AnalyticsCategoryTotal[];
+  start: string;
+  end: string;
+  snapshot_digest: string;
   scope: AnalyticsScope;
+  currencies: AnalyticsTotals[];
+  months: { month: string; currencies: AnalyticsTotals[] }[];
+  categories: AnalyticsCategoryTotal[];
   transfer_summary: AnalyticsTransferSummary;
 }
 
 /** The owner's explicit kind choice; "auto" returns the entry to rules and defaults. */
 export type KindChoice = "auto" | "expense" | "income" | "refund" | "excluded";
 export const KIND_CHOICES: readonly KindChoice[] = ["auto", "expense", "income", "refund", "excluded"];
+/** Effective kinds the server reports and filters by. */
+export const EFFECTIVE_KINDS = ["expense", "income", "refund", "unclassified_credit", "transfer", "excluded"] as const;
 
 export interface AnalyticsAnnotation {
-  mode: "auto" | "manual";
-  kind: KindChoice;
-  category_id: string | null;
   version: number;
+  mode: "auto" | "manual";
+  category_id: string | null;
+  kind: KindChoice;
   /** The bank entry changed after this decision was made; it needs the owner's look. */
   stale: boolean;
 }
 
-export interface AnalyticsTransaction {
+export type TransferStatus = "suggested" | "accepted" | "review" | "boundary" | "rejected" | "undone";
+
+export interface AnalyticsTransaction extends Pick<BudgetTransaction, "amount" | "currency" | "credit_debit_indicator" | "status"
+  | "booking_date" | "value_date" | "transaction_date" | "remittance_information" | "source" | "observed_at" | "api_observed_at"> {
   account_id: string;
   entry_reference: string;
+  /** Financial fingerprint: an annotation is accepted only for the entry as the owner saw it. */
   fingerprint: string;
-  amount: string;
-  currency: string;
-  credit_debit_indicator: "CRDT" | "DBIT";
-  status: string;
-  booking_date: string | null;
-  value_date: string | null;
-  transaction_date: string | null;
-  remittance_information: string[];
-  counterparty_name: string | null;
+  transfer_fingerprint: string;
   annotation: AnalyticsAnnotation | null;
-  effective: { category_id: string | null; kind: string; source: "manual" | "rule" | "uncategorised" };
-  transfer_state: "none" | "suggested" | "accepted" | "review" | "rejected";
+  effective: {
+    kind: (typeof EFFECTIVE_KINDS)[number];
+    category_id: string | null;
+    source: "default" | "manual" | "rule" | "transfer";
+    rule_id: string | null;
+  };
+  metadata: { creditor_name: string | null; debtor_name: string | null; mcc: string | null } | null;
+  transfer: { status: "none" | TransferStatus; decision_id: string | null; candidate_count: number; ambiguous: boolean };
 }
 
-export interface AnalyticsTransactions { transactions: AnalyticsTransaction[]; total: number; next_cursor: string | null }
+export interface AnalyticsTransactions {
+  period: string;
+  start: string;
+  end: string;
+  snapshot_digest: string;
+  transactions: AnalyticsTransaction[];
+  filtered_total: number;
+  next_cursor: string | null;
+}
 
 export interface AnalyticsCategory { id: string; name: string; archived: boolean; version: number }
 
@@ -94,6 +125,8 @@ export interface AnnotationRequest {
   mode: "auto" | "manual";
   category_id: string | null;
   kind: KindChoice;
+  /** The entry's financial fingerprint as shown; a changed bank entry is refused, not silently re-annotated. */
+  expected_fingerprint: string;
   /** 0 creates the first annotation; otherwise the version the owner saw. */
   expected_version: number;
 }
@@ -105,7 +138,7 @@ export function annotationRequest(row: AnalyticsTransaction, category: CategoryC
   return {
     account_id: row.account_id, entry_reference: row.entry_reference, mode: category.mode,
     category_id: category.mode === "manual" ? category.category_id : null, kind,
-    expected_version: row.annotation?.version ?? 0,
+    expected_fingerprint: row.fingerprint, expected_version: row.annotation?.version ?? 0,
   };
 }
 
@@ -113,6 +146,99 @@ export function annotationRequest(row: AnalyticsTransaction, category: CategoryC
 export function currentChoice(row: AnalyticsTransaction): CategoryChoice {
   const annotation = row.annotation;
   return annotation === null || annotation.mode === "auto" ? { mode: "auto" } : { mode: "manual", category_id: annotation.category_id };
+}
+
+/** The other party's name as the bank reported it: the creditor of a payment, the debtor of an incoming one. */
+export function counterparty(row: AnalyticsTransaction): string | null {
+  const metadata = row.metadata;
+  if (metadata === null) return null;
+  return row.credit_debit_indicator === "DBIT" ? metadata.creditor_name : metadata.debtor_name;
+}
+
+/** Accounts whose stored transactions are outdated or never downloaded, so the period may be incomplete. */
+export function staleAccounts(scope: AnalyticsScope): string[] {
+  return scope.freshness.filter((item) => item.transactions.stale || item.transactions.suspended).map((item) => item.account_id);
+}
+
+export interface TransferLeg {
+  account_id: string;
+  entry_reference: string;
+  /** Pair fingerprint; null (with amount, currency and date) for a leg outside the selected accounts. */
+  fingerprint: string | null;
+  amount: string | null;
+  currency: string | null;
+  date: string | null;
+  selected: boolean;
+}
+
+export interface TransferPair {
+  /** null while the pair is only a suggestion nobody has decided on. */
+  id: string | null;
+  /** 0 before the first decision. */
+  version: number;
+  status: TransferStatus;
+  /** account_identity: matched by account number; heuristic: equal amount within 3 days; manual: the owner's pairing. */
+  source: "account_identity" | "heuristic" | "manual";
+  debit: TransferLeg;
+  credit: TransferLeg;
+  date_distance: number | null;
+  /** One of the legs also fits another pair; the owner has to choose, nothing is picked automatically. */
+  ambiguous: boolean;
+  /** A leg changed at the bank after the decision. */
+  stale: boolean;
+  /** Only one leg lies inside the selected accounts. */
+  boundary: boolean;
+}
+
+export interface TransferList {
+  period: string;
+  start: string;
+  end: string;
+  snapshot_digest: string;
+  transfers: TransferPair[];
+  filtered_total: number;
+  next_cursor: string | null;
+  scan_limited: boolean;
+}
+
+export type TransferAction = "accept" | "reject" | "undo";
+/** The queues the owner reviews; "undone" pairs are history, not a queue. */
+export const TRANSFER_QUEUES = ["suggested", "review", "boundary", "accepted", "rejected"] as const;
+export type TransferQueue = (typeof TRANSFER_QUEUES)[number];
+
+export type TransferDecisionRequest =
+  | {
+    action: "accept" | "reject";
+    source: TransferPair["source"];
+    debit: { account_id: string; entry_reference: string };
+    credit: { account_id: string; entry_reference: string };
+    expected_debit_fingerprint: string | null;
+    expected_credit_fingerprint: string | null;
+    expected_version: number;
+  }
+  | { action: "undo"; decision_id: string; expected_version: number };
+
+export function transferDecision(pair: TransferPair, action: TransferAction): TransferDecisionRequest | null {
+  if (action === "undo") return pair.id === null ? null : { action, decision_id: pair.id, expected_version: pair.version };
+  return {
+    action, source: pair.source, expected_version: pair.version,
+    debit: { account_id: pair.debit.account_id, entry_reference: pair.debit.entry_reference },
+    credit: { account_id: pair.credit.account_id, entry_reference: pair.credit.entry_reference },
+    expected_debit_fingerprint: pair.debit.fingerprint, expected_credit_fingerprint: pair.credit.fingerprint,
+  };
+}
+
+/** The actions the owner can take on a pair; a pair with a leg outside the selection cannot be accepted. */
+export function transferActions(pair: TransferPair): TransferAction[] {
+  const decided = pair.id !== null;
+  switch (pair.status) {
+    case "suggested": return pair.boundary ? ["reject"] : ["accept", "reject"];
+    case "review": return pair.boundary ? ["undo"] : ["accept", "undo"];
+    case "boundary": return decided ? ["undo"] : ["reject"];
+    case "accepted":
+    case "rejected": return decided ? ["undo"] : [];
+    case "undone": return [];
+  }
 }
 
 const MONTH = /^(\d{4})-(0[1-9]|1[0-2])$/;

@@ -6,7 +6,7 @@ import type { BudgetApi, BudgetResult } from "./api";
 import { Budget } from "./budget";
 import { account, componentLimit, connection, sharedLimit } from "./fixtures";
 import type { BudgetAccount, BudgetBalances, BudgetJob, BudgetTransaction, BudgetTransactions } from "./model";
-import { overviewOf } from "./analytics/fixtures";
+import { entriesOf, overviewOf, transfersOf } from "./analytics/fixtures";
 
 type Settle<T> = (value: BudgetResult<T>) => void;
 
@@ -60,9 +60,11 @@ function fakeApi(accounts: BudgetAccount[] = [account({ display })]) {
     setBackground: vi.fn<BudgetApi["setBackground"]>(),
     refresh: vi.fn<BudgetApi["refresh"]>(),
     overview: vi.fn<BudgetApi["overview"]>((period) => ok(overviewOf(period))),
-    analyticsTransactions: vi.fn<BudgetApi["analyticsTransactions"]>(() => ok({ transactions: [], total: 0, next_cursor: null })),
+    analyticsTransactions: vi.fn<BudgetApi["analyticsTransactions"]>((period) => ok(entriesOf(period))),
     categories: vi.fn<BudgetApi["categories"]>(() => ok({ categories: [] })),
     annotate: vi.fn<BudgetApi["annotate"]>(),
+    transfers: vi.fn<BudgetApi["transfers"]>((period) => ok(transfersOf(period))),
+    decideTransfer: vi.fn<BudgetApi["decideTransfer"]>(),
   } satisfies BudgetApi;
 }
 

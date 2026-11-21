@@ -85,3 +85,8 @@
   .budget-entry-main { grid-template-columns: minmax(0, 1fr) auto; }
   .budget-entry-main > span:first-child { grid-column: 1 / -1; }
 }
+.budget-transfers { border: 1px solid var(--border); border-radius: .7rem; padding: .7rem 1rem; background: var(--surface); display: grid; gap: .5rem; }
+.budget-transfers h4 { margin: 0; }
+.budget-pair-legs { display: flex; flex-wrap: wrap; align-items: baseline; gap: .3rem .6rem; font-size: .9rem; }
+.budget-leg { overflow-wrap: anywhere; }
+.budget-leg .is-credit { color: var(--ok, #2e7d32); }

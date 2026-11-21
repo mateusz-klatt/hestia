@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { currentMonth, hasAnalytics, isMonth, isZero, monthLabel, shiftMonth } from "./model";
+import { counterparty, currentMonth, hasAnalytics, isMonth, isZero, monthLabel, shiftMonth, transferActions, transferDecision } from "./model";
+import { entry, pair } from "./fixtures";
 
 const capabilities = { stored_reads: true, account_controls: true, refresh: false, background_selection: true,
   background_polling: false, consent: false };
@@ -38,5 +39,31 @@ describe("analysis month helpers", () => {
     expect(monthLabel("2026-11", "en")).toBe("November 2026");
     expect(monthLabel("2026-11", "pl")).toMatch(/listopad 2026/);
     expect(monthLabel("bad", "en")).toBe("bad");
+  });
+});
+
+describe("analytics decisions", () => {
+  it("names the other party from the bank metadata by direction", () => {
+    const metadata = { creditor_name: "Synthetic Payee", debtor_name: "Synthetic Payer", mcc: null };
+    expect(counterparty(entry("a", { metadata }))).toBe("Synthetic Payee");
+    expect(counterparty(entry("b", { metadata, credit_debit_indicator: "CRDT" }))).toBe("Synthetic Payer");
+    expect(counterparty(entry("c"))).toBeNull();
+  });
+
+  it("offers only the actions each transfer state allows", () => {
+    expect(transferActions(pair())).toEqual(["accept", "reject"]);
+    expect(transferActions(pair({ boundary: true }))).toEqual(["reject"]);
+    expect(transferActions(pair({ status: "review", id: "d" }))).toEqual(["accept", "undo"]);
+    expect(transferActions(pair({ status: "review", id: "d", boundary: true }))).toEqual(["undo"]);
+    expect(transferActions(pair({ status: "boundary" }))).toEqual(["reject"]);
+    expect(transferActions(pair({ status: "boundary", id: "d" }))).toEqual(["undo"]);
+    expect(transferActions(pair({ status: "accepted", id: "d" }))).toEqual(["undo"]);
+    expect(transferActions(pair({ status: "rejected" }))).toEqual([]);
+    expect(transferActions(pair({ status: "undone", id: "d" }))).toEqual([]);
+  });
+
+  it("cannot undo a pair nobody decided on", () => {
+    expect(transferDecision(pair(), "undo")).toBeNull();
+    expect(transferDecision(pair({ id: "d", version: 3 }), "undo")).toEqual({ action: "undo", decision_id: "d", expected_version: 3 });
   });
 });

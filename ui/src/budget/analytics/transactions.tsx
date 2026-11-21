@@ -4,13 +4,13 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { BudgetApi } from "../api";
 import type { BudgetAccount } from "../model";
 import { accountLabel, formatAmount, transactionDate, transactionText } from "../model";
-import { KIND_CHOICES, NO_FILTER, UNCATEGORISED, annotationRequest, currentChoice } from "./model";
+import { EFFECTIVE_KINDS, KIND_CHOICES, NO_FILTER, UNCATEGORISED, annotationRequest, counterparty, currentChoice } from "./model";
 import type { AnalyticsCategory, AnalyticsTransaction, CategoryChoice, KindChoice, TransactionFilter } from "./model";
 
 const kindsEn = { auto: "Automatic", expense: "Expense", income: "Income", refund: "Refund", excluded: "Leave out of the budget",
-  unclassified_credit: "To classify", internal: "Own transfer" };
+  unclassified_credit: "To classify", transfer: "Own transfer" };
 const kindsPl = { auto: "Automatycznie", expense: "Wydatek", income: "Wpływ", refund: "Zwrot", excluded: "Pomiń w budżecie",
-  unclassified_credit: "Do sklasyfikowania", internal: "Przelew własny" };
+  unclassified_credit: "Do sklasyfikowania", transfer: "Przelew własny" };
 
 export const transactionLabels = {
   en: {
@@ -19,7 +19,8 @@ export const transactionLabels = {
     edit: "Change", save: "Save", cancel: "Cancel", total: (count: number) => `${String(count)} entries`,
     manual: "set by you", rule: "by rule", stale: "the bank changed this entry; check your choice",
     transfer: { none: "", suggested: "possible own transfer", accepted: "own transfer", review: "own transfer to re-check",
-      rejected: "" },
+      boundary: "other side on an excluded account", rejected: "", undone: "" },
+    ambiguous: "fits several pairs; choose in own transfers",
     more: "Load more", empty: "No entries match.", loading: "Loading entries…", error: "Entries could not be loaded.",
     conflict: "This changed elsewhere; the latest state was loaded.", saveError: "Could not save. Try again.",
     account: "Account",
@@ -30,15 +31,14 @@ export const transactionLabels = {
     edit: "Zmień", save: "Zapisz", cancel: "Anuluj", total: (count: number) => `Pozycji: ${String(count)}`,
     manual: "ustawione przez Ciebie", rule: "z reguły", stale: "bank zmienił tę pozycję; sprawdź swój wybór",
     transfer: { none: "", suggested: "możliwy przelew własny", accepted: "przelew własny",
-      review: "przelew własny do sprawdzenia", rejected: "" },
+      review: "przelew własny do sprawdzenia", boundary: "druga strona na koncie wykluczonym", rejected: "", undone: "" },
+    ambiguous: "pasuje do kilku par; wybierz w przelewach własnych",
     more: "Wczytaj więcej", empty: "Brak pasujących pozycji.", loading: "Wczytywanie pozycji…",
     error: "Nie udało się wczytać pozycji.", conflict: "Zmieniono to w innym miejscu; wczytano aktualny stan.",
     saveError: "Nie udało się zapisać. Spróbuj ponownie.", account: "Konto",
   },
 };
 export type TransactionLabels = typeof transactionLabels.en;
-
-const FILTER_KINDS = ["expense", "income", "refund", "unclassified_credit", "internal", "excluded"] as const;
 
 interface Page { rows: AnalyticsTransaction[]; cursor: string | null; total: number; loading: boolean; failed: boolean }
 const LOADING: Page = { rows: [], cursor: null, total: 0, loading: true, failed: false };
@@ -82,7 +82,7 @@ export function TransactionsPanel({ api, period, currencies, accounts, text, loc
     void api.analyticsTransactions(period, filter).then((result) => {
       if (onAccessLoss(result) || token !== generation.current) return;
       setPage(result.ok
-        ? { rows: result.data.transactions, cursor: result.data.next_cursor, total: result.data.total, loading: false, failed: false }
+        ? { rows: result.data.transactions, cursor: result.data.next_cursor, total: result.data.filtered_total, loading: false, failed: false }
         : { ...LOADING, loading: false, failed: true });
     });
   }, [api, period, filter, revision, reloads, onAccessLoss]);
@@ -96,7 +96,7 @@ export function TransactionsPanel({ api, period, currencies, accounts, text, loc
     const result = await api.analyticsTransactions(period, filter, cursor);
     if (onAccessLoss(result) || token !== generation.current) return;
     setPage((current) => (result.ok
-      ? { rows: [...current.rows, ...result.data.transactions], cursor: result.data.next_cursor, total: result.data.total,
+      ? { rows: [...current.rows, ...result.data.transactions], cursor: result.data.next_cursor, total: result.data.filtered_total,
           loading: false, failed: false }
       : { ...current, loading: false, failed: true }));
   }, [api, period, filter, page.cursor, onAccessLoss]);
@@ -147,7 +147,7 @@ export function TransactionsPanel({ api, period, currencies, accounts, text, loc
         <label>{text.kind}
           <select value={draft.kind} onChange={(event) => { setDraft({ ...draft, kind: event.currentTarget.value }); }}>
             <option value="">{text.all}</option>
-            {FILTER_KINDS.map((kind) => <option key={kind} value={kind}>{kindText(kind)}</option>)}
+            {EFFECTIVE_KINDS.map((kind) => <option key={kind} value={kind}>{kindText(kind)}</option>)}
           </select>
         </label>
         <label>{text.search}
@@ -166,12 +166,12 @@ export function TransactionsPanel({ api, period, currencies, accounts, text, loc
           <ul className="budget-entry-list">
             {page.rows.map((row) => {
               const key = rowKey(row);
-              const transfer = text.transfer[row.transfer_state];
+              const transfer = text.transfer[row.transfer.status];
               return (
                 <li key={key} className="budget-entry">
                   <div className="budget-entry-main">
                     <span className="budget-muted">{transactionDate(row)}</span>
-                    <span className="budget-entry-text">{row.counterparty_name ?? transactionText(row)}</span>
+                    <span className="budget-entry-text">{counterparty(row) ?? transactionText(row)}</span>
                     <strong className={row.credit_debit_indicator === "DBIT" ? "is-debit" : "is-credit"}>
                       {formatAmount(row.amount, row.currency, locale, row.credit_debit_indicator)}
                     </strong>
@@ -184,6 +184,7 @@ export function TransactionsPanel({ api, period, currencies, accounts, text, loc
                     {row.effective.source === "manual" ? <span>{text.manual}</span> : null}
                     {row.effective.source === "rule" ? <span>{text.rule}</span> : null}
                     {transfer === "" ? null : <span className="budget-chip">{transfer}</span>}
+                    {row.transfer.ambiguous ? <span className="budget-warn">{text.ambiguous}</span> : null}
                     {row.annotation?.stale === true ? <span className="budget-warn">{text.stale}</span> : null}
                     {editing === key ? null : (
                       <button type="button" disabled={busy !== null} onClick={() => { setEditing(key); setNotice(null); }}>{text.edit}</button>

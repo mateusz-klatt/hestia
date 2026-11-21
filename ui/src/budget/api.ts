@@ -6,7 +6,7 @@ import type { BudgetAccount, BudgetCapabilities, BudgetConnection, BudgetConsent
   BudgetKind, BudgetBalances, BudgetLimit, BudgetOperation, BudgetTransactions, ConsentIntent } from "./model";
 import { idempotencyKey } from "./model";
 import type { AnalyticsCategory, AnalyticsOverview, AnalyticsTransaction, AnalyticsTransactions, AnnotationRequest,
-  TransactionFilter } from "./analytics/model";
+  TransactionFilter, TransferDecisionRequest, TransferList, TransferPair, TransferStatus } from "./analytics/model";
 
 export type BudgetResult<T> =
   | { ok: true; data: T }
@@ -83,6 +83,10 @@ export const budgetApi = {
   categories: () => call<{ categories: AnalyticsCategory[] }>(url("analytics/categories")),
   /** The owner's explicit category/kind decision for one entry, versioned against concurrent edits. */
   annotate: (request: AnnotationRequest) => post<{ transaction: AnalyticsTransaction }>("analytics/annotation", request),
+  /** Own-transfer pairs of a period in one state; suggestions are never accepted without the owner. */
+  transfers: (period: string, status: TransferStatus, cursor?: string) =>
+    call<TransferList>(url("analytics/transfers", { period, status, cursor })),
+  decideTransfer: (request: TransferDecisionRequest) => post<{ transfer: TransferPair }>("analytics/transfer-decision", request),
   setSelected: (account: BudgetAccount, selected: boolean) =>
     post<{ account: BudgetAccount }>("account-selection",
       { account_id: account.id, selected, expected_version: account.control_version }),
