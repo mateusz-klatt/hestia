@@ -440,6 +440,65 @@ describe("bank consent", () => {
   });
 });
 
+describe("consent lifecycle guards", () => {
+  function enable(api: ReturnType<typeof fakeApi>) {
+    api.connections.mockImplementation(() => ok({ connections: [connection], capabilities: { ...capabilities, consent: true } }));
+  }
+  async function scoped(api: ReturnType<typeof fakeApi>, navigate: (url: string) => void, principal = "owner", active = true) {
+    await act(async () => { root.render(<Budget active={active} api={api} pollMs={5} principal={principal} navigate={navigate} />); await Promise.resolve(); });
+    await settle();
+  }
+  const started = { ok: true as const, data: { flow_id: "flow-old", authorization_url: "https://bank.example.test/start?old", expires_at: 9 } };
+
+  it.each(["status", "pending"])("clears at once on a %s 401 even while the sibling consent read hangs", async (failed) => {
+    const api = fakeApi();
+    enable(api);
+    if (failed === "pending") {
+      api.consentStatus.mockImplementation(() => new Promise(() => undefined));
+      api.consentPending.mockImplementation(() => fail(401, "budget_http_401"));
+    } else {
+      api.consentStatus.mockImplementation(() => fail(401, "budget_http_401"));
+      api.consentPending.mockImplementation(() => new Promise(() => undefined));
+    }
+    await scoped(api, vi.fn());
+    expect(host.textContent).not.toContain("Synthetic Current");
+    expect(host.textContent).toContain("Only the budget's owner");
+  });
+
+  it("does not navigate from a start answer that belongs to a previous principal", async () => {
+    const api = fakeApi();
+    enable(api);
+    const navigate = vi.fn<(url: string) => void>();
+    const late = deferred<Loaded<BudgetApi["consentStart"]>>();
+    api.consentStart.mockImplementation(() => late.promise);
+    await scoped(api, navigate);
+    await click(button("Connect bank"));
+    api.whoami.mockImplementation(() => ok({ user: "new-owner", role: "admin" }));
+    await scoped(api, navigate, "new-owner");
+    await act(async () => { late.settle(started); await Promise.resolve(); });
+    await settle();
+    expect(navigate).not.toHaveBeenCalled();
+  });
+
+  it("does not navigate after the owner leaves the budget tab while a start is pending", async () => {
+    const api = fakeApi();
+    enable(api);
+    const navigate = vi.fn<(url: string) => void>();
+    const late = deferred<Loaded<BudgetApi["consentStart"]>>();
+    api.consentStart.mockImplementation(() => late.promise);
+    await scoped(api, navigate);
+    await click(button("Connect bank"));
+    await scoped(api, navigate, "owner", false);
+    expect(host.textContent).toBe("");
+    await act(async () => { late.settle(started); await Promise.resolve(); });
+    await settle();
+    expect(navigate).not.toHaveBeenCalled();
+    await scoped(api, navigate, "owner", true);
+    await click(button("Connect bank"));
+    expect(api.consentStart).toHaveBeenCalledTimes(2);
+  });
+});
+
 describe("download limits", () => {
   const soon = Date.now() / 1000 + 6 * 3600;
   function limitsFor(): Loaded<BudgetApi["limits"]> {

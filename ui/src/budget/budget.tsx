@@ -162,6 +162,13 @@ export function Budget({ active, api = budgetApi, pollMs = 2000, principal,
   const generation = useRef(0);
   const epoch = useRef(0);
   const [revision, setRevision] = useState(0);
+  // Bumped whenever the view is hidden or the principal changes; a pending bank start must not navigate then.
+  const lifecycle = useRef(0);
+  const activeRef = useRef(active);
+  useEffect(() => {
+    activeRef.current = active;
+    lifecycle.current += 1;
+  }, [active, principal]);
   const [pollTick, setPollTick] = useState(0);
   useEffect(() => {
     alive.current = true;
@@ -300,8 +307,13 @@ export function Budget({ active, api = budgetApi, pollMs = 2000, principal,
     if (!active || !consentEnabled) return undefined;
     let cancelled = false;
     const started = epoch.current;
-    void Promise.all([api.consentStatus(), api.consentPending()]).then(([status, open]) => {
-      if (!alive.current || started !== epoch.current || barrier(status) || barrier(open) || cancelled) return;
+    // Each read passes the access barrier as soon as it arrives; a hanging sibling cannot delay clearing.
+    const watch = <T,>(request: Promise<BudgetResult<T>>) => request.then((result) => {
+      if (alive.current && started === epoch.current) barrier(result);
+      return result;
+    });
+    void Promise.all([watch(api.consentStatus()), watch(api.consentPending())]).then(([status, open]) => {
+      if (!alive.current || started !== epoch.current || isAccessLoss(status) || isAccessLoss(open) || cancelled) return;
       if (status.ok) setConsents(status.data.consents);
       if (open.ok) setPending(open.data.pending.filter((flow) => READY_FLOW.has(flow.status)));
     });
@@ -310,8 +322,10 @@ export function Budget({ active, api = budgetApi, pollMs = 2000, principal,
 
   const startConsent = useCallback(async (connection: BudgetConnection) => {
     setNotice(null);
+    const ticket = lifecycle.current;
     const result = await run(`consent:${connection.id}`, () => api.consentStart(connection, consentIntent(connection)));
-    if (result === null) return;
+    // Leave for the bank only if this is still the same visible budget for the same principal.
+    if (result === null || !activeRef.current || lifecycle.current !== ticket) return;
     if (!result.ok) {
       setNotice(result.error === "budget_version_conflict" ? text.conflict
         : result.status === 409 || result.status === 429 ? text.consentBusy : text.consentError);
