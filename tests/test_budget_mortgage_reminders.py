@@ -101,6 +101,29 @@ class MortgageRemindersTests(unittest.TestCase):
         self.assertEqual((feb_leap[0].due_date, feb_leap[0].days_until_due, feb_leap[0].status),
                          ("2028-02-29", 3, "due_soon"))
 
+        # Century and 400-year leap clamping plus 30-day month clamping and exact lead-time boundary.
+        for today, start, expected_due in (
+            ("2000-02-25", "2000-01-01", "2000-02-29"),
+            ("2024-02-25", "2024-01-01", "2024-02-29"),
+            ("2100-02-25", "2100-01-01", "2100-02-28"),
+            ("2026-04-25", "2026-01-01", "2026-04-30"),
+        ):
+            clamped = evaluate_mortgage_reminders("owner", today, [_schedule(due_day=31, start_date=start)])
+            self.assertEqual(clamped[0].due_date, expected_due)
+
+        edge_soon = evaluate_mortgage_reminders("owner", "2026-11-10", [_schedule(due_day=15, remind_days_before=5)])
+        edge_upcoming = evaluate_mortgage_reminders("owner", "2026-11-09", [_schedule(due_day=15, remind_days_before=5)])
+        self.assertEqual((edge_soon[0].status, edge_soon[0].reminder_active), ("due_soon", True))
+        self.assertEqual((edge_upcoming[0].status, edge_upcoming[0].reminder_active), ("upcoming", False))
+
+        # Valid paid_months outside the schedule [start_date, end_date] window are safely ignored.
+        out_of_window_paid = evaluate_mortgage_reminders(
+            "owner", "2026-06-10",
+            [_schedule(due_day=15, start_date="2026-06-01", end_date="2026-08-31",
+                       paid_months=frozenset({"2025-12", "2026-05", "2026-09", "2030-01"}))]
+        )
+        self.assertEqual((out_of_window_paid[0].due_date, out_of_window_paid[0].status), ("2026-06-15", "due_soon"))
+
         year_roll = evaluate_mortgage_reminders(
             "owner", "2026-12-20", [_schedule(due_day=15, paid_months=frozenset({"2026-12"}))]
         )
@@ -149,6 +172,7 @@ class MortgageRemindersTests(unittest.TestCase):
         self.assertEqual(PRIVATE_DESTINATIONS, frozenset({"owner_inbox", "owner_push", "owner_email"}))
         bad_calls = [
             lambda: evaluate_mortgage_reminders(" ", "2026-11-21", []),
+            lambda: evaluate_mortgage_reminders(" " * 1025, "2026-11-21", []),
             lambda: evaluate_mortgage_reminders("owner\t", "2026-11-21", []),
             lambda: evaluate_mortgage_reminders("owner", "2026-02-29", []),
             lambda: evaluate_mortgage_reminders("owner", "1899-12-31", []),

@@ -81,7 +81,9 @@ class SpendingLimitsTests(unittest.TestCase):
             _limit("cat-negative-net", "100"),
             _limit("cat-sub-unit-neg", "1.00"),
             _limit("cat-zero-net", "100", warning_percent=1),
+            _limit("cat-low-warn-hit", "100", warning_percent=1),
             _limit("cat-high-warn", "100", warning_percent=99),
+            _limit("cat-high-warn-hit", "100", warning_percent=99),
             _limit("cat-third-33", "3", warning_percent=33),
             _limit("cat-third-34", "3", warning_percent=34),
             _limit("cat-archived", "50"),
@@ -92,7 +94,9 @@ class SpendingLimitsTests(unittest.TestCase):
             _spending("cat-negative-net", "10.25", "35.50"),
             _spending("cat-sub-unit-neg", "0.50", "1.00"),
             _spending("cat-zero-net", "12.50", "12.50"),
+            _spending("cat-low-warn-hit", "1.00", "0"),
             _spending("cat-high-warn", "98.99", "0"),
+            _spending("cat-high-warn-hit", "99.00", "0"),
             _spending("cat-third-33", "1", "0"),
             _spending("cat-third-34", "1", "0"),
             _spending("cat-archived", "12.50", "0", archived=True),
@@ -112,7 +116,11 @@ class SpendingLimitsTests(unittest.TestCase):
         zero_net = by_cat["cat-zero-net"]
         self.assertEqual((zero_net.status, zero_net.net_spending, zero_net.remaining, zero_net.percent_used_floor),
                          ("within", "0", "100", 0))
+        self.assertEqual((by_cat["cat-low-warn-hit"].status, by_cat["cat-low-warn-hit"].percent_used_floor),
+                         ("approaching", 1))
         self.assertEqual((by_cat["cat-high-warn"].status, by_cat["cat-high-warn"].percent_used_floor), ("within", 98))
+        self.assertEqual((by_cat["cat-high-warn-hit"].status, by_cat["cat-high-warn-hit"].percent_used_floor),
+                         ("approaching", 99))
         self.assertEqual((by_cat["cat-third-33"].status, by_cat["cat-third-33"].percent_used_floor), ("approaching", 33))
         self.assertEqual((by_cat["cat-third-34"].status, by_cat["cat-third-34"].percent_used_floor), ("within", 33))
         self.assertTrue(by_cat["cat-archived"].archived)
@@ -151,6 +159,7 @@ class SpendingLimitsTests(unittest.TestCase):
     def test_validation_caps_and_fixed_error_messages(self):
         bad_calls = [
             lambda: evaluate_spending_limits(" ", "2026-11", [], []),
+            lambda: evaluate_spending_limits(" " * 1025, "2026-11", [], []),
             lambda: evaluate_spending_limits("owner\n", "2026-11", [], []),
             lambda: evaluate_spending_limits("owner", "2026", [], []),
             lambda: evaluate_spending_limits("owner", "2026-00", [], []),
