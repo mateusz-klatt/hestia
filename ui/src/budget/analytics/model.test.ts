@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { accountName, annotationRequest, canPair, canonicalAmount, counterparty, currentMonth, daysBetween, kindChoice, kindChoicesFor,
-  legsMatch, hasAnalytics, isMonth, isZero, manualPairRequest, monthLabel, pairCandidates, pairDate, pairPeriods, pluralPl,
-  recurringCurrencies, shiftMonth, transferActions, transferDecision } from "./model";
+  legsMatch, hasAnalytics, isMonth, isZero, limitCurrencies, manualPairRequest, monthLabel, pairCandidates, pairDate, pairPeriods,
+  parseWarningPercent, pluralPl, recurringCurrencies, shiftMonth, transferActions, transferDecision, validCurrency,
+  validLimitAmount } from "./model";
 import type { AnalyticsTransaction } from "./model";
-import { entry, leg, pair, recurringHint } from "./fixtures";
+import { entry, leg, pair, recurringHint, spendingLimit } from "./fixtures";
 import { account, connection } from "../fixtures";
 
 const capabilities = { stored_reads: true, account_controls: true, refresh: false, background_selection: true,
@@ -259,5 +260,30 @@ describe("analytics decisions", () => {
     expect([1, 2, 3, 5, 13, 23].map(occ)).toEqual([
       "1 wystąpienie", "2 wystąpienia", "3 wystąpienia", "5 wystąpień", "13 wystąpień", "23 wystąpienia",
     ]);
+  });
+
+  it("validates spending limit inputs textually without floating-point coercion", () => {
+    expect(validLimitAmount("500")).toBe(true);
+    expect(validLimitAmount(" 12345678901234567890.05 ")).toBe(true);
+    expect(validLimitAmount("0")).toBe(false);
+    expect(validLimitAmount("0.00")).toBe(false);
+    expect(validLimitAmount("-50")).toBe(false);
+    expect(validLimitAmount("1e5")).toBe(false);
+    expect(validLimitAmount("1".repeat(81))).toBe(false);
+    expect(validCurrency("pln")).toBe(true);
+    expect(validCurrency("EUR")).toBe(true);
+    expect(validCurrency("PL")).toBe(false);
+    expect(validCurrency("123")).toBe(false);
+    expect(parseWarningPercent("1")).toBe(1);
+    expect(parseWarningPercent("80")).toBe(80);
+    expect(parseWarningPercent("99")).toBe(99);
+    expect(parseWarningPercent("0")).toBeNull();
+    expect(parseWarningPercent("100")).toBeNull();
+    expect(parseWarningPercent("80.5")).toBeNull();
+    expect(parseWarningPercent("")).toBeNull();
+    expect(limitCurrencies(
+      [spendingLimit({ currency: "EUR" }), spendingLimit({ id: "lim-2", currency: "PLN" })],
+      [account({ display: { product: "Synthetic", currency: "USD", masked_suffix: "0001", source: "api", observed_at: 1, imported_at: 2 } })],
+    )).toEqual(["EUR", "PLN", "USD"]);
   });
 });

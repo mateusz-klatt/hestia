@@ -111,3 +111,8 @@
 .budget-recurring-evidence { font-size: .85rem; color: var(--fg-soft); }
 .budget-recurring-evidence summary { cursor: pointer; }
 .budget-recurring-evidence ul { margin: .35rem 0 0; padding-inline-start: 1.1rem; display: grid; gap: .2rem; overflow-wrap: anywhere; }
+.budget-limit-main { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: .3rem .75rem; min-width: 0; }
+.budget-limit-figures { font-variant-numeric: tabular-nums; overflow-wrap: anywhere; font-size: .9rem; }
+.budget-limit-meter { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem .75rem; min-width: 0; }
+.budget-limit-meter progress { flex: 1 1 8rem; max-width: 100%; height: .55rem; accent-color: var(--accent); }
+.budget-limit-status[data-status="approaching"], .budget-limit-status[data-status="at_limit"], .budget-limit-status[data-status="exceeded"] { border-color: var(--accent); color: var(--accent); font-weight: 600; }

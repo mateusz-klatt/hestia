@@ -17,7 +17,7 @@ export const recurringLabels = {
     error: "Recurring charges could not be loaded. Try again.",
     empty: "No recurring monthly charges have been detected yet.",
     emptyForCurrency: (currency: string) => `No recurring monthly charges detected in ${currency}.`,
-    truncated: (shown: number, total: number) => `Showing first ${String(shown)} of ${String(total)} recurring hints.`,
+    truncated: (shown: number, total: number) => `Showing first ${String(shown)} of ${String(total)} recurring hints. Currency filter reflects currencies shown here.`,
     cadences: { monthly: "Monthly" },
     sources: { counterparty_name: "Counterparty", description: "Description" },
     occurrences: (count: number) => `${String(count)} ${count === 1 ? "occurrence" : "occurrences"}`,
@@ -38,7 +38,7 @@ export const recurringLabels = {
     error: "Nie udało się wczytać powtarzalnych wydatków. Spróbuj ponownie.",
     empty: "Nie wykryto jeszcze powtarzalnych miesięcznych wydatków.",
     emptyForCurrency: (currency: string) => `Nie wykryto powtarzalnych miesięcznych wydatków w walucie ${currency}.`,
-    truncated: (shown: number, total: number) => `Pokazano pierwsze ${String(shown)} z ${String(total)} podpowiedzi.`,
+    truncated: (shown: number, total: number) => `Pokazano pierwsze ${String(shown)} z ${String(total)} podpowiedzi. Filtr walut obejmuje waluty widoczne w tych podpowiedziach.`,
     cadences: { monthly: "Co miesiąc" },
     sources: { counterparty_name: "Kontrahent", description: "Opis" },
     occurrences: (count: number) => `${String(count)} ${pluralPl(count, "wystąpienie", "wystąpienia", "wystąpień")}`,
@@ -151,8 +151,6 @@ export function RecurringView({ api, accounts, connections = [], text, locale, r
                           <span>{item.date}</span>
                           {" · "}
                           <span>{name(item.account_id)}</span>
-                          {" · "}
-                          <span className="budget-muted">{item.entry_reference}</span>
                         </li>
                       ))}
                     </ul>

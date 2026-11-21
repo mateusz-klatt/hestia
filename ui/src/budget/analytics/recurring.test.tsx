@@ -72,7 +72,7 @@ describe("RecurringView", () => {
     await settle();
 
     expect(host.textContent).toContain("informational hints only");
-    expect(host.textContent).toContain("Showing first 2 of 205 recurring hints.");
+    expect(host.textContent).toContain("Showing first 2 of 205 recurring hints. Currency filter reflects currencies shown here.");
     expect(host.textContent).toContain("Synthetic Cloud");
     expect(host.textContent).toContain("\u221212,345,678,901,234,567,890.05 PLN");
     expect(host.textContent).toContain("5 occurrences");
@@ -81,7 +81,7 @@ describe("RecurringView", () => {
     expect(host.textContent).toContain("28–31 days apart");
     expect(host.textContent).toContain("Showing latest 3 entries.");
     expect(host.textContent).toContain("Synthetic Bank · Synthetic Main ••0001");
-    expect(host.textContent).toContain("rec-1");
+    expect(host.textContent).not.toContain("rec-1");
     expect(setItem).not.toHaveBeenCalled();
     expect(window.location.search).toBe("");
 
