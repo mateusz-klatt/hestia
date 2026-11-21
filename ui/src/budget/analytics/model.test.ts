@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { accountName, annotationRequest, canPair, canonicalAmount, counterparty, currentMonth, daysBetween, kindChoice, kindChoicesFor,
-  legsMatch, hasAnalytics, isMonth, isZero, manualPairRequest, monthLabel, pairCandidates, pairDate, pairPeriods, shiftMonth,
-  transferActions, transferDecision } from "./model";
+  legsMatch, hasAnalytics, isMonth, isZero, manualPairRequest, monthLabel, pairCandidates, pairDate, pairPeriods, pluralPl,
+  recurringCurrencies, shiftMonth, transferActions, transferDecision } from "./model";
 import type { AnalyticsTransaction } from "./model";
-import { entry, leg, pair } from "./fixtures";
+import { entry, leg, pair, recurringHint } from "./fixtures";
 import { account, connection } from "../fixtures";
 
 const capabilities = { stored_reads: true, account_controls: true, refresh: false, background_selection: true,
@@ -235,5 +235,29 @@ describe("analytics decisions", () => {
       debit: null, credit: null, expected_debit_fingerprint: null, expected_credit_fingerprint: null, expected_version: 3 });
     expect(transferDecision(pair({ id: "d", source: "future_source" }), "undo")).toMatchObject({ source: "manual" });
     expect(transferActions(pair({ status: "future_status" }))).toEqual([]);
+  });
+
+  it("extracts sorted unique currencies from recurring hints and pluralizes Polish integers accurately", () => {
+    expect(recurringCurrencies([
+      recurringHint({ currency: "USD" }),
+      recurringHint({ currency: "PLN" }),
+      recurringHint({ currency: "EUR" }),
+      recurringHint({ currency: "PLN" }),
+    ])).toEqual(["EUR", "PLN", "USD"]);
+    expect(recurringCurrencies([])).toEqual([]);
+
+    const days = (n: number) => `${String(n)} ${pluralPl(n, "dzień", "dni", "dni")}`;
+    expect([0, 1, 2, 4, 5, 12, 22].map(days)).toEqual([
+      "0 dni", "1 dzień", "2 dni", "4 dni", "5 dni", "12 dni", "22 dni",
+    ]);
+    const months = (n: number) => `${String(n)} ${pluralPl(n, "miesiąc", "miesiące", "miesięcy")}`;
+    expect([0, 1, 2, 3, 4, 5, 11, 12, 14, 21, 22, 24, 25].map(months)).toEqual([
+      "0 miesięcy", "1 miesiąc", "2 miesiące", "3 miesiące", "4 miesiące", "5 miesięcy",
+      "11 miesięcy", "12 miesięcy", "14 miesięcy", "21 miesięcy", "22 miesiące", "24 miesiące", "25 miesięcy",
+    ]);
+    const occ = (n: number) => `${String(n)} ${pluralPl(n, "wystąpienie", "wystąpienia", "wystąpień")}`;
+    expect([1, 2, 3, 5, 13, 23].map(occ)).toEqual([
+      "1 wystąpienie", "2 wystąpienia", "3 wystąpienia", "5 wystąpień", "13 wystąpień", "23 wystąpienia",
+    ]);
   });
 });

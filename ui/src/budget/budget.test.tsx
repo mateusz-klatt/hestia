@@ -6,7 +6,7 @@ import type { BudgetApi, BudgetResult } from "./api";
 import { Budget } from "./budget";
 import { account, componentLimit, connection, sharedLimit } from "./fixtures";
 import type { BudgetAccount, BudgetBalances, BudgetJob, BudgetTransaction, BudgetTransactions } from "./model";
-import { entriesOf, overviewOf, transfersOf } from "./analytics/fixtures";
+import { entriesOf, overviewOf, recurringHint, recurringOf, transfersOf } from "./analytics/fixtures";
 
 type Settle<T> = (value: BudgetResult<T>) => void;
 
@@ -70,6 +70,7 @@ function fakeApi(accounts: BudgetAccount[] = [account({ display })]) {
     rules: vi.fn<BudgetApi["rules"]>(() => ok({ rules: [] })),
     previewRule: vi.fn<BudgetApi["previewRule"]>(),
     saveRule: vi.fn<BudgetApi["saveRule"]>(),
+    recurring: vi.fn<BudgetApi["recurring"]>(() => ok(recurringOf([]))),
   } satisfies BudgetApi;
 }
 
@@ -876,9 +877,24 @@ describe("analytics views", () => {
     await click(button("Categories and rules"));
     expect(api.rules).toHaveBeenCalledTimes(1);
     expect(host.textContent).toContain("No categories yet.");
+    api.recurring.mockImplementation(() => ok(recurringOf([recurringHint({ label: "Synthetic Fiber" })])));
+    await click(button("Recurring"));
+    expect(api.recurring).toHaveBeenCalledTimes(1);
+    expect(host.textContent).toContain("Synthetic Fiber");
+    expect(button("Recurring").getAttribute("aria-pressed")).toBe("true");
     await click(button("Accounts"));
     expect(host.textContent).toContain("Synthetic Current ••0001");
     expect(host.querySelector(".budget-month")).toBeNull();
+  });
+
+  it("clears the whole budget when the recurring read reports lost access", async () => {
+    const api = fakeApi();
+    api.connections.mockImplementation(() => ok({ connections: [connection], capabilities: analysis }));
+    api.recurring.mockImplementation(() => fail(403, "budget_forbidden"));
+    await render(api);
+    await click(button("Recurring"));
+    expect(host.textContent).toContain("Only the budget's owner");
+    expect(host.querySelector(".budget-views")).toBeNull();
   });
 
   it("clears everything when the month read reports lost access, and reopens on accounts", async () => {

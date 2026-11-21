@@ -106,3 +106,8 @@
 .budget-year thead th { color: var(--fg-soft); font-weight: 500; }
 .budget-app .budget-link { border: none; background: transparent; padding: 0; min-height: 0; color: var(--accent); text-decoration: underline; cursor: pointer; font: inherit; }
 @media (max-width: 640px) { .budget-year { display: block; overflow-x: auto; } }
+.budget-recurring-main { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: .3rem .75rem; font-size: .95rem; min-width: 0; }
+.budget-recurring-amount { font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.budget-recurring-evidence { font-size: .85rem; color: var(--fg-soft); }
+.budget-recurring-evidence summary { cursor: pointer; }
+.budget-recurring-evidence ul { margin: .35rem 0 0; padding-inline-start: 1.1rem; display: grid; gap: .2rem; overflow-wrap: anywhere; }

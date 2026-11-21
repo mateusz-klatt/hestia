@@ -33,6 +33,11 @@ describe("budget api", () => {
     expect(Object.fromEntries(sent(fetchMock).url.searchParams)).toEqual({ period: "2026-11", currency: "PLN", cursor: "opaque", limit: "200" });
     await budgetApi.analyticsTransactions("2026-11", filter);
     expect(Object.fromEntries(sent(fetchMock, 1).url.searchParams)).toEqual({ period: "2026-11", currency: "PLN" });
+    await budgetApi.recurring();
+    expect(sent(fetchMock, 2).url.pathname).toMatch(/\/api\/budget\/analytics\/recurring$/);
+    expect(sent(fetchMock, 2).url.search).toBe("");
+    await budgetApi.recurring("EUR");
+    expect(Object.fromEntries(sent(fetchMock, 3).url.searchParams)).toEqual({ currency: "EUR" });
   });
 
   it("sends refresh with its idempotency key, JSON body and no Authorization header", async () => {

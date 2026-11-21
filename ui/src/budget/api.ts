@@ -5,9 +5,10 @@ import { apiUrl } from "../api/client";
 import type { BudgetAccount, BudgetCapabilities, BudgetConnection, BudgetConsent, BudgetConsentFlow, BudgetJob,
   BudgetKind, BudgetBalances, BudgetLimit, BudgetOperation, BudgetTransactions, ConsentIntent } from "./model";
 import { idempotencyKey } from "./model";
-import type { AnalyticsCategory, AnalyticsOverview, AnalyticsRule, AnalyticsTransactions, AnnotationRequest, AnnotationSaved,
-  CategoryCreateRequest, CategorySaved, CategoryUpdateRequest, RuleCandidate, RulePreview, RuleSaved, TransactionFilter,
-  TransferDecisionRequest, TransferDecisionResult, TransferList, TransferQueue } from "./analytics/model";
+import type { AnalyticsCategory, AnalyticsOverview, AnalyticsRecurring, AnalyticsRule, AnalyticsTransactions,
+  AnnotationRequest, AnnotationSaved, CategoryCreateRequest, CategorySaved, CategoryUpdateRequest, RuleCandidate,
+  RulePreview, RuleSaved, TransactionFilter, TransferDecisionRequest, TransferDecisionResult, TransferList,
+  TransferQueue } from "./analytics/model";
 
 export type BudgetResult<T> =
   | { ok: true; data: T }
@@ -95,6 +96,8 @@ export const budgetApi = {
   /** Shows what a rule would change; nothing is applied until the preview is saved. */
   previewRule: (candidate: RuleCandidate) => post<{ preview: RulePreview }>("analytics/rule-preview", candidate),
   saveRule: (previewId: string) => post<{ rule: RuleSaved }>("analytics/rule-save", { preview_id: previewId }),
+  /** Read-only recurring-charge hints computed by the server across selected eligible expenses. */
+  recurring: (currency?: string) => call<AnalyticsRecurring>(url("analytics/recurring", { currency })),
   setSelected: (account: BudgetAccount, selected: boolean) =>
     post<{ account: BudgetAccount }>("account-selection",
       { account_id: account.id, selected, expected_version: account.control_version }),
