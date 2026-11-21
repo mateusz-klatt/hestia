@@ -14,22 +14,30 @@ from sqlalchemy import delete, func, select
 from ..db import BudgetAccount as Account, BudgetAccountIdentity as Identity
 from ..db import BudgetAnnotation as Annotation, BudgetAnalyticsAudit as Audit, BudgetCategory as Category
 from ..db import BudgetCategoryLimit as CategoryLimitRow
+from ..db import BudgetMortgagePayment as MortgagePaymentRow, BudgetMortgageSchedule as MortgageScheduleRow
 from ..db import BudgetConnection as Connection, BudgetRule as Rule, BudgetRulePreview as Preview
 from ..db import BudgetTransaction as Transaction, BudgetTransactionMetadata as Metadata
 from ..db import BudgetTransferDecision as Decision, BudgetTransferLeg as Leg
 from .analytics_core import (AnalyticsError, KINDS, compare_money, compatible_kind, effective_date,
                              financial_fingerprint, pair_fingerprint, rule_matches)
 from .client import _reject_constant, _unique_error_fields
+from .mortgage_reminders import (MAX_PAID_MONTHS as MAX_MORTGAGE_PAID_MONTHS, MAX_SCHEDULES as MAX_MORTGAGE_SCHEDULES,
+                                 PRIVATE_DESTINATIONS as MORTGAGE_DESTINATIONS, MortgageInputError,
+                                 _parse_amount as _parse_mortgage_amount, _parse_date as _parse_mortgage_date,
+                                 _parse_month as _parse_mortgage_month, installment_due_date)
 from .spending_limits import SpendingLimitInputError, _format_scaled, _parse_amount
 from .views import BudgetHTTPStore
 
 MAX_CATEGORY_LIMITS = 200
+_LIMIT_ERROR = "budget_analytics_limit"
 _HASH = re.compile(r"[a-f0-9]{64}\Z", re.ASCII)
 _CURRENCY = re.compile(r"[A-Z]{3}\Z", re.ASCII)
 _RULE_FIELDS = frozenset({"rule_id", "expected_version", "field", "operator", "value", "category_id", "kind", "priority", "enabled"})
 _CATEGORY_FIELDS = ("id", "name", "archived", "version", "created_at", "updated_at")
 _CATEGORY_LIMIT_FIELDS = ("id", "category_id", "currency", "monthly_limit", "warning_percent", "enabled",
                           "version", "created_at", "updated_at")
+_MORTGAGE_SCHEDULE_FIELDS = ("id", "label", "amount", "currency", "due_day", "start_date", "end_date",
+                             "remind_days_before", "destination_kind", "enabled", "version", "created_at", "updated_at")
 _RULE_OUTPUT = ("id", "field", "operator", "value", "category_id", "kind", "priority", "enabled", "version", "created_at", "updated_at")
 _ANNOTATION_FIELDS = ("account_id", "entry_reference", "mode", "category_id", "kind", "ledger_fingerprint", "version", "updated_at")
 _DECISION_FIELDS = ("id", "debit_account_id", "debit_ref", "credit_account_id", "credit_ref", "source", "status",
@@ -218,6 +226,140 @@ class BudgetAnalyticsStore(BudgetHTTPStore):
             result = _dict(row, _CATEGORY_LIMIT_FIELDS)
             self._analytics_audit(session, owner, "category_limit", row.id, "update", before, result)
             return {**result, "changed": True}
+
+    @staticmethod
+    def _mortgage_schedule_dict(row, paid_months):
+        return {**_dict(row, _MORTGAGE_SCHEDULE_FIELDS), "paid_months": list(paid_months)}
+
+    @staticmethod
+    def _mortgage_audit_payload(row):
+        """Strict allowlist: never logs label, amount or any destination target/PII."""
+        return {"schedule_id": row.id, "version": row.version, "enabled": row.enabled,
+                "destination_kind": row.destination_kind}
+
+    @staticmethod
+    def _mortgage_payment_audit(schedule_id, version, month, paid):
+        return {"schedule_id": schedule_id, "version": version, "month": month, "paid": paid}
+
+    @staticmethod
+    def _mortgage_payment_result(row, month, paid, paid_months, changed):
+        return {**BudgetAnalyticsStore._mortgage_payment_audit(row.id, row.version, month, paid),
+                "paid_months": paid_months, "changed": changed}
+
+    @staticmethod
+    def _mortgage_paid_months(session, schedule_id):
+        return list(session.scalars(
+            select(MortgagePaymentRow.month).where(MortgagePaymentRow.schedule_id == schedule_id)
+            .order_by(MortgagePaymentRow.month)))
+
+    @staticmethod
+    def _validate_mortgage_write(schedule_id, label, amount, currency, due_day, start_date, end_date,
+                                 remind_days_before, destination_kind, enabled, expected_version):
+        if schedule_id is not None and (
+                not isinstance(schedule_id, str) or not 1 <= len(schedule_id) <= 128 or not schedule_id.strip()):
+            raise AnalyticsError()
+        clean_label = _text(label, limit=256)
+        if (not isinstance(currency, str) or not _CURRENCY.fullmatch(currency)
+                or type(due_day) is not int or not 1 <= due_day <= 31
+                or type(remind_days_before) is not int or not 0 <= remind_days_before <= 31
+                or not isinstance(destination_kind, str) or destination_kind not in MORTGAGE_DESTINATIONS
+                or type(enabled) is not bool or type(expected_version) is not int or expected_version < 0):
+            raise AnalyticsError()
+        try:
+            canonical_amount = _parse_mortgage_amount(amount)
+            start = _parse_mortgage_date(start_date)
+            end = None if end_date is None else _parse_mortgage_date(end_date)
+        except MortgageInputError:
+            raise AnalyticsError() from None
+        if end is not None and end < start:
+            raise AnalyticsError()
+        return clean_label, canonical_amount, start.isoformat(), (None if end is None else end.isoformat())
+
+    def save_mortgage_schedule(self, owner, *, schedule_id=None, label, amount, currency, due_day, start_date,
+                               end_date=None, remind_days_before, destination_kind, enabled, expected_version):
+        """Atomically create or update one owner-private mortgage reminder schedule (evaluation-only)."""
+        clean_label, canonical_amount, start_iso, end_iso = self._validate_mortgage_write(
+            schedule_id, label, amount, currency, due_day, start_date, end_date,
+            remind_days_before, destination_kind, enabled, expected_version)
+        with self.transaction() as session:
+            self._owner(session, owner)
+            if schedule_id is None:
+                _version(0, expected_version)
+                count = session.scalar(select(func.count()).select_from(MortgageScheduleRow).where(
+                    MortgageScheduleRow.owner == owner))
+                if count >= MAX_MORTGAGE_SCHEDULES:
+                    raise AnalyticsError(_LIMIT_ERROR, 413)
+                now = self._now()
+                row = MortgageScheduleRow(
+                    id=str(uuid.uuid4()), owner=owner, label=clean_label, amount=canonical_amount,
+                    currency=currency, due_day=due_day, start_date=start_iso, end_date=end_iso,
+                    remind_days_before=remind_days_before, destination_kind=destination_kind,
+                    enabled=enabled, version=1, created_at=now, updated_at=now,
+                )
+                session.add(row)
+                session.flush()
+                self._analytics_audit(session, owner, "mortgage_schedule", row.id, "create",
+                                      None, self._mortgage_audit_payload(row))
+                return {**self._mortgage_schedule_dict(row, ()), "changed": True}
+            row = self._owned(session, MortgageScheduleRow, owner, schedule_id)
+            _version(row.version, expected_version)
+            paid_months = self._mortgage_paid_months(session, row.id)
+            desired = (clean_label, canonical_amount, currency, due_day, start_iso, end_iso,
+                       remind_days_before, destination_kind, enabled)
+            current = (row.label, row.amount, row.currency, row.due_day, row.start_date, row.end_date,
+                       row.remind_days_before, row.destination_kind, row.enabled)
+            if current == desired:
+                return {**self._mortgage_schedule_dict(row, paid_months), "changed": False}
+            before_audit = self._mortgage_audit_payload(row)
+            (row.label, row.amount, row.currency, row.due_day, row.start_date, row.end_date,
+             row.remind_days_before, row.destination_kind, row.enabled) = desired
+            row.version += 1
+            row.updated_at = self._now()
+            session.flush()
+            self._analytics_audit(session, owner, "mortgage_schedule", row.id, "update",
+                                  before_audit, self._mortgage_audit_payload(row))
+            return {**self._mortgage_schedule_dict(row, paid_months), "changed": True}
+
+    def set_mortgage_payment(self, owner, *, schedule_id, month, paid, expected_version):
+        """Atomically mark or unmark one YYYY-MM installment paid, bumping schedule.version once."""
+        if (not isinstance(schedule_id, str) or not 1 <= len(schedule_id) <= 128 or not schedule_id.strip()
+                or type(paid) is not bool or type(expected_version) is not int or expected_version < 0):
+            raise AnalyticsError()
+        try:
+            clean_month = _parse_mortgage_month(month)
+        except MortgageInputError:
+            raise AnalyticsError() from None
+        with self.transaction() as session:
+            self._owner(session, owner)
+            row = self._owned(session, MortgageScheduleRow, owner, schedule_id)
+            _version(row.version, expected_version)
+            if paid and installment_due_date(row.due_day, row.start_date, row.end_date, clean_month) is None:
+                raise AnalyticsError()
+            existing = session.get(MortgagePaymentRow, (row.id, clean_month))
+            already_paid = existing is not None
+            if already_paid == paid:
+                return self._mortgage_payment_result(
+                    row, clean_month, paid, self._mortgage_paid_months(session, row.id), False)
+            now = self._now()
+            if paid:
+                count = session.scalar(select(func.count()).select_from(MortgagePaymentRow).where(
+                    MortgagePaymentRow.schedule_id == row.id))
+                if count >= MAX_MORTGAGE_PAID_MONTHS:
+                    raise AnalyticsError(_LIMIT_ERROR, 413)
+                session.add(MortgagePaymentRow(schedule_id=row.id, month=clean_month, owner=owner, marked_at=now))
+            else:
+                session.delete(existing)
+            old_version = row.version
+            row.version += 1
+            row.updated_at = now
+            session.flush()
+            self._analytics_audit(
+                session, owner, "mortgage_payment", row.id, "mark_paid" if paid else "unmark_paid",
+                self._mortgage_payment_audit(row.id, old_version, clean_month, already_paid),
+                self._mortgage_payment_audit(row.id, row.version, clean_month, paid),
+            )
+            return self._mortgage_payment_result(
+                row, clean_month, paid, self._mortgage_paid_months(session, row.id), True)
 
     def annotate(self, owner, account_id, entry_reference, *, mode, category_id, kind, expected_version,
                  expected_fingerprint):

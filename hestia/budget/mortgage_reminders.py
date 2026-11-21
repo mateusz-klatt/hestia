@@ -59,7 +59,7 @@ class MortgageSchedule:
     due_day: int
     start_date: str
     destination_kind: str
-    destination_target: str
+    destination_target: str | None = None
     end_date: str | None = None
     remind_days_before: int = DEFAULT_REMIND_DAYS
     paid_months: frozenset[str] = frozenset()
@@ -77,7 +77,7 @@ class MortgageReminder:
     status: str
     reminder_active: bool
     destination_kind: str
-    destination_target: str
+    destination_target: str | None
     freshness_stale: bool
     ledger_as_of: str | None
     rule_version: int = RULE_VERSION
@@ -134,15 +134,33 @@ def _due_date(year, month, due_day):
     return date(year, month, min(due_day, calendar.monthrange(year, month)[1]))
 
 
+def installment_due_date(due_day: int, start_date: str, end_date: str | None, month: str) -> str | None:
+    """Return the actual clamped ISO due date for ``month`` (YYYY-MM) iff it falls in ``[start_date, end_date]``.
+
+    Never shifts a due date onto ``start_date`` or ``end_date``; month-end days clamp to
+    the real last day of that calendar month (including leap years).
+    """
+    if type(due_day) is not int or not 1 <= due_day <= 31:
+        raise MortgageInputError()
+    start = _parse_date(start_date)
+    end = None if end_date is None else _parse_date(end_date)
+    if end is not None and end < start:
+        raise MortgageInputError()
+    parsed = _parse_month(month)
+    due = _due_date(int(parsed[:4]), int(parsed[5:7]), due_day)
+    if due < start or (end is not None and due > end):
+        return None
+    return due.isoformat()
+
+
 def _next_month(year, month):
     if month < 12:
         return year, month + 1
     return None if year >= 9999 else (year + 1, 1)
 
 
-def _next_due_date(today, due_day, start, end, paid_months):
-    anchor = today if today >= start else start
-    ym = (anchor.year, anchor.month)
+def _next_due_date(due_day, start, end, paid_months):
+    ym = (start.year, start.month)
     while ym is not None:
         year, month = ym
         candidate = _due_date(year, month, due_day)
@@ -197,7 +215,7 @@ def _validate_schedule(owner, item, seen):
     end = None if item.end_date is None else _parse_date(item.end_date)
     if end is not None and end < start:
         raise MortgageInputError()
-    target = _text(item.destination_target, MAX_LABEL)
+    target = None if item.destination_target is None else _text(item.destination_target, MAX_LABEL)
     paid = _parse_paid_months(item.paid_months)
     if not item.enabled:
         return None
@@ -211,12 +229,14 @@ def evaluate_mortgage_reminders(owner: str, today: str, schedules: Iterable[Mort
                                 max_schedules: int = MAX_SCHEDULES) -> tuple[MortgageReminder, ...]:
     """Return deterministically ordered private mortgage reminders for ``today`` (YYYY-MM-DD).
 
-    Evaluates each enabled schedule starting from the calendar month of
-    ``max(today, start_date)``, advancing past months explicitly listed in
-    ``paid_months`` (valid ``paid_months`` outside the schedule window are safely
-    ignored). Only owner-private notification destinations are accepted;
-    shared calendars are rejected. Disabled schedules are still validated for
-    ownership, privacy and duplicate IDs before being excluded from active reminders.
+    Finds each enabled schedule's earliest unpaid qualifying installment whose actual
+    clamped due date satisfies ``start_date <= due_date <= end_date`` (never shifting a
+    due date onto a boundary). Unpaid overdue installments remain visible even after
+    subsequent months or ``end_date``; ``end_date`` stops new installments from being
+    generated. A reminder lead window (``remind_days_before``) may become active before
+    ``start_date`` when the first due date is within the lead window. Valid ``paid_months``
+    outside the schedule window are safely ignored. Only owner-private notification
+    destinations are accepted; shared calendars are rejected even when disabled.
     """
     owner, today_date, freshness_stale = _scope(owner, today, ledger_as_of, stale_after_days, max_schedules)
     if not isinstance(schedules, Iterable) or isinstance(schedules, (str, bytes, Mapping)):
@@ -230,7 +250,7 @@ def evaluate_mortgage_reminders(owner: str, today: str, schedules: Iterable[Mort
             continue
         (schedule_id, label, amount, currency, due_day, start, end,
          remind_days, destination_kind, target, paid) = validated
-        due = _next_due_date(today_date, due_day, start, end, paid)
+        due = _next_due_date(due_day, start, end, paid)
         days = None if due is None else (due - today_date).days
         status, active = _status(days, remind_days)
         results.append(MortgageReminder(

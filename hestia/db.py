@@ -514,6 +514,77 @@ class BudgetCategoryLimit(Base):
     updated_at: Mapped[float]
 
 
+class BudgetMortgageSchedule(Base):
+    """Owner-private mortgage reminder schedule; stores destination_kind only (no PII targets)."""
+
+    __tablename__ = "budget_mortgage_schedules"
+    __table_args__ = (
+        UniqueConstraint("id", "owner", name="uq_budget_mortgage_schedules_id_owner"),
+        Index("ix_budget_mortgage_schedules_owner", "owner"),
+        CheckConstraint("length(label) >= 1 AND length(label) <= 256",
+                        name="ck_budget_mortgage_schedules_label_len"),
+        CheckConstraint("length(amount) >= 1 AND length(amount) <= 80",
+                        name="ck_budget_mortgage_schedules_amount_len"),
+        CheckConstraint("length(currency) = 3 AND currency GLOB '[A-Z][A-Z][A-Z]'",
+                        name="ck_budget_mortgage_schedules_currency"),
+        CheckConstraint("due_day >= 1 AND due_day <= 31",
+                        name="ck_budget_mortgage_schedules_due_day"),
+        CheckConstraint(
+            "length(start_date) = 10 AND start_date GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'",
+            name="ck_budget_mortgage_schedules_start_date",
+        ),
+        CheckConstraint(
+            "end_date IS NULL OR (length(end_date) = 10 "
+            "AND end_date GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]' "
+            "AND end_date >= start_date)",
+            name="ck_budget_mortgage_schedules_end_date",
+        ),
+        CheckConstraint("remind_days_before >= 0 AND remind_days_before <= 31",
+                        name="ck_budget_mortgage_schedules_remind_days"),
+        CheckConstraint("destination_kind IN ('owner_inbox', 'owner_push', 'owner_email')",
+                        name="ck_budget_mortgage_schedules_destination_kind"),
+        CheckConstraint("enabled IN (0, 1)", name="ck_budget_mortgage_schedules_enabled"),
+        CheckConstraint("version >= 1", name="ck_budget_mortgage_schedules_version"),
+    )
+    id: Mapped[str] = mapped_column(primary_key=True)
+    owner: Mapped[str] = mapped_column(ForeignKey("users.username"))
+    label: Mapped[str]
+    amount: Mapped[str]
+    currency: Mapped[str]
+    due_day: Mapped[int]
+    start_date: Mapped[str]
+    end_date: Mapped[str | None]
+    remind_days_before: Mapped[int]
+    destination_kind: Mapped[str]
+    enabled: Mapped[bool]
+    version: Mapped[int]
+    created_at: Mapped[float]
+    updated_at: Mapped[float]
+
+
+class BudgetMortgagePayment(Base):
+    """Explicit owner-recorded YYYY-MM payment marks bound to an owned mortgage schedule."""
+
+    __tablename__ = "budget_mortgage_payments"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["schedule_id", "owner"],
+            ["budget_mortgage_schedules.id", "budget_mortgage_schedules.owner"],
+            name="fk_budget_mortgage_payments_schedule_owner",
+        ),
+        Index("ix_budget_mortgage_payments_owner", "owner"),
+        CheckConstraint(
+            "length(month) = 7 AND month GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]' "
+            "AND substr(month, 6, 2) BETWEEN '01' AND '12'",
+            name="ck_budget_mortgage_payments_month",
+        ),
+    )
+    schedule_id: Mapped[str] = mapped_column(primary_key=True)
+    month: Mapped[str] = mapped_column(primary_key=True)
+    owner: Mapped[str] = mapped_column(ForeignKey("users.username"))
+    marked_at: Mapped[float]
+
+
 class BudgetAnnotation(Base):
     __tablename__ = "budget_annotations"
     __table_args__ = (ForeignKeyConstraint(["account_id", "entry_reference"],

@@ -13,7 +13,7 @@ from __future__ import annotations
 import base64
 from collections import OrderedDict, defaultdict
 from copy import deepcopy
-from datetime import date
+from datetime import date, datetime, timezone
 import hashlib
 import json
 import math
@@ -375,6 +375,33 @@ def _limits_version(rows):
         [[row["id"], row["category_id"], row["currency"], row["monthly_limit"],
           row["warning_percent"], row["enabled"], row["version"]] for row in rows],
     ])
+
+
+def _schedules_version(owner, schedules):
+    return core.projection_digest([
+        "mortgage-schedules-v1",
+        owner,
+        [[row["id"], row["label"], row["amount"], row["currency"], row["due_day"], row["start_date"],
+          row["end_date"], row["remind_days_before"], row["destination_kind"], row["enabled"],
+          row["version"], row["paid_months"]] for row in schedules],
+    ])
+
+
+def _wire_mortgage_reminder(item):
+    return {
+        "schedule_id": item.schedule_id,
+        "label": item.label,
+        "amount": item.amount,
+        "currency": item.currency,
+        "due_date": item.due_date,
+        "days_until_due": item.days_until_due,
+        "status": item.status,
+        "reminder_active": item.reminder_active,
+        "destination_kind": item.destination_kind,
+        "freshness_stale": item.freshness_stale,
+        "ledger_as_of": item.ledger_as_of,
+        "rule_version": item.rule_version,
+    }
 
 
 def _spending_limit_statuses(owner, period, limit_rows, category_totals, categories):
@@ -767,6 +794,58 @@ class BudgetAnalyticsViews(BudgetAnalyticsStore):
             return {"period": period, "start": start, "end": end, "snapshot_digest": snapshot["digest"],
                     "limits_version": limits_version, "rule_version": RULE_VERSION,
                     "limits": filtered, "statuses": statuses}
+
+    @staticmethod
+    def _ledger_as_of(session, owner, evaluation_date):
+        selected = select(db.BudgetAccount.id).join(db.BudgetConnection).where(
+            db.BudgetAccount.owner == owner, db.BudgetConnection.owner == owner, db.BudgetAccount.enabled)
+        component_ts = session.scalar(select(func.max(db.BudgetComponent.last_success)).where(
+            db.BudgetComponent.account_id.in_(selected), db.BudgetComponent.operation == "transactions"))
+        tx_ts = session.scalar(select(func.max(db.BudgetTransaction.observed_at)).where(
+            db.BudgetTransaction.account_id.in_(selected), db.BudgetTransaction.uncertain.is_(False)))
+        stamps = [ts for ts in (component_ts, tx_ts) if ts is not None]
+        if not stamps:
+            return None
+        observed = datetime.fromtimestamp(max(stamps), timezone.utc).date().isoformat()
+        return min(observed, evaluation_date)
+
+    def mortgages(self, owner):
+        """Evaluate owner-private mortgage schedules against server UTC today in one read snapshot."""
+        from .mortgage_reminders import MortgageSchedule, RULE_VERSION, evaluate_mortgage_reminders
+
+        evaluation_date = datetime.fromtimestamp(self._now(), timezone.utc).date().isoformat()
+        with _read_lock, self._read(owner) as session:
+            rows = list(session.scalars(
+                select(db.BudgetMortgageSchedule).where(db.BudgetMortgageSchedule.owner == owner)
+                .order_by(db.BudgetMortgageSchedule.id)))
+            payments_by_schedule = defaultdict(list)
+            for payment in session.scalars(
+                select(db.BudgetMortgagePayment).where(db.BudgetMortgagePayment.owner == owner)
+                .order_by(db.BudgetMortgagePayment.schedule_id, db.BudgetMortgagePayment.month)):
+                payments_by_schedule[payment.schedule_id].append(payment.month)
+            schedules = [self._mortgage_schedule_dict(row, payments_by_schedule[row.id]) for row in rows]
+            schedules_version = _schedules_version(owner, schedules)
+            ledger_as_of = self._ledger_as_of(session, owner, evaluation_date)
+            models = [
+                MortgageSchedule(
+                    owner=owner, schedule_id=item["id"], label=item["label"], amount=item["amount"],
+                    currency=item["currency"], due_day=item["due_day"], start_date=item["start_date"],
+                    destination_kind=item["destination_kind"], destination_target=None,
+                    end_date=item["end_date"], remind_days_before=item["remind_days_before"],
+                    paid_months=frozenset(item["paid_months"]), enabled=item["enabled"],
+                )
+                for item in schedules
+            ]
+            reminders = evaluate_mortgage_reminders(owner, evaluation_date, models, ledger_as_of=ledger_as_of)
+            return {
+                "evaluation_date": evaluation_date,
+                "evaluation_timezone": "UTC",
+                "ledger_as_of": ledger_as_of,
+                "schedules_version": schedules_version,
+                "rule_version": RULE_VERSION,
+                "schedules": schedules,
+                "reminders": [_wire_mortgage_reminder(item) for item in reminders],
+            }
 
 
 def _row_filter(row, category_id, kind, query):
