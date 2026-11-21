@@ -55,7 +55,8 @@
       <aside class="notice" aria-label="Status of optional banking access">
         <p><strong>Read-only banking access is optional and off by default.</strong> Hestia contains
           an Enable Banking budget module, which runs only after the operator explicitly enables it
-          and only for accounts their holder has authorised at the bank and selected. These terms
+          and only for accounts their holder has authorised at the bank and that are explicitly
+          chosen for import or synchronisation. These terms
           do not themselves connect a bank account or authorise access.</p>
       </aside>
 
@@ -104,8 +105,9 @@
       <h2>4. Optional read-only banking access</h2>
       <p>The optional budget module lets an individual authorise access to their own linked accounts
         through Enable Banking for private, non-commercial household budgeting. It reads permitted
-        balances and transactions for the selected accounts and stores them on this self-hosted
-        server, as described in the <a href="privacy-policy.html#banking">Privacy Policy</a>. Only
+        balances and transactions for the chosen accounts, or imports history from an earlier
+        authorised download, and stores them on this self-hosted server, as described in the
+        <a href="privacy-policy.html#banking">Privacy Policy</a>. Only
         the budget's owner can view it in Hestia. Bank coverage, transaction history, card support
         and data freshness depend on the bank, the provider and their access limits.</p>
       <p>Hestia does not initiate transfers or payments, hold money or ask you to give it bank login

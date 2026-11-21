@@ -57,8 +57,9 @@
       <aside class="notice" aria-label="Status of optional banking access">
         <p><strong>Optional banking access is off unless the operator enables it.</strong> Hestia
           contains a read-only budget module that uses Enable Banking. It stays disabled until the
-          operator explicitly configures and switches it on, and it covers only accounts that their
-          holder has authorised and selected. Section 4 describes what it handles.</p>
+          operator explicitly configures and switches it on, and it covers only authorised accounts
+          that are explicitly chosen for import or synchronisation. Section 4 describes what it
+          handles.</p>
       </aside>
 
       <h2 id="data">1. Data handled by Hestia</h2>
@@ -84,8 +85,9 @@
           OAuth credentials and refresh tokens, Apple app-specific credentials and local device keys.
           Secrets are configured on the server separately from the calendar event database.</li>
         <li><strong>Optional banking data:</strong> when the budget module is enabled, account
-          balances, transactions and related status, control and audit records for authorised and
-          selected bank accounts. <a href="#banking">Section 4</a> lists exactly what is kept.</li>
+          balances, transactions and related status, control and audit records for authorised bank
+          accounts chosen for import or synchronisation. <a href="#banking">Section 4</a> lists
+          exactly what is kept.</li>
         <li><strong>Visits and contact:</strong> IP addresses and ordinary HTTP request metadata,
           including requested URLs, timestamps, headers and security signals, can be processed by
           the web server and reverse proxies. If you email the operator, your address and message
@@ -165,14 +167,16 @@
         <strong>Do not enter bank passwords, PINs or one-time banking codes into Hestia.</strong>
         Hestia uses its own application key and the resulting authorised access session, not your
         online-banking login credentials. The application key and session identifiers are kept in
-        files on the server that only the operator's account can read; they are mounted read-only
-        for the application and are not stored in the database.</p>
-      <p>For accounts that the account holder has authorised and selected, Hestia stores the
-        following in its SQLite database on this server:</p>
+        files on the server that only the system account running Hestia can read; the deployment
+        is intended to mount them read-only, and they are not stored in the database.</p>
+      <p>For authorised accounts that are explicitly chosen for import or synchronisation, Hestia
+        stores the following in its SQLite database on this server. History imported from an
+        earlier authorised download can be kept without enabling live synchronisation; importing
+        and synchronising are separate choices.</p>
       <ul>
         <li><strong>Account references:</strong> a local identifier and the hashed account
-          identifier issued by Enable Banking. The budget module does not store full account numbers
-          or the account-holder names that the bank lists with an account.</li>
+          identifier issued by Enable Banking. Full account numbers and account-holder names from
+          the bank's list of accounts are not stored as account details.</li>
         <li><strong>Optional account labels:</strong> the bank's product name, the account currency
           and the last four characters of the account identifier, so that the owner can recognise
           accounts. Product names that look like account numbers or identifiers are not stored.</li>
@@ -180,15 +184,24 @@
           observed. Balances imported from earlier downloads are labelled separately.</li>
         <li><strong>Transactions:</strong> amount, currency, credit or debit, booking status,
           booking, value and transaction dates, the bank's reference and the free-text description
-          lines supplied by the bank. Description lines can contain names of shops or people and
-          other payment details. Entries that the bank reports ambiguously are kept apart as
+          lines supplied by the bank. Hestia keeps these lines as the bank sends them: they can
+          contain names of shops or people, account numbers and other payment identifiers, and
+          Hestia does not filter them. Entries that the bank reports ambiguously are kept apart as
           uncertain observations instead of being merged.</li>
         <li><strong>Origin and timing:</strong> whether data came from the bank interface or from an
           operator-imported copy of an earlier authorised download, and when they were observed,
           fetched and imported.</li>
         <li><strong>Controls and audit:</strong> which accounts are selected, confirmed account
-          types, paused connections, the person and time of each change, and per-account
-          request-limit and retry state used to respect the bank's access limits.</li>
+          types, paused connections, the owner's choice of automatic refresh for each connection,
+          the person and time of each change, and per-account request-limit and retry state used
+          to respect the bank's access limits.</li>
+        <li><strong>Refresh records:</strong> each requested or automatic refresh: who or what
+          started it, when, which account and data type, its outcome and a technical key that
+          prevents duplicate requests. Finished records become eligible for automatic cleanup after
+          at least seven days; active work and backups may be kept longer.</li>
+        <li><strong>Attention state:</strong> when the bank rejects authorisation, Hestia marks the
+          connection as needing attention and stops automatic refresh for it until a successful,
+          explicitly requested check.</li>
       </ul>
       <p>Hestia contacts the bank only for selected accounts, within the bank's access limits, when
         a refresh is requested or when the owner has enabled automatic refresh for a connection.
@@ -196,7 +209,11 @@
         be signed in with an enabled administrator account; other users, including other
         administrators, cannot read them there. The operator has privileged access to the server,
         its database, files and backups. Budget pages and responses are delivered through the same
-        Cloudflare and Apache reverse proxy as the rest of the application. The SQLite database,
+        Cloudflare and Apache reverse proxy as the rest of the application. The reverse proxy's
+        access logs record requested addresses including their query part; for budget requests
+        these contain Hestia's local identifiers, date filters and an encrypted paging token, not
+        amounts, descriptions or bank identifiers. Hestia itself keeps no web access log and
+        records budget errors only by error type. The SQLite database,
         its write-ahead log and backups are not encrypted by Hestia; they are protected by server
         file permissions and access controls.</p>
       <p>Enable Banking provides the regulated account information service under its own terms and
@@ -225,7 +242,8 @@
         external copy from recreating the event. Pending operations may also survive restarts.</p>
       <p>Banking history has no automatic deletion deadline. Transactions, balances, account labels
         and their audit records stay in SQLite and in backups until the operator removes them on
-        request.</p>
+        request. Only finished refresh records are cleaned up automatically, as described in
+        <a href="#banking">section 4</a>.</p>
       <p>Disconnecting an integration or revoking a provider token does not erase previously stored
         records, provider-side copies or backups. For full removal, contact the operator so that
         local records, synchronisation mappings, external copies and backups can be considered
