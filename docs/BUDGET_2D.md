@@ -155,10 +155,12 @@ Lists use encrypted cursors bound to owner, filters and the complete projection.
 A changed snapshot returns 409 `budget_analytics_stale_cursor`; restart paging.
 
 Reads reuse one projection per committed state. Each GET first rechecks the exact
-admin owner, then hashes every column of every row the projection can read for
-that owner: connections, accounts, ledger, evidence, own identities, annotations,
-categories, rules, decisions and both unresolved tables, plus the row and edge
-limits. A projection computed for that digest is reused; any committed change
+admin owner, then hashes everything the projection reads for that owner: every
+column of its connections, accounts, selected ledger, evidence and annotations,
+own identities, categories, rules and decisions, the owner-wide uncertainty
+counts, and the row and edge limits. Excluded accounts' ledgers are not read; the
+selected ledger is bounded by the row limit before anything else, returning the
+same 413. A projection computed for that digest is reused; any committed change
 gives a new digest and a fresh computation, so nothing is invalidated by hand.
 Concurrent reads of one state share a single computation, and analytics reads run
 one at a time, because CPU-bound reads only interleave under the GIL. The memo
