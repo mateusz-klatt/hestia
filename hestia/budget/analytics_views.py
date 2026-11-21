@@ -811,7 +811,8 @@ class BudgetAnalyticsViews(BudgetAnalyticsStore):
 
     def mortgages(self, owner):
         """Evaluate owner-private mortgage schedules against server UTC today in one read snapshot."""
-        from .mortgage_reminders import MortgageSchedule, RULE_VERSION, evaluate_mortgage_reminders
+        from .mortgage_reminders import (MortgageInputError, MortgageLimitError, MortgageSchedule, RULE_VERSION,
+                                         evaluate_mortgage_reminders)
 
         evaluation_date = datetime.fromtimestamp(self._now(), timezone.utc).date().isoformat()
         with _read_lock, self._read(owner) as session:
@@ -836,7 +837,12 @@ class BudgetAnalyticsViews(BudgetAnalyticsStore):
                 )
                 for item in schedules
             ]
-            reminders = evaluate_mortgage_reminders(owner, evaluation_date, models, ledger_as_of=ledger_as_of)
+            try:
+                reminders = evaluate_mortgage_reminders(owner, evaluation_date, models, ledger_as_of=ledger_as_of)
+            except MortgageLimitError:
+                raise AnalyticsError("budget_analytics_limit", 413) from None
+            except MortgageInputError:
+                raise AnalyticsError() from None
             return {
                 "evaluation_date": evaluation_date,
                 "evaluation_timezone": "UTC",

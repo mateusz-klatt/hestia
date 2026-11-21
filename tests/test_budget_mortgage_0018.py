@@ -259,6 +259,7 @@ class MortgageStore0018Tests(AnalyticsCase):
     def test_validation_caps_rollback_and_concurrent_cas_races(self):
         bad_schedules = (
             {"schedule_id": " "}, {"schedule_id": "x" * 129}, {"label": " "}, {"label": "x" * 257},
+            {"label": "\u0958" * 200},  # NFC expands 200 chars -> 400 chars (> 256 limit)
             {"amount": "0"}, {"amount": "-5"}, {"amount": 2500}, {"currency": "pln"}, {"due_day": True},
             {"due_day": 0}, {"due_day": 32}, {"start_date": "2026-02-30"}, {"end_date": "2026-02-30"},
             {"start_date": "2026-06-01", "end_date": "2026-05-31"}, {"remind_days_before": True},
@@ -380,14 +381,24 @@ class MortgageViewsAndAPI0018Tests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(bad_query.status, 400)
         self.assert_private_headers(bad_query)
 
+        # Freeze ONLY the analytics views evaluator clock (leaving auth/session time.time() untouched,
+        # avoiding any future CI timebomb once wall-clock time passes 2026-12-21).
         fixed_now = datetime(2026, 11, 21, 12, 0, tzinfo=timezone.utc).timestamp()
-        with mock.patch.object(web, "_now", return_value=fixed_now):
-            # Empty initial read works with Cache-Control: no-store.
+        real_store = analytics_api._store
+
+        def frozen_store(secret):
+            store = real_store(secret)
+            store.clock = lambda: fixed_now
+            return store
+
+        with mock.patch.object(analytics_api, "_store", side_effect=frozen_store):
+            # Empty initial read works with Cache-Control: no-store and exact frozen evaluation_date.
             r0 = await self.get("mortgages")
             self.assertEqual(r0.status, 200)
             self.assert_private_headers(r0)
             d0 = await r0.json()
             api_contract.BudgetAnalyticsMortgages.model_validate(d0)
+            self.assertEqual(d0["evaluation_date"], "2026-11-21")
             self.assertEqual(d0["evaluation_timezone"], "UTC")
             self.assertEqual((d0["schedules"], d0["reminders"]), ([], []))
 
@@ -405,6 +416,7 @@ class MortgageViewsAndAPI0018Tests(unittest.IsolatedAsyncioTestCase):
             r1 = await self.get("mortgages")
             d1 = await r1.json()
             api_contract.BudgetAnalyticsMortgages.model_validate(d1)
+            self.assertEqual(d1["evaluation_date"], "2026-11-21")
             self.assertNotEqual(d1["schedules_version"], d0["schedules_version"])
             self.assertEqual(d1["reminders"][0]["due_date"], "2026-10-15")
             self.assertEqual(d1["reminders"][0]["status"], "overdue")
@@ -426,12 +438,14 @@ class MortgageViewsAndAPI0018Tests(unittest.IsolatedAsyncioTestCase):
             self.assertNotEqual(d2["schedules_version"], d1["schedules_version"])
             self.assertEqual(d2["reminders"][0]["due_date"], "2026-11-15")
 
-            # Strict DTO rejects destination_target PII, shared_calendar, float/int amount, bool due_day.
+            # Strict DTO + NFC length check reject destination_target PII, shared_calendar,
+            # numeric amount, bool due_day and NFC-expanding Unicode labels with 400 (never 500).
             for bad_body in (
                 {**_schedule_payload(), "destination_target": "owner@example.com"},
                 _schedule_payload(destination_kind="shared_calendar"),
                 _schedule_payload(amount=2500),
                 _schedule_payload(due_day=True),
+                _schedule_payload(label="\u0958" * 200),
             ):
                 bad_resp = await self.post("mortgage-save", bad_body)
                 self.assertEqual(bad_resp.status, 400)
@@ -441,7 +455,7 @@ class MortgageViewsAndAPI0018Tests(unittest.IsolatedAsyncioTestCase):
         overview_after = await (await self.get("overview")).json()
         self.assertEqual(overview_after["snapshot_digest"], before_digest)
 
-        # Direct views test when owner has no ledger observations at all -> ledger_as_of=None, freshness_stale=True.
+        # Direct views tests: ledger_as_of=None when empty + MortgageInputError->400 & MortgageLimitError->413 mapping.
         views = BudgetAnalyticsViews(self.sessions, clock=lambda: fixed_now, cursor_secret=b"synthetic-only")
         bob_view = views.mortgages("bob")
         self.assertEqual(bob_view["evaluation_date"], "2026-11-21")
@@ -452,6 +466,16 @@ class MortgageViewsAndAPI0018Tests(unittest.IsolatedAsyncioTestCase):
         empty_view = views.mortgages("emptyadmin")
         self.assertIsNone(empty_view["ledger_as_of"])
         self.assertTrue(empty_view["reminders"][0]["freshness_stale"])
+
+        from hestia.budget import mortgage_reminders as mr
+        with mock.patch.object(mr, "evaluate_mortgage_reminders", side_effect=mr.MortgageInputError()):
+            with self.assertRaises(AnalyticsError) as bad_eval:
+                views.mortgages("emptyadmin")
+            self.assertEqual(bad_eval.exception.status, 400)
+        with mock.patch.object(mr, "evaluate_mortgage_reminders", side_effect=mr.MortgageLimitError()):
+            with self.assertRaises(AnalyticsError) as limit_eval:
+                views.mortgages("emptyadmin")
+            self.assertEqual((limit_eval.exception.code, limit_eval.exception.status), ("budget_analytics_limit", 413))
 
 
 if __name__ == "__main__":

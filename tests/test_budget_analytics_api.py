@@ -86,7 +86,7 @@ class BudgetAnalyticsAPITests(unittest.IsolatedAsyncioTestCase):
                 "mortgage-payment-set": {"schedule_id": "unknown", "month": "2026-01", "paid": True,
                                          "expected_version": 1}}
 
-    async def test_all_seven_reads_are_private_local_bounded_and_match_wire_models(self):
+    async def test_all_eight_reads_are_private_local_bounded_and_match_wire_models(self):
         models = {"overview": api_contract.BudgetAnalyticsOverview, "transactions": api_contract.BudgetAnalyticsTransactions,
                   "categories": api_contract.BudgetAnalyticsCategories, "rules": api_contract.BudgetAnalyticsRules,
                   "transfers": api_contract.BudgetAnalyticsTransfers, "recurring": api_contract.BudgetAnalyticsRecurring,
@@ -114,7 +114,7 @@ class BudgetAnalyticsAPITests(unittest.IsolatedAsyncioTestCase):
         audit.assert_not_called()
         self.assertEqual(len(self.rows(db.BudgetAcquisition)), before)
 
-    async def test_all_eleven_routes_require_current_admin_and_auth_feature_flags(self):
+    async def test_all_routes_require_current_admin_and_auth_feature_flags(self):
         for user, expected in (("viewer", 403), ("operator", 403), ("disabled", 401)):
             for operation in analytics_api.READS:
                 response = await self.get(operation, user=user)
@@ -132,7 +132,7 @@ class BudgetAnalyticsAPITests(unittest.IsolatedAsyncioTestCase):
         with mock.patch.object(web, "_AUTH_ENABLED", False):
             self.assertEqual((await self.get("overview")).status, 401)
 
-    async def test_all_six_writes_require_cookie_and_exact_origin(self):
+    async def test_all_writes_require_cookie_and_exact_origin(self):
         for operation, body in self.bodies().items():
             for headers in (self.headers(bearer=True, origin=True), self.headers(),
                             {**self.headers(), "Origin": "https://foreign.invalid"}):

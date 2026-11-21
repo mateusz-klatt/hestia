@@ -53,10 +53,13 @@ def _dict(row, fields):
 
 
 def _text(value, limit=80):
-    if (not isinstance(value, str) or not value.strip() or len(value) > limit
+    if (not isinstance(value, str) or len(value) > limit
             or any(unicodedata.category(char) in ("Cc", "Cf", "Cs") for char in value)):
         raise AnalyticsError()
-    return unicodedata.normalize("NFC", value.strip())
+    normalized = unicodedata.normalize("NFC", value.strip())
+    if not normalized or len(normalized) > limit:
+        raise AnalyticsError()
+    return normalized
 
 
 def _version(current, expected):
@@ -247,9 +250,10 @@ class BudgetAnalyticsStore(BudgetHTTPStore):
                 "paid_months": paid_months, "changed": changed}
 
     @staticmethod
-    def _mortgage_paid_months(session, schedule_id):
+    def _mortgage_paid_months(session, owner, schedule_id):
         return list(session.scalars(
-            select(MortgagePaymentRow.month).where(MortgagePaymentRow.schedule_id == schedule_id)
+            select(MortgagePaymentRow.month).where(
+                MortgagePaymentRow.owner == owner, MortgagePaymentRow.schedule_id == schedule_id)
             .order_by(MortgagePaymentRow.month)))
 
     @staticmethod
@@ -303,7 +307,7 @@ class BudgetAnalyticsStore(BudgetHTTPStore):
                 return {**self._mortgage_schedule_dict(row, ()), "changed": True}
             row = self._owned(session, MortgageScheduleRow, owner, schedule_id)
             _version(row.version, expected_version)
-            paid_months = self._mortgage_paid_months(session, row.id)
+            paid_months = self._mortgage_paid_months(session, owner, row.id)
             desired = (clean_label, canonical_amount, currency, due_day, start_iso, end_iso,
                        remind_days_before, destination_kind, enabled)
             current = (row.label, row.amount, row.currency, row.due_day, row.start_date, row.end_date,
@@ -339,11 +343,11 @@ class BudgetAnalyticsStore(BudgetHTTPStore):
             already_paid = existing is not None
             if already_paid == paid:
                 return self._mortgage_payment_result(
-                    row, clean_month, paid, self._mortgage_paid_months(session, row.id), False)
+                    row, clean_month, paid, self._mortgage_paid_months(session, owner, row.id), False)
             now = self._now()
             if paid:
                 count = session.scalar(select(func.count()).select_from(MortgagePaymentRow).where(
-                    MortgagePaymentRow.schedule_id == row.id))
+                    MortgagePaymentRow.owner == owner, MortgagePaymentRow.schedule_id == row.id))
                 if count >= MAX_MORTGAGE_PAID_MONTHS:
                     raise AnalyticsError(_LIMIT_ERROR, 413)
                 session.add(MortgagePaymentRow(schedule_id=row.id, month=clean_month, owner=owner, marked_at=now))
@@ -359,7 +363,7 @@ class BudgetAnalyticsStore(BudgetHTTPStore):
                 self._mortgage_payment_audit(row.id, row.version, clean_month, paid),
             )
             return self._mortgage_payment_result(
-                row, clean_month, paid, self._mortgage_paid_months(session, row.id), True)
+                row, clean_month, paid, self._mortgage_paid_months(session, owner, row.id), True)
 
     def annotate(self, owner, account_id, entry_reference, *, mode, category_id, kind, expected_version,
                  expected_fingerprint):
