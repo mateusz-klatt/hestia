@@ -1,12 +1,14 @@
 # Budget: read-only Enable Banking foundation
 
-Status: deployed at migration `0013` are the CLI foundation, the private HTTP API
-(2B.1), durable refresh jobs with an opt-in poller (2B.jobs) and the owner budget
-screens (2C). Each server feature has its own default-off flag. Browser bank consent
-and renewal (2B.2/2B.3) are implemented in migration `0014` and require their own
-explicit activation; deployment of `0013` alone does not expose them. This module does not make payments or
-categorise expenses. The public privacy policy and terms describe the budget module;
-keep them current before changing what is processed.
+Status as of 2026-11-21: deployed at migration `0014` are the CLI foundation,
+private HTTP API (2B.1), durable refresh jobs with an opt-in poller (2B.jobs),
+browser bank consent and renewal (2B.2/2B.3), and owner React budget screens (2C).
+The production screens include read-only download limits and Connect/Renew
+controls. Each server feature still has its own default-off flag; a new
+installation requires explicit activation. Remote session closure and spending
+analytics remain future work. This module does not make payments or categorise
+expenses. The public privacy policy and terms describe the budget module; keep
+them current before changing what is processed.
 
 ## Decisions
 
@@ -81,10 +83,12 @@ as well: its existing vhost header override must not replace the budget policy.
 Use synthetic, separate-database records for HTTP/UAT checks; enabling the flag
 does not itself authorize live import or access to bank credentials.
 
-Connection capabilities report which of refresh jobs, background selection, background
-polling and browser consent are available. Browser consent stays unavailable: no
-callback/consent/public completion route exists yet. See [BUDGET_2B.md](BUDGET_2B.md)
-for the later consent/renewal sequence.
+Connection capabilities report which of refresh jobs, background selection,
+background polling and browser consent are available. The screens show bank
+connection controls only when the consent service is enabled and ready. The
+callback and clean public completion page are implemented; see
+[Browser consent and renewal](#browser-consent-and-renewal) and
+[BUDGET_2B.md](BUDGET_2B.md) for their authentication and activation requirements.
 
 ## Refresh jobs and opt-in background polling (2B.jobs)
 
@@ -216,7 +220,13 @@ admin owns the configured connections. Each admin sees only their own budget.
   updated, partly updated, not due yet, failed or interrupted, with the next
   possible start. *Attention* means unattended refresh stopped after an
   authorization or session problem; a successful manual refresh clears it, and
-  reconnecting may be needed. Reconnect and renewal are not in the screens yet.
+  reconnecting may be needed. **Connect bank** and **Renew bank consent** start
+  browser authorization when the consent capability is available. Renewal keeps
+  account choices and history; it does not reset acquisition limits.
+- **Download limits** loads stored limits on demand. It shows shared restrictions
+  and each account's transaction/balance deadline, suspension or in-progress
+  acquisition, with readable account labels and excluded accounts marked. This
+  panel cannot lift a restriction or contact a bank.
 - **Account detail** shows current balances from the bank interface. Earlier
   imported balance snapshots are listed as metadata only, never as current funds.
   Transactions are newest first, with 30/90-day, this-year and all-time presets,
@@ -695,11 +705,10 @@ no-store/no-referrer responses and fixed diagnostics without raw secrets.
 
 1. Explicit remote closure of Hestia-created sessions and an owner-facing
    reconciliation/retention workflow for uncertain or retired consents.
-2. Reminder seven days before actual provider `valid_until`; an **Odnów** action
-   verifies and adopts a new session without automatically closing external/PoC
-   sessions. Some banks invalidate the old consent during new SCA; retaining the
-   old local reference does not guarantee it remains usable. No universal 180-day
-   assumption. Status already reports renewal due.
+2. Scheduled renewal reminders beyond the current UI's expiry/renewal status and
+   **Renew bank consent** action. Use actual provider `valid_until`, with no
+   universal 180-day assumption. Retaining an old local reference does not
+   guarantee it remains usable after a new SCA.
 3. Verify ING/BNP field shapes with owner-approved PoC sessions. Do not infer
    support for cards, pending entries or statement due dates from bank branding.
 4. Year view and conservative categorisation/subscription hints with manual
@@ -712,8 +721,9 @@ no-store/no-referrer responses and fixed diagnostics without raw secrets.
    stops acquisition and retains history; provider revocation is not local erasure.
 6. Staged live activation follows the runbook above. No bank data is sent to
    external AI tools.
-7. Authenticated UI for limit inspection and operator review, preserving the CLI's
-   deadlines and audit. Do not erase quota history to compensate for a partial result.
+7. Owner-facing limit recovery/review beyond the implemented read-only limit
+   panel; operator recovery remains in the CLI. Preserve deadlines and audit, and
+   never erase quota history to compensate for a partial result.
 
 ## Sources
 
