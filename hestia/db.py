@@ -202,6 +202,10 @@ class BudgetConnection(Base):
     next_attempt: Mapped[float]
     failures: Mapped[int]
     last_error: Mapped[str | None]
+    # Diagnostic for the last round-level HTTP failure: a status and a fixed Enable Banking
+    # identifier, never response text. Cleared whenever last_error stops describing that failure.
+    last_http_status: Mapped[int | None]
+    last_provider_error: Mapped[str | None]
 
 
 class BudgetConsentFlow(Base):
@@ -323,6 +327,9 @@ class BudgetComponent(Base):
     retry_at: Mapped[float | None]
     suspended: Mapped[bool] = mapped_column(default=False, server_default=text("0"))
     backoff_until: Mapped[float] = mapped_column(default=0, server_default=text("0"))
+    # Diagnostic for last_error when it came from an HTTP response; see BudgetConnection.
+    last_http_status: Mapped[int | None]
+    last_provider_error: Mapped[str | None]
 
 
 class BudgetAcquisition(Base):

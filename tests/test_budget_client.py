@@ -219,7 +219,7 @@ class BudgetClientTests(unittest.TestCase):
         self.assert_safe(error.exception)
         self.assertEqual(opener.calls, [])
 
-    def test_http_status_mapping_reads_only_bounded_429_metadata_and_does_not_retry(self):
+    def test_http_status_mapping_reads_only_bounded_error_metadata_and_does_not_retry(self):
         cases = [(status, "provider_error", False) for status in (301, 302, 303, 307, 308, 400, 404)]
         cases += [(401, "authorization", False), (403, "authorization", False), (429, "rate_limit", True)]
         cases += [(status, "unavailable", True) for status in (408, 425, 500, 503, 599)]
@@ -235,9 +235,12 @@ class BudgetClientTests(unittest.TestCase):
                 self.assert_safe(error.exception)
                 self.assertEqual(len(opener.calls), 1)
                 self.assertTrue(body.closed if raised else reply.closed)
+                # The error body is read only up to its bound; a non-JSON body leaves no diagnostic.
+                self.assertIsNone(error.exception.provider_error)
                 if not raised:
-                    self.assertEqual(bool(reply.read_sizes), status == 429)
+                    self.assertTrue(reply.read_sizes)
                     self.assertTrue(all(0 < size <= module.READ_CHUNK for size in reply.read_sizes))
+                    self.assertLessEqual(sum(reply.read_sizes), module.MAX_ERROR_RESPONSE + module.READ_CHUNK)
 
     def test_network_errors_before_and_during_read_are_safe_and_close_responses(self):
         for failure in (OSError(PRIVATE), URLError(PRIVATE), TimeoutError(PRIVATE), ValueError(PRIVATE),

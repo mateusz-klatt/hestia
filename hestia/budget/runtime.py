@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from dataclasses import replace
 from pathlib import Path
 
-from .client import BudgetAPIError, EnableBankingClient
+from .client import BudgetAPIError, EnableBankingClient, ProviderDiagnostic
 from .config import BudgetConfigError, credentials
 from .normalize import BudgetDataError, fetch_snapshot
 from .store import ATTENTION, OPERATIONS, BudgetStore, BudgetStoreError, BudgetPausedError, safe_error
@@ -189,7 +189,7 @@ def acquire(config, connection, store, scheduler, client_factory, clock, monoton
         # Storage failure here still escapes to the safe CLI; bank/programming
         # failures must not starve independent connections.
         code = _error_code(exc)
-        store.record_failure(connection.id, code, attempt_id=attempt_id)
+        store.record_failure(connection.id, code, attempt_id=attempt_id, diagnostic=ProviderDiagnostic.of(exc))
         return "failed", safe_error(code)
     errors = [safe_error(code) for code in _snapshot_errors(snapshot, target)]
     # A session/authorization failure must win over an unrelated earlier component error.
