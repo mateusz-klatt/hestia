@@ -22,7 +22,7 @@ export const rulesLabels = {
     saveRule: "Save rule", affects: (count: number) => `This rule would apply to ${String(count)} entries, for example:`,
     reference: "entry", account: "Account",
     nothingToDo: "Choose a category or a type for the rule.",
-    archivedTarget: "This category is archived; choose another one or restore it first.",
+    archivedTarget: "This category is archived: the rule can only be turned off. To keep it on, choose another category or restore this one.",
     loading: "Loading…", error: "Could not be loaded.", conflict: "This changed elsewhere; the latest state was loaded.",
     expired: "The preview expired or the data changed; preview the rule again.", saveError: "Could not save. Try again.",
   },
@@ -39,7 +39,7 @@ export const rulesLabels = {
     saveRule: "Zapisz regułę", affects: (count: number) => `Reguła obejmie pozycji: ${String(count)}, na przykład:`,
     reference: "pozycja", account: "Konto",
     nothingToDo: "Wybierz kategorię albo rodzaj dla reguły.",
-    archivedTarget: "Ta kategoria jest archiwalna; wybierz inną albo najpierw ją przywróć.",
+    archivedTarget: "Ta kategoria jest archiwalna: regułę można tylko wyłączyć. Aby działała dalej, wybierz inną kategorię albo przywróć tę.",
     loading: "Wczytywanie…", error: "Nie udało się wczytać.", conflict: "Zmieniono to w innym miejscu; wczytano aktualny stan.",
     expired: "Podgląd wygasł albo dane się zmieniły; zrób podgląd reguły ponownie.", saveError: "Nie udało się zapisać. Spróbuj ponownie.",
   },
@@ -238,11 +238,12 @@ function RulesPanel({ rules, categories, accounts, api, run, text, onSaved, epoc
   };
   const close = () => { draft.current += 1; setEditing(null); setPreview(null); };
 
-  // A rule cannot point at an archived category (the server refuses it); an existing rule that does shows it,
-  // disabled, until the owner picks another category or restores that one.
+  // An enabled rule cannot point at an archived category (the server refuses it). An existing rule whose category was
+  // archived keeps it and may still be turned off; turning it on again needs an active category. Only the rule's own
+  // archived category is ever offered, so a new assignment to an archived one cannot be made here.
   const archivedTarget = editing !== null && editing.category_id !== null
     && categories.some((item) => item.id === editing.category_id && item.archived);
-  const ready = editing !== null && validCandidate(editing) && !archivedTarget;
+  const ready = editing !== null && validCandidate(editing) && !(archivedTarget && editing.enabled);
 
   const ask = async () => {
     if (editing === null || !ready) return;
@@ -338,7 +339,7 @@ function RulesPanel({ rules, categories, accounts, api, run, text, onSaved, epoc
             {text.enabled}
           </label>
           {editing.category_id === null && editing.kind === "auto" ? <p className="budget-muted">{text.nothingToDo}</p> : null}
-          {archivedTarget ? <p className="budget-notice" role="alert">{text.archivedTarget}</p> : null}
+          {archivedTarget ? <p className="budget-notice" role={editing.enabled ? "alert" : "note"}>{text.archivedTarget}</p> : null}
           <div className="budget-actions">
             <button type="submit" disabled={busy || !ready}>{text.preview}</button>
             <button type="button" disabled={busy} onClick={close}>{text.cancel}</button>

@@ -206,15 +206,26 @@ describe("rules", () => {
     expect(onAccessLoss).toHaveBeenCalledWith({ ok: false, status: 401, error: "budget_http_401" });
   });
 
-  it("will not preview a rule that points at an archived category until another one is chosen", async () => {
+  it("lets a rule on an archived category only be turned off until another category is chosen", async () => {
     const api = fakeApi();
-    api.rules.mockImplementation(() => ok({ rules: [{ ...rule, category_id: "cat-old" }] }));
+    api.rules.mockImplementation(() => ok({ rules: [{ ...rule, category_id: "cat-old", enabled: true }] }));
     await show(api);
     await click(button("Edit"));
     const form = section("Rules").querySelector("form");
     if (form === null) throw new Error("editor missing");
     expect((field(form, "Category") as HTMLSelectElement).selectedOptions[0]?.textContent).toBe("Synthetic Old (archived)");
-    expect(form.querySelector('[role="alert"]')?.textContent).toContain("This category is archived");
+    expect(form.querySelector('[role="alert"]')?.textContent).toContain("can only be turned off");
+    expect(button("Preview", form).disabled).toBe(true);
+    // Turning the rule off keeps its archived category and may be previewed and saved.
+    const enabled = [...form.querySelectorAll("label")].find((item) => item.textContent.includes("Enabled"))?.querySelector("input");
+    await act(async () => { enabled?.click(); await Promise.resolve(); });
+    expect(button("Preview", form).disabled).toBe(false);
+    expect(form.querySelector('[role="alert"]')).toBeNull();
+    await act(async () => { form.requestSubmit(); await Promise.resolve(); });
+    await settle();
+    expect(api.previewRule).toHaveBeenLastCalledWith(expect.objectContaining({ category_id: "cat-old", enabled: false }));
+    // Turning it back on needs an active category.
+    await act(async () => { enabled?.click(); await Promise.resolve(); });
     expect(button("Preview", form).disabled).toBe(true);
     await choose(field(form, "Category") as HTMLSelectElement, "cat-food");
     expect(form.querySelector('[role="alert"]')).toBeNull();
