@@ -41,6 +41,7 @@ CONSENT_CLASSIFICATIONS = (
     "external_read_only",
     "active_pointer_mismatch",
     "uncertain_flow_evidence",
+    "stale_flow_evidence",
     "active_current",
     "active_expired",
     "unadopted_in_progress",
@@ -190,18 +191,17 @@ def _validate_flow(owner, item, seen):
     return flow_id, connection_id, item.status, created_at, expires_at, candidate
 
 
-def _classify_unadopted(consent_id, connection_id, valid_until, now, retention_seconds,
-                        active_candidates, unresolved_flow_consents):
+def _classify_unadopted(consent_id, connection_id, valid_until, now, retention_seconds, active_candidates):
     if (connection_id, consent_id) in active_candidates:
         return "unadopted_in_progress", False, False, False
     if valid_until is None or valid_until > now:
         return "unadopted_orphan", True, True, False
-    if consent_id in unresolved_flow_consents or not _past_retention(now, valid_until, retention_seconds):
-        return "unadopted_expired_retained", True, False, False
-    return "unadopted_expired_prunable", False, False, True
+    if _past_retention(now, valid_until, retention_seconds):
+        return "unadopted_expired_prunable", False, False, True
+    return "unadopted_expired_retained", True, False, False
 
 
-def _classify_retired(consent_id, valid_until, now, retention_seconds, unresolved_flow_consents):
+def _classify_retired(valid_until, now, retention_seconds):
     """Classify a RETIRED consent.
 
     Store invariant (``consent_store.py``): ``RETIRED`` is written exclusively when a
@@ -212,15 +212,13 @@ def _classify_retired(consent_id, valid_until, now, retention_seconds, unresolve
     """
     if valid_until is None or valid_until > now:
         return "retired_still_valid", True, True, False
-    if consent_id in unresolved_flow_consents:
-        return "retired_retained", True, False, False
     if _past_retention(now, valid_until, retention_seconds):
         return "retired_prunable", False, False, True
     return "retired_retained", False, False, False
 
 
 def _classify_consent(record, now, retention_seconds, active_candidates,
-                      uncertain_flow_consents, unresolved_flow_consents, active_pointers):
+                      uncertain_flow_consents, stale_flow_consents, active_pointers):
     consent_id, connection_id, provenance, status, _, valid_until = record
     if provenance != HESTIA_PROVENANCE:
         classification, review, remote, local = "external_read_only", False, False, False
@@ -228,16 +226,16 @@ def _classify_consent(record, now, retention_seconds, active_candidates,
         classification, review, remote, local = "active_pointer_mismatch", True, False, False
     elif consent_id in uncertain_flow_consents:
         classification, review, remote, local = "uncertain_flow_evidence", True, False, False
+    elif consent_id in stale_flow_consents:
+        classification, review, remote, local = "stale_flow_evidence", True, False, False
     elif status == "ACTIVE":
         expired = valid_until is not None and valid_until <= now
         classification, review, remote, local = ("active_expired" if expired else "active_current"), expired, False, False
     elif status == "UNADOPTED":
         classification, review, remote, local = _classify_unadopted(
-            consent_id, connection_id, valid_until, now, retention_seconds,
-            active_candidates, unresolved_flow_consents)
+            consent_id, connection_id, valid_until, now, retention_seconds, active_candidates)
     else:
-        classification, review, remote, local = _classify_retired(
-            consent_id, valid_until, now, retention_seconds, unresolved_flow_consents)
+        classification, review, remote, local = _classify_retired(valid_until, now, retention_seconds)
     return ConsentFinding(
         consent_id=consent_id,
         connection_id=connection_id,
