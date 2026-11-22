@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="Terms for the private Hestia household installation, its optional integrations and planned read-only banking access.">
+  <meta name="description" content="Terms for the private Hestia household installation, its optional integrations and optional read-only banking access.">
   <meta name="color-scheme" content="light dark">
   <title>Terms of Service · Hestia</title>
   <style>
@@ -43,7 +43,7 @@
     <main id="main">
       <p class="eyebrow">Private household installation</p>
       <h1>Terms of Service</h1>
-      <p class="updated">Last updated: <time datetime="2026-11-21">21 November 2026</time></p>
+      <p class="updated">Last updated: <time datetime="2026-11-22">22 November 2026</time></p>
       <p>These terms explain use of the Hestia installation at <strong>hestia.klatt.ie</strong>,
         operated by <strong>Mateusz Klatt</strong>. Contact:
         <a href="mailto:mateusz@klatt.ie">mateusz@klatt.ie</a>. It is a private, self-hosted
@@ -107,14 +107,23 @@
         through Enable Banking for private, non-commercial household budgeting. It reads permitted
         balances and transactions for the chosen accounts, or imports history from an earlier
         authorised download, and stores them on this self-hosted server, as described in the
-        <a href="privacy-policy.html#banking">Privacy Policy</a>. Only
-        the budget's owner can view it in Hestia. Bank coverage, transaction history, card support
-        and data freshness depend on the bank, the provider and their access limits.</p>
+        <a href="privacy-policy.html#banking">Privacy Policy</a>. Only the budget's owner can
+        currently view it in Hestia. A read-only household view of selected budget information is
+        planned for a spouse the owner explicitly authorises. Bank coverage, transaction history,
+        card support and data freshness depend on the bank, the provider and their access limits.</p>
       <p>Local budget reports use the owner's currently selected accounts and keep currencies separate.
         Categories, literal classification rules and reviewed own-account transfer relationships can
         change how those records are grouped in reports; they do not edit the bank's records.
         Transfer suggestions require the owner's acceptance. Missing, stale or uncertain records
         and unresolved transfer choices can affect the usefulness of totals.</p>
+      <p>The read-only Monthly budget dashboard uses already stored bank transactions and settings
+        configured on the server. It shows income received, expected income, spending to date,
+        remaining budget, spending pace and category limits. Expected income and spending pace are
+        estimates. Charts show cumulative daily spending, monthly spending by category and monthly
+        income versus spending.</p>
+      <p>Forecast estimates upcoming commitments from stored mortgage schedules and recurring
+        expense patterns, and may count likely duplicates once. Forecast figures are estimates
+        only, with no guarantee of future amounts, due dates or available funds.</p>
       <p>Hestia does not initiate transfers or payments, hold money or ask you to give it bank login
         passwords, PINs or one-time banking codes. Complete bank authentication only through the
         bank and Enable Banking's authorisation flow. Do not paste banking credentials into Hestia,
@@ -134,6 +143,24 @@
         financial advice or a promise that funds will be available. They can be delayed or
         incomplete, and pending transactions may not appear. Check actual bank balances and payment
         deadlines before making a financial decision.</p>
+
+      <h3>Receipts (when enabled)</h3>
+      <p>Receipts are planned and will be off by default. When enabled, Hestia parses pasted
+        receipt text and suggests matches to stored card transactions. Review the parsed receipt
+        and any suggested match before confirming. A confirmed link is for reference only.</p>
+      <p>Photo uploads are planned for a later release. A RapidOCR sidecar on the owner's server
+        will recognise text locally without sending photos off the server. The separate Cloud AI
+        OCR feature will be off by default and will send a photo to its provider only after the
+        owner consents for that receipt. The <a href="privacy-policy.html#receipts">Privacy
+        Policy</a> explains storage, deletion and cloud processing.</p>
+
+      <h3>Gmail receipt import (when enabled)</h3>
+      <p>This planned feature requires the budget owner to grant read-only access to their own
+        Google Account. Hestia uses that access only to import receipts from messages selected
+        by label or sender. The owner can revoke access in their
+        <a href="https://myaccount.google.com/linkedapps">Google Account</a>. The
+        <a href="privacy-policy.html#gmail">Privacy Policy</a> explains what Hestia stores and
+        how Google's Limited Use requirements apply.</p>
 
       <h2>5. Data handling and external services</h2>
       <p>The <a href="privacy-policy.html">Privacy Policy</a> describes server-side storage,

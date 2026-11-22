@@ -44,7 +44,7 @@
     <main id="main">
       <p class="eyebrow">Private household installation</p>
       <h1>Privacy Policy</h1>
-      <p class="updated">Last updated: <time datetime="2026-11-21">21 November 2026</time></p>
+      <p class="updated">Last updated: <time datetime="2026-11-22">22 November 2026</time></p>
       <p>This policy covers Hestia at <strong>hestia.klatt.ie</strong>, operated by
         <strong>Mateusz Klatt</strong>. Hestia is a self-hosted smart-home and household application
         for the operator and invited users, not a public subscription service. The operator is the
@@ -88,6 +88,9 @@
           balances, transactions and related status, control and audit records for authorised bank
           accounts chosen for import or synchronisation. <a href="#banking">Section 4</a> lists
           exactly what is kept.</li>
+        <li><strong>Optional receipts:</strong> see <a href="#receipts">receipt processing and
+          retention</a> and <a href="#gmail">Gmail receipt import</a> for the data handled when
+          these planned features are enabled.</li>
         <li><strong>Visits and contact:</strong> IP addresses and ordinary HTTP request metadata,
           including requested URLs, timestamps, headers and security signals, can be processed by
           the web server and reverse proxies. If you email the operator, your address and message
@@ -145,6 +148,15 @@
           Banking obtains the data from the bank. They receive the request details and network
           information needed for that access. See <a href="https://enablebanking.com/privacy/">Enable
           Banking's privacy notice</a>.</li>
+        <li><strong>Gmail (when enabled):</strong> Google receives authorisation and read requests
+          for the planned <a href="#gmail">Gmail receipt import</a>. See the
+          <a href="https://policies.google.com/privacy">Google privacy policy</a> and the
+          <a href="https://developers.google.com/terms/api-services-user-data-policy">Google API
+          Services User Data Policy</a>.</li>
+        <li id="cloud-ocr"><strong>Cloud AI OCR (planned):</strong> if enabled, the cloud provider
+          will receive a receipt photo for text recognition only after the owner consents for that
+          receipt. This policy will name the provider and describe its retention terms before
+          activation.</li>
         <li><strong>Optional network and weather services:</strong> enabling DNS-over-HTTPS
           resolution can send the queried hostname and server connection information to Google or
           Cloudflare resolvers. Enabling Open-Meteo weather sends configured latitude and longitude
@@ -218,13 +230,22 @@
           marks the connection as needing attention and stops automatic refresh for it until a
           successful, explicitly requested check.</li>
       </ul>
+      <p>The read-only Monthly budget dashboard uses transactions already stored for the owner's
+        selected accounts and settings configured on the server. It shows income received,
+        expected income, spending to date, remaining budget, spending pace and category limits.
+        Expected income and spending pace are estimates. The dashboard includes charts of
+        cumulative daily spending, monthly spending by category and monthly income versus spending.</p>
+      <p>Forecast uses stored mortgage schedules and recurring expense patterns to estimate upcoming
+        commitments and may count likely duplicates once. The estimates carry no guarantee of future
+        amounts or dates.</p>
       <p>Hestia contacts the bank only for selected accounts, within the bank's access limits, when
         a refresh is requested or when the owner has enabled automatic refresh for a connection.
-        Budget data are available through the Hestia interface only to the budget's owner, who must
-        be signed in with an enabled administrator account; other users, including other
-        administrators, cannot read them there. The operator has privileged access to the server,
-        its database, files and backups. Budget pages and responses are delivered through the same
-        Cloudflare and Apache reverse proxy as the rest of the application. The reverse proxy's
+        Budget data are currently available through the Hestia interface only to the budget's
+        owner, who must be signed in with an enabled administrator account. A read-only household
+        view of selected budget information is planned for a spouse the owner explicitly authorises.
+        The operator has privileged access to the server, its database, files and backups. Budget
+        pages and responses are delivered through the same Cloudflare and Apache reverse proxy as
+        the rest of the application. The reverse proxy's
         access logs record requested addresses including their query part; for budget requests
         these can contain Hestia's local identifiers, date/category filters, an encrypted paging token
         and any transaction search text entered by the owner. Hestia itself keeps no web access log and
@@ -244,6 +265,34 @@
         automatically erase copies already stored by Hestia. Deleting local data is a separate
         request, and providers manage their own records under their own obligations.</p>
 
+      <h3 id="receipts">Receipts (when enabled)</h3>
+      <p>Receipt import is planned and will be off by default. When enabled, Hestia parses text
+        pasted by the owner to extract details such as the shop, purchase date, total and line
+        items. It suggests links to stored card transactions for the owner to confirm.</p>
+      <p>Hestia redacts card numbers (PANs) before storing receipt text. It deletes unconfirmed
+        drafts and their text after 48 hours, and deletes the redacted raw text 30 days after
+        confirmation. Confirmed structured receipts and line items are kept until the owner
+        deletes them.</p>
+      <p>Photo uploads are planned for a later release. A RapidOCR sidecar on the owner's server
+        will recognise text locally without sending photos off the server. Draft photos will be
+        deleted with their drafts, and confirmed photos will be deleted 30 days after confirmation.
+        The separate <a href="#cloud-ocr">Cloud AI OCR</a> feature will be off by default and will
+        send a photo to its provider only after the owner consents for that receipt.</p>
+
+      <h3 id="gmail">Gmail receipt import (when enabled)</h3>
+      <p>This planned feature will require the owner to authorise access to their own Google
+        Account with the read-only <code>gmail.readonly</code> scope. This permission allows
+        mailbox reads. Hestia will fetch only messages likely to contain receipts, using a Gmail
+        label or a list of approved senders, and read them to extract receipt details.</p>
+      <p>From these messages, Hestia will store only the parsed receipt and a keyed hash of the
+        Message-ID to avoid duplicate imports. Hestia will never store message bodies or email
+        addresses from the messages. The owner can revoke access in their
+        <a href="https://myaccount.google.com/linkedapps">Google Account</a>.</p>
+      <p>Cloudflare and the Apache reverse proxy may process requests and responses that contain
+        imported receipt data to deliver and secure the application, as described in
+        <a href="#recipients">section 3</a>.</p>
+      <p>Hestia will use Gmail data only to provide the owner-facing receipt-import feature. It will not sell Gmail data or use it for advertising. Hestia's use and transfer to any other app of information received from the Gmail API will adhere to the Google API Services User Data Policy, including its Limited Use requirements.</p>
+
       <h2 id="retention">5. Retention, disconnection and deletion</h2>
       <p>Configuration and household records are retained while needed for the requested service,
         synchronisation integrity, troubleshooting or an applicable legal obligation. Retention
@@ -257,8 +306,9 @@
         external copy from recreating the event. Pending operations may also survive restarts.</p>
       <p>Banking history has no automatic deletion deadline. Transactions, balances, account labels
         and their audit records stay in SQLite and in backups until the operator removes them on
-        request. Only finished refresh records are cleaned up automatically, as described in
-        <a href="#banking">section 4</a>.</p>
+        request. Finished refresh records are cleaned up automatically, as described in
+        <a href="#banking">section 4</a>. Receipt drafts, raw text and photos have the separate
+        deadlines described in <a href="#receipts">Receipts (when enabled)</a>.</p>
       <p>Disconnecting an integration or revoking a provider token does not erase previously stored
         records, provider-side copies or backups. For full removal, contact the operator so that
         local records, synchronisation mappings, external copies and backups can be considered
