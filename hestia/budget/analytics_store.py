@@ -18,8 +18,9 @@ from ..db import BudgetMortgagePayment as MortgagePaymentRow, BudgetMortgageSche
 from ..db import BudgetConnection as Connection, BudgetRule as Rule, BudgetRulePreview as Preview
 from ..db import BudgetTransaction as Transaction, BudgetTransactionMetadata as Metadata
 from ..db import BudgetTransferDecision as Decision, BudgetTransferLeg as Leg
-from .analytics_core import (AnalyticsError, KINDS, compare_money, compatible_kind, effective_date,
-                             financial_fingerprint, pair_fingerprint, rule_matches)
+from .analytics_core import (AnalyticsError, KINDS, compare_money, compatible_kind, compile_rules,
+                             effective_date, financial_fingerprint, first_matching_rule, match_texts,
+                             pair_fingerprint)
 from .client import _reject_constant, _unique_error_fields
 from .receipt_reconcile import reconcile_receipt_links
 from .mortgage_reminders import (MAX_PAID_MONTHS as MAX_MORTGAGE_PAID_MONTHS, MAX_SCHEDULES as MAX_MORTGAGE_SCHEDULES,
@@ -31,6 +32,8 @@ from .views import BudgetHTTPStore
 
 MAX_CATEGORY_LIMITS = 200
 _LIMIT_ERROR = "budget_analytics_limit"
+MAX_RULES = 5000
+MAX_BATCH_RULES = 100
 _HASH = re.compile(r"[a-f0-9]{64}\Z", re.ASCII)
 _CURRENCY = re.compile(r"[A-Z]{3}\Z", re.ASCII)
 _RULE_FIELDS = frozenset({"rule_id", "expected_version", "field", "operator", "value", "category_id", "kind", "priority", "enabled"})
@@ -432,18 +435,37 @@ class BudgetAnalyticsStore(BudgetHTTPStore):
         return projection_snapshot(session, owner)
 
     @staticmethod
-    def _proposed(rows, rules):
+    def _proposed(rows, rules, *, watch=None):
+        """Count rows whose rule result changes. ``watch`` is the candidate subset: only rows that
+        already use one of those rules, or whose text can match one, are evaluated."""
+        compiled, safe = compile_rules(rules)
+        watch_compiled, replaced = None, set()
+        if watch is not None and safe:
+            watch_compiled, watch_safe = compile_rules(watch)
+            if watch_safe:
+                replaced = {rule["id"] for rule in watch}
+            else:
+                watch_compiled = None
         affected, examples = 0, []
         for row in rows:
             if row["annotation"]["mode"] == "manual" or row["effective"].get("source") == "transfer":
                 continue
-            effective = {"kind": "expense" if row["payload"]["credit_debit_indicator"] == "DBIT" else "unclassified_credit",
-                         "category_id": None, "rule_id": None}
-            for rule in rules:
-                if rule_matches(rule, row["payload"], row["metadata"]):
-                    effective = {"kind": effective["kind"] if rule["kind"] == "auto" else rule["kind"],
-                                 "category_id": rule["category_id"], "rule_id": rule["id"]}
-                    break
+            texts = row.get("_match_texts")
+            if texts is None:
+                texts = match_texts(row["payload"], row["metadata"])
+            if watch_compiled is not None:
+                current_id = row.get("base_effective", row["effective"]).get("rule_id")
+                if current_id not in replaced and first_matching_rule(watch_compiled, row["payload"], texts) is None:
+                    continue
+            rule = first_matching_rule(compiled, row["payload"], texts)
+            if rule is None:
+                effective = {"kind": "expense" if row["payload"]["credit_debit_indicator"] == "DBIT" else "unclassified_credit",
+                             "category_id": None, "rule_id": None}
+            else:
+                effective = {"kind": "expense" if row["payload"]["credit_debit_indicator"] == "DBIT" else "unclassified_credit",
+                             "category_id": rule["category_id"], "rule_id": rule["id"]}
+                if rule["kind"] != "auto":
+                    effective["kind"] = rule["kind"]
             current = row.get("base_effective", row["effective"])
             if any(current.get(key) != effective[key] for key in effective):
                 affected += 1
@@ -451,64 +473,175 @@ class BudgetAnalyticsStore(BudgetHTTPStore):
                     examples.append({"account_id": row["account_id"], "entry_reference": row["entry_reference"]})
         return affected, examples
 
+    @staticmethod
+    def _merged_rules(existing, proposed):
+        proposed_ids = {rule["id"] for rule in proposed}
+        rules = [rule for rule in existing if rule["id"] not in proposed_ids]
+        rules.extend(proposed)
+        rules.sort(key=lambda row: (row["priority"], row["id"]))
+        return rules
+
+    def _reserve_preview(self, session, owner, now):
+        session.execute(delete(Preview).where(Preview.owner == owner, Preview.saved_rule_id.is_(None),
+                                              Preview.expires_at <= now))
+        count = session.scalar(select(func.count()).select_from(Preview).where(Preview.owner == owner,
+                                                                                Preview.saved_rule_id.is_(None)))
+        if count >= 100:
+            raise AnalyticsError("budget_analytics_limit", 413)
+
+    def _stage_candidates(self, session, owner, candidates):
+        if not isinstance(candidates, list) or not 1 <= len(candidates) <= MAX_BATCH_RULES:
+            raise AnalyticsError()
+        seen, staged = set(), []
+        for candidate in candidates:
+            candidate, row = self._rule_candidate(session, owner, candidate)
+            if candidate["rule_id"] is not None:
+                if candidate["rule_id"] in seen:
+                    raise AnalyticsError()
+                seen.add(candidate["rule_id"])
+            candidate = dict(candidate)
+            candidate["_proposed_id"] = candidate["rule_id"] or str(uuid.uuid4())
+            staged.append(candidate)
+        return staged
+
+    def _preview_candidates(self, session, owner, staged):
+        now = self._now()
+        self._reserve_preview(session, owner, now)
+        snapshot = self._snapshot(session, owner)
+        proposed = [{**candidate, "id": candidate["_proposed_id"]} for candidate in staged]
+        rules = self._merged_rules(snapshot["rules"], proposed)
+        affected, examples = self._proposed(snapshot["transactions"], rules, watch=proposed)
+        return snapshot, affected, examples, now
+
     def preview_rule(self, owner, candidate):
         with self.transaction() as session:
             self._owner(session, owner)
-            candidate, _ = self._rule_candidate(session, owner, candidate)
-            now = self._now()
-            session.execute(delete(Preview).where(Preview.owner == owner, Preview.saved_rule_id.is_(None),
-                                                  Preview.expires_at <= now))
-            count = session.scalar(select(func.count()).select_from(Preview).where(Preview.owner == owner,
-                                                                                    Preview.saved_rule_id.is_(None)))
-            if count >= 100:
-                raise AnalyticsError("budget_analytics_limit", 413)
-            snapshot = self._snapshot(session, owner)
-            candidate["_proposed_id"] = candidate["rule_id"] or str(uuid.uuid4())
-            proposed = {**candidate, "id": candidate["_proposed_id"]}
-            rules = [rule for rule in snapshot["rules"] if rule["id"] != proposed["id"]] + [proposed]
-            rules.sort(key=lambda row: (row["priority"], row["id"]))
-            affected, examples = self._proposed(snapshot["transactions"], rules)
-            preview = Preview(id=str(uuid.uuid4()), owner=owner, candidate_json=_json(candidate),
+            staged = self._stage_candidates(session, owner, [candidate])
+            snapshot, affected, examples, now = self._preview_candidates(session, owner, staged)
+            preview = Preview(id=str(uuid.uuid4()), owner=owner, candidate_json=_json(staged[0]),
                               snapshot_digest=snapshot["digest"], created_at=now, expires_at=now + 900)
             session.add(preview)
             return {"preview_id": preview.id, "expires_at": preview.expires_at,
                     "affected_count": affected, "examples": examples}
+
+    def preview_rules(self, owner, candidates):
+        """One snapshot and one digest for up to 100 rules. Nothing is stored if any candidate is invalid."""
+        with self.transaction() as session:
+            self._owner(session, owner)
+            staged = self._stage_candidates(session, owner, candidates)
+            snapshot, affected, examples, now = self._preview_candidates(session, owner, staged)
+            preview = Preview(id=str(uuid.uuid4()), owner=owner,
+                              candidate_json=_json({"_batch": True, "candidates": staged}),
+                              snapshot_digest=snapshot["digest"], created_at=now, expires_at=now + 900)
+            session.add(preview)
+            return {"preview_id": preview.id, "expires_at": preview.expires_at,
+                    "affected_count": affected, "examples": examples, "rule_count": len(staged)}
+
+    def _snapshot_digest(self, session, owner):
+        from .analytics_views import projection_snapshot
+        preview = projection_snapshot(session, owner, classify=False)
+        _, safe = compile_rules(preview["rules"])
+        if safe:
+            return preview["digest"]
+        return projection_snapshot(session, owner)["digest"]
+
+    def _apply_candidate(self, session, owner, candidate):
+        proposed_id = candidate.pop("_proposed_id", None)
+        if not isinstance(proposed_id, str) or not proposed_id:
+            raise AnalyticsError()
+        candidate, row = self._rule_candidate(session, owner, candidate)
+        before = None if row is None else _dict(row, _RULE_OUTPUT)
+        fields = ("field", "operator", "value", "category_id", "kind", "priority", "enabled")
+        changed = row is None or any(getattr(row, key) != candidate[key] for key in fields)
+        if row is None:
+            if session.scalar(select(func.count()).select_from(Rule).where(Rule.owner == owner)) >= MAX_RULES:
+                raise AnalyticsError("budget_analytics_limit", 413)
+            now = self._now()
+            row = Rule(id=proposed_id, owner=owner, version=0, created_at=now)
+            session.add(row)
+        if changed:
+            for key in fields:
+                setattr(row, key, candidate[key])
+            row.version += 1
+            row.updated_at = self._now()
+        session.flush()
+        result = _dict(row, _RULE_OUTPUT)
+        if changed:
+            self._analytics_audit(session, owner, "rule", row.id, "save", before, result)
+        return {**result, "changed": changed}
+
+    def _saved_batch(self, session, owner, payload):
+        rules = []
+        for candidate in payload["candidates"]:
+            proposed_id = candidate.get("_proposed_id") if isinstance(candidate, dict) else None
+            if not isinstance(proposed_id, str) or not proposed_id:
+                raise AnalyticsError()
+            row = self._owned(session, Rule, owner, proposed_id)
+            rules.append({**_dict(row, _RULE_OUTPUT), "changed": False})
+        return {"rules": rules, "changed": False}
 
     def save_rule(self, owner, preview_id):
         with self.transaction() as session:
             self._owner(session, owner)
             preview = self._owned(session, Preview, owner, preview_id)
             if preview.saved_rule_id is not None:
+                # A saved batch is not a single-rule replay. Corrupt JSON on an ordinary
+                # saved preview still replays: only a well-formed batch object is rejected.
+                try:
+                    saved = json.loads(preview.candidate_json)
+                except json.JSONDecodeError:
+                    saved = None
+                if isinstance(saved, dict) and saved.get("_batch"):
+                    raise AnalyticsError()
                 row = self._owned(session, Rule, owner, preview.saved_rule_id)
                 return {**_dict(row, _RULE_OUTPUT), "changed": False}
             if preview.expires_at <= self._now():
                 raise AnalyticsError("budget_analytics_preview_expired", 409)
-            snapshot = self._snapshot(session, owner)
-            if preview.snapshot_digest != snapshot["digest"]:
+            if preview.snapshot_digest != self._snapshot_digest(session, owner):
                 raise AnalyticsError("budget_analytics_stale_preview", 409)
             candidate = json.loads(preview.candidate_json)
-            proposed_id = candidate.pop("_proposed_id")
-            candidate, row = self._rule_candidate(session, owner, candidate)
-            before = None if row is None else _dict(row, _RULE_OUTPUT)
-            fields = ("field", "operator", "value", "category_id", "kind", "priority", "enabled")
-            changed = row is None or any(getattr(row, key) != candidate[key] for key in fields)
-            if row is None:
-                if session.scalar(select(func.count()).select_from(Rule).where(Rule.owner == owner)) >= 100:
-                    raise AnalyticsError("budget_analytics_limit", 413)
-                now = self._now()
-                row = Rule(id=proposed_id, owner=owner, version=0, created_at=now)
-                session.add(row)
-            if changed:
-                for key in fields:
-                    setattr(row, key, candidate[key])
-                row.version += 1
-                row.updated_at = self._now()
-            session.flush()
-            result = _dict(row, _RULE_OUTPUT)
-            preview.saved_rule_id, preview.saved_version = row.id, row.version
-            if changed:
-                self._analytics_audit(session, owner, "rule", row.id, "save", before, result)
-            return {**result, "changed": changed}
+            if not isinstance(candidate, dict) or candidate.get("_batch"):
+                raise AnalyticsError()
+            result = self._apply_candidate(session, owner, candidate)
+            preview.saved_rule_id, preview.saved_version = result["id"], result["version"]
+            return result
+
+    def save_rules(self, owner, preview_id):
+        """Apply every candidate in one transaction or leave the rule set unchanged."""
+        with self.transaction() as session:
+            self._owner(session, owner)
+            preview = self._owned(session, Preview, owner, preview_id)
+            payload = json.loads(preview.candidate_json)
+            candidates = payload.get("candidates") if isinstance(payload, dict) else None
+            if (not isinstance(payload, dict) or not payload.get("_batch") or not isinstance(candidates, list)
+                    or not 1 <= len(candidates) <= MAX_BATCH_RULES):
+                raise AnalyticsError()
+            if preview.saved_rule_id is not None:
+                return self._saved_batch(session, owner, payload)
+            if preview.expires_at <= self._now():
+                raise AnalyticsError("budget_analytics_preview_expired", 409)
+            if preview.snapshot_digest != self._snapshot_digest(session, owner):
+                raise AnalyticsError("budget_analytics_stale_preview", 409)
+            # Reject a tampered candidate before the cap or any write. A missing id used to
+            # escape as KeyError and a 500.
+            checked, creating = [], 0
+            for candidate in payload["candidates"]:
+                proposed_id = candidate.get("_proposed_id") if isinstance(candidate, dict) else None
+                if not isinstance(proposed_id, str) or not proposed_id:
+                    raise AnalyticsError()
+                creating += candidate.get("rule_id") is None
+                checked.append(dict(candidate))
+            existing = session.scalar(select(func.count()).select_from(Rule).where(Rule.owner == owner))
+            if existing + creating > MAX_RULES:
+                raise AnalyticsError("budget_analytics_limit", 413)
+            # Re-validate every candidate before the first write so a later conflict cannot land.
+            for candidate in checked:
+                probe = dict(candidate)
+                probe.pop("_proposed_id", None)
+                self._rule_candidate(session, owner, probe)
+            results = [self._apply_candidate(session, owner, candidate) for candidate in checked]
+            preview.saved_rule_id, preview.saved_version = results[0]["id"], results[0]["version"]
+            return {"rules": results, "changed": any(row["changed"] for row in results)}
 
     @staticmethod
     def _evidence(session, owner, row, payload, fingerprint):

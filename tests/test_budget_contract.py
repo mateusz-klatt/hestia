@@ -201,13 +201,15 @@ class BudgetOpenApiTests(unittest.TestCase):
         for read_path in ("/api/budget/consent/renewal-reminders", "/api/budget/consent/reconcile"):
             self.assertIn("413", consent[read_path]["get"]["responses"])
         analytics_reads = {"overview", "transactions", "categories", "rules", "transfers", "recurring",
-                           "spending-limits", "mortgages", "inbox", "quarantine", "forecast", "monthly-budget"}
+                           "spending-limits", "mortgages", "inbox", "quarantine", "forecast",
+                           "monthly-budget", "monthly-budget/charts"}
         analytics_writes = {"category-create", "category-update", "annotation", "rule-preview", "rule-save",
+                            "rule-batch-preview", "rule-batch-save",
                             "transfer-decision", "spending-limit-save", "mortgage-save", "mortgage-payment-set",
                             "inbox-mark"}
         self.assertEqual(set(analytics), {"/api/budget/analytics/" + name for name in analytics_reads | analytics_writes})
         for path, methods in analytics.items():
-            method = "get" if path.rsplit("/", 1)[1] in analytics_reads else "post"
+            method = "get" if path.removeprefix("/api/budget/analytics/") in analytics_reads else "post"
             self.assertEqual(set(methods), {method})
             self.assertEqual(methods[method]["x-required-role"], "admin")
             self.assertIn("413", methods[method]["responses"])
@@ -238,7 +240,12 @@ class BudgetOpenApiTests(unittest.TestCase):
         self.assertIn("budget_receipt_quota_exceeded", parse_limit)
         self.assertIn("131072", receipts["/api/budget/receipts/confirm"]["post"]["responses"]["413"]["description"])
         self.assertIn("16384", receipts["/api/budget/receipts/list"]["post"]["responses"]["413"]["description"])
-        self.assertEqual(document["info"]["version"], "0.30.0")
+        self.assertEqual(document["info"]["version"], "0.31.0")
+        batch = analytics["/api/budget/analytics/rule-batch-preview"]["post"]["description"]
+        self.assertIn("1..100", batch)
+        self.assertIn("All-or-nothing", batch)
+        save = analytics["/api/budget/analytics/rule-batch-save"]["post"]["description"]
+        self.assertIn("MAX_RULES = 5000", save)
         mark_desc = analytics["/api/budget/analytics/inbox-mark"]["post"]["description"]
         for phrase in ("reads_version", "1..100", "500"):
             self.assertIn(phrase, mark_desc)
@@ -388,6 +395,45 @@ class BudgetOpenApiTests(unittest.TestCase):
             "string",
         )
 
+    def test_monthly_budget_charts_query_error_and_schema_contract(self):
+        doc = contract.build_openapi()
+        charts = doc["paths"]["/api/budget/analytics/monthly-budget/charts"]["get"]
+        parameters = {param["name"]: param for param in charts["parameters"]}
+        self.assertEqual(set(parameters), {"period", "currency", "history"})
+        for param in parameters.values():
+            self.assertEqual(param["in"], "query")
+            self.assertFalse(param["required"])
+        self.assertEqual(parameters["history"]["schema"], {"type": "string", "enum": ["6", "12"], "default": "6"})
+        responses = charts["responses"]
+        self.assertEqual(set(responses), {"200", "400", "401", "403", "404", "409", "413", "500", "503"})
+        self.assertEqual(responses["200"]["content"]["application/json"]["schema"],
+                         {"$ref": "#/components/schemas/BudgetAnalyticsMonthlyBudgetCharts"})
+        for code in ("400", "409", "413", "500", "503"):
+            self.assertEqual(responses[code]["content"]["application/json"]["schema"],
+                             {"$ref": "#/components/schemas/BudgetError"})
+            self.assertIn("monthly-budget/charts", responses["409"]["description"])
+
+        schemas = doc["components"]["schemas"]
+        for suffix, keys in {
+            "DailyPoint": {"date", "cumulative_spent"},
+            "SeriesCategory": {"category_id", "net_spending"},
+            "SeriesMonth": {"period", "has_activity", "is_current_month", "income_estimate_partial",
+                            "provisional", "start_budget", "spent", "categories"},
+            "CategoryLabel": {"category_id", "name", "archived"},
+            "Series": {"daily", "months", "category_labels"},
+            "Charts": {"budget", "series"},
+        }.items():
+            with self.subTest(schema=suffix):
+                schema = schemas["BudgetAnalyticsMonthlyBudget" + suffix]
+                self.assertEqual(set(schema["properties"]), keys)
+                self.assertEqual(set(schema["required"]), keys)
+                self.assertNotIn("additionalProperties", schema)
+        series_props = schemas["BudgetAnalyticsMonthlyBudgetSeries"]["properties"]
+        self.assertEqual((series_props["daily"]["minItems"], series_props["daily"]["maxItems"]), (1, 31))
+        self.assertEqual((series_props["months"]["minItems"], series_props["months"]["maxItems"]), (1, 12))
+        self.assertEqual(schemas["BudgetAnalyticsMonthlyBudgetDailyPoint"]["properties"]["cumulative_spent"]["maxLength"], 192)
+        self.assertEqual(schemas["BudgetAnalyticsMonthlyBudgetSeriesMonth"]["properties"]["spent"]["maxLength"], 192)
+
     def test_query_metadata_pins_required_account_dates_limit_and_opaque_cursor(self):
         paths = contract.build_openapi()["paths"]
         query = {p["name"]: p for p in paths["/api/budget/transactions"]["get"]["parameters"]}
@@ -406,7 +452,8 @@ class BudgetOpenApiTests(unittest.TestCase):
         request_names.add("BudgetConsentFlowRequest")
         request_names.update({"BudgetAnalyticsCategoryCreateRequest", "BudgetAnalyticsCategoryUpdateRequest",
                               "BudgetAnalyticsAnnotationRequest", "BudgetAnalyticsRulePreviewRequest",
-                              "BudgetAnalyticsRuleSaveRequest", "BudgetAnalyticsTransferDecisionRequest",
+                              "BudgetAnalyticsRuleSaveRequest", "BudgetAnalyticsRuleBatchPreviewRequest",
+                              "BudgetAnalyticsRuleBatchSaveRequest", "BudgetAnalyticsTransferDecisionRequest",
                               "BudgetAnalyticsLegRequest", "BudgetAnalyticsSpendingLimitSaveRequest",
                               "BudgetAnalyticsMortgageSaveRequest", "BudgetAnalyticsMortgagePaymentSetRequest",
                               "BudgetAnalyticsInboxKeyRequest", "BudgetAnalyticsInboxMarkRequest",

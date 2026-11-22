@@ -226,6 +226,19 @@ class ClassificationTests(ProjectionCase):
         self.assertEqual(self.store.transactions("owner", "2026", query="")["filtered_total"], 2)
         api_contract.BudgetAnalyticsTransactions.model_validate(self.store.transactions("owner", "2026"))
 
+    def test_effective_helper_compiles_rules_and_folds_texts_when_omitted(self):
+        category = self.store.create_category("owner", "Food")
+        categories = {category["id"]: category}
+        annotation = {"mode": "auto", "stale": False, "kind": "auto", "category_id": None}
+        rules = [{"id": "r1", "enabled": True, "kind": "expense", "field": "description",
+                  "operator": "contains", "value": "shop", "category_id": category["id"], "priority": 1}]
+        tx = {"credit_debit_indicator": "DBIT", "remittance_information": ["Synthetic SHOP"]}
+        self.assertEqual(views._effective(tx, None, annotation, categories, rules),
+                         {"kind": "expense", "category_id": category["id"], "source": "rule", "rule_id": "r1"})
+        miss = views._effective({"credit_debit_indicator": "DBIT", "remittance_information": ["Other"]},
+                                None, annotation, categories, rules)
+        self.assertEqual(miss, {"kind": "expense", "category_id": None, "source": "default", "rule_id": None})
+
 
 class TransferProjectionTests(ProjectionCase):
     def test_manual_and_rule_exclusions_remove_suggestions_and_ambiguity_edges(self):
@@ -1009,6 +1022,111 @@ class MonthlyBudgetProjectionTests(ProjectionCase):
         with mock.patch.dict(os.environ, {month_budget.MONTH_CONFIG_ENV: json.dumps({"owner": {"income_category_ids": [foreign["id"]]}})}):
             with self.assertRaises(BudgetConfigError):
                 self.store.monthly_budget("owner")
+
+    def test_monthly_budget_charts_single_snapshot_cache_identity_and_income_window(self):
+        salary = self.store.create_category("owner", "Wynagrodzenie")
+        rent = self.store.create_category("owner", "Najem")
+        mortgage = self.store.create_category("owner", "Kredyt")
+        food = self.store.create_category("owner", "Zakupy")
+        self.add_transaction("a", "sal-oct-late", amount="5000", credit_debit_indicator="CRDT", booking_date="2026-10-28")
+        self.annotation(account="a", reference="sal-oct-late", category_id=salary["id"], kind="income")
+        self.add_transaction("a", "sal-nov-late", amount="5500", credit_debit_indicator="CRDT", booking_date="2026-11-26")
+        self.annotation(account="a", reference="sal-nov-late", category_id=salary["id"], kind="income")
+        self.add_transaction("a", "mort-nov", amount="2200", booking_date="2026-11-05", transaction_date="2026-11-05")
+        self.annotation(account="a", reference="mort-nov", category_id=mortgage["id"], kind="expense")
+        self.add_transaction("a", "rent-nov", amount="1800", credit_debit_indicator="CRDT", booking_date="2026-11-20")
+        self.annotation(account="a", reference="rent-nov", category_id=rent["id"], kind="income")
+        self.add_transaction("a", "food-nov", amount="120.5", booking_date="2026-11-10", transaction_date="2026-11-10")
+        self.annotation(account="a", reference="food-nov", category_id=food["id"], kind="expense")
+        self.add_transaction("a", "food-sep", amount="90", booking_date="2026-09-08", transaction_date="2026-09-08")
+        self.annotation(account="a", reference="food-sep", category_id=food["id"], kind="expense")
+        self.now = datetime(2026, 11, 28, 12, 0, tzinfo=timezone.utc).timestamp()
+
+        cfg = json.dumps({
+            "owner": {
+                "income_category_ids": [salary["id"]],
+                "income_window_start_day": 20,
+                "pass_through": {"rent_category_id": rent["id"], "mortgage_category_id": mortgage["id"]},
+            },
+        })
+        self.store.overview("owner", "2026-11")
+        statements = []
+
+        def capture(connection, cursor, statement, parameters, context, executemany):
+            statements.append(statement.split()[0].upper())
+
+        def read_clock():
+            self.assertIn("BEGIN", statements)
+            self.assertTrue(views._read_lock.locked())
+            return self.now
+
+        self.store.clock = mock.Mock(side_effect=read_clock)
+        event.listen(self.engine, "before_cursor_execute", capture)
+        try:
+            with mock.patch.dict(os.environ, {month_budget.MONTH_CONFIG_ENV: cfg}), \
+                 mock.patch.object(views, "projection_snapshot", side_effect=AssertionError("projection cache missed")):
+                charts = self.store.monthly_budget_charts("owner", history="12")
+        finally:
+            event.remove(self.engine, "before_cursor_execute", capture)
+
+        self.store.clock.assert_called_once_with()
+        self.assertEqual(statements.count("BEGIN"), 1)
+        self.assertEqual(set(statements), {"BEGIN", "SELECT"})
+        api_contract.BudgetAnalyticsMonthlyBudgetCharts.model_validate(charts)
+
+        budget = charts["budget"]
+        series = charts["series"]
+        self.assertEqual(budget["summary"], {"start_budget": "5000", "spent": "520.5", "remaining": "4479.5"})
+        self.assertEqual(len(series["daily"]), 28)
+        self.assertEqual(series["daily"][-1]["cumulative_spent"], "520.5")
+        self.assertEqual(len(series["months"]), 12)
+        nov_bucket = series["months"][-1]
+        self.assertEqual(nov_bucket["period"], "2026-11")
+        self.assertEqual(nov_bucket["start_budget"], "5000")
+        self.assertEqual(nov_bucket["spent"], "520.5")
+        self.assertEqual(month_budget.core.sum_money(c["net_spending"] for c in nov_bucket["categories"]), "520.5")
+        self.assertEqual(series["months"][-3]["period"], "2026-09")
+        self.assertEqual(series["months"][-3]["spent"], "90")
+        self.assert_invalid(lambda: self.store.monthly_budget_charts("owner", history="3"))
+
+    def test_monthly_budget_equals_charts_budget_on_same_snapshot_and_clock(self):
+        salary = self.store.create_category("owner", "Wynagrodzenie")
+        rent = self.store.create_category("owner", "Najem")
+        mortgage = self.store.create_category("owner", "Kredyt")
+        food = self.store.create_category("owner", "Zakupy")
+        self.add_transaction("a", "sal-prior", amount="5000", credit_debit_indicator="CRDT", booking_date="2026-09-26")
+        self.annotation(account="a", reference="sal-prior", category_id=salary["id"], kind="income")
+        self.metadata("a", "sal-prior", {"debtor_name": "Pracodawca"})
+        self.add_transaction("a", "sal-curr", amount="5200", credit_debit_indicator="CRDT", booking_date="2026-10-26")
+        self.annotation(account="a", reference="sal-curr", category_id=salary["id"], kind="income")
+        self.metadata("a", "sal-curr", {"debtor_name": "Pracodawca"})
+        self.add_transaction("a", "mort-nov", amount="2100", booking_date="2026-11-05", transaction_date="2026-11-05")
+        self.annotation(account="a", reference="mort-nov", category_id=mortgage["id"], kind="expense")
+        self.add_transaction("a", "rent-nov", amount="1800", credit_debit_indicator="CRDT", booking_date="2026-11-15")
+        self.annotation(account="a", reference="rent-nov", category_id=rent["id"], kind="income")
+        self.add_transaction("a", "food-nov", amount="75", booking_date="2026-11-10", transaction_date="2026-11-10")
+        self.annotation(account="a", reference="food-nov", category_id=food["id"], kind="expense")
+        self.store.save_spending_limit("owner", category_id=food["id"], currency="PLN",
+                                       monthly_limit="500", warning_percent=80, enabled=True, expected_version=0)
+
+        self.store.clock = mock.Mock(return_value=self.now)
+        unconfigured_budget = self.store.monthly_budget("owner")
+        unconfigured_charts = self.store.monthly_budget_charts("owner", history="12")
+        self.assertEqual(unconfigured_charts["budget"], unconfigured_budget)
+        self.assertIsNone(unconfigured_charts["series"])
+
+        cfg = json.dumps({
+            "owner": {
+                "income_category_ids": [salary["id"]],
+                "income_window_start_day": 20,
+                "pass_through": {"rent_category_id": rent["id"], "mortgage_category_id": mortgage["id"]},
+            },
+        })
+        with mock.patch.dict(os.environ, {month_budget.MONTH_CONFIG_ENV: cfg}):
+            single = self.store.monthly_budget("owner", period="2026-11", currency="PLN")
+            charts = self.store.monthly_budget_charts("owner", period="2026-11", currency="PLN", history="12")
+        self.assertEqual(charts["budget"], single)
+        self.assertEqual(charts["series"]["daily"][-1]["cumulative_spent"], single["summary"]["spent"])
 
 
 class SpendingLimitsProjectionTests(ProjectionCase):

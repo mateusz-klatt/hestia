@@ -76,6 +76,12 @@ export type AnalyticsMonthlyBudgetCategorySpend = Schemas["BudgetAnalyticsMonthl
 export type AnalyticsMonthlyBudgetCategoryLimit = Schemas["BudgetAnalyticsMonthlyBudgetCategoryLimit"];
 export type AnalyticsMonthlyBudgetPassThrough = Schemas["BudgetAnalyticsMonthlyBudgetPassThrough"];
 export type AnalyticsMonthlyBudgetCardExposure = Schemas["BudgetAnalyticsMonthlyBudgetCardExposure"];
+export type AnalyticsMonthlyBudgetCharts = Schemas["BudgetAnalyticsMonthlyBudgetCharts"];
+export type AnalyticsMonthlyBudgetSeries = Schemas["BudgetAnalyticsMonthlyBudgetSeries"];
+export type AnalyticsMonthlyBudgetDailyPoint = Schemas["BudgetAnalyticsMonthlyBudgetDailyPoint"];
+export type AnalyticsMonthlyBudgetSeriesMonth = Schemas["BudgetAnalyticsMonthlyBudgetSeriesMonth"];
+export type AnalyticsMonthlyBudgetSeriesCategory = Schemas["BudgetAnalyticsMonthlyBudgetSeriesCategory"];
+export type AnalyticsMonthlyBudgetCategoryLabel = Schemas["BudgetAnalyticsMonthlyBudgetCategoryLabel"];
 
 export const INBOX_MARK_BATCH_MAX = 100;
 
@@ -510,7 +516,9 @@ export function pluralPl(count: number, one: string, few: string, many: string):
   return many;
 }
 
-function parseScaledInt(value: string): { negative: boolean; coeff: bigint; scale: number } | null {
+export interface ScaledInt { negative: boolean; coeff: bigint; scale: number }
+
+export function parseScaledInt(value: string): ScaledInt | null {
   const negative = value.startsWith("-");
   const body = negative ? value.slice(1) : value;
   if (!/^\d+(?:\.\d+)?$/.test(body)) return null;
@@ -518,6 +526,18 @@ function parseScaledInt(value: string): { negative: boolean; coeff: bigint; scal
   const whole = dot === -1 ? body : body.slice(0, dot);
   const fraction = dot === -1 ? "" : body.slice(dot + 1);
   return { negative, coeff: BigInt(`${whole}${fraction}`), scale: fraction.length };
+}
+
+/** Format a signed BigInt scaled by 10^(-scale) as a canonical decimal string. */
+export function formatScaledBigInt(value: bigint, scale: number): string {
+  if (value === 0n) return "0";
+  const neg = value < 0n;
+  const digits = (neg ? -value : value).toString();
+  if (scale === 0) return `${neg ? "-" : ""}${digits}`;
+  const padded = digits.padStart(scale + 1, "0");
+  const whole = padded.slice(0, -scale);
+  const fraction = padded.slice(-scale).replace(/0+$/, "");
+  return `${neg ? "-" : ""}${whole}${fraction === "" ? "" : `.${fraction}`}`;
 }
 
 /** True when a valid decimal string represents a strictly positive amount. */

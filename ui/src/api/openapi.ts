@@ -285,6 +285,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/budget/analytics/monthly-budget/charts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read the owner-private monthly budget dashboard and chart series
+         * @description Pure read-only single-snapshot monthly budget dashboard and chart series evaluated in Europe/Warsaw from one UTC instant. Returns the MonthlyBudget dashboard alongside cumulative daily spending through cutoff and 6 or 12 historical monthly category/income buckets computed with each month's configured income window. Returns series=null when unconfigured. Makes no bank requests and no database writes.
+         */
+        get: operations["getBudgetAnalyticsMonthlyBudgetCharts"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/budget/analytics/mortgage-payment-set": {
         parameters: {
             query?: never;
@@ -390,6 +410,46 @@ export interface paths {
         get: operations["getBudgetAnalyticsRecurring"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/budget/analytics/rule-batch-preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Preview up to 100 owner-private rules against one snapshot
+         * @description Requires the exact admin owner, browser cookie and configured HTTPS Origin. All-or-nothing: every candidate is validated before a preview row is stored, and one snapshot digest fences the whole batch (1..100 rules). affected_count is the combined change, not a sum of single-rule previews. No bank request is made.
+         */
+        post: operations["previewBudgetAnalyticsRules"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/budget/analytics/rule-batch-save": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Save a batch rule preview atomically
+         * @description Requires the exact admin owner, browser cookie and configured HTTPS Origin. Applies every rule in the batch preview or none: one digest check, per-rule expected_version checks, and the per-owner rule cap (MAX_RULES = 5000) are evaluated before any rule row changes. Replaying a saved batch returns changed=false. A single-rule preview id is rejected. No bank request is made.
+         */
+        post: operations["saveBudgetAnalyticsRules"];
         delete?: never;
         options?: never;
         head?: never;
@@ -818,6 +878,146 @@ export interface paths {
         get: operations["getBudgetLimits"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/budget/receipts/confirm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Validate exact line and total identities, review an optional bank link, and retain redacted text for 30 days; JSON body cap 128 KiB.
+         * @description Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Requires an authenticated SQLite admin owner, browser cookie and exact configured Origin before the body is read. 411 means Content-Length is required and 415 means Content-Type must be application/json.
+         */
+        post: operations["confirmBudgetReceipt"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/budget/receipts/delete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Delete receipt lines before their owned receipt using expected_version CAS.
+         * @description Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Requires an authenticated SQLite admin owner, browser cookie and exact configured Origin before the body is read. 411 means Content-Length is required and 415 means Content-Type must be application/json.
+         */
+        post: operations["deleteBudgetReceipt"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/budget/receipts/detail": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read one owned receipt, its structured lines and redacted raw text.
+         * @description Default-off owner-private read. Unknown and foreign receipt IDs both return 404.
+         */
+        get: operations["getBudgetReceiptDetail"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/budget/receipts/image": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read one owned WebP image; v1a has no stored images and therefore returns 404.
+         * @description Default-off owner-private read. Unknown and foreign receipt IDs both return 404.
+         */
+        get: operations["getBudgetReceiptImage"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/budget/receipts/list": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Keyset-page owner receipts with filters in the JSON body, never URL query parameters.
+         * @description Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Requires an authenticated SQLite admin owner, browser cookie and exact configured Origin before the body is read. 411 means Content-Length is required and 415 means Content-Type must be application/json.
+         */
+        post: operations["listBudgetReceipts"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/budget/receipts/parse-text": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Paste Live Text, redact PAN data and create a 48-hour draft; JSON body cap 48 KiB.
+         * @description Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Requires an authenticated SQLite admin owner, browser cookie and exact configured Origin before the body is read. 411 means Content-Length is required and 415 means Content-Type must be application/json.
+         */
+        post: operations["parseBudgetReceiptText"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/budget/receipts/search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Search owner receipts with the query in the JSON body, never reverse-proxy URL logs.
+         * @description Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Requires an authenticated SQLite admin owner, browser cookie and exact configured Origin before the body is read. 411 means Content-Length is required and 415 means Content-Type must be application/json.
+         */
+        post: operations["searchBudgetReceipts"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1641,6 +1841,28 @@ export interface components {
             /** Version */
             version: number;
         };
+        /** BudgetAnalyticsBatchPreview */
+        BudgetAnalyticsBatchPreview: {
+            /** Affected Count */
+            affected_count: number;
+            /** Examples */
+            examples: components["schemas"]["BudgetAnalyticsPreviewExample"][];
+            /** Expires At */
+            expires_at: number;
+            /** Preview Id */
+            preview_id: string;
+            /** Rule Count */
+            rule_count: number;
+        };
+        /** BudgetAnalyticsBatchPreviewResult */
+        BudgetAnalyticsBatchPreviewResult: {
+            /**
+             * Ok
+             * @constant
+             */
+            ok: true;
+            preview: components["schemas"]["BudgetAnalyticsBatchPreview"];
+        };
         /** BudgetAnalyticsCategories */
         BudgetAnalyticsCategories: {
             /** Categories */
@@ -2247,6 +2469,15 @@ export interface components {
              */
             status: "unavailable";
         };
+        /** BudgetAnalyticsMonthlyBudgetCategoryLabel */
+        BudgetAnalyticsMonthlyBudgetCategoryLabel: {
+            /** Archived */
+            archived: boolean;
+            /** Category Id */
+            category_id: string;
+            /** Name */
+            name: string;
+        };
         /** BudgetAnalyticsMonthlyBudgetCategoryLimit */
         BudgetAnalyticsMonthlyBudgetCategoryLimit: {
             /** Monthly Limit */
@@ -2281,6 +2512,14 @@ export interface components {
             /** Refunds */
             refunds: string;
         };
+        /**
+         * BudgetAnalyticsMonthlyBudgetCharts
+         * @description Read-only owner-private monthly budget dashboard and chart series evaluated from one snapshot.
+         */
+        BudgetAnalyticsMonthlyBudgetCharts: {
+            budget: components["schemas"]["BudgetAnalyticsMonthlyBudget"];
+            series: components["schemas"]["BudgetAnalyticsMonthlyBudgetSeries"] | null;
+        };
         /** BudgetAnalyticsMonthlyBudgetConfiguration */
         BudgetAnalyticsMonthlyBudgetConfiguration: {
             income_window?: components["schemas"]["BudgetAnalyticsMonthlyBudgetIncomeWindow"];
@@ -2311,6 +2550,13 @@ export interface components {
             stale_selected_accounts: number;
             /** Transfer Scan Limited */
             transfer_scan_limited: boolean;
+        };
+        /** BudgetAnalyticsMonthlyBudgetDailyPoint */
+        BudgetAnalyticsMonthlyBudgetDailyPoint: {
+            /** Cumulative Spent */
+            cumulative_spent: string;
+            /** Date */
+            date: string;
         };
         /** BudgetAnalyticsMonthlyBudgetExpectedIncome */
         BudgetAnalyticsMonthlyBudgetExpectedIncome: {
@@ -2393,6 +2639,41 @@ export interface components {
             denominator: number;
             /** Numerator */
             numerator: string;
+        };
+        /** BudgetAnalyticsMonthlyBudgetSeries */
+        BudgetAnalyticsMonthlyBudgetSeries: {
+            /** Category Labels */
+            category_labels: components["schemas"]["BudgetAnalyticsMonthlyBudgetCategoryLabel"][];
+            /** Daily */
+            daily: components["schemas"]["BudgetAnalyticsMonthlyBudgetDailyPoint"][];
+            /** Months */
+            months: components["schemas"]["BudgetAnalyticsMonthlyBudgetSeriesMonth"][];
+        };
+        /** BudgetAnalyticsMonthlyBudgetSeriesCategory */
+        BudgetAnalyticsMonthlyBudgetSeriesCategory: {
+            /** Category Id */
+            category_id: string | null;
+            /** Net Spending */
+            net_spending: string;
+        };
+        /** BudgetAnalyticsMonthlyBudgetSeriesMonth */
+        BudgetAnalyticsMonthlyBudgetSeriesMonth: {
+            /** Categories */
+            categories: components["schemas"]["BudgetAnalyticsMonthlyBudgetSeriesCategory"][];
+            /** Has Activity */
+            has_activity: boolean;
+            /** Income Estimate Partial */
+            income_estimate_partial: boolean;
+            /** Is Current Month */
+            is_current_month: boolean;
+            /** Period */
+            period: string;
+            /** Provisional */
+            provisional: boolean;
+            /** Spent */
+            spent: string;
+            /** Start Budget */
+            start_budget: string;
         };
         /** BudgetAnalyticsMonthlyBudgetSummary */
         BudgetAnalyticsMonthlyBudgetSummary: {
@@ -2817,6 +3098,38 @@ export interface components {
             value: string;
             /** Version */
             version: number;
+        };
+        /** BudgetAnalyticsRuleBatch */
+        BudgetAnalyticsRuleBatch: {
+            /** Changed */
+            changed: boolean;
+            /** Rules */
+            rules: components["schemas"]["BudgetAnalyticsRuleSaved"][];
+        };
+        /**
+         * BudgetAnalyticsRuleBatchPreviewRequest
+         * @description Preview up to 100 rules against one snapshot. Invalid candidates store nothing.
+         */
+        BudgetAnalyticsRuleBatchPreviewRequest: {
+            /** Rules */
+            rules: components["schemas"]["BudgetAnalyticsRulePreviewRequest"][];
+        };
+        /** BudgetAnalyticsRuleBatchResult */
+        BudgetAnalyticsRuleBatchResult: {
+            batch: components["schemas"]["BudgetAnalyticsRuleBatch"];
+            /**
+             * Ok
+             * @constant
+             */
+            ok: true;
+        };
+        /**
+         * BudgetAnalyticsRuleBatchSaveRequest
+         * @description Save the whole batch preview or none of it. A single-rule preview id is rejected.
+         */
+        BudgetAnalyticsRuleBatchSaveRequest: {
+            /** Preview Id */
+            preview_id: string;
         };
         /** BudgetAnalyticsRulePreviewRequest */
         BudgetAnalyticsRulePreviewRequest: {
@@ -3864,6 +4177,358 @@ export interface components {
             amount: string;
             /** Currency */
             currency: string;
+        };
+        /** BudgetReceiptCandidate */
+        BudgetReceiptCandidate: {
+            /** Account Id */
+            account_id: string;
+            /** Amount */
+            amount: string;
+            /** Booking Date */
+            booking_date: string | null;
+            /** Candidate Token */
+            candidate_token: string;
+            /**
+             * Credit Debit Indicator
+             * @enum {string}
+             */
+            credit_debit_indicator: "DBIT" | "CRDT";
+            /** Creditor Name */
+            creditor_name: string | null;
+            /** Currency */
+            currency: string;
+            /** Date Distance */
+            date_distance: number;
+            /** Entry Reference */
+            entry_reference: string;
+            /** Merchant Token Hit */
+            merchant_token_hit: boolean;
+            /** Remittance Information */
+            remittance_information: string[];
+            /** Transaction Date */
+            transaction_date: string | null;
+            /** Value Date */
+            value_date: string | null;
+        };
+        /** BudgetReceiptConfirmRequest */
+        BudgetReceiptConfirmRequest: {
+            /** Currency */
+            currency: string;
+            /** Expected Version */
+            expected_version: number;
+            /** Lines */
+            lines: components["schemas"]["BudgetReceiptLineInput"][];
+            link: components["schemas"]["BudgetReceiptLinkRequest"] | null;
+            /**
+             * Payment Method
+             * @enum {string}
+             */
+            payment_method: "card" | "blik" | "cash" | "mixed" | "unknown";
+            /** Raw Nip */
+            raw_nip: string | null;
+            /** Raw Shop Name */
+            raw_shop_name: string | null;
+            /**
+             * Receipt Date
+             * Format: date
+             */
+            receipt_date: string;
+            /** Receipt Id */
+            receipt_id: string;
+            /**
+             * Receipt Kind
+             * @enum {string}
+             */
+            receipt_kind: "purchase" | "refund";
+            /** Receipt Time */
+            receipt_time: string | null;
+            /** Total Amount */
+            total_amount: string;
+        };
+        /** BudgetReceiptConfirmResult */
+        BudgetReceiptConfirmResult: {
+            /**
+             * Ok
+             * @constant
+             */
+            ok: true;
+            receipt: components["schemas"]["BudgetReceiptDetail"];
+        };
+        /** BudgetReceiptDeleteRequest */
+        BudgetReceiptDeleteRequest: {
+            /** Expected Version */
+            expected_version: number;
+            /** Receipt Id */
+            receipt_id: string;
+        };
+        /** BudgetReceiptDeleteResult */
+        BudgetReceiptDeleteResult: {
+            /**
+             * Deleted
+             * @constant
+             */
+            deleted: true;
+            /**
+             * Ok
+             * @constant
+             */
+            ok: true;
+        };
+        /** BudgetReceiptDetail */
+        BudgetReceiptDetail: {
+            /** Chain Key */
+            chain_key: string | null;
+            /** Created At */
+            created_at: number;
+            /** Currency */
+            currency: string | null;
+            /** Image Available */
+            image_available: boolean;
+            /** Image Expires At */
+            image_expires_at: number | null;
+            /** Lines */
+            lines: components["schemas"]["BudgetReceiptLine"][];
+            /** Linked */
+            linked: boolean;
+            /** Linked Account Id */
+            linked_account_id: string | null;
+            /** Linked Entry Ref */
+            linked_entry_ref: string | null;
+            /** Math Delta */
+            math_delta: string | null;
+            /** Payment Method */
+            payment_method: string | null;
+            /** Raw Nip */
+            raw_nip: string | null;
+            /** Raw Ocr Text */
+            raw_ocr_text: string | null;
+            /** Raw Shop Name */
+            raw_shop_name: string | null;
+            /** Raw Text Expires At */
+            raw_text_expires_at: number | null;
+            /** Receipt Date */
+            receipt_date: string | null;
+            /** Receipt Id */
+            receipt_id: string;
+            /**
+             * Receipt Kind
+             * @enum {string}
+             */
+            receipt_kind: "purchase" | "refund";
+            /** Receipt Time */
+            receipt_time: string | null;
+            /** Shop Id */
+            shop_id: string | null;
+            /**
+             * Source Kind
+             * @enum {string}
+             */
+            source_kind: "live_text" | "local_ocr" | "cloud_ai";
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "draft" | "confirmed" | "needs_review";
+            /** Total Amount */
+            total_amount: string | null;
+            /** Updated At */
+            updated_at: number;
+            /** Version */
+            version: number;
+        };
+        /** BudgetReceiptDetailResult */
+        BudgetReceiptDetailResult: {
+            receipt: components["schemas"]["BudgetReceiptDetail"];
+        };
+        /** BudgetReceiptLine */
+        BudgetReceiptLine: {
+            /** Discount Amount */
+            discount_amount: string;
+            /** Gross Line Total */
+            gross_line_total: string;
+            /**
+             * Line Kind
+             * @enum {string}
+             */
+            line_kind: "item" | "deposit" | "basket_discount" | "other";
+            /** Line No */
+            line_no: number;
+            /** Net Line Total */
+            net_line_total: string;
+            /** Ptu Code */
+            ptu_code: ("A" | "B" | "C" | "D" | "E" | "F" | "G") | null;
+            /** Quantity */
+            quantity: string;
+            /** Raw Name */
+            raw_name: string;
+            /** Raw Name Key */
+            raw_name_key: string;
+            /** Raw Unit */
+            raw_unit: string | null;
+            /** Unit Price Raw */
+            unit_price_raw: string | null;
+        };
+        /** BudgetReceiptLineInput */
+        BudgetReceiptLineInput: {
+            /** Discount Amount */
+            discount_amount: string;
+            /** Gross Line Total */
+            gross_line_total: string;
+            /**
+             * Line Kind
+             * @enum {string}
+             */
+            line_kind: "item" | "deposit" | "basket_discount" | "other";
+            /** Net Line Total */
+            net_line_total: string;
+            /** Ptu Code */
+            ptu_code: ("A" | "B" | "C" | "D" | "E" | "F" | "G") | null;
+            /** Quantity */
+            quantity: string;
+            /** Raw Name */
+            raw_name: string;
+            /** Raw Unit */
+            raw_unit: string | null;
+            /** Unit Price Raw */
+            unit_price_raw: string | null;
+        };
+        /** BudgetReceiptLinkRequest */
+        BudgetReceiptLinkRequest: {
+            /** Account Id */
+            account_id: string;
+            /**
+             * Candidate Token
+             * @description HMAC bound to the owner, transaction, three dates and merchant evidence shown at preview.
+             */
+            candidate_token: string;
+            /** Entry Reference */
+            entry_reference: string;
+        };
+        /** BudgetReceiptListRequest */
+        BudgetReceiptListRequest: {
+            /**
+             * Cursor
+             * @default null
+             */
+            cursor: string | null;
+            /**
+             * Limit
+             * @default 50
+             */
+            limit: number;
+            /**
+             * Linked
+             * @default null
+             */
+            linked: boolean | null;
+            /**
+             * Month
+             * @default null
+             */
+            month: string | null;
+            /**
+             * Status
+             * @default null
+             */
+            status: ("draft" | "confirmed" | "needs_review") | null;
+        };
+        /** BudgetReceiptListResult */
+        BudgetReceiptListResult: {
+            /** Next Cursor */
+            next_cursor: string | null;
+            /** Receipts */
+            receipts: components["schemas"]["BudgetReceiptSummary"][];
+        };
+        /** BudgetReceiptParseResult */
+        BudgetReceiptParseResult: {
+            /** Candidates */
+            candidates: components["schemas"]["BudgetReceiptCandidate"][];
+            draft: components["schemas"]["BudgetReceiptDetail"];
+            /** Receipt Id */
+            receipt_id: string;
+            /** Version */
+            version: number;
+        };
+        /** BudgetReceiptParseTextRequest */
+        BudgetReceiptParseTextRequest: {
+            /**
+             * Text
+             * @description UTF-8 text is additionally capped at 32 KiB and 500 lines.
+             */
+            text: string;
+        };
+        /** BudgetReceiptSearchRequest */
+        BudgetReceiptSearchRequest: {
+            /**
+             * Cursor
+             * @default null
+             */
+            cursor: string | null;
+            /**
+             * Limit
+             * @default 50
+             */
+            limit: number;
+            /** Query */
+            query: string;
+        };
+        /** BudgetReceiptSummary */
+        BudgetReceiptSummary: {
+            /** Chain Key */
+            chain_key: string | null;
+            /** Created At */
+            created_at: number;
+            /** Currency */
+            currency: string | null;
+            /** Image Available */
+            image_available: boolean;
+            /** Image Expires At */
+            image_expires_at: number | null;
+            /** Linked */
+            linked: boolean;
+            /** Linked Account Id */
+            linked_account_id: string | null;
+            /** Linked Entry Ref */
+            linked_entry_ref: string | null;
+            /** Math Delta */
+            math_delta: string | null;
+            /** Payment Method */
+            payment_method: string | null;
+            /** Raw Nip */
+            raw_nip: string | null;
+            /** Raw Shop Name */
+            raw_shop_name: string | null;
+            /** Raw Text Expires At */
+            raw_text_expires_at: number | null;
+            /** Receipt Date */
+            receipt_date: string | null;
+            /** Receipt Id */
+            receipt_id: string;
+            /**
+             * Receipt Kind
+             * @enum {string}
+             */
+            receipt_kind: "purchase" | "refund";
+            /** Receipt Time */
+            receipt_time: string | null;
+            /** Shop Id */
+            shop_id: string | null;
+            /**
+             * Source Kind
+             * @enum {string}
+             */
+            source_kind: "live_text" | "local_ocr" | "cloud_ai";
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "draft" | "confirmed" | "needs_review";
+            /** Total Amount */
+            total_amount: string | null;
+            /** Updated At */
+            updated_at: number;
+            /** Version */
+            version: number;
         };
         /** BudgetRefreshAccepted */
         BudgetRefreshAccepted: {
@@ -6286,6 +6951,105 @@ export interface operations {
             };
         };
     };
+    getBudgetAnalyticsMonthlyBudgetCharts: {
+        parameters: {
+            query?: {
+                /** @description Optional calendar month YYYY-MM, 1900 through the current Europe/Warsaw month; defaults to current month. */
+                period?: string;
+                /** @description Optional uppercase 3-letter ISO currency code; defaults to PLN. */
+                currency?: string;
+                /** @description Optional monthly history window (6 or 12 months); defaults to 6. */
+                history?: "6" | "12";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Owner-private monthly budget dashboard and chart series from one local snapshot. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetAnalyticsMonthlyBudgetCharts"];
+                };
+            };
+            /** @description Invalid monthly budget charts query: period must match ^[0-9]{4}-[0-9]{2}$ through the current Europe/Warsaw month, currency must match ^[A-Z]{3}$, history must be 6 or 12, and unknown or duplicate parameters are rejected. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description session required; middleware may return an empty body */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description admin owner or browser-origin requirement failed; middleware may return an empty body */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description unknown, disabled or foreign resource */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description SQLite backend required: monthly-budget/charts requires HESTIA_PERSIST=sqlite. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Monthly budget charts limit exceeded (>100,000 selected rows, >1,000 category limits, >192-character aggregate decimal output, or >4 MiB UTF-8 JSON payload); no partial totals returned. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Stored ledger, category, limit, metadata, or timestamp integrity check failed (`budget_analytics_data_error`), including stored-data helper errors mapped to 500 after query validation, or unexpected internal failure (`budget_internal_error`). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Analytics storage, Europe/Warsaw time zone, or monthly budget configuration unavailable (`budget_analytics_unavailable` or `budget_unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+        };
+    };
     setBudgetAnalyticsMortgagePayment: {
         parameters: {
             query?: never;
@@ -6779,6 +7543,198 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["BudgetAnalyticsRecurring"];
+                };
+            };
+            /** @description invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description session required; middleware may return an empty body */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description admin owner or browser-origin requirement failed; middleware may return an empty body */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description unknown, disabled or foreign resource */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Version, financial source, reserved transfer leg, preview or cursor changed; reload and review. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Explicit analytics processing or owner configuration limit; no partial totals. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description budget configuration unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+        };
+    };
+    previewBudgetAnalyticsRules: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BudgetAnalyticsRuleBatchPreviewRequest"];
+            };
+        };
+        responses: {
+            /** @description owner-scoped stored state; no bank request */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetAnalyticsBatchPreviewResult"];
+                };
+            };
+            /** @description invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description session required; middleware may return an empty body */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description admin owner or browser-origin requirement failed; middleware may return an empty body */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description unknown, disabled or foreign resource */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Version, financial source, reserved transfer leg, preview or cursor changed; reload and review. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Explicit analytics processing or owner configuration limit; no partial totals. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description budget configuration unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+        };
+    };
+    saveBudgetAnalyticsRules: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BudgetAnalyticsRuleBatchSaveRequest"];
+            };
+        };
+        responses: {
+            /** @description owner-scoped stored state; no bank request */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetAnalyticsRuleBatchResult"];
                 };
             };
             /** @description invalid request */
@@ -8821,6 +9777,748 @@ export interface operations {
             };
             /** @description SQLite session users required */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description budget configuration unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+        };
+    };
+    confirmBudgetReceipt: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BudgetReceiptConfirmRequest"];
+            };
+        };
+        responses: {
+            /** @description owner-scoped stored state; no bank request */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetReceiptConfirmResult"];
+                };
+            };
+            /** @description invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description session required; middleware may return an empty body */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description admin owner or browser-origin requirement failed; middleware may return an empty body */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description unknown, disabled or foreign resource */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Stale expected_version (budget_receipt_conflict), the bank transaction is already linked (budget_receipt_tx_already_linked), or the candidate token no longer matches the owner, transaction, dates and merchant evidence shown at preview (budget_receipt_stale_source). A missing SQLite users backend also returns 409 (budget_requires_sqlite_users). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Content-Length is required. */
+            411: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description JSON body exceeds 131072 bytes. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Content-Type must be application/json. */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description budget configuration unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+        };
+    };
+    deleteBudgetReceipt: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BudgetReceiptDeleteRequest"];
+            };
+        };
+        responses: {
+            /** @description owner-scoped stored state; no bank request */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetReceiptDeleteResult"];
+                };
+            };
+            /** @description invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description session required; middleware may return an empty body */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description admin owner or browser-origin requirement failed; middleware may return an empty body */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description unknown, disabled or foreign resource */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Stale expected_version (budget_receipt_conflict). A missing SQLite users backend also returns 409 (budget_requires_sqlite_users). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Content-Length is required. */
+            411: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description JSON body exceeds 16384 bytes. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Content-Type must be application/json. */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description budget configuration unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+        };
+    };
+    getBudgetReceiptDetail: {
+        parameters: {
+            query: {
+                /** @description Opaque owned receipt UUID. */
+                receipt_id: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description owner-scoped stored state; no bank request */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetReceiptDetailResult"];
+                };
+            };
+            /** @description invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description session required; middleware may return an empty body */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description admin owner or browser-origin requirement failed; middleware may return an empty body */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description unknown, disabled or foreign resource */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description SQLite users backend is required (budget_requires_sqlite_users). This read does not accept a JSON body. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description budget configuration unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+        };
+    };
+    getBudgetReceiptImage: {
+        parameters: {
+            query: {
+                /** @description Opaque owned receipt UUID. */
+                receipt_id: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Owner-private WebP bytes (available from v1b). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "image/webp": string;
+                };
+            };
+            /** @description invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description session required; middleware may return an empty body */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description admin owner or browser-origin requirement failed; middleware may return an empty body */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description unknown, disabled or foreign resource */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description SQLite users backend is required (budget_requires_sqlite_users). This read does not accept a JSON body. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description budget configuration unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+        };
+    };
+    listBudgetReceipts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BudgetReceiptListRequest"];
+            };
+        };
+        responses: {
+            /** @description owner-scoped stored state; no bank request */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetReceiptListResult"];
+                };
+            };
+            /** @description invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description session required; middleware may return an empty body */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description admin owner or browser-origin requirement failed; middleware may return an empty body */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description unknown, disabled or foreign resource */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description SQLite users backend is required (budget_requires_sqlite_users). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Content-Length is required. */
+            411: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description JSON body exceeds 16384 bytes. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Content-Type must be application/json. */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description budget configuration unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+        };
+    };
+    parseBudgetReceiptText: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BudgetReceiptParseTextRequest"];
+            };
+        };
+        responses: {
+            /** @description owner-scoped stored state; no bank request */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetReceiptParseResult"];
+                };
+            };
+            /** @description invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description session required; middleware may return an empty body */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description admin owner or browser-origin requirement failed; middleware may return an empty body */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description unknown, disabled or foreign resource */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description SQLite users backend is required (budget_requires_sqlite_users). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Content-Length is required. */
+            411: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description JSON body exceeds 49152 bytes, or the owner already has 20 active drafts (budget_receipt_quota_exceeded). */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Content-Type must be application/json. */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description budget configuration unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+        };
+    };
+    searchBudgetReceipts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BudgetReceiptSearchRequest"];
+            };
+        };
+        responses: {
+            /** @description owner-scoped stored state; no bank request */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetReceiptListResult"];
+                };
+            };
+            /** @description invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description session required; middleware may return an empty body */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description admin owner or browser-origin requirement failed; middleware may return an empty body */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description unknown, disabled or foreign resource */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description SQLite users backend is required (budget_requires_sqlite_users). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Content-Length is required. */
+            411: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description JSON body exceeds 16384 bytes. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Content-Type must be application/json. */
+            415: {
                 headers: {
                     [name: string]: unknown;
                 };

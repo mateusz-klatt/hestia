@@ -56,12 +56,34 @@ class OpenApiArtifactTests(unittest.TestCase):
 
     def test_monthly_budget_contract_is_strictly_additive_from_0_27_0(self):
         document = api_contract.build_openapi()
-        self.assertEqual(document["info"]["version"], "0.30.0")
+        self.assertEqual(document["info"]["version"], "0.31.0")
         for path in [path for path in document["paths"] if path.startswith("/api/budget/receipts/")]:
             del document["paths"][path]
         for name in [name for name in document["components"]["schemas"] if name.startswith("BudgetReceipt")]:
             del document["components"]["schemas"][name]
+        document["info"]["version"] = "0.30.0"
+        canonical_0_30 = json.dumps(document, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        self.assertEqual(hashlib.sha256(canonical_0_30).hexdigest(),
+                         "896148e8965fdf4d10e9433f4b0145d2b440db22f3e98ae6a6f2f685d78d4e9b")
+        # Strip this batch addition and compare with the 0.29.0 monthly-budget contract.
+        for path in ("/api/budget/analytics/rule-batch-preview", "/api/budget/analytics/rule-batch-save"):
+            del document["paths"][path]
+        for name in ("BudgetAnalyticsRuleBatchPreviewRequest", "BudgetAnalyticsRuleBatchSaveRequest",
+                     "BudgetAnalyticsBatchPreview", "BudgetAnalyticsBatchPreviewResult",
+                     "BudgetAnalyticsRuleBatch", "BudgetAnalyticsRuleBatchResult"):
+            del document["components"]["schemas"][name]
+        document["info"]["version"] = "0.29.0"
+        canonical_0_29 = json.dumps(document, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        self.assertEqual(hashlib.sha256(canonical_0_29).hexdigest(),
+                         "a4cbedec9290daf19844d81638d2b26aaba3a58b93e74584bf0d29c5f5191b4a")
+        del document["paths"]["/api/budget/analytics/monthly-budget/charts"]
+        for suffix in ("DailyPoint", "SeriesCategory", "SeriesMonth", "CategoryLabel", "Series", "Charts"):
+            del document["components"]["schemas"]["BudgetAnalyticsMonthlyBudget" + suffix]
         document["info"]["version"] = "0.28.0"
+        canonical_0_28 = json.dumps(document, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        self.assertEqual(hashlib.sha256(canonical_0_28).hexdigest(),
+                         "c5bcae67df899fd1ad3a8527b17244aef0251a65e7b7e4d115b7a6e4e6e832fd")
+
         del document["components"]["schemas"]["BudgetAnalyticsMonthlyBudgetConfiguration"]["properties"]["income_window"]
         del document["components"]["schemas"]["BudgetAnalyticsMonthlyBudgetIncomeWindow"]
         document["info"]["version"] = "0.27.0"
@@ -492,6 +514,7 @@ class TolerantResponseContractTests(unittest.TestCase):
     REQUEST_ONLY = {
         "BudgetAnalyticsCategoryCreateRequest", "BudgetAnalyticsCategoryUpdateRequest",
         "BudgetAnalyticsAnnotationRequest", "BudgetAnalyticsRulePreviewRequest", "BudgetAnalyticsRuleSaveRequest",
+        "BudgetAnalyticsRuleBatchPreviewRequest", "BudgetAnalyticsRuleBatchSaveRequest",
         "BudgetAnalyticsTransferDecisionRequest", "BudgetAnalyticsLegRequest",
         "BudgetAnalyticsSpendingLimitSaveRequest", "BudgetAnalyticsMortgageSaveRequest",
         "BudgetAnalyticsMortgagePaymentSetRequest", "BudgetAnalyticsInboxKeyRequest",

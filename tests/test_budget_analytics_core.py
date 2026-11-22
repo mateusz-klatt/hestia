@@ -1,11 +1,12 @@
 """Exact arithmetic and material evidence use only synthetic values."""
 from copy import deepcopy
 from types import SimpleNamespace
+import unicodedata
 import unittest
 
 from hestia.budget.analytics_core import (AnalyticsError, canonical_money, compare_money, compatible_kind,
-    effective_date, financial_fingerprint, negate_money, owned_identities, pair_fingerprint, parse_period,
-    projection_digest, rule_matches, sum_money)
+    compile_rules, effective_date, financial_fingerprint, first_matching_rule, match_texts, negate_money,
+    owned_identities, pair_fingerprint, parse_period, projection_digest, rule_matches, sum_money)
 
 
 def payload(**changes):
@@ -139,3 +140,81 @@ class PeriodAndRuleTests(unittest.TestCase):
                      ("expense", "DBIT", True), ("income", "CRDT", True), ("refund", "CRDT", True),
                      ("income", "DBIT", False), ("expense", "CRDT", False), ("bad", "DBIT", False)):
             self.assertEqual(compatible_kind(kind, payload(credit_debit_indicator=direction)), expected)
+
+    def test_compiled_rules_match_the_same_first_rule_without_refolding(self):
+        rules = [
+            {"id": "later", "enabled": True, "kind": "expense", "field": "description", "operator": "contains",
+             "value": "shop", "priority": 2},
+            {"id": "first", "enabled": True, "kind": "auto", "field": "description", "operator": "equals",
+             "value": "Synthetic SHOP", "priority": 1},
+            {"id": "off", "enabled": False, "kind": "expense", "field": "execute", "operator": "regex",
+             "value": "shop", "priority": 0},
+        ]
+        ordered = sorted(rules, key=lambda row: (row["priority"], row["id"]))
+        compiled, safe = compile_rules(ordered)
+        self.assertTrue(safe)
+        texts = match_texts(payload(), None)
+        found = first_matching_rule(compiled, payload(), texts)
+        self.assertEqual(found["id"], "first")
+        self.assertTrue(rule_matches(ordered[1], payload()))
+        # Sort order is (priority, id), so the disabled rule is ordered[0], not the last input.
+        self.assertEqual(ordered[0]["id"], "off")
+        disabled, disabled_safe = compile_rules([ordered[0]])
+        self.assertTrue(disabled_safe)
+        self.assertIsNone(first_matching_rule(disabled, payload(), texts))
+        self.assertFalse(rule_matches(ordered[0], payload()))
+        broken, broken_safe = compile_rules([ordered[1] | {"field": "execute"}])
+        self.assertFalse(broken_safe)
+        with self.assertRaises(AnalyticsError):
+            first_matching_rule(broken, payload(), texts)
+
+    def test_compiled_matcher_agrees_with_rule_matches(self):
+        base = {"enabled": True, "kind": "auto", "field": "description", "operator": "contains", "priority": 1}
+        literal = ".*+?[]()"
+        nfc, nfd = "ŻÓŁĆ", unicodedata.normalize("NFD", "ŻÓŁĆ")
+        self.assertNotEqual(nfc, nfd)
+        text = {**base, "id": "u", "field": "counterparty_name", "operator": "equals"}
+        expense = {"id": "later", "enabled": True, "kind": "expense", "field": "description",
+                   "operator": "contains", "value": "shop", "priority": 2}
+        cases = (
+            ("empty contains", [{**base, "id": "e", "value": ""}], payload(), None),
+            ("empty equals miss", [{**base, "id": "e", "operator": "equals", "value": ""}], payload(), None),
+            ("empty equals hit", [{**base, "id": "e", "operator": "equals", "value": ""}],
+             payload(remittance_information=[""]), None),
+            ("regex literal miss", [{**base, "id": "r", "value": literal}], payload(), None),
+            ("regex literal hit", [{**base, "id": "r", "value": literal}],
+             payload(remittance_information=[f"before {literal} after"]), None),
+            ("nfc needle nfd text", [{**text, "value": nfc}], payload(), {"creditor_name": nfd}),
+            ("nfd needle nfc text", [{**text, "value": nfd}], payload(), {"creditor_name": nfc}),
+            ("sharp s", [{**text, "value": "ß"}], payload(), {"creditor_name": "SS"}),
+            ("sharp s lower", [{**text, "value": "ß"}], payload(), {"creditor_name": "ss"}),
+            ("priority tie", [{**base, "id": "b", "priority": 4, "value": "shop"},
+                              {**base, "id": "a", "priority": 4, "value": "shop"}], payload(), None),
+            ("disabled isolation", [{"id": "off", "enabled": False, "kind": "expense", "field": "execute",
+                                     "operator": "regex", "value": "shop", "priority": 0}], payload(), None),
+            ("expense debit", [expense], payload(), None),
+            ("expense credit", [expense], payload(credit_debit_indicator="CRDT"), None),
+            ("income credit", [{**base, "id": "inc", "kind": "income", "value": "shop"}],
+             payload(credit_debit_indicator="CRDT"), None),
+            ("income debit", [{**base, "id": "inc", "kind": "income", "value": "shop"}],
+             payload(credit_debit_indicator="DBIT"), None),
+            ("refund credit", [{**base, "id": "ref", "kind": "refund", "value": "shop"}],
+             payload(credit_debit_indicator="CRDT"), None),
+            ("excluded credit", [{**base, "id": "exc", "kind": "excluded", "value": "shop"}],
+             payload(credit_debit_indicator="CRDT"), None),
+            ("unknown kind", [{**base, "id": "bad", "kind": "bad", "value": "shop"}], payload(), None),
+        )
+        for name, rules, body, metadata in cases:
+            with self.subTest(name=name):
+                ordered = sorted(rules, key=lambda row: (row["priority"], row["id"]))
+                compiled, safe = compile_rules(ordered)
+                self.assertTrue(safe)
+                found = first_matching_rule(compiled, body, match_texts(body, metadata))
+                expected = next((rule for rule in ordered if rule_matches(rule, body, metadata)), None)
+                self.assertEqual(found["id"] if found is not None else None,
+                                 expected["id"] if expected is not None else None)
+                if name == "priority tie":
+                    self.assertEqual(found["id"], "a")
+                if name == "disabled isolation":
+                    self.assertIsNone(found)
+                    self.assertFalse(rule_matches(ordered[0], body, metadata))
