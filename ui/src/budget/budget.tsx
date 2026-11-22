@@ -12,6 +12,7 @@ import type { BudgetAccount, BudgetBalances, BudgetCapabilities, BudgetConnectio
   BudgetConsent, BudgetConsentFlow, BudgetLimit, BudgetSharedLimit, BudgetTransaction, DateRange,
   LimitState } from "./model";
 import { ConsentHealthPanel, consentHealthLabels } from "./consent_health";
+import { InboxView, inboxLabels } from "./analytics/inbox";
 import { MonthView, monthLabels } from "./analytics/month";
 import { MortgagesView, mortgagesLabels } from "./analytics/mortgages";
 import { RecurringView, recurringLabels } from "./analytics/recurring";
@@ -24,7 +25,7 @@ import "./budget.css";
 const labels = {
   en: {
     title: "Budget", subtitle: "Your private household finances.", reload: "Reload", loading: "Loading budget…",
-    views: { accounts: "Accounts", month: "Month", year: "Year", limits: "Spending limits", recurring: "Recurring", mortgages: "Mortgages", rules: "Categories and rules" }, viewsLabel: "Budget view",
+    views: { accounts: "Accounts", inbox: "Inbox", month: "Month", year: "Year", limits: "Spending limits", recurring: "Recurring", mortgages: "Mortgages", rules: "Categories and rules" }, viewsLabel: "Budget view",
     disabled: "The budget is not enabled on this server.", denied: "Only the budget's owner can view it.",
     error: "The budget could not be loaded. Try again.", empty: "No bank connections are configured.",
     account: "Account", refresh: "Refresh from bank", refreshing: "Refresh queued…",
@@ -70,7 +71,7 @@ const labels = {
   },
   pl: {
     title: "Budżet", subtitle: "Prywatne finanse domowe.", reload: "Wczytaj ponownie", loading: "Wczytywanie budżetu…",
-    views: { accounts: "Konta", month: "Miesiąc", year: "Rok", limits: "Limity wydatków", recurring: "Cykliczne", mortgages: "Hipoteka", rules: "Kategorie i reguły" }, viewsLabel: "Widok budżetu",
+    views: { accounts: "Konta", inbox: "Skrzynka", month: "Miesiąc", year: "Rok", limits: "Limity wydatków", recurring: "Cykliczne", mortgages: "Hipoteka", rules: "Kategorie i reguły" }, viewsLabel: "Widok budżetu",
     disabled: "Budżet nie jest włączony na tym serwerze.", denied: "Budżet widzi tylko jego właściciel.",
     error: "Nie udało się wczytać budżetu. Spróbuj ponownie.", empty: "Brak skonfigurowanych połączeń z bankiem.",
     account: "Konto", refresh: "Odśwież z banku", refreshing: "Odświeżanie w kolejce…",
@@ -117,19 +118,21 @@ const labels = {
 };
 type Labels = typeof labels.en;
 
-function pick(): { text: Labels; consentHealth: typeof consentHealthLabels.en; month: typeof monthLabels.en; year: typeof yearLabels.en;
+function pick(): { text: Labels; consentHealth: typeof consentHealthLabels.en; inbox: typeof inboxLabels.en;
+  month: typeof monthLabels.en; year: typeof yearLabels.en;
   limits: typeof spendingLimitsLabels.en; recurring: typeof recurringLabels.en;
   mortgages: typeof mortgagesLabels.en; rules: typeof rulesLabels.en; locale: string } {
   const locale = currentLocale();
   const pl = locale.startsWith("pl");
   return { text: pl ? labels.pl : labels.en, consentHealth: pl ? consentHealthLabels.pl : consentHealthLabels.en,
+    inbox: pl ? inboxLabels.pl : inboxLabels.en,
     month: pl ? monthLabels.pl : monthLabels.en, year: pl ? yearLabels.pl : yearLabels.en,
     limits: pl ? spendingLimitsLabels.pl : spendingLimitsLabels.en,
     recurring: pl ? recurringLabels.pl : recurringLabels.en,
     mortgages: pl ? mortgagesLabels.pl : mortgagesLabels.en, rules: pl ? rulesLabels.pl : rulesLabels.en, locale };
 }
 
-type View = "accounts" | "month" | "year" | "limits" | "recurring" | "mortgages" | "rules";
+type View = "accounts" | "inbox" | "month" | "year" | "limits" | "recurring" | "mortgages" | "rules";
 
 type Load = "loading" | "ready" | "disabled" | "denied" | "error";
 
@@ -166,7 +169,7 @@ export interface BudgetProps {
 
 export function Budget({ active, api = budgetApi, pollMs = 2000, principal,
   navigate = (url) => { window.location.assign(url); }, completeUrl = "/budget/connect/complete" }: BudgetProps) {
-  const { text, consentHealth: consentHealthText, month: monthText, year: yearText, limits: limitsText, recurring: recurringText,
+  const { text, consentHealth: consentHealthText, inbox: inboxText, month: monthText, year: yearText, limits: limitsText, recurring: recurringText,
     mortgages: mortgagesText, rules: rulesText, locale } = pick();
   const [load, setLoad] = useState<Load>("loading");
   const [connections, setConnections] = useState<BudgetConnection[]>([]);
@@ -443,13 +446,22 @@ export function Budget({ active, api = budgetApi, pollMs = 2000, principal,
       )}
       {analysis ? (
         <div className="budget-views" role="group" aria-label={text.viewsLabel}>
-          {(["accounts", "month", "year", "limits", "recurring", "mortgages", "rules"] as const).map((item) => (
+          {(["accounts", "inbox", "month", "year", "limits", "recurring", "mortgages", "rules"] as const).map((item) => (
             <button type="button" key={item} aria-pressed={shownView === item}
               onClick={() => { setView(item); if (item === "month") setFocusMonth(undefined); }}>{text.views[item]}</button>
           ))}
         </div>
       ) : null}
-      {shownView === "month" ? (
+      {shownView === "inbox" ? (
+        <InboxView api={api} connections={connections} consentEnabled={consentEnabled} text={inboxText} locale={locale}
+          revision={revision} onAccessLoss={barrier}
+          onOpenAccounts={(openConsentHealth) => {
+            setView("accounts");
+            if (openConsentHealth && consentEnabled) setShowConsentHealth(true);
+          }}
+          onOpenMortgages={() => { setView("mortgages"); }}
+          onOpenLimits={() => { setView("limits"); }} />
+      ) : shownView === "month" ? (
         <MonthView key={focusMonth ?? "current"} api={api} accounts={accounts} connections={connections} text={monthText} locale={locale} revision={revision}
           onAccessLoss={barrier} initialMonth={focusMonth} />
       ) : shownView === "year" ? (

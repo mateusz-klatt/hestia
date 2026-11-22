@@ -205,6 +205,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/budget/analytics/inbox": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read owner-private live active alerts inbox (pure read-only)
+         * @description Pure read-only single-snapshot evaluation of currently active consent renewal, mortgage due and spending-limit alerts against durable owner read markers (zero DB writes, zero bank requests). Resolved alerts disappear automatically even if unread; read markers are not pruned in v1 (cap 500).
+         */
+        get: operations["getBudgetAnalyticsInbox"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/budget/analytics/inbox-mark": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Mark or unmark owner-private inbox alerts (atomic anti-ABA CAS)
+         * @description Requires the exact admin owner, browser cookie and configured HTTPS Origin. Atomically marks or unmarks 1..100 deduplicated alert keys under anti-ABA reads_version CAS (409 budget_analytics_conflict if stale; 409 budget_analytics_source_changed if any unmarked key is inactive on read=true; 413 budget_analytics_limit at the 500-marker cap on create only). No bank request is made.
+         */
+        post: operations["markBudgetAnalyticsInbox"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/budget/analytics/mortgage-payment-set": {
         parameters: {
             query?: never;
@@ -1707,6 +1747,227 @@ export interface components {
             account_id: string;
             balances: components["schemas"]["BudgetComponentStatus"];
             transactions: components["schemas"]["BudgetComponentStatus"];
+        };
+        /**
+         * BudgetAnalyticsInbox
+         * @description Owner-private live active alerts evaluated in one SQLite read snapshot (pure read-only, zero DB writes).
+         *     Represents currently active alerts only: resolved alerts disappear automatically even if unread.
+         *     Read markers are durable dedupe receipts (no pruning in v1, cap 500 per owner).
+         */
+        BudgetAnalyticsInbox: {
+            /** Evaluated At */
+            evaluated_at: number;
+            /** Evaluation Date */
+            evaluation_date: string;
+            /**
+             * Evaluation Timezone
+             * @constant
+             */
+            evaluation_timezone: "UTC";
+            /** Items */
+            items: (components["schemas"]["BudgetAnalyticsInboxConsentItem"] | components["schemas"]["BudgetAnalyticsInboxMortgageItem"] | components["schemas"]["BudgetAnalyticsInboxSpendingLimitItem"])[];
+            /** Reads Cap */
+            reads_cap: number;
+            /** Reads Count */
+            reads_count: number;
+            /** Reads Revision */
+            reads_revision: number;
+            /** Reads Version */
+            reads_version: string;
+            /** Rule Version */
+            rule_version: number;
+            /** Unread Count */
+            unread_count: number;
+        };
+        /** BudgetAnalyticsInboxConsentItem */
+        BudgetAnalyticsInboxConsentItem: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "consent_renewal";
+            /** Milestone */
+            milestone: string;
+            params: components["schemas"]["BudgetAnalyticsInboxConsentParams"];
+            /** Read */
+            read: boolean;
+            /** Read At */
+            read_at: number | null;
+            ref: components["schemas"]["BudgetAnalyticsInboxConsentRef"];
+            /** Subject Id */
+            subject_id: string;
+        };
+        /**
+         * BudgetAnalyticsInboxConsentParams
+         * @description Strictly allowlisted live params for a consent_renewal alert (zero bank/provider IDs).
+         */
+        BudgetAnalyticsInboxConsentParams: {
+            /** Attention */
+            attention: string | null;
+            /** Days Remaining */
+            days_remaining: number | null;
+            /** Paused */
+            paused: boolean;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "attention_required" | "expired" | "due_soon";
+            /** Valid Until */
+            valid_until: number | null;
+        };
+        /**
+         * BudgetAnalyticsInboxConsentRef
+         * @description Owner-known local connection ID for UI lookup (computed live, never stored or logged).
+         */
+        BudgetAnalyticsInboxConsentRef: {
+            /** Connection Id */
+            connection_id: string;
+        };
+        /**
+         * BudgetAnalyticsInboxKeyRequest
+         * @description One opaque owner-inbox alert key (kind, stable local subject_id, milestone).
+         */
+        BudgetAnalyticsInboxKeyRequest: {
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "consent_renewal" | "mortgage_due" | "spending_limit";
+            /** Milestone */
+            milestone: string;
+            /** Subject Id */
+            subject_id: string;
+        };
+        /**
+         * BudgetAnalyticsInboxMarkRequest
+         * @description Atomically mark or unmark 1..100 owner-inbox alert keys under anti-ABA reads_version CAS.
+         */
+        BudgetAnalyticsInboxMarkRequest: {
+            /** Expected Reads Version */
+            expected_reads_version: string;
+            /** Items */
+            items: components["schemas"]["BudgetAnalyticsInboxKeyRequest"][];
+            /** Read */
+            read: boolean;
+        };
+        /** BudgetAnalyticsInboxMarkResult */
+        BudgetAnalyticsInboxMarkResult: {
+            inbox: components["schemas"]["BudgetAnalyticsInboxMarkSaved"];
+            /**
+             * Ok
+             * @constant
+             */
+            ok: true;
+        };
+        /** BudgetAnalyticsInboxMarkSaved */
+        BudgetAnalyticsInboxMarkSaved: {
+            /** Changed */
+            changed: boolean;
+            /** Changed Count */
+            changed_count: number;
+            /** Read */
+            read: boolean;
+            /** Reads Cap */
+            reads_cap: number;
+            /** Reads Count */
+            reads_count: number;
+            /** Reads Revision */
+            reads_revision: number;
+            /** Reads Version */
+            reads_version: string;
+        };
+        /** BudgetAnalyticsInboxMortgageItem */
+        BudgetAnalyticsInboxMortgageItem: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "mortgage_due";
+            /** Milestone */
+            milestone: string;
+            params: components["schemas"]["BudgetAnalyticsInboxMortgageParams"];
+            /** Read */
+            read: boolean;
+            /** Read At */
+            read_at: number | null;
+            ref: components["schemas"]["BudgetAnalyticsInboxMortgageRef"];
+            /** Subject Id */
+            subject_id: string;
+        };
+        /**
+         * BudgetAnalyticsInboxMortgageParams
+         * @description Strictly allowlisted live params for a mortgage_due alert (zero labels or amounts).
+         */
+        BudgetAnalyticsInboxMortgageParams: {
+            /** Currency */
+            currency: string;
+            /** Days Until Due */
+            days_until_due: number;
+            /** Due Date */
+            due_date: string;
+            /** Freshness Stale */
+            freshness_stale: boolean;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "overdue" | "due_today" | "due_soon";
+        };
+        /**
+         * BudgetAnalyticsInboxMortgageRef
+         * @description Owner-known local mortgage schedule ID for UI lookup (computed live, never stored or logged).
+         */
+        BudgetAnalyticsInboxMortgageRef: {
+            /** Schedule Id */
+            schedule_id: string;
+        };
+        /** BudgetAnalyticsInboxSpendingLimitItem */
+        BudgetAnalyticsInboxSpendingLimitItem: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "spending_limit";
+            /** Milestone */
+            milestone: string;
+            params: components["schemas"]["BudgetAnalyticsInboxSpendingLimitParams"];
+            /** Read */
+            read: boolean;
+            /** Read At */
+            read_at: number | null;
+            ref: components["schemas"]["BudgetAnalyticsInboxSpendingLimitRef"];
+            /** Subject Id */
+            subject_id: string;
+        };
+        /**
+         * BudgetAnalyticsInboxSpendingLimitParams
+         * @description Strictly allowlisted live params for a spending_limit alert (zero category names or amounts).
+         */
+        BudgetAnalyticsInboxSpendingLimitParams: {
+            /** Currency */
+            currency: string;
+            /** Percent Used Floor */
+            percent_used_floor: number;
+            /** Period */
+            period: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "approaching" | "at_limit" | "exceeded";
+            /** Warning Percent */
+            warning_percent: number;
+        };
+        /**
+         * BudgetAnalyticsInboxSpendingLimitRef
+         * @description Owner-known local category ID and currency for UI lookup (computed live, never stored or logged).
+         */
+        BudgetAnalyticsInboxSpendingLimitRef: {
+            /** Category Id */
+            category_id: string;
+            /** Currency */
+            currency: string;
         };
         /** BudgetAnalyticsLeg */
         BudgetAnalyticsLeg: {
@@ -5101,6 +5362,194 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["BudgetAnalyticsCategoryResult"];
+                };
+            };
+            /** @description invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description session required; middleware may return an empty body */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description admin owner or browser-origin requirement failed; middleware may return an empty body */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description unknown, disabled or foreign resource */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Version, financial source, reserved transfer leg, preview or cursor changed; reload and review. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Explicit analytics processing or owner configuration limit; no partial totals. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description budget configuration unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+        };
+    };
+    getBudgetAnalyticsInbox: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description owner-scoped stored state; no bank request */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetAnalyticsInbox"];
+                };
+            };
+            /** @description invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description session required; middleware may return an empty body */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description admin owner or browser-origin requirement failed; middleware may return an empty body */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description unknown, disabled or foreign resource */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Version, financial source, reserved transfer leg, preview or cursor changed; reload and review. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Explicit analytics processing or owner configuration limit; no partial totals. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description budget configuration unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+        };
+    };
+    markBudgetAnalyticsInbox: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BudgetAnalyticsInboxMarkRequest"];
+            };
+        };
+        responses: {
+            /** @description owner-scoped stored state; no bank request */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetAnalyticsInboxMarkResult"];
                 };
             };
             /** @description invalid request */

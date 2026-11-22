@@ -40,6 +40,28 @@ export type MortgageScheduleSaved = Schemas["BudgetAnalyticsMortgageScheduleSave
 export type MortgagePaymentSetRequest = Schemas["BudgetAnalyticsMortgagePaymentSetRequest"];
 export type MortgagePaymentSaved = Schemas["BudgetAnalyticsMortgagePaymentSaved"];
 
+export type AnalyticsInboxConsentItem = Schemas["BudgetAnalyticsInboxConsentItem"];
+export type AnalyticsInboxMortgageItem = Schemas["BudgetAnalyticsInboxMortgageItem"];
+export type AnalyticsInboxSpendingLimitItem = Schemas["BudgetAnalyticsInboxSpendingLimitItem"];
+export type AnalyticsInboxItem =
+  | AnalyticsInboxConsentItem
+  | AnalyticsInboxMortgageItem
+  | AnalyticsInboxSpendingLimitItem;
+export type AnalyticsInbox = Schemas["BudgetAnalyticsInbox"];
+export type AnalyticsInboxKey = Schemas["BudgetAnalyticsInboxKeyRequest"];
+export type AnalyticsInboxMarkRequest = Schemas["BudgetAnalyticsInboxMarkRequest"];
+export type AnalyticsInboxMarkSaved = Schemas["BudgetAnalyticsInboxMarkSaved"];
+
+export const INBOX_MARK_BATCH_MAX = 100;
+
+export function inboxItemKey(item: AnalyticsInboxItem): AnalyticsInboxKey {
+  return { kind: item.kind, subject_id: item.subject_id, milestone: item.milestone };
+}
+
+export function inboxRowKey(item: AnalyticsInboxItem): string {
+  return `${item.kind}:${item.subject_id}:${item.milestone}`;
+}
+
 /** The owner's explicit kind choice; "auto" returns the entry to rules and defaults. */
 export type KindChoice = "auto" | "expense" | "income" | "refund" | "excluded";
 export const KIND_CHOICES: readonly KindChoice[] = ["auto", "expense", "income", "refund", "excluded"];

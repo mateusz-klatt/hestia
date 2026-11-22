@@ -69,6 +69,22 @@ describe("budget api", () => {
     expect(JSON.parse(sent(fetchMock, 9).init.body as string)).toEqual({
       schedule_id: "mtg-1", month: "2026-11", paid: true, expected_version: 1,
     });
+    await budgetApi.inbox();
+    expect(sent(fetchMock, 10).url.pathname).toMatch(/\/api\/budget\/analytics\/inbox$/);
+    expect(sent(fetchMock, 10).url.search).toBe("");
+    await budgetApi.markInbox({
+      items: [{ kind: "consent_renewal", subject_id: "a".repeat(64), milestone: "g1:exp1800000000:lead:7" }],
+      read: true,
+      expected_reads_version: "0".repeat(64),
+    });
+    expect(sent(fetchMock, 11).url.pathname).toMatch(/\/api\/budget\/analytics\/inbox-mark$/);
+    expect(sent(fetchMock, 11).init.method).toBe("POST");
+    expect(Object.keys(sent(fetchMock, 11).init.headers as Record<string, string>)).not.toContain("Authorization");
+    expect(JSON.parse(sent(fetchMock, 11).init.body as string)).toEqual({
+      items: [{ kind: "consent_renewal", subject_id: "a".repeat(64), milestone: "g1:exp1800000000:lead:7" }],
+      read: true,
+      expected_reads_version: "0".repeat(64),
+    });
   });
 
   it("sends refresh with its idempotency key, JSON body and no Authorization header", async () => {

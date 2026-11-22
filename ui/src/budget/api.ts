@@ -6,7 +6,8 @@ import type { BudgetAccount, BudgetCapabilities, BudgetConnection, BudgetConsent
   BudgetConsentReconcile, BudgetConsentRenewalReminders, BudgetJob, BudgetKind, BudgetBalances, BudgetLimit,
   BudgetOperation, BudgetTransactions, ConsentIntent } from "./model";
 import { idempotencyKey } from "./model";
-import type { AnalyticsCategory, AnalyticsMortgages, AnalyticsOverview, AnalyticsRecurring, AnalyticsRule,
+import type { AnalyticsCategory, AnalyticsInbox, AnalyticsInboxMarkRequest, AnalyticsInboxMarkSaved,
+  AnalyticsMortgages, AnalyticsOverview, AnalyticsRecurring, AnalyticsRule,
   AnalyticsSpendingLimits, AnalyticsTransactions, AnnotationRequest, AnnotationSaved, CategoryCreateRequest,
   CategorySaved, CategoryUpdateRequest, MortgagePaymentSaved, MortgagePaymentSetRequest, MortgageSaveRequest,
   MortgageScheduleSaved, RuleCandidate, RulePreview, RuleSaved, SpendingLimitSaveRequest, SpendingLimitSaved,
@@ -118,6 +119,11 @@ export const budgetApi = {
   /** Marks or unmarks one YYYY-MM installment paid on an owned mortgage schedule with strict CAS. */
   setMortgagePayment: (request: MortgagePaymentSetRequest) =>
     post<{ payment: MortgagePaymentSaved }>("analytics/mortgage-payment-set", request),
+  /** Pure read-only single-snapshot evaluation of currently active owner inbox alerts. */
+  inbox: () => call<AnalyticsInbox>(url("analytics/inbox")),
+  /** Atomically marks or unmarks 1..100 owner inbox alert keys under anti-ABA reads_version CAS. */
+  markInbox: (request: AnalyticsInboxMarkRequest) =>
+    post<{ inbox: AnalyticsInboxMarkSaved }>("analytics/inbox-mark", request),
   setSelected: (account: BudgetAccount, selected: boolean) =>
     post<{ account: BudgetAccount }>("account-selection",
       { account_id: account.id, selected, expected_version: account.control_version }),
