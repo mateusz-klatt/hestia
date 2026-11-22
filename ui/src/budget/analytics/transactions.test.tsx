@@ -61,13 +61,13 @@ async function settle(): Promise<void> {
   await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
 }
 
-interface Options { period?: string; revision?: number; lost?: boolean; rowCap?: number }
+interface Options { period?: string; revision?: number; lost?: boolean; rowCap?: number; text?: typeof transactionLabels.en; locale?: string }
 async function show(api: ReturnType<typeof fakeApi>, options: Options = {}) {
   const onAccessLoss = vi.fn((result: { ok: boolean }) => options.lost === true && !result.ok);
   const onChanged = vi.fn();
   await act(async () => {
     root.render(<TransactionsPanel api={api} period={options.period ?? "2026-11"} currencies={["EUR", "PLN"]}
-      accounts={accounts} text={transactionLabels.en} locale="en" revision={options.revision ?? 0}
+      accounts={accounts} text={options.text ?? transactionLabels.en} locale={options.locale ?? "en"} revision={options.revision ?? 0}
       onAccessLoss={onAccessLoss} onChanged={onChanged} rowCap={options.rowCap} />);
     await Promise.resolve();
   });
@@ -390,16 +390,16 @@ describe("period entries", () => {
   function names(): string[] {
     return [...host.querySelectorAll(".budget-entry-text")].map((item) => item.textContent);
   }
-  function header(label: string): HTMLTableCellElement {
-    const found = [...host.querySelectorAll<HTMLTableCellElement>("thead th")].find((item) => item.querySelector("button")?.textContent === label);
-    if (found === undefined) throw new Error(`header ${label} missing`);
-    return found;
+  function sortButton(label: string): HTMLButtonElement {
+    const group = host.querySelector('.budget-sort[role="group"]');
+    if (group === null) throw new Error("sort group missing");
+    return button(label, group);
   }
   function classified(reference: string, changes: Partial<AnalyticsTransaction>): AnalyticsTransaction {
     return entry(reference, changes);
   }
 
-  it("sorts by date, category and absolute amount and toggles direction", async () => {
+  it("sorts by date, category and absolute amount with a sort button bar above the transaction list", async () => {
     const rows = [
       classified("mid", { booking_date: "2026-11-02", amount: "10.00",
         effective: { kind: "expense", category_id: "cat-food", source: "default", rule_id: null } }),
@@ -410,33 +410,42 @@ describe("period entries", () => {
     ];
     const api = fakeApi(rows);
     await show(api);
+    expect(host.querySelector(".budget-entries-table")).toBeNull();
+    expect(host.querySelector(".budget-entry-list")?.getAttribute("aria-label")).toBe("Transactions");
+    expect(host.querySelector('.budget-sort[role="group"]')?.getAttribute("aria-label")).toBe("Sort");
     expect(names()).toEqual(["Synthetic shop mid", "Synthetic shop early", "Synthetic shop late"]);
-    expect(header("Date").getAttribute("aria-sort")).toBe("none");
-    expect(header("Category").getAttribute("aria-sort")).toBe("none");
-    expect(header("Amount").getAttribute("aria-sort")).toBe("none");
+    expect(sortButton("Date").getAttribute("aria-pressed")).toBe("false");
+    expect(sortButton("Category").getAttribute("aria-pressed")).toBe("false");
+    expect(sortButton("Amount").getAttribute("aria-pressed")).toBe("false");
 
-    await click(button("Date"));
-    expect(header("Date").getAttribute("aria-sort")).toBe("ascending");
+    await click(sortButton("Date"));
+    expect(sortButton("Date").getAttribute("aria-pressed")).toBe("true");
+    expect(sortButton("Date").getAttribute("data-sort")).toBe("asc");
+    expect(sortButton("Date").getAttribute("aria-label")).toBe("Date, ascending");
     expect(names()).toEqual(["Synthetic shop early", "Synthetic shop mid", "Synthetic shop late"]);
-    await click(button("Date"));
-    expect(header("Date").getAttribute("aria-sort")).toBe("descending");
+    await click(sortButton("Date"));
+    expect(sortButton("Date").getAttribute("data-sort")).toBe("desc");
+    expect(sortButton("Date").getAttribute("aria-label")).toBe("Date, descending");
     expect(names()).toEqual(["Synthetic shop late", "Synthetic shop mid", "Synthetic shop early"]);
 
-    await click(button("Category"));
-    expect(header("Date").getAttribute("aria-sort")).toBe("none");
-    expect(header("Category").getAttribute("aria-sort")).toBe("ascending");
+    await click(sortButton("Category"));
+    expect(sortButton("Date").getAttribute("aria-pressed")).toBe("false");
+    expect(sortButton("Date").getAttribute("data-sort")).toBeNull();
+    expect(sortButton("Category").getAttribute("aria-pressed")).toBe("true");
+    expect(sortButton("Category").getAttribute("data-sort")).toBe("asc");
     expect(names()).toEqual(["Synthetic shop mid", "Synthetic shop late", "Synthetic shop early"]);
-    await click(button("Category"));
-    expect(header("Category").getAttribute("aria-sort")).toBe("descending");
+    await click(sortButton("Category"));
+    expect(sortButton("Category").getAttribute("data-sort")).toBe("desc");
     expect(names()).toEqual(["Synthetic shop early", "Synthetic shop late", "Synthetic shop mid"]);
 
-    await click(button("Amount"));
-    expect(header("Amount").getAttribute("aria-sort")).toBe("ascending");
-    expect(header("Category").getAttribute("aria-sort")).toBe("none");
+    await click(sortButton("Amount"));
+    expect(sortButton("Amount").getAttribute("aria-pressed")).toBe("true");
+    expect(sortButton("Amount").getAttribute("data-sort")).toBe("asc");
+    expect(sortButton("Category").getAttribute("aria-pressed")).toBe("false");
     // Absolute values: 2.50, 10.00, 30.00. The negative amount is not treated as smaller.
     expect(names()).toEqual(["Synthetic shop late", "Synthetic shop mid", "Synthetic shop early"]);
-    await click(button("Amount"));
-    expect(header("Amount").getAttribute("aria-sort")).toBe("descending");
+    await click(sortButton("Amount"));
+    expect(sortButton("Amount").getAttribute("data-sort")).toBe("desc");
     expect(names()).toEqual(["Synthetic shop early", "Synthetic shop mid", "Synthetic shop late"]);
   });
 
@@ -448,12 +457,120 @@ describe("period entries", () => {
     ];
     const api = fakeApi(rows);
     await show(api);
-    await click(button("Amount"));
+    await click(sortButton("Amount"));
     expect(names()).toEqual(["Synthetic shop none", "Synthetic shop debit", "Synthetic shop credit"]);
-    await click(button("Date"));
+    await click(sortButton("Date"));
     expect(names()).toEqual(["Synthetic shop credit", "Synthetic shop debit", "Synthetic shop none"]);
-    await click(button("Date"));
+    await click(sortButton("Date"));
     expect(names()).toEqual(["Synthetic shop debit", "Synthetic shop credit", "Synthetic shop none"]);
+  });
+
+  it("sorts amounts above 2^53 and mixed scales exactly without float rounding", async () => {
+    const rows = [
+      classified("huge-hi-neg", { amount: "-9007199254740993.25" }),
+      classified("ten-half", { amount: "10.500" }),
+      classified("huge-mid", { amount: "9007199254740993" }),
+      classified("ten-int", { amount: "10" }),
+      classified("huge-lo", { amount: "9007199254740992.5" }),
+      classified("ten-frac-pad", { amount: "0010.05" }),
+      classified("ten-fortyfive", { amount: "10.45" }),
+    ];
+    const api = fakeApi(rows);
+    await show(api);
+    await click(sortButton("Amount"));
+    expect(names()).toEqual([
+      "Synthetic shop ten-int",
+      "Synthetic shop ten-frac-pad",
+      "Synthetic shop ten-fortyfive",
+      "Synthetic shop ten-half",
+      "Synthetic shop huge-lo",
+      "Synthetic shop huge-mid",
+      "Synthetic shop huge-hi-neg",
+    ]);
+    await click(sortButton("Amount"));
+    expect(names()).toEqual([
+      "Synthetic shop huge-hi-neg",
+      "Synthetic shop huge-mid",
+      "Synthetic shop huge-lo",
+      "Synthetic shop ten-half",
+      "Synthetic shop ten-fortyfive",
+      "Synthetic shop ten-frac-pad",
+      "Synthetic shop ten-int",
+    ]);
+  });
+
+  it("keeps unparsable amounts last in both sort directions", async () => {
+    const rows = [
+      classified("bad-text", { amount: "abc" }),
+      classified("high", { amount: "-100.00" }),
+      classified("bad-empty", { amount: "" }),
+      classified("low", { amount: "5.00" }),
+      classified("bad-dots", { amount: "1.2.3" }),
+    ];
+    const api = fakeApi(rows);
+    await show(api);
+    await click(sortButton("Amount"));
+    expect(names()).toEqual([
+      "Synthetic shop low",
+      "Synthetic shop high",
+      "Synthetic shop bad-text",
+      "Synthetic shop bad-empty",
+      "Synthetic shop bad-dots",
+    ]);
+    await click(sortButton("Amount"));
+    expect(names()).toEqual([
+      "Synthetic shop high",
+      "Synthetic shop low",
+      "Synthetic shop bad-text",
+      "Synthetic shop bad-empty",
+      "Synthetic shop bad-dots",
+    ]);
+  });
+
+  it("sorts Polish category names using Polish collation and labels the list Transakcje", async () => {
+    const plCategories = [
+      { id: "c-zolw", name: "Żółw", archived: false, version: 1, created_at: 1, updated_at: 1 },
+      { id: "c-zebra", name: "Zebra", archived: false, version: 1, created_at: 1, updated_at: 1 },
+      { id: "c-zrebak", name: "Źrebak", archived: false, version: 1, created_at: 1, updated_at: 1 },
+      { id: "c-lodz", name: "Łódź", archived: false, version: 1, created_at: 1, updated_at: 1 },
+      { id: "c-lod", name: "Lód", archived: false, version: 1, created_at: 1, updated_at: 1 },
+      { id: "c-cma", name: "Ćma", archived: false, version: 1, created_at: 1, updated_at: 1 },
+      { id: "c-cebula", name: "Cebula", archived: false, version: 1, created_at: 1, updated_at: 1 },
+    ];
+    const rows = [
+      classified("zolw", { effective: { kind: "expense", category_id: "c-zolw", source: "default", rule_id: null } }),
+      classified("lodz", { effective: { kind: "expense", category_id: "c-lodz", source: "default", rule_id: null } }),
+      classified("cma", { effective: { kind: "expense", category_id: "c-cma", source: "default", rule_id: null } }),
+      classified("zebra", { effective: { kind: "expense", category_id: "c-zebra", source: "default", rule_id: null } }),
+      classified("lod", { effective: { kind: "expense", category_id: "c-lod", source: "default", rule_id: null } }),
+      classified("zrebak", { effective: { kind: "expense", category_id: "c-zrebak", source: "default", rule_id: null } }),
+      classified("cebula", { effective: { kind: "expense", category_id: "c-cebula", source: "default", rule_id: null } }),
+    ];
+    const api = fakeApi(rows);
+    api.categories.mockImplementation(() => ok({ categories: plCategories }));
+    await show(api, { text: transactionLabels.pl, locale: "pl" });
+    expect(host.querySelector(".budget-entry-list")?.getAttribute("aria-label")).toBe("Transakcje");
+    expect(host.querySelector('.budget-sort[role="group"]')?.getAttribute("aria-label")).toBe("Sortowanie");
+    await click(sortButton(transactionLabels.pl.category));
+    expect(names()).toEqual([
+      "Synthetic shop cebula",
+      "Synthetic shop cma",
+      "Synthetic shop lod",
+      "Synthetic shop lodz",
+      "Synthetic shop zebra",
+      "Synthetic shop zrebak",
+      "Synthetic shop zolw",
+    ]);
+    await click(sortButton(transactionLabels.pl.category));
+    expect(names()).toEqual([
+      "Synthetic shop zolw",
+      "Synthetic shop zrebak",
+      "Synthetic shop zebra",
+      "Synthetic shop lodz",
+      "Synthetic shop lod",
+      "Synthetic shop cma",
+      "Synthetic shop cebula",
+    ]);
   });
 
   it("keeps fetching pages in the background and shows how many rows are in", async () => {
@@ -495,6 +612,24 @@ describe("period entries", () => {
     expect(host.textContent).not.toContain("late");
   });
 
+  it("ignores a stale background page arriving after a filter change", async () => {
+    let late: (value: BudgetResult<AnalyticsTransactions>) => void = () => undefined;
+    const api = fakeApi();
+    api.analyticsTransactions.mockImplementation((_period, filter, cursor) => {
+      if (filter.currency === "EUR") return ok(pageOf([entry("eur-only")]));
+      if (cursor === undefined) return ok(pageOf([entry("all-first")], "c1"));
+      return new Promise((resolve) => { late = resolve; });
+    });
+    await show(api);
+    expect(names()).toEqual(["Synthetic shop all-first"]);
+    await applyCurrencyFilter();
+    expect(names()).toEqual(["Synthetic shop eur-only"]);
+    await act(async () => { late({ ok: true, data: pageOf([entry("stale-after-filter")]) }); await Promise.resolve(); });
+    await drain();
+    expect(names()).toEqual(["Synthetic shop eur-only"]);
+    expect(host.textContent).not.toContain("stale-after-filter");
+  });
+
   it("stops the background walk when access is lost", async () => {
     const calls: Array<string | undefined> = [];
     const api = fakeApi();
@@ -512,21 +647,126 @@ describe("period entries", () => {
     expect(host.textContent).not.toContain("Loading…");
   });
 
-  it("stops background loading at the row cap", async () => {
+  it("recovers from an error mid-walk by retrying from the failed cursor", async () => {
+    const calls: Array<string | undefined> = [];
+    let failSecond = true;
+    const api = fakeApi();
+    api.analyticsTransactions.mockImplementation((_period, _filter, cursor) => {
+      calls.push(cursor);
+      if (cursor === undefined) return ok(pageOf([entry("p1")], "c1"));
+      if (cursor === "c1" && failSecond) return fail(500, "budget_internal_error");
+      if (cursor === "c1") return ok(pageOf([entry("p2")], "c2"));
+      return ok(pageOf([entry("p3")]));
+    });
+    await show(api);
+    await drain();
+    expect(calls).toEqual([undefined, "c1"]);
+    expect(names()).toEqual(["Synthetic shop p1"]);
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain(transactionLabels.en.error);
+    expect(transactionLabels.pl.retry).toBe("Ponów");
+
+    failSecond = false;
+    await click(button(transactionLabels.en.retry));
+    await drain();
+    expect(calls).toEqual([undefined, "c1", "c1", "c2"]);
+    expect(names()).toEqual(["Synthetic shop p1", "Synthetic shop p2", "Synthetic shop p3"]);
+    expect(host.querySelector('[role="alert"]')).toBeNull();
+  });
+
+  it("stops background loading at the row cap, shows a truncation notice, and continues via load more", async () => {
     expect(TRANSACTION_ROW_CAP).toBe(5000);
+    expect(transactionLabels.pl.more).toBe("Wczytaj więcej");
     const calls: Array<string | undefined> = [];
     const api = fakeApi();
     api.analyticsTransactions.mockImplementation((_period, _filter, cursor) => {
       calls.push(cursor);
       const page = calls.length;
-      return ok(pageOf([entry(`p${String(page)}a`), entry(`p${String(page)}b`)], `c${String(page)}`));
+      if (page === 3) return ok({ ...pageOf([entry("p3a"), entry("p3b")]), filtered_total: 6 });
+      return ok({ ...pageOf([entry(`p${String(page)}a`), entry(`p${String(page)}b`)], `c${String(page)}`), filtered_total: 6 });
     });
     await show(api, { rowCap: 3 });
     await drain();
     expect(calls).toEqual([undefined, "c1"]);
-    expect(names()).toEqual(["Synthetic shop p1a", "Synthetic shop p1b", "Synthetic shop p2a"]);
-    expect(host.textContent).not.toContain("p2b");
+    expect(names()).toEqual(["Synthetic shop p1a", "Synthetic shop p1b", "Synthetic shop p2a", "Synthetic shop p2b"]);
     expect(host.textContent).not.toContain("Loading…");
+    expect(host.querySelector('[role="note"]')?.textContent).toContain(transactionLabels.en.truncated(4, 6));
+
+    await click(button(transactionLabels.en.more));
+    await drain();
+    expect(calls).toEqual([undefined, "c1", "c2"]);
+    expect(names()).toEqual([
+      "Synthetic shop p1a", "Synthetic shop p1b", "Synthetic shop p2a", "Synthetic shop p2b", "Synthetic shop p3a", "Synthetic shop p3b",
+    ]);
+    expect(host.querySelector('[role="note"]')).toBeNull();
+  });
+
+  it("caps automatic reloads on staleCursor at two and deduplicates rows by rowKey", async () => {
+    const calls: Array<string | undefined> = [];
+    let staleRemaining = 3;
+    const api = fakeApi();
+    api.analyticsTransactions.mockImplementation((_period, _filter, cursor) => {
+      calls.push(cursor);
+      if (cursor === undefined) return ok(pageOf([entry("p1"), entry("dup")], "c1"));
+      if (staleRemaining > 0) {
+        staleRemaining -= 1;
+        return fail(409, "budget_analytics_stale_cursor");
+      }
+      return ok(pageOf([entry("dup"), entry("p2")]));
+    });
+    await show(api);
+    await drain();
+    // Initial attempt + at most 2 automatic reloads = 3 pairs of (undefined, c1).
+    expect(calls).toEqual([undefined, "c1", undefined, "c1", undefined, "c1"]);
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain(transactionLabels.en.error);
+
+    await click(button(transactionLabels.en.retry));
+    await drain();
+    expect(names()).toEqual(["Synthetic shop p1", "Synthetic shop dup", "Synthetic shop p2"]);
+    expect(host.querySelector('[role="alert"]')).toBeNull();
+  });
+
+  it("keeps row order stable while the editor is open and re-sorts when closed or re-sorted", async () => {
+    let releasePage2: (value: BudgetResult<AnalyticsTransactions>) => void = () => undefined;
+    let releasePage3: (value: BudgetResult<AnalyticsTransactions>) => void = () => undefined;
+    const api = fakeApi();
+    api.analyticsTransactions.mockImplementation((_period, _filter, cursor) => {
+      if (cursor === undefined) {
+        return ok(pageOf([entry("high", { amount: "50.00" }), entry("mid", { amount: "20.00" })], "c1"));
+      }
+      if (cursor === "c1") return new Promise((resolve) => { releasePage2 = resolve; });
+      return new Promise((resolve) => { releasePage3 = resolve; });
+    });
+    await show(api);
+    await click(sortButton("Amount"));
+    expect(names()).toEqual(["Synthetic shop mid", "Synthetic shop high"]);
+
+    await click(button(transactionLabels.en.edit, host.querySelectorAll(".budget-entry")[0]));
+    expect(host.querySelector(".budget-entry-editor")).not.toBeNull();
+
+    // Background page arrives with a smaller amount while editor is open: existing rows must not jump.
+    await act(async () => {
+      releasePage2({ ok: true, data: pageOf([entry("low", { amount: "5.00" })], "c2") });
+      await Promise.resolve();
+    });
+    await settle();
+    expect(names()).toEqual(["Synthetic shop mid", "Synthetic shop high", "Synthetic shop low"]);
+    expect(host.querySelectorAll(".budget-entry")[0]?.querySelector(".budget-entry-editor")).not.toBeNull();
+
+    // User explicitly re-sorts while editor is still open: order updates immediately.
+    await click(sortButton("Amount"));
+    expect(names()).toEqual(["Synthetic shop high", "Synthetic shop mid", "Synthetic shop low"]);
+
+    // Another background page arrives while editor remains open: newly sorted order stays stable.
+    await act(async () => {
+      releasePage3({ ok: true, data: pageOf([entry("huge", { amount: "100.00" })]) });
+      await Promise.resolve();
+    });
+    await settle();
+    expect(names()).toEqual(["Synthetic shop high", "Synthetic shop mid", "Synthetic shop low", "Synthetic shop huge"]);
+
+    // Closing the editor restores live sorting across all loaded rows.
+    await click(button(transactionLabels.en.cancel));
+    expect(names()).toEqual(["Synthetic shop huge", "Synthetic shop high", "Synthetic shop mid", "Synthetic shop low"]);
   });
 });
 

@@ -1,6 +1,6 @@
 // A period's entries with the owner's category/kind corrections (2D). Rows come from the server one bounded page
 // at a time; a correction is an explicit, versioned decision, and a conflict reloads instead of overwriting.
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { BudgetApi } from "../api";
 import type { BudgetAccount, BudgetConnection } from "../model";
 import { formatAmount, transactionDate, transactionText } from "../model";
@@ -19,13 +19,14 @@ export const transactionLabels = {
     title: "Transactions", currency: "Currency", category: "Category", kind: "Type", search: "Search", apply: "Apply",
     all: "All", uncategorised: "Uncategorised", automatic: "Automatic (rules)", kinds: kindsEn,
     edit: "Change", save: "Save", cancel: "Cancel", archived: "archived", total: (count: number) => `${String(count)} entries`,
-    date: "Date", amount: "Amount", sort: "Sort",
+    date: "Date", amount: "Amount", sort: "Sort", sortAsc: "ascending", sortDesc: "descending",
     loadingMore: (count: number) => `Loading… ${String(count)}`,
+    truncated: (shown: number, total: number) => `Showing ${String(shown)} of ${String(total)} entries.`,
     manual: "set by you", rule: "by rule", stale: "the bank changed this entry; check your choice",
     transfer: { none: "", suggested: "possible own transfer", accepted: "own transfer", review: "own transfer to re-check",
       boundary: "other side on an excluded account", rejected: "", undone: "" },
     ambiguous: "fits several pairs; choose in own transfers",
-    empty: "No entries match.", loading: "Loading entries…", error: "Entries could not be loaded.",
+    more: "Load more", retry: "Retry", empty: "No entries match.", loading: "Loading entries…", error: "Entries could not be loaded.",
     conflict: "This changed elsewhere; the latest state was loaded.", saveError: "Could not save. Try again.",
     changed: "The bank changed this entry; the latest state was loaded.", account: "Account",
     pair: "Pair as own transfer", pairTitle: "Matching credits within 3 days", pairLoading: "Looking for matching entries…",
@@ -41,13 +42,14 @@ export const transactionLabels = {
     title: "Transakcje", currency: "Waluta", category: "Kategoria", kind: "Rodzaj", search: "Szukaj", apply: "Zastosuj",
     all: "Wszystkie", uncategorised: "Bez kategorii", automatic: "Automatycznie (reguły)", kinds: kindsPl,
     edit: "Zmień", save: "Zapisz", cancel: "Anuluj", archived: "archiwalna", total: (count: number) => `Pozycji: ${String(count)}`,
-    date: "Data", amount: "Kwota", sort: "Sortowanie",
+    date: "Data", amount: "Kwota", sort: "Sortowanie", sortAsc: "rosnąco", sortDesc: "malejąco",
     loadingMore: (count: number) => `Wczytywanie… ${String(count)}`,
+    truncated: (shown: number, total: number) => `Pokazano ${String(shown)} z ${String(total)} pozycji.`,
     manual: "ustawione przez Ciebie", rule: "z reguły", stale: "bank zmienił tę pozycję; sprawdź swój wybór",
     transfer: { none: "", suggested: "możliwy przelew własny", accepted: "przelew własny",
       review: "przelew własny do sprawdzenia", boundary: "druga strona na koncie wykluczonym", rejected: "", undone: "" },
     ambiguous: "pasuje do kilku par; wybierz w przelewach własnych",
-    empty: "Brak pasujących pozycji.", loading: "Wczytywanie pozycji…",
+    more: "Wczytaj więcej", retry: "Ponów", empty: "Brak pasujących pozycji.", loading: "Wczytywanie pozycji…",
     error: "Nie udało się wczytać pozycji.", conflict: "Zmieniono to w innym miejscu; wczytano aktualny stan.",
     saveError: "Nie udało się zapisać. Spróbuj ponownie.", changed: "Bank zmienił tę pozycję; wczytano aktualny stan.",
     account: "Konto",
@@ -63,8 +65,9 @@ export const transactionLabels = {
 };
 export type TransactionLabels = typeof transactionLabels.en;
 
-/** Background pagination stops once this many rows are in memory. Sorting then covers that whole set. */
+/** Background pagination stops once this many rows are in memory; remaining pages load on demand. */
 export const TRANSACTION_ROW_CAP = 5000;
+const MAX_STALE_RELOADS = 2;
 
 export type TransactionSortKey = "date" | "category" | "amount";
 export type TransactionSortDirection = "asc" | "desc";
@@ -137,8 +140,8 @@ export function sortTransactions(rows: readonly AnalyticsTransaction[], sort: Tr
     .map((item) => item.row);
 }
 
-interface Page { rows: AnalyticsTransaction[]; cursor: string | null; total: number; loading: boolean; failed: boolean }
-const LOADING: Page = { rows: [], cursor: null, total: 0, loading: true, failed: false };
+interface Page { rows: AnalyticsTransaction[]; cursor: string | null; total: number; loading: boolean; failed: boolean; staleError: boolean }
+const LOADING: Page = { rows: [], cursor: null, total: 0, loading: true, failed: false, staleError: false };
 interface PairPage { rows: AnalyticsTransaction[]; loading: boolean; failed: boolean; limited: boolean }
 const PAIR_LOADING: PairPage = { rows: [], loading: true, failed: false, limited: false };
 
@@ -160,6 +163,47 @@ export interface TransactionsProps {
 
 const rowKey = (row: AnalyticsTransaction) => `${row.account_id}/${row.entry_reference}`;
 
+function mergeRows(existing: readonly AnalyticsTransaction[], incoming: readonly AnalyticsTransaction[]): AnalyticsTransaction[] {
+  const seen = new Set(existing.map(rowKey));
+  const next = [...existing];
+  for (const row of incoming) {
+    const key = rowKey(row);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    next.push(row);
+  }
+  return next;
+}
+
+function orderRows(
+  rows: readonly AnalyticsTransaction[],
+  sort: TransactionSort | null,
+  frozenOrder: readonly string[] | null,
+  categoryName: (id: string | null) => string,
+  locale: string,
+): AnalyticsTransaction[] {
+  if (frozenOrder !== null) {
+    const byKey = new Map(rows.map((row) => [rowKey(row), row]));
+    const ordered: AnalyticsTransaction[] = [];
+    const used = new Set<string>();
+    for (const key of frozenOrder) {
+      const row = byKey.get(key);
+      if (row === undefined || used.has(key)) continue;
+      used.add(key);
+      ordered.push(row);
+    }
+    for (const row of rows) {
+      const key = rowKey(row);
+      if (!used.has(key)) {
+        used.add(key);
+        ordered.push(row);
+      }
+    }
+    return ordered;
+  }
+  return sort === null ? [...rows] : sortTransactions(rows, sort, categoryName, locale);
+}
+
 export function TransactionsPanel({ api, period, currencies, accounts, connections = [], text, locale, revision, onAccessLoss,
   onChanged, rowCap = TRANSACTION_ROW_CAP }: TransactionsProps) {
   const [filter, setFilter] = useState<TransactionFilter>(NO_FILTER);
@@ -167,6 +211,7 @@ export function TransactionsPanel({ api, period, currencies, accounts, connectio
   const [page, setPage] = useState<Page>(LOADING);
   const [categories, setCategories] = useState<AnalyticsCategory[]>([]);
   const [editing, setEditing] = useState<string | null>(null);
+  const [frozenOrder, setFrozenOrder] = useState<readonly string[] | null>(null);
   const [pairing, setPairing] = useState<string | null>(null);
   const [pairPage, setPairPage] = useState<PairPage>(PAIR_LOADING);
   const [busy, setBusy] = useState<string | null>(null);
@@ -175,13 +220,69 @@ export function TransactionsPanel({ api, period, currencies, accounts, connectio
   const [sort, setSort] = useState<TransactionSort | null>(null);
   // Every period, filter or reload change takes a new generation; late pages and saves of an older one are dropped.
   const generation = useRef(0);
+  const walkToken = useRef(0);
+  const staleReloads = useRef(0);
   const picker = useRef(0);
+
+  const walkPages = useCallback(async (
+    genToken: number,
+    runToken: number,
+    startCursor: string | undefined,
+    initialRows: readonly AnalyticsTransaction[],
+    stopAfterOne: boolean,
+  ) => {
+    let cursor = startCursor;
+    let rows = [...initialRows];
+    let first = rows.length === 0;
+    let fetchedAny = false;
+    while (!fetchedAny || (!stopAfterOne && rows.length < rowCap)) {
+      const result = cursor === undefined
+        ? await api.analyticsTransactions(period, filter)
+        : await api.analyticsTransactions(period, filter, cursor);
+      const accessLost = onAccessLoss(result);
+      if (genToken !== generation.current || runToken !== walkToken.current) return;
+      if (accessLost) {
+        if (!first) setPage((current) => ({ ...current, loading: false }));
+        return;
+      }
+      if (!result.ok) {
+        if (cursor !== undefined && result.error === ANALYTICS_ERROR.staleCursor && staleReloads.current < MAX_STALE_RELOADS) {
+          staleReloads.current += 1;
+          setReloads((current) => current + 1);
+          return;
+        }
+        const staleError = cursor !== undefined && result.error === ANALYTICS_ERROR.staleCursor;
+        setPage((current) => (first
+          ? { ...LOADING, loading: false, failed: true, staleError }
+          : { ...current, cursor: cursor ?? null, loading: false, failed: true, staleError }));
+        return;
+      }
+      fetchedAny = true;
+      const added = result.data.transactions.length;
+      rows = mergeRows(rows, result.data.transactions);
+      const total = result.data.filtered_total;
+      const next = result.data.next_cursor;
+      const exhausted = next === null || added === 0 || next === cursor;
+      const nextCursor = exhausted ? null : next;
+      const stopHere = exhausted || stopAfterOne || rows.length >= rowCap;
+      setPage({ rows, cursor: nextCursor, total, loading: !stopHere, failed: false, staleError: false });
+      if (stopHere) return;
+      cursor = next;
+      first = false;
+    }
+  }, [api, period, filter, onAccessLoss, rowCap]);
+
+  useEffect(() => {
+    staleReloads.current = 0;
+  }, [api, period, filter, revision]);
 
   useEffect(() => {
     const token = ++generation.current;
+    const runToken = ++walkToken.current;
     picker.current += 1;
     setPage(LOADING);
     setEditing(null);
+    setFrozenOrder(null);
     setPairing(null);
     setBusy(null);
     void api.categories().then((result) => {
@@ -189,43 +290,34 @@ export function TransactionsPanel({ api, period, currencies, accounts, connectio
       if (result.ok) setCategories(result.data.categories);
     });
     // The first page paints immediately. Later pages follow the cursor until the cap, the period changes,
-    // or the access barrier rejects an answer. A stale cursor restarts from the first page.
-    void (async () => {
-      let cursor: string | undefined;
-      let rows: AnalyticsTransaction[] = [];
-      let total: number;
-      let first = true;
-      while (rows.length < rowCap) {
-        const result = cursor === undefined
-          ? await api.analyticsTransactions(period, filter)
-          : await api.analyticsTransactions(period, filter, cursor);
-        const accessLost = onAccessLoss(result);
-        if (token !== generation.current) return;
-        if (accessLost) {
-          if (!first) setPage((current) => ({ ...current, loading: false }));
-          return;
-        }
-        if (!result.ok) {
-          if (!first && result.error === ANALYTICS_ERROR.staleCursor) { setReloads((current) => current + 1); return; }
-          if (first) setPage({ ...LOADING, loading: false, failed: true });
-          else setPage((current) => ({ ...current, loading: false, failed: true }));
-          return;
-        }
-        const added = result.data.transactions.length;
-        rows = [...rows, ...result.data.transactions];
-        total = result.data.filtered_total;
-        const next = result.data.next_cursor;
-        const capped = rows.length >= rowCap;
-        if (capped) rows = rows.slice(0, rowCap);
-        const done = capped || next === null || added === 0 || next === cursor;
-        setPage({ rows, cursor: done ? null : next, total, loading: !done, failed: false });
-        if (done) return;
-        cursor = next;
-        first = false;
-      }
-    })();
-  }, [api, period, filter, revision, reloads, onAccessLoss, rowCap]);
-  useEffect(() => () => { generation.current += 1; picker.current += 1; }, []);
+    // or the access barrier rejects an answer. A stale cursor restarts from the first page (up to the retry cap).
+    void walkPages(token, runToken, undefined, [], false);
+  }, [api, period, filter, revision, reloads, onAccessLoss, walkPages]);
+  useEffect(() => () => { generation.current += 1; walkToken.current += 1; picker.current += 1; }, []);
+
+  const more = useCallback(() => {
+    if (page.loading || page.cursor === null) return;
+    const runToken = ++walkToken.current;
+    const cursor = page.cursor;
+    const rows = page.rows;
+    setPage((current) => ({ ...current, loading: true, failed: false, staleError: false }));
+    void walkPages(generation.current, runToken, cursor, rows, true);
+  }, [page.cursor, page.loading, page.rows, walkPages]);
+
+  const retry = useCallback(() => {
+    if (page.loading) return;
+    if (page.staleError) {
+      staleReloads.current = 0;
+      setReloads((current) => current + 1);
+      return;
+    }
+    const runToken = ++walkToken.current;
+    const cursor = page.cursor ?? undefined;
+    const rows = page.rows;
+    const stopAfterOne = rows.length >= rowCap;
+    setPage((current) => ({ ...current, loading: true, failed: false, staleError: false }));
+    void walkPages(generation.current, runToken, cursor, rows, stopAfterOne);
+  }, [page.cursor, page.loading, page.rows, page.staleError, rowCap, walkPages]);
 
   const loadPairs = useCallback(async (debit: AnalyticsTransaction, pickerToken: number, generationToken: number) => {
     const date = pairDate(debit);
@@ -271,6 +363,7 @@ export function TransactionsPanel({ api, period, currencies, accounts, connectio
     setPairing(rowKey(row));
     setPairPage(PAIR_LOADING);
     setEditing(null);
+    setFrozenOrder(null);
     setNotice(null);
     void loadPairs(row, pickerToken, generation.current);
   }, [loadPairs]);
@@ -289,10 +382,14 @@ export function TransactionsPanel({ api, period, currencies, accounts, connectio
     if (!result.ok) {
       setNotice(result.error === ANALYTICS_ERROR.sourceChanged ? text.changed
         : RELOAD_ERRORS.has(result.error) ? text.conflict : text.saveError);
-      if (RELOAD_ERRORS.has(result.error)) setReloads((current) => current + 1);
+      if (RELOAD_ERRORS.has(result.error)) {
+        staleReloads.current = 0;
+        setReloads((current) => current + 1);
+      }
       return;
     }
     setEditing(null);
+    setFrozenOrder(null);
   }, [api, onAccessLoss, onChanged, text]);
 
   const confirmPair = useCallback(async (debit: AnalyticsTransaction, credit: AnalyticsTransaction) => {
@@ -313,18 +410,47 @@ export function TransactionsPanel({ api, period, currencies, accounts, connectio
         : reserved ? text.pairReserved : existing ? text.pairExisting
           : result.error === ANALYTICS_ERROR.invalidRequest ? text.pairInvalid
             : RELOAD_ERRORS.has(result.error) ? text.conflict : text.saveError);
-      if (RELOAD_ERRORS.has(result.error)) setReloads((current) => current + 1);
+      if (RELOAD_ERRORS.has(result.error)) {
+        staleReloads.current = 0;
+        setReloads((current) => current + 1);
+      }
       return;
     }
     picker.current += 1;
     setPairing(null);
   }, [api, onAccessLoss, onChanged, text]);
 
-  const categoryName = (id: string | null) => (id === null ? text.uncategorised
-    : categories.find((item) => item.id === id)?.name ?? text.uncategorised);
+  const categoryNames = useMemo(() => new Map(categories.map((item) => [item.id, item.name])), [categories]);
+  const categoryName = useCallback(
+    (id: string | null) => (id === null ? text.uncategorised : (categoryNames.get(id) ?? text.uncategorised)),
+    [categoryNames, text.uncategorised],
+  );
   const accountName = (id: string) => nameOf(accounts, connections, id, text.account);
   const kindText = (kind: string) => labelOf(text.kinds, kind);
-  const shownRows = sort === null ? page.rows : sortTransactions(page.rows, sort, categoryName, locale);
+  const shownRows = useMemo(
+    () => orderRows(page.rows, sort, frozenOrder, categoryName, locale),
+    [page.rows, sort, frozenOrder, categoryName, locale],
+  );
+
+  const startEditing = (key: string) => {
+    closePairs();
+    setFrozenOrder(shownRows.map(rowKey));
+    setEditing(key);
+    setNotice(null);
+  };
+  const stopEditing = () => {
+    setEditing(null);
+    setFrozenOrder(null);
+  };
+  const changeSort = (key: TransactionSortKey) => {
+    const next = nextSort(sort, key);
+    setSort(next);
+    if (editing !== null) {
+      setFrozenOrder(sortTransactions(page.rows, next, categoryName, locale).map(rowKey));
+    } else {
+      setFrozenOrder(null);
+    }
+  };
 
   return (
     <section className="budget-entries" aria-label={text.title}>
@@ -356,35 +482,50 @@ export function TransactionsPanel({ api, period, currencies, accounts, connectio
         <button type="submit">{text.apply}</button>
       </form>
       {notice === null ? null : <p className="budget-notice" role="alert">{notice}</p>}
-      {page.failed ? <p className="budget-notice" role="alert">{text.error}</p> : null}
+      {page.failed ? (
+        <div className="budget-notice budget-entries-action" role="alert">
+          <span>{text.error}</span>
+          <button type="button" onClick={retry}>{text.retry}</button>
+        </div>
+      ) : null}
       {page.loading && page.rows.length === 0 ? <p className="budget-muted" role="status">{text.loading}</p> : null}
       {!page.loading && !page.failed && page.rows.length === 0 ? <p className="budget-muted">{text.empty}</p> : null}
       {page.rows.length === 0 ? null : (
         <>
           <p className="budget-muted">{text.total(page.total)}</p>
           {page.loading ? <p className="budget-muted" role="status">{text.loadingMore(page.rows.length)}</p> : null}
-          <table className="budget-entries-table" aria-label={text.sort}>
-            <thead>
-              <tr>
-                {SORT_KEYS.map((key) => {
-                  const active = sort?.key === key;
-                  const ariaSort = active ? (sort.direction === "asc" ? "ascending" : "descending") : "none";
-                  return (
-                    <th key={key} scope="col" aria-sort={ariaSort}>
-                      <button type="button" onClick={() => { setSort((current) => nextSort(current, key)); }}>{sortLabel(text, key)}</button>
-                    </th>
-                  );
-                })}
-              </tr>
-            </thead>
-            <tbody>
+          {!page.loading && !page.failed && page.cursor !== null ? (
+            <div className="budget-notice budget-entries-action" role="note">
+              <span>{text.truncated(page.rows.length, page.total)}</span>
+              <button type="button" onClick={more}>{text.more}</button>
+            </div>
+          ) : null}
+          <div className="budget-views budget-sort" role="group" aria-label={text.sort}>
+            {SORT_KEYS.map((key) => {
+              const active = sort?.key === key;
+              const direction = active ? sort.direction : undefined;
+              const label = sortLabel(text, key);
+              const directionText = direction === "asc" ? text.sortAsc : direction === "desc" ? text.sortDesc : undefined;
+              return (
+                <button
+                  type="button"
+                  key={key}
+                  aria-pressed={active}
+                  data-sort={direction}
+                  aria-label={directionText === undefined ? label : `${label}, ${directionText}`}
+                  onClick={() => { changeSort(key); }}
+                >
+                  {label}
+                </button>
+              );
+            })}
+          </div>
+          <ul className="budget-entry-list" aria-label={text.title}>
             {shownRows.map((row) => {
               const key = rowKey(row);
               const transfer = labelOf(text.transfer, row.transfer.status === "none" ? "" : row.transfer.status);
               return (
-                <tr key={key}>
-                  <td colSpan={SORT_KEYS.length}>
-                  <div className="budget-entry">
+                <li key={key} className="budget-entry">
                   <div className="budget-entry-main">
                     <span className="budget-muted">{transactionDate(row)}</span>
                     <span className="budget-entry-text">{counterparty(row) ?? transactionText(row)}</span>
@@ -403,7 +544,7 @@ export function TransactionsPanel({ api, period, currencies, accounts, connectio
                     {row.transfer.ambiguous ? <span className="budget-warn">{text.ambiguous}</span> : null}
                     {row.annotation.stale ? <span className="budget-warn">{text.stale}</span> : null}
                     {editing === key ? null : (
-                      <button type="button" disabled={busy !== null} onClick={() => { closePairs(); setEditing(key); setNotice(null); }}>{text.edit}</button>
+                      <button type="button" disabled={busy !== null} onClick={() => { startEditing(key); }}>{text.edit}</button>
                     )}
                     {canPair(row) && pairing !== key ? (
                       <button type="button" disabled={busy !== null} onClick={() => { openPairs(row); }}>{text.pair}</button>
@@ -411,19 +552,16 @@ export function TransactionsPanel({ api, period, currencies, accounts, connectio
                   </div>
                   {editing === key ? (
                     <Editor row={row} categories={categories} text={text} kindText={kindText} saving={busy === key}
-                      onSave={(category, kind) => { void save(row, category, kind); }} onCancel={() => { setEditing(null); }} />
+                      onSave={(category, kind) => { void save(row, category, kind); }} onCancel={stopEditing} />
                   ) : null}
                   {pairing === key ? (
                     <PairPicker debit={row} page={pairPage} accounts={accounts} connections={connections} text={text} locale={locale}
                       disabled={busy !== null} onConfirm={(credit) => { void confirmPair(row, credit); }} onCancel={closePairs} />
                   ) : null}
-                  </div>
-                  </td>
-                </tr>
+                </li>
               );
             })}
-            </tbody>
-          </table>
+          </ul>
         </>
       )}
     </section>

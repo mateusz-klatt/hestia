@@ -56,11 +56,11 @@ async function settle(): Promise<void> {
 
 async function show(overview: (period: string) => Promise<Answer>,
   options: { period?: string; current?: boolean; revision?: number; lost?: boolean; text?: typeof overviewLabels.en;
-    onCurrencies?: (currencies: string[]) => void } = {}) {
+    locale?: string; onCurrencies?: (currencies: string[]) => void } = {}) {
   const onAccessLoss = vi.fn(() => options.lost === true);
   await act(async () => {
     root.render(<OverviewPanel overview={overview} period={options.period ?? "2026-11"} current={options.current ?? true}
-      accounts={accounts} text={options.text ?? overviewLabels.en} locale="en" revision={options.revision ?? 0}
+      accounts={accounts} text={options.text ?? overviewLabels.en} locale={options.locale ?? "en"} revision={options.revision ?? 0}
       onAccessLoss={onAccessLoss} onCurrencies={options.onCurrencies} />);
     await Promise.resolve();
   });
@@ -94,7 +94,7 @@ describe("period overview", () => {
   });
 
   it("wraps each amount of a compound total so the line can break between them", async () => {
-    await show((period) => Promise.resolve<Answer>({ ok: true, data: rich(period) }), { text: overviewLabels.pl });
+    await show((period) => Promise.resolve<Answer>({ ok: true, data: rich(period) }), { text: overviewLabels.pl, locale: "pl" });
     const card = host.querySelector('.budget-total[aria-label="PLN"]');
     const ddAfter = (label: string) => [...card?.querySelectorAll("dt") ?? []].find((item) => item.textContent === label)?.nextElementSibling;
     const transfer = ddAfter("Przelewy własne");
@@ -103,10 +103,14 @@ describe("period overview", () => {
     expect(transfer?.classList.contains("budget-total-split")).toBe(true);
     expect(excluded?.classList.contains("budget-total-split")).toBe(true);
     expect(spending?.classList.contains("budget-total-split")).toBe(false);
-    expect([...(transfer?.querySelectorAll(".budget-amount") ?? [])].map((item) => item.textContent)).toEqual(["1,200.00 PLN", "1,200.00 PLN"]);
-    expect([...(excluded?.querySelectorAll(".budget-amount") ?? [])].map((item) => item.textContent)).toEqual(["5.00 PLN", "0.00 PLN"]);
-    expect(transfer?.textContent).toBe("wyszło 1,200.00 PLN · weszło 1,200.00 PLN");
-    expect(excluded?.textContent).toBe("wyszło 5.00 PLN · weszło 0.00 PLN");
+    expect([...(transfer?.querySelectorAll(".budget-amount") ?? [])].map((item) => item.textContent.replace(/\s/g, " "))).toEqual([
+      "1 200,00 PLN", "1 200,00 PLN",
+    ]);
+    expect([...(excluded?.querySelectorAll(".budget-amount") ?? [])].map((item) => item.textContent.replace(/\s/g, " "))).toEqual([
+      "5,00 PLN", "0,00 PLN",
+    ]);
+    expect(transfer?.textContent.replace(/\s/g, " ")).toBe("wyszło 1 200,00 PLN · weszło 1 200,00 PLN");
+    expect(excluded?.textContent.replace(/\s/g, " ")).toBe("wyszło 5,00 PLN · weszło 0,00 PLN");
     expect(spending?.querySelector(".budget-amount")?.textContent).toContain("PLN");
     const detail = card?.querySelector(".budget-total-detail");
     expect(detail?.classList.contains("budget-total-split")).toBe(true);
