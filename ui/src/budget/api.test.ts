@@ -106,12 +106,16 @@ describe("budget api", () => {
     expect(sent(fetchMock, 7).url.pathname).toMatch(/\/api\/budget\/limits$/);
     await budgetApi.consentStatus();
     await budgetApi.consentPending();
+    await budgetApi.consentRenewalReminders();
+    await budgetApi.consentReconcile();
     await budgetApi.consentStart(connection, "renew");
     await budgetApi.consentCancel("flow-1");
-    expect([8, 9, 10, 11].map((index) => sent(fetchMock, index).url.pathname.replace(/.*\/api\/budget\//, "")))
-      .toEqual(["consent/status", "consent/pending", "consent/start", "consent/cancel"]);
-    expect(JSON.parse(sent(fetchMock, 10).init.body as string)).toEqual({ connection_id: "bank", expected_version: 4, intent: "renew" });
-    expect(JSON.parse(sent(fetchMock, 11).init.body as string)).toEqual({ flow_id: "flow-1" });
+    expect([8, 9, 10, 11, 12, 13].map((index) => sent(fetchMock, index).url.pathname.replace(/.*\/api\/budget\//, "")))
+      .toEqual(["consent/status", "consent/pending", "consent/renewal-reminders", "consent/reconcile", "consent/start", "consent/cancel"]);
+    expect(sent(fetchMock, 10).url.search).toBe("");
+    expect(sent(fetchMock, 11).url.search).toBe("");
+    expect(JSON.parse(sent(fetchMock, 12).init.body as string)).toEqual({ connection_id: "bank", expected_version: 4, intent: "renew" });
+    expect(JSON.parse(sent(fetchMock, 13).init.body as string)).toEqual({ flow_id: "flow-1" });
     expect(sent(fetchMock, 4).url.searchParams.get("connection_id")).toBe("bank");
     expect(sent(fetchMock, 5).url.search).toBe("");
   });

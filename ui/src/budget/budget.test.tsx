@@ -53,6 +53,14 @@ function fakeApi(accounts: BudgetAccount[] = [account({ display })]) {
     limits: vi.fn<BudgetApi["limits"]>(() => ok({ limits: [] })),
     consentStatus: vi.fn<BudgetApi["consentStatus"]>(() => ok({ consents: [] })),
     consentPending: vi.fn<BudgetApi["consentPending"]>(() => ok({ pending: [] })),
+    consentRenewalReminders: vi.fn<BudgetApi["consentRenewalReminders"]>(() => ok({
+      evaluated_at: 1_800_000_000, lead_days: [14, 7, 3, 1], rule_version: 1, reminders: [],
+    })),
+    consentReconcile: vi.fn<BudgetApi["consentReconcile"]>(() => ok({
+      evaluated_at: 1_800_000_000, retention_days: 90, rule_version: 1,
+      summary: { consents_total: 0, flows_total: 0, needs_owner_review: 0, remote_close_eligible: 0, local_retire_eligible: 0 },
+      consents: [], flows: [],
+    })),
     consentStart: vi.fn<BudgetApi["consentStart"]>(),
     consentCancel: vi.fn<BudgetApi["consentCancel"]>(),
     setSelected: vi.fn<BudgetApi["setSelected"]>(),
@@ -488,6 +496,31 @@ describe("bank consent", () => {
     await renderConsent(api);
     expect(host.textContent).toContain("Only the budget's owner");
     expect(host.textContent).not.toContain("Synthetic Current");
+  });
+
+  it("opens consent health on demand only when consent is enabled and clears everything on 401", async () => {
+    const api = fakeApi();
+    await render(api);
+    expect([...host.querySelectorAll("button")].some((item) => item.textContent === "Consent status")).toBe(false);
+    api.consentRenewalReminders.mockImplementation(() => ok({
+      evaluated_at: 1_800_000_000, lead_days: [14, 7, 3, 1], rule_version: 1,
+      reminders: [{ connection_id: "bank", bank_name: "Synthetic Bank", valid_until: 1_815_379_200,
+        seconds_remaining: 178 * 86400, days_remaining: 178, status: "healthy", active_milestone: null,
+        reminder_due: false, paused: false, attention: null, destination_kind: "owner_inbox", rule_version: 1 }],
+    }));
+    await renderConsent(api);
+    expect(api.consentRenewalReminders).not.toHaveBeenCalled();
+    await click(button("Consent status"));
+    expect(api.consentRenewalReminders).toHaveBeenCalledTimes(1);
+    expect(api.consentReconcile).toHaveBeenCalledTimes(1);
+    expect(host.textContent).toContain("External consents (imported): 1 · managed by Hestia: 0");
+    await click(button("Hide consent status"));
+    expect(host.querySelector(".budget-consent-health")).toBeNull();
+
+    api.consentReconcile.mockImplementationOnce(() => fail(401, "budget_http_401"));
+    await click(button("Consent status"));
+    expect(host.textContent).toContain("Only the budget's owner");
+    expect(host.querySelector(".budget-consent-health")).toBeNull();
   });
 });
 

@@ -111,7 +111,7 @@ export const mortgagesLabels = {
       due_today: "Termin dziś",
       due_soon: "Wkrótce termin",
       upcoming: "Nadchodząca",
-      completed: "Zakończony",
+      completed: "Zakończona",
     },
     dueOn: (date: string) => `Termin ${date}`,
     daysOverdue: (days: number) => `${String(days)} ${pluralPl(days, "dzień", "dni", "dni")} po terminie`,

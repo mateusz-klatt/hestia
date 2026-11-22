@@ -19,6 +19,12 @@ export type BudgetLimit = BudgetSharedLimit | BudgetComponentLimit;
 export type BudgetConsent = Schemas["BudgetConsent"];
 export type BudgetConsentFlow = Schemas["BudgetConsentFlow"];
 export type ConsentIntent = Schemas["BudgetConsentStartRequest"]["intent"];
+export type BudgetConsentRenewalReminder = Schemas["BudgetConsentRenewalReminder"];
+export type BudgetConsentRenewalReminders = Schemas["BudgetConsentRenewalReminders"];
+export type BudgetConsentReconcileSummary = Schemas["BudgetConsentReconcileSummary"];
+export type BudgetConsentReconcileConsent = Schemas["BudgetConsentReconcileConsent"];
+export type BudgetConsentReconcileFlow = Schemas["BudgetConsentReconcileFlow"];
+export type BudgetConsentReconcile = Schemas["BudgetConsentReconcile"];
 
 /** Flow states the completion page can still finish (mirrors the server's ready set). */
 export const READY_FLOW = new Set(["staged", "candidate", "exchanging"]);

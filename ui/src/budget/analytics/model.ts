@@ -404,19 +404,21 @@ export function parseWarningPercent(value: string): number | null {
 const INTEGER_DIGITS = /^\d{1,3}$/;
 const ISO_DATE = /^(\d{4})-(\d{2})-(\d{2})$/;
 
-function hasControlChar(value: string): boolean {
-  for (let index = 0; index < value.length; index += 1) {
-    const code = value.charCodeAt(index);
-    if (code <= 0x1f || code === 0x7f) return true;
+const FORBIDDEN_LABEL_CHAR = /\p{Cc}|\p{Cf}|\p{Cs}/u;
+
+function codePointLength(value: string): number {
+  let count = 0;
+  for (let index = 0; index < value.length; index += (value.codePointAt(index) ?? 0) > 0xffff ? 2 : 1) {
+    count += 1;
   }
-  return false;
+  return count;
 }
 
-/** Non-empty schedule label within 256 chars both before and after NFC normalization, without control characters. */
+/** Non-empty schedule label within 256 Unicode code points both before and after NFC, without Cc/Cf/Cs chars. */
 export function validMortgageLabel(value: string): boolean {
   const trimmed = value.trim();
-  if (trimmed === "" || trimmed.length > MORTGAGE_LABEL_MAX || hasControlChar(trimmed)) return false;
-  return trimmed.normalize("NFC").length <= MORTGAGE_LABEL_MAX;
+  if (trimmed === "" || codePointLength(trimmed) > MORTGAGE_LABEL_MAX || FORBIDDEN_LABEL_CHAR.test(trimmed)) return false;
+  return codePointLength(trimmed.normalize("NFC")) <= MORTGAGE_LABEL_MAX;
 }
 
 /** Exact integer text in [min, max], rejecting decimals and non-digits. */
