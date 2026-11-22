@@ -1,8 +1,7 @@
-# Release Notes Draft: v1.8.0 (Budget 2D & Consent Observability)
+# Release Notes: v1.8.0 (Budget 2D & Consent Observability)
 
-> **Status:** Draft only. Git tag `v1.8.0` and the GitHub Release will be created only
-> after explicit owner approval. Covers PRs `#182`–`#217` (commit `1e699a1`, schema `0019`,
-> OpenAPI `0.24.0`).
+> **Status:** Released 2026-11-22 from master `8190f1f` — PRs `#182`–`#219`, schema `0019`,
+> OpenAPI `0.24.0`. Tag `v1.8.0`; GitHub Release and Docker Hub image `klattm/hestia:v1.8.0`.
 
 ## Summary
 
