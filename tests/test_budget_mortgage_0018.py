@@ -69,11 +69,6 @@ class MortgageMigration0018Tests(unittest.TestCase):
             tables = set(inspect(engine).get_table_names())
             self.assertTrue({"budget_mortgage_schedules", "budget_mortgage_payments"} <= tables)
 
-            # Zero ORM vs migration drift at head.
-            with engine.connect() as conn:
-                ctx = MigrationContext.configure(conn)
-                self.assertEqual(compare_metadata(ctx, db.Base.metadata), [])
-
             # Valid schedule + payment insert.
             with engine.begin() as conn:
                 conn.exec_driver_sql(
@@ -162,6 +157,11 @@ class MortgageMigration0018Tests(unittest.TestCase):
                         "destination_kind, enabled, version, created_at, updated_at) "
                         "VALUES ('s-bad', 'alice', 'Loan', '100', 'PLN', 15, '2026-01-01', NULL, 5, "
                         "'shared_calendar', 1, 1, 100.0, 100.0)")
+            with engine.begin() as conn:
+                command.upgrade(db._alembic_config(conn), "head")
+            with engine.connect() as conn:
+                ctx = MigrationContext.configure(conn)
+                self.assertEqual(compare_metadata(ctx, db.Base.metadata), [])
         finally:
             engine.dispose()
 

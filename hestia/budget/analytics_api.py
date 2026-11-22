@@ -16,7 +16,8 @@ from .views import BudgetUsersBackendRequired
 
 PREFIX = "/api/budget/analytics"
 FLAG = "HESTIA_BUDGET_ANALYTICS_ENABLED"
-READS = ("overview", "transactions", "categories", "rules", "transfers", "recurring", "spending-limits", "mortgages")
+READS = ("overview", "transactions", "categories", "rules", "transfers", "recurring", "spending-limits",
+         "mortgages", "inbox")
 WRITES = {
     "category-create": (api_contract.BudgetAnalyticsCategoryCreateRequest, "create_category", "category"),
     "category-update": (api_contract.BudgetAnalyticsCategoryUpdateRequest, "update_category", "category"),
@@ -27,6 +28,7 @@ WRITES = {
     "spending-limit-save": (api_contract.BudgetAnalyticsSpendingLimitSaveRequest, "save_spending_limit", "limit"),
     "mortgage-save": (api_contract.BudgetAnalyticsMortgageSaveRequest, "save_mortgage_schedule", "schedule"),
     "mortgage-payment-set": (api_contract.BudgetAnalyticsMortgagePaymentSetRequest, "set_mortgage_payment", "payment"),
+    "inbox-mark": (api_contract.BudgetAnalyticsInboxMarkRequest, "mark_inbox", "inbox"),
 }
 _QUERY_FIELDS = {"overview": {"period", "currency"},
                  "transactions": {"period", "currency", "category_id", "kind", "query", "limit", "cursor"},
@@ -104,7 +106,8 @@ def register(app, read_json_body, *, auth_enabled, session_secret):
                 result = await asyncio.to_thread(_read, owner, operation, query, secret)
             else:
                 api._browser(request, owner, secret)
-                body, error = await read_json_body(request, 16384, reject_duplicates=True)
+                max_bytes = 65536 if operation == "inbox-mark" else 16384
+                body, error = await read_json_body(request, max_bytes, reject_duplicates=True)
                 if error:
                     return body
                 values = WRITES[operation][0].model_validate(body).model_dump()

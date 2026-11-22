@@ -15,6 +15,7 @@ from collections import OrderedDict, defaultdict
 from copy import deepcopy
 from datetime import date, datetime, timezone
 import hashlib
+import hmac
 import json
 import math
 import os
@@ -26,6 +27,7 @@ from sqlalchemy import func, or_, select
 
 from .. import db
 from . import analytics_core as core
+from . import owner_inbox as inbox_mod
 from .analytics_core import AnalyticsError
 from .analytics_store import BudgetAnalyticsStore, _CATEGORY_LIMIT_FIELDS, _dict
 from .client import _reject_constant, _unique_error_fields
@@ -38,6 +40,8 @@ MAX_RECURRING_HINTS = 200
 MAX_RECURRING_EVIDENCE = 24
 CURSOR_TTL = 900
 MAX_CURSOR = 8192
+_DATA_ERROR = "budget_analytics_data_error"
+_LIMIT_ERROR = "budget_analytics_limit"
 _DOMAIN = b"hestia/budget/analytics/cursor/v1"
 _PAYLOAD_FIELDS = ("amount", "currency", "credit_debit_indicator", "status", "booking_date", "value_date",
                    "transaction_date", "remittance_information")
@@ -809,48 +813,286 @@ class BudgetAnalyticsViews(BudgetAnalyticsStore):
         observed = datetime.fromtimestamp(max(stamps), timezone.utc).date().isoformat()
         return min(observed, evaluation_date)
 
+    def _mortgage_reminders_in_session(self, session, owner, evaluation_date):
+        from .mortgage_reminders import (MortgageInputError, MortgageLimitError, MortgageSchedule,
+                                         evaluate_mortgage_reminders)
+
+        rows = list(session.scalars(
+            select(db.BudgetMortgageSchedule).where(db.BudgetMortgageSchedule.owner == owner)
+            .order_by(db.BudgetMortgageSchedule.id)))
+        payments_by_schedule = defaultdict(list)
+        for payment in session.scalars(
+            select(db.BudgetMortgagePayment).where(db.BudgetMortgagePayment.owner == owner)
+            .order_by(db.BudgetMortgagePayment.schedule_id, db.BudgetMortgagePayment.month)):
+            payments_by_schedule[payment.schedule_id].append(payment.month)
+        schedules = [self._mortgage_schedule_dict(row, payments_by_schedule[row.id]) for row in rows]
+        ledger_as_of = self._ledger_as_of(session, owner, evaluation_date)
+        models = [
+            MortgageSchedule(
+                owner=owner, schedule_id=item["id"], label=item["label"], amount=item["amount"],
+                currency=item["currency"], due_day=item["due_day"], start_date=item["start_date"],
+                destination_kind=item["destination_kind"], destination_target=None,
+                end_date=item["end_date"], remind_days_before=item["remind_days_before"],
+                paid_months=frozenset(item["paid_months"]), enabled=item["enabled"],
+            )
+            for item in schedules
+        ]
+        try:
+            reminders = evaluate_mortgage_reminders(owner, evaluation_date, models, ledger_as_of=ledger_as_of)
+        except MortgageLimitError:
+            raise AnalyticsError(_LIMIT_ERROR, 413) from None
+        except MortgageInputError:
+            raise AnalyticsError(_DATA_ERROR, 500) from None
+        return schedules, ledger_as_of, reminders
+
     def mortgages(self, owner):
         """Evaluate owner-private mortgage schedules against server UTC today in one read snapshot."""
-        from .mortgage_reminders import (MortgageInputError, MortgageLimitError, MortgageSchedule, RULE_VERSION,
-                                         evaluate_mortgage_reminders)
+        from .mortgage_reminders import RULE_VERSION
 
         evaluation_date = datetime.fromtimestamp(self._now(), timezone.utc).date().isoformat()
         with _read_lock, self._read(owner) as session:
-            rows = list(session.scalars(
-                select(db.BudgetMortgageSchedule).where(db.BudgetMortgageSchedule.owner == owner)
-                .order_by(db.BudgetMortgageSchedule.id)))
-            payments_by_schedule = defaultdict(list)
-            for payment in session.scalars(
-                select(db.BudgetMortgagePayment).where(db.BudgetMortgagePayment.owner == owner)
-                .order_by(db.BudgetMortgagePayment.schedule_id, db.BudgetMortgagePayment.month)):
-                payments_by_schedule[payment.schedule_id].append(payment.month)
-            schedules = [self._mortgage_schedule_dict(row, payments_by_schedule[row.id]) for row in rows]
-            schedules_version = _schedules_version(owner, schedules)
-            ledger_as_of = self._ledger_as_of(session, owner, evaluation_date)
-            models = [
-                MortgageSchedule(
-                    owner=owner, schedule_id=item["id"], label=item["label"], amount=item["amount"],
-                    currency=item["currency"], due_day=item["due_day"], start_date=item["start_date"],
-                    destination_kind=item["destination_kind"], destination_target=None,
-                    end_date=item["end_date"], remind_days_before=item["remind_days_before"],
-                    paid_months=frozenset(item["paid_months"]), enabled=item["enabled"],
-                )
-                for item in schedules
-            ]
-            try:
-                reminders = evaluate_mortgage_reminders(owner, evaluation_date, models, ledger_as_of=ledger_as_of)
-            except MortgageLimitError:
-                raise AnalyticsError("budget_analytics_limit", 413) from None
-            except MortgageInputError:
-                raise AnalyticsError("budget_analytics_data_error", 500) from None
+            schedules, ledger_as_of, reminders = self._mortgage_reminders_in_session(session, owner, evaluation_date)
             return {
                 "evaluation_date": evaluation_date,
                 "evaluation_timezone": "UTC",
                 "ledger_as_of": ledger_as_of,
-                "schedules_version": schedules_version,
+                "schedules_version": _schedules_version(owner, schedules),
                 "rule_version": RULE_VERSION,
                 "schedules": schedules,
                 "reminders": [_wire_mortgage_reminder(item) for item in reminders],
+            }
+
+    @staticmethod
+    def _inbox_consent_entries(session, owner, evaluated_at):
+        from .renewal_reminders import (ConsentRenewalTarget, RenewalInputError, RenewalLimitError,
+                                        evaluate_renewal_reminders)
+
+        rows = list(session.scalars(
+            select(db.BudgetConnection).where(db.BudgetConnection.owner == owner)
+            .order_by(db.BudgetConnection.id)))
+        generations = {row.id: row.consent_generation for row in rows}
+        targets = [
+            ConsentRenewalTarget(
+                owner=owner, connection_id=row.id, bank_name=row.bank_name, valid_until=row.valid_until,
+                destination_kind="owner_inbox", destination_target=None,
+                enabled=row.enabled, paused=row.paused, attention=row.attention,
+            )
+            for row in rows
+        ]
+        try:
+            reminders = evaluate_renewal_reminders(owner, evaluated_at, targets)
+        except RenewalLimitError:
+            raise AnalyticsError(_LIMIT_ERROR, 413) from None
+        except RenewalInputError:
+            raise AnalyticsError(_DATA_ERROR, 500) from None
+        entries = []
+        for item in reminders:
+            if not item.reminder_due:
+                continue
+            entries.append({
+                "kind": inbox_mod.KIND_CONSENT,
+                "subject_id": inbox_mod.opaque_subject_id(owner, inbox_mod.KIND_CONSENT, item.connection_id),
+                "milestone": inbox_mod.consent_milestone(
+                    generations[item.connection_id], item.valid_until, item.status,
+                    item.active_milestone, item.attention,
+                ),
+                "params": inbox_mod.consent_params(
+                    status=item.status, valid_until=item.valid_until, days_remaining=item.days_remaining,
+                    attention=item.attention, paused=item.paused,
+                ),
+            })
+        return entries
+
+    def _inbox_mortgage_entries(self, session, owner, evaluation_date):
+        _, _, reminders = self._mortgage_reminders_in_session(session, owner, evaluation_date)
+        return [
+            {
+                "kind": inbox_mod.KIND_MORTGAGE,
+                "subject_id": inbox_mod.opaque_subject_id(owner, inbox_mod.KIND_MORTGAGE, item.schedule_id),
+                "milestone": inbox_mod.mortgage_milestone(item.due_date, item.status),
+                "params": inbox_mod.mortgage_params(
+                    status=item.status, due_date=item.due_date, days_until_due=item.days_until_due,
+                    currency=item.currency, freshness_stale=item.freshness_stale,
+                ),
+            }
+            for item in reminders if item.reminder_active
+        ]
+
+    def _inbox_spending_entries(self, session, owner, period, *, use_cache):
+        from .spending_limits import (CategoryLimit, CategorySpending, SpendingLimitCapError,
+                                      SpendingLimitInputError, evaluate_spending_limits)
+
+        all_limits = [_dict(row, _CATEGORY_LIMIT_FIELDS) for row in session.scalars(
+            select(db.BudgetCategoryLimit).where(db.BudgetCategoryLimit.owner == owner)
+            .order_by(db.BudgetCategoryLimit.currency, db.BudgetCategoryLimit.category_id,
+                      db.BudgetCategoryLimit.id))]
+        if any(row["enabled"] for row in all_limits):
+            snapshot = self._projection(session, owner) if use_cache else projection_snapshot(session, owner)
+            categories = {row["id"]: row for row in snapshot["categories"]}
+            start, end = core.parse_period(period)
+            totals = _category_totals(_period_rows(snapshot, start, end, None), snapshot["categories"])
+        else:
+            categories = {row.id: _entity(row) for row in session.scalars(
+                select(db.BudgetCategory).where(db.BudgetCategory.owner == owner)
+                .order_by(db.BudgetCategory.id))}
+            totals = []
+        if any(row["category_id"] not in categories for row in all_limits):
+            raise AnalyticsError(_DATA_ERROR, 500)
+        limits = [
+            CategoryLimit(owner=owner, category_id=row["category_id"], currency=row["currency"],
+                          monthly_limit=row["monthly_limit"], enabled=row["enabled"],
+                          warning_percent=row["warning_percent"])
+            for row in all_limits
+        ]
+        spending = [
+            CategorySpending(owner=owner, category_id=row["category_id"], currency=row["currency"],
+                             expenses=row["expenses"], refunds=row["refunds"], archived=row["archived"])
+            for row in totals
+        ]
+        try:
+            evaluated = evaluate_spending_limits(owner, period, limits, spending)
+        except SpendingLimitCapError:
+            raise AnalyticsError(_LIMIT_ERROR, 413) from None
+        except SpendingLimitInputError:
+            raise AnalyticsError(_DATA_ERROR, 500) from None
+        return [
+            {
+                "kind": inbox_mod.KIND_SPENDING,
+                "subject_id": inbox_mod.opaque_subject_id(
+                    owner, inbox_mod.KIND_SPENDING, f"{item.category_id}\0{item.currency}"),
+                "milestone": inbox_mod.spending_limit_milestone(item.period, item.status),
+                "params": inbox_mod.spending_limit_params(
+                    status=item.status, period=item.period, currency=item.currency,
+                    warning_percent=item.warning_percent, percent_used_floor=item.percent_used_floor,
+                ),
+            }
+            for item in evaluated if item.status != "within"
+        ]
+
+    def _evaluate_active_inbox(self, session, owner, evaluated_at, evaluation_date, *, use_cache, kinds=None):
+        selected = set(inbox_mod.INBOX_KINDS) if kinds is None else kinds
+        entries = []
+        try:
+            if inbox_mod.KIND_CONSENT in selected:
+                entries.extend(self._inbox_consent_entries(session, owner, evaluated_at))
+            if inbox_mod.KIND_MORTGAGE in selected:
+                entries.extend(self._inbox_mortgage_entries(session, owner, evaluation_date))
+            if inbox_mod.KIND_SPENDING in selected:
+                entries.extend(self._inbox_spending_entries(session, owner, evaluation_date[:7], use_cache=use_cache))
+        except inbox_mod.OwnerInboxDataError:
+            raise AnalyticsError(_DATA_ERROR, 500) from None
+        return entries
+
+    @staticmethod
+    def _inbox_read_state(session, owner):
+        state = session.get(db.BudgetOwnerInboxState, owner)
+        reads_revision = 0 if state is None else state.reads_revision
+        read_rows = list(session.scalars(
+            select(db.BudgetOwnerInboxRead).where(db.BudgetOwnerInboxRead.owner == owner)
+            .order_by(db.BudgetOwnerInboxRead.kind, db.BudgetOwnerInboxRead.subject_id,
+                      db.BudgetOwnerInboxRead.milestone)))
+        tuples = [(row.kind, row.subject_id, row.milestone, float(row.read_at)) for row in read_rows]
+        try:
+            reads_version = inbox_mod.reads_version_digest(owner, reads_revision, tuples)
+        except inbox_mod.OwnerInboxDataError:
+            raise AnalyticsError(_DATA_ERROR, 500) from None
+        return state, reads_revision, read_rows, tuples, reads_version
+
+    def inbox(self, owner):
+        """Pure read-only live active alerts inbox evaluated in one SQLite read snapshot."""
+        evaluated_at = float(self._now())
+        evaluation_date = datetime.fromtimestamp(evaluated_at, timezone.utc).date().isoformat()
+        with _read_lock, self._read(owner) as session:
+            _, reads_revision, read_rows, tuples, reads_version = self._inbox_read_state(session, owner)
+            active = self._evaluate_active_inbox(session, owner, evaluated_at, evaluation_date, use_cache=True)
+            read_map = {(kind, subject_id, milestone): read_at for kind, subject_id, milestone, read_at in tuples}
+            try:
+                items = inbox_mod.build_inbox_items(active, read_map)
+            except inbox_mod.OwnerInboxDataError:
+                raise AnalyticsError(_DATA_ERROR, 500) from None
+            return {
+                "evaluation_date": evaluation_date,
+                "evaluation_timezone": "UTC",
+                "evaluated_at": evaluated_at,
+                "reads_revision": reads_revision,
+                "reads_version": reads_version,
+                "reads_count": len(read_rows),
+                "reads_cap": inbox_mod.MAX_INBOX_READS,
+                "unread_count": sum(not item["read"] for item in items),
+                "rule_version": inbox_mod.RULE_VERSION,
+                "items": items,
+            }
+
+    def _apply_inbox_mark_read(self, session, owner, changed_keys, read_rows, tuples, now):
+        evaluation_date = datetime.fromtimestamp(now, timezone.utc).date().isoformat()
+        active = self._evaluate_active_inbox(
+            session, owner, now, evaluation_date, use_cache=False,
+            kinds={kind for kind, _, _ in changed_keys},
+        )
+        active_keys = {(entry["kind"], entry["subject_id"], entry["milestone"]) for entry in active}
+        if any(key not in active_keys for key in changed_keys):
+            raise AnalyticsError("budget_analytics_source_changed", 409)
+        if len(read_rows) + len(changed_keys) > inbox_mod.MAX_INBOX_READS:
+            raise AnalyticsError(_LIMIT_ERROR, 413)
+        for kind, subject_id, milestone in changed_keys:
+            session.add(db.BudgetOwnerInboxRead(
+                owner=owner, kind=kind, subject_id=subject_id, milestone=milestone, read_at=now))
+        return tuples + [(kind, subject_id, milestone, now) for kind, subject_id, milestone in changed_keys]
+
+    @staticmethod
+    def _apply_inbox_unmark(session, changed_keys, existing_by_key, tuples):
+        removed = set(changed_keys)
+        for key in changed_keys:
+            session.delete(existing_by_key[key])
+        return [row for row in tuples if (row[0], row[1], row[2]) not in removed]
+
+    def _record_inbox_mark_audit(self, session, owner, changed_keys, read, old_revision, new_revision):
+        action = "mark_read" if read else "mark_unread"
+        for kind, subject_id, milestone in changed_keys:
+            token = inbox_mod.opaque_key_token(kind, subject_id, milestone)
+            self._analytics_audit(
+                session, owner, "owner_inbox_read", token, action,
+                {"key_token": token, "kind": kind, "reads_revision": old_revision, "read": not read},
+                {"key_token": token, "kind": kind, "reads_revision": new_revision, "read": read},
+            )
+
+    def mark_inbox(self, owner, *, items, read, expected_reads_version):
+        """Atomically mark or unmark 1..100 inbox alert keys under anti-ABA reads_version CAS."""
+        if (type(read) is not bool
+                or not isinstance(expected_reads_version, str)
+                or not inbox_mod._HEX64.fullmatch(expected_reads_version)):
+            raise AnalyticsError()
+        keys = inbox_mod.validate_mark_items(items)
+        with self.transaction() as session:
+            self._owner(session, owner)
+            state, reads_revision, read_rows, tuples, current_version = self._inbox_read_state(session, owner)
+            if not hmac.compare_digest(current_version, expected_reads_version):
+                raise AnalyticsError("budget_analytics_conflict", 409)
+            existing_by_key = {(row.kind, row.subject_id, row.milestone): row for row in read_rows}
+            changed_keys = [key for key in keys if (key not in existing_by_key if read else key in existing_by_key)]
+            if not changed_keys:
+                return {
+                    "read": read, "changed": False, "changed_count": 0,
+                    "reads_revision": reads_revision, "reads_version": current_version,
+                    "reads_count": len(read_rows), "reads_cap": inbox_mod.MAX_INBOX_READS,
+                }
+            now = float(self._now())
+            new_tuples = (
+                self._apply_inbox_mark_read(session, owner, changed_keys, read_rows, tuples, now)
+                if read else self._apply_inbox_unmark(session, changed_keys, existing_by_key, tuples)
+            )
+            new_revision = reads_revision + 1
+            if state is None:
+                session.add(db.BudgetOwnerInboxState(owner=owner, reads_revision=new_revision, updated_at=now))
+            else:
+                state.reads_revision, state.updated_at = new_revision, now
+            session.flush()
+            new_version = inbox_mod.reads_version_digest(owner, new_revision, new_tuples)
+            self._record_inbox_mark_audit(session, owner, changed_keys, read, reads_revision, new_revision)
+            return {
+                "read": read, "changed": True, "changed_count": len(changed_keys),
+                "reads_revision": new_revision, "reads_version": new_version,
+                "reads_count": len(new_tuples), "reads_cap": inbox_mod.MAX_INBOX_READS,
             }
 
 

@@ -585,6 +585,46 @@ class BudgetMortgagePayment(Base):
     marked_at: Mapped[float]
 
 
+class BudgetOwnerInboxState(Base):
+    """Monotonic per-owner inbox read-marker revision for anti-ABA CAS (outside _source_digest)."""
+
+    __tablename__ = "budget_owner_inbox_state"
+    __table_args__ = (
+        CheckConstraint("reads_revision >= 0", name="ck_budget_owner_inbox_state_reads_revision"),
+        CheckConstraint("updated_at >= 0", name="ck_budget_owner_inbox_state_updated_at"),
+    )
+    owner: Mapped[str] = mapped_column(ForeignKey("users.username"), primary_key=True)
+    reads_revision: Mapped[int]
+    updated_at: Mapped[float]
+
+
+class BudgetOwnerInboxRead(Base):
+    """Durable per-owner read markers for live inbox alerts; never pruned automatically in v1."""
+
+    __tablename__ = "budget_owner_inbox_reads"
+    __table_args__ = (
+        Index("ix_budget_owner_inbox_reads_owner", "owner"),
+        CheckConstraint(
+            "kind IN ('consent_renewal', 'mortgage_due', 'spending_limit')",
+            name="ck_budget_owner_inbox_reads_kind",
+        ),
+        CheckConstraint(
+            "length(subject_id) = 64 AND subject_id NOT GLOB '*[^0-9a-f]*'",
+            name="ck_budget_owner_inbox_reads_subject_id",
+        ),
+        CheckConstraint(
+            "length(milestone) >= 1 AND length(milestone) <= 128",
+            name="ck_budget_owner_inbox_reads_milestone",
+        ),
+        CheckConstraint("read_at >= 0", name="ck_budget_owner_inbox_reads_read_at"),
+    )
+    owner: Mapped[str] = mapped_column(ForeignKey("users.username"), primary_key=True)
+    kind: Mapped[str] = mapped_column(primary_key=True)
+    subject_id: Mapped[str] = mapped_column(primary_key=True)
+    milestone: Mapped[str] = mapped_column(primary_key=True)
+    read_at: Mapped[float]
+
+
 class BudgetAnnotation(Base):
     __tablename__ = "budget_annotations"
     __table_args__ = (ForeignKeyConstraint(["account_id", "entry_reference"],
