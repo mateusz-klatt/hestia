@@ -184,7 +184,9 @@ class BudgetOpenApiTests(unittest.TestCase):
         posts = ("account-selection", "account-kind", "connection-state", "background-selection", "refresh")
         consent = {path: methods for path, methods in budget.items() if "/consent/" in path or "/enable-banking/" in path}
         analytics = {path: methods for path, methods in budget.items() if "/analytics/" in path}
-        stored = {path: methods for path, methods in budget.items() if path not in consent and path not in analytics}
+        receipts = {path: methods for path, methods in budget.items() if "/receipts/" in path}
+        stored = {path: methods for path, methods in budget.items()
+                  if path not in consent and path not in analytics and path not in receipts}
         self.assertEqual({path.rsplit("/", 1)[1] for path in stored},
                          {"connections", "accounts", "status", "transactions", "balances", "limits", "jobs", *posts})
         for path, methods in stored.items():
@@ -209,7 +211,16 @@ class BudgetOpenApiTests(unittest.TestCase):
             self.assertEqual(set(methods), {method})
             self.assertEqual(methods[method]["x-required-role"], "admin")
             self.assertIn("413", methods[method]["responses"])
-        self.assertEqual(document["info"]["version"], "0.28.0")
+        self.assertEqual(set(receipts), {"/api/budget/receipts/" + name for name in
+                         ("parse-text", "confirm", "list", "search", "detail", "image", "delete")})
+        for path, methods in receipts.items():
+            name = path.rsplit("/", 1)[1]
+            method = "get" if name in ("detail", "image") else "post"
+            self.assertEqual(set(methods), {method})
+            self.assertEqual(methods[method]["x-required-role"], "admin")
+            if method == "post":
+                self.assertIn("requestBody", methods[method])
+        self.assertEqual(document["info"]["version"], "0.30.0")
         mark_desc = analytics["/api/budget/analytics/inbox-mark"]["post"]["description"]
         for phrase in ("reads_version", "1..100", "500"):
             self.assertIn(phrase, mark_desc)
@@ -380,7 +391,10 @@ class BudgetOpenApiTests(unittest.TestCase):
                               "BudgetAnalyticsRuleSaveRequest", "BudgetAnalyticsTransferDecisionRequest",
                               "BudgetAnalyticsLegRequest", "BudgetAnalyticsSpendingLimitSaveRequest",
                               "BudgetAnalyticsMortgageSaveRequest", "BudgetAnalyticsMortgagePaymentSetRequest",
-                              "BudgetAnalyticsInboxKeyRequest", "BudgetAnalyticsInboxMarkRequest"})
+                              "BudgetAnalyticsInboxKeyRequest", "BudgetAnalyticsInboxMarkRequest",
+                              "BudgetReceiptParseTextRequest", "BudgetReceiptConfirmRequest", "BudgetReceiptLineInput",
+                              "BudgetReceiptLinkRequest", "BudgetReceiptListRequest", "BudgetReceiptSearchRequest",
+                              "BudgetReceiptDeleteRequest"})
         for name, schema in schemas.items():
             if name in request_names:
                 self.assertIs(schema["additionalProperties"], False)

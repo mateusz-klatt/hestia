@@ -194,6 +194,13 @@ _ROUTE_MIN_ROLE = {
     ("POST", "/api/budget/analytics/mortgage-save"): _ADMIN,
     ("POST", "/api/budget/analytics/mortgage-payment-set"): _ADMIN,
     ("POST", "/api/budget/analytics/inbox-mark"): _ADMIN,
+    ("POST", "/api/budget/receipts/parse-text"): _ADMIN,
+    ("POST", "/api/budget/receipts/confirm"): _ADMIN,
+    ("POST", "/api/budget/receipts/list"): _ADMIN,
+    ("POST", "/api/budget/receipts/search"): _ADMIN,
+    ("GET", "/api/budget/receipts/detail"): _ADMIN,
+    ("GET", "/api/budget/receipts/image"): _ADMIN,
+    ("POST", "/api/budget/receipts/delete"): _ADMIN,
     ("GET", "/api/budget/connections"): _ADMIN,
     ("GET", "/api/budget/accounts"): _ADMIN,
     ("GET", "/api/budget/status"): _ADMIN,
@@ -1160,7 +1167,7 @@ def make_app(rt):
     from .calendar_sync.api import register as register_calendars
     from .budget.api import register as register_budget
     app = web.Application(
-        client_max_size=MAX_RULE_BODY + 4096,
+        client_max_size=6 * 1024 * 1024,
         middlewares=[_auth_middleware, _empty_404_405_middleware],   # auth OUTERMOST: gate before routing
     )
     app[_RT_KEY] = rt

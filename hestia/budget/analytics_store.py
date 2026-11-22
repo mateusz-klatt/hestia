@@ -21,6 +21,7 @@ from ..db import BudgetTransferDecision as Decision, BudgetTransferLeg as Leg
 from .analytics_core import (AnalyticsError, KINDS, compare_money, compatible_kind, effective_date,
                              financial_fingerprint, pair_fingerprint, rule_matches)
 from .client import _reject_constant, _unique_error_fields
+from .receipt_reconcile import reconcile_receipt_links
 from .mortgage_reminders import (MAX_PAID_MONTHS as MAX_MORTGAGE_PAID_MONTHS, MAX_SCHEDULES as MAX_MORTGAGE_SCHEDULES,
                                  PRIVATE_DESTINATIONS as MORTGAGE_DESTINATIONS, MortgageInputError,
                                  _parse_amount as _parse_mortgage_amount, _parse_date as _parse_mortgage_date,
@@ -608,6 +609,7 @@ class BudgetAnalyticsStore(BudgetHTTPStore):
             row.version += 1
             row.updated_at = self._now()
             session.flush()
+            reconcile_receipt_links(session, owner, row.updated_at)
             result = _dict(row, _DECISION_FIELDS)
             self._analytics_audit(session, owner, "transfer", row.id, action, before, result)
             return {**result, "changed": True}

@@ -76,7 +76,9 @@ from pydantic.json_schema import models_json_schema
 # 0.26.0: read-only upcoming commitments forecast (GET /api/budget/analytics/forecast, zero migration).
 # 0.27.0: read-only owner-private monthly budget dashboard (GET /api/budget/analytics/monthly-budget, zero migration).
 # 0.28.0: additive optional income window on monthly-budget configuration (zero migration).
-CONTRACT_VERSION = "0.28.0"
+# 0.30.0: default-off owner-private paste receipts and informational bank links (migration 0020).
+#         0.29.0 is reserved by the concurrently developed P2 charts branch.
+CONTRACT_VERSION = "0.30.0"
 OPENAPI_PATH = Path(__file__).resolve().parent.parent / "docs" / "api" / "openapi.json"
 
 # De-duplicated string literals (SonarPython S1192): the OpenAPI content-type, the paths reused
@@ -2464,6 +2466,167 @@ class BudgetAnalyticsMonthlyBudget(BaseModel):
     card_exposure: BudgetAnalyticsMonthlyBudgetCardExposure
 
 
+BudgetReceiptId = Annotated[str, Field(pattern=r"^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$")]
+BudgetReceiptMoney = Annotated[str, Field(min_length=1, max_length=80, pattern=r"^-?[0-9]+(?:\.[0-9]+)?$")]
+BudgetReceiptCursor = Annotated[str, Field(min_length=1, max_length=8192)]
+
+
+class BudgetReceiptParseTextRequest(BaseModel):
+    model_config = _STRICT
+    text: Annotated[str, Field(min_length=1, max_length=32768,
+                               description="UTF-8 text is additionally capped at 32 KiB and 500 lines.")]
+
+
+class BudgetReceiptLineInput(BaseModel):
+    model_config = _STRICT
+    line_kind: Literal["item", "deposit", "basket_discount", "other"]
+    raw_name: Annotated[str, Field(min_length=1, max_length=128)]
+    ptu_code: Literal["A", "B", "C", "D", "E", "F", "G"] | None
+    quantity: BudgetReceiptMoney
+    raw_unit: Annotated[str, Field(max_length=16)] | None
+    unit_price_raw: BudgetReceiptMoney | None
+    gross_line_total: BudgetReceiptMoney
+    discount_amount: BudgetReceiptMoney
+    net_line_total: BudgetReceiptMoney
+
+
+class BudgetReceiptLinkRequest(BaseModel):
+    model_config = _STRICT
+    account_id: BudgetId
+    entry_reference: BudgetAnalyticsReference
+
+
+class BudgetReceiptConfirmRequest(BaseModel):
+    model_config = _STRICT
+    receipt_id: BudgetReceiptId
+    expected_version: BudgetVersion
+    raw_shop_name: Annotated[str, Field(max_length=128)] | None
+    raw_nip: Annotated[str, Field(pattern=r"^(?:|[0-9]{10})$")] | None
+    receipt_kind: Literal["purchase", "refund"]
+    receipt_date: Annotated[str, Field(pattern=r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+                                       json_schema_extra={"format": "date"})]
+    receipt_time: Annotated[str, Field(pattern=r"^(?:|(?:[01][0-9]|2[0-3]):[0-5][0-9])$")] | None
+    total_amount: BudgetReceiptMoney
+    currency: Annotated[str, Field(pattern=r"^[A-Z]{3}$")]
+    payment_method: Literal["card", "blik", "cash", "mixed", "unknown"]
+    lines: Annotated[list[BudgetReceiptLineInput], Field(max_length=300)]
+    link: BudgetReceiptLinkRequest | None
+
+
+class BudgetReceiptListRequest(BaseModel):
+    model_config = _STRICT
+    month: Annotated[str, Field(pattern=r"^[0-9]{4}-[0-9]{2}$")] | None = None
+    status: Literal["draft", "confirmed", "needs_review"] | None = None
+    linked: bool | None = None
+    limit: Annotated[int, Field(ge=1, le=200)] = 50
+    cursor: BudgetReceiptCursor | None = None
+
+
+class BudgetReceiptSearchRequest(BaseModel):
+    model_config = _STRICT
+    query: Annotated[str, Field(min_length=1, max_length=128)]
+    limit: Annotated[int, Field(ge=1, le=200)] = 50
+    cursor: BudgetReceiptCursor | None = None
+
+
+class BudgetReceiptDeleteRequest(BaseModel):
+    model_config = _STRICT
+    receipt_id: BudgetReceiptId
+    expected_version: BudgetVersion
+
+
+class BudgetReceiptLine(BudgetReceiptLineInput):
+    model_config = _READ
+    line_no: int
+    raw_name_key: str
+
+
+class BudgetReceiptSummary(BaseModel):
+    model_config = _READ
+    receipt_id: BudgetReceiptId
+    shop_id: str | None
+    chain_key: str | None
+    raw_shop_name: str | None
+    raw_nip: str | None
+    receipt_kind: Literal["purchase", "refund"]
+    receipt_date: str | None
+    receipt_time: str | None
+    total_amount: str | None
+    currency: str | None
+    payment_method: str | None
+    status: Literal["draft", "confirmed", "needs_review"]
+    source_kind: Literal["live_text", "local_ocr", "cloud_ai"]
+    linked: bool
+    linked_account_id: str | None
+    linked_entry_ref: str | None
+    version: int
+    created_at: float
+    updated_at: float
+    image_available: bool
+    image_expires_at: float | None
+    raw_text_expires_at: float | None
+    math_delta: str | None
+
+
+class BudgetReceiptDetail(BudgetReceiptSummary):
+    raw_ocr_text: str | None
+    lines: list[BudgetReceiptLine]
+
+
+class BudgetReceiptCandidate(BaseModel):
+    model_config = _READ
+    account_id: str
+    entry_reference: str
+    amount: str
+    currency: str
+    credit_debit_indicator: Literal["DBIT", "CRDT"]
+    transaction_date: str | None
+    booking_date: str | None
+    value_date: str | None
+    remittance_information: list[str]
+    creditor_name: str | None
+    merchant_token_hit: bool
+    date_distance: int
+
+
+class BudgetReceiptParseResult(BaseModel):
+    model_config = _READ
+    receipt_id: BudgetReceiptId
+    draft: BudgetReceiptDetail
+    candidates: list[BudgetReceiptCandidate]
+    version: int
+
+
+class BudgetReceiptDetailResult(BaseModel):
+    model_config = _READ
+    receipt: BudgetReceiptDetail
+
+
+class BudgetReceiptConfirmResult(BaseModel):
+    model_config = _READ
+    ok: Literal[True]
+    receipt: BudgetReceiptDetail
+
+
+class BudgetReceiptListResult(BaseModel):
+    model_config = _READ
+    receipts: list[BudgetReceiptSummary]
+    next_cursor: str | None
+
+
+class BudgetReceiptDeleteResult(BaseModel):
+    model_config = _READ
+    ok: Literal[True]
+    deleted: Literal[True]
+
+
+_RECEIPT_MODELS = (
+    BudgetReceiptParseTextRequest, BudgetReceiptConfirmRequest, BudgetReceiptListRequest,
+    BudgetReceiptSearchRequest, BudgetReceiptDeleteRequest, BudgetReceiptParseResult,
+    BudgetReceiptDetailResult, BudgetReceiptConfirmResult, BudgetReceiptListResult, BudgetReceiptDeleteResult,
+)
+
+
 _ANALYTICS_MODELS = (BudgetAnalyticsCategoryCreateRequest, BudgetAnalyticsCategoryUpdateRequest,
                      BudgetAnalyticsAnnotationRequest, BudgetAnalyticsRulePreviewRequest,
                      BudgetAnalyticsRuleSaveRequest, BudgetAnalyticsTransferDecisionRequest,
@@ -2520,6 +2683,13 @@ _PATH_ROLES = {
     ("POST", "/api/budget/analytics/mortgage-save"): "admin",
     ("POST", "/api/budget/analytics/mortgage-payment-set"): "admin",
     ("POST", "/api/budget/analytics/inbox-mark"): "admin",
+    ("POST", "/api/budget/receipts/parse-text"): "admin",
+    ("POST", "/api/budget/receipts/confirm"): "admin",
+    ("POST", "/api/budget/receipts/list"): "admin",
+    ("POST", "/api/budget/receipts/search"): "admin",
+    ("GET", "/api/budget/receipts/detail"): "admin",
+    ("GET", "/api/budget/receipts/image"): "admin",
+    ("POST", "/api/budget/receipts/delete"): "admin",
 
     ("GET", "/api/budget/enable-banking/callback"): "public",
     ("GET", "/api/budget/consent/pending"): "admin",
@@ -2580,7 +2750,7 @@ def _component_schemas() -> dict:
         [(model, "validation")
          for model in (*_CONTROL_MODELS, ControlSuccess, ControlError, *_COMMAND_MODELS,
                        *_READ_MODELS, *_AUTH_MODELS, *_AUTOMATION_MODELS, *_EVENT_MODELS,
-                       *_USER_MODELS, *_CALENDAR_MODELS, *_BUDGET_MODELS, *_ANALYTICS_MODELS)],
+                       *_USER_MODELS, *_CALENDAR_MODELS, *_BUDGET_MODELS, *_ANALYTICS_MODELS, *_RECEIPT_MODELS)],
         ref_template="#/components/schemas/{model}",
     )
     schemas = combined.get("$defs", {})
@@ -3125,6 +3295,57 @@ def _budget_paths():
     paths[_P_BUDGET_REFRESH] = {"post": _refresh_operation()}
     paths.update(_consent_paths())
     paths.update(_analytics_paths())
+    paths.update(_receipt_paths())
+    return paths
+
+
+def _receipt_paths():
+    prefix = "/api/budget/receipts/"
+    writes = (
+        ("parse-text", "parseBudgetReceiptText", "BudgetReceiptParseTextRequest", "BudgetReceiptParseResult",
+         "Paste Live Text, redact PAN data and create a 48-hour draft; JSON body cap 48 KiB."),
+        ("confirm", "confirmBudgetReceipt", "BudgetReceiptConfirmRequest", "BudgetReceiptConfirmResult",
+         "Validate exact line and total identities, review an optional bank link, and retain redacted text for 30 days; "
+         "JSON body cap 128 KiB."),
+        ("list", "listBudgetReceipts", "BudgetReceiptListRequest", "BudgetReceiptListResult",
+         "Keyset-page owner receipts with filters in the JSON body, never URL query parameters."),
+        ("search", "searchBudgetReceipts", "BudgetReceiptSearchRequest", "BudgetReceiptListResult",
+         "Search owner receipts with the query in the JSON body, never reverse-proxy URL logs."),
+        ("delete", "deleteBudgetReceipt", "BudgetReceiptDeleteRequest", "BudgetReceiptDeleteResult",
+         "Delete receipt lines before their owned receipt using expected_version CAS."),
+    )
+    paths = {}
+    for name, operation, request, response, summary in writes:
+        responses = _budget_responses(response)
+        responses["409"]["description"] = "Stale receipt version or an already-linked bank transaction."
+        responses["413"] = {"description": "Active draft quota exceeded.",
+                            "content": {_APP_JSON: {"schema": _ref("BudgetError")}}}
+        paths[prefix + name] = {"post": {
+            "operationId": operation, "summary": summary,
+            "description": "Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Requires an authenticated SQLite admin "
+                           "owner, browser cookie and exact configured Origin before the body is read.",
+            "requestBody": {"required": True, "content": {_APP_JSON: {"schema": _ref(request)}}},
+            "responses": responses,
+        }}
+    receipt_query = [_budget_query("receipt_id", required=True,
+                                   schema={"type": "string",
+                                           "pattern": r"^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$"},
+                                   description="Opaque owned receipt UUID.")]
+    for name, operation, response, summary in (
+        ("detail", "getBudgetReceiptDetail", "BudgetReceiptDetailResult",
+         "Read one owned receipt, its structured lines and redacted raw text."),
+        ("image", "getBudgetReceiptImage", None,
+         "Read one owned WebP image; v1a has no stored images and therefore returns 404."),
+    ):
+        responses = _budget_responses(response) if response else _budget_responses("BudgetError")
+        if response is None:
+            responses["200"] = {"description": "Owner-private WebP bytes (available from v1b).",
+                                "content": {"image/webp": {"schema": {"type": "string", "format": "binary"}}}}
+        paths[prefix + name] = {"get": {
+            "operationId": operation, "summary": summary,
+            "description": "Default-off owner-private read. Unknown and foreign receipt IDs both return 404.",
+            "parameters": receipt_query, "responses": responses,
+        }}
     return paths
 
 

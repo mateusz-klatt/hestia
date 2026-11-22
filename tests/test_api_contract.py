@@ -56,7 +56,12 @@ class OpenApiArtifactTests(unittest.TestCase):
 
     def test_monthly_budget_contract_is_strictly_additive_from_0_27_0(self):
         document = api_contract.build_openapi()
-        self.assertEqual(document["info"]["version"], "0.28.0")
+        self.assertEqual(document["info"]["version"], "0.30.0")
+        for path in [path for path in document["paths"] if path.startswith("/api/budget/receipts/")]:
+            del document["paths"][path]
+        for name in [name for name in document["components"]["schemas"] if name.startswith("BudgetReceipt")]:
+            del document["components"]["schemas"][name]
+        document["info"]["version"] = "0.28.0"
         del document["components"]["schemas"]["BudgetAnalyticsMonthlyBudgetConfiguration"]["properties"]["income_window"]
         del document["components"]["schemas"]["BudgetAnalyticsMonthlyBudgetIncomeWindow"]
         document["info"]["version"] = "0.27.0"
@@ -490,7 +495,9 @@ class TolerantResponseContractTests(unittest.TestCase):
         "BudgetAnalyticsTransferDecisionRequest", "BudgetAnalyticsLegRequest",
         "BudgetAnalyticsSpendingLimitSaveRequest", "BudgetAnalyticsMortgageSaveRequest",
         "BudgetAnalyticsMortgagePaymentSetRequest", "BudgetAnalyticsInboxKeyRequest",
-        "BudgetAnalyticsInboxMarkRequest",
+        "BudgetAnalyticsInboxMarkRequest", "BudgetReceiptParseTextRequest", "BudgetReceiptConfirmRequest",
+        "BudgetReceiptLineInput", "BudgetReceiptLinkRequest", "BudgetReceiptListRequest",
+        "BudgetReceiptSearchRequest", "BudgetReceiptDeleteRequest",
         "AddUserRequest", "ChangePasswordRequest", "ControlCover", "ControlLevel", "ControlRequest",
         "ControlSwitch", "ControlThermostat", "ControlThermostatPower", "IrRequest", "LoginRequest",
         "NameRequest", "ResetPasswordRequest", "RoomIconRequest", "RuleInput", "SceneRequest",
