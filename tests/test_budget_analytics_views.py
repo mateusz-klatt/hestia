@@ -846,6 +846,26 @@ class MonthlyBudgetProjectionTests(ProjectionCase):
         self.assertEqual(result["summary"], {"start_budget": "10000", "spent": "200", "remaining": "9800"})
         api_contract.BudgetAnalyticsMonthlyBudget.model_validate(result)
 
+    def test_monthly_budget_card_fallback_requires_confirmed_account_kind(self):
+        self.add_transaction("a", "card-purchase", amount="125.25", booking_date="2026-11-10",
+                             transaction_date="2026-11-10")
+        with self.sessions.begin() as session:
+            account = session.get(db.BudgetAccount, self.accounts["a"])
+            account.kind, account.kind_confirmed_at = "credit_card", None
+        cfg = json.dumps({"owner": {"income_category_ids": []}})
+        with mock.patch.dict(os.environ, {month_budget.MONTH_CONFIG_ENV: cfg}):
+            unconfirmed = self.store.monthly_budget("owner")
+            with self.sessions.begin() as session:
+                session.get(db.BudgetAccount, self.accounts["a"]).kind_confirmed_at = self.now
+            confirmed = self.store.monthly_budget("owner")
+
+        self.assertEqual(unconfirmed["summary"]["spent"], "125.25")
+        self.assertEqual(confirmed["summary"], unconfirmed["summary"])
+        self.assertEqual((unconfirmed["coverage"]["pending_transfer_rows"], unconfirmed["coverage"]["provisional"]),
+                         (1, True))
+        self.assertEqual((confirmed["coverage"]["pending_transfer_rows"], confirmed["coverage"]["provisional"]),
+                         (0, False))
+
     def test_ledger_as_of_offline_imports_empty_live_sync_and_stale_counts(self):
         # Empty/unresolved-only offline import leaves ledger_as_of None and all 4 selected accounts stale.
         with self.sessions.begin() as session:

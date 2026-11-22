@@ -644,6 +644,7 @@ def evaluate_monthly_budget(
     identities: Mapping[str, Sequence[Mapping]],
     limits: Sequence[Mapping],
     account_component_timestamps: Mapping[str, int | float | None],
+    account_kinds: Mapping[str, str],
     settings: MonthBudgetSettings | None,
 ) -> dict:
     """Pure single-snapshot evaluation for ``GET /api/budget/analytics/monthly-budget``."""
@@ -742,7 +743,8 @@ def evaluate_monthly_budget(
                     purchase_date_fallback_count += 1
                 if nonzero:
                     has_affecting_unexcluded = True
-                    if unresolved or not _is_explicit_expense(eff, row["annotation"], rules_by_id):
+                    if unresolved or (account_kinds.get(acct_id) != "credit_card"
+                                      and not _is_explicit_expense(eff, row["annotation"], rules_by_id)):
                         pending_transfer_rows += 1
                 observed_spend_categories.add(cat_id)
                 if mortgage_cat_id is not None and cat_id == mortgage_cat_id:
