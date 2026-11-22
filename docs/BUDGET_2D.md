@@ -468,6 +468,20 @@ IDs with a truncation flag. Currency filtering scopes amounts, items, matches an
 summary counts. The snapshot digest, schedules version and account freshness are owner-wide.
 
 The endpoint returns HTTP `413` without partial totals if a ledger, schedule, active
-hint, item or encoded response limit is exceeded. Malformed stored inputs return HTTP
-`500` (`budget_analytics_data_error`). The read writes no data and makes no bank requests.
+hint, category-baseline, item or encoded response limit is exceeded. Malformed stored
+inputs return HTTP `500` (`budget_analytics_data_error`). The read writes no data and
+makes no bank requests.
+
+Optional `HESTIA_BUDGET_FORECAST_CONFIG` (server-only JSON, 16 KiB, default empty) names
+categories whose irregular bills should be estimated. For each category the forecast adds
+one `category_baseline` item per month (`confidence: estimated`, label is the category
+name). The amount is the median, or a trimmed mean, of positive expense totals over the
+last `history_months` complete months (default 6, at least 3 months with expenses). The
+current month subtracts expenses already booked. Recurring hints and mortgage schedules
+that belong to the category are subtracted and listed in `deduplications` with
+`baseline_category_id`. Invalid configuration returns HTTP `503` (`budget_unavailable`).
+
+```json
+{"owner": {"category_ids": ["electricity", "mobile"], "history_months": 6, "estimator": "median"}}
+```
 The projection rules and full wire contract are specified in [BUDGET_FORECAST.md](BUDGET_FORECAST.md).

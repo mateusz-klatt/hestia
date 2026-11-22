@@ -169,6 +169,55 @@ describe("ForecastView", () => {
     expect(details.querySelector("button, input, select")).toBeNull();
   });
 
+  it.each([
+    { locale: "en-US", badge: "Estimate", adjustments: "Category estimate adjustments", merged: "Merged with instalment" },
+    { locale: "pl-PL", badge: "Szacunek", adjustments: "Korekty szacunku", merged: "Połączono z ratą" },
+  ])("shows a category baseline estimate badge in $locale", async ({ locale, badge, adjustments, merged }) => {
+    const api = fakeApi();
+    const base = forecastOf();
+    const estimate = {
+      ...forecastItem({
+        schedule_id: null, label: "Electricity", amount: "180.5", currency: "PLN",
+        expected_date: "2026-11-28", past_due: false, account_stale: false,
+      }),
+      source: "category_baseline",
+      confidence: "estimated",
+    } as unknown as ReturnType<typeof forecastItem>;
+    const adjustment = {
+      ...forecastDeduplication({
+        schedule_id: "cat-power", schedule_label: "Electricity", recurring_label: "Orange", amount: "40",
+        matched_due_date: "2026-11-28", last_observed_date: "2026-10-12", account_stale: false,
+      }),
+      baseline_category_id: "cat-power",
+    } as unknown as ReturnType<typeof forecastDeduplication>;
+    const total = forecastCurrencyTotal({ currency: "PLN", total: "180.5", scheduled_total: "0", estimated_total: "180.5" });
+    api.forecast.mockResolvedValue(ok({
+      ...base,
+      totals: [total],
+      deduplications: [forecastDeduplication(), adjustment],
+      months: base.months.map((month) => month.month === base.start_month
+        ? { ...month, items: [estimate], currencies: [total] }
+        : month),
+    }));
+    await show(api, locale);
+
+    const month = requireElement(host.querySelector("section.budget-month"), "month");
+    expect([...month.querySelectorAll(".budget-chip")].map((chip) => chip.textContent)).toEqual([badge]);
+    expect(month.textContent).toContain("Electricity");
+    expect(month.textContent).toContain("2026-11-28");
+
+    const mergedDetails = [...host.querySelectorAll("details")].find((item) => item.querySelector("summary")?.textContent === merged);
+    const adjustmentDetails = [...host.querySelectorAll("details")].find((item) => item.querySelector("summary")?.textContent === adjustments);
+    if (mergedDetails === undefined || adjustmentDetails === undefined) throw new Error("Missing forecast details");
+    expect(mergedDetails.textContent).not.toContain("Orange");
+    expect(adjustmentDetails.textContent).not.toContain("Synthetic Bank Mortgage");
+    await update(() => { requireElement(adjustmentDetails.querySelector("summary"), adjustments).click(); });
+    expect(adjustmentDetails.open).toBe(true);
+    expect(adjustmentDetails.textContent).toContain("Orange");
+    expect(adjustmentDetails.textContent).toContain("Electricity");
+    expect(adjustmentDetails.querySelector(".budget-chip")?.textContent).toBe(badge);
+  });
+
   it("labels each currency chart and shows exact monthly totals in text tables", async () => {
     const api = fakeApi();
     api.forecast.mockResolvedValue(ok(populatedForecast()));

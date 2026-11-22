@@ -41,7 +41,8 @@ const forecastLabels = {
     total: "Total",
     scheduledTotal: "Scheduled",
     estimatedTotal: "Estimated",
-    confidence: { scheduled: "Scheduled", high: "Estimated", medium: "Estimated" },
+    confidence: { scheduled: "Scheduled", high: "Estimated", medium: "Estimated", estimated: "Estimate" },
+    estimateAdjustments: "Category estimate adjustments",
     unmarked: "Unmarked",
     accountStale: "Account not up to date",
     merged: "Merged with instalment",
@@ -80,7 +81,8 @@ const forecastLabels = {
     total: "Razem",
     scheduledTotal: "Zaplanowane",
     estimatedTotal: "Szacowane",
-    confidence: { scheduled: "Zaplanowana", high: "Szacowana", medium: "Szacowana" },
+    confidence: { scheduled: "Zaplanowana", high: "Szacowana", medium: "Szacowana", estimated: "Szacunek" },
+    estimateAdjustments: "Korekty szacunku",
     unmarked: "Nieoznaczona",
     accountStale: "Konto nieaktualne",
     merged: "Połączono z ratą",
@@ -103,6 +105,10 @@ interface ForecastViewProps {
 
 function currencyOptions(codes: readonly string[]): string[] {
   return [...new Set(codes.filter(validCurrency).map((code) => code.trim().toUpperCase()))].sort();
+}
+
+function baselineCategoryId(item: { baseline_category_id?: string | null }): string | null {
+  return item.baseline_category_id ?? null;
 }
 
 function ForecastSummary({ data, accounts, connections, text, onOpenMortgages }: {
@@ -332,11 +338,11 @@ export function ForecastView({ api, accounts, connections = [], locale, revision
               {data.months.map((month) => <ForecastMonth key={month.month} month={month} text={text} locale={locale} />)}
             </>
           )}
-          {data.deduplications.length > 0 ? (
+          {data.deduplications.some((item) => baselineCategoryId(item) === null) ? (
             <details className="budget-recurring-evidence">
               <summary>{text.merged}</summary>
               <ul className="budget-entry-list">
-                {data.deduplications.map((item) => (
+                {data.deduplications.filter((item) => baselineCategoryId(item) === null).map((item) => (
                   <li key={`${item.schedule_id}/${item.matched_due_date}`} className="budget-entry">
                     <div className="budget-recurring-main">
                       <span className="budget-entry-text">{item.recurring_label} → {item.schedule_label}</span>
@@ -346,6 +352,25 @@ export function ForecastView({ api, accounts, connections = [], locale, revision
                       <span>{text.matchedDue(item.matched_due_date)}</span>
                       <span>{text.lastObserved(item.last_observed_date)}</span>
                       {item.account_stale ? <span className="budget-chip">{text.accountStale}</span> : null}
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </details>
+          ) : null}
+          {data.deduplications.some((item) => baselineCategoryId(item) !== null) ? (
+            <details className="budget-recurring-evidence">
+              <summary>{text.estimateAdjustments}</summary>
+              <ul className="budget-entry-list">
+                {data.deduplications.filter((item) => baselineCategoryId(item) !== null).map((item) => (
+                  <li key={`${baselineCategoryId(item) ?? ""}/${item.schedule_id}/${item.matched_due_date}/${item.recurring_label}`} className="budget-entry">
+                    <div className="budget-recurring-main">
+                      <span className="budget-entry-text">{item.recurring_label} → {item.schedule_label}</span>
+                      <strong className="budget-recurring-amount">{formatAmount(item.amount, item.currency, locale)}</strong>
+                    </div>
+                    <div className="budget-entry-facts">
+                      <span>{text.matchedDue(item.matched_due_date)}</span>
+                      <span className="budget-chip">{text.confidence.estimated}</span>
                     </div>
                   </li>
                 ))}
