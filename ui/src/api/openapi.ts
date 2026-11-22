@@ -328,7 +328,7 @@ export interface paths {
         };
         /**
          * Read owner-private quarantine counts and safe entry metadata (read-only)
-         * @description Pure read-only single-snapshot summary of uncertain, unresolved and offline-import-unresolved observations excluded from report totals (zero mutations, zero bank requests). Returns exact whole-scope and per-account counts plus bounded safe details (entry_reference, date, status and exclusion reason only; never amounts, descriptions or counterparty names).
+         * @description Pure read-only single-snapshot summary of uncertain, unresolved and offline-import-unresolved observations excluded from report totals (zero mutations, zero bank requests). Returns exact whole-scope and per-account counts plus up to 200 safe details ordered newest effective date first (undated last), then observed_at descending (entry_reference, date, status and exclusion reason only; never amounts, descriptions or counterparty names). Whole-scope bounded integrity probes fail closed with 500 budget_analytics_data_error for invalid stored reasons, sources, timestamps or SQL-verifiable payload fields (duplicate JSON keys are validated on extracted candidate items).
          */
         get: operations["getBudgetAnalyticsQuarantine"];
         put?: never;
