@@ -184,8 +184,7 @@ def warsaw_date(evaluated_at: int | float) -> tuple[str, str]:
         local_dt = datetime.fromtimestamp(evaluated_at, tz=timezone.utc).astimezone(zone)
     except (OverflowError, OSError, ValueError):
         raise MonthDataError() from None
-    if not 1900 <= local_dt.year <= 9999:
-        raise MonthDataError()
+    # Non-negative epochs map to years >= 1970; >9999 raises OverflowError above.
     evaluation_date = local_dt.date().isoformat()
     return evaluation_date, evaluation_date[:7]
 
