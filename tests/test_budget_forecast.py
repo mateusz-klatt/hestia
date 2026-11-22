@@ -270,6 +270,23 @@ class BudgetForecastTests(unittest.TestCase):
                 self.assertEqual(result["end_month"], month)
                 self.assertEqual(result["deduplications"][0]["matched_due_date"], f"{month}-15")
 
+    def test_dedup_crosses_year_boundary_with_five_day_tolerance(self):
+        for due_date, five_days_away, six_days_away in (
+            ("2027-01-01", "2026-12-27", "2026-12-26"),
+            ("2026-12-31", "2027-01-05", "2027-01-06"),
+        ):
+            schedule = _schedule("loan", due_day=int(due_date[-2:]), start_date=due_date, end_date=due_date)
+            for last_date, matches in ((five_days_away, True), (six_days_away, False)):
+                with self.subTest(due_date=due_date, last_date=last_date):
+                    hint = _hint("monthly debit", last_date=last_date)
+                    result = _forecast(evaluation_date="2027-02-01", schedules=[schedule], hints=[hint], months=1)
+                    self.assertEqual(result["summary"]["deduped_recurring_count"], int(matches))
+                    audits = [(row["matched_due_date"], row["last_observed_date"], row["day_distance"])
+                              for row in result["deduplications"]]
+                    self.assertEqual(audits, [(due_date, last_date, 5)] if matches else [])
+                    labels = [row["label"] for row in result["months"][0]["items"]]
+                    self.assertEqual(labels, [] if matches else ["monthly debit"])
+
     def test_filter_then_partition_then_hint_cap_before_dedup(self):
         hints = [_hint(f"debit {index}") for index in range(201)]
         with self.assertRaisesRegex(forecast.ForecastLimitError, "^Forecast limit exceeded$"):
@@ -302,6 +319,56 @@ class BudgetForecastTests(unittest.TestCase):
         result = _forecast(hints=hints, schedules=[_schedule("loan", label="漢" * 256)], months=1)
         self.assertEqual(result["deduplications"][0]["recurring_label"], "é" * 254 + "…")
         self.assertEqual(result["deduplications"][0]["schedule_label"], "漢" * 256)
+
+    def test_iban_like_sequences_are_redacted_in_every_displayed_label(self):
+        plain = "Principal repayment for November (reference 2026-11)"
+        for original, redacted in (
+            ("12345678901234567890123456", "••3456"),
+            ("12 3456 7890 1234 5678 9012 3456", "••3456"),
+            ("PL12345678901234567890123456", "PL••3456"),
+            ("PL12 3456 7890 1234 5678 9012 3456", "PL••3456"),
+            ("PL 12 3456 7890 1234 5678 9012 3456", "PL••3456"),
+            ("GB82QWER12345678901234", "GB••1234"),
+            ("GB82 QWER 1234 5678 9012 34", "GB••1234"),
+            ("GB82QWER12345678901234 monthly fee", "GB••1234 monthly fee"),
+            ("GB82 QWER 1234 5678 9012 34 monthly fee", "GB••1234 monthly fee"),
+            ("GB82QWER12345678 901234", "GB••1234"),
+            ("GB82QWER12345678901234 GB82 QWER 1234 5678 9012 34", "GB••1234 GB••1234"),
+            (plain, plain),
+        ):
+            with self.subTest(label=original):
+                original += " - monthly fee"
+                redacted += " - monthly fee"
+                hints = _observed_hints(["2026-08-15", "2026-09-15", "2026-10-15"], description=original)
+                self.assertEqual(hints[0].label_source, "description")
+                self.assertEqual(hints[0].label, original)
+                projected = _forecast(hints=hints, schedules=[_schedule("loan", amount="200", label=original)], months=1)
+                self.assertEqual({item["source"]: item["label"] for item in projected["months"][0]["items"]},
+                                 {"mortgage": redacted, "recurring": redacted})
+                matched = _forecast(hints=hints, schedules=[_schedule("loan", label=original)], months=1)
+                self.assertEqual(len(matched["deduplications"]), 1)
+                audit = matched["deduplications"][0]
+                self.assertEqual((audit["schedule_label"], audit["recurring_label"]), (redacted, redacted))
+
+    def test_iban_redaction_precedes_label_truncation(self):
+        prefix = "x" * 244 + " "
+        hints = _observed_hints(["2026-08-15", "2026-09-15", "2026-10-15"],
+                                description=prefix + "PL12345678901234567890123456")
+        result = _forecast(hints=hints, months=1)
+        self.assertEqual(result["months"][0]["items"][0]["label"], prefix + "PL••3456")
+        result = _forecast(hints=hints, schedules=[_schedule("loan")], months=1)
+        self.assertEqual(result["deduplications"][0]["recurring_label"], prefix + "PL••3456")
+
+    def test_hints_with_identical_masked_labels_keep_separate_dedup_identities(self):
+        dates = ["2026-08-15", "2026-09-15", "2026-10-15"]
+        first = _observed_hints(dates, description="PL12345678901234567890123456")
+        second = _observed_hints(dates, description="PL34345678901234567890123456")
+        schedules = [_schedule("a"), _schedule("b")]
+        result = _forecast(hints=first + second, schedules=schedules, months=1)
+        self.assertEqual(result["summary"]["deduped_recurring_count"], 2)
+        self.assertEqual([(audit["schedule_id"], audit["recurring_label"]) for audit in result["deduplications"]],
+                         [("a", "PL••3456"), ("b", "PL••3456")])
+        self.assertEqual([item["source"] for item in result["months"][0]["items"]], ["mortgage", "mortgage"])
 
     def test_validation_errors_are_fixed_before_currency_filter_and_redact_reprs(self):
         confidential = _hint("private label", amount="123456789.987654321")

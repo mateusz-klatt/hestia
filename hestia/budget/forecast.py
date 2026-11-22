@@ -6,6 +6,7 @@ from collections import defaultdict
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
+from functools import cache
 from itertools import chain
 import re
 
@@ -23,6 +24,16 @@ MAX_STALE_ACCOUNT_IDS = 200
 _MAX_MATCH_DISTANCE = 5
 _FIRST_MONTH = 1900 * 12
 _LAST_MONTH = 9999 * 12 + 11
+# Prefer complete Polish and compact forms, then uppercase print forms, before
+# the loose spaced form. This keeps ordinary trailing words out of common matches.
+_IBAN_LIKE = re.compile(
+    r"(?<![A-Za-z0-9])(?:"
+    r"(?:[Pp][Ll]\s*)?[0-9](?:\s*[0-9]){25}"
+    r"|[A-Za-z]{2}[0-9]{2}[A-Za-z0-9]{11,30}(?!\s+[0-9])"
+    r"|[A-Z]{2}\s*[0-9]\s*[0-9](?:\s*[A-Z0-9]){11,30}(?!\s+[A-Za-z0-9]{0,29}[0-9])"
+    r"|[A-Za-z]{2}\s*[0-9]\s*[0-9](?:\s*[A-Za-z0-9]){11,30}"
+    r")(?![A-Za-z0-9])"
+)
 
 
 class ForecastInputError(ValueError):
@@ -190,7 +201,14 @@ def _project_month(month, evaluation_date, schedules, hints):
     return items
 
 
+def _mask_iban(match):
+    compact = "".join(match[0].split())
+    country = compact[:2].upper() if compact[0].isalpha() else ""
+    return country + "••" + compact[-4:]
+
+
 def _bounded_label(label):
+    label = _IBAN_LIKE.sub(_mask_iban, label)
     if len(label) > MAX_FORECAST_LABEL:
         return label[:MAX_FORECAST_LABEL - 1].rstrip() + "…"
     return label
@@ -246,16 +264,18 @@ def evaluate_forecast(*, owner: str, evaluation_date: str, months: int, currency
     if sum(map(len, projected)) > MAX_FORECAST_ITEMS:
         raise ForecastLimitError()
 
+    # Month rows repeat labels. Scan each original only once in this evaluation.
+    display_label = cache(_bounded_label)
     month_rows = []
     for month, items in zip(horizon, projected):
         for item, _ in items:
-            item["label"] = _bounded_label(item["label"])
+            item["label"] = display_label(item["label"])
         items.sort(key=_item_sort_key)
         wire_items = [item for item, _ in items]
         month_rows.append({"month": month, "currencies": _currency_totals(wire_items), "items": wire_items})
     for audit in audits:
-        audit["schedule_label"] = _bounded_label(audit["schedule_label"])
-        audit["recurring_label"] = _bounded_label(audit["recurring_label"])
+        audit["schedule_label"] = display_label(audit["schedule_label"])
+        audit["recurring_label"] = display_label(audit["recurring_label"])
     audits.sort(key=lambda audit: (audit["currency"], audit["matched_due_date"], audit["schedule_id"]))
 
     return {
