@@ -190,14 +190,17 @@ class MonthlyBudgetConfigAndClockTests(unittest.TestCase):
         valid = json.dumps({
             "owner": {
                 "income_category_ids": ["cat-salary", "cat-zus"],
+                "income_window_start_day": 20,
                 "pass_through": {"rent_category_id": "cat-rent", "mortgage_category_id": "cat-mortgage"},
             },
             "empty_owner": {"income_category_ids": []},
         })
         parsed = month_budget.load_month_config({month_budget.MONTH_CONFIG_ENV: valid})
         self.assertEqual(parsed["owner"].income_category_ids, ("cat-salary", "cat-zus"))
+        self.assertEqual(parsed["owner"].income_window_start_day, 20)
         self.assertEqual(parsed["owner"].pass_through.rent_category_id, "cat-rent")
         self.assertEqual(parsed["empty_owner"], month_budget.MonthBudgetSettings(income_category_ids=(), pass_through=None))
+        self.assertEqual(parsed["empty_owner"].income_window_start_day, 1)
 
         invalid_payloads = [
             "not-json",
@@ -222,6 +225,11 @@ class MonthlyBudgetConfigAndClockTests(unittest.TestCase):
         ]
         for raw in invalid_payloads:
             with self.subTest(raw=raw[:40]), self.assertRaises(BudgetConfigError):
+                month_budget.load_month_config({month_budget.MONTH_CONFIG_ENV: raw})
+
+        for bad_start_day in (0, 29, "20", 1.0, True, False, None):
+            raw = json.dumps({"owner": {"income_category_ids": [], "income_window_start_day": bad_start_day}})
+            with self.subTest(start_day=bad_start_day), self.assertRaises(BudgetConfigError):
                 month_budget.load_month_config({month_budget.MONTH_CONFIG_ENV: raw})
 
     def test_unconfigured_dashboard_and_snapshot_category_reference_checks(self):
@@ -693,6 +701,142 @@ class MonthlyBudgetPassThroughAndLimitsTests(unittest.TestCase):
         with mock.patch.object(month_budget.core, "MAX_ROWS", 1):
             with self.assertRaises(month_budget.MonthLimitError):
                 _eval(transactions=txs[:2], settings=no_pt_settings)
+
+
+class MonthlyBudgetIncomeWindowTests(unittest.TestCase):
+    def test_salary_zus_weekend_expected_income_and_closed_month_window(self):
+        cfg = month_budget.MonthBudgetSettings(
+            ("cat-salary", "cat-zus"), income_window_start_day=20,
+        )
+
+        def credit(ref, booking_date, amount, name, category_id="cat-salary"):
+            return _tx(
+                "acc-a", ref, amount=amount, direction="CRDT", booking_date=booking_date,
+                kind="income", category_id=category_id, source="manual", metadata={"debtor_name": name},
+            )
+
+        transactions = [
+            credit("sep-a", "2026-09-26", "5000", "Employer A"),
+            credit("oct-a", "2026-10-26", "5000", "Employer A"),
+            credit("nov-a", "2026-11-26", "5500", "Employer A"),
+            credit("sep-b", "2026-09-30", "6000", "Employer B"),
+            credit("oct-b", "2026-10-30", "6000", "Employer B"),
+            credit("nov-b", "2026-11-30", "6500", "Employer B"),
+            credit("sep-c", "2026-09-30", "7000", "Employer C"),
+            credit("weekend-c", "2026-11-01", "7000", "Employer C"),
+            credit("oct-zus", "2026-10-10", "800", "ZUS", "cat-zus"),
+            credit("nov-zus", "2026-11-10", "800", "ZUS", "cat-zus"),
+        ]
+        early = _eval(
+            period="2026-11", evaluated_at=_utc_ts("2026-11-05T12:00:00Z"),
+            transactions=transactions, settings=cfg,
+        )
+        self.assertEqual(early["summary"]["start_budget"], "18000")
+        self.assertEqual(early["expected_income"], {
+            "status": "estimated", "total": "800",
+            "items": [{"category_id": "cat-zus", "amount": "800", "expected_date": "2026-11-10",
+                       "source": "previous_month"}],
+        })
+        self.assertEqual(early["pace"]["budget"], "18800")
+        self.assertEqual(early["pace"]["basis"], "received_plus_expected")
+
+        november = _eval(
+            period="2026-11", evaluated_at=_utc_ts("2026-11-30T12:00:00Z"),
+            transactions=transactions, settings=cfg,
+        )
+        api_contract.BudgetAnalyticsMonthlyBudget.model_validate(november)
+        self.assertEqual(november["configuration"], {
+            "status": "ready", "source": "bootstrap",
+            "income_window": {"start": "2026-10-20", "end": "2026-11-19", "start_day": 20},
+        })
+        self.assertEqual(november["summary"], {"start_budget": "18800", "spent": "0", "remaining": "18800"})
+        self.assertEqual(november["expected_income"], {"status": "none", "total": "0", "items": []})
+        self.assertEqual(november["pace"]["budget"], "18800")
+        self.assertEqual(november["pace"]["basis"], "received")
+
+        december = _eval(
+            period="2026-12", evaluated_at=_utc_ts("2027-01-02T12:00:00Z"),
+            transactions=transactions, settings=cfg,
+        )
+        self.assertEqual(december["configuration"]["income_window"], {
+            "start": "2026-11-20", "end": "2026-12-19", "start_day": 20,
+        })
+        self.assertEqual(december["summary"]["start_budget"], "12000")
+        self.assertEqual(december["expected_income"], {"status": "historical", "total": None, "items": []})
+        self.assertEqual(december["pace"]["basis"], "received")
+        self.assertEqual(december["pace"]["budget"], "12000")
+
+    def test_window_edges_at_warsaw_midnight_in_winter_and_summer(self):
+        cfg = month_budget.MonthBudgetSettings(("cat-salary",), income_window_start_day=20)
+        cases = (
+            ("winter", "2026-12", "2026-11-19", "2026-11-20", "2026-12-19", "2026-12-20",
+             (("2026-12-19T22:59:59Z", "2026-12-19"), ("2026-12-19T23:00:00Z", "2026-12-20"))),
+            ("summer", "2026-07", "2026-06-19", "2026-06-20", "2026-07-19", "2026-07-20",
+             (("2026-07-19T21:59:59Z", "2026-07-19"), ("2026-07-19T22:00:00Z", "2026-07-20"))),
+        )
+        for label, period, before, start, end, after, instants in cases:
+            transactions = [
+                _tx("acc-a", label + booking, amount=amount, direction="CRDT", booking_date=booking,
+                    kind="income", category_id="cat-salary", source="manual")
+                for booking, amount in ((before, "10"), (start, "100"), (end, "200"), (after, "400"))
+            ]
+            for instant, evaluation_date in instants:
+                with self.subTest(season=label, instant=instant):
+                    result = _eval(
+                        period=period, evaluated_at=_utc_ts(instant), transactions=transactions, settings=cfg,
+                    )
+                    self.assertEqual(result["evaluation_date"], evaluation_date)
+                    self.assertEqual(result["cutoff"], evaluation_date)
+                    self.assertEqual(result["configuration"]["income_window"],
+                                     {"start": start, "end": end, "start_day": 20})
+                    self.assertEqual(result["summary"]["start_budget"], "300")
+                    self.assertEqual(result["pace"]["budget"], "300")
+
+    def test_start_day_one_is_byte_for_byte_calendar_month_regression(self):
+        transactions = [
+            _tx("acc-a", "oct", amount="5000", direction="CRDT", booking_date="2026-10-26",
+                kind="income", category_id="cat-salary", source="manual", metadata={"debtor_name": "Employer"}),
+            _tx("acc-a", "nov", amount="5500", direction="CRDT", booking_date="2026-11-26",
+                kind="income", category_id="cat-salary", source="manual", metadata={"debtor_name": "Employer"}),
+        ]
+        kwargs = {
+            "period": "2026-11", "evaluated_at": _utc_ts("2026-11-30T12:00:00Z"),
+            "transactions": transactions,
+        }
+        implicit = _eval(**kwargs, settings=month_budget.MonthBudgetSettings(("cat-salary",)))
+        explicit = _eval(
+            **kwargs,
+            settings=month_budget.MonthBudgetSettings(("cat-salary",), income_window_start_day=1),
+        )
+        self.assertEqual(explicit, implicit)
+        self.assertEqual(implicit["configuration"], {"status": "ready", "source": "bootstrap"})
+        self.assertEqual(implicit["summary"]["start_budget"], "5500")
+
+    def test_spending_refunds_and_rent_remain_on_calendar_month(self):
+        cfg = month_budget.MonthBudgetSettings(
+            ("cat-salary",),
+            pass_through=month_budget.PassThroughSettings("cat-rent", "cat-mortgage"),
+            income_window_start_day=20,
+        )
+        transactions = [
+            _tx("acc-a", "old-expense", amount="100", booking_date="2026-10-25",
+                kind="expense", category_id="cat-food", source="manual"),
+            _tx("acc-a", "new-expense", amount="40", booking_date="2026-11-05",
+                kind="expense", category_id="cat-food", source="manual"),
+            _tx("acc-a", "old-refund", amount="10", direction="CRDT", booking_date="2026-10-25",
+                kind="refund", category_id="cat-food", source="manual"),
+            _tx("acc-a", "new-refund", amount="5", direction="CRDT", booking_date="2026-11-06",
+                kind="refund", category_id="cat-food", source="manual"),
+            _tx("acc-a", "old-rent", amount="2000", direction="CRDT", booking_date="2026-10-25",
+                kind="income", category_id="cat-rent", source="manual"),
+            _tx("acc-a", "new-rent", amount="1000", direction="CRDT", booking_date="2026-11-07",
+                kind="income", category_id="cat-rent", source="manual"),
+        ]
+        result = _eval(transactions=transactions, settings=cfg)
+        self.assertEqual(result["summary"], {"start_budget": "0", "spent": "35", "remaining": "-35"})
+        self.assertEqual(result["category_spend"][0]["expenses"], "40")
+        self.assertEqual(result["category_spend"][0]["refunds"], "5")
+        self.assertEqual(result["pass_through"]["rent_received"], "1000")
 
 
 class MonthlyBudgetExpectedIncomeAndPaceTests(unittest.TestCase):

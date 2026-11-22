@@ -1,4 +1,4 @@
-// Read-only owner-private monthly budget dashboard (P1, OpenAPI 0.27.0).
+// Read-only owner-private monthly budget dashboard (P1, OpenAPI 0.28.0).
 // Evaluates in Europe/Warsaw from one snapshot on the server; all amounts stay decimal strings end to end,
 // ratios divide via BigInt half-even rounding, and no raw IDs or remittance text ever enter the DOM.
 import { useEffect, useRef, useState } from "react";
@@ -8,7 +8,7 @@ import type { BudgetAccount } from "../model";
 import { clampPercentString, formatRatioHalfEven, isPositiveDecimal, isZero, labelOf,
   monthLabel, monthlyBudgetCurrencies, pluralPl, ratioPercentFloor, shiftMonth, validCurrency } from "./model";
 import type { AnalyticsCategory, AnalyticsMonthlyBudget, AnalyticsMonthlyBudgetExpectedIncome,
-  AnalyticsMonthlyBudgetPace, AnalyticsMonthlyBudgetPassThrough } from "./model";
+  AnalyticsMonthlyBudgetIncomeWindow, AnalyticsMonthlyBudgetPace, AnalyticsMonthlyBudgetPassThrough } from "./model";
 
 export const monthBudgetLabels = {
   en: {
@@ -235,6 +235,15 @@ export interface MonthBudgetViewProps {
   revision: number;
   onAccessLoss: (result: { ok: boolean; status?: number; error?: string }) => boolean;
   onOpenMonth: (month: string, serverCurrentMonth: string) => void;
+}
+
+function incomeWindowLabel(incomeWindow: AnalyticsMonthlyBudgetIncomeWindow, locale: string): string {
+  const monthFormatter = new Intl.DateTimeFormat(locale, { month: "short", timeZone: "UTC" });
+  const formatDay = (value: string) => {
+    const parsed = new Date(`${value}T00:00:00Z`);
+    return `${String(parsed.getUTCDate())} ${monthFormatter.format(parsed)}`;
+  };
+  return `${formatDay(incomeWindow.start)} – ${formatDay(incomeWindow.end)}`;
 }
 
 function paceSentence(pace: AnalyticsMonthlyBudgetPace, text: MonthBudgetLabels): string {
@@ -585,7 +594,14 @@ function ReadyDashboard({ data, categoryMap, text, locale, onOpenMonth }: {
                 {data.coverage.provisional ? <span className="budget-chip budget-warn">{text.provisional}</span> : null}
               </div>
               <dl>
-                <dt>{text.budgetReceived}</dt>
+                <dt>
+                  {text.budgetReceived}
+                  {data.configuration.income_window ? (
+                    <small className="budget-muted">
+                      {" "}({incomeWindowLabel(data.configuration.income_window, locale)})
+                    </small>
+                  ) : null}
+                </dt>
                 <dd><strong>{money(data.summary.start_budget)}</strong></dd>
                 <dt>
                   {isCurrent ? text.spentToDate : text.spentClosed}

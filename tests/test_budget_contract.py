@@ -209,7 +209,7 @@ class BudgetOpenApiTests(unittest.TestCase):
             self.assertEqual(set(methods), {method})
             self.assertEqual(methods[method]["x-required-role"], "admin")
             self.assertIn("413", methods[method]["responses"])
-        self.assertEqual(document["info"]["version"], "0.27.0")
+        self.assertEqual(document["info"]["version"], "0.28.0")
         mark_desc = analytics["/api/budget/analytics/inbox-mark"]["post"]["description"]
         for phrase in ("reads_version", "1..100", "500"):
             self.assertIn(phrase, mark_desc)
@@ -318,11 +318,13 @@ class BudgetOpenApiTests(unittest.TestCase):
 
     def test_monthly_budget_schemas_pin_wire_fields_and_bounds(self):
         schemas = contract.build_openapi()["components"]["schemas"]
+        optional_keys = {"Configuration": {"income_window"}}
         for suffix, keys in {
             "": {"period", "start", "end", "cutoff", "current_month", "evaluated_at", "evaluation_date",
                  "evaluation_timezone", "currency", "available_currencies", "configuration", "coverage",
                  "summary", "expected_income", "pace", "category_spend", "pass_through", "card_exposure"},
-            "Configuration": {"status", "source"},
+            "Configuration": {"status", "source", "income_window"},
+            "IncomeWindow": {"start", "end", "start_day"},
             "Coverage": {"ledger_as_of", "stale_selected_accounts", "purchase_date_fallback_count",
                          "pending_transfer_rows", "transfer_scan_limited", "provisional", "has_activity"},
             "Summary": {"start_budget", "spent", "remaining"},
@@ -341,8 +343,12 @@ class BudgetOpenApiTests(unittest.TestCase):
             with self.subTest(schema=suffix):
                 schema = schemas["BudgetAnalyticsMonthlyBudget" + suffix]
                 self.assertEqual(set(schema["properties"]), keys)
-                self.assertEqual(set(schema["required"]), keys)
+                self.assertEqual(set(schema["required"]), keys - optional_keys.get(suffix, set()))
                 self.assertNotIn("additionalProperties", schema)
+        window = schemas["BudgetAnalyticsMonthlyBudgetIncomeWindow"]["properties"]
+        self.assertEqual(window["start_day"]["type"], "integer")
+        self.assertEqual((window["start_day"]["minimum"], window["start_day"]["maximum"]), (1, 28))
+        self.assertNotIn("income_window", schemas["BudgetAnalyticsMonthlyBudgetConfiguration"]["required"])
         root = schemas["BudgetAnalyticsMonthlyBudget"]["properties"]
         self.assertEqual(root["evaluation_timezone"]["const"], "Europe/Warsaw")
         self.assertEqual(schemas["BudgetAnalyticsMonthlyBudgetCardExposure"]["properties"]["status"]["const"],

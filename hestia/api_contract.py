@@ -75,7 +75,8 @@ from pydantic.json_schema import models_json_schema
 #         exact counts + bounded safe ref/date/status/reason details without descriptions or amounts).
 # 0.26.0: read-only upcoming commitments forecast (GET /api/budget/analytics/forecast, zero migration).
 # 0.27.0: read-only owner-private monthly budget dashboard (GET /api/budget/analytics/monthly-budget, zero migration).
-CONTRACT_VERSION = "0.27.0"
+# 0.28.0: additive optional income window on monthly-budget configuration (zero migration).
+CONTRACT_VERSION = "0.28.0"
 OPENAPI_PATH = Path(__file__).resolve().parent.parent / "docs" / "api" / "openapi.json"
 
 # De-duplicated string literals (SonarPython S1192): the OpenAPI content-type, the paths reused
@@ -2333,10 +2334,21 @@ class BudgetAnalyticsForecast(BaseModel):
 BudgetAnalyticsMonthlyBudgetMoney = Annotated[str, Field(max_length=192)]
 
 
+class BudgetAnalyticsMonthlyBudgetIncomeWindow(BaseModel):
+    model_config = _READ
+    start: str
+    end: str
+    start_day: Annotated[int, Field(ge=1, le=28)]
+
+
 class BudgetAnalyticsMonthlyBudgetConfiguration(BaseModel):
     model_config = _READ
     status: Literal["ready", "unconfigured"]
     source: Literal["bootstrap", "saved", "none"]
+    income_window: Annotated[
+        BudgetAnalyticsMonthlyBudgetIncomeWindow,
+        Field(default=None, json_schema_extra=_OMIT),
+    ] = None
 
 
 class BudgetAnalyticsMonthlyBudgetCoverage(BaseModel):

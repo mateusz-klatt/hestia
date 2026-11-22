@@ -846,6 +846,25 @@ class MonthlyBudgetProjectionTests(ProjectionCase):
         self.assertEqual(result["summary"], {"start_budget": "10000", "spent": "200", "remaining": "9800"})
         api_contract.BudgetAnalyticsMonthlyBudget.model_validate(result)
 
+    def test_monthly_budget_income_window_from_owner_config(self):
+        salary = self.store.create_category("owner", "Wynagrodzenie")
+        self.add_transaction("a", "sal-oct", amount="5000", credit_debit_indicator="CRDT", booking_date="2026-10-30")
+        self.annotation(account="a", reference="sal-oct", category_id=salary["id"], kind="income")
+        self.add_transaction("a", "sal-nov", amount="5500", credit_debit_indicator="CRDT", booking_date="2026-11-26")
+        self.annotation(account="a", reference="sal-nov", category_id=salary["id"], kind="income")
+        self.now = datetime(2026, 11, 30, 12, 0, tzinfo=timezone.utc).timestamp()
+        cfg = json.dumps({"owner": {"income_category_ids": [salary["id"]], "income_window_start_day": 20}})
+
+        with mock.patch.dict(os.environ, {month_budget.MONTH_CONFIG_ENV: cfg}):
+            result = self.store.monthly_budget("owner")
+
+        api_contract.BudgetAnalyticsMonthlyBudget.model_validate(result)
+        self.assertEqual(result["configuration"], {
+            "status": "ready", "source": "bootstrap",
+            "income_window": {"start": "2026-10-20", "end": "2026-11-19", "start_day": 20},
+        })
+        self.assertEqual(result["summary"]["start_budget"], "5000")
+
     def test_monthly_budget_card_fallback_requires_confirmed_account_kind(self):
         self.add_transaction("a", "card-purchase", amount="125.25", booking_date="2026-11-10",
                              transaction_date="2026-11-10")

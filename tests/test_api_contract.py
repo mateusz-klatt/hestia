@@ -5,7 +5,7 @@ Contract guarantees:
      ``python -m hestia.api_contract``).
   2. Each request DTO accepts/rejects exactly what the authoritative runtime validator does, so the
      generated client types can never lie about what the server will accept.
-  3. The monthly budget addition leaves the OpenAPI 0.26.0 contract structurally intact.
+  3. Each monthly budget addition leaves the preceding OpenAPI contract structurally intact.
 """
 from __future__ import annotations
 
@@ -54,9 +54,16 @@ class OpenApiArtifactTests(unittest.TestCase):
             "docs/api/openapi.json is stale — run `python -m hestia.api_contract`",
         )
 
-    def test_monthly_budget_contract_is_strictly_additive_from_0_26_0(self):
+    def test_monthly_budget_contract_is_strictly_additive_from_0_27_0(self):
         document = api_contract.build_openapi()
-        self.assertEqual(document["info"]["version"], "0.27.0")
+        self.assertEqual(document["info"]["version"], "0.28.0")
+        del document["components"]["schemas"]["BudgetAnalyticsMonthlyBudgetConfiguration"]["properties"]["income_window"]
+        del document["components"]["schemas"]["BudgetAnalyticsMonthlyBudgetIncomeWindow"]
+        document["info"]["version"] = "0.27.0"
+        canonical_0_27 = json.dumps(document, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        self.assertEqual(hashlib.sha256(canonical_0_27).hexdigest(),
+                         "dc5ab818460475a849a90f91b9b312a7ca5fcf68f5ad8286318b149462f0aab0")
+
         document["info"]["version"] = "0.26.0"
         del document["paths"]["/api/budget/analytics/monthly-budget"]
         for suffix in ("", "Configuration", "Coverage", "Summary", "ExpectedIncome", "ExpectedIncomeItem",
