@@ -11,6 +11,7 @@ import { ACTIVE_JOB, KINDS, accountLabel, effectiveState, formatAmount, freshnes
 import type { BudgetAccount, BudgetBalances, BudgetCapabilities, BudgetConnection, BudgetJob, BudgetKind,
   BudgetConsent, BudgetConsentFlow, BudgetLimit, BudgetSharedLimit, BudgetTransaction, DateRange,
   LimitState } from "./model";
+import { ConsentHealthPanel, consentHealthLabels } from "./consent_health";
 import { MonthView, monthLabels } from "./analytics/month";
 import { MortgagesView, mortgagesLabels } from "./analytics/mortgages";
 import { RecurringView, recurringLabels } from "./analytics/recurring";
@@ -52,6 +53,7 @@ const labels = {
     consentContext: "The connection cannot be started safely from this address; open Hestia at its usual address.",
     consentUrl: "The bank returned an invalid address; nothing was opened.",
     limits: "Download limits", limitsHide: "Hide limits", limitsLoading: "Loading limits…",
+    consentHealth: "Consent status", consentHealthHide: "Hide consent status",
     limitsError: "Limits could not be loaded.",
     limitsIntro: "Each account and data type is downloaded at most twice a day, at least 12 hours apart; a bank can ask for a longer pause. These are read-only.",
     scopes: { application: "All banks", provider: "This bank", connection: "This connection" },
@@ -97,6 +99,7 @@ const labels = {
     consentContext: "Nie można bezpiecznie rozpocząć połączenia z tego adresu; otwórz Hestię pod jej zwykłym adresem.",
     consentUrl: "Bank zwrócił nieprawidłowy adres; niczego nie otwarto.",
     limits: "Limity pobrań", limitsHide: "Ukryj limity", limitsLoading: "Wczytywanie limitów…",
+    consentHealth: "Stan zgód", consentHealthHide: "Ukryj stan zgód",
     limitsError: "Nie udało się wczytać limitów.",
     limitsIntro: "Każde konto i rodzaj danych pobieramy najwyżej 2 razy na dobę, co najmniej co 12 godzin; bank może zażądać dłuższej przerwy. To tylko podgląd.",
     scopes: { application: "Wszystkie banki", provider: "Ten bank", connection: "To połączenie" },
@@ -114,12 +117,13 @@ const labels = {
 };
 type Labels = typeof labels.en;
 
-function pick(): { text: Labels; month: typeof monthLabels.en; year: typeof yearLabels.en;
+function pick(): { text: Labels; consentHealth: typeof consentHealthLabels.en; month: typeof monthLabels.en; year: typeof yearLabels.en;
   limits: typeof spendingLimitsLabels.en; recurring: typeof recurringLabels.en;
   mortgages: typeof mortgagesLabels.en; rules: typeof rulesLabels.en; locale: string } {
   const locale = currentLocale();
   const pl = locale.startsWith("pl");
-  return { text: pl ? labels.pl : labels.en, month: pl ? monthLabels.pl : monthLabels.en, year: pl ? yearLabels.pl : yearLabels.en,
+  return { text: pl ? labels.pl : labels.en, consentHealth: pl ? consentHealthLabels.pl : consentHealthLabels.en,
+    month: pl ? monthLabels.pl : monthLabels.en, year: pl ? yearLabels.pl : yearLabels.en,
     limits: pl ? spendingLimitsLabels.pl : spendingLimitsLabels.en,
     recurring: pl ? recurringLabels.pl : recurringLabels.en,
     mortgages: pl ? mortgagesLabels.pl : mortgagesLabels.en, rules: pl ? rulesLabels.pl : rulesLabels.en, locale };
@@ -162,7 +166,7 @@ export interface BudgetProps {
 
 export function Budget({ active, api = budgetApi, pollMs = 2000, principal,
   navigate = (url) => { window.location.assign(url); }, completeUrl = "/budget/connect/complete" }: BudgetProps) {
-  const { text, month: monthText, year: yearText, limits: limitsText, recurring: recurringText,
+  const { text, consentHealth: consentHealthText, month: monthText, year: yearText, limits: limitsText, recurring: recurringText,
     mortgages: mortgagesText, rules: rulesText, locale } = pick();
   const [load, setLoad] = useState<Load>("loading");
   const [connections, setConnections] = useState<BudgetConnection[]>([]);
@@ -170,6 +174,7 @@ export function Budget({ active, api = budgetApi, pollMs = 2000, principal,
   const [accounts, setAccounts] = useState<BudgetAccount[]>([]);
   const [jobs, setJobs] = useState<BudgetJob[]>([]);
   const [showLimits, setShowLimits] = useState(false);
+  const [showConsentHealth, setShowConsentHealth] = useState(false);
   const [limits, setLimits] = useState<BudgetLimit[] | null | "error">(null);
   const [consents, setConsents] = useState<BudgetConsent[]>([]);
   const [pending, setPending] = useState<BudgetConsentFlow[]>([]);
@@ -207,7 +212,7 @@ export function Budget({ active, api = budgetApi, pollMs = 2000, principal,
     epoch.current += 1;
     generation.current += 1;
     setConnections([]); setAccounts([]); setJobs([]); setDetail(null); setCapabilities(null); setBusy(new Set());
-    setLimits(null); setShowLimits(false); setConsents([]); setPending([]); setView("accounts");
+    setLimits(null); setShowLimits(false); setShowConsentHealth(false); setConsents([]); setPending([]); setView("accounts");
     setLoad(disabled ? "disabled" : "denied");
   }, []);
   const barrier = useCallback((result: { ok: boolean; status?: number; error?: string }): boolean => {
@@ -388,6 +393,11 @@ export function Budget({ active, api = budgetApi, pollMs = 2000, principal,
     <header className="budget-header">
       <div><h2>{text.title}</h2><p>{text.subtitle}</p></div>
       <div className="budget-actions">
+        {load === "ready" && consentEnabled ? (
+          <button type="button" aria-pressed={showConsentHealth} onClick={() => { setShowConsentHealth((current) => !current); }}>
+            {showConsentHealth ? text.consentHealthHide : text.consentHealth}
+          </button>
+        ) : null}
         {load === "ready" ? (
           <button type="button" aria-pressed={showLimits} onClick={() => { setShowLimits((current) => !current); }}>
             {showLimits ? text.limitsHide : text.limits}
@@ -410,6 +420,10 @@ export function Budget({ active, api = budgetApi, pollMs = 2000, principal,
       {header}
       {notice === null ? null : <p className="budget-notice" role="alert">{notice}</p>}
       {showLimits ? <p className="budget-muted">{text.limitsIntro}</p> : null}
+      {showConsentHealth && consentEnabled ? (
+        <ConsentHealthPanel api={api} connections={connections} text={consentHealthText} locale={locale}
+          revision={revision} onAccessLoss={barrier} />
+      ) : null}
       {pending.length === 0 ? null : (
         <section className="budget-pending" aria-label={text.pendingTitle}>
           <h3>{text.pendingTitle}</h3>

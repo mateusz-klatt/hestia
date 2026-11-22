@@ -292,7 +292,12 @@ describe("analytics decisions", () => {
     expect(validMortgageLabel("Synthetic Loan")).toBe(true);
     expect(validMortgageLabel("   ")).toBe(false);
     expect(validMortgageLabel("bad\nline")).toBe(false);
-    // U+0958 decomposes under NFC to 2 code units (200 -> 400 > 256).
+    // Rejects Unicode Cf (zero-width) characters matching server Cc/Cf/Cs check.
+    expect(validMortgageLabel("zero\u200bwidth")).toBe(false);
+    // Counts Unicode code points rather than UTF-16 code units (>128 astral emoji still valid up to 256).
+    expect(validMortgageLabel("🏠".repeat(130))).toBe(true);
+    expect(validMortgageLabel("🏠".repeat(257))).toBe(false);
+    // U+0958 decomposes under NFC to 2 code points (200 -> 400 > 256).
     expect(validMortgageLabel("\u0958".repeat(200))).toBe(false);
     expect(validMortgageLabel("\u0958".repeat(128))).toBe(true);
     expect(parseIntInRange("1", 1, 31)).toBe(1);

@@ -122,3 +122,5 @@
 .budget-mortgage-months { list-style: none; margin: .35rem 0; padding: 0; display: flex; flex-wrap: wrap; gap: .35rem .6rem; }
 .budget-mortgage-months li { display: inline-flex; align-items: center; gap: .35rem; border: 1px solid var(--border); border-radius: 999px; padding: .1rem .55rem; color: var(--fg); }
 .budget-mortgage-months button { min-height: 1.7rem; padding-inline: .45rem; font-size: .78rem; }
+.budget-consent-health h5 { margin: .4rem 0 .1rem; font-size: .9rem; color: var(--fg-soft); }
+.budget-consent-status[data-status="attention_required"], .budget-consent-status[data-status="expired"], .budget-consent-status[data-status="due_soon"] { border-color: var(--accent); color: var(--accent); font-weight: 600; }

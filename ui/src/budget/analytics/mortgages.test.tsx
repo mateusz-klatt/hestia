@@ -128,6 +128,7 @@ describe("MortgagesView", () => {
     expect(host.textContent).toContain("Przypomnienie 1 dzień wcześniej");
     expect(host.textContent).toContain("Przypomnienie w dniu terminu");
     expect(host.textContent).toContain("Push właściciela");
+    expect(host.textContent).toContain("Zakończona");
   });
 
   it("creates, edits, toggles and marks/unmarks payments with strict CAS, busy lock and 409/413/400 handling", async () => {

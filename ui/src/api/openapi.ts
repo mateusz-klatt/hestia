@@ -584,6 +584,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/budget/consent/reconcile": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Browser-bound bank consent: reconcile
+         * @description Default-off. Requires the SQLite admin owner and signed browser cookie; mutations also require exact Origin and JSON. Each flow has a Secure HttpOnly SameSite=Lax binding cookie. Owner reads and cancel never contact a bank. Start uses GET /aspsps and POST /auth; complete claims one POST /sessions before delivery, verifies GET /sessions and adopts under version fences. Configured accounts, selections, history, pauses and acquisition debits are preserved.
+         */
+        get: operations["getBudgetConsentReconcile"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/budget/consent/renewal-reminders": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Browser-bound bank consent: renewal-reminders
+         * @description Default-off. Requires the SQLite admin owner and signed browser cookie; mutations also require exact Origin and JSON. Each flow has a Secure HttpOnly SameSite=Lax binding cookie. Owner reads and cancel never contact a bank. Start uses GET /aspsps and POST /auth; complete claims one POST /sessions before delivery, verifies GET /sessions and adopts under version fences. Configured accounts, selections, history, pauses and acquisition debits are preserved.
+         */
+        get: operations["getBudgetConsentRenewalReminders"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/budget/consent/start": {
         parameters: {
             query?: never;
@@ -2823,6 +2863,136 @@ export interface components {
         BudgetConsentPending: {
             /** Pending */
             pending: components["schemas"]["BudgetConsentFlow"][];
+        };
+        /**
+         * BudgetConsentReconcile
+         * @description Read-only reconciliation report; *_eligible fields are informational only and trigger no deletion or remote closure.
+         */
+        BudgetConsentReconcile: {
+            /** Consents */
+            consents: components["schemas"]["BudgetConsentReconcileConsent"][];
+            /** Evaluated At */
+            evaluated_at: number;
+            /** Flows */
+            flows: components["schemas"]["BudgetConsentReconcileFlow"][];
+            /** Retention Days */
+            retention_days: number;
+            /** Rule Version */
+            rule_version: number;
+            summary: components["schemas"]["BudgetConsentReconcileSummary"];
+        };
+        /**
+         * BudgetConsentReconcileConsent
+         * @description Informational consent classification; consent_id is an opaque non-reversible hash, never a provider session ID.
+         */
+        BudgetConsentReconcileConsent: {
+            /** Classification */
+            classification: string;
+            /** Connection Id */
+            connection_id: string;
+            /** Consent Id */
+            consent_id: string;
+            /** Local Retire Eligible */
+            local_retire_eligible: boolean;
+            /** Needs Owner Review */
+            needs_owner_review: boolean;
+            /**
+             * Provenance
+             * @enum {string}
+             */
+            provenance: "hestia_created" | "external_file" | "poc_retired";
+            /** Remote Close Eligible */
+            remote_close_eligible: boolean;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "ACTIVE" | "UNADOPTED" | "RETIRED";
+            /** Valid Until */
+            valid_until: number | null;
+        };
+        /**
+         * BudgetConsentReconcileFlow
+         * @description Informational consent-flow classification; flow_id and candidate_consent_id are opaque non-reversible hashes.
+         */
+        BudgetConsentReconcileFlow: {
+            /** Candidate Consent Id */
+            candidate_consent_id: string | null;
+            /** Classification */
+            classification: string;
+            /** Connection Id */
+            connection_id: string;
+            /** Flow Id */
+            flow_id: string;
+            /** Local Retire Eligible */
+            local_retire_eligible: boolean;
+            /** Needs Owner Review */
+            needs_owner_review: boolean;
+            /** Status */
+            status: string;
+        };
+        /** BudgetConsentReconcileSummary */
+        BudgetConsentReconcileSummary: {
+            /** Consents Total */
+            consents_total: number;
+            /** Flows Total */
+            flows_total: number;
+            /** Local Retire Eligible */
+            local_retire_eligible: number;
+            /** Needs Owner Review */
+            needs_owner_review: number;
+            /** Remote Close Eligible */
+            remote_close_eligible: number;
+        };
+        /**
+         * BudgetConsentRenewalReminder
+         * @description Read-only private consent-renewal status derived from stored provider valid_until and attention.
+         */
+        BudgetConsentRenewalReminder: {
+            /** Active Milestone */
+            active_milestone: number | "attention" | null;
+            /** Attention */
+            attention: string | null;
+            /** Bank Name */
+            bank_name: string;
+            /** Connection Id */
+            connection_id: string;
+            /** Days Remaining */
+            days_remaining: number | null;
+            /**
+             * Destination Kind
+             * @enum {string}
+             */
+            destination_kind: "owner_inbox" | "owner_push" | "owner_email";
+            /** Paused */
+            paused: boolean;
+            /** Reminder Due */
+            reminder_due: boolean;
+            /** Rule Version */
+            rule_version: number;
+            /** Seconds Remaining */
+            seconds_remaining: number | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "attention_required" | "expired" | "due_soon" | "healthy" | "unknown_expiry";
+            /** Valid Until */
+            valid_until: number | null;
+        };
+        /**
+         * BudgetConsentRenewalReminders
+         * @description Owner-private consent renewal reminders evaluated on demand; no bank requests or delivery.
+         */
+        BudgetConsentRenewalReminders: {
+            /** Evaluated At */
+            evaluated_at: number;
+            /** Lead Days */
+            lead_days: number[];
+            /** Reminders */
+            reminders: components["schemas"]["BudgetConsentRenewalReminder"][];
+            /** Rule Version */
+            rule_version: number;
         };
         /**
          * BudgetConsentStartRequest
@@ -6856,6 +7026,208 @@ export interface operations {
             };
             /** @description SQLite session users required */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Durable consent throttle or provider cooldown; no automatic new consent. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description budget configuration unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+        };
+    };
+    getBudgetConsentReconcile: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description owner-scoped stored state; no bank request */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetConsentReconcile"];
+                };
+            };
+            /** @description invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description session required; middleware may return an empty body */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description admin owner or browser-origin requirement failed; middleware may return an empty body */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description unknown, disabled or foreign resource */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description SQLite session users required */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Owner consent evaluation cap exceeded; no partial results returned. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Durable consent throttle or provider cooldown; no automatic new consent. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description budget configuration unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+        };
+    };
+    getBudgetConsentRenewalReminders: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description owner-scoped stored state; no bank request */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetConsentRenewalReminders"];
+                };
+            };
+            /** @description invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description session required; middleware may return an empty body */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description admin owner or browser-origin requirement failed; middleware may return an empty body */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description unknown, disabled or foreign resource */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description SQLite session users required */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Owner consent evaluation cap exceeded; no partial results returned. */
+            413: {
                 headers: {
                     [name: string]: unknown;
                 };

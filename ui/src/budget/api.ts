@@ -2,8 +2,9 @@
 // Authorization header (the server rejects bearer mutations). Results are discriminated, never thrown, so a
 // failed call cannot become an unhandled rejection. Nothing here persists financial data in the browser.
 import { apiUrl } from "../api/client";
-import type { BudgetAccount, BudgetCapabilities, BudgetConnection, BudgetConsent, BudgetConsentFlow, BudgetJob,
-  BudgetKind, BudgetBalances, BudgetLimit, BudgetOperation, BudgetTransactions, ConsentIntent } from "./model";
+import type { BudgetAccount, BudgetCapabilities, BudgetConnection, BudgetConsent, BudgetConsentFlow,
+  BudgetConsentReconcile, BudgetConsentRenewalReminders, BudgetJob, BudgetKind, BudgetBalances, BudgetLimit,
+  BudgetOperation, BudgetTransactions, ConsentIntent } from "./model";
 import { idempotencyKey } from "./model";
 import type { AnalyticsCategory, AnalyticsMortgages, AnalyticsOverview, AnalyticsRecurring, AnalyticsRule,
   AnalyticsSpendingLimits, AnalyticsTransactions, AnnotationRequest, AnnotationSaved, CategoryCreateRequest,
@@ -69,6 +70,10 @@ export const budgetApi = {
   limits: () => call<{ limits: BudgetLimit[] }>(url("limits")),
   consentStatus: () => call<{ consents: BudgetConsent[] }>(url("consent/status")),
   consentPending: () => call<{ pending: BudgetConsentFlow[] }>(url("consent/pending")),
+  /** Read-only consent renewal reminders derived from stored valid_until and attention (no bank requests). */
+  consentRenewalReminders: () => call<BudgetConsentRenewalReminders>(url("consent/renewal-reminders")),
+  /** Read-only consent reconciliation summary and opaque classifications (zero actions, no bank requests). */
+  consentReconcile: () => call<BudgetConsentReconcile>(url("consent/reconcile")),
   /** Starts a bank authorization; the browser then leaves for the returned URL. No bank data is read here. */
   consentStart: (connection: BudgetConnection, intent: ConsentIntent) =>
     post<{ flow_id: string; authorization_url: string; expires_at: number }>("consent/start",
