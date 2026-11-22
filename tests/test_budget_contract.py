@@ -323,7 +323,8 @@ class BudgetOpenApiTests(unittest.TestCase):
 
     def test_monthly_budget_schemas_pin_wire_fields_and_bounds(self):
         schemas = contract.build_openapi()["components"]["schemas"]
-        optional_keys = {"Configuration": {"income_window"}, "Coverage": {"pending_row_keys"}}
+        optional_keys = {"Configuration": {"income_window"},
+                         "Coverage": {"pending_row_keys", "pending_row_keys_truncated"}}
         for suffix, keys in {
             "": {"period", "start", "end", "cutoff", "current_month", "evaluated_at", "evaluation_date",
                  "evaluation_timezone", "currency", "available_currencies", "configuration", "coverage",
@@ -331,7 +332,8 @@ class BudgetOpenApiTests(unittest.TestCase):
             "Configuration": {"status", "source", "income_window"},
             "IncomeWindow": {"start", "end", "start_day"},
             "Coverage": {"ledger_as_of", "stale_selected_accounts", "purchase_date_fallback_count",
-                         "pending_transfer_rows", "pending_row_keys", "transfer_scan_limited", "provisional", "has_activity"},
+                         "pending_transfer_rows", "pending_row_keys", "pending_row_keys_truncated",
+                         "transfer_scan_limited", "provisional", "has_activity"},
             "Summary": {"start_budget", "spent", "remaining"},
             "ExpectedIncome": {"status", "total", "items"},
             "ExpectedIncomeItem": {"category_id", "amount", "expected_date", "source"},
@@ -357,8 +359,32 @@ class BudgetOpenApiTests(unittest.TestCase):
         pending_row_keys = schemas["BudgetAnalyticsMonthlyBudgetCoverage"]["properties"]["pending_row_keys"]
         self.assertEqual(pending_row_keys["type"], "array")
         self.assertEqual(pending_row_keys["maxItems"], 500)
-        self.assertEqual(pending_row_keys["items"], {"type": "string"})
+        self.assertEqual(pending_row_keys["items"], {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 1153,
+            "pattern": contract._ROW_KEY_PATTERN,
+        })
         self.assertNotIn("pending_row_keys", schemas["BudgetAnalyticsMonthlyBudgetCoverage"]["required"])
+        self.assertNotIn("pending_row_keys_truncated", schemas["BudgetAnalyticsMonthlyBudgetCoverage"]["required"])
+        self.assertEqual(
+            schemas["BudgetAnalyticsMonthlyBudgetCoverage"]["properties"]["pending_row_keys_truncated"]["type"],
+            "boolean",
+        )
+        tx_params = {
+            param["name"]: param
+            for param in contract.build_openapi()["paths"]["/api/budget/analytics/transactions"]["get"]["parameters"]
+        }
+        self.assertEqual(tx_params["row_keys"]["schema"], {
+            "type": "array",
+            "maxItems": 500,
+            "items": {
+                "type": "string",
+                "minLength": 3,
+                "maxLength": 1153,
+                "pattern": contract._ROW_KEY_PATTERN,
+            },
+        })
         root = schemas["BudgetAnalyticsMonthlyBudget"]["properties"]
         self.assertEqual(root["evaluation_timezone"]["const"], "Europe/Warsaw")
         self.assertEqual(schemas["BudgetAnalyticsMonthlyBudgetCardExposure"]["properties"]["status"]["const"],

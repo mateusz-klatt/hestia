@@ -978,6 +978,7 @@ def _evaluate_monthly_budget_core(
         "purchase_date_fallback_count": purchase_date_fallback_count,
         "pending_transfer_rows": selected_bucket.pending_transfer_rows,
         "pending_row_keys": selected_bucket.pending_row_keys,
+        "pending_row_keys_truncated": selected_bucket.pending_transfer_rows > len(selected_bucket.pending_row_keys),
         "transfer_scan_limited": transfer_scan_limited,
         "provisional": provisional,
         "has_activity": selected_bucket.has_activity,

@@ -625,6 +625,7 @@ class MonthlyBudgetTransferAndProvisionalTests(unittest.TestCase):
         ]
         self.assertEqual(res["coverage"]["pending_transfer_rows"], len(expected_keys))
         self.assertEqual(res["coverage"]["pending_row_keys"], expected_keys)
+        self.assertFalse(res["coverage"]["pending_row_keys_truncated"])
         api_contract.BudgetAnalyticsMonthlyBudget.model_validate(res)
 
         charts = _eval_charts(
@@ -634,13 +635,33 @@ class MonthlyBudgetTransferAndProvisionalTests(unittest.TestCase):
             settings=cfg,
         )
         self.assertEqual(charts["budget"]["coverage"]["pending_row_keys"], expected_keys)
+        self.assertFalse(charts["budget"]["coverage"]["pending_row_keys_truncated"])
         api_contract.BudgetAnalyticsMonthlyBudgetCharts.model_validate(charts)
+
+        clean_only = _eval(
+            transactions=[_tx("acc-card", "card-clean", amount="70")],
+            account_kinds={"acc-card": "credit_card"},
+            settings=cfg,
+        )
+        self.assertEqual(clean_only["coverage"]["pending_transfer_rows"], 0)
+        self.assertEqual(clean_only["coverage"]["pending_row_keys"], [])
+        self.assertFalse(clean_only["coverage"]["pending_row_keys_truncated"])
+        api_contract.BudgetAnalyticsMonthlyBudget.model_validate(clean_only)
+
+        exact_500 = _eval(
+            transactions=[_tx("acc-a", f"eq-{idx:03d}", amount="1") for idx in range(500)],
+            settings=cfg,
+        )
+        self.assertEqual(exact_500["coverage"]["pending_transfer_rows"], 500)
+        self.assertEqual(len(exact_500["coverage"]["pending_row_keys"]), 500)
+        self.assertFalse(exact_500["coverage"]["pending_row_keys_truncated"])
 
         many_txs = [_tx("acc-a", f"p-{idx:03d}", amount="1") for idx in range(505)]
         capped = _eval(transactions=many_txs, settings=cfg)
         self.assertEqual(capped["coverage"]["pending_transfer_rows"], 505)
         self.assertEqual(len(capped["coverage"]["pending_row_keys"]), month_budget.MAX_PENDING_ROW_KEYS)
         self.assertEqual(capped["coverage"]["pending_row_keys"], [f"acc-a/p-{idx:03d}" for idx in range(500)])
+        self.assertTrue(capped["coverage"]["pending_row_keys_truncated"])
         api_contract.BudgetAnalyticsMonthlyBudget.model_validate(capped)
 
 

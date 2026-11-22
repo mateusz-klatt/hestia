@@ -996,6 +996,45 @@ describe("analytics views", () => {
   it("opens Month transactions filtered to the provisional rows when clicking View transactions on the provisional banner", async () => {
     const api = fakeApi();
     api.connections.mockImplementation(() => ok({ connections: [connection], capabilities: analysis }));
+    const provRows = [
+      entry("prov-1", { account_id: "acc-secret-a", booking_date: "2026-11-10", remittance_information: ["Synthetic Prov One"] }),
+      entry("prov-2-dec", {
+        account_id: "acc-secret-a",
+        booking_date: "2026-12-02",
+        transaction_date: "2026-11-29",
+        remittance_information: ["Synthetic Prov Two Dec"],
+        effective: { kind: "expense", category_id: "cat-food", source: "rule", rule_id: "rule-auto" },
+      }),
+      entry("prov-3-oct", {
+        account_id: "acc-secret-a",
+        booking_date: "2026-10-28",
+        remittance_information: ["Synthetic Prov Three Oct"],
+        transfer: { status: "review", decision_id: "d-1", candidate_count: 1, ambiguous: false },
+      }),
+      entry("prov-4", {
+        account_id: "acc-secret-a",
+        remittance_information: ["Synthetic Prov Four"],
+        annotation: { version: 1, mode: "manual", category_id: null, kind: "excluded", stale: true },
+      }),
+    ];
+    const novRows = [
+      provRows[0] as typeof provRows[number],
+      provRows[3] as typeof provRows[number],
+      entry("clean-rule", { remittance_information: ["Synthetic Clean Rule"], effective: { kind: "expense", category_id: "cat-food", source: "rule", rule_id: "rule-exp" } }),
+      entry("clean-manual", {
+        remittance_information: ["Synthetic Clean Manual"],
+        annotation: { version: 1, mode: "manual", category_id: "cat-food", kind: "expense", stale: false },
+        effective: { kind: "expense", category_id: "cat-food", source: "manual", rule_id: null },
+      }),
+      entry("nov-extra-1", { remittance_information: ["Synthetic Nov Extra 1"] }),
+      entry("nov-extra-2", { remittance_information: ["Synthetic Nov Extra 2"] }),
+    ];
+    const keys = [
+      "acc-secret-a/prov-1",
+      "acc-secret-a/prov-2-dec",
+      "acc-secret-a/prov-3-oct",
+      "acc-secret-a/prov-4",
+    ];
     api.monthlyBudgetCharts.mockImplementation(() => ok(monthlyBudgetChartsOf({
       period: "2026-11",
       current_month: "2026-11",
@@ -1006,26 +1045,21 @@ describe("analytics views", () => {
         stale_selected_accounts: 0,
         purchase_date_fallback_count: 0,
         pending_transfer_rows: 4,
-        pending_row_keys: ["acc-1/prov-1", "acc-1/prov-2", "acc-1/prov-3", "acc-1/prov-4"],
+        pending_row_keys: keys,
+        pending_row_keys_truncated: false,
         transfer_scan_limited: false,
         provisional: true,
         has_activity: true,
       },
     })));
     api.transfers.mockImplementation((period) => ok(transfersOf(period, [])));
-    api.analyticsTransactions.mockImplementation((period) => ok(entriesOf(period, [
-      entry("prov-1"),
-      entry("prov-2", { effective: { kind: "expense", category_id: "cat-food", source: "rule", rule_id: "rule-auto" } }),
-      entry("prov-3", { transfer: { status: "review", decision_id: "d-1", candidate_count: 1, ambiguous: false } }),
-      entry("prov-4", { annotation: { version: 1, mode: "manual", category_id: null, kind: "excluded", stale: true } }),
-      entry("clean-rule", { effective: { kind: "expense", category_id: "cat-food", source: "rule", rule_id: "rule-exp" } }),
-      entry("clean-manual", {
-        annotation: { version: 1, mode: "manual", category_id: "cat-food", kind: "expense", stale: false },
-        effective: { kind: "expense", category_id: "cat-food", source: "manual", rule_id: null },
-      }),
-    ])));
+    api.analyticsTransactions.mockImplementation((period, _filter, _cursor, _limit, rowKeys) =>
+      ok(entriesOf(period, rowKeys === undefined ? novRows : provRows)));
 
     await render(api);
+    for (const secret of [...keys, "acc-secret-a", "prov-2-dec", "prov-3-oct"]) {
+      expect(host.textContent).not.toContain(secret);
+    }
     const scrollSpy = vi.spyOn(Element.prototype, "scrollIntoView");
     const links = [...host.querySelectorAll("button")].filter((item) => item.textContent === "View transactions");
     expect(links).toHaveLength(2);
@@ -1033,7 +1067,9 @@ describe("analytics views", () => {
 
     expect(button("Month").getAttribute("aria-pressed")).toBe("true");
     expect(api.rules).not.toHaveBeenCalled();
-    expect(api.analyticsTransactions).toHaveBeenLastCalledWith("2026-11", { currency: "PLN", category: "", kind: "", query: "" });
+    expect(api.analyticsTransactions).toHaveBeenLastCalledWith(
+      "2026-11", { currency: "PLN", category: "", kind: "", query: "" }, undefined, undefined, keys,
+    );
     const provisionalToggle = host.querySelector<HTMLInputElement>('input[name="provisional"]');
     expect(provisionalToggle?.checked).toBe(true);
     expect(host.querySelector<HTMLSelectElement>('select[name="currency"]')?.value).toBe("PLN");
@@ -1042,21 +1078,28 @@ describe("analytics views", () => {
 
     const visibleTexts = () => [...host.querySelectorAll(".budget-entries .budget-entry-text")].map((item) => item.textContent);
     expect(visibleTexts()).toEqual([
-      "Synthetic shop prov-1",
-      "Synthetic shop prov-2",
-      "Synthetic shop prov-3",
-      "Synthetic shop prov-4",
+      "Synthetic Prov One",
+      "Synthetic Prov Two Dec",
+      "Synthetic Prov Three Oct",
+      "Synthetic Prov Four",
     ]);
     expect(host.querySelector(".budget-entries")?.textContent).toContain("4 entries");
+    for (const secret of [...keys, "acc-secret-a", "prov-2-dec", "prov-3-oct"]) {
+      expect(host.textContent).not.toContain(secret);
+    }
 
-    // Toggling the provisional checkbox shows all entries and re-enabling returns to the server-key subset.
+    // Toggling the provisional checkbox loads all month entries without rowKeys and re-enabling passes rowKeys again.
     if (provisionalToggle === null) throw new Error("missing provisional toggle");
     await click(provisionalToggle);
+    expect(api.analyticsTransactions).toHaveBeenLastCalledWith("2026-11", { currency: "PLN", category: "", kind: "", query: "" });
     expect(visibleTexts()).toHaveLength(6);
     expect(host.querySelector(".budget-entries")?.textContent).toContain("6 entries");
     const toggledAgain = host.querySelector<HTMLInputElement>('input[name="provisional"]');
     if (toggledAgain === null) throw new Error("missing provisional toggle after uncheck");
     await click(toggledAgain);
+    expect(api.analyticsTransactions).toHaveBeenLastCalledWith(
+      "2026-11", { currency: "PLN", category: "", kind: "", query: "" }, undefined, undefined, keys,
+    );
     expect(visibleTexts()).toHaveLength(4);
 
     // Returning to Monthly budget and opening the general View transactions link clears the provisional filter.

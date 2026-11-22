@@ -38,6 +38,7 @@ export const monthBudgetLabels = {
     provisional: "Provisional totals",
     pendingTransfers: (count: number) =>
       `Provisional totals: ${String(count)} unverified transfer or classification ${count === 1 ? "candidate still affects" : "candidates still affect"} totals.`,
+    provisionalTruncated: (shown: number, total: number) => `Showing first ${String(shown)} of ${String(total)}.`,
     transferScanLimited: "Own-transfer detection reached its scan limit; some transfer pairs may be missing.",
     purchaseDateBasis: (cutoff: string) => `Through ${cutoff} · expenses by purchase date`,
     purchaseDateFallback: (count: number) =>
@@ -170,6 +171,7 @@ export const monthBudgetLabels = {
     provisional: "Wynik wstępny",
     pendingTransfers: (count: number) =>
       `Wynik wstępny: ${String(count)} ${pluralPl(count, "niepotwierdzony wpis lub przelew nadal wpływa", "niepotwierdzone wpisy lub przelewy nadal wpływają", "niepotwierdzonych wpisów lub przelewów nadal wpływa")} na sumy.`,
+    provisionalTruncated: (shown: number, total: number) => `Pokazano pierwsze ${String(shown)} z ${String(total)}.`,
     transferScanLimited: "Wyszukiwanie przelewów własnych osiągnęło limit; części par może brakować.",
     purchaseDateBasis: (cutoff: string) => `Do ${cutoff} · wydatki według daty zakupu`,
     purchaseDateFallback: (count: number) =>
@@ -286,6 +288,8 @@ type Shown =
 export interface OpenMonthOptions {
   currency?: string;
   provisionalKeys?: readonly string[];
+  provisionalTotal?: number;
+  provisionalTruncated?: boolean;
 }
 
 export interface MonthBudgetViewProps {
@@ -652,12 +656,17 @@ function ReadyDashboard({ data, series, categoryMap, text, locale, onOpenMonth }
           {data.coverage.pending_transfer_rows > 0 ? (
             <p className="budget-notice" role="note">
               {text.pendingTransfers(data.coverage.pending_transfer_rows)}
+              {data.coverage.pending_row_keys_truncated === true
+                ? ` ${text.provisionalTruncated(data.coverage.pending_row_keys?.length ?? 500, data.coverage.pending_transfer_rows)}`
+                : ""}
               {" "}
               <button type="button" className="budget-link"
                 onClick={() => {
                   onOpenMonth(data.period, data.current_month, {
                     currency: data.currency,
                     provisionalKeys: data.coverage.pending_row_keys ?? [],
+                    provisionalTotal: data.coverage.pending_transfer_rows,
+                    provisionalTruncated: data.coverage.pending_row_keys_truncated === true,
                   });
                 }}>
                 {text.viewTransactions}

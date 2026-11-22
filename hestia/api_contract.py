@@ -79,7 +79,7 @@ from pydantic.json_schema import models_json_schema
 # 0.29.0: read-only owner-private monthly budget charts (GET /api/budget/analytics/monthly-budget/charts, zero migration).
 # 0.30.0: batch rule preview and save (POST /api/budget/analytics/rule-batch-preview and rule-batch-save,
 #         zero migration). This branch merges first; the open follow-ups take 0.31.0 and 0.32.0.
-# 0.31.0: additive coverage.pending_row_keys on monthly-budget responses (zero migration).
+# 0.31.0: additive coverage.pending_row_keys / pending_row_keys_truncated and transactions row_keys filter (zero migration).
 CONTRACT_VERSION = "0.31.0"
 OPENAPI_PATH = Path(__file__).resolve().parent.parent / "docs" / "api" / "openapi.json"
 
@@ -1535,6 +1535,8 @@ class BudgetConflict(BudgetError):
 BudgetAnalyticsVersion = Annotated[int, Field(ge=0)]
 BudgetAnalyticsFingerprint = Annotated[str, Field(pattern=r"^[a-f0-9]{64}$")]
 BudgetAnalyticsReference = Annotated[str, Field(min_length=1, max_length=1024)]
+_ROW_KEY_PATTERN = r"^[^/\x00-\x1f\x7f]{1,128}/[^\x00-\x1f\x7f]{1,1024}$"
+BudgetAnalyticsRowKey = Annotated[str, Field(min_length=3, max_length=1153, pattern=_ROW_KEY_PATTERN)]
 BudgetAnalyticsKind = Literal["auto", "expense", "income", "refund", "excluded"]
 
 
@@ -2400,7 +2402,8 @@ class BudgetAnalyticsMonthlyBudgetCoverage(BaseModel):
     stale_selected_accounts: int
     purchase_date_fallback_count: int
     pending_transfer_rows: int
-    pending_row_keys: Annotated[list[str], Field(default_factory=list, max_length=500)]
+    pending_row_keys: Annotated[list[BudgetAnalyticsRowKey], Field(default_factory=list, max_length=500)]
+    pending_row_keys_truncated: bool = Field(default_factory=lambda: False)
     transfer_scan_limited: bool
     provisional: bool
     has_activity: bool
@@ -3257,7 +3260,11 @@ def _analytics_paths():
         ("overview", "getBudgetAnalyticsOverview", "BudgetAnalyticsOverview", [period, currency]),
         ("transactions", "getBudgetAnalyticsTransactions", "BudgetAnalyticsTransactions",
          [period, currency, _budget_query("category_id", description="Category ID, or uncategorised for no category."),
-          _budget_query("kind"), _budget_query("query", schema={"type": "string", "minLength": 1, "maxLength": 256}), *page]),
+          _budget_query("kind"), _budget_query("query", schema={"type": "string", "minLength": 1, "maxLength": 256}),
+          _budget_query("row_keys", schema={"type": "array", "maxItems": 500,
+                        "items": {"type": "string", "minLength": 3, "maxLength": 1153, "pattern": _ROW_KEY_PATTERN}},
+                        description="Optional exact row keys (<account_id>/<entry_reference>, max 500); ignores period filter when supplied."),
+          *page]),
         ("categories", "getBudgetAnalyticsCategories", "BudgetAnalyticsCategories", []),
         ("rules", "getBudgetAnalyticsRules", "BudgetAnalyticsRules", []),
         ("transfers", "getBudgetAnalyticsTransfers", "BudgetAnalyticsTransfers",

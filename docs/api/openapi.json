@@ -2742,11 +2742,18 @@
           },
           "pending_row_keys": {
             "items": {
+              "maxLength": 1153,
+              "minLength": 3,
+              "pattern": "^[^/\\x00-\\x1f\\x7f]{1,128}/[^\\x00-\\x1f\\x7f]{1,1024}$",
               "type": "string"
             },
             "maxItems": 500,
             "title": "Pending Row Keys",
             "type": "array"
+          },
+          "pending_row_keys_truncated": {
+            "title": "Pending Row Keys Truncated",
+            "type": "boolean"
           },
           "pending_transfer_rows": {
             "title": "Pending Transfer Rows",
@@ -13678,6 +13685,22 @@
               "maxLength": 256,
               "minLength": 1,
               "type": "string"
+            }
+          },
+          {
+            "description": "Optional exact row keys (<account_id>/<entry_reference>, max 500); ignores period filter when supplied.",
+            "in": "query",
+            "name": "row_keys",
+            "required": false,
+            "schema": {
+              "items": {
+                "maxLength": 1153,
+                "minLength": 3,
+                "pattern": "^[^/\\x00-\\x1f\\x7f]{1,128}/[^\\x00-\\x1f\\x7f]{1,1024}$",
+                "type": "string"
+              },
+              "maxItems": 500,
+              "type": "array"
             }
           },
           {

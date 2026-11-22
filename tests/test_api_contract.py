@@ -57,8 +57,14 @@ class OpenApiArtifactTests(unittest.TestCase):
     def test_monthly_budget_contract_is_strictly_additive_from_0_27_0(self):
         document = api_contract.build_openapi()
         self.assertEqual(document["info"]["version"], "0.31.0")
-        # Strip this pending_row_keys addition and compare with the 0.30.0 contract.
-        del document["components"]["schemas"]["BudgetAnalyticsMonthlyBudgetCoverage"]["properties"]["pending_row_keys"]
+        # Strip the pending_row_keys / pending_row_keys_truncated / row_keys additions and compare with 0.30.0.
+        coverage_props = document["components"]["schemas"]["BudgetAnalyticsMonthlyBudgetCoverage"]["properties"]
+        del coverage_props["pending_row_keys"]
+        del coverage_props["pending_row_keys_truncated"]
+        tx_params = document["paths"]["/api/budget/analytics/transactions"]["get"]["parameters"]
+        document["paths"]["/api/budget/analytics/transactions"]["get"]["parameters"] = [
+            param for param in tx_params if param["name"] != "row_keys"
+        ]
         document["info"]["version"] = "0.30.0"
         canonical_0_30 = json.dumps(document, sort_keys=True, separators=(",", ":")).encode("utf-8")
         self.assertEqual(hashlib.sha256(canonical_0_30).hexdigest(),

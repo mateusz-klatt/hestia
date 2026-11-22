@@ -2402,6 +2402,8 @@ export interface components {
             ledger_as_of: number | null;
             /** Pending Row Keys */
             pending_row_keys?: string[];
+            /** Pending Row Keys Truncated */
+            pending_row_keys_truncated?: boolean;
             /** Pending Transfer Rows */
             pending_transfer_rows: number;
             /** Provisional */
@@ -7807,6 +7809,8 @@ export interface operations {
                 category_id?: string;
                 kind?: string;
                 query?: string;
+                /** @description Optional exact row keys (<account_id>/<entry_reference>, max 500); ignores period filter when supplied. */
+                row_keys?: string[];
                 limit?: number;
                 /** @description Opaque cursor bound to the current projection. A changed snapshot returns 409. */
                 cursor?: string;

@@ -1092,29 +1092,40 @@ describe("manual own-transfer pairing", () => {
     expect(rendered[1]?.textContent).not.toContain("Synthetic shop late");
   });
 
-  it("filters strictly to server-provided provisional row keys, updates total count, and toggles cleanly", async () => {
+  it("fetches server-provided row keys across adjacent periods, shows truncation note without leaking keys, and toggles cleanly", async () => {
     const scrollIntoView = vi.fn();
     const prevScroll = (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView;
     Element.prototype.scrollIntoView = scrollIntoView;
     try {
-      const confirmedCard = account({ id: "acc-card", kind: "credit_card", kind_confirmed_at: 10 });
-      const rows = [
-        entry("pending-1"),
-        entry("rule-backed", { effective: { kind: "expense", category_id: "cat-food", source: "rule", rule_id: "rule-auto" } }),
-        entry("card-pending", {
-          account_id: "acc-card",
-          transfer: { status: "suggested", decision_id: null, candidate_count: 1, ambiguous: false },
-        }),
-        entry("stale-manual-excl", {
+      const confirmedCard = account({ id: "acc-card-secret", kind: "credit_card", kind_confirmed_at: 10 });
+      const provisionalRows = [
+        entry("ref-secret-1", { account_id: "acc-secret-1", booking_date: "2026-11-10", remittance_information: ["Synthetic Grocery"] }),
+        entry("ref-secret-dec", { account_id: "acc-secret-1", booking_date: "2026-12-02", transaction_date: "2026-11-29", remittance_information: ["Synthetic Dec Booked"] }),
+        entry("ref-secret-oct", { account_id: "acc-card-secret", booking_date: "2026-10-28", remittance_information: ["Synthetic Window Salary"] }),
+        entry("ref-secret-stale", {
+          account_id: "acc-secret-1",
+          remittance_information: ["Synthetic Stale Exclusion"],
           annotation: { version: 1, mode: "manual", category_id: null, kind: "excluded", stale: true },
           effective: { kind: "expense", category_id: "cat-food", source: "rule", rule_id: "rule-exp" },
         }),
-        // Even an unclassified/default debit outside `initialProvisionalKeys` is excluded,
-        // and a row listed in `initialProvisionalKeys` is kept regardless of client metadata.
-        entry("not-in-keys-default"),
-        entry("not-in-keys-card", { account_id: "acc-card" }),
       ];
-      const api = fakeApi(rows);
+      const novemberRows = [
+        provisionalRows[0] as AnalyticsTransaction,
+        provisionalRows[3] as AnalyticsTransaction,
+        entry("nov-clean-1", { booking_date: "2026-11-11", remittance_information: ["Synthetic November Clean A"] }),
+        entry("nov-clean-2", { booking_date: "2026-11-12", remittance_information: ["Synthetic November Clean B"] }),
+        entry("nov-clean-3", { booking_date: "2026-11-13", remittance_information: ["Synthetic November Clean C"] }),
+        entry("nov-clean-4", { booking_date: "2026-11-14", remittance_information: ["Synthetic November Clean D"] }),
+      ];
+      const keys = [
+        "acc-secret-1/ref-secret-1",
+        "acc-secret-1/ref-secret-dec",
+        "acc-card-secret/ref-secret-oct",
+        "acc-secret-1/ref-secret-stale",
+      ];
+      const api = fakeApi(novemberRows);
+      api.analyticsTransactions.mockImplementation((period, _filter, _cursor, _limit, rowKeys) =>
+        ok(entriesOf(period, rowKeys === undefined ? novemberRows : provisionalRows)));
 
       await act(async () => {
         root.render(
@@ -1122,41 +1133,49 @@ describe("manual own-transfer pairing", () => {
             accounts={[...accounts, confirmedCard]} text={transactionLabels.en} locale="en" revision={0}
             onAccessLoss={() => false} onChanged={() => undefined}
             initialCurrency="PLN"
-            initialProvisionalKeys={[
-              "acc-1/pending-1",
-              "acc-1/rule-backed",
-              "acc-card/card-pending",
-              "acc-1/stale-manual-excl",
-            ]}
+            initialProvisionalKeys={keys}
+            initialProvisionalTotal={505}
+            initialProvisionalTruncated={true}
             focusOnMount={true} />,
         );
         await Promise.resolve();
       });
       await settle();
 
-      expect(api.analyticsTransactions).toHaveBeenCalledWith("2026-11", { currency: "PLN", category: "", kind: "", query: "" });
+      expect(api.analyticsTransactions).toHaveBeenCalledWith(
+        "2026-11", { currency: "PLN", category: "", kind: "", query: "" }, undefined, undefined, keys,
+      );
       expect(scrollIntoView).toHaveBeenCalled();
       expect(select("Currency").value).toBe("PLN");
       const checkbox = host.querySelector<HTMLInputElement>('input[name="provisional"]');
       expect(checkbox?.checked).toBe(true);
       const entryNames = () => [...host.querySelectorAll(".budget-entry-text")].map((item) => item.textContent);
       expect(entryNames()).toEqual([
-        "Synthetic shop pending-1",
-        "Synthetic shop rule-backed",
-        "Synthetic shop card-pending",
-        "Synthetic shop stale-manual-excl",
+        "Synthetic Grocery",
+        "Synthetic Dec Booked",
+        "Synthetic Window Salary",
+        "Synthetic Stale Exclusion",
       ]);
       expect(host.textContent).toContain("4 entries");
+      expect(host.textContent).toContain("Showing first 4 of 505.");
+      for (const secret of ["acc-secret-1", "acc-card-secret", "ref-secret-1", "ref-secret-dec", "ref-secret-oct", "ref-secret-stale"]) {
+        expect(host.textContent).not.toContain(secret);
+      }
 
-      // Unchecking shows all rows and re-checking restores the server-key filter without extra API fetches.
+      // Unchecking loads full month entries without `rowKeys` and hides the truncation note; re-checking restores `rowKeys`.
       await act(async () => { checkbox?.click(); await Promise.resolve(); });
       await settle();
+      expect(api.analyticsTransactions).toHaveBeenLastCalledWith("2026-11", { currency: "PLN", category: "", kind: "", query: "" });
       expect(entryNames()).toHaveLength(6);
       expect(host.textContent).toContain("6 entries");
+      expect(host.textContent).not.toContain("Showing first");
+
       await act(async () => { host.querySelector<HTMLInputElement>('input[name="provisional"]')?.click(); await Promise.resolve(); });
       await settle();
+      expect(api.analyticsTransactions).toHaveBeenLastCalledWith(
+        "2026-11", { currency: "PLN", category: "", kind: "", query: "" }, undefined, undefined, keys,
+      );
       expect(entryNames()).toHaveLength(4);
-      expect(api.analyticsTransactions).toHaveBeenCalledTimes(1);
     } finally {
       if (prevScroll === undefined) {
         delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView;
@@ -1164,6 +1183,21 @@ describe("manual own-transfer pairing", () => {
         Element.prototype.scrollIntoView = prevScroll as typeof Element.prototype.scrollIntoView;
       }
     }
+  });
+
+  it("handles empty initialProvisionalKeys without querying empty row_keys", async () => {
+    const api = fakeApi([entry("e1")]);
+    await act(async () => {
+      root.render(
+        <TransactionsPanel api={api} period="2026-11" currencies={["PLN"]} accounts={accounts}
+          text={transactionLabels.en} locale="en" revision={0} onAccessLoss={() => false}
+          onChanged={() => undefined} initialProvisionalKeys={[]} />,
+      );
+      await Promise.resolve();
+    });
+    await settle();
+    expect(api.analyticsTransactions).not.toHaveBeenCalled();
+    expect(host.textContent).toContain("No entries match.");
   });
 
   it("hides the provisional toggle when opened without initialProvisionalKeys", async () => {

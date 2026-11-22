@@ -873,6 +873,47 @@ class BudgetAnalyticsAPITests(unittest.IsolatedAsyncioTestCase):
         self.assertNotEqual(after["limits_version"], view["limits_version"])
         self.assertEqual(after["snapshot_digest"], view["snapshot_digest"])
 
+    async def test_transactions_row_keys_returns_adjacent_months_ignores_foreign_and_validates(self):
+        dec_tx = transaction("alice-dec", amount="42", booking_date="2026-12-03",
+                             transaction_date="2026-11-29", remittance_information=["Synthetic Dec"])
+        self.store.commit_snapshot("bank", Snapshot(web._now() + 31536000,
+            (AccountSnapshot(fixture.PRIVATE_A, (), (self.debit, dec_tx)),
+             AccountSnapshot("ALICE-SYNTHETIC-CREDIT", (), (self.credit,))), "2026-01-01", "2026-12-31"))
+
+        nov = await self.get("transactions", params=PERIOD)
+        self.assertEqual(nov.status, 200)
+        nov_refs = [row["entry_reference"] for row in (await nov.json())["transactions"]]
+        self.assertIn(self.debit["entry_reference"], nov_refs)
+        self.assertNotIn("alice-dec", nov_refs)
+
+        params = MultiDict([
+            ("period", "2026-11"),
+            ("row_keys", f"{self.alice_id}/alice-dec"),
+            ("row_keys", f"{self.alice_id}/{self.debit['entry_reference']}"),
+            ("row_keys", f"{self.bob_id}/bob-entry"),
+            ("row_keys", f"{self.alice_id}/missing-ref"),
+        ])
+        response = await self.get("transactions", params=params)
+        self.assertEqual(response.status, 200, await response.text())
+        body = await response.json()
+        api_contract.BudgetAnalyticsTransactions.model_validate(body)
+        self.assertEqual(body["filtered_total"], 2)
+        self.assertEqual([row["entry_reference"] for row in body["transactions"]],
+                         ["alice-dec", self.debit["entry_reference"]])
+        self.assertNotIn("bob-entry", json.dumps(body))
+
+        for bad in ({"row_keys": ""}, {"row_keys": "noslash"}, {"row_keys": "/ref"}, {"row_keys": "acc/"},
+                    {"row_keys": "acc/bad\nref"}):
+            res = await self.get("transactions", params={**PERIOD, **bad})
+            self.assertEqual(res.status, 400, bad)
+
+        too_many = MultiDict([("period", "2026-11"), *((("row_keys", f"{self.alice_id}/r{i}") for i in range(501)))])
+        with self.assertRaises(analytics_api.AnalyticsError):
+            analytics_api._query(SimpleNamespace(query=too_many), "transactions")
+        too_long = MultiDict([("period", "2026-11"), ("row_keys", f"{self.alice_id}/" + "r" * 1025)])
+        with self.assertRaises(analytics_api.AnalyticsError):
+            analytics_api._query(SimpleNamespace(query=too_long), "transactions")
+
 
 if __name__ == "__main__":
     unittest.main()

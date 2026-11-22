@@ -44,6 +44,8 @@ MAX_RECURRING_HINTS = 200
 MAX_RECURRING_EVIDENCE = 24
 CURSOR_TTL = 900
 MAX_CURSOR = 8192
+MAX_ROW_KEYS = 500
+MAX_ROW_KEY_LENGTH = 1153
 _DATA_ERROR = "budget_analytics_data_error"
 _LIMIT_ERROR = "budget_analytics_limit"
 _DOMAIN = b"hestia/budget/analytics/cursor/v1"
@@ -596,6 +598,24 @@ def _currency(value):
     return value
 
 
+def _validate_row_keys(row_keys):
+    if row_keys is None:
+        return None
+    if not isinstance(row_keys, (list, tuple)) or not row_keys or len(row_keys) > MAX_ROW_KEYS:
+        raise AnalyticsError()
+    parsed = []
+    for item in row_keys:
+        if not isinstance(item, str) or len(item) < 3 or len(item) > MAX_ROW_KEY_LENGTH:
+            raise AnalyticsError()
+        if any(ord(ch) < 32 or ord(ch) == 127 for ch in item):
+            raise AnalyticsError()
+        acct_id, sep, entry_ref = item.partition("/")
+        if not sep or not acct_id or not entry_ref or len(acct_id) > 128 or len(entry_ref) > 1024:
+            raise AnalyticsError()
+        parsed.append((acct_id, entry_ref))
+    return tuple(sorted(set(parsed)))
+
+
 def _forecast_query(months=None, currency=None):
     try:
         return forecast_mod.validate_forecast_query(months, currency)
@@ -776,9 +796,11 @@ class BudgetAnalyticsViews(BudgetAnalyticsStore):
         next_cursor = self._cursor_encode(context, snapshot, end, now) if end < len(rows) else None
         return rows[index:end], next_cursor
 
-    def transactions(self, owner, period, *, currency=None, category_id=None, kind=None, query=None, limit=50, cursor=None):
+    def transactions(self, owner, period, *, currency=None, category_id=None, kind=None, query=None, limit=50,
+                     cursor=None, row_keys=None):
         start, end = core.parse_period(period)
         currency = _currency(currency)
+        parsed_keys = _validate_row_keys(row_keys)
         if kind is not None and (not isinstance(kind, str) or kind not in _KINDS):
             raise AnalyticsError()
         if category_id is not None and (not isinstance(category_id, str) or not category_id or len(category_id) > 128):
@@ -788,11 +810,20 @@ class BudgetAnalyticsViews(BudgetAnalyticsStore):
         query = None if query is None else query.casefold().strip()
         filters = {"owner": owner, "operation": "transactions", "period": period, "currency": currency,
                    "category_id": category_id, "kind": kind, "query": query, "limit": limit}
+        if parsed_keys is not None:
+            filters["row_keys"] = [list(item) for item in parsed_keys]
         with _read_lock, self._read(owner) as session:
             snapshot = self._projection(session, owner)
             if category_id not in (None, "uncategorised") and category_id not in {row["id"] for row in snapshot["categories"]}:
                 raise AnalyticsError("budget_analytics_not_found", 404)
-            rows = [row for row in _period_rows(snapshot, start, end, currency) if _row_filter(row, category_id, kind, query)]
+            if parsed_keys is None:
+                source_rows = _period_rows(snapshot, start, end, currency)
+            else:
+                key_set = set(parsed_keys)
+                source_rows = [row for row in snapshot["transactions"]
+                               if (row["account_id"], row["entry_reference"]) in key_set
+                               and (currency is None or row["payload"]["currency"] == currency)]
+            rows = [row for row in source_rows if _row_filter(row, category_id, kind, query)]
             rows.sort(key=lambda row: (core.effective_date(row["payload"]), row["account_id"], row["entry_reference"]), reverse=True)
             page, next_cursor = self._page(rows, cursor, filters, snapshot["digest"])
             return {"period": period, "start": start, "end": end, "snapshot_digest": snapshot["digest"],

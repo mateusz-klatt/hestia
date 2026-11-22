@@ -1034,6 +1034,44 @@ describe("MonthBudgetView", () => {
     expect(onOpenMonth).toHaveBeenNthCalledWith(2, "2026-10", "2026-11", {
       currency: "EUR",
       provisionalKeys: ["acc-1/p1", "acc-1/p2", "acc-1/p3", "acc-1/p4"],
+      provisionalTotal: 4,
+      provisionalTruncated: false,
+    });
+    expect(host.textContent).not.toContain("Showing first");
+  });
+
+  it("shows a truncation note without leaking row keys when pending_row_keys is capped at 500", async () => {
+    const keys = Array.from({ length: 500 }, (_, idx) => `acc-secret-id/ref-secret-${String(idx)}`);
+    const api = fakeApi();
+    const onOpenMonth = vi.fn();
+    api.monthlyBudgetCharts.mockResolvedValue(ok(monthlyBudgetChartsOf({
+      period: "2026-11",
+      current_month: "2026-11",
+      currency: "PLN",
+      coverage: {
+        ledger_as_of: 1_795_345_200,
+        stale_selected_accounts: 0,
+        purchase_date_fallback_count: 0,
+        pending_transfer_rows: 505,
+        pending_row_keys: keys,
+        pending_row_keys_truncated: true,
+        transfer_scan_limited: false,
+        provisional: true,
+        has_activity: true,
+      },
+    })));
+    await show(api, { locale: "pl-PL", onOpenMonth });
+    expect(host.textContent).toContain("Pokazano pierwsze 500 z 505.");
+    expect(host.textContent).not.toContain("acc-secret-id");
+    expect(host.textContent).not.toContain("ref-secret-0");
+
+    const links = [...host.querySelectorAll("button")].filter((item) => item.textContent === "Zobacz transakcje");
+    await click(links[1] as HTMLButtonElement);
+    expect(onOpenMonth).toHaveBeenNthCalledWith(1, "2026-11", "2026-11", {
+      currency: "PLN",
+      provisionalKeys: keys,
+      provisionalTotal: 505,
+      provisionalTruncated: true,
     });
   });
 

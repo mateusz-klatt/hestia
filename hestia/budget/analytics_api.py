@@ -13,7 +13,7 @@ from ..db import init_db
 from . import api
 from .analytics_core import AnalyticsError
 from .analytics_views import (BudgetAnalyticsViews, _forecast_query, _monthly_budget_charts_query,
-                              _monthly_budget_query)
+                              _monthly_budget_query, _validate_row_keys)
 from .views import BudgetUsersBackendRequired
 
 PREFIX = "/api/budget/analytics"
@@ -39,7 +39,7 @@ WRITES = {
     "inbox-mark": (api_contract.BudgetAnalyticsInboxMarkRequest, "mark_inbox", "inbox"),
 }
 _QUERY_FIELDS = {"overview": {"period", "currency"},
-                 "transactions": {"period", "currency", "category_id", "kind", "query", "limit", "cursor"},
+                 "transactions": {"period", "currency", "category_id", "kind", "query", "limit", "cursor", "row_keys"},
                  "transfers": {"period", "currency", "status", "limit", "cursor"},
                  "recurring": {"currency"},
                  "spending-limits": {"period", "currency"},
@@ -61,8 +61,16 @@ def enabled():
 
 def _query(request, operation):
     values = {}
-    for key in request.query:
-        if key not in _QUERY_FIELDS.get(operation, ()) or len(request.query.getall(key)) != 1:
+    allowed = _QUERY_FIELDS.get(operation, ())
+    for key in dict.fromkeys(request.query):
+        if key not in allowed:
+            raise AnalyticsError()
+        if operation == "transactions" and key == "row_keys":
+            raw_keys = request.query.getall(key)
+            _validate_row_keys(raw_keys)
+            values[key] = raw_keys
+            continue
+        if len(request.query.getall(key)) != 1:
             raise AnalyticsError()
         value = request.query[key]
         maximum = 8192 if key == "cursor" else 256 if key == "query" else 128
