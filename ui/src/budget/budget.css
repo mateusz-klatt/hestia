@@ -57,10 +57,11 @@
 .budget-totals { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 16rem), 1fr)); gap: .6rem; }
 .budget-total { border: 1px solid var(--border); border-radius: .7rem; padding: .7rem 1rem; background: var(--surface); }
 .budget-total h4 { margin: 0 0 .4rem; }
-.budget-total dl { display: grid; grid-template-columns: auto 1fr; gap: .25rem .8rem; margin: 0; }
-.budget-total dt { color: var(--fg-soft); }
-.budget-total dd { margin: 0; text-align: end; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.budget-total dl { display: grid; grid-template-columns: minmax(0, 1fr) max-content; gap: .25rem .8rem; margin: 0; }
+.budget-total dt { color: var(--fg-soft); min-width: 0; hyphens: auto; }
+.budget-total dd { margin: 0; text-align: end; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .budget-total small { color: var(--fg-soft); }
+.budget-month-dashboard .budget-totals { grid-template-columns: repeat(auto-fit, minmax(min(100%, 22rem), 1fr)); }
 .budget-total-detail { grid-column: 1 / -1; font-size: .8rem; color: var(--fg-soft); }
 .budget-categories { width: 100%; border-collapse: collapse; font-size: .85rem; margin-top: .6rem; }
 .budget-categories caption { text-align: start; color: var(--fg-soft); font-size: .8rem; padding-bottom: .2rem; }
