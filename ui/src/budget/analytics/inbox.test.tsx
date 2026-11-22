@@ -115,7 +115,8 @@ describe("InboxView", () => {
     await click(button("Open Spending limits"));
     expect(onOpenLimits).toHaveBeenCalledTimes(1);
 
-    // Filter toggle shows unread only without touching storage or URL.
+    // Filter group carries its own aria-label distinct from the section title.
+    expect(host.querySelector('[role="group"]')?.getAttribute("aria-label")).toBe("Alert filter");
     await click(button("Unread only"));
     expect(host.querySelectorAll(".budget-inbox-item")).toHaveLength(2);
     expect(host.textContent).not.toContain("Synthetic Food");
@@ -130,6 +131,8 @@ describe("InboxView", () => {
       await Promise.resolve();
     });
     await settle();
+    expect(host.querySelector('[role="group"]')?.getAttribute("aria-label")).toBe("Filtr alertów");
+    expect(inboxLabels.pl.markedPartial(100, 105)).toContain("Oznaczono 100 z 105");
     expect(host.textContent).toContain("Stan na 2026-11-21 (UTC)");
     expect(host.textContent).toContain("Nieprzeczytane: 2");
     expect(host.textContent).toContain("3 dni po terminie");
@@ -266,6 +269,7 @@ describe("InboxView", () => {
     await click(button("Mark all unread read"));
     const lastCall = api.markInbox.mock.calls.at(-1)?.[0];
     expect(lastCall?.items).toHaveLength(100);
+    expect(host.querySelector('[role="status"]')?.textContent).toContain("Marked 100 of 105 unread alerts");
   });
 
   it("invokes onAccessLoss barrier before generation check even when superseded or unmounted", async () => {

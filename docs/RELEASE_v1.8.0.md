@@ -77,7 +77,7 @@ currency.
 | Migration | Tables / Columns Added | In `_source_digest`? | Downgrade / Backup Note |
 | --- | --- | --- | --- |
 | `0015` | `budget_account_identity`, `budget_transaction_metadata`, `budget_categories`, `budget_annotations`, `budget_rules`, `budget_rule_previews`, `budget_transfer_decisions`, `budget_transfer_legs`, `budget_analytics_audit` | Yes (except previews/audit) | Back up SQLite before downgrade; drops all 2D classifications and decisions. |
-| `0016` | `last_http_status`, `last_provider_error` on `budget_connections` and `budget_components` | Yes (connections) | Drops diagnostic columns only; preserves ledger and quotas. |
+| `0016` | `last_http_status`, `last_provider_error` on `budget_connections` and `budget_components` | Yes (`budget_connections` only; `budget_components` excluded) | Drops diagnostic columns only; preserves ledger and quotas. |
 | `0017` | `budget_category_limits` | No | Back up SQLite before downgrade; drops saved spending limits, keeps `budget_analytics_audit`. |
 | `0018` | `budget_mortgage_schedules`, `budget_mortgage_payments` | No | Back up SQLite before downgrade; drops payment marks then schedules, keeps `budget_analytics_audit`. |
 | `0019` | `budget_owner_inbox_state`, `budget_owner_inbox_reads` | No | Back up SQLite before downgrade; drops inbox read markers and monotonic revision, keeps `budget_analytics_audit`. |
@@ -105,5 +105,5 @@ currency.
 ## Upgrade Checklist
 
 1. Back up the SQLite database (`hestia.db` + WAL) consistently with the private consent capsule directory before stopping the container.
-2. Run an offline shadow-migration test (`0014 -> 0019`) against a copy of production SQLite with `--network none` and verify zero foreign-key violations and zero Alembic/ORM drift.
+2. For deployments upgrading from `v1.7.x` (`0014`), run an offline shadow-migration test (`0014 -> 0019`) against a copy of production SQLite with `--network none` and verify zero foreign-key violations and zero Alembic/ORM drift. (For this production host, incremental shadow migrations through `0018 -> 0019` were already verified and applied in Deploy 11.)
 3. Keep default-off flags explicit in deployment configuration (`HESTIA_BUDGET_ANALYTICS_ENABLED=1` for Budget 2D tabs; `HESTIA_BUDGET_CONSENT_ENABLED=1` for consent status/renewal; `HESTIA_BUDGET_POLLER_ENABLED` remains independently opt-in).
