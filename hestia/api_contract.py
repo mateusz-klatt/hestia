@@ -78,8 +78,10 @@ from pydantic.json_schema import models_json_schema
 # 0.28.0: additive optional income window on monthly-budget configuration (zero migration).
 # 0.29.0: read-only owner-private monthly budget charts (GET /api/budget/analytics/monthly-budget/charts, zero migration).
 # 0.30.0: batch rule preview and save (POST /api/budget/analytics/rule-batch-preview and rule-batch-save,
-#         zero migration). This branch merges first; the open follow-ups take 0.31.0 and 0.32.0.
-CONTRACT_VERSION = "0.30.0"
+#         zero migration). This branch merges first; the open follow-ups take the next free minors.
+# 0.31.0: additive category parent_id (migration 0022). List rows include parent_id. Create and update
+#         accept an optional parent_id: omit it on update to leave the parent, send null to detach.
+CONTRACT_VERSION = "0.31.0"
 OPENAPI_PATH = Path(__file__).resolve().parent.parent / "docs" / "api" / "openapi.json"
 
 # De-duplicated string literals (SonarPython S1192): the OpenAPI content-type, the paths reused
@@ -1540,6 +1542,11 @@ BudgetAnalyticsKind = Literal["auto", "expense", "income", "refund", "excluded"]
 class BudgetAnalyticsCategoryCreateRequest(BaseModel):
     model_config = _STRICT
     name: Annotated[str, Field(min_length=1, max_length=80)]
+    parent_id: BudgetId | None = Field(
+        default=None,
+        description="Parent category owned by the same user. Null is a top-level category. "
+                    "On update, omit this field to leave the parent unchanged and send null to detach.",
+    )
 
 
 class BudgetAnalyticsCategoryUpdateRequest(BudgetAnalyticsCategoryCreateRequest):
@@ -1603,6 +1610,7 @@ class BudgetAnalyticsCategory(BaseModel):
     version: int
     created_at: float
     updated_at: float
+    parent_id: str | None
 
 
 class BudgetAnalyticsCategorySaved(BudgetAnalyticsCategory):

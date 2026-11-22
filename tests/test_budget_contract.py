@@ -211,7 +211,7 @@ class BudgetOpenApiTests(unittest.TestCase):
             self.assertEqual(set(methods), {method})
             self.assertEqual(methods[method]["x-required-role"], "admin")
             self.assertIn("413", methods[method]["responses"])
-        self.assertEqual(document["info"]["version"], "0.30.0")
+        self.assertEqual(document["info"]["version"], "0.31.0")
         batch = analytics["/api/budget/analytics/rule-batch-preview"]["post"]["description"]
         self.assertIn("1..100", batch)
         self.assertIn("All-or-nothing", batch)
@@ -223,6 +223,20 @@ class BudgetOpenApiTests(unittest.TestCase):
         self.assertTrue(refresh["parameters"][0]["required"])
         self.assertIn("202", refresh["responses"])
         self.assertNotIn("200", refresh["responses"])
+
+    def test_category_parent_is_additive_on_list_create_and_update(self):
+        schemas = contract.build_openapi()["components"]["schemas"]
+        category = schemas["BudgetAnalyticsCategory"]
+        self.assertEqual(category["properties"]["parent_id"]["anyOf"][1], {"type": "null"})
+        self.assertIn("parent_id", category["required"])
+        saved = schemas["BudgetAnalyticsCategorySaved"]["required"]
+        self.assertIn("parent_id", saved)
+        for name in ("BudgetAnalyticsCategoryCreateRequest", "BudgetAnalyticsCategoryUpdateRequest"):
+            schema = schemas[name]
+            parent = schema["properties"]["parent_id"]
+            self.assertNotIn("parent_id", schema["required"])
+            self.assertIsNone(parent["default"])
+            self.assertIn("omit this field", parent["description"])
 
     def test_forecast_query_and_error_contract(self):
         paths = contract.build_openapi()["paths"]

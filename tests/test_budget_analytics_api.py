@@ -719,6 +719,41 @@ class BudgetAnalyticsAPITests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(self.rows(db.BudgetAnalyticsAudit))
         self.assertEqual(self.rows(db.Audit), [])
 
+    async def test_category_parent_omitted_update_keeps_parent_and_null_detaches(self):
+        transport = (await (await self.post("category-create", {"name": "Transport"})).json())["category"]
+        car = (await (await self.post("category-create", {"name": "Car", "parent_id": transport["id"]})).json())["category"]
+        fuel = (await (await self.post("category-create",
+                {"name": "Fuel", "parent_id": car["id"]})).json())["category"]
+        self.assertEqual((car["parent_id"], fuel["parent_id"]), (transport["id"], car["id"]))
+        renamed = await self.post("category-update", {"category_id": fuel["id"], "name": "Fuel renamed",
+                                "archived": False, "expected_version": fuel["version"]})
+        self.assertEqual(renamed.status, 200, await renamed.text())
+        renamed_body = (await renamed.json())["category"]
+        self.assertEqual(renamed_body["parent_id"], car["id"])
+        detached = await self.post("category-update", {"category_id": fuel["id"], "name": "Fuel renamed",
+                                 "archived": False, "expected_version": renamed_body["version"], "parent_id": None})
+        self.assertIsNone((await detached.json())["category"]["parent_id"])
+        listed = await (await self.get("categories")).json()
+        api_contract.BudgetAnalyticsCategories.model_validate(listed)
+        self.assertEqual({row["name"]: row["parent_id"] for row in listed["categories"]},
+                         {"Car": transport["id"], "Fuel renamed": None, "Transport": None})
+        too_deep = await self.post("category-create", {"name": "Detail", "parent_id": car["id"]})
+        grandchild = (await too_deep.json())["category"]
+        self.assertEqual(grandchild["parent_id"], car["id"])
+        rejected = await self.post("category-create", {"name": "Too deep", "parent_id": grandchild["id"]})
+        self.assertEqual(rejected.status, 400)
+        cycle = await self.post("category-update", {"category_id": transport["id"], "name": "Transport",
+                               "archived": False, "expected_version": transport["version"], "parent_id": car["id"]})
+        self.assertEqual(cycle.status, 400)
+        archived = await self.post("category-update", {"category_id": transport["id"], "name": "Transport",
+                                 "archived": True, "expected_version": transport["version"]})
+        self.assertEqual(archived.status, 400)
+        foreign = await self.post("category-create", {"name": "Bob private"}, user="bob")
+        self.assertEqual(foreign.status, 200, await foreign.text())
+        cross = await self.post("category-create", {"name": "Cross",
+                               "parent_id": (await foreign.json())["category"]["id"]})
+        self.assertEqual(cross.status, 404)
+
     async def test_rule_preview_save_replay_expiry_and_selection_change_are_fenced(self):
         response = await self.post("rule-preview", self.candidate())
         self.assertEqual(response.status, 200, await response.text())

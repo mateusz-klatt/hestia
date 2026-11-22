@@ -911,6 +911,17 @@
             "title": "Name",
             "type": "string"
           },
+          "parent_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Id"
+          },
           "updated_at": {
             "title": "Updated At",
             "type": "number"
@@ -926,7 +937,8 @@
           "archived",
           "version",
           "created_at",
-          "updated_at"
+          "updated_at",
+          "parent_id"
         ],
         "title": "BudgetAnalyticsCategory",
         "type": "object"
@@ -939,6 +951,21 @@
             "minLength": 1,
             "title": "Name",
             "type": "string"
+          },
+          "parent_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Parent category owned by the same user. Null is a top-level category. On update, omit this field to leave the parent unchanged and send null to detach.",
+            "title": "Parent Id"
           }
         },
         "required": [
@@ -987,6 +1014,17 @@
             "title": "Name",
             "type": "string"
           },
+          "parent_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Id"
+          },
           "updated_at": {
             "title": "Updated At",
             "type": "number"
@@ -1003,6 +1041,7 @@
           "version",
           "created_at",
           "updated_at",
+          "parent_id",
           "changed"
         ],
         "title": "BudgetAnalyticsCategorySaved",
@@ -1088,6 +1127,21 @@
             "minLength": 1,
             "title": "Name",
             "type": "string"
+          },
+          "parent_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Parent category owned by the same user. Null is a top-level category. On update, omit this field to leave the parent unchanged and send null to detach.",
+            "title": "Parent Id"
           }
         },
         "required": [
@@ -10687,7 +10741,7 @@
   "info": {
     "description": "Local cloud-free smart-home control API. Generated from hestia/api_contract.py \u2014 do not edit by hand; run `python -m hestia.api_contract`.",
     "title": "hestia API",
-    "version": "0.30.0"
+    "version": "0.31.0"
   },
   "openapi": "3.1.0",
   "paths": {

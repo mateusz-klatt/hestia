@@ -56,7 +56,17 @@ class OpenApiArtifactTests(unittest.TestCase):
 
     def test_monthly_budget_contract_is_strictly_additive_from_0_27_0(self):
         document = api_contract.build_openapi()
-        self.assertEqual(document["info"]["version"], "0.30.0")
+        self.assertEqual(document["info"]["version"], "0.31.0")
+        # Strip the 0.31.0 category parent and compare with the 0.30.0 document, then the older contracts.
+        for name in ("BudgetAnalyticsCategory", "BudgetAnalyticsCategorySaved",
+                     "BudgetAnalyticsCategoryCreateRequest", "BudgetAnalyticsCategoryUpdateRequest"):
+            schema = document["components"]["schemas"][name]
+            schema.get("properties", {}).pop("parent_id", None)
+            if "required" in schema:
+                schema["required"] = [item for item in schema["required"] if item != "parent_id"]
+                if not schema["required"]:
+                    del schema["required"]
+        document["info"]["version"] = "0.30.0"
         # Strip this batch addition and compare with the 0.29.0 monthly-budget contract.
         for path in ("/api/budget/analytics/rule-batch-preview", "/api/budget/analytics/rule-batch-save"):
             del document["paths"][path]
