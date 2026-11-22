@@ -762,6 +762,33 @@ class BudgetAnalyticsAPITests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.post("rule-batch-save", {"preview_id": single["preview_id"]})).status, 400)
         self.assertEqual(len(self.rows(db.BudgetRule)), 2)
 
+    async def test_tampered_preview_without_proposed_id_is_rejected(self):
+        created = await self.post("rule-preview", self.candidate())
+        preview_id = (await created.json())["preview"]["preview_id"]
+        with self.sessions.begin() as session:
+            row = session.get(db.BudgetRulePreview, preview_id)
+            candidate = json.loads(row.candidate_json)
+            del candidate["_proposed_id"]
+            row.candidate_json = json.dumps(candidate)
+        response = await self.post("rule-save", {"preview_id": preview_id})
+        self.assertEqual(response.status, 400)
+        self.assertEqual(self.rows(db.BudgetRule), [])
+
+    async def test_batch_preview_accepts_a_body_larger_than_the_global_client_max_size(self):
+        # aiohttp's client_max_size is MAX_RULE_BODY + 4096 (69,632). The handler reads
+        # request.content itself, so that global cap does not apply. A 256-character value
+        # of a 3-byte character is still a legal rule and pushes 100 rules past the cap.
+        rules = [self.candidate(value="€" * 256, priority=index) for index in range(100)]
+        raw = json.dumps({"rules": rules}, ensure_ascii=False).encode()
+        self.assertGreater(len(raw), web.MAX_RULE_BODY + 4096)
+        self.assertLessEqual(len(raw), 262144)
+        response = await self.client.post(
+            PREFIX + "/rule-batch-preview", data=raw,
+            headers={**self.headers(origin=True), "Content-Type": "application/json"})
+        self.assertEqual(response.status, 200, await response.text())
+        preview = (await response.json())["preview"]
+        self.assertEqual(preview["rule_count"], 100)
+
     async def test_transfer_accept_reject_undo_and_fingerprints_are_atomic(self):
         response = await self.get("transfers")
         self.assertEqual(response.status, 200, await response.text())

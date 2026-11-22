@@ -545,7 +545,9 @@ class BudgetAnalyticsStore(BudgetHTTPStore):
         return projection_snapshot(session, owner)["digest"]
 
     def _apply_candidate(self, session, owner, candidate):
-        proposed_id = candidate.pop("_proposed_id")
+        proposed_id = candidate.pop("_proposed_id", None)
+        if not isinstance(proposed_id, str) or not proposed_id:
+            raise AnalyticsError()
         candidate, row = self._rule_candidate(session, owner, candidate)
         before = None if row is None else _dict(row, _RULE_OUTPUT)
         fields = ("field", "operator", "value", "category_id", "kind", "priority", "enabled")
@@ -570,7 +572,10 @@ class BudgetAnalyticsStore(BudgetHTTPStore):
     def _saved_batch(self, session, owner, payload):
         rules = []
         for candidate in payload["candidates"]:
-            row = self._owned(session, Rule, owner, candidate["_proposed_id"])
+            proposed_id = candidate.get("_proposed_id") if isinstance(candidate, dict) else None
+            if not isinstance(proposed_id, str) or not proposed_id:
+                raise AnalyticsError()
+            row = self._owned(session, Rule, owner, proposed_id)
             rules.append({**_dict(row, _RULE_OUTPUT), "changed": False})
         return {"rules": rules, "changed": False}
 
@@ -616,19 +621,23 @@ class BudgetAnalyticsStore(BudgetHTTPStore):
                 raise AnalyticsError("budget_analytics_preview_expired", 409)
             if preview.snapshot_digest != self._snapshot_digest(session, owner):
                 raise AnalyticsError("budget_analytics_stale_preview", 409)
-            creating = sum(candidate.get("rule_id") is None for candidate in payload["candidates"])
+            # Reject a tampered candidate before the cap or any write. A missing id used to
+            # escape as KeyError and a 500.
+            checked, creating = [], 0
+            for candidate in payload["candidates"]:
+                proposed_id = candidate.get("_proposed_id") if isinstance(candidate, dict) else None
+                if not isinstance(proposed_id, str) or not proposed_id:
+                    raise AnalyticsError()
+                creating += candidate.get("rule_id") is None
+                checked.append(dict(candidate))
             existing = session.scalar(select(func.count()).select_from(Rule).where(Rule.owner == owner))
             if existing + creating > MAX_RULES:
                 raise AnalyticsError("budget_analytics_limit", 413)
             # Re-validate every candidate before the first write so a later conflict cannot land.
-            checked = []
-            for candidate in payload["candidates"]:
-                candidate = dict(candidate)
-                proposed_id = candidate.get("_proposed_id")
+            for candidate in checked:
                 probe = dict(candidate)
                 probe.pop("_proposed_id", None)
                 self._rule_candidate(session, owner, probe)
-                checked.append(candidate if proposed_id is None else {**candidate, "_proposed_id": proposed_id})
             results = [self._apply_candidate(session, owner, candidate) for candidate in checked]
             preview.saved_rule_id, preview.saved_version = results[0]["id"], results[0]["version"]
             return {"rules": results, "changed": any(row["changed"] for row in results)}

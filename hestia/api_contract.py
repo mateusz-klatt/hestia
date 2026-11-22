@@ -77,9 +77,9 @@ from pydantic.json_schema import models_json_schema
 # 0.27.0: read-only owner-private monthly budget dashboard (GET /api/budget/analytics/monthly-budget, zero migration).
 # 0.28.0: additive optional income window on monthly-budget configuration (zero migration).
 # 0.29.0: read-only owner-private monthly budget charts (GET /api/budget/analytics/monthly-budget/charts, zero migration).
-# 0.32.0: batch rule preview and save (POST /api/budget/analytics/rule-batch-preview and rule-batch-save,
-#         zero migration). 0.30.0 and 0.31.0 are reserved by open PRs.
-CONTRACT_VERSION = "0.32.0"
+# 0.30.0: batch rule preview and save (POST /api/budget/analytics/rule-batch-preview and rule-batch-save,
+#         zero migration). This branch merges first; the open follow-ups take 0.31.0 and 0.32.0.
+CONTRACT_VERSION = "0.30.0"
 OPENAPI_PATH = Path(__file__).resolve().parent.parent / "docs" / "api" / "openapi.json"
 
 # De-duplicated string literals (SonarPython S1192): the OpenAPI content-type, the paths reused
