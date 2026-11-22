@@ -124,6 +124,32 @@ class NormalizeTransactionTests(unittest.TestCase):
             self.assertEqual(error.code, "invalid_data")
             self.assertEqual(str(error), "Invalid budget snapshot: invalid_data")
 
+    def test_c0_controls_in_entry_reference_normalize_to_none(self):
+        c0_points = (*range(0x20), 0x7F)
+        for code in c0_points:
+            char = chr(code)
+            for ref in (char, f"{char}ref", f"ref{char}", f"a{char}b"):
+                with self.subTest(code=code, ref=repr(ref)):
+                    result = normalize_transaction(transaction(ref))
+                    self.assertIsNone(result["entry_reference"])
+        # Non-C0 characters such as C1 controls or spaces around valid text remain allowed.
+        self.assertEqual(normalize_transaction(transaction("valid-ref"))["entry_reference"], "valid-ref")
+
+    def test_remittance_information_replaces_disallowed_c0_controls_with_fffd(self):
+        preserved = {0x09, 0x0A, 0x0D}
+        for code in range(0x80):
+            char = chr(code)
+            expected = "\ufffd" if (code < 0x20 or code == 0x7F) and code not in preserved else char
+            with self.subTest(code=code):
+                result = normalize_transaction(transaction(remittance_information=[f"a{char}b"]))
+                self.assertEqual(result["remittance_information"], [f"a{expected}b"])
+        mixed = normalize_transaction(transaction(remittance_information=["pay\x00ment\x01\tline\nnext\r\x7f"]))
+        self.assertEqual(mixed["remittance_information"], ["pay\ufffdment\ufffd\tline\nnext\r\ufffd"])
+        exact_limit = normalize_transaction(transaction(remittance_information=["\x00" * 4096]))
+        self.assertEqual(exact_limit["remittance_information"], ["\ufffd" * 4096])
+        with self.assertRaises(BudgetDataError):
+            normalize_transaction(transaction(remittance_information=["\x00" * 4097]))
+
 
 class NormalizeBalancesTests(unittest.TestCase):
     def test_preserves_types_currencies_negative_balances_without_inference(self):
@@ -140,11 +166,16 @@ class NormalizeBalancesTests(unittest.TestCase):
     def test_rejects_invalid_lists_rows_names_and_types(self):
         invalid = [None, {}, {"balances": None}, {"balances": {}}, {"balances": [None]}]
         invalid += [{"balances": [balance(**change)]} for change in (
-            {"name": None}, {"name": " "}, {"balance_type": []}, {"balance_type": "unsupported"},
+            {"name": None}, {"name": " "}, {"name": "\x00balance"}, {"name": "balance\x01"},
+            {"name": "balance\t"}, {"name": "balance\n"}, {"name": "balance\r"}, {"name": "balance\x7f"},
+            {"balance_type": []}, {"balance_type": "unsupported"},
             {"balance_amount": {"amount": 1.2, "currency": "PLN"}}, {"reference_date": "yesterday"})]
         for value in invalid:
             with self.subTest(value=value), self.assertRaises(BudgetDataError):
                 normalize_balances(value)
+        for code in (*range(0x20), 0x7F):
+            with self.subTest(code=code), self.assertRaises(BudgetDataError):
+                normalize_balances({"balances": [balance(name=f"bal{chr(code)}")]})
 
 
 class FetchSnapshotTests(unittest.TestCase):
@@ -256,6 +287,28 @@ class FetchSnapshotTests(unittest.TestCase):
                 with self.assertRaises(BudgetDataError):
                     self.fetch()
                 self.assertEqual(len(self.client.calls), 1)
+
+    def test_c0_controls_in_identification_hash_are_rejected_and_c0_entry_reference_becomes_unresolved(self):
+        for code in (0x00, 0x01, 0x09, 0x0A, 0x0D, 0x1F, 0x7F):
+            bad_hash = f"hash{chr(code)}id"
+            with self.subTest(code=code):
+                self.client = FakeClient()
+                self.client.session["accounts_data"] = [{"identification_hash": bad_hash, "uid": ACCOUNT}]
+                self.connection = replace(self.connection, accounts=(bad_hash,))
+                with self.assertRaises(BudgetDataError) as caught:
+                    self.fetch()
+                self.assertEqual(caught.exception.code, "invalid_data")
+                self.assertEqual(len(self.client.calls), 1)
+        self.client = FakeClient()
+        self.connection = replace(self.connection, accounts=(PRIMARY,))
+        self.client.pages[ACCOUNT] = [{"transactions": [
+            transaction("\x00short", remittance_information=["a\x00b\x01\x7f\t\n\r"]),
+            transaction("also\x07bad"),
+        ]}]
+        snapshot = self.fetch()
+        self.assertEqual(len(snapshot.accounts[0].transactions), 2)
+        self.assertEqual([tx["entry_reference"] for tx in snapshot.accounts[0].transactions], [None, None])
+        self.assertEqual(snapshot.accounts[0].transactions[0]["remittance_information"], ["a\ufffdb\ufffd\ufffd\t\n\r"])
 
     def test_all_pages_including_empty_middle_keep_query_and_dedup_exact_references(self):
         self.client.pages[ACCOUNT] = [
