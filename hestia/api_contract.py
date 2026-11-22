@@ -3381,20 +3381,24 @@ def _analytics_paths():
                            "Version and source fingerprints prevent stale changes. No bank request is made.",
             "requestBody": {"required": True, "content": {_APP_JSON: {"schema": _ref(request)}}},
             "responses": _analytics_responses(model)}}
-    paths[prefix + "rule-batch-preview"]["post"]["summary"] = "Preview up to 100 owner-private rules against one snapshot"
-    paths[prefix + "rule-batch-preview"]["post"]["description"] = (
-        "Requires the exact admin owner, browser cookie and configured HTTPS Origin. All-or-nothing: "
-        "every candidate is validated before a preview row is stored, and one snapshot digest fences the "
-        "whole batch (1..100 rules). affected_count is the combined change, not a sum of single-rule previews. "
-        "No bank request is made."
-    )
-    paths[prefix + "rule-batch-save"]["post"]["summary"] = "Save a batch rule preview atomically"
-    paths[prefix + "rule-batch-save"]["post"]["description"] = (
-        "Requires the exact admin owner, browser cookie and configured HTTPS Origin. Applies every rule in the "
-        "batch preview or none: one digest check, per-rule expected_version checks, and the 500-rule cap are "
-        "evaluated before any rule row changes. Replaying a saved batch returns changed=false. A single-rule "
-        "preview id is rejected. No bank request is made."
-    )
+    batch_overrides = {
+        "rule-batch-preview": (
+            "Preview up to 100 owner-private rules against one snapshot",
+            "Requires the exact admin owner, browser cookie and configured HTTPS Origin. All-or-nothing: "
+            "every candidate is validated before a preview row is stored, and one snapshot digest fences the "
+            "whole batch (1..100 rules). affected_count is the combined change, not a sum of single-rule previews. "
+            "No bank request is made.",
+        ),
+        "rule-batch-save": (
+            "Save a batch rule preview atomically",
+            "Requires the exact admin owner, browser cookie and configured HTTPS Origin. Applies every rule in the "
+            "batch preview or none: one digest check, per-rule expected_version checks, and the 500-rule cap are "
+            "evaluated before any rule row changes. Replaying a saved batch returns changed=false. A single-rule "
+            "preview id is rejected. No bank request is made.",
+        ),
+    }
+    for path, (summary, description) in batch_overrides.items():
+        paths[prefix + path]["post"].update(summary=summary, description=description)
     paths[prefix + "inbox-mark"]["post"]["summary"] = "Mark or unmark owner-private inbox alerts (atomic anti-ABA CAS)"
     paths[prefix + "inbox-mark"]["post"]["description"] = (
         "Requires the exact admin owner, browser cookie and configured HTTPS Origin. Atomically marks or unmarks "
