@@ -13,11 +13,14 @@ function fakeApi() {
   return {
     overview: vi.fn<BudgetApi["overview"]>((period) => ok(overviewOf(period, { currencies: [totals("EUR"), totals("PLN")] }))),
     analyticsTransactions: vi.fn<BudgetApi["analyticsTransactions"]>((period) => ok(entriesOf(period, [entry("e1")]))),
+    analyticsTransactionsByKeys: vi.fn<BudgetApi["analyticsTransactionsByKeys"]>(() => ok(entriesOf("", [entry("e1")]))),
     categories: vi.fn<BudgetApi["categories"]>(() => ok({ categories: categoryList })),
     annotate: vi.fn<BudgetApi["annotate"]>(() => ok({ annotation: annotationOf() })),
     transfers: vi.fn<BudgetApi["transfers"]>((period) => ok(transfersOf(period))),
     decideTransfer: vi.fn<BudgetApi["decideTransfer"]>(),
-  } satisfies Pick<BudgetApi, "overview" | "analyticsTransactions" | "categories" | "annotate" | "transfers" | "decideTransfer">;
+  } satisfies Pick<BudgetApi,
+    "overview" | "analyticsTransactions" | "analyticsTransactionsByKeys" | "categories" | "annotate" | "transfers"
+    | "decideTransfer">;
 }
 
 let host: HTMLElement;
@@ -121,8 +124,8 @@ describe("month view", () => {
           effective: { kind: "expense", category_id: "cat-food", source: "manual", rule_id: null },
         }),
       ];
-      api.analyticsTransactions.mockImplementation((period, _filter, _cursor, _limit, rowKeys) =>
-        ok(entriesOf(period, rowKeys === undefined ? rows : [pendingRow])));
+      api.analyticsTransactions.mockImplementation((period) => ok(entriesOf(period, rows)));
+      api.analyticsTransactionsByKeys.mockImplementation(() => ok(entriesOf("", [pendingRow])));
       await act(async () => {
         root.render(<MonthView api={api} accounts={[]} text={monthLabels.en} locale="en" revision={0}
           onAccessLoss={() => false} initialMonth="2026-03" initialCurrency="EUR"
@@ -132,9 +135,9 @@ describe("month view", () => {
       });
       await settle();
 
-      expect(api.analyticsTransactions).toHaveBeenCalledWith(
-        "2026-03", { currency: "EUR", category: "", kind: "", query: "" }, undefined, undefined, ["acc-1/pending-1"],
-      );
+      expect(api.analyticsTransactionsByKeys).toHaveBeenCalledWith({
+        row_keys: ["acc-1/pending-1"], currency: "EUR",
+      });
       const provisionalToggle = host.querySelector<HTMLInputElement>('input[name="provisional"]');
       expect(provisionalToggle?.checked).toBe(true);
       const currencySelect = [...host.querySelectorAll("label")].find((item) => item.textContent.startsWith("Currency"))?.querySelector("select");
@@ -146,6 +149,7 @@ describe("month view", () => {
 
       // Navigating to another month does not apply the originating month's provisional keys or truncation note.
       await click(host.querySelector<HTMLButtonElement>('button[aria-label="Previous month"]') ?? undefined);
+      expect(api.analyticsTransactionsByKeys).toHaveBeenCalledTimes(1);
       expect(api.analyticsTransactions).toHaveBeenLastCalledWith("2026-02", { currency: "EUR", category: "", kind: "", query: "" });
       expect(host.querySelector<HTMLInputElement>('input[name="provisional"]')).toBeNull();
       expect(host.textContent).not.toContain("Showing first");

@@ -32,10 +32,12 @@ function mockPairSearch(api: ReturnType<typeof fakeApi>, debit: AnalyticsTransac
 function fakeApi(rows: AnalyticsTransaction[] = [entry("e1")]) {
   return {
     analyticsTransactions: vi.fn<BudgetApi["analyticsTransactions"]>(() => ok(pageOf(rows))),
+    analyticsTransactionsByKeys: vi.fn<BudgetApi["analyticsTransactionsByKeys"]>(() => ok(entriesOf("", rows))),
     categories: vi.fn<BudgetApi["categories"]>(() => ok({ categories: categoryList })),
     annotate: vi.fn<BudgetApi["annotate"]>(() => ok({ annotation: annotationOf() })),
     decideTransfer: vi.fn<BudgetApi["decideTransfer"]>(() => ok({ decision: decisionOf() })),
-  } satisfies Pick<BudgetApi, "analyticsTransactions" | "categories" | "annotate" | "decideTransfer">;
+  } satisfies Pick<BudgetApi,
+    "analyticsTransactions" | "analyticsTransactionsByKeys" | "categories" | "annotate" | "decideTransfer">;
 }
 
 const accounts = [
@@ -1124,8 +1126,8 @@ describe("manual own-transfer pairing", () => {
         "acc-secret-1/ref-secret-stale",
       ];
       const api = fakeApi(novemberRows);
-      api.analyticsTransactions.mockImplementation((period, _filter, _cursor, _limit, rowKeys) =>
-        ok(entriesOf(period, rowKeys === undefined ? novemberRows : provisionalRows)));
+      api.analyticsTransactions.mockImplementation((period) => ok(entriesOf(period, novemberRows)));
+      api.analyticsTransactionsByKeys.mockImplementation(() => ok(entriesOf("", provisionalRows)));
 
       await act(async () => {
         root.render(
@@ -1142,9 +1144,8 @@ describe("manual own-transfer pairing", () => {
       });
       await settle();
 
-      expect(api.analyticsTransactions).toHaveBeenCalledWith(
-        "2026-11", { currency: "PLN", category: "", kind: "", query: "" }, undefined, undefined, keys,
-      );
+      expect(api.analyticsTransactionsByKeys).toHaveBeenCalledWith({ row_keys: keys, currency: "PLN" });
+      expect(api.analyticsTransactions).not.toHaveBeenCalled();
       expect(scrollIntoView).toHaveBeenCalled();
       expect(select("Currency").value).toBe("PLN");
       const checkbox = host.querySelector<HTMLInputElement>('input[name="provisional"]');
@@ -1162,7 +1163,7 @@ describe("manual own-transfer pairing", () => {
         expect(host.textContent).not.toContain(secret);
       }
 
-      // Unchecking loads full month entries without `rowKeys` and hides the truncation note; re-checking restores `rowKeys`.
+      // Unchecking loads full month entries via GET and hides the truncation note; re-checking uses POST transactions-by-keys.
       await act(async () => { checkbox?.click(); await Promise.resolve(); });
       await settle();
       expect(api.analyticsTransactions).toHaveBeenLastCalledWith("2026-11", { currency: "PLN", category: "", kind: "", query: "" });
@@ -1172,9 +1173,8 @@ describe("manual own-transfer pairing", () => {
 
       await act(async () => { host.querySelector<HTMLInputElement>('input[name="provisional"]')?.click(); await Promise.resolve(); });
       await settle();
-      expect(api.analyticsTransactions).toHaveBeenLastCalledWith(
-        "2026-11", { currency: "PLN", category: "", kind: "", query: "" }, undefined, undefined, keys,
-      );
+      expect(api.analyticsTransactionsByKeys).toHaveBeenCalledTimes(2);
+      expect(api.analyticsTransactionsByKeys).toHaveBeenLastCalledWith({ row_keys: keys, currency: "PLN" });
       expect(entryNames()).toHaveLength(4);
     } finally {
       if (prevScroll === undefined) {
@@ -1197,6 +1197,7 @@ describe("manual own-transfer pairing", () => {
     });
     await settle();
     expect(api.analyticsTransactions).not.toHaveBeenCalled();
+    expect(api.analyticsTransactionsByKeys).not.toHaveBeenCalled();
     expect(host.textContent).toContain("No entries match.");
   });
 

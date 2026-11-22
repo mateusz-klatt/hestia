@@ -201,8 +201,8 @@ class BudgetOpenApiTests(unittest.TestCase):
         analytics_reads = {"overview", "transactions", "categories", "rules", "transfers", "recurring",
                            "spending-limits", "mortgages", "inbox", "quarantine", "forecast",
                            "monthly-budget", "monthly-budget/charts"}
-        analytics_writes = {"category-create", "category-update", "annotation", "rule-preview", "rule-save",
-                            "rule-batch-preview", "rule-batch-save",
+        analytics_writes = {"transactions-by-keys", "category-create", "category-update", "annotation", "rule-preview",
+                            "rule-save", "rule-batch-preview", "rule-batch-save",
                             "transfer-decision", "spending-limit-save", "mortgage-save", "mortgage-payment-set",
                             "inbox-mark"}
         self.assertEqual(set(analytics), {"/api/budget/analytics/" + name for name in analytics_reads | analytics_writes})
@@ -375,16 +375,31 @@ class BudgetOpenApiTests(unittest.TestCase):
             param["name"]: param
             for param in contract.build_openapi()["paths"]["/api/budget/analytics/transactions"]["get"]["parameters"]
         }
-        self.assertEqual(tx_params["row_keys"]["schema"], {
-            "type": "array",
-            "maxItems": 500,
-            "items": {
-                "type": "string",
-                "minLength": 3,
-                "maxLength": 1153,
-                "pattern": contract._ROW_KEY_PATTERN,
-            },
+        self.assertEqual(set(tx_params), {"period", "currency", "category_id", "kind", "query", "limit", "cursor"})
+        tx_by_keys = contract.build_openapi()["paths"]["/api/budget/analytics/transactions-by-keys"]["post"]
+        self.assertEqual(
+            tx_by_keys["requestBody"]["content"]["application/json"]["schema"],
+            {"$ref": "#/components/schemas/BudgetAnalyticsTransactionsByKeysRequest"},
+        )
+        self.assertEqual(
+            tx_by_keys["responses"]["200"]["content"]["application/json"]["schema"],
+            {"$ref": "#/components/schemas/BudgetAnalyticsTransactions"},
+        )
+        by_keys_req = schemas["BudgetAnalyticsTransactionsByKeysRequest"]
+        self.assertIs(by_keys_req["additionalProperties"], False)
+        self.assertEqual(by_keys_req["required"], ["row_keys"])
+        self.assertEqual(by_keys_req["properties"]["row_keys"]["minItems"], 1)
+        self.assertEqual(by_keys_req["properties"]["row_keys"]["maxItems"], 500)
+        self.assertEqual(by_keys_req["properties"]["row_keys"]["items"], {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 1153,
+            "pattern": contract._ROW_KEY_PATTERN,
         })
+        self.assertEqual(
+            set(by_keys_req["properties"]),
+            {"row_keys", "cursor", "limit", "currency", "category_id", "kind", "query"},
+        )
         root = schemas["BudgetAnalyticsMonthlyBudget"]["properties"]
         self.assertEqual(root["evaluation_timezone"]["const"], "Europe/Warsaw")
         self.assertEqual(schemas["BudgetAnalyticsMonthlyBudgetCardExposure"]["properties"]["status"]["const"],
@@ -456,7 +471,8 @@ class BudgetOpenApiTests(unittest.TestCase):
                               "BudgetAnalyticsRuleBatchSaveRequest", "BudgetAnalyticsTransferDecisionRequest",
                               "BudgetAnalyticsLegRequest", "BudgetAnalyticsSpendingLimitSaveRequest",
                               "BudgetAnalyticsMortgageSaveRequest", "BudgetAnalyticsMortgagePaymentSetRequest",
-                              "BudgetAnalyticsInboxKeyRequest", "BudgetAnalyticsInboxMarkRequest"})
+                              "BudgetAnalyticsInboxKeyRequest", "BudgetAnalyticsInboxMarkRequest",
+                              "BudgetAnalyticsTransactionsByKeysRequest"})
         for name, schema in schemas.items():
             if name in request_names:
                 self.assertIs(schema["additionalProperties"], False)

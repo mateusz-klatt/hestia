@@ -88,13 +88,15 @@ describe("budget api", () => {
     });
   });
 
-  it("encodes repeated row_keys query parameters for analytics transactions", async () => {
-    const fetchMock = respond(200, { period: "2026-11", transactions: [], filtered_total: 0, next_cursor: null });
-    const filter = { currency: "PLN", category: "", kind: "", query: "" };
-    await budgetApi.analyticsTransactions("2026-11", filter, undefined, undefined, ["acc-1/r1", "acc-2/r2"]);
-    expect(sent(fetchMock).url.pathname).toMatch(/\/api\/budget\/analytics\/transactions$/);
-    expect(sent(fetchMock).url.searchParams.getAll("row_keys")).toEqual(["acc-1/r1", "acc-2/r2"]);
-    expect(sent(fetchMock).url.searchParams.get("period")).toBe("2026-11");
+  it("sends row_keys via JSON POST without Authorization header for transactions-by-keys", async () => {
+    const fetchMock = respond(200, { period: "", start: "", end: "", snapshot_digest: "d", transactions: [], filtered_total: 0, next_cursor: null });
+    await budgetApi.analyticsTransactionsByKeys({ row_keys: ["acc-1/r1", "acc-2/r2"], currency: "PLN" });
+    const { url, init } = sent(fetchMock);
+    expect(url.pathname).toMatch(/\/api\/budget\/analytics\/transactions-by-keys$/);
+    expect(url.search).toBe("");
+    expect(init.method).toBe("POST");
+    expect(Object.keys(init.headers as Record<string, string>)).not.toContain("Authorization");
+    expect(JSON.parse(init.body as string)).toEqual({ row_keys: ["acc-1/r1", "acc-2/r2"], currency: "PLN" });
   });
 
   it("builds quarantine reads with and without an account filter", async () => {

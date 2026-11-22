@@ -22,7 +22,9 @@ export interface MonthLabels {
 }
 
 export interface MonthViewProps {
-  api: Pick<BudgetApi, "overview" | "analyticsTransactions" | "categories" | "annotate" | "transfers" | "decideTransfer">;
+  api: Pick<BudgetApi,
+    "overview" | "analyticsTransactions" | "analyticsTransactionsByKeys" | "categories" | "annotate" | "transfers"
+    | "decideTransfer">;
   accounts: readonly BudgetAccount[];
   connections?: readonly BudgetConnection[] | undefined;
   text: MonthLabels;

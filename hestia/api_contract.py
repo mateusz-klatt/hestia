@@ -79,7 +79,7 @@ from pydantic.json_schema import models_json_schema
 # 0.29.0: read-only owner-private monthly budget charts (GET /api/budget/analytics/monthly-budget/charts, zero migration).
 # 0.30.0: batch rule preview and save (POST /api/budget/analytics/rule-batch-preview and rule-batch-save,
 #         zero migration). This branch merges first; the open follow-ups take 0.31.0 and 0.32.0.
-# 0.31.0: additive coverage.pending_row_keys / pending_row_keys_truncated and transactions row_keys filter (zero migration).
+# 0.31.0: additive coverage.pending_row_keys / pending_row_keys_truncated and POST transactions-by-keys endpoint (zero migration).
 CONTRACT_VERSION = "0.31.0"
 OPENAPI_PATH = Path(__file__).resolve().parent.parent / "docs" / "api" / "openapi.json"
 
@@ -1540,6 +1540,17 @@ BudgetAnalyticsRowKey = Annotated[str, Field(min_length=3, max_length=1153, patt
 BudgetAnalyticsKind = Literal["auto", "expense", "income", "refund", "excluded"]
 
 
+class BudgetAnalyticsTransactionsByKeysRequest(BaseModel):
+    model_config = _STRICT
+    row_keys: Annotated[list[BudgetAnalyticsRowKey], Field(min_length=1, max_length=500)]
+    cursor: Annotated[str, Field(min_length=1, max_length=8192)] | None = None
+    limit: Annotated[int, Field(ge=1, le=200)] = 50
+    currency: Annotated[str, Field(pattern=r"^[A-Z]{3}$")] | None = None
+    category_id: BudgetId | None = None
+    kind: Literal["expense", "income", "refund", "excluded", "unclassified_credit", "transfer"] | None = None
+    query: Annotated[str, Field(min_length=1, max_length=256)] | None = None
+
+
 class BudgetAnalyticsCategoryCreateRequest(BaseModel):
     model_config = _STRICT
     name: Annotated[str, Field(min_length=1, max_length=80)]
@@ -2557,11 +2568,12 @@ class BudgetAnalyticsMonthlyBudgetCharts(BaseModel):
 
 
 _ANALYTICS_MODELS = (BudgetAnalyticsCategoryCreateRequest, BudgetAnalyticsCategoryUpdateRequest,
-                     BudgetAnalyticsAnnotationRequest, BudgetAnalyticsRulePreviewRequest,
-                     BudgetAnalyticsRuleSaveRequest, BudgetAnalyticsTransferDecisionRequest,
-                     BudgetAnalyticsSpendingLimitSaveRequest, BudgetAnalyticsMortgageSaveRequest,
-                     BudgetAnalyticsMortgagePaymentSetRequest, BudgetAnalyticsInboxMarkRequest,
-                     BudgetAnalyticsCategories, BudgetAnalyticsCategoryResult, BudgetAnalyticsAnnotationResult,
+                     BudgetAnalyticsAnnotationRequest, BudgetAnalyticsTransactionsByKeysRequest,
+                     BudgetAnalyticsRulePreviewRequest, BudgetAnalyticsRuleSaveRequest,
+                     BudgetAnalyticsTransferDecisionRequest, BudgetAnalyticsSpendingLimitSaveRequest,
+                     BudgetAnalyticsMortgageSaveRequest, BudgetAnalyticsMortgagePaymentSetRequest,
+                     BudgetAnalyticsInboxMarkRequest, BudgetAnalyticsCategories,
+                     BudgetAnalyticsCategoryResult, BudgetAnalyticsAnnotationResult,
                      BudgetAnalyticsRules, BudgetAnalyticsRuleResult, BudgetAnalyticsPreviewResult,
                      BudgetAnalyticsRuleBatchPreviewRequest, BudgetAnalyticsRuleBatchSaveRequest,
                      BudgetAnalyticsBatchPreview, BudgetAnalyticsBatchPreviewResult,
@@ -2598,6 +2610,7 @@ def _ref(name: str) -> dict:
 _PATH_ROLES = {
     ("GET", "/api/budget/analytics/overview"): "admin",
     ("GET", "/api/budget/analytics/transactions"): "admin",
+    ("POST", "/api/budget/analytics/transactions-by-keys"): "admin",
     ("GET", "/api/budget/analytics/categories"): "admin",
     ("GET", "/api/budget/analytics/rules"): "admin",
     ("GET", "/api/budget/analytics/transfers"): "admin",
@@ -3261,9 +3274,6 @@ def _analytics_paths():
         ("transactions", "getBudgetAnalyticsTransactions", "BudgetAnalyticsTransactions",
          [period, currency, _budget_query("category_id", description="Category ID, or uncategorised for no category."),
           _budget_query("kind"), _budget_query("query", schema={"type": "string", "minLength": 1, "maxLength": 256}),
-          _budget_query("row_keys", schema={"type": "array", "maxItems": 500,
-                        "items": {"type": "string", "minLength": 3, "maxLength": 1153, "pattern": _ROW_KEY_PATTERN}},
-                        description="Optional exact row keys (<account_id>/<entry_reference>, max 500); ignores period filter when supplied."),
           *page]),
         ("categories", "getBudgetAnalyticsCategories", "BudgetAnalyticsCategories", []),
         ("rules", "getBudgetAnalyticsRules", "BudgetAnalyticsRules", []),
@@ -3415,6 +3425,17 @@ def _analytics_paths():
         "409 budget_analytics_source_changed if any unmarked key is inactive on read=true; 413 budget_analytics_limit "
         "at the 500-marker cap on create only). No bank request is made."
     )
+    paths[prefix + "transactions-by-keys"] = {"post": {
+        "operationId": "listBudgetAnalyticsTransactionsByKeys",
+        "summary": "Read owner-private transactions matching exact row keys (pure read-only)",
+        "description": "Requires the exact admin owner, browser cookie and configured HTTPS Origin. "
+                       "Returns the same paginated BudgetAnalyticsTransactions shape as GET transactions for "
+                       "1..500 exact <account_id>/<entry_reference> keys in the JSON body (<= 1 MiB) regardless of "
+                       "period, preventing oversized GET query strings and key leakage in access logs. "
+                       "Makes no bank requests and no database writes.",
+        "requestBody": {"required": True, "content": {_APP_JSON: {"schema": _ref("BudgetAnalyticsTransactionsByKeysRequest")}}},
+        "responses": _analytics_responses("BudgetAnalyticsTransactions"),
+    }}
     return paths
 
 

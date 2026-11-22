@@ -174,6 +174,7 @@ _ROUTE_MIN_ROLE = {
     ("POST", "/api/budget/consent/cancel"): _ADMIN,
     ("GET", "/api/budget/analytics/overview"): _ADMIN,
     ("GET", "/api/budget/analytics/transactions"): _ADMIN,
+    ("POST", "/api/budget/analytics/transactions-by-keys"): _ADMIN,
     ("GET", "/api/budget/analytics/categories"): _ADMIN,
     ("GET", "/api/budget/analytics/rules"): _ADMIN,
     ("GET", "/api/budget/analytics/transfers"): _ADMIN,
@@ -932,7 +933,15 @@ async def _read_json_body(request, max_body=MAX_BODY, *, reject_duplicates=False
     if cl > max_body:
         return _json(HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
                      {"ok": False, "error": f"body must be ≤ {max_body} bytes"}), True
-    body = await request.content.read(cl) if cl > 0 else b""
+    chunks = []
+    remaining = cl
+    while remaining > 0:
+        chunk = await request.content.read(remaining)
+        if not chunk:
+            break
+        chunks.append(chunk)
+        remaining -= len(chunk)
+    body = b"".join(chunks)
     try:
         return (json.loads(body, object_pairs_hook=_unique_json_fields if reject_duplicates else None)
                 if body else {}), False

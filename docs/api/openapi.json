@@ -5196,6 +5196,110 @@
         "title": "BudgetAnalyticsTransactions",
         "type": "object"
       },
+      "BudgetAnalyticsTransactionsByKeysRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "category_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Category Id"
+          },
+          "currency": {
+            "anyOf": [
+              {
+                "pattern": "^[A-Z]{3}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Currency"
+          },
+          "cursor": {
+            "anyOf": [
+              {
+                "maxLength": 8192,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Cursor"
+          },
+          "kind": {
+            "anyOf": [
+              {
+                "enum": [
+                  "expense",
+                  "income",
+                  "refund",
+                  "excluded",
+                  "unclassified_credit",
+                  "transfer"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Kind"
+          },
+          "limit": {
+            "default": 50,
+            "maximum": 200,
+            "minimum": 1,
+            "title": "Limit",
+            "type": "integer"
+          },
+          "query": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Query"
+          },
+          "row_keys": {
+            "items": {
+              "maxLength": 1153,
+              "minLength": 3,
+              "pattern": "^[^/\\x00-\\x1f\\x7f]{1,128}/[^\\x00-\\x1f\\x7f]{1,1024}$",
+              "type": "string"
+            },
+            "maxItems": 500,
+            "minItems": 1,
+            "title": "Row Keys",
+            "type": "array"
+          }
+        },
+        "required": [
+          "row_keys"
+        ],
+        "title": "BudgetAnalyticsTransactionsByKeysRequest",
+        "type": "object"
+      },
       "BudgetAnalyticsTransfer": {
         "properties": {
           "ambiguous": {
@@ -13688,22 +13792,6 @@
             }
           },
           {
-            "description": "Optional exact row keys (<account_id>/<entry_reference>, max 500); ignores period filter when supplied.",
-            "in": "query",
-            "name": "row_keys",
-            "required": false,
-            "schema": {
-              "items": {
-                "maxLength": 1153,
-                "minLength": 3,
-                "pattern": "^[^/\\x00-\\x1f\\x7f]{1,128}/[^\\x00-\\x1f\\x7f]{1,1024}$",
-                "type": "string"
-              },
-              "maxItems": 500,
-              "type": "array"
-            }
-          },
-          {
             "description": "",
             "in": "query",
             "name": "limit",
@@ -13820,6 +13908,116 @@
           }
         },
         "summary": "Read owner-private local budget analytics",
+        "x-required-role": "admin"
+      }
+    },
+    "/api/budget/analytics/transactions-by-keys": {
+      "post": {
+        "description": "Requires the exact admin owner, browser cookie and configured HTTPS Origin. Returns the same paginated BudgetAnalyticsTransactions shape as GET transactions for 1..500 exact <account_id>/<entry_reference> keys in the JSON body (<= 1 MiB) regardless of period, preventing oversized GET query strings and key leakage in access logs. Makes no bank requests and no database writes.",
+        "operationId": "listBudgetAnalyticsTransactionsByKeys",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BudgetAnalyticsTransactionsByKeysRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetAnalyticsTransactions"
+                }
+              }
+            },
+            "description": "owner-scoped stored state; no bank request"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "session required; middleware may return an empty body"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "admin owner or browser-origin requirement failed; middleware may return an empty body"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "unknown, disabled or foreign resource"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Version, financial source, reserved transfer leg, preview or cursor changed; reload and review."
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Explicit analytics processing or owner configuration limit; no partial totals."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "budget configuration unavailable"
+          }
+        },
+        "summary": "Read owner-private transactions matching exact row keys (pure read-only)",
         "x-required-role": "admin"
       }
     },

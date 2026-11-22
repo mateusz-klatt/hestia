@@ -7,7 +7,8 @@ import { formatAmount, transactionDate, transactionText } from "../model";
 import { ANALYTICS_ERROR, EFFECTIVE_KINDS, NO_FILTER, RELOAD_ERRORS, UNCATEGORISED, annotationRequest, canPair, canonicalAmount,
   counterparty, accountName as nameOf, currentChoice, daysBetween, kindChoice, kindChoicesFor, labelOf, manualPairRequest,
   pairCandidates, pairDate, pairPeriods, transactionRowKey } from "./model";
-import type { AnalyticsCategory, AnalyticsTransaction, CategoryChoice, KindChoice, TransactionFilter } from "./model";
+import type { AnalyticsCategory, AnalyticsTransaction, AnalyticsTransactionsByKeysRequest, CategoryChoice, KindChoice,
+  TransactionFilter } from "./model";
 
 const kindsEn = { auto: "Automatic", expense: "Expense", income: "Income", refund: "Refund", excluded: "Leave out of the budget",
   unclassified_credit: "To classify", transfer: "Own transfer" };
@@ -150,7 +151,7 @@ interface PairPage { rows: AnalyticsTransaction[]; loading: boolean; failed: boo
 const PAIR_LOADING: PairPage = { rows: [], loading: true, failed: false, limited: false };
 
 export interface TransactionsProps {
-  api: Pick<BudgetApi, "analyticsTransactions" | "categories" | "annotate" | "decideTransfer">;
+  api: Pick<BudgetApi, "analyticsTransactions" | "analyticsTransactionsByKeys" | "categories" | "annotate" | "decideTransfer">;
   period: string;
   currencies: readonly string[];
   accounts: readonly BudgetAccount[];
@@ -265,7 +266,14 @@ export function TransactionsPanel({ api, period, currencies, accounts, connectio
     let fetchedAny = false;
     while (!fetchedAny || (!stopAfterOne && rows.length < rowCap)) {
       const result = rowKeys !== undefined
-        ? await api.analyticsTransactions(period, filter, cursor, undefined, rowKeys)
+        ? await api.analyticsTransactionsByKeys({
+          row_keys: [...rowKeys],
+          ...(cursor === undefined ? {} : { cursor }),
+          ...(filter.currency === "" ? {} : { currency: filter.currency }),
+          ...(filter.category === "" ? {} : { category_id: filter.category }),
+          ...(filter.kind === "" ? {} : { kind: filter.kind as NonNullable<AnalyticsTransactionsByKeysRequest["kind"]> }),
+          ...(filter.query === "" ? {} : { query: filter.query }),
+        })
         : cursor === undefined
           ? await api.analyticsTransactions(period, filter)
           : await api.analyticsTransactions(period, filter, cursor);

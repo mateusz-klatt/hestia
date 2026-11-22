@@ -71,6 +71,7 @@ function fakeApi(accounts: BudgetAccount[] = [account({ display })]) {
     refresh: vi.fn<BudgetApi["refresh"]>(),
     overview: vi.fn<BudgetApi["overview"]>((period) => ok(overviewOf(period))),
     analyticsTransactions: vi.fn<BudgetApi["analyticsTransactions"]>((period) => ok(entriesOf(period))),
+    analyticsTransactionsByKeys: vi.fn<BudgetApi["analyticsTransactionsByKeys"]>(() => ok(entriesOf(""))),
     categories: vi.fn<BudgetApi["categories"]>(() => ok({ categories: [] })),
     annotate: vi.fn<BudgetApi["annotate"]>(),
     transfers: vi.fn<BudgetApi["transfers"]>((period) => ok(transfersOf(period))),
@@ -1053,8 +1054,8 @@ describe("analytics views", () => {
       },
     })));
     api.transfers.mockImplementation((period) => ok(transfersOf(period, [])));
-    api.analyticsTransactions.mockImplementation((period, _filter, _cursor, _limit, rowKeys) =>
-      ok(entriesOf(period, rowKeys === undefined ? novRows : provRows)));
+    api.analyticsTransactions.mockImplementation((period) => ok(entriesOf(period, novRows)));
+    api.analyticsTransactionsByKeys.mockImplementation(() => ok(entriesOf("", provRows)));
 
     await render(api);
     for (const secret of [...keys, "acc-secret-a", "prov-2-dec", "prov-3-oct"]) {
@@ -1067,9 +1068,7 @@ describe("analytics views", () => {
 
     expect(button("Month").getAttribute("aria-pressed")).toBe("true");
     expect(api.rules).not.toHaveBeenCalled();
-    expect(api.analyticsTransactions).toHaveBeenLastCalledWith(
-      "2026-11", { currency: "PLN", category: "", kind: "", query: "" }, undefined, undefined, keys,
-    );
+    expect(api.analyticsTransactionsByKeys).toHaveBeenCalledWith({ row_keys: keys, currency: "PLN" });
     const provisionalToggle = host.querySelector<HTMLInputElement>('input[name="provisional"]');
     expect(provisionalToggle?.checked).toBe(true);
     expect(host.querySelector<HTMLSelectElement>('select[name="currency"]')?.value).toBe("PLN");
@@ -1088,7 +1087,7 @@ describe("analytics views", () => {
       expect(host.textContent).not.toContain(secret);
     }
 
-    // Toggling the provisional checkbox loads all month entries without rowKeys and re-enabling passes rowKeys again.
+    // Toggling the provisional checkbox loads all month entries via GET and re-enabling uses POST transactions-by-keys.
     if (provisionalToggle === null) throw new Error("missing provisional toggle");
     await click(provisionalToggle);
     expect(api.analyticsTransactions).toHaveBeenLastCalledWith("2026-11", { currency: "PLN", category: "", kind: "", query: "" });
@@ -1097,9 +1096,8 @@ describe("analytics views", () => {
     const toggledAgain = host.querySelector<HTMLInputElement>('input[name="provisional"]');
     if (toggledAgain === null) throw new Error("missing provisional toggle after uncheck");
     await click(toggledAgain);
-    expect(api.analyticsTransactions).toHaveBeenLastCalledWith(
-      "2026-11", { currency: "PLN", category: "", kind: "", query: "" }, undefined, undefined, keys,
-    );
+    expect(api.analyticsTransactionsByKeys).toHaveBeenCalledTimes(2);
+    expect(api.analyticsTransactionsByKeys).toHaveBeenLastCalledWith({ row_keys: keys, currency: "PLN" });
     expect(visibleTexts()).toHaveLength(4);
 
     // Returning to Monthly budget and opening the general View transactions link clears the provisional filter.

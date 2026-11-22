@@ -109,6 +109,9 @@ export type TransferStatus = "suggested" | "accepted" | "review" | "boundary" | 
 export type AnalyticsTransaction = Schemas["BudgetAnalyticsTransaction"];
 
 export type AnalyticsTransactions = Schemas["BudgetAnalyticsTransactions"];
+type RawTransactionsByKeysRequest = Schemas["BudgetAnalyticsTransactionsByKeysRequest"];
+export type AnalyticsTransactionsByKeysRequest =
+  Pick<RawTransactionsByKeysRequest, "row_keys"> & Partial<Omit<RawTransactionsByKeysRequest, "row_keys">>;
 
 export type AnalyticsCategory = Schemas["BudgetAnalyticsCategory"];
 export type CategorySaved = Schemas["BudgetAnalyticsCategorySaved"];

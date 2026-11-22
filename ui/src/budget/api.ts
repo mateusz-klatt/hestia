@@ -8,30 +8,24 @@ import type { BudgetAccount, BudgetCapabilities, BudgetConnection, BudgetConsent
 import { idempotencyKey } from "./model";
 import type { AnalyticsCategory, AnalyticsForecast, AnalyticsInbox, AnalyticsInboxMarkRequest, AnalyticsInboxMarkSaved,
   AnalyticsMonthlyBudget, AnalyticsMonthlyBudgetCharts, AnalyticsMortgages, AnalyticsOverview, AnalyticsQuarantine,
-  AnalyticsRecurring, AnalyticsRule, AnalyticsSpendingLimits, AnalyticsTransactions, AnnotationRequest, AnnotationSaved,
-  CategoryCreateRequest, CategorySaved, CategoryUpdateRequest, MortgagePaymentSaved, MortgagePaymentSetRequest,
-  MortgageSaveRequest, MortgageScheduleSaved, RuleCandidate, RulePreview, RuleSaved, SpendingLimitSaveRequest,
-  SpendingLimitSaved, TransactionFilter, TransferDecisionRequest, TransferDecisionResult, TransferList,
-  TransferQueue } from "./analytics/model";
+  AnalyticsRecurring, AnalyticsRule, AnalyticsSpendingLimits, AnalyticsTransactions, AnalyticsTransactionsByKeysRequest,
+  AnnotationRequest, AnnotationSaved, CategoryCreateRequest, CategorySaved, CategoryUpdateRequest, MortgagePaymentSaved,
+  MortgagePaymentSetRequest, MortgageSaveRequest, MortgageScheduleSaved, RuleCandidate, RulePreview, RuleSaved,
+  SpendingLimitSaveRequest, SpendingLimitSaved, TransactionFilter, TransferDecisionRequest, TransferDecisionResult,
+  TransferList, TransferQueue } from "./analytics/model";
 
 export type BudgetResult<T> =
   | { ok: true; data: T }
   | { ok: false; status: number; error: string; current?: unknown };
 
-type QueryValue = string | number | readonly string[] | undefined;
-type Query = Record<string, QueryValue>;
+type Query = Record<string, string | number | undefined>;
 
 function url(path: string, query: Query = {}): URL {
   const target = apiUrl(`budget/${path}`);
   for (const [key, value] of Object.entries(query)) {
-    if (typeof value === "string" || typeof value === "number") {
-      const text = String(value);
-      if (text !== "") target.searchParams.set(key, text);
-    } else if (value !== undefined) {
-      for (const item of value) {
-        if (item !== "") target.searchParams.append(key, item);
-      }
-    }
+    if (value === undefined) continue;
+    const text = String(value);
+    if (text !== "") target.searchParams.set(key, text);
   }
   return target;
 }
@@ -93,13 +87,15 @@ export const budgetApi = {
   /** Server-computed per-currency totals of one period ("YYYY-MM" or "YYYY") for the selected accounts. */
   overview: (period: string, currency?: string) =>
     call<AnalyticsOverview>(url("analytics/overview", { period, currency })),
-  /** One server-bounded page of a period's entries (or exact `row_keys` across periods); empty filter values are omitted. */
-  analyticsTransactions: (period: string, filter: TransactionFilter, cursor?: string, limit?: number,
-    rowKeys?: readonly string[]) =>
+  /** One server-bounded page of a period's entries; empty filter values are omitted. */
+  analyticsTransactions: (period: string, filter: TransactionFilter, cursor?: string, limit?: number) =>
     call<AnalyticsTransactions>(url("analytics/transactions", {
       period, currency: filter.currency, category_id: filter.category, kind: filter.kind, query: filter.query,
-      cursor, limit, row_keys: rowKeys,
+      cursor, limit,
     })),
+  /** One server-bounded page matching 1..500 exact row keys across periods via JSON POST. */
+  analyticsTransactionsByKeys: (request: AnalyticsTransactionsByKeysRequest) =>
+    post<AnalyticsTransactions>("analytics/transactions-by-keys", request),
   categories: () => call<{ categories: AnalyticsCategory[] }>(url("analytics/categories")),
   /** The owner's explicit category/kind decision for one entry, versioned against concurrent edits. */
   annotate: (request: AnnotationRequest) => post<{ annotation: AnnotationSaved }>("analytics/annotation", request),

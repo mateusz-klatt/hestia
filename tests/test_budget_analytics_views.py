@@ -570,30 +570,31 @@ class ValidationTests(ProjectionCase):
             f"{self.accounts['foreign']}/bob-tx",
             f"{self.accounts['a']}/unknown-ref",
         ]
-        all_matched = self.store.transactions("owner", "2026-11", row_keys=requested)
+        all_matched = self.store.transactions_by_keys("owner", row_keys=requested)
         api_contract.BudgetAnalyticsTransactions.model_validate(all_matched)
+        self.assertEqual((all_matched["period"], all_matched["start"], all_matched["end"]), ("", "", ""))
         self.assertEqual(all_matched["filtered_total"], 3)
         self.assertEqual([row["entry_reference"] for row in all_matched["transactions"]],
                          ["dec-pln", "nov-pln", "oct-eur"])
 
-        pln_only = self.store.transactions("owner", "2026-11", currency="PLN", row_keys=requested)
+        pln_only = self.store.transactions_by_keys("owner", currency="PLN", row_keys=requested)
         self.assertEqual([row["entry_reference"] for row in pln_only["transactions"]], ["dec-pln", "nov-pln"])
 
-        first = self.store.transactions("owner", "2026-11", limit=1, row_keys=requested)
-        second = self.store.transactions("owner", "2026-11", limit=1, cursor=first["next_cursor"], row_keys=requested)
+        first = self.store.transactions_by_keys("owner", limit=1, row_keys=requested)
+        second = self.store.transactions_by_keys("owner", limit=1, cursor=first["next_cursor"], row_keys=requested)
         self.assertEqual(
             [first["transactions"][0]["entry_reference"], second["transactions"][0]["entry_reference"]],
             ["dec-pln", "nov-pln"],
         )
         self.assert_invalid(
-            lambda: self.store.transactions("owner", "2026-11", limit=1, cursor=first["next_cursor"],
-                                            row_keys=[f"{self.accounts['a']}/nov-pln"]),
+            lambda: self.store.transactions_by_keys("owner", limit=1, cursor=first["next_cursor"],
+                                                    row_keys=[f"{self.accounts['a']}/nov-pln"]),
         )
 
         too_many = [f"{self.accounts['a']}/r{i}" for i in range(501)]
-        for bad in ([], "not-a-list", too_many, ["no-slash"], ["/ref"], ["acc/"], ["acc/bad\x00ref"],
+        for bad in (None, [], "not-a-list", too_many, ["no-slash"], ["/ref"], ["acc/"], ["acc/bad\x00ref"],
                     ["a" * 129 + "/ref"], ["acc/" + "r" * 1025]):
-            self.assert_invalid(lambda: self.store.transactions("owner", "2026-11", row_keys=bad))
+            self.assert_invalid(lambda: self.store.transactions_by_keys("owner", row_keys=bad))
 
     def test_corrupt_ledger_and_metadata_never_yield_partial_figures(self):
         self.add_transaction("a", "debit")
