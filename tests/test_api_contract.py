@@ -5,7 +5,7 @@ Contract guarantees:
      ``python -m hestia.api_contract``).
   2. Each request DTO accepts/rejects exactly what the authoritative runtime validator does, so the
      generated client types can never lie about what the server will accept.
-  3. The forecast addition leaves the OpenAPI 0.25.0 contract structurally intact.
+  3. The monthly budget addition leaves the OpenAPI 0.26.0 contract structurally intact.
 """
 from __future__ import annotations
 
@@ -54,18 +54,27 @@ class OpenApiArtifactTests(unittest.TestCase):
             "docs/api/openapi.json is stale — run `python -m hestia.api_contract`",
         )
 
-    def test_forecast_contract_is_strictly_additive_from_0_25_0(self):
+    def test_monthly_budget_contract_is_strictly_additive_from_0_26_0(self):
         document = api_contract.build_openapi()
-        self.assertEqual(document["info"]["version"], "0.26.0")
+        self.assertEqual(document["info"]["version"], "0.27.0")
+        document["info"]["version"] = "0.26.0"
+        del document["paths"]["/api/budget/analytics/monthly-budget"]
+        for suffix in ("", "Configuration", "Coverage", "Summary", "ExpectedIncome", "ExpectedIncomeItem",
+                       "Ratio", "Pace", "CategoryLimit", "CategorySpend", "PassThrough", "CardExposure"):
+            del document["components"]["schemas"]["BudgetAnalyticsMonthlyBudget" + suffix]
+
+        # SHA-256 of canonical JSON parsed from 1808d5d:docs/api/openapi.json.
+        # Canonicalization ignores object key order and whitespace while preserving operation and schema content.
+        canonical_0_26 = json.dumps(document, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        self.assertEqual(hashlib.sha256(canonical_0_26).hexdigest(),
+                         "cae094d3d4ba1fd5d4b56bef41997c85ced29d927f9d4d7fd44b51b91cbc37a6")
+
         document["info"]["version"] = "0.25.0"
         del document["paths"]["/api/budget/analytics/forecast"]
         for suffix in ("", "Summary", "CurrencyTotal", "Deduplication", "Month", "Item"):
             del document["components"]["schemas"]["BudgetAnalyticsForecast" + suffix]
-
-        # SHA-256 of canonical JSON parsed from dc03790:docs/api/openapi.json.
-        # Canonicalization ignores object key order and whitespace while preserving operation and schema content.
-        canonical = json.dumps(document, sort_keys=True, separators=(",", ":")).encode("utf-8")
-        self.assertEqual(hashlib.sha256(canonical).hexdigest(),
+        canonical_0_25 = json.dumps(document, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        self.assertEqual(hashlib.sha256(canonical_0_25).hexdigest(),
                          "80a427bb64b7d1eb9f7f84138e14ea97c78b0b2ab5b5c0e0165a61d6453db4b5")
 
     def test_openapi_is_well_formed_3_1(self):

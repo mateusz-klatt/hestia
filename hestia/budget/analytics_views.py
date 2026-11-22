@@ -28,6 +28,7 @@ from sqlalchemy import and_, case, func, or_, select
 from .. import db
 from . import analytics_core as core
 from . import forecast as forecast_mod
+from . import month_budget as month_budget_mod
 from . import owner_inbox as inbox_mod
 from . import quarantine as quarantine_mod
 from .analytics_core import AnalyticsError
@@ -589,6 +590,13 @@ def _forecast_query(months=None, currency=None):
         raise AnalyticsError() from None
 
 
+def _monthly_budget_query(period=None, currency=None):
+    try:
+        return month_budget_mod.validate_monthly_budget_query(period, currency)
+    except month_budget_mod.MonthInputError:
+        raise AnalyticsError() from None
+
+
 def _source_digest(session, owner):
     """Digest of everything the projection reads for ``owner``: all columns of the rows it loads
     (equal to or a superset of its own filters) and the owner-wide counts it reports.
@@ -932,6 +940,51 @@ class BudgetAnalyticsViews(BudgetAnalyticsStore):
         except forecast_mod.ForecastLimitError:
             raise AnalyticsError(_LIMIT_ERROR, 413) from None
         except forecast_mod.ForecastDataError:
+            raise AnalyticsError(_DATA_ERROR, 500) from None
+        except AnalyticsError as exc:
+            if exc.status == 400:
+                raise AnalyticsError(_DATA_ERROR, 500) from None
+            raise
+
+    @staticmethod
+    def _selected_transaction_component_timestamps(session, owner):
+        account = db.BudgetAccount
+        component = db.BudgetComponent
+        component_ts = select(component.last_success).where(
+            component.account_id == account.id, component.operation == "transactions").scalar_subquery()
+        rows = session.execute(select(account.id, component_ts).join(db.BudgetConnection).where(
+            account.owner == owner, db.BudgetConnection.owner == owner, account.enabled))
+        return {account_id: stamp for account_id, stamp in rows}
+
+    def monthly_budget(self, owner, *, period=None, currency=None):
+        """Evaluate owner-private monthly budget dashboard in one read-only SQLite snapshot."""
+        period, currency = _monthly_budget_query(period, currency)
+        try:
+            with _read_lock, self._read(owner) as session:
+                evaluated_at = float(self._now())
+                _, current_month = month_budget_mod.warsaw_date(evaluated_at)
+                if period is not None and period > current_month:
+                    raise month_budget_mod.MonthInputError()
+                month_configs = month_budget_mod.load_month_config()
+                settings = None if month_configs is None else month_configs.get(owner)
+                snapshot = self._projection(session, owner)
+                all_limits = [_dict(row, _CATEGORY_LIMIT_FIELDS) for row in session.scalars(
+                    select(db.BudgetCategoryLimit).where(db.BudgetCategoryLimit.owner == owner)
+                    .order_by(db.BudgetCategoryLimit.currency, db.BudgetCategoryLimit.category_id,
+                              db.BudgetCategoryLimit.id))]
+                account_timestamps = self._selected_transaction_component_timestamps(session, owner)
+                return month_budget_mod.evaluate_monthly_budget(
+                    owner=owner, period=period, currency=currency, evaluated_at=evaluated_at,
+                    transactions=snapshot["transactions"], transfers=snapshot["_transfers"],
+                    scan_limited=snapshot["_scan_limited"], categories=snapshot["categories"],
+                    rules=snapshot["rules"], identities=snapshot["identities"], limits=all_limits,
+                    account_component_timestamps=account_timestamps, settings=settings,
+                )
+        except month_budget_mod.MonthInputError:
+            raise AnalyticsError() from None
+        except month_budget_mod.MonthLimitError:
+            raise AnalyticsError(_LIMIT_ERROR, 413) from None
+        except month_budget_mod.MonthDataError:
             raise AnalyticsError(_DATA_ERROR, 500) from None
         except AnalyticsError as exc:
             if exc.status == 400:
