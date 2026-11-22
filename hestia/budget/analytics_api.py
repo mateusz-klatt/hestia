@@ -17,7 +17,7 @@ from .views import BudgetUsersBackendRequired
 PREFIX = "/api/budget/analytics"
 FLAG = "HESTIA_BUDGET_ANALYTICS_ENABLED"
 READS = ("overview", "transactions", "categories", "rules", "transfers", "recurring", "spending-limits",
-         "mortgages", "inbox")
+         "mortgages", "inbox", "quarantine")
 WRITES = {
     "category-create": (api_contract.BudgetAnalyticsCategoryCreateRequest, "create_category", "category"),
     "category-update": (api_contract.BudgetAnalyticsCategoryUpdateRequest, "update_category", "category"),
@@ -34,7 +34,8 @@ _QUERY_FIELDS = {"overview": {"period", "currency"},
                  "transactions": {"period", "currency", "category_id", "kind", "query", "limit", "cursor"},
                  "transfers": {"period", "currency", "status", "limit", "cursor"},
                  "recurring": {"currency"},
-                 "spending-limits": {"period", "currency"}}
+                 "spending-limits": {"period", "currency"},
+                 "quarantine": {"account_id"}}
 
 
 def enabled():

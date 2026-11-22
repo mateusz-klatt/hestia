@@ -88,13 +88,14 @@ class BudgetAnalyticsAPITests(unittest.IsolatedAsyncioTestCase):
                 "inbox-mark": {"items": [{"kind": "consent_renewal", "subject_id": "a" * 64, "milestone": "g0:exp0:expired"}],
                                "read": True, "expected_reads_version": "0" * 64}}
 
-    async def test_all_nine_reads_are_private_local_bounded_and_match_wire_models(self):
+    async def test_all_ten_reads_are_private_local_bounded_and_match_wire_models(self):
         models = {"overview": api_contract.BudgetAnalyticsOverview, "transactions": api_contract.BudgetAnalyticsTransactions,
                   "categories": api_contract.BudgetAnalyticsCategories, "rules": api_contract.BudgetAnalyticsRules,
                   "transfers": api_contract.BudgetAnalyticsTransfers, "recurring": api_contract.BudgetAnalyticsRecurring,
                   "spending-limits": api_contract.BudgetAnalyticsSpendingLimits,
                   "mortgages": api_contract.BudgetAnalyticsMortgages,
-                  "inbox": api_contract.BudgetAnalyticsInbox}
+                  "inbox": api_contract.BudgetAnalyticsInbox,
+                  "quarantine": api_contract.BudgetAnalyticsQuarantine}
         before = len(self.rows(db.BudgetAcquisition))
         with mock.patch.object(config, "load_config", side_effect=AssertionError("No configuration read")), \
              mock.patch.object(runtime, "credentials") as credentials, \

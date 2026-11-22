@@ -71,7 +71,9 @@ from pydantic.json_schema import models_json_schema
 #         GET /api/budget/analytics/inbox, POST /api/budget/analytics/inbox-mark).
 # 0.24.0: additive live owner-known `ref` on GET /api/budget/analytics/inbox items (zero migration;
 #         subject_id remains the durable read-marker key).
-CONTRACT_VERSION = "0.24.0"
+# 0.25.0: read-only quarantine inspection (GET /api/budget/analytics/quarantine, zero migration;
+#         exact counts + bounded safe ref/date/status/reason details without descriptions or amounts).
+CONTRACT_VERSION = "0.25.0"
 OPENAPI_PATH = Path(__file__).resolve().parent.parent / "docs" / "api" / "openapi.json"
 
 # De-duplicated string literals (SonarPython S1192): the OpenAPI content-type, the paths reused
@@ -2193,6 +2195,62 @@ class BudgetAnalyticsInboxMarkResult(BaseModel):
     inbox: BudgetAnalyticsInboxMarkSaved
 
 
+BudgetAnalyticsQuarantineBucket = Literal["uncertain", "unresolved", "import_unresolved"]
+BudgetAnalyticsQuarantineReason = Literal[
+    "non_booked_status",
+    "missing_reference",
+    "missing_date",
+    "reference_conflict",
+    "non_canonical",
+    "api_preserved",
+    "stale_conflict",
+    "same_time_conflict",
+]
+
+
+class BudgetAnalyticsQuarantineSummary(BaseModel):
+    model_config = _READ
+    uncertain_count: int
+    unresolved_count: int
+    import_unresolved_count: int
+    total_count: int
+
+
+class BudgetAnalyticsQuarantineAccount(BaseModel):
+    model_config = _READ
+    account_id: str
+    selected: bool
+    uncertain_count: int
+    unresolved_count: int
+    import_unresolved_count: int
+    total_count: int
+
+
+class BudgetAnalyticsQuarantineItem(BaseModel):
+    """Safe non-prose quarantine entry (ref, date, status and exclusion reason only; no descriptions or amounts)."""
+    model_config = _READ
+    bucket: BudgetAnalyticsQuarantineBucket
+    account_id: str
+    selected: bool
+    entry_reference: str | None
+    date: str | None
+    status: str | None
+    reason: BudgetAnalyticsQuarantineReason
+    source: str
+    observed_at: float
+
+
+class BudgetAnalyticsQuarantine(BaseModel):
+    """Read-only owner-scoped quarantine counts and bounded safe entry metadata (zero mutations, zero bank I/O)."""
+    model_config = _READ
+    rule_version: int
+    summary: BudgetAnalyticsQuarantineSummary
+    accounts: list[BudgetAnalyticsQuarantineAccount]
+    items_cap: int
+    truncated: bool
+    items: list[BudgetAnalyticsQuarantineItem]
+
+
 _ANALYTICS_MODELS = (BudgetAnalyticsCategoryCreateRequest, BudgetAnalyticsCategoryUpdateRequest,
                      BudgetAnalyticsAnnotationRequest, BudgetAnalyticsRulePreviewRequest,
                      BudgetAnalyticsRuleSaveRequest, BudgetAnalyticsTransferDecisionRequest,
@@ -2205,7 +2263,7 @@ _ANALYTICS_MODELS = (BudgetAnalyticsCategoryCreateRequest, BudgetAnalyticsCatego
                      BudgetAnalyticsSpendingLimits, BudgetAnalyticsSpendingLimitResult,
                      BudgetAnalyticsMortgages, BudgetAnalyticsMortgageScheduleResult,
                      BudgetAnalyticsMortgagePaymentResult, BudgetAnalyticsInbox,
-                     BudgetAnalyticsInboxMarkResult)
+                     BudgetAnalyticsInboxMarkResult, BudgetAnalyticsQuarantine)
 
 
 _BUDGET_MODELS = (BudgetSelectionRequest, BudgetKindRequest, BudgetConnectionStateRequest,
@@ -2235,6 +2293,7 @@ _PATH_ROLES = {
     ("GET", "/api/budget/analytics/spending-limits"): "admin",
     ("GET", "/api/budget/analytics/mortgages"): "admin",
     ("GET", "/api/budget/analytics/inbox"): "admin",
+    ("GET", "/api/budget/analytics/quarantine"): "admin",
     ("POST", "/api/budget/analytics/category-create"): "admin",
     ("POST", "/api/budget/analytics/category-update"): "admin",
     ("POST", "/api/budget/analytics/annotation"): "admin",
@@ -2877,16 +2936,30 @@ def _analytics_paths():
         ("spending-limits", "getBudgetAnalyticsSpendingLimits", "BudgetAnalyticsSpendingLimits", [month, currency]),
         ("mortgages", "getBudgetAnalyticsMortgages", "BudgetAnalyticsMortgages", []),
         ("inbox", "getBudgetAnalyticsInbox", "BudgetAnalyticsInbox", []),
+        ("quarantine", "getBudgetAnalyticsQuarantine", "BudgetAnalyticsQuarantine",
+         [_budget_query("account_id", description="Optional owned local account ID filter.")]),
     )
     paths = {prefix + path: {"get": {"operationId": operation, "summary": "Read owner-private local budget analytics",
               "parameters": parameters, "responses": _analytics_responses(model)}}
              for path, operation, model, parameters in reads}
-    paths[prefix + "inbox"]["get"]["summary"] = "Read owner-private live active alerts inbox (pure read-only)"
-    paths[prefix + "inbox"]["get"]["description"] = (
-        "Pure read-only single-snapshot evaluation of currently active consent renewal, mortgage due and "
-        "spending-limit alerts against durable owner read markers (zero DB writes, zero bank requests). "
-        "Resolved alerts disappear automatically even if unread; read markers are not pruned in v1 (cap 500)."
-    )
+    read_overrides = {
+        "inbox": ("Read owner-private live active alerts inbox (pure read-only)", (
+            "Pure read-only single-snapshot evaluation of currently active consent renewal, mortgage due and "
+            "spending-limit alerts against durable owner read markers (zero DB writes, zero bank requests). "
+            "Resolved alerts disappear automatically even if unread; read markers are not pruned in v1 (cap 500)."
+        )),
+        "quarantine": ("Read owner-private quarantine counts and safe entry metadata (read-only)", (
+            "Pure read-only single-snapshot summary of uncertain, unresolved and offline-import-unresolved observations "
+            "excluded from report totals (zero mutations, zero bank requests). Returns exact whole-scope and per-account "
+            "counts plus up to 200 safe details ordered newest effective date first (undated last), then observed_at "
+            "descending (entry_reference, date, status and exclusion reason only; never amounts, descriptions or "
+            "counterparty names). Whole-scope bounded integrity probes fail closed with 500 budget_analytics_data_error "
+            "for invalid stored reasons, sources, timestamps or SQL-verifiable payload fields (duplicate JSON keys are "
+            "validated on extracted candidate items)."
+        )),
+    }
+    for path, (summary, description) in read_overrides.items():
+        paths[prefix + path]["get"].update(summary=summary, description=description)
     writes = (
         ("category-create", "createBudgetAnalyticsCategory", "BudgetAnalyticsCategoryCreateRequest", "BudgetAnalyticsCategoryResult"),
         ("category-update", "updateBudgetAnalyticsCategory", "BudgetAnalyticsCategoryUpdateRequest", "BudgetAnalyticsCategoryResult"),

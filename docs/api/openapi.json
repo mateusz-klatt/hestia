@@ -2657,6 +2657,206 @@
         "title": "BudgetAnalyticsPreviewResult",
         "type": "object"
       },
+      "BudgetAnalyticsQuarantine": {
+        "description": "Read-only owner-scoped quarantine counts and bounded safe entry metadata (zero mutations, zero bank I/O).",
+        "properties": {
+          "accounts": {
+            "items": {
+              "$ref": "#/components/schemas/BudgetAnalyticsQuarantineAccount"
+            },
+            "title": "Accounts",
+            "type": "array"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/BudgetAnalyticsQuarantineItem"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "items_cap": {
+            "title": "Items Cap",
+            "type": "integer"
+          },
+          "rule_version": {
+            "title": "Rule Version",
+            "type": "integer"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/BudgetAnalyticsQuarantineSummary"
+          },
+          "truncated": {
+            "title": "Truncated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "rule_version",
+          "summary",
+          "accounts",
+          "items_cap",
+          "truncated",
+          "items"
+        ],
+        "title": "BudgetAnalyticsQuarantine",
+        "type": "object"
+      },
+      "BudgetAnalyticsQuarantineAccount": {
+        "properties": {
+          "account_id": {
+            "title": "Account Id",
+            "type": "string"
+          },
+          "import_unresolved_count": {
+            "title": "Import Unresolved Count",
+            "type": "integer"
+          },
+          "selected": {
+            "title": "Selected",
+            "type": "boolean"
+          },
+          "total_count": {
+            "title": "Total Count",
+            "type": "integer"
+          },
+          "uncertain_count": {
+            "title": "Uncertain Count",
+            "type": "integer"
+          },
+          "unresolved_count": {
+            "title": "Unresolved Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "account_id",
+          "selected",
+          "uncertain_count",
+          "unresolved_count",
+          "import_unresolved_count",
+          "total_count"
+        ],
+        "title": "BudgetAnalyticsQuarantineAccount",
+        "type": "object"
+      },
+      "BudgetAnalyticsQuarantineItem": {
+        "description": "Safe non-prose quarantine entry (ref, date, status and exclusion reason only; no descriptions or amounts).",
+        "properties": {
+          "account_id": {
+            "title": "Account Id",
+            "type": "string"
+          },
+          "bucket": {
+            "enum": [
+              "uncertain",
+              "unresolved",
+              "import_unresolved"
+            ],
+            "title": "Bucket",
+            "type": "string"
+          },
+          "date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Date"
+          },
+          "entry_reference": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Entry Reference"
+          },
+          "observed_at": {
+            "title": "Observed At",
+            "type": "number"
+          },
+          "reason": {
+            "enum": [
+              "non_booked_status",
+              "missing_reference",
+              "missing_date",
+              "reference_conflict",
+              "non_canonical",
+              "api_preserved",
+              "stale_conflict",
+              "same_time_conflict"
+            ],
+            "title": "Reason",
+            "type": "string"
+          },
+          "selected": {
+            "title": "Selected",
+            "type": "boolean"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status"
+          }
+        },
+        "required": [
+          "bucket",
+          "account_id",
+          "selected",
+          "entry_reference",
+          "date",
+          "status",
+          "reason",
+          "source",
+          "observed_at"
+        ],
+        "title": "BudgetAnalyticsQuarantineItem",
+        "type": "object"
+      },
+      "BudgetAnalyticsQuarantineSummary": {
+        "properties": {
+          "import_unresolved_count": {
+            "title": "Import Unresolved Count",
+            "type": "integer"
+          },
+          "total_count": {
+            "title": "Total Count",
+            "type": "integer"
+          },
+          "uncertain_count": {
+            "title": "Uncertain Count",
+            "type": "integer"
+          },
+          "unresolved_count": {
+            "title": "Unresolved Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "uncertain_count",
+          "unresolved_count",
+          "import_unresolved_count",
+          "total_count"
+        ],
+        "title": "BudgetAnalyticsQuarantineSummary",
+        "type": "object"
+      },
       "BudgetAnalyticsRecurring": {
         "properties": {
           "hints": {
@@ -9194,7 +9394,7 @@
   "info": {
     "description": "Local cloud-free smart-home control API. Generated from hestia/api_contract.py \u2014 do not edit by hand; run `python -m hestia.api_contract`.",
     "title": "hestia API",
-    "version": "0.24.0"
+    "version": "0.25.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -10741,6 +10941,119 @@
           }
         },
         "summary": "Read owner-private local budget analytics",
+        "x-required-role": "admin"
+      }
+    },
+    "/api/budget/analytics/quarantine": {
+      "get": {
+        "description": "Pure read-only single-snapshot summary of uncertain, unresolved and offline-import-unresolved observations excluded from report totals (zero mutations, zero bank requests). Returns exact whole-scope and per-account counts plus up to 200 safe details ordered newest effective date first (undated last), then observed_at descending (entry_reference, date, status and exclusion reason only; never amounts, descriptions or counterparty names). Whole-scope bounded integrity probes fail closed with 500 budget_analytics_data_error for invalid stored reasons, sources, timestamps or SQL-verifiable payload fields (duplicate JSON keys are validated on extracted candidate items).",
+        "operationId": "getBudgetAnalyticsQuarantine",
+        "parameters": [
+          {
+            "description": "Optional owned local account ID filter.",
+            "in": "query",
+            "name": "account_id",
+            "required": false,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetAnalyticsQuarantine"
+                }
+              }
+            },
+            "description": "owner-scoped stored state; no bank request"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "session required; middleware may return an empty body"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "admin owner or browser-origin requirement failed; middleware may return an empty body"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "unknown, disabled or foreign resource"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Version, financial source, reserved transfer leg, preview or cursor changed; reload and review."
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Explicit analytics processing or owner configuration limit; no partial totals."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "budget configuration unavailable"
+          }
+        },
+        "summary": "Read owner-private quarantine counts and safe entry metadata (read-only)",
         "x-required-role": "admin"
       }
     },
