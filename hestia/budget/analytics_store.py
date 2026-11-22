@@ -30,6 +30,7 @@ from .views import BudgetHTTPStore
 
 MAX_CATEGORY_LIMITS = 200
 _LIMIT_ERROR = "budget_analytics_limit"
+MAX_RULES = 500
 _HASH = re.compile(r"[a-f0-9]{64}\Z", re.ASCII)
 _CURRENCY = re.compile(r"[A-Z]{3}\Z", re.ASCII)
 _RULE_FIELDS = frozenset({"rule_id", "expected_version", "field", "operator", "value", "category_id", "kind", "priority", "enabled"})
@@ -492,7 +493,7 @@ class BudgetAnalyticsStore(BudgetHTTPStore):
             fields = ("field", "operator", "value", "category_id", "kind", "priority", "enabled")
             changed = row is None or any(getattr(row, key) != candidate[key] for key in fields)
             if row is None:
-                if session.scalar(select(func.count()).select_from(Rule).where(Rule.owner == owner)) >= 100:
+                if session.scalar(select(func.count()).select_from(Rule).where(Rule.owner == owner)) >= MAX_RULES:
                     raise AnalyticsError("budget_analytics_limit", 413)
                 now = self._now()
                 row = Rule(id=proposed_id, owner=owner, version=0, created_at=now)
