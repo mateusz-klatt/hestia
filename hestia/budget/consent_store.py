@@ -30,6 +30,7 @@ _UIDS = "account_uids"
 _LIMIT_ERROR = "budget_consent_limit"
 _DATA_ERROR = "budget_consent_data_error"
 _OPAQUE_CONSENT = "consent"
+_OPAQUE_KEY_DOMAIN = b"hestia/budget/consent-reconcile/key/v1\0"
 
 
 class BudgetConsentError(BudgetStoreError):
@@ -548,12 +549,19 @@ class BudgetConsentStore(BudgetJobStore):
         }
 
     @staticmethod
-    def _opaque_reconcile_id(owner, kind, raw_id):
-        """Domain-separated non-reversible opaque hash so raw DB/provider IDs never leave the server."""
-        payload = f"hestia/budget/consent-reconcile/v1\0{kind}\0{owner}\0{raw_id}".encode("utf-8")
-        return hashlib.sha256(payload).hexdigest()
+    def _opaque_reconcile_key(opaque_secret):
+        """Derive a domain-separated HMAC key from the server secret; fail closed if absent."""
+        if not isinstance(opaque_secret, bytes) or not opaque_secret:
+            raise BudgetConsentError(_DATA_ERROR, 500)
+        return hashlib.sha256(_OPAQUE_KEY_DOMAIN + opaque_secret).digest()
 
-    def reconcile(self, owner, *, now=None):
+    @staticmethod
+    def _opaque_reconcile_id(key, owner, kind, raw_id):
+        """Keyed domain-separated HMAC-SHA256 digest; not stable across restarts or secret rotations."""
+        payload = f"hestia/budget/consent-reconcile/v1\0{kind}\0{owner}\0{raw_id}".encode("utf-8")
+        return hmac.new(key, payload, hashlib.sha256).hexdigest()
+
+    def reconcile(self, owner, *, now=None, opaque_secret=None):
         """Read-only classification of owned consents and flows (zero actions, zero bank I/O)."""
         from .consent_reconcile import (
             DEFAULT_RETENTION_DAYS,
@@ -565,6 +573,7 @@ class BudgetConsentStore(BudgetJobStore):
             classify_consents,
         )
 
+        key = self._opaque_reconcile_key(opaque_secret)
         evaluated_at = self.clock() if now is None else now
         with self.sessions() as session:
             session.execute(text("BEGIN"))
@@ -576,13 +585,13 @@ class BudgetConsentStore(BudgetJobStore):
             flow_rows = list(session.scalars(
                 select(Flow).where(Flow.owner == owner).order_by(Flow.created_at, Flow.id)))
             active_consent_ids = {
-                row.id: self._opaque_reconcile_id(owner, _OPAQUE_CONSENT, row.active_consent_id)
+                row.id: self._opaque_reconcile_id(key, owner, _OPAQUE_CONSENT, row.active_consent_id)
                 for row in connections if row.active_consent_id is not None
             }
             valid_until_by_id = {}
             consents = []
             for row in consent_rows:
-                opaque_id = self._opaque_reconcile_id(owner, _OPAQUE_CONSENT, row.id)
+                opaque_id = self._opaque_reconcile_id(key, owner, _OPAQUE_CONSENT, row.id)
                 valid_until_by_id[opaque_id] = row.valid_until
                 consents.append(ConsentRecord(
                     owner=owner,
@@ -597,13 +606,13 @@ class BudgetConsentStore(BudgetJobStore):
             flows = [
                 ConsentFlowRecord(
                     owner=owner,
-                    flow_id=self._opaque_reconcile_id(owner, "flow", row.id),
+                    flow_id=self._opaque_reconcile_id(key, owner, "flow", row.id),
                     connection_id=row.connection_id,
                     status=row.status,
                     created_at=row.created_at,
                     expires_at=row.expires_at,
                     candidate_consent_id=(None if row.candidate_consent_id is None
-                                          else self._opaque_reconcile_id(owner, _OPAQUE_CONSENT, row.candidate_consent_id)),
+                                          else self._opaque_reconcile_id(key, owner, _OPAQUE_CONSENT, row.candidate_consent_id)),
                 )
                 for row in flow_rows
             ]

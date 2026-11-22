@@ -408,6 +408,7 @@ class ConsentAPITests(unittest.IsolatedAsyncioTestCase):
             self.assertIs(REAL_CREATE(**defaults), service.return_value)
             self.assertIs(service.call_args.args[0], self.config)
             self.assertEqual(service.call_args.kwargs["redirect_url"], ORIGIN + module.CALLBACK)
+            self.assertEqual(service.call_args.kwargs["opaque_secret"], SECRET)
             files.assert_called_once_with(str(self.root / "capsules"))
         with self.sessions() as session:
             self.assertEqual(session.get(db.BudgetConsentFlow, flow["id"]).status, "exchange_uncertain")
@@ -450,7 +451,7 @@ class ConsentAPITests(unittest.IsolatedAsyncioTestCase):
         store = BudgetConsentControlStore(self.sessions, clock=lambda: now[0])
         real = BudgetConsentService(self.config, store, ConsentFiles(self.root / "real-synthetic-capsules"), path=self.path,
                     redirect_url=ORIGIN + module.CALLBACK, clock=lambda: now[0], monotonic=lambda: mono[0],
-                    sleeper=sleep, client_factory=lambda *args, **kwargs: provider)
+                    sleeper=sleep, client_factory=lambda *args, **kwargs: provider, opaque_secret=SECRET)
         self.client.server.app[module.KEY].service = real
         return provider, calls
 
@@ -757,13 +758,22 @@ class ConsentAPITests(unittest.IsolatedAsyncioTestCase):
                           "state_hash", "nonce_hash", "auth_fingerprint", "cap-"):
             self.assertNotIn(forbidden, wire)
 
-        opaque = real.store._opaque_reconcile_id
+        hmac_key = real.store._opaque_reconcile_key(SECRET)
+        opaque = lambda owner_name, kind, raw_id: real.store._opaque_reconcile_id(hmac_key, owner_name, kind, raw_id)
         by_consent = {row["consent_id"]: row for row in payload["consents"]}
         by_flow = {row["flow_id"]: row for row in payload["flows"]}
         for cid in by_consent:
             self.assertRegex(cid, r"^[0-9a-f]{64}$")
         for fid in by_flow:
             self.assertRegex(fid, r"^[0-9a-f]{64}$")
+
+        # Rotating the server secret changes all opaque IDs while preserving flow->consent correlation.
+        rotated = real.reconcile("alice", opaque_secret=b"rotated-synthetic-secret-v2")
+        self.assertTrue(set(by_consent).isdisjoint({row["consent_id"] for row in rotated["consents"]}))
+        self.assertTrue(set(by_flow).isdisjoint({row["flow_id"] for row in rotated["flows"]}))
+        rotated_ids = {row["consent_id"] for row in rotated["consents"]}
+        rotated_candidates = {row["candidate_consent_id"] for row in rotated["flows"] if row["candidate_consent_id"]}
+        self.assertTrue(rotated_candidates <= rotated_ids)
 
         self.assertEqual(by_consent[opaque("alice", "consent", "c-active")]["classification"], "active_current")
         self.assertEqual(by_consent[opaque("alice", "consent", "c-retired-valid")]["classification"], "retired_still_valid")
@@ -793,8 +803,12 @@ class ConsentAPITests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((bob_body["summary"]["consents_total"], bob_body["summary"]["flows_total"]), (1, 1))
         self.assertEqual(bob_body["consents"][0]["connection_id"], "bob-bank")
 
-        # Direct store call with default now=None uses store.clock.
-        self.assertEqual(real.store.reconcile("alice")["evaluated_at"], fixed_now)
+        # Direct store call with default now=None uses store.clock; missing/empty secret fails closed (500).
+        self.assertEqual(real.store.reconcile("alice", opaque_secret=SECRET)["evaluated_at"], fixed_now)
+        for missing_secret in (None, b"", "not-bytes"):
+            with self.assertRaises(BudgetConsentError) as secret_err:
+                real.store.reconcile("alice", opaque_secret=missing_secret)
+            self.assertEqual((secret_err.exception.code, secret_err.exception.status), ("budget_consent_data_error", 500))
 
         # Auth, method, query and flag guards fail closed without touching provider or DB rows.
         for user, status in (("viewer", 403), ("operator", 403), ("disabled", 401)):

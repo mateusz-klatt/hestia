@@ -134,7 +134,8 @@ def create_service(*, auth_enabled, session_secret, secure_cookie):
         store.configure(config)
         store.recover_interrupted()
     files = ConsentFiles(os.environ.get("HESTIA_BUDGET_CONSENT_DIR", "/data/budget-consent"))
-    return BudgetConsentService(config, store, files, path=path, redirect_url=origin + CALLBACK)
+    return BudgetConsentService(config, store, files, path=path, redirect_url=origin + CALLBACK,
+                                opaque_secret=api._secret(session_secret))
 
 
 async def auth_transition(request, response=None):

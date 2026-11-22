@@ -319,8 +319,10 @@ outflow without a known accepted relationship remains spending within that scope
   `remote_close_eligible` and `local_retire_eligible` are advisory flags only. External and
   retired PoC sessions (`external_file`, `poc_retired`) always classify as `external_read_only`
   with both eligibility flags `false`.
-- **Opaque identifiers:** `consent_id`, `flow_id` and `candidate_consent_id` are returned
-  exclusively as domain-separated SHA-256 hashes (never raw Enable Banking session IDs, DB
-  UUIDs, capsule refs, URLs, codes, `aspsp_id` or `psu_type`). Stored DB integrity errors fail
-  closed with HTTP 500 (`budget_consent_data_error`) and exceeding evaluation caps returns 413
-  (`budget_consent_limit`).
+- **Opaque identifiers (keyed HMAC-SHA256):** `consent_id`, `flow_id` and `candidate_consent_id`
+  are returned exclusively as domain-separated HMAC-SHA256 digests keyed with a key derived from
+  the server session secret (never raw Enable Banking session IDs, DB UUIDs, capsule refs, URLs,
+  codes, `aspsp_id` or `psu_type`). These digests are **not stable across restarts or secret
+  rotations**; the UI uses them solely as ephemeral React keys and never displays or persists them.
+  Stored DB integrity or missing-secret errors fail closed with HTTP 500
+  (`budget_consent_data_error`) and exceeding evaluation caps returns 413 (`budget_consent_limit`).
