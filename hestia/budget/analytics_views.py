@@ -27,11 +27,13 @@ from sqlalchemy import and_, case, func, or_, select
 
 from .. import db
 from . import analytics_core as core
+from . import forecast as forecast_mod
 from . import owner_inbox as inbox_mod
 from . import quarantine as quarantine_mod
 from .analytics_core import AnalyticsError
 from .analytics_store import BudgetAnalyticsStore, _CATEGORY_LIMIT_FIELDS, _dict
 from .client import _reject_constant, _unique_error_fields
+from .mortgage_reminders import MAX_PAID_MONTHS, MAX_SCHEDULES, MortgageSchedule
 from .scheduler import shared_state
 from .views import BudgetHTTPStore
 
@@ -351,6 +353,14 @@ def _recurring_hints(snapshot):
         raise AnalyticsError() from None
 
 
+def _snapshot_recurring(snapshot):
+    hints = snapshot.get("_recurring")
+    if hints is None:
+        hints = _recurring_hints(snapshot)
+        snapshot["_recurring"] = hints
+    return hints
+
+
 def _wire_recurring(hint):
     evidence = hint.evidence[-MAX_RECURRING_EVIDENCE:]
     return {
@@ -390,6 +400,19 @@ def _schedules_version(owner, schedules):
           row["end_date"], row["remind_days_before"], row["destination_kind"], row["enabled"],
           row["version"], row["paid_months"]] for row in schedules],
     ])
+
+
+def _mortgage_models(owner, schedules):
+    return [
+        MortgageSchedule(
+            owner=owner, schedule_id=item["id"], label=item["label"], amount=item["amount"],
+            currency=item["currency"], due_day=item["due_day"], start_date=item["start_date"],
+            destination_kind=item["destination_kind"], end_date=item["end_date"],
+            remind_days_before=item["remind_days_before"], paid_months=frozenset(item["paid_months"]),
+            enabled=item["enabled"],
+        )
+        for item in schedules
+    ]
 
 
 def _wire_mortgage_reminder(item):
@@ -557,6 +580,13 @@ def _currency(value):
     if value is not None and (not isinstance(value, str) or not re.fullmatch(r"[A-Z]{3}", value, re.ASCII)):
         raise AnalyticsError()
     return value
+
+
+def _forecast_query(months=None, currency=None):
+    try:
+        return forecast_mod.validate_forecast_query(months, currency)
+    except forecast_mod.ForecastInputError:
+        raise AnalyticsError() from None
 
 
 def _source_digest(session, owner):
@@ -765,10 +795,7 @@ class BudgetAnalyticsViews(BudgetAnalyticsStore):
         currency = _currency(currency)
         with _read_lock, self._read(owner) as session:
             snapshot = self._projection(session, owner)
-            hints = snapshot.get("_recurring")
-            if hints is None:
-                hints = _recurring_hints(snapshot)
-                snapshot["_recurring"] = hints
+            hints = _snapshot_recurring(snapshot)
             if currency is not None:
                 hints = tuple(item for item in hints if item.currency == currency)
             page = hints[:MAX_RECURRING_HINTS]
@@ -815,7 +842,7 @@ class BudgetAnalyticsViews(BudgetAnalyticsStore):
         return min(observed, evaluation_date)
 
     def _mortgage_reminders_in_session(self, session, owner, evaluation_date):
-        from .mortgage_reminders import (MortgageInputError, MortgageLimitError, MortgageSchedule,
+        from .mortgage_reminders import (MortgageInputError, MortgageLimitError,
                                          evaluate_mortgage_reminders)
 
         rows = list(session.scalars(
@@ -828,18 +855,9 @@ class BudgetAnalyticsViews(BudgetAnalyticsStore):
             payments_by_schedule[payment.schedule_id].append(payment.month)
         schedules = [self._mortgage_schedule_dict(row, payments_by_schedule[row.id]) for row in rows]
         ledger_as_of = self._ledger_as_of(session, owner, evaluation_date)
-        models = [
-            MortgageSchedule(
-                owner=owner, schedule_id=item["id"], label=item["label"], amount=item["amount"],
-                currency=item["currency"], due_day=item["due_day"], start_date=item["start_date"],
-                destination_kind=item["destination_kind"], destination_target=None,
-                end_date=item["end_date"], remind_days_before=item["remind_days_before"],
-                paid_months=frozenset(item["paid_months"]), enabled=item["enabled"],
-            )
-            for item in schedules
-        ]
         try:
-            reminders = evaluate_mortgage_reminders(owner, evaluation_date, models, ledger_as_of=ledger_as_of)
+            reminders = evaluate_mortgage_reminders(owner, evaluation_date, _mortgage_models(owner, schedules),
+                                                    ledger_as_of=ledger_as_of)
         except MortgageLimitError:
             raise AnalyticsError(_LIMIT_ERROR, 413) from None
         except MortgageInputError:
@@ -862,6 +880,63 @@ class BudgetAnalyticsViews(BudgetAnalyticsStore):
                 "schedules": schedules,
                 "reminders": [_wire_mortgage_reminder(item) for item in reminders],
             }
+
+    @staticmethod
+    def _forecast_account_timestamps(session, owner):
+        account = db.BudgetAccount
+        component = db.BudgetComponent
+        transaction = db.BudgetTransaction
+        component_ts = select(component.last_success).where(
+            component.account_id == account.id, component.operation == "transactions").scalar_subquery()
+        tx_ts = select(func.max(transaction.observed_at)).where(
+            transaction.account_id == account.id, transaction.uncertain.is_(False)).scalar_subquery()
+        rows = session.execute(select(account.id, component_ts, tx_ts).join(db.BudgetConnection).where(
+            account.owner == owner, db.BudgetConnection.owner == owner, account.enabled))
+        return {account_id: (component_stamp, tx_stamp) for account_id, component_stamp, tx_stamp in rows}
+
+    def _forecast_schedules(self, session, owner):
+        schedule = db.BudgetMortgageSchedule
+        payment = db.BudgetMortgagePayment
+        rows = list(session.scalars(select(schedule).where(schedule.owner == owner)
+                                    .order_by(schedule.id).limit(MAX_SCHEDULES + 1)))
+        if len(rows) > MAX_SCHEDULES:
+            raise forecast_mod.ForecastLimitError()
+        paid = {row.id: [] for row in rows}
+        payments = session.execute(select(payment.schedule_id, payment.month).where(payment.owner == owner)
+                                   .order_by(payment.schedule_id, payment.month).execution_options(yield_per=256))
+        for schedule_id, month in payments:
+            if schedule_id not in paid:
+                raise forecast_mod.ForecastDataError()
+            marks = paid[schedule_id]
+            if len(marks) >= MAX_PAID_MONTHS:
+                raise forecast_mod.ForecastLimitError()
+            marks.append(month)
+        return [self._mortgage_schedule_dict(row, paid[row.id]) for row in rows]
+
+    def forecast(self, owner, *, months=None, currency=None):
+        """Project private commitments from one read-only SQLite snapshot."""
+        months, currency = _forecast_query(months, currency)
+        try:
+            with _read_lock, self._read(owner) as session:
+                evaluation_date = datetime.fromtimestamp(self._now(), timezone.utc).date().isoformat()
+                snapshot = self._projection(session, owner)
+                schedules = self._forecast_schedules(session, owner)
+                schedules_version = _schedules_version(owner, schedules)
+                account_timestamps = self._forecast_account_timestamps(session, owner)
+                return forecast_mod.evaluate_forecast(
+                    owner=owner, evaluation_date=evaluation_date, months=months, currency=currency,
+                    account_timestamps=account_timestamps, excluded_accounts=snapshot["counts"]["excluded_accounts"],
+                    schedules=_mortgage_models(owner, schedules), hints=_snapshot_recurring(snapshot),
+                    snapshot_digest=snapshot["digest"], schedules_version=schedules_version,
+                )
+        except forecast_mod.ForecastLimitError:
+            raise AnalyticsError(_LIMIT_ERROR, 413) from None
+        except forecast_mod.ForecastDataError:
+            raise AnalyticsError(_DATA_ERROR, 500) from None
+        except AnalyticsError as exc:
+            if exc.status == 400:
+                raise AnalyticsError(_DATA_ERROR, 500) from None
+            raise
 
     @staticmethod
     def _inbox_consent_entries(session, owner, evaluated_at):

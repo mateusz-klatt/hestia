@@ -2,12 +2,13 @@
 from __future__ import annotations
 
 import base64
+from datetime import datetime, timezone
 import json
 import unittest
 from unittest import mock
 import uuid
 
-from sqlalchemy import delete, event
+from sqlalchemy import delete, event, text
 
 from hestia import api_contract, db
 from hestia.budget import analytics_views as views
@@ -652,6 +653,154 @@ class RecurringProjectionTests(ProjectionCase):
         self.add_transaction("a", "bad-meta", amount="10", booking_date="2026-11-10")
         self.metadata("a", "bad-meta", {"creditor_name": "x" * 1025})
         self.assert_invalid(lambda: self.store.recurring("owner"))
+
+
+class ForecastProjectionTests(ProjectionCase):
+    def setUp(self):
+        super().setUp()
+        self.now = datetime(2026, 11, 22, 0, 1, tzinfo=timezone.utc).timestamp()
+
+    def add_hint(self, label, *, account="a", amount="15", currency="PLN", day=15):
+        for month in (8, 9, 10):
+            self.add_transaction(account, f"{label}-{month}", amount=amount, currency=currency,
+                                 booking_date=f"2026-{month:02d}-{day:02d}", remittance_information=[label])
+
+    def add_schedule(self, label, **overrides):
+        defaults = {"label": label, "amount": "2000", "currency": "PLN", "due_day": 15,
+                    "start_date": "2026-08-01", "remind_days_before": 5,
+                    "destination_kind": "owner_inbox", "enabled": True, "expected_version": 0}
+        return self.store.save_mortgage_schedule("owner", **(defaults | overrides))
+
+    def test_forecast_reuses_untruncated_projection_and_reads_one_sqlite_snapshot(self):
+        self.add_hint("Synthetic plan A")
+        self.add_hint("Synthetic plan B")
+        with mock.patch.object(views, "MAX_RECURRING_HINTS", 1):
+            recurring = self.store.recurring("owner")
+        self.assertEqual((recurring["total_hints"], len(recurring["hints"]), recurring["truncated"]), (2, 1, True))
+        statements = []
+
+        def capture(connection, cursor, statement, parameters, context, executemany):
+            statements.append(statement.split()[0].upper())
+
+        def read_clock():
+            self.assertIn("BEGIN", statements)
+            self.assertTrue(views._read_lock.locked())
+            return self.now
+
+        self.store.clock = mock.Mock(side_effect=read_clock)
+        event.listen(self.engine, "before_cursor_execute", capture)
+        try:
+            with mock.patch.object(views, "projection_snapshot", side_effect=AssertionError("projection cache missed")), \
+                 mock.patch.object(views, "_recurring_hints", side_effect=AssertionError("recurring cache missed")):
+                result = self.store.forecast("owner")
+        finally:
+            event.remove(self.engine, "before_cursor_execute", capture)
+
+        self.store.clock.assert_called_once_with()
+        self.assertEqual(statements.count("BEGIN"), 1)
+        self.assertEqual(set(statements), {"BEGIN", "SELECT"})
+        self.assertEqual(result["snapshot_digest"], recurring["snapshot_digest"])
+        self.assertEqual((result["evaluation_date"], result["evaluation_timezone"], result["horizon_months"]),
+                         ("2026-11-22", "UTC", 3))
+        self.assertEqual([row["month"] for row in result["months"]], ["2026-11", "2026-12", "2027-01"])
+        self.assertEqual([item["label"] for item in result["months"][0]["items"]],
+                         ["Synthetic plan A", "Synthetic plan B"])
+        api_contract.BudgetAnalyticsForecast.model_validate(result)
+
+    def test_forecast_currency_scopes_money_and_warnings_but_keeps_owner_versions(self):
+        scheduled = self.add_schedule("Synthetic PLN mortgage")
+        disabled = self.add_schedule("Synthetic inactive PLN mortgage", enabled=False)
+        self.add_schedule("Synthetic EUR mortgage", currency="EUR", start_date="2026-11-01", amount="810")
+        self.add_hint("Synthetic matching mortgage", amount="2000")
+        self.add_hint("Synthetic lapsed subscription", amount="20", day=7)
+        self.add_hint("Synthetic stale subscription", account="b", amount="30", day=7)
+        self.add_hint("Synthetic EUR subscription", amount="9.99", currency="EUR", day=27)
+        self.select_account("d", False)
+        with self.sessions.begin() as session:
+            session.query(db.BudgetTransaction).filter_by(account_id=self.accounts["b"]).update(
+                {"observed_at": self.now - 8 * 86400})
+        category = self.store.create_category("owner", "Synthetic limits")
+        self.store.save_spending_limit("owner", category_id=category["id"], currency="EUR", monthly_limit="5000",
+                                       warning_percent=80, enabled=True, expected_version=0)
+
+        unfiltered = self.store.forecast("owner")
+        eur_only = self.store.forecast("owner", months="1", currency="EUR")
+        self.assertEqual(unfiltered["summary"], {
+            "selected_accounts": 3, "excluded_accounts": 1, "stale_accounts": 2,
+            "overdue_mortgage_schedule_count": 1, "lapsed_recurring_count": 1,
+            "deduped_recurring_count": 1, "stale_recurring_count": 1,
+        })
+        self.assertEqual(eur_only["summary"], {
+            "selected_accounts": 3, "excluded_accounts": 1, "stale_accounts": 2,
+            "overdue_mortgage_schedule_count": 0, "lapsed_recurring_count": 0,
+            "deduped_recurring_count": 0, "stale_recurring_count": 0,
+        })
+        for field in ("stale_account_ids", "stale_account_ids_truncated", "ledger_as_of", "freshness_stale",
+                      "snapshot_digest", "schedules_version"):
+            self.assertEqual(unfiltered[field], eur_only[field], field)
+        self.assertEqual(eur_only["schedules_version"], self.store.mortgages("owner")["schedules_version"])
+        self.assertEqual(unfiltered["deduplications"], [{"schedule_id": scheduled["id"],
+            "schedule_label": scheduled["label"], "recurring_label": "Synthetic matching mortgage", "amount": "2000",
+            "currency": "PLN", "matched_due_date": "2026-10-15", "last_observed_date": "2026-10-15",
+            "day_distance": 0, "account_stale": False}])
+        self.assertEqual(eur_only["deduplications"], [])
+        self.assertEqual([item["currency"] for item in eur_only["months"][0]["items"]], ["EUR", "EUR"])
+        self.assertEqual(eur_only["totals"], [{"currency": "EUR", "total": "819.99",
+                                             "scheduled_total": "810", "estimated_total": "9.99"}])
+        self.assertEqual(eur_only["months"][0]["currencies"], eur_only["totals"])
+
+        self.store.set_mortgage_payment("owner", schedule_id=disabled["id"], month="2027-01", paid=True,
+                                       expected_version=disabled["version"])
+        after = self.store.forecast("owner", months="1", currency="EUR")
+        self.assertNotEqual(after["schedules_version"], eur_only["schedules_version"])
+        self.assertEqual(after, eur_only | {"schedules_version": after["schedules_version"]})
+
+    def test_forecast_account_timestamps_use_only_selected_certain_tx_and_transaction_components(self):
+        self.select_account("d", False)
+        for account, reference in (("a", "older"), ("b", "latest"), ("c", "stale"), ("c", "uncertain"),
+                                   ("d", "excluded"), ("foreign", "foreign")):
+            self.add_transaction(account, reference)
+        with self.sessions.begin() as session:
+            for account, reference, age in (("a", "older", 10), ("b", "latest", 6), ("c", "stale", 8),
+                                            ("c", "uncertain", -1), ("d", "excluded", -1), ("foreign", "foreign", -1)):
+                transaction = session.get(db.BudgetTransaction, (self.accounts[account], reference))
+                transaction.observed_at = self.now - age * 86400
+                transaction.uncertain = reference == "uncertain"
+            for account, operation, age in (("a", "transactions", 7), ("b", "transactions", 8), ("c", "balances", -1)):
+                component = session.get(db.BudgetComponent, (self.accounts[account], operation))
+                component.last_success = self.now - age * 86400
+        result = self.store.forecast("owner")
+        self.assertEqual(result["ledger_as_of"], "2026-11-16")
+        self.assertEqual(result["stale_account_ids"], [self.accounts["c"]])
+        self.assertTrue(result["freshness_stale"])
+        with self.sessions.begin() as session:
+            component = session.get(db.BudgetComponent, (self.accounts["a"], "transactions"))
+            component.last_success = self.now + 86400
+        after = self.store.forecast("owner")
+        self.assertEqual(after["ledger_as_of"], after["evaluation_date"])
+        self.assertEqual(after["stale_account_ids"], result["stale_account_ids"])
+        self.assertEqual(after["snapshot_digest"], result["snapshot_digest"])
+
+    def test_forecast_orphan_paid_mark_returns_stored_data_error(self):
+        with self.engine.connect() as connection:
+            connection.exec_driver_sql("PRAGMA foreign_keys=OFF")
+            try:
+                connection.execute(db.BudgetMortgagePayment.__table__.insert(), {
+                    "schedule_id": "absent", "month": "2026-11", "owner": "owner", "marked_at": self.now,
+                })
+                connection.commit()
+            finally:
+                connection.exec_driver_sql("PRAGMA foreign_keys=ON")
+        self.assert_invalid(lambda: self.store.forecast("owner"), code="budget_analytics_data_error", status=500)
+        self.assert_invalid(lambda: self.store.forecast("owner", months="13"))
+
+    def test_forecast_malformed_component_timestamp_returns_stored_data_error(self):
+        self.add_transaction("a", "valid-observation")
+        with self.sessions.begin() as session:
+            session.execute(text("UPDATE budget_components SET last_success = 'bad timestamp' "
+                                 "WHERE account_id = :account_id AND operation = 'transactions'"),
+                            {"account_id": self.accounts["a"]})
+        self.assert_invalid(lambda: self.store.forecast("owner"), code="budget_analytics_data_error", status=500)
 
 
 class SpendingLimitsProjectionTests(ProjectionCase):

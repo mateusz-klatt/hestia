@@ -73,7 +73,8 @@ from pydantic.json_schema import models_json_schema
 #         subject_id remains the durable read-marker key).
 # 0.25.0: read-only quarantine inspection (GET /api/budget/analytics/quarantine, zero migration;
 #         exact counts + bounded safe ref/date/status/reason details without descriptions or amounts).
-CONTRACT_VERSION = "0.25.0"
+# 0.26.0: read-only upcoming commitments forecast (GET /api/budget/analytics/forecast, zero migration).
+CONTRACT_VERSION = "0.26.0"
 OPENAPI_PATH = Path(__file__).resolve().parent.parent / "docs" / "api" / "openapi.json"
 
 # De-duplicated string literals (SonarPython S1192): the OpenAPI content-type, the paths reused
@@ -2251,6 +2252,83 @@ class BudgetAnalyticsQuarantine(BaseModel):
     items: list[BudgetAnalyticsQuarantineItem]
 
 
+class BudgetAnalyticsForecastSummary(BaseModel):
+    model_config = _READ
+    selected_accounts: int
+    excluded_accounts: int
+    stale_accounts: int
+    overdue_mortgage_schedule_count: int
+    lapsed_recurring_count: int
+    deduped_recurring_count: int
+    stale_recurring_count: int
+
+
+class BudgetAnalyticsForecastCurrencyTotal(BaseModel):
+    """Exact decimal commitment totals in one currency."""
+    model_config = _READ
+    currency: str
+    total: str
+    scheduled_total: str
+    estimated_total: str
+
+
+BudgetAnalyticsForecastLabel = Annotated[str, Field(max_length=256)]
+
+
+class BudgetAnalyticsForecastDeduplication(BaseModel):
+    model_config = _READ
+    schedule_id: str
+    schedule_label: BudgetAnalyticsForecastLabel
+    recurring_label: BudgetAnalyticsForecastLabel
+    amount: str
+    currency: str
+    matched_due_date: str
+    last_observed_date: str
+    day_distance: Annotated[int, Field(ge=0, le=5)]
+    account_stale: bool
+
+
+class BudgetAnalyticsForecastItem(BaseModel):
+    model_config = _READ
+    source: Literal["mortgage", "recurring"]
+    schedule_id: str | None
+    label: BudgetAnalyticsForecastLabel
+    amount: str
+    currency: str
+    expected_date: str
+    confidence: Literal["scheduled", "high", "medium"]
+    past_due: bool
+    account_stale: bool
+
+
+class BudgetAnalyticsForecastMonth(BaseModel):
+    model_config = _READ
+    month: str
+    currencies: list[BudgetAnalyticsForecastCurrencyTotal]
+    items: list[BudgetAnalyticsForecastItem]
+
+
+class BudgetAnalyticsForecast(BaseModel):
+    """Read-only estimate of scheduled and recurring commitments by UTC calendar month."""
+    model_config = _READ
+    evaluation_date: str
+    evaluation_timezone: Literal["UTC"]
+    horizon_months: Annotated[int, Field(ge=1, le=12)]
+    start_month: str
+    end_month: str
+    ledger_as_of: str | None
+    freshness_stale: bool
+    stale_account_ids: Annotated[list[str], Field(max_length=200)]
+    stale_account_ids_truncated: bool
+    snapshot_digest: str
+    schedules_version: str
+    rule_version: int
+    summary: BudgetAnalyticsForecastSummary
+    totals: list[BudgetAnalyticsForecastCurrencyTotal]
+    deduplications: list[BudgetAnalyticsForecastDeduplication]
+    months: Annotated[list[BudgetAnalyticsForecastMonth], Field(min_length=1, max_length=12)]
+
+
 _ANALYTICS_MODELS = (BudgetAnalyticsCategoryCreateRequest, BudgetAnalyticsCategoryUpdateRequest,
                      BudgetAnalyticsAnnotationRequest, BudgetAnalyticsRulePreviewRequest,
                      BudgetAnalyticsRuleSaveRequest, BudgetAnalyticsTransferDecisionRequest,
@@ -2263,7 +2341,7 @@ _ANALYTICS_MODELS = (BudgetAnalyticsCategoryCreateRequest, BudgetAnalyticsCatego
                      BudgetAnalyticsSpendingLimits, BudgetAnalyticsSpendingLimitResult,
                      BudgetAnalyticsMortgages, BudgetAnalyticsMortgageScheduleResult,
                      BudgetAnalyticsMortgagePaymentResult, BudgetAnalyticsInbox,
-                     BudgetAnalyticsInboxMarkResult, BudgetAnalyticsQuarantine)
+                     BudgetAnalyticsInboxMarkResult, BudgetAnalyticsQuarantine, BudgetAnalyticsForecast)
 
 
 _BUDGET_MODELS = (BudgetSelectionRequest, BudgetKindRequest, BudgetConnectionStateRequest,
@@ -2294,6 +2372,7 @@ _PATH_ROLES = {
     ("GET", "/api/budget/analytics/mortgages"): "admin",
     ("GET", "/api/budget/analytics/inbox"): "admin",
     ("GET", "/api/budget/analytics/quarantine"): "admin",
+    ("GET", "/api/budget/analytics/forecast"): "admin",
     ("POST", "/api/budget/analytics/category-create"): "admin",
     ("POST", "/api/budget/analytics/category-update"): "admin",
     ("POST", "/api/budget/analytics/annotation"): "admin",
@@ -2922,6 +3001,8 @@ def _analytics_paths():
                           description="Opaque cursor bound to the current projection. A changed snapshot returns 409.")]
     month = _budget_query("period", required=True, schema={"type": "string", "pattern": r"^[0-9]{4}-[0-9]{2}$"},
                           description="Inclusive calendar month YYYY-MM, 1900 through 9999.")
+    horizon = _budget_query("months", schema={"type": "string", "pattern": "^[0-9]{1,2}$", "default": "3"},
+                            description="Integer 1..12, starting with the current server UTC calendar month.")
     reads = (
         ("overview", "getBudgetAnalyticsOverview", "BudgetAnalyticsOverview", [period, currency]),
         ("transactions", "getBudgetAnalyticsTransactions", "BudgetAnalyticsTransactions",
@@ -2938,6 +3019,7 @@ def _analytics_paths():
         ("inbox", "getBudgetAnalyticsInbox", "BudgetAnalyticsInbox", []),
         ("quarantine", "getBudgetAnalyticsQuarantine", "BudgetAnalyticsQuarantine",
          [_budget_query("account_id", description="Optional owned local account ID filter.")]),
+        ("forecast", "getBudgetAnalyticsForecast", "BudgetAnalyticsForecast", [horizon, currency]),
     )
     paths = {prefix + path: {"get": {"operationId": operation, "summary": "Read owner-private local budget analytics",
               "parameters": parameters, "responses": _analytics_responses(model)}}
@@ -2957,9 +3039,33 @@ def _analytics_paths():
             "for invalid stored reasons, sources, timestamps or SQL-verifiable payload fields (duplicate JSON keys are "
             "validated on extracted candidate items)."
         )),
+        "forecast": ("Read the owner-private upcoming commitments estimate", (
+            "Read-only evaluation of unmarked mortgage instalments and active recurring charges from one local "
+            "snapshot using the server UTC date. Matches recurring hints to individual scheduled instalments to "
+            "suppress duplicate estimates. An optional currency filter scopes commitments, deduplications and "
+            "their summary counts. Snapshot metadata and account freshness cover all selected accounts. "
+            "The estimate excludes spending limits and makes no bank requests or stored changes."
+        )),
     }
     for path, (summary, description) in read_overrides.items():
         paths[prefix + path]["get"].update(summary=summary, description=description)
+    forecast_responses = paths[prefix + "forecast"]["get"]["responses"]
+    forecast_descriptions = {
+        "200": "Owner-private upcoming commitments estimate and freshness from one local snapshot.",
+        "400": "Invalid forecast query: months must be an integer 1..12, currency must match ^[A-Z]{3}$, "
+               "and unknown or duplicate parameters (including today) are rejected.",
+        "409": "SQLite backend required: forecast requires HESTIA_PERSIST=sqlite.",
+        "413": "Forecast limit exceeded (>100,000 selected rows, >100 schedules, >1,200 paid marks per schedule, "
+               ">200 active currency-filtered hints, >3,600 projected items, or >4 MiB UTF-8 JSON payload); "
+               "zero partial totals returned.",
+        "500": "Stored mortgage schedule, ledger, or metadata integrity check failed (`budget_analytics_data_error`), "
+               "including stored-data helper errors mapped to 500 after forecast query validation, or unexpected "
+               "internal failure (`budget_internal_error`).",
+        "503": "Analytics storage or budget configuration unavailable (`budget_analytics_unavailable` or "
+               "`budget_unavailable`).",
+    }
+    for code, description in forecast_descriptions.items():
+        forecast_responses[code]["description"] = description
     writes = (
         ("category-create", "createBudgetAnalyticsCategory", "BudgetAnalyticsCategoryCreateRequest", "BudgetAnalyticsCategoryResult"),
         ("category-update", "updateBudgetAnalyticsCategory", "BudgetAnalyticsCategoryUpdateRequest", "BudgetAnalyticsCategoryResult"),

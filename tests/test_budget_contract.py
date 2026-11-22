@@ -199,7 +199,7 @@ class BudgetOpenApiTests(unittest.TestCase):
         for read_path in ("/api/budget/consent/renewal-reminders", "/api/budget/consent/reconcile"):
             self.assertIn("413", consent[read_path]["get"]["responses"])
         analytics_reads = {"overview", "transactions", "categories", "rules", "transfers", "recurring",
-                           "spending-limits", "mortgages", "inbox", "quarantine"}
+                           "spending-limits", "mortgages", "inbox", "quarantine", "forecast"}
         analytics_writes = {"category-create", "category-update", "annotation", "rule-preview", "rule-save",
                             "transfer-decision", "spending-limit-save", "mortgage-save", "mortgage-payment-set",
                             "inbox-mark"}
@@ -209,7 +209,7 @@ class BudgetOpenApiTests(unittest.TestCase):
             self.assertEqual(set(methods), {method})
             self.assertEqual(methods[method]["x-required-role"], "admin")
             self.assertIn("413", methods[method]["responses"])
-        self.assertEqual(document["info"]["version"], "0.25.0")
+        self.assertEqual(document["info"]["version"], "0.26.0")
         mark_desc = analytics["/api/budget/analytics/inbox-mark"]["post"]["description"]
         for phrase in ("reads_version", "1..100", "500"):
             self.assertIn(phrase, mark_desc)
@@ -218,6 +218,70 @@ class BudgetOpenApiTests(unittest.TestCase):
         self.assertTrue(refresh["parameters"][0]["required"])
         self.assertIn("202", refresh["responses"])
         self.assertNotIn("200", refresh["responses"])
+
+    def test_forecast_query_and_error_contract(self):
+        paths = contract.build_openapi()["paths"]
+        forecast = paths["/api/budget/analytics/forecast"]["get"]
+        parameters = {param["name"]: param for param in forecast["parameters"]}
+        self.assertEqual(set(parameters), {"months", "currency"})
+        for param in parameters.values():
+            self.assertEqual(param["in"], "query")
+            self.assertFalse(param["required"])
+        self.assertEqual(parameters["months"]["schema"],
+                         {"type": "string", "pattern": "^[0-9]{1,2}$", "default": "3"})
+        self.assertEqual(parameters["currency"]["schema"], {"type": "string", "pattern": "^[A-Z]{3}$"})
+        responses = forecast["responses"]
+        self.assertEqual(set(responses), {"200", "400", "401", "403", "404", "409", "413", "500", "503"})
+        self.assertEqual(responses["200"]["content"]["application/json"]["schema"],
+                         {"$ref": "#/components/schemas/BudgetAnalyticsForecast"})
+        for code, description in {
+            "400": "Invalid forecast query: months must be an integer 1..12, currency must match ^[A-Z]{3}$, "
+                   "and unknown or duplicate parameters (including today) are rejected.",
+            "409": "SQLite backend required: forecast requires HESTIA_PERSIST=sqlite.",
+            "413": "Forecast limit exceeded (>100,000 selected rows, >100 schedules, >1,200 paid marks per schedule, "
+                   ">200 active currency-filtered hints, >3,600 projected items, or >4 MiB UTF-8 JSON payload); "
+                   "zero partial totals returned.",
+            "500": "Stored mortgage schedule, ledger, or metadata integrity check failed (`budget_analytics_data_error`), "
+                   "including stored-data helper errors mapped to 500 after forecast query validation, or unexpected "
+                   "internal failure (`budget_internal_error`).",
+        }.items():
+            with self.subTest(code=code):
+                self.assertEqual(responses[code]["description"], description)
+                self.assertEqual(responses[code]["content"]["application/json"]["schema"],
+                                 {"$ref": "#/components/schemas/BudgetError"})
+        self.assertNotEqual(paths["/api/budget/analytics/quarantine"]["get"]["responses"]["409"]["description"],
+                            responses["409"]["description"])
+
+    def test_forecast_schemas_pin_wire_fields_and_bounds(self):
+        schemas = contract.build_openapi()["components"]["schemas"]
+        for suffix, keys in {
+            "": {"evaluation_date", "evaluation_timezone", "horizon_months", "start_month", "end_month",
+                 "ledger_as_of", "freshness_stale", "stale_account_ids", "stale_account_ids_truncated",
+                 "snapshot_digest", "schedules_version", "rule_version", "summary", "totals", "deduplications", "months"},
+            "Summary": {"selected_accounts", "excluded_accounts", "stale_accounts", "overdue_mortgage_schedule_count",
+                        "lapsed_recurring_count", "deduped_recurring_count", "stale_recurring_count"},
+            "CurrencyTotal": {"currency", "total", "scheduled_total", "estimated_total"},
+            "Deduplication": {"schedule_id", "schedule_label", "recurring_label", "amount", "currency",
+                              "matched_due_date", "last_observed_date", "day_distance", "account_stale"},
+            "Month": {"month", "currencies", "items"},
+            "Item": {"source", "schedule_id", "label", "amount", "currency", "expected_date", "confidence",
+                     "past_due", "account_stale"},
+        }.items():
+            with self.subTest(schema=suffix):
+                schema = schemas["BudgetAnalyticsForecast" + suffix]
+                self.assertEqual(set(schema["properties"]), keys)
+                self.assertEqual(set(schema["required"]), keys)
+                self.assertNotIn("additionalProperties", schema)
+        forecast = schemas["BudgetAnalyticsForecast"]["properties"]
+        item = schemas["BudgetAnalyticsForecastItem"]["properties"]
+        dedup = schemas["BudgetAnalyticsForecastDeduplication"]["properties"]
+        totals = schemas["BudgetAnalyticsForecastCurrencyTotal"]["properties"]
+        self.assertEqual(forecast["evaluation_timezone"]["const"], "UTC")
+        self.assertEqual(forecast["stale_account_ids"]["maxItems"], 200)
+        for label in (item["label"], dedup["schedule_label"], dedup["recurring_label"]):
+            self.assertEqual(label["maxLength"], 256)
+        for money in (item["amount"], dedup["amount"], totals["total"], totals["scheduled_total"], totals["estimated_total"]):
+            self.assertEqual(money["type"], "string")
 
     def test_query_metadata_pins_required_account_dates_limit_and_opaque_cursor(self):
         paths = contract.build_openapi()["paths"]

@@ -2,6 +2,7 @@
 
 Status as of 2026-11-22: implemented and deployed opt-in local analytics using
 migrations `0015`, `0017`, `0018` and `0019` (OpenAPI `0.17.0`–`0.24.0`, PRs `#182`–`#217`).
+The read-only commitments forecast API is implemented in OpenAPI `0.26.0` on schema `0019`.
 The canonical ledger, explicit account selection and consent implementation remain the
 source of truth. Suggestions require owner review before changing totals.
 
@@ -445,3 +446,28 @@ query strings; any `401`/`403`/`404` access loss clears all budget state immedia
   invalid `reason`, `source`, `observed_at`/`fetched_at`, or SQL-verifiable `payload_json`
   fields anywhere in scope (including beyond row `200`); duplicate-key JSON rejection
   applies to the extracted candidate items.
+
+## Read-only commitments forecast API (OpenAPI `0.26.0`, zero migration)
+
+`GET /api/budget/analytics/forecast` estimates upcoming commitments from owner mortgage
+schedules and recurring monthly expenses in one local SQLite read snapshot. It requires
+an authenticated SQLite admin and both budget HTTP and analytics flags. Responses use
+`Cache-Control: no-store`, and `HEAD` is disabled. The forecast uses the server UTC date
+and accepts `months` (`1`–`12`, default `3`) and optional `currency` (three uppercase
+letters). Unknown or repeated query parameters return HTTP `400`.
+
+The estimate sums exact decimal amounts separately by currency. An unmarked mortgage
+instalment in the current month stays in that month's total after its due date. Older
+unmarked instalments contribute one warning per affected schedule. Only explicit
+payment marks suppress scheduled items. Recurring hints can be paired to historical
+mortgage instalments and suppressed across the horizon, with each match shown in
+`deduplications`. Freshness is evaluated per selected account. A hint on any stale
+account stays active and carries a staleness flag, including when it matches a mortgage.
+The stale account count covers the full selection, and the returned list caps at `200`
+IDs with a truncation flag. Currency filtering scopes amounts, items, matches and their
+summary counts. The snapshot digest, schedules version and account freshness are owner-wide.
+
+The endpoint returns HTTP `413` without partial totals if a ledger, schedule, active
+hint, item or encoded response limit is exceeded. Malformed stored inputs return HTTP
+`500` (`budget_analytics_data_error`). The read writes no data and makes no bank requests.
+The projection rules and full wire contract are specified in [BUDGET_FORECAST.md](BUDGET_FORECAST.md).
