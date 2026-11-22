@@ -170,8 +170,8 @@ describe("ForecastView", () => {
   });
 
   it.each([
-    { locale: "en-US", badge: "Estimate", adjustments: "Category estimate adjustments", merged: "Merged with instalment" },
-    { locale: "pl-PL", badge: "Szacunek", adjustments: "Korekty szacunku", merged: "Połączono z ratą" },
+    { locale: "en-US", badge: "≈ estimated", adjustments: "Category estimate adjustments", merged: "Merged with instalment" },
+    { locale: "pl-PL", badge: "≈ szacowane", adjustments: "Korekty szacunku", merged: "Połączono z ratą" },
   ])("shows a category baseline estimate badge in $locale", async ({ locale, badge, adjustments, merged }) => {
     const api = fakeApi();
     const base = forecastOf();
