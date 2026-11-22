@@ -6,8 +6,9 @@ import type { BudgetApi, BudgetResult } from "./api";
 import { Budget } from "./budget";
 import { account, componentLimit, connection, sharedLimit } from "./fixtures";
 import type { BudgetAccount, BudgetBalances, BudgetJob, BudgetTransaction, BudgetTransactions } from "./model";
-import { entriesOf, mortgageReminder, mortgageSchedule, mortgagesOf, overviewOf, recurringHint, recurringOf,
-  spendingLimit, spendingLimitsOf, spendingLimitStatus, transfersOf } from "./analytics/fixtures";
+import { entriesOf, inboxConsentItem, inboxMarkSaved, inboxOf, mortgageReminder, mortgageSchedule, mortgagesOf,
+  overviewOf, recurringHint, recurringOf, spendingLimit, spendingLimitsOf, spendingLimitStatus,
+  transfersOf } from "./analytics/fixtures";
 
 type Settle<T> = (value: BudgetResult<T>) => void;
 
@@ -85,6 +86,8 @@ function fakeApi(accounts: BudgetAccount[] = [account({ display })]) {
     mortgages: vi.fn<BudgetApi["mortgages"]>(() => ok(mortgagesOf())),
     saveMortgage: vi.fn<BudgetApi["saveMortgage"]>(),
     setMortgagePayment: vi.fn<BudgetApi["setMortgagePayment"]>(),
+    inbox: vi.fn<BudgetApi["inbox"]>(() => ok(inboxOf())),
+    markInbox: vi.fn<BudgetApi["markInbox"]>(() => ok({ inbox: inboxMarkSaved() })),
   } satisfies BudgetApi;
 }
 
@@ -934,9 +937,24 @@ describe("analytics views", () => {
     expect(api.mortgages).toHaveBeenCalledTimes(1);
     expect(host.textContent).toContain("Synthetic Home Loan");
     expect(button("Mortgages").getAttribute("aria-pressed")).toBe("true");
+    api.inbox.mockImplementation(() => ok(inboxOf([inboxConsentItem()])));
+    await click(button("Inbox"));
+    expect(api.inbox).toHaveBeenCalledTimes(1);
+    expect(host.textContent).toContain("Synthetic Bank");
+    expect(button("Inbox").getAttribute("aria-pressed")).toBe("true");
     await click(button("Accounts"));
     expect(host.textContent).toContain("Synthetic Current ••0001");
     expect(host.querySelector(".budget-month")).toBeNull();
+  });
+
+  it("clears the whole budget when the inbox read reports lost access", async () => {
+    const api = fakeApi();
+    api.connections.mockImplementation(() => ok({ connections: [connection], capabilities: analysis }));
+    api.inbox.mockImplementation(() => fail(403, "budget_forbidden"));
+    await render(api);
+    await click(button("Inbox"));
+    expect(host.textContent).toContain("Only the budget's owner");
+    expect(host.querySelector(".budget-views")).toBeNull();
   });
 
   it("clears the whole budget when the mortgages read reports lost access", async () => {

@@ -1,6 +1,8 @@
 // Synthetic analytics fixtures only; no real account, transaction or bank data.
 import { component } from "../fixtures";
-import type { AnalyticsCategory, AnalyticsMortgageReminder, AnalyticsMortgages, AnalyticsMortgageSchedule,
+import type { AnalyticsCategory, AnalyticsInbox, AnalyticsInboxConsentItem, AnalyticsInboxItem,
+  AnalyticsInboxMarkSaved, AnalyticsInboxMortgageItem, AnalyticsInboxSpendingLimitItem,
+  AnalyticsMortgageReminder, AnalyticsMortgages, AnalyticsMortgageSchedule,
   AnalyticsOverview, AnalyticsRecurring, AnalyticsRecurringHint, AnalyticsSpendingLimit, AnalyticsSpendingLimitStatus,
   AnalyticsSpendingLimits, AnnotationSaved, MortgagePaymentSaved, MortgageScheduleSaved, SpendingLimitSaved,
   TransferDecisionResult, AnalyticsTotals, AnalyticsTransaction, AnalyticsTransactions, TransferLeg, TransferList,
@@ -160,5 +162,77 @@ export function mortgagePaymentSaved(changes: Partial<MortgagePaymentSaved> = {}
   return {
     schedule_id: "mtg-1", version: 2, month: "2026-11", paid: true, paid_months: ["2026-10", "2026-11"],
     changed: true, ...changes,
+  };
+}
+
+export function inboxConsentItem(changes: Partial<AnalyticsInboxConsentItem> = {}): AnalyticsInboxConsentItem {
+  return {
+    kind: "consent_renewal",
+    subject_id: "a".repeat(64),
+    milestone: "g1:exp1800000000:lead:7",
+    read: false,
+    read_at: null,
+    ref: { connection_id: "bank" },
+    params: { status: "due_soon", valid_until: 1_800_000_000, days_remaining: 5, attention: null, paused: false },
+    ...changes,
+  };
+}
+
+export function inboxMortgageItem(changes: Partial<AnalyticsInboxMortgageItem> = {}): AnalyticsInboxMortgageItem {
+  return {
+    kind: "mortgage_due",
+    subject_id: "b".repeat(64),
+    milestone: "2026-11:overdue",
+    read: false,
+    read_at: null,
+    ref: { schedule_id: "mtg-1" },
+    params: { status: "overdue", due_date: "2026-11-10", days_until_due: -3, currency: "PLN", freshness_stale: false },
+    ...changes,
+  };
+}
+
+export function inboxSpendingLimitItem(
+  changes: Partial<AnalyticsInboxSpendingLimitItem> = {},
+): AnalyticsInboxSpendingLimitItem {
+  return {
+    kind: "spending_limit",
+    subject_id: "c".repeat(64),
+    milestone: "2026-11:exceeded",
+    read: false,
+    read_at: null,
+    ref: { category_id: "cat-food", currency: "PLN" },
+    params: { status: "exceeded", period: "2026-11", currency: "PLN", warning_percent: 80, percent_used_floor: 112 },
+    ...changes,
+  };
+}
+
+export function inboxOf(items: AnalyticsInboxItem[] = [], changes: Partial<AnalyticsInbox> = {}): AnalyticsInbox {
+  const unread = items.filter((item) => !item.read).length;
+  const readCount = items.filter((item) => item.read).length;
+  return {
+    evaluation_date: "2026-11-21",
+    evaluation_timezone: "UTC",
+    evaluated_at: 1_795_176_000,
+    reads_revision: 0,
+    reads_version: "0".repeat(64),
+    reads_count: readCount,
+    reads_cap: 500,
+    unread_count: unread,
+    rule_version: 1,
+    items,
+    ...changes,
+  };
+}
+
+export function inboxMarkSaved(changes: Partial<AnalyticsInboxMarkSaved> = {}): AnalyticsInboxMarkSaved {
+  return {
+    read: true,
+    changed: true,
+    changed_count: 1,
+    reads_revision: 1,
+    reads_version: "1".repeat(64),
+    reads_count: 1,
+    reads_cap: 500,
+    ...changes,
   };
 }

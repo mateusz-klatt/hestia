@@ -124,3 +124,5 @@
 .budget-mortgage-months button { min-height: 1.7rem; padding-inline: .45rem; font-size: .78rem; }
 .budget-consent-health h5 { margin: .4rem 0 .1rem; font-size: .9rem; color: var(--fg-soft); }
 .budget-consent-status[data-status="attention_required"], .budget-consent-status[data-status="expired"], .budget-consent-status[data-status="due_soon"] { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+.budget-inbox-item.is-read { opacity: .72; }
+.budget-inbox-status[data-status="attention_required"], .budget-inbox-status[data-status="expired"], .budget-inbox-status[data-status="overdue"], .budget-inbox-status[data-status="due_today"], .budget-inbox-status[data-status="exceeded"], .budget-inbox-status[data-status="at_limit"] { border-color: var(--accent); color: var(--accent); font-weight: 600; }
