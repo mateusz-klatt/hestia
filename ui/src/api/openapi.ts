@@ -2400,6 +2400,8 @@ export interface components {
             has_activity: boolean;
             /** Ledger As Of */
             ledger_as_of: number | null;
+            /** Pending Row Keys */
+            pending_row_keys?: string[];
             /** Pending Transfer Rows */
             pending_transfer_rows: number;
             /** Provisional */

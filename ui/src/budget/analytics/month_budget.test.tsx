@@ -1019,6 +1019,7 @@ describe("MonthBudgetView", () => {
         stale_selected_accounts: 0,
         purchase_date_fallback_count: 0,
         pending_transfer_rows: 4,
+        pending_row_keys: ["acc-1/p1", "acc-1/p2", "acc-1/p3", "acc-1/p4"],
         transfer_scan_limited: false,
         provisional: true,
         has_activity: true,
@@ -1030,7 +1031,10 @@ describe("MonthBudgetView", () => {
     await click(links[0] as HTMLButtonElement);
     expect(onOpenMonth).toHaveBeenNthCalledWith(1, "2026-10", "2026-11");
     await click(links[1] as HTMLButtonElement);
-    expect(onOpenMonth).toHaveBeenNthCalledWith(2, "2026-10", "2026-11", { currency: "EUR", provisional: true });
+    expect(onOpenMonth).toHaveBeenNthCalledWith(2, "2026-10", "2026-11", {
+      currency: "EUR",
+      provisionalKeys: ["acc-1/p1", "acc-1/p2", "acc-1/p3", "acc-1/p4"],
+    });
   });
 
   it("drops stale responses and refuses mismatched period responses", async () => {

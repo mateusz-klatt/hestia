@@ -1006,16 +1006,13 @@ describe("analytics views", () => {
         stale_selected_accounts: 0,
         purchase_date_fallback_count: 0,
         pending_transfer_rows: 4,
+        pending_row_keys: ["acc-1/prov-1", "acc-1/prov-2", "acc-1/prov-3", "acc-1/prov-4"],
         transfer_scan_limited: false,
         provisional: true,
         has_activity: true,
       },
     })));
     api.transfers.mockImplementation((period) => ok(transfersOf(period, [])));
-    api.rules.mockImplementation(() => ok({ rules: [
-      { id: "rule-auto", field: "description", operator: "contains", value: "auto", category_id: "cat-food", kind: "auto", priority: 1, enabled: true, version: 1, created_at: 1, updated_at: 1 },
-      { id: "rule-exp", field: "description", operator: "contains", value: "exp", category_id: "cat-food", kind: "expense", priority: 2, enabled: true, version: 1, created_at: 1, updated_at: 1 },
-    ] }));
     api.analyticsTransactions.mockImplementation((period) => ok(entriesOf(period, [
       entry("prov-1"),
       entry("prov-2", { effective: { kind: "expense", category_id: "cat-food", source: "rule", rule_id: "rule-auto" } }),
@@ -1035,14 +1032,16 @@ describe("analytics views", () => {
     await click(links[1] as HTMLButtonElement);
 
     expect(button("Month").getAttribute("aria-pressed")).toBe("true");
+    expect(api.rules).not.toHaveBeenCalled();
     expect(api.analyticsTransactions).toHaveBeenLastCalledWith("2026-11", { currency: "PLN", category: "", kind: "", query: "" });
-    expect(host.querySelector<HTMLInputElement>('input[name="provisional"]')?.checked).toBe(true);
+    const provisionalToggle = host.querySelector<HTMLInputElement>('input[name="provisional"]');
+    expect(provisionalToggle?.checked).toBe(true);
     expect(host.querySelector<HTMLSelectElement>('select[name="currency"]')?.value).toBe("PLN");
     expect(scrollSpy).toHaveBeenCalled();
     expect(scrollSpy.mock.instances).toContain(host.querySelector(".budget-entries"));
 
-    const visibleTexts = [...host.querySelectorAll(".budget-entries .budget-entry-text")].map((item) => item.textContent);
-    expect(visibleTexts).toEqual([
+    const visibleTexts = () => [...host.querySelectorAll(".budget-entries .budget-entry-text")].map((item) => item.textContent);
+    expect(visibleTexts()).toEqual([
       "Synthetic shop prov-1",
       "Synthetic shop prov-2",
       "Synthetic shop prov-3",
@@ -1050,11 +1049,21 @@ describe("analytics views", () => {
     ]);
     expect(host.querySelector(".budget-entries")?.textContent).toContain("4 entries");
 
+    // Toggling the provisional checkbox shows all entries and re-enabling returns to the server-key subset.
+    if (provisionalToggle === null) throw new Error("missing provisional toggle");
+    await click(provisionalToggle);
+    expect(visibleTexts()).toHaveLength(6);
+    expect(host.querySelector(".budget-entries")?.textContent).toContain("6 entries");
+    const toggledAgain = host.querySelector<HTMLInputElement>('input[name="provisional"]');
+    if (toggledAgain === null) throw new Error("missing provisional toggle after uncheck");
+    await click(toggledAgain);
+    expect(visibleTexts()).toHaveLength(4);
+
     // Returning to Monthly budget and opening the general View transactions link clears the provisional filter.
     await click(button("Monthly budget"));
     const freshLinks = [...host.querySelectorAll("button")].filter((item) => item.textContent === "View transactions");
     await click(freshLinks[0] as HTMLButtonElement);
-    expect(host.querySelector<HTMLInputElement>('input[name="provisional"]')?.checked).toBe(false);
+    expect(host.querySelector<HTMLInputElement>('input[name="provisional"]')).toBeNull();
     expect(host.querySelectorAll(".budget-entries .budget-entry")).toHaveLength(6);
   });
 

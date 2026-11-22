@@ -609,49 +609,7 @@ export function monthlyBudgetCurrencies(available: readonly string[], accounts: 
   return ordered;
 }
 
-export interface ProvisionalContext {
-  confirmedCreditCardIds: ReadonlySet<string>;
-  rulesById: ReadonlyMap<string, AnalyticsRule> | null;
-}
-
-/** Accounts whose confirmed kind is credit card; only confirmed kinds exempt implicit expenses. */
-export function confirmedCreditCardAccounts(accounts: readonly BudgetAccount[]): Set<string> {
-  return new Set(
-    accounts
-      .filter((account) => account.kind === "credit_card" && account.kind_confirmed_at !== null)
-      .map((account) => account.id),
-  );
-}
-
-/** Matches the server's unresolved transfer evidence signals visible on transaction rows. */
-export function hasUnresolvedTransferEvidence(row: AnalyticsTransaction): boolean {
-  if (row.transfer.status === "suggested" || row.transfer.status === "review" || row.transfer.status === "boundary") {
-    return true;
-  }
-  return row.annotation.mode === "manual" && row.annotation.stale && row.annotation.kind === "excluded";
-}
-
-function isExplicitExpense(row: AnalyticsTransaction, rulesById: ReadonlyMap<string, AnalyticsRule> | null): boolean {
-  if (row.effective.source === "manual") return row.annotation.kind === "expense";
-  if (row.effective.source === "rule") {
-    if (row.effective.rule_id === null || rulesById === null) return true;
-    return rulesById.get(row.effective.rule_id)?.kind === "expense";
-  }
-  return false;
-}
-
-/** Client-side filter mirroring Monthly budget's pending_transfer_rows for transaction rows. */
-export function isProvisionalTransaction(row: AnalyticsTransaction, context: ProvisionalContext): boolean {
-  const amount = canonicalAmount(row.amount);
-  if (amount === null || amount === "0") return false;
-  const unresolved = hasUnresolvedTransferEvidence(row);
-  if (row.credit_debit_indicator === "DBIT" && row.effective.kind === "expense") {
-    if (unresolved) return true;
-    return !context.confirmedCreditCardIds.has(row.account_id) && !isExplicitExpense(row, context.rulesById);
-  }
-  if (row.credit_debit_indicator === "CRDT") {
-    if (row.effective.kind === "refund") return unresolved;
-    if (row.effective.kind === "income" && row.effective.category_id !== null) return unresolved;
-  }
-  return false;
+/** Stable identifier for an analytics transaction row, matching server `coverage.pending_row_keys`. */
+export function transactionRowKey(row: Pick<AnalyticsTransaction, "account_id" | "entry_reference">): string {
+  return `${row.account_id}/${row.entry_reference}`;
 }

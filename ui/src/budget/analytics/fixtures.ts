@@ -398,6 +398,7 @@ export function monthlyBudgetOf(changes: Partial<AnalyticsMonthlyBudget> = {}): 
       stale_selected_accounts: 0,
       purchase_date_fallback_count: 0,
       pending_transfer_rows: 0,
+      pending_row_keys: [],
       transfer_scan_limited: false,
       provisional: false,
       has_activity: true,

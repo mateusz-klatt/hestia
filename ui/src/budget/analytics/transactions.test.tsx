@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BudgetApi, BudgetResult } from "../api";
 import { account } from "../fixtures";
 import { annotationOf, categoryList, decisionOf, entriesOf, entry } from "./fixtures";
-import type { AnalyticsRule, AnalyticsTransaction, AnalyticsTransactions, AnnotationSaved, TransferDecisionResult } from "./model";
+import type { AnalyticsTransaction, AnalyticsTransactions, AnnotationSaved, TransferDecisionResult } from "./model";
 import { TRANSACTION_ROW_CAP, TransactionsPanel, transactionLabels } from "./transactions";
 
 function ok<T>(data: T): Promise<BudgetResult<T>> { return Promise.resolve({ ok: true, data }); }
@@ -1092,26 +1092,16 @@ describe("manual own-transfer pairing", () => {
     expect(rendered[1]?.textContent).not.toContain("Synthetic shop late");
   });
 
-  it("filters to provisional rows using accounts and rules, updates total count, and toggles cleanly", async () => {
+  it("filters strictly to server-provided provisional row keys, updates total count, and toggles cleanly", async () => {
     const scrollIntoView = vi.fn();
     const prevScroll = (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView;
     Element.prototype.scrollIntoView = scrollIntoView;
     try {
       const confirmedCard = account({ id: "acc-card", kind: "credit_card", kind_confirmed_at: 10 });
-      const ruleAuto: AnalyticsRule = { id: "rule-auto", field: "description", operator: "contains", value: "auto",
-        category_id: "cat-food", kind: "auto", priority: 1, enabled: true, version: 1, created_at: 1, updated_at: 1 };
-      const ruleExp: AnalyticsRule = { id: "rule-exp", field: "description", operator: "contains", value: "exp",
-        category_id: "cat-food", kind: "expense", priority: 2, enabled: true, version: 1, created_at: 1, updated_at: 1 };
       const rows = [
-        entry("default-dbit"),
-        entry("auto-rule-dbit", { effective: { kind: "expense", category_id: "cat-food", source: "rule", rule_id: "rule-auto" } }),
-        entry("exp-rule-dbit", { effective: { kind: "expense", category_id: "cat-food", source: "rule", rule_id: "rule-exp" } }),
-        entry("manual-exp-dbit", {
-          annotation: { version: 1, mode: "manual", category_id: "cat-food", kind: "expense", stale: false },
-          effective: { kind: "expense", category_id: "cat-food", source: "manual", rule_id: null },
-        }),
-        entry("confirmed-card-default", { account_id: "acc-card" }),
-        entry("confirmed-card-suggested", {
+        entry("pending-1"),
+        entry("rule-backed", { effective: { kind: "expense", category_id: "cat-food", source: "rule", rule_id: "rule-auto" } }),
+        entry("card-pending", {
           account_id: "acc-card",
           transfer: { status: "suggested", decision_id: null, candidate_count: 1, ambiguous: false },
         }),
@@ -1119,48 +1109,53 @@ describe("manual own-transfer pairing", () => {
           annotation: { version: 1, mode: "manual", category_id: null, kind: "excluded", stale: true },
           effective: { kind: "expense", category_id: "cat-food", source: "rule", rule_id: "rule-exp" },
         }),
-        entry("unclass-credit", {
-          credit_debit_indicator: "CRDT",
-          effective: { kind: "unclassified_credit", category_id: null, source: "default", rule_id: null },
-          transfer: { status: "suggested", decision_id: null, candidate_count: 1, ambiguous: false },
-        }),
+        // Even an unclassified/default debit outside `initialProvisionalKeys` is excluded,
+        // and a row listed in `initialProvisionalKeys` is kept regardless of client metadata.
+        entry("not-in-keys-default"),
+        entry("not-in-keys-card", { account_id: "acc-card" }),
       ];
-      const api = {
-        ...fakeApi(rows),
-        rules: vi.fn<BudgetApi["rules"]>(() => ok({ rules: [ruleAuto, ruleExp] })),
-      };
+      const api = fakeApi(rows);
 
       await act(async () => {
         root.render(
           <TransactionsPanel api={api} period="2026-11" currencies={["EUR", "PLN"]}
             accounts={[...accounts, confirmedCard]} text={transactionLabels.en} locale="en" revision={0}
             onAccessLoss={() => false} onChanged={() => undefined}
-            initialCurrency="PLN" initialProvisional={true} focusOnMount={true} />,
+            initialCurrency="PLN"
+            initialProvisionalKeys={[
+              "acc-1/pending-1",
+              "acc-1/rule-backed",
+              "acc-card/card-pending",
+              "acc-1/stale-manual-excl",
+            ]}
+            focusOnMount={true} />,
         );
         await Promise.resolve();
       });
       await settle();
 
       expect(api.analyticsTransactions).toHaveBeenCalledWith("2026-11", { currency: "PLN", category: "", kind: "", query: "" });
-      expect(api.rules).toHaveBeenCalledTimes(1);
       expect(scrollIntoView).toHaveBeenCalled();
       expect(select("Currency").value).toBe("PLN");
       const checkbox = host.querySelector<HTMLInputElement>('input[name="provisional"]');
       expect(checkbox?.checked).toBe(true);
       const entryNames = () => [...host.querySelectorAll(".budget-entry-text")].map((item) => item.textContent);
       expect(entryNames()).toEqual([
-        "Synthetic shop default-dbit",
-        "Synthetic shop auto-rule-dbit",
-        "Synthetic shop confirmed-card-suggested",
+        "Synthetic shop pending-1",
+        "Synthetic shop rule-backed",
+        "Synthetic shop card-pending",
         "Synthetic shop stale-manual-excl",
       ]);
       expect(host.textContent).toContain("4 entries");
 
-      // Unchecking the provisional filter shows all rows immediately without extra API fetches.
+      // Unchecking shows all rows and re-checking restores the server-key filter without extra API fetches.
       await act(async () => { checkbox?.click(); await Promise.resolve(); });
       await settle();
-      expect(entryNames()).toHaveLength(8);
-      expect(host.textContent).toContain("8 entries");
+      expect(entryNames()).toHaveLength(6);
+      expect(host.textContent).toContain("6 entries");
+      await act(async () => { host.querySelector<HTMLInputElement>('input[name="provisional"]')?.click(); await Promise.resolve(); });
+      await settle();
+      expect(entryNames()).toHaveLength(4);
       expect(api.analyticsTransactions).toHaveBeenCalledTimes(1);
     } finally {
       if (prevScroll === undefined) {
@@ -1171,21 +1166,18 @@ describe("manual own-transfer pairing", () => {
     }
   });
 
-  it("passes rules() failures through the access barrier when provisional filter is active", async () => {
-    const api = {
-      ...fakeApi([entry("e1")]),
-      rules: vi.fn<BudgetApi["rules"]>(() => fail(401, "budget_http_401")),
-    };
-    const onAccessLoss = vi.fn((result: { ok: boolean }) => !result.ok);
+  it("hides the provisional toggle when opened without initialProvisionalKeys", async () => {
+    const api = fakeApi([entry("e1")]);
     await act(async () => {
       root.render(
         <TransactionsPanel api={api} period="2026-11" currencies={["PLN"]} accounts={accounts}
-          text={transactionLabels.en} locale="en" revision={0} onAccessLoss={onAccessLoss}
-          onChanged={() => undefined} initialProvisional={true} />,
+          text={transactionLabels.en} locale="en" revision={0} onAccessLoss={() => false}
+          onChanged={() => undefined} />,
       );
       await Promise.resolve();
     });
     await settle();
-    expect(onAccessLoss).toHaveBeenCalledWith({ ok: false, status: 401, error: "budget_http_401" });
+    expect(host.querySelector('input[name="provisional"]')).toBeNull();
+    expect(host.querySelectorAll(".budget-entry")).toHaveLength(1);
   });
 });

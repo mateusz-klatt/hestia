@@ -211,7 +211,7 @@ class BudgetOpenApiTests(unittest.TestCase):
             self.assertEqual(set(methods), {method})
             self.assertEqual(methods[method]["x-required-role"], "admin")
             self.assertIn("413", methods[method]["responses"])
-        self.assertEqual(document["info"]["version"], "0.30.0")
+        self.assertEqual(document["info"]["version"], "0.31.0")
         batch = analytics["/api/budget/analytics/rule-batch-preview"]["post"]["description"]
         self.assertIn("1..100", batch)
         self.assertIn("All-or-nothing", batch)
@@ -323,7 +323,7 @@ class BudgetOpenApiTests(unittest.TestCase):
 
     def test_monthly_budget_schemas_pin_wire_fields_and_bounds(self):
         schemas = contract.build_openapi()["components"]["schemas"]
-        optional_keys = {"Configuration": {"income_window"}}
+        optional_keys = {"Configuration": {"income_window"}, "Coverage": {"pending_row_keys"}}
         for suffix, keys in {
             "": {"period", "start", "end", "cutoff", "current_month", "evaluated_at", "evaluation_date",
                  "evaluation_timezone", "currency", "available_currencies", "configuration", "coverage",
@@ -331,7 +331,7 @@ class BudgetOpenApiTests(unittest.TestCase):
             "Configuration": {"status", "source", "income_window"},
             "IncomeWindow": {"start", "end", "start_day"},
             "Coverage": {"ledger_as_of", "stale_selected_accounts", "purchase_date_fallback_count",
-                         "pending_transfer_rows", "transfer_scan_limited", "provisional", "has_activity"},
+                         "pending_transfer_rows", "pending_row_keys", "transfer_scan_limited", "provisional", "has_activity"},
             "Summary": {"start_budget", "spent", "remaining"},
             "ExpectedIncome": {"status", "total", "items"},
             "ExpectedIncomeItem": {"category_id", "amount", "expected_date", "source"},
@@ -354,6 +354,11 @@ class BudgetOpenApiTests(unittest.TestCase):
         self.assertEqual(window["start_day"]["type"], "integer")
         self.assertEqual((window["start_day"]["minimum"], window["start_day"]["maximum"]), (1, 28))
         self.assertNotIn("income_window", schemas["BudgetAnalyticsMonthlyBudgetConfiguration"]["required"])
+        pending_row_keys = schemas["BudgetAnalyticsMonthlyBudgetCoverage"]["properties"]["pending_row_keys"]
+        self.assertEqual(pending_row_keys["type"], "array")
+        self.assertEqual(pending_row_keys["maxItems"], 500)
+        self.assertEqual(pending_row_keys["items"], {"type": "string"})
+        self.assertNotIn("pending_row_keys", schemas["BudgetAnalyticsMonthlyBudgetCoverage"]["required"])
         root = schemas["BudgetAnalyticsMonthlyBudget"]["properties"]
         self.assertEqual(root["evaluation_timezone"]["const"], "Europe/Warsaw")
         self.assertEqual(schemas["BudgetAnalyticsMonthlyBudgetCardExposure"]["properties"]["status"]["const"],

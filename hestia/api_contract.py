@@ -79,7 +79,8 @@ from pydantic.json_schema import models_json_schema
 # 0.29.0: read-only owner-private monthly budget charts (GET /api/budget/analytics/monthly-budget/charts, zero migration).
 # 0.30.0: batch rule preview and save (POST /api/budget/analytics/rule-batch-preview and rule-batch-save,
 #         zero migration). This branch merges first; the open follow-ups take 0.31.0 and 0.32.0.
-CONTRACT_VERSION = "0.30.0"
+# 0.31.0: additive coverage.pending_row_keys on monthly-budget responses (zero migration).
+CONTRACT_VERSION = "0.31.0"
 OPENAPI_PATH = Path(__file__).resolve().parent.parent / "docs" / "api" / "openapi.json"
 
 # De-duplicated string literals (SonarPython S1192): the OpenAPI content-type, the paths reused
@@ -2399,6 +2400,7 @@ class BudgetAnalyticsMonthlyBudgetCoverage(BaseModel):
     stale_selected_accounts: int
     purchase_date_fallback_count: int
     pending_transfer_rows: int
+    pending_row_keys: Annotated[list[str], Field(default_factory=list, max_length=500)]
     transfer_scan_limited: bool
     provisional: bool
     has_activity: bool

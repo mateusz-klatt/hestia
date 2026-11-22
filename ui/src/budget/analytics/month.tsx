@@ -22,8 +22,7 @@ export interface MonthLabels {
 }
 
 export interface MonthViewProps {
-  api: Pick<BudgetApi, "overview" | "analyticsTransactions" | "categories" | "annotate" | "transfers" | "decideTransfer">
-    & Partial<Pick<BudgetApi, "rules">>;
+  api: Pick<BudgetApi, "overview" | "analyticsTransactions" | "categories" | "annotate" | "transfers" | "decideTransfer">;
   accounts: readonly BudgetAccount[];
   connections?: readonly BudgetConnection[] | undefined;
   text: MonthLabels;
@@ -35,20 +34,22 @@ export interface MonthViewProps {
   initialMonth?: string | undefined;
   /** Initial currency filter when opened from Monthly budget. */
   initialCurrency?: string | undefined;
-  /** Start with Transactions filtered to provisional/unconfirmed rows and scrolled into view. */
-  initialProvisional?: boolean | undefined;
+  /** Exact server-computed `coverage.pending_row_keys` to filter Transactions on arrival and scroll into view. */
+  initialProvisionalKeys?: readonly string[] | undefined;
   /** Injected clock for tests. */
   today?: () => Date;
 }
 
 export function MonthView({ api, accounts, connections = [], text, locale, revision, onAccessLoss, initialMonth,
-  initialCurrency, initialProvisional, today = () => new Date() }: MonthViewProps) {
+  initialCurrency, initialProvisionalKeys, today = () => new Date() }: MonthViewProps) {
   const latest = currentMonth(today());
-  const [month, setMonth] = useState(initialMonth !== undefined && isMonth(initialMonth) && initialMonth < latest ? initialMonth : latest);
+  const initialPeriod = initialMonth !== undefined && isMonth(initialMonth) && initialMonth < latest ? initialMonth : latest;
+  const [month, setMonth] = useState(initialPeriod);
   const [changes, setChanges] = useState(0);
   const [currencies, setCurrencies] = useState<string[]>([]);
   const changed = useCallback(() => { setChanges((current) => current + 1); }, []);
   const overview = useCallback((period: string) => api.overview(period), [api]);
+  const provisionalKeys = month === initialPeriod ? initialProvisionalKeys : undefined;
   return (
     <section className="budget-month" aria-label={monthLabel(month, locale)}>
       <nav className="budget-month-nav">
@@ -63,7 +64,7 @@ export function MonthView({ api, accounts, connections = [], text, locale, revis
         revision={revision + changes} onAccessLoss={onAccessLoss} onChanged={changed} />
       <TransactionsPanel api={api} period={month} currencies={currencies} accounts={accounts} connections={connections} text={text.entries}
         locale={locale} revision={revision + changes} onAccessLoss={onAccessLoss} onChanged={changed}
-        initialCurrency={initialCurrency} initialProvisional={initialProvisional} focusOnMount={initialProvisional === true} />
+        initialCurrency={initialCurrency} initialProvisionalKeys={provisionalKeys} focusOnMount={initialProvisionalKeys !== undefined} />
     </section>
   );
 }

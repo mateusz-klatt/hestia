@@ -106,15 +106,12 @@ describe("month view", () => {
     expect(api.transfers).toHaveBeenCalledTimes(2);
   });
 
-  it("forwards initial currency and provisional filter to Transactions and scrolls it into view", async () => {
+  it("forwards initial currency and provisional keys to Transactions, scrolls into view, and drops them on month navigation", async () => {
     const scrollIntoView = vi.fn();
     const prevScroll = (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView;
     Element.prototype.scrollIntoView = scrollIntoView;
     try {
-      const api = {
-        ...fakeApi(),
-        rules: vi.fn<BudgetApi["rules"]>(() => ok({ rules: [] })),
-      };
+      const api = fakeApi();
       api.analyticsTransactions.mockImplementation((period) => ok(entriesOf(period, [
         entry("pending-1"),
         entry("explicit-1", {
@@ -124,14 +121,13 @@ describe("month view", () => {
       ])));
       await act(async () => {
         root.render(<MonthView api={api} accounts={[]} text={monthLabels.en} locale="en" revision={0}
-          onAccessLoss={() => false} initialMonth="2026-03" initialCurrency="EUR" initialProvisional={true}
-          today={() => new Date(2026, 10, 21, 12)} />);
+          onAccessLoss={() => false} initialMonth="2026-03" initialCurrency="EUR"
+          initialProvisionalKeys={["acc-1/pending-1"]} today={() => new Date(2026, 10, 21, 12)} />);
         await Promise.resolve();
       });
       await settle();
 
       expect(api.analyticsTransactions).toHaveBeenCalledWith("2026-03", { currency: "EUR", category: "", kind: "", query: "" });
-      expect(api.rules).toHaveBeenCalledTimes(1);
       const provisionalToggle = host.querySelector<HTMLInputElement>('input[name="provisional"]');
       expect(provisionalToggle?.checked).toBe(true);
       const currencySelect = [...host.querySelectorAll("label")].find((item) => item.textContent.startsWith("Currency"))?.querySelector("select");
@@ -139,6 +135,15 @@ describe("month view", () => {
       expect([...host.querySelectorAll(".budget-entry-text")].map((item) => item.textContent)).toEqual(["Synthetic shop pending-1"]);
       expect(host.textContent).toContain("1 entries");
       expect(scrollIntoView).toHaveBeenCalled();
+
+      // Navigating to another month does not apply the originating month's provisional keys.
+      await click(host.querySelector<HTMLButtonElement>('button[aria-label="Previous month"]') ?? undefined);
+      expect(api.analyticsTransactions).toHaveBeenLastCalledWith("2026-02", { currency: "EUR", category: "", kind: "", query: "" });
+      expect(host.querySelector<HTMLInputElement>('input[name="provisional"]')).toBeNull();
+      expect([...host.querySelectorAll(".budget-entry-text")].map((item) => item.textContent)).toEqual([
+        "Synthetic shop pending-1",
+        "Synthetic shop explicit-1",
+      ]);
     } finally {
       if (prevScroll === undefined) {
         delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView;

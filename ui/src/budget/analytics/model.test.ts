@@ -1,12 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { accountName, annotationRequest, canPair, canonicalAmount, clampPercentString, confirmedCreditCardAccounts,
-  counterparty, currentMonth, daysBetween, formatRatioHalfEven, formatScaledBigInt, hasAnalytics,
-  hasUnresolvedTransferEvidence, isMonth, isPositiveDecimal, isProvisionalTransaction, isZero, kindChoice,
+import { accountName, annotationRequest, canPair, canonicalAmount, clampPercentString, counterparty, currentMonth,
+  daysBetween, formatRatioHalfEven, formatScaledBigInt, hasAnalytics, isMonth, isPositiveDecimal, isZero, kindChoice,
   kindChoicesFor, legsMatch, limitCurrencies, manualPairRequest, monthLabel, monthlyBudgetCurrencies, mortgageCurrencies,
   pairCandidates, pairDate, pairPeriods, parseIntInRange, parseScaledInt, parseWarningPercent, pluralPl, ratioPercentFloor,
-  recurringCurrencies, shiftMonth, transferActions, transferDecision, validCurrency, validIsoDate, validLimitAmount,
-  validMortgageLabel } from "./model";
-import type { AnalyticsRule, AnalyticsTransaction } from "./model";
+  recurringCurrencies, shiftMonth, transactionRowKey, transferActions, transferDecision, validCurrency, validIsoDate,
+  validLimitAmount, validMortgageLabel } from "./model";
+import type { AnalyticsTransaction } from "./model";
 import { entry, leg, mortgageSchedule, pair, recurringHint, spendingLimit } from "./fixtures";
 import { account, connection } from "../fixtures";
 
@@ -365,77 +364,8 @@ describe("analytics decisions", () => {
     expect(formatScaledBigInt(42n, 0)).toBe("42");
   });
 
-  it("classifies provisional transactions matching Monthly budget pending_transfer_rows semantics", () => {
-    const confirmedCardIds = confirmedCreditCardAccounts([
-      account({ id: "card-confirmed", kind: "credit_card", kind_confirmed_at: 100 }),
-      account({ id: "card-unconfirmed", kind: "credit_card", kind_confirmed_at: null }),
-      account({ id: "acc-1", kind: "current", kind_confirmed_at: 100 }),
-    ]);
-    expect([...confirmedCardIds]).toEqual(["card-confirmed"]);
-
-    const rulesById = new Map<string, AnalyticsRule>([
-      ["rule-exp", { id: "rule-exp", field: "description", operator: "contains", value: "shop", category_id: "cat-food", kind: "expense", priority: 1, enabled: true, version: 1, created_at: 1, updated_at: 1 }],
-      ["rule-auto", { id: "rule-auto", field: "description", operator: "contains", value: "shop", category_id: "cat-food", kind: "auto", priority: 2, enabled: true, version: 1, created_at: 1, updated_at: 1 }],
-    ]);
-    const ctx = { confirmedCreditCardIds: confirmedCardIds, rulesById };
-
-    // Default debit on non-credit-card or unconfirmed card is provisional; on confirmed card it is not.
-    expect(isProvisionalTransaction(entry("d1"), ctx)).toBe(true);
-    expect(isProvisionalTransaction(entry("d2", { account_id: "card-unconfirmed" }), ctx)).toBe(true);
-    expect(isProvisionalTransaction(entry("d3", { account_id: "card-confirmed" }), ctx)).toBe(false);
-
-    // Explicit manual/rule expenses are clean unless unresolved transfer evidence is present.
-    expect(isProvisionalTransaction(entry("m-exp", {
-      annotation: { version: 1, mode: "manual", category_id: "cat-food", kind: "expense", stale: false },
-      effective: { kind: "expense", category_id: "cat-food", source: "manual", rule_id: null },
-    }), ctx)).toBe(false);
-    expect(isProvisionalTransaction(entry("m-auto", {
-      annotation: { version: 1, mode: "manual", category_id: "cat-food", kind: "auto", stale: false },
-      effective: { kind: "expense", category_id: "cat-food", source: "manual", rule_id: null },
-    }), ctx)).toBe(true);
-    expect(isProvisionalTransaction(entry("r-exp", {
-      effective: { kind: "expense", category_id: "cat-food", source: "rule", rule_id: "rule-exp" },
-    }), ctx)).toBe(false);
-    expect(isProvisionalTransaction(entry("r-auto", {
-      effective: { kind: "expense", category_id: "cat-food", source: "rule", rule_id: "rule-auto" },
-    }), ctx)).toBe(true);
-
-    // Unresolved transfer statuses and stale manual excluded annotations make expenses, refunds, and categorised incomes provisional.
-    for (const status of ["suggested", "review", "boundary"] as const) {
-      expect(isProvisionalTransaction(entry(`card-${status}`, {
-        account_id: "card-confirmed",
-        transfer: { status, decision_id: null, candidate_count: 1, ambiguous: false },
-      }), ctx)).toBe(true);
-    }
-    expect(hasUnresolvedTransferEvidence(entry("stale-excl", {
-      annotation: { version: 1, mode: "manual", category_id: null, kind: "excluded", stale: true },
-    }))).toBe(true);
-    expect(isProvisionalTransaction(entry("stale-excl-card", {
-      account_id: "card-confirmed",
-      annotation: { version: 1, mode: "manual", category_id: null, kind: "excluded", stale: true },
-      effective: { kind: "expense", category_id: "cat-food", source: "rule", rule_id: "rule-exp" },
-    }), ctx)).toBe(true);
-
-    // Credits: refund and categorised income with unresolved evidence are provisional; unclassified_credit, zero, excluded, transfer are not.
-    expect(isProvisionalTransaction(entry("ref-sug", {
-      credit_debit_indicator: "CRDT",
-      effective: { kind: "refund", category_id: "cat-food", source: "manual", rule_id: null },
-      transfer: { status: "suggested", decision_id: null, candidate_count: 1, ambiguous: false },
-    }), ctx)).toBe(true);
-    expect(isProvisionalTransaction(entry("inc-sug", {
-      credit_debit_indicator: "CRDT",
-      effective: { kind: "income", category_id: "cat-salary", source: "manual", rule_id: null },
-      transfer: { status: "boundary", decision_id: "d1", candidate_count: 1, ambiguous: false },
-    }), ctx)).toBe(true);
-    expect(isProvisionalTransaction(entry("unclass-sug", {
-      credit_debit_indicator: "CRDT",
-      effective: { kind: "unclassified_credit", category_id: null, source: "default", rule_id: null },
-      transfer: { status: "suggested", decision_id: null, candidate_count: 1, ambiguous: false },
-    }), ctx)).toBe(false);
-    expect(isProvisionalTransaction(entry("zero", { amount: "0.00" }), ctx)).toBe(false);
-    expect(isProvisionalTransaction(entry("excl", {
-      effective: { kind: "excluded", category_id: null, source: "manual", rule_id: null },
-      transfer: { status: "suggested", decision_id: null, candidate_count: 1, ambiguous: false },
-    }), ctx)).toBe(false);
+  it("builds stable account/reference keys for transactions", () => {
+    expect(transactionRowKey(entry("e-42"))).toBe("acc-1/e-42");
+    expect(transactionRowKey(entry("ref-9", { account_id: "card-2" }))).toBe("card-2/ref-9");
   });
 });

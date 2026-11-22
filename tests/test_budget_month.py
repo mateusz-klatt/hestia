@@ -575,6 +575,74 @@ class MonthlyBudgetTransferAndProvisionalTests(unittest.TestCase):
         self.assertTrue(res_affecting["coverage"]["transfer_scan_limited"])
         self.assertTrue(res_affecting["coverage"]["provisional"])
 
+    def test_pending_row_keys_match_pending_transfer_rows_and_cap_at_500(self):
+        cfg = month_budget.MonthBudgetSettings(
+            ("cat-salary",),
+            pass_through=month_budget.PassThroughSettings("cat-rent", "cat-mortgage"),
+            income_window_start_day=1,
+        )
+        rules = [
+            {"id": "rule-auto", "kind": "auto", "category_id": "cat-food"},
+            {"id": "rule-exp", "kind": "expense", "category_id": "cat-food"},
+        ]
+        txs = [
+            # Counted pending rows across all 4 coverage paths:
+            _tx("acc-a", "imp-dbit", amount="40"),
+            _tx("acc-a", "rule-auto-dbit", amount="50", kind="expense", category_id="cat-food",
+                source="rule", rule_id="rule-auto"),
+            _tx("acc-card", "card-stale-excl", amount="60", kind="expense", category_id="cat-food",
+                source="rule", rule_id="rule-exp",
+                annotation={"version": 1, "mode": "manual", "category_id": None, "kind": "excluded", "stale": True}),
+            _tx("acc-a", "ref-sug", amount="15", direction="CRDT", kind="refund", category_id="cat-food",
+                source="manual", transfer_status="suggested"),
+            _tx("acc-a", "rent-rev", amount="800", direction="CRDT", kind="income", category_id="cat-rent",
+                source="manual", transfer_status="review"),
+            _tx("acc-a", "sal-bnd", amount="5000", direction="CRDT", kind="income", category_id="cat-salary",
+                source="manual", transfer_status="boundary"),
+            # Non-pending rows that must NOT appear in pending_row_keys:
+            _tx("acc-card", "card-clean", amount="70"),
+            _tx("acc-a", "rule-exp-clean", amount="80", kind="expense", category_id="cat-food",
+                source="rule", rule_id="rule-exp"),
+            _tx("acc-a", "manual-exp-clean", amount="90", kind="expense", category_id="cat-food", source="manual",
+                annotation={"version": 1, "mode": "manual", "category_id": "cat-food", "kind": "expense", "stale": False}),
+            _tx("acc-a", "unclass-sug", amount="25", direction="CRDT", transfer_status="suggested"),
+            _tx("acc-a", "zero-amt", amount="0"),
+            _tx("acc-a", "other-month", amount="33", booking_date="2026-10-15"),
+        ]
+        res = _eval(
+            transactions=txs,
+            rules=rules,
+            account_kinds={"acc-a": "current", "acc-card": "credit_card"},
+            settings=cfg,
+        )
+        expected_keys = [
+            "acc-a/imp-dbit",
+            "acc-a/rule-auto-dbit",
+            "acc-card/card-stale-excl",
+            "acc-a/ref-sug",
+            "acc-a/rent-rev",
+            "acc-a/sal-bnd",
+        ]
+        self.assertEqual(res["coverage"]["pending_transfer_rows"], len(expected_keys))
+        self.assertEqual(res["coverage"]["pending_row_keys"], expected_keys)
+        api_contract.BudgetAnalyticsMonthlyBudget.model_validate(res)
+
+        charts = _eval_charts(
+            transactions=txs,
+            rules=rules,
+            account_kinds={"acc-a": "current", "acc-card": "credit_card"},
+            settings=cfg,
+        )
+        self.assertEqual(charts["budget"]["coverage"]["pending_row_keys"], expected_keys)
+        api_contract.BudgetAnalyticsMonthlyBudgetCharts.model_validate(charts)
+
+        many_txs = [_tx("acc-a", f"p-{idx:03d}", amount="1") for idx in range(505)]
+        capped = _eval(transactions=many_txs, settings=cfg)
+        self.assertEqual(capped["coverage"]["pending_transfer_rows"], 505)
+        self.assertEqual(len(capped["coverage"]["pending_row_keys"]), month_budget.MAX_PENDING_ROW_KEYS)
+        self.assertEqual(capped["coverage"]["pending_row_keys"], [f"acc-a/p-{idx:03d}" for idx in range(500)])
+        api_contract.BudgetAnalyticsMonthlyBudget.model_validate(capped)
+
 
 class MonthlyBudgetPassThroughAndLimitsTests(unittest.TestCase):
     def test_late_rent_overpayment_unused_mortgage_refund_and_no_carry(self):

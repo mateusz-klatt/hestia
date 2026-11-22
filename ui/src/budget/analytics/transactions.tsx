@@ -5,9 +5,9 @@ import type { BudgetApi } from "../api";
 import type { BudgetAccount, BudgetConnection } from "../model";
 import { formatAmount, transactionDate, transactionText } from "../model";
 import { ANALYTICS_ERROR, EFFECTIVE_KINDS, NO_FILTER, RELOAD_ERRORS, UNCATEGORISED, annotationRequest, canPair, canonicalAmount,
-  confirmedCreditCardAccounts, counterparty, accountName as nameOf, currentChoice, daysBetween, isProvisionalTransaction,
-  kindChoice, kindChoicesFor, labelOf, manualPairRequest, pairCandidates, pairDate, pairPeriods } from "./model";
-import type { AnalyticsCategory, AnalyticsRule, AnalyticsTransaction, CategoryChoice, KindChoice, TransactionFilter } from "./model";
+  counterparty, accountName as nameOf, currentChoice, daysBetween, kindChoice, kindChoicesFor, labelOf, manualPairRequest,
+  pairCandidates, pairDate, pairPeriods, transactionRowKey } from "./model";
+import type { AnalyticsCategory, AnalyticsTransaction, CategoryChoice, KindChoice, TransactionFilter } from "./model";
 
 const kindsEn = { auto: "Automatic", expense: "Expense", income: "Income", refund: "Refund", excluded: "Leave out of the budget",
   unclassified_credit: "To classify", transfer: "Own transfer" };
@@ -148,8 +148,7 @@ interface PairPage { rows: AnalyticsTransaction[]; loading: boolean; failed: boo
 const PAIR_LOADING: PairPage = { rows: [], loading: true, failed: false, limited: false };
 
 export interface TransactionsProps {
-  api: Pick<BudgetApi, "analyticsTransactions" | "categories" | "annotate" | "decideTransfer">
-    & Partial<Pick<BudgetApi, "rules">>;
+  api: Pick<BudgetApi, "analyticsTransactions" | "categories" | "annotate" | "decideTransfer">;
   period: string;
   currencies: readonly string[];
   accounts: readonly BudgetAccount[];
@@ -164,13 +163,13 @@ export interface TransactionsProps {
   rowCap?: number | undefined;
   /** Initial currency filter when opened from another view (e.g. Monthly budget). */
   initialCurrency?: string | undefined;
-  /** Start with provisional/unconfirmed entries filter enabled. */
-  initialProvisional?: boolean | undefined;
+  /** Server-computed `coverage.pending_row_keys` to filter entries when opened from the provisional banner. */
+  initialProvisionalKeys?: readonly string[] | undefined;
   /** Scroll this section into view when mounted (e.g. opened from the provisional banner link). */
   focusOnMount?: boolean | undefined;
 }
 
-const rowKey = (row: AnalyticsTransaction) => `${row.account_id}/${row.entry_reference}`;
+const rowKey = transactionRowKey;
 
 function mergeRows(existing: readonly AnalyticsTransaction[], incoming: readonly AnalyticsTransaction[]): AnalyticsTransaction[] {
   const seen = new Set(existing.map(rowKey));
@@ -214,19 +213,17 @@ function orderRows(
 }
 
 export function TransactionsPanel({ api, period, currencies, accounts, connections = [], text, locale, revision, onAccessLoss,
-  onChanged, rowCap = TRANSACTION_ROW_CAP, initialCurrency, initialProvisional, focusOnMount = false }: TransactionsProps) {
+  onChanged, rowCap = TRANSACTION_ROW_CAP, initialCurrency, initialProvisionalKeys, focusOnMount = false }: TransactionsProps) {
   const startingFilter: TransactionFilter = initialCurrency === undefined ? NO_FILTER : { ...NO_FILTER, currency: initialCurrency };
   const [filter, setFilter] = useState<TransactionFilter>(startingFilter);
   const [draft, setDraft] = useState<TransactionFilter>(startingFilter);
-  const [provisionalOnly, setProvisionalOnly] = useState(initialProvisional === true);
+  const [provisionalFilter, setProvisionalFilter] = useState<{
+    period: string;
+    keys: readonly string[] | undefined;
+    checked: boolean;
+  }>(() => ({ period, keys: initialProvisionalKeys, checked: initialProvisionalKeys !== undefined }));
   const [page, setPage] = useState<Page>(LOADING);
   const [categories, setCategories] = useState<AnalyticsCategory[]>([]);
-  const [rulesState, setRulesState] = useState<{
-    api: TransactionsProps["api"];
-    revision: number;
-    reloads: number;
-    rules: readonly AnalyticsRule[] | null;
-  } | null>(null);
   const [editing, setEditing] = useState<string | null>(null);
   const [frozenOrder, setFrozenOrder] = useState<readonly string[] | null>(null);
   const [pairing, setPairing] = useState<string | null>(null);
@@ -312,15 +309,6 @@ export function TransactionsPanel({ api, period, currencies, accounts, connectio
     // or the access barrier rejects an answer. A stale cursor restarts from the first page (up to the retry cap).
     void walkPages(token, runToken, undefined, [], false);
   }, [api, period, filter, revision, reloads, onAccessLoss, walkPages]);
-  useEffect(() => {
-    if (!provisionalOnly || api.rules === undefined) return undefined;
-    let cancelled = false;
-    void api.rules().then((result) => {
-      if (onAccessLoss(result) || cancelled) return;
-      setRulesState({ api, revision, reloads, rules: result.ok ? result.data.rules : null });
-    });
-    return () => { cancelled = true; };
-  }, [api, provisionalOnly, revision, reloads, onAccessLoss]);
   useEffect(() => () => { generation.current += 1; walkToken.current += 1; picker.current += 1; }, []);
 
   const more = useCallback(() => {
@@ -448,15 +436,14 @@ export function TransactionsPanel({ api, period, currencies, accounts, connectio
     setPairing(null);
   }, [api, onAccessLoss, onChanged, text]);
 
-  const rulesReady = !provisionalOnly || api.rules === undefined
-    || (rulesState !== null && rulesState.api === api && rulesState.revision === revision && rulesState.reloads === reloads);
-  const rulesById = useMemo(
-    () => (rulesReady && rulesState !== null && rulesState.rules !== null
-      ? new Map(rulesState.rules.map((item) => [item.id, item]))
-      : null),
-    [rulesReady, rulesState],
+  const provisionalChecked = provisionalFilter.period === period && provisionalFilter.keys === initialProvisionalKeys
+    ? provisionalFilter.checked
+    : true;
+  const provisionalKeySet = useMemo(
+    () => (initialProvisionalKeys !== undefined && provisionalChecked ? new Set(initialProvisionalKeys) : null),
+    [initialProvisionalKeys, provisionalChecked],
   );
-  const confirmedCreditCards = useMemo(() => confirmedCreditCardAccounts(accounts), [accounts]);
+  const provisionalOnly = provisionalKeySet !== null;
   const currencyOptions = useMemo(() => {
     const extras = [draft.currency, filter.currency].filter((code) => code !== "" && !currencies.includes(code));
     return extras.length === 0 ? currencies : [...currencies, ...extras].sort((a, b) => a.localeCompare(b));
@@ -469,18 +456,13 @@ export function TransactionsPanel({ api, period, currencies, accounts, connectio
   const accountName = (id: string) => nameOf(accounts, connections, id, text.account);
   const kindText = (kind: string) => labelOf(text.kinds, kind);
   const matchingRows = useMemo(() => {
-    if (!provisionalOnly) return page.rows;
-    if (!rulesReady) return [];
-    return page.rows.filter((row) => isProvisionalTransaction(row, {
-      confirmedCreditCardIds: confirmedCreditCards,
-      rulesById,
-    }));
-  }, [provisionalOnly, rulesReady, page.rows, confirmedCreditCards, rulesById]);
+    if (provisionalKeySet === null) return page.rows;
+    return page.rows.filter((row) => provisionalKeySet.has(rowKey(row)));
+  }, [page.rows, provisionalKeySet]);
   const shownRows = useMemo(
     () => orderRows(matchingRows, sort, frozenOrder, categoryName, locale),
     [matchingRows, sort, frozenOrder, categoryName, locale],
   );
-  const isLoading = page.loading || !rulesReady;
   const shownTotal = provisionalOnly ? matchingRows.length : page.total;
 
   useEffect(() => {
@@ -490,11 +472,11 @@ export function TransactionsPanel({ api, period, currencies, accounts, connectio
   }, [focusOnMount]);
 
   useEffect(() => {
-    if (!focusOnMount || didScrollOnLoad.current || isLoading) return;
+    if (!focusOnMount || didScrollOnLoad.current || page.loading) return;
     didScrollOnLoad.current = true;
     const target: { scrollIntoView?: (options?: ScrollIntoViewOptions) => void } | null = sectionRef.current;
     target?.scrollIntoView?.({ behavior: "smooth", block: "start" });
-  }, [focusOnMount, isLoading]);
+  }, [focusOnMount, page.loading]);
 
   const startEditing = (key: string) => {
     closePairs();
@@ -515,7 +497,7 @@ export function TransactionsPanel({ api, period, currencies, accounts, connectio
       setFrozenOrder(null);
     }
   };
-  const truncatedNotice = !isLoading && !page.failed && page.cursor !== null ? (
+  const truncatedNotice = !page.loading && !page.failed && page.cursor !== null ? (
     <div className="budget-notice budget-entries-action" role="note">
       <span>{text.truncated(page.rows.length, page.total)}</span>
       <button type="button" onClick={more}>{text.more}</button>
@@ -549,16 +531,18 @@ export function TransactionsPanel({ api, period, currencies, accounts, connectio
           <input name="query" type="search" maxLength={100} value={draft.query}
             onChange={(event) => { setDraft({ ...draft, query: event.currentTarget.value }); }} />
         </label>
-        <label className="budget-toggle">
-          <input name="provisional" type="checkbox" checked={provisionalOnly}
-            onChange={(event) => {
-              setProvisionalOnly(event.currentTarget.checked);
-              setEditing(null);
-              setFrozenOrder(null);
-              setPairing(null);
-            }} />
-          {text.provisionalOnly}
-        </label>
+        {initialProvisionalKeys === undefined ? null : (
+          <label className="budget-toggle">
+            <input name="provisional" type="checkbox" checked={provisionalOnly}
+              onChange={(event) => {
+                setProvisionalFilter({ period, keys: initialProvisionalKeys, checked: event.currentTarget.checked });
+                setEditing(null);
+                setFrozenOrder(null);
+                setPairing(null);
+              }} />
+            {text.provisionalOnly}
+          </label>
+        )}
         <button type="submit">{text.apply}</button>
       </form>
       {notice === null ? null : <p className="budget-notice" role="alert">{notice}</p>}
@@ -568,8 +552,8 @@ export function TransactionsPanel({ api, period, currencies, accounts, connectio
           <button type="button" onClick={retry}>{text.retry}</button>
         </div>
       ) : null}
-      {isLoading && shownRows.length === 0 ? <p className="budget-muted" role="status">{text.loading}</p> : null}
-      {!isLoading && !page.failed && shownRows.length === 0 ? (
+      {page.loading && shownRows.length === 0 ? <p className="budget-muted" role="status">{text.loading}</p> : null}
+      {!page.loading && !page.failed && shownRows.length === 0 ? (
         <>
           <p className="budget-muted">{text.empty}</p>
           {truncatedNotice}
@@ -578,7 +562,7 @@ export function TransactionsPanel({ api, period, currencies, accounts, connectio
       {shownRows.length === 0 ? null : (
         <>
           <p className="budget-muted">{text.total(shownTotal)}</p>
-          {isLoading ? <p className="budget-muted" role="status">{text.loadingMore(page.rows.length)}</p> : null}
+          {page.loading ? <p className="budget-muted" role="status">{text.loadingMore(page.rows.length)}</p> : null}
           {truncatedNotice}
           <div className="budget-views budget-sort" role="group" aria-label={text.sort}>
             {SORT_KEYS.map((key) => {

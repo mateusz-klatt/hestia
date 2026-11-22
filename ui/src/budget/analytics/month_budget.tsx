@@ -285,7 +285,7 @@ type Shown =
 
 export interface OpenMonthOptions {
   currency?: string;
-  provisional?: boolean;
+  provisionalKeys?: readonly string[];
 }
 
 export interface MonthBudgetViewProps {
@@ -654,7 +654,12 @@ function ReadyDashboard({ data, series, categoryMap, text, locale, onOpenMonth }
               {text.pendingTransfers(data.coverage.pending_transfer_rows)}
               {" "}
               <button type="button" className="budget-link"
-                onClick={() => { onOpenMonth(data.period, data.current_month, { currency: data.currency, provisional: true }); }}>
+                onClick={() => {
+                  onOpenMonth(data.period, data.current_month, {
+                    currency: data.currency,
+                    provisionalKeys: data.coverage.pending_row_keys ?? [],
+                  });
+                }}>
                 {text.viewTransactions}
               </button>
             </p>

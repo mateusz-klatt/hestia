@@ -2740,6 +2740,14 @@
             ],
             "title": "Ledger As Of"
           },
+          "pending_row_keys": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 500,
+            "title": "Pending Row Keys",
+            "type": "array"
+          },
           "pending_transfer_rows": {
             "title": "Pending Transfer Rows",
             "type": "integer"
@@ -10687,7 +10695,7 @@
   "info": {
     "description": "Local cloud-free smart-home control API. Generated from hestia/api_contract.py \u2014 do not edit by hand; run `python -m hestia.api_contract`.",
     "title": "hestia API",
-    "version": "0.30.0"
+    "version": "0.31.0"
   },
   "openapi": "3.1.0",
   "paths": {
