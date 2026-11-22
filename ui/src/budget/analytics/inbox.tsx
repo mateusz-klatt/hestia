@@ -10,7 +10,7 @@ import type { BudgetConnection } from "../model";
 import { ANALYTICS_ERROR, INBOX_MARK_BATCH_MAX, RELOAD_ERRORS, inboxItemKey, inboxRowKey, labelOf,
   pluralPl } from "./model";
 import type { AnalyticsCategory, AnalyticsInbox, AnalyticsInboxConsentItem, AnalyticsInboxItem,
-  AnalyticsInboxKey, AnalyticsInboxMortgageItem, AnalyticsInboxSpendingLimitItem,
+  AnalyticsInboxKey, AnalyticsInboxMarkSaved, AnalyticsInboxMortgageItem, AnalyticsInboxSpendingLimitItem,
   AnalyticsMortgageSchedule } from "./model";
 
 export const inboxLabels = {
@@ -24,9 +24,12 @@ export const inboxLabels = {
     error: "Inbox could not be loaded. Try again.",
     empty: "No active alerts right now.",
     emptyUnread: "No unread active alerts right now.",
+    filterLabel: "Alert filter",
     filterAll: "All active",
     filterUnread: "Unread only",
     markAllRead: "Mark all unread read",
+    markedPartial: (marked: number, total: number) =>
+      `Marked ${String(marked)} of ${String(total)} unread alerts. Click again to mark the rest.`,
     markRead: "Mark read",
     markUnread: "Mark unread",
     readAt: (formatted: string) => `Read ${formatted}`,
@@ -86,9 +89,12 @@ export const inboxLabels = {
     error: "Nie udało się wczytać skrzynki. Spróbuj ponownie.",
     empty: "Brak aktywnych alertów.",
     emptyUnread: "Brak nieprzeczytanych aktywnych alertów.",
+    filterLabel: "Filtr alertów",
     filterAll: "Wszystkie aktywne",
     filterUnread: "Tylko nieprzeczytane",
     markAllRead: "Oznacz wszystkie jako przeczytane",
+    markedPartial: (marked: number, total: number) =>
+      `Oznaczono ${String(marked)} z ${String(total)} nieprzeczytanych alertów. Kliknij ponownie, aby oznaczyć pozostałe.`,
     markRead: "Oznacz jako przeczytane",
     markUnread: "Oznacz jako nieprzeczytane",
     readAt: (formatted: string) => `Przeczytano ${formatted}`,
@@ -293,7 +299,7 @@ export function InboxView({
   const [filter, setFilter] = useState<Filter>("all");
   const [changes, setChanges] = useState(0);
   const [busy, setBusy] = useState(false);
-  const [notice, setNotice] = useState<string | null>(null);
+  const [notice, setNotice] = useState<{ kind: "error" | "info"; text: string } | null>(null);
   const generation = useRef(0);
 
   useEffect(() => {
@@ -325,19 +331,22 @@ export function InboxView({
   useEffect(() => () => { generation.current += 1; }, []);
 
   const reload = useCallback(() => { setChanges((current) => current + 1); }, []);
-  const mutate = useCallback(async (items: AnalyticsInboxKey[], read: boolean, version: string) => {
+  const mutate = useCallback(async (items: AnalyticsInboxKey[], read: boolean, version: string, partialTotal?: number) => {
     const token = generation.current;
     setBusy(true);
     setNotice(null);
-    const result: BudgetResult<{ inbox: unknown }> = await api.markInbox({
+    const result: BudgetResult<{ inbox: AnalyticsInboxMarkSaved }> = await api.markInbox({
       items, read, expected_reads_version: version,
     });
     if (onAccessLoss(result) || token !== generation.current) return;
     setBusy(false);
     if (!result.ok) {
       if (RELOAD_ERRORS.has(result.error)) reload();
-      setNotice(saveFailure(text, result.error));
+      setNotice({ kind: "error", text: saveFailure(text, result.error) });
       return;
+    }
+    if (partialTotal !== undefined && partialTotal > items.length) {
+      setNotice({ kind: "info", text: text.markedPartial(result.data.inbox.changed_count, partialTotal) });
     }
     reload();
   }, [api, onAccessLoss, reload, text]);
@@ -367,20 +376,22 @@ export function InboxView({
           </span>
         </div>
       )}
-      {notice === null ? null : <p className="budget-notice" role="alert">{notice}</p>}
+      {notice === null ? null : (
+        <p className="budget-notice" role={notice.kind === "error" ? "alert" : "status"}>{notice.text}</p>
+      )}
       {shown.state === "loading" ? <p className="budget-muted" role="status">{text.loading}</p> : null}
       {shown.state === "error" ? <p className="budget-notice" role="alert">{text.error}</p> : null}
       {data === null ? null : (
         <section className="budget-entries" aria-label={text.title}>
           <div className="budget-limit-main">
-            <div className="budget-views" role="group" aria-label={text.title}>
+            <div className="budget-views" role="group" aria-label={text.filterLabel}>
               <button type="button" aria-pressed={filter === "all"} disabled={busy}
                 onClick={() => { setFilter("all"); }}>{text.filterAll}</button>
               <button type="button" aria-pressed={filter === "unread"} disabled={busy}
                 onClick={() => { setFilter("unread"); }}>{text.filterUnread}</button>
             </div>
             <button type="button" className="budget-primary" disabled={busy || unreadBatch.length === 0}
-              onClick={() => { void mutate(unreadBatch.map(inboxItemKey), true, data.reads_version); }}>
+              onClick={() => { void mutate(unreadBatch.map(inboxItemKey), true, data.reads_version, data.unread_count); }}>
               {text.markAllRead}
             </button>
           </div>
