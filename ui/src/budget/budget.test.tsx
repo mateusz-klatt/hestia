@@ -970,6 +970,20 @@ describe("analytics views", () => {
     expect(host.querySelector(".budget-month")).toBeNull();
   });
 
+  it.each([[401, "budget_http_401"], [403, "budget_forbidden"]])(
+    "clears the whole budget when the quarantine read reports lost access (%s)", async (status, error) => {
+      const api = fakeApi();
+      api.connections.mockImplementation(() => ok({ connections: [connection], capabilities: analysis }));
+      api.quarantine.mockImplementation(() => fail(status, error));
+      await render(api);
+      expect(host.textContent).toContain("Synthetic Current ••0001");
+      await click(button("Quarantine"));
+      expect(host.textContent).toContain("Only the budget's owner");
+      expect(host.querySelector(".budget-views")).toBeNull();
+      expect(host.querySelector(".budget-entries")).toBeNull();
+      expect(host.textContent).not.toContain("Synthetic Current");
+    });
+
   it("clears the whole budget when the inbox read reports lost access", async () => {
     const api = fakeApi();
     api.connections.mockImplementation(() => ok({ connections: [connection], capabilities: analysis }));

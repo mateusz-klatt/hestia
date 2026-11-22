@@ -13,6 +13,7 @@ type QuarantineApi = Pick<BudgetApi, "quarantine">;
 type AccessLoss = (result: { ok: boolean; status?: number; error?: string }) => boolean;
 
 function ok<T>(data: T): Promise<BudgetResult<T>> { return Promise.resolve({ ok: true, data }); }
+function fail<T>(status: number, error: string): Promise<BudgetResult<T>> { return Promise.resolve({ ok: false, status, error }); }
 function deferred<T>(): { promise: Promise<BudgetResult<T>>; settle: Settle<T> } {
   let settle: Settle<T> = () => undefined;
   const promise = new Promise<BudgetResult<T>>((resolve) => { settle = resolve; });
@@ -206,6 +207,22 @@ describe("QuarantineView", () => {
     await settle();
     expect(onAccessLoss).toHaveBeenCalledWith(denied);
     expect(host.querySelector("details")?.textContent).toContain("2026-11-01");
+  });
+
+  it("shows a localized error and clears loaded data when the current generation fails", async () => {
+    const quarantine = vi.fn<BudgetApi["quarantine"]>()
+      .mockImplementationOnce(() => ok(quarantineOf([quarantineItem({ date: "2026-11-20" })])))
+      .mockImplementationOnce(() => fail<AnalyticsQuarantine>(500, "budget_internal_error"));
+    await renderView({ quarantine });
+    expect(host.querySelector(".budget-total")?.textContent).toContain("Entries kept out of totals");
+    expect(host.querySelector("details")?.textContent).toContain("2026-11-20");
+
+    await click(button("Synthetic Bank · Synthetic Savings ••0002"));
+    expect(quarantine).toHaveBeenLastCalledWith("acc-2");
+    expect(host.querySelector('[role="alert"]')?.textContent).toBe(quarantineLabels.en.error);
+    expect(host.querySelector(".budget-total")).toBeNull();
+    expect(host.querySelector("details")).toBeNull();
+    expect(host.textContent).not.toContain("2026-11-20");
   });
 
   it("shows the newest-item truncation notice using the exact total", async () => {
