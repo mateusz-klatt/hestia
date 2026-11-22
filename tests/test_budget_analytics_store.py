@@ -18,6 +18,7 @@ from sqlalchemy import select
 
 from hestia import db
 from hestia.budget.analytics_core import AnalyticsError, financial_fingerprint
+from hestia.budget import analytics_store
 from hestia.budget.analytics_store import BudgetAnalyticsStore
 from hestia.budget.views import BudgetAccessDenied, BudgetUsersBackendRequired
 from hestia.budget.store import BudgetNotFound
@@ -726,9 +727,9 @@ class RuleTests(AnalyticsCase):
 
     def test_rule_limit_is_checked_at_save_and_examples_are_bounded(self):
         with self.sessions.begin() as session:
-            for index in range(100):
+            for index in range(analytics_store.MAX_RULES):
                 session.add(db.BudgetRule(id=str(uuid.uuid4()), owner="owner", field="description", operator="contains", value="never",
-                            category_id=None, kind="auto", priority=index, enabled=False, version=1,
+                            category_id=None, kind="auto", priority=index % 10001, enabled=False, version=1,
                             created_at=self.now, updated_at=self.now))
         preview = self.store.preview_rule("owner", self.candidate())
         with self.assertRaises(AnalyticsError) as cap:
