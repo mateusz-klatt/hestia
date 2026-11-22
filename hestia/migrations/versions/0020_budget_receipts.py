@@ -27,10 +27,14 @@ def _real_transaction():
     version update. Repeating the request here keeps upgrade and downgrade
     atomic when a caller reaches the revision without that wrapper: pysqlite
     must be out of implicit-commit mode and ``BEGIN`` must already be open.
-    An open transaction is left open so the version update commits with the DDL.
+    Assigning ``isolation_level`` commits a caller's open transaction, so that
+    case is refused. A transaction this migration already opened stays open so
+    the version update commits with the DDL.
     """
     connection = op.get_bind()
     raw = connection.connection.dbapi_connection
+    if raw.in_transaction and raw.isolation_level is not None:
+        raise RuntimeError("refusing to migrate while a transaction is open")
     if raw.isolation_level is not None:
         raw.isolation_level = None
     if not raw.in_transaction:

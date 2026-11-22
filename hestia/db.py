@@ -926,11 +926,15 @@ def open_sqlite_ddl_transaction(connection):
 
     SQLAlchemy's SQLite dialect does not emit ``BEGIN`` (``do_begin`` is a no-op) and
     pysqlite commits before each DDL statement, so a failure mid-revision leaves tables
-    behind while ``alembic_version`` stays put. The returned isolation level must be
-    restored after ``run_migrations`` returns; restoring it does not end the transaction.
-    The caller commits or rolls back only after Alembic's revision update.
+    behind while ``alembic_version`` stays put. Assigning ``isolation_level`` also
+    commits any transaction the caller already opened, so this refuses that case and
+    leaves those writes for the caller to commit or roll back. The returned isolation
+    level must be restored after ``run_migrations`` returns; restoring it does not end
+    the transaction. The caller commits or rolls back only after Alembic's revision update.
     """
     raw = connection.connection.dbapi_connection
+    if raw.in_transaction:
+        raise RuntimeError("refusing to migrate while a transaction is open")
     previous = raw.isolation_level
     raw.isolation_level = None
     if not raw.in_transaction:

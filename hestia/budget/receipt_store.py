@@ -21,8 +21,8 @@ from .analytics_core import (AnalyticsError, canonical_money, compare_money, fin
                              sum_money)
 from .receipt_parser import (CONFIRMED_TEXT_TTL_SECONDS, DRAFT_TTL_SECONDS, MAX_RECEIPT_LINES, ReceiptError,
                              merchant_tokens, parse_receipt, validate_confirm)
-from .receipt_reconcile import (_EVIDENCE_KEYS, audit_payload, creditor_name, evidence_json, erase_receipt_audit,
-                                link_evidence, write_audit)
+from .receipt_reconcile import (audit_payload, creditor_name, evidence_json, erase_receipt_audit, link_evidence,
+                                write_audit)
 from .views import BudgetHTTPStore
 
 MAX_DRAFTS = 20
@@ -31,6 +31,7 @@ CURSOR_TTL_SECONDS = 900
 MAX_CURSOR_CHARS = 8192
 _CURSOR_DOMAIN = b"hestia/budget/receipts/cursor/v1"
 _CANDIDATE_DOMAIN = b"hestia/budget/receipts/candidate/v1"
+_CANDIDATE_TOKEN = re.compile(r"[A-Za-z0-9_-]{43}\Z")
 _UUID = re.compile(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\Z", re.ASCII)
 _MONTH = re.compile(r"[0-9]{4}-[0-9]{2}\Z", re.ASCII)
 _SUMMARY_FIELDS = (
@@ -278,7 +279,7 @@ class BudgetReceiptStore(BudgetHTTPStore):
                 creditor = creditor_name(session, owner, transaction.account_id, transaction.entry_reference, fingerprint)
                 evidence = link_evidence(
                     owner, transaction.account_id, transaction.entry_reference, payload,
-                    row.raw_shop_name, row.raw_nip, creditor)
+                    row.raw_shop_name, row.raw_nip, creditor, fingerprint)
                 token = self._candidate_token(evidence)
             except (AnalyticsError, ValueError, TypeError, RecursionError):
                 continue
@@ -311,7 +312,7 @@ class BudgetReceiptStore(BudgetHTTPStore):
             raise ReceiptError()
         transaction = session.get(Transaction, (link["account_id"], link["entry_reference"]))
         if transaction is None:
-            raise ReceiptError("budget_receipt_not_found", 404)
+            raise ReceiptError("budget_receipt_stale_source", 409)
         if session.get(Leg, (link["account_id"], link["entry_reference"])) is not None:
             raise ReceiptError()
         other = session.scalar(select(Receipt).where(
@@ -340,47 +341,36 @@ class BudgetReceiptStore(BudgetHTTPStore):
         return fingerprint
 
     def _candidate_token(self, evidence):
+        """Fixed-length HMAC over a digest of the evidence, not the evidence itself."""
         raw = evidence_json(evidence).encode("ascii")
-        signature = hmac.new(self._candidate_key, raw, hashlib.sha256).digest()
-        body = base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
-        mac = base64.urlsafe_b64encode(signature).rstrip(b"=").decode("ascii")
-        return body + "." + mac
-
-    def _presented_evidence(self, token, owner, link):
-        try:
-            if not isinstance(token, str) or token.count(".") != 1:
-                raise ValueError
-            encoded, signature = token.split(".")
-            raw = base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4))
-            supplied = base64.urlsafe_b64decode(signature + "=" * (-len(signature) % 4))
-            if not hmac.compare_digest(hmac.new(self._candidate_key, raw, hashlib.sha256).digest(), supplied):
-                raise ValueError
-            evidence = _json(raw)
-            if (not isinstance(evidence, dict) or set(evidence) != set(_EVIDENCE_KEYS)
-                    or evidence["owner"] != owner or evidence["account_id"] != link["account_id"]
-                    or evidence["entry_reference"] != link["entry_reference"]):
-                raise ValueError
-            return evidence
-        except (ValueError, TypeError, KeyError, RecursionError, AnalyticsError):
-            raise ReceiptError() from None
+        digest = hashlib.sha256(raw).digest()
+        signature = hmac.new(self._candidate_key, digest, hashlib.sha256).digest()
+        token = base64.urlsafe_b64encode(signature).rstrip(b"=").decode("ascii")
+        if _CANDIDATE_TOKEN.fullmatch(token) is None:
+            raise ReceiptError()
+        return token
 
     def _confirmed_link(self, session, owner, cleaned, link, row):
-        presented = self._presented_evidence(link["candidate_token"], owner, link)
+        token = link["candidate_token"]
+        if not isinstance(token, str) or _CANDIDATE_TOKEN.fullmatch(token) is None:
+            raise ReceiptError()
         transaction = session.get(Transaction, (link["account_id"], link["entry_reference"]))
         if transaction is None:
-            raise ReceiptError("budget_receipt_not_found", 404)
+            raise ReceiptError("budget_receipt_stale_source", 409)
         try:
             payload = _json(transaction.payload_json)
             fingerprint = None if transaction.uncertain else financial_fingerprint(payload)
             creditor = creditor_name(session, owner, link["account_id"], link["entry_reference"], fingerprint)
             current = link_evidence(
                 owner, link["account_id"], link["entry_reference"], payload,
-                cleaned["raw_shop_name"], cleaned["raw_nip"], creditor)
+                cleaned["raw_shop_name"], cleaned["raw_nip"], creditor, fingerprint)
+            expected = self._candidate_token(current)
+            stored = evidence_json(current)
         except (AnalyticsError, ValueError, TypeError, KeyError, RecursionError):
             raise ReceiptError("budget_receipt_stale_source", 409) from None
-        if current != presented:
+        if not hmac.compare_digest(expected, token):
             raise ReceiptError("budget_receipt_stale_source", 409)
-        return self._verify_link(session, owner, cleaned, link, row.id), evidence_json(current)
+        return self._verify_link(session, owner, cleaned, link, row.id), stored
 
     def confirm(self, owner, values):
         cleaned = validate_confirm(values)

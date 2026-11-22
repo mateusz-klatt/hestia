@@ -462,6 +462,25 @@ NR KARTY ****5555
         self.assertIn("2026-11-20", redacted)
         untouched = "NIP 7791011327\n2026-11-20\n"
         self.assertEqual(redact_pan(untouched), untouched)
+        self.assertEqual(redact_pan("4111********1111"), "[REDACTED]")
+        beside_mask = redact_pan("4111********1111 998877")
+        self.assertNotIn("4111", beside_mask)
+        self.assertIn("998877", beside_mask)
+        beside_pan = redact_pan("4111111111111111 20261120")
+        self.assertNotIn("4111111111111111", beside_pan)
+        self.assertIn("20261120", beside_pan)
+        self.assertNotIn("5351", redact_pan("5351  0055  5555  5555 2026"))
+
+    def test_pan_scan_is_bounded_before_a_long_mask_run(self):
+        import time
+        started = time.perf_counter()
+        with self.assertRaises(ReceiptError):
+            redact_pan("*" * 50_000)
+        self.assertLess(time.perf_counter() - started, 0.5)
+        started = time.perf_counter()
+        scanned = redact_pan("*" * (32 * 1024 - 1))
+        self.assertLess(time.perf_counter() - started, 0.5)
+        self.assertNotIn("[REDACTED]", scanned)
 
     def test_money_magnitude_precision_and_folded_name_length_are_limited(self):
         def text(item):
@@ -475,6 +494,11 @@ NR KARTY ****5555
             parse_receipt(text("MLEKO 1 x 1,00000 5,00 A"))
         with self.assertRaises(ReceiptError):
             parse_receipt(text("MLEKO 1 x 1000000000 5,00 A"))
+        with self.assertRaises(ReceiptError):
+            parse_receipt(
+                "BIEDRONKA\nNIP 7791011327\n2026-11-30 12:34\n"
+                "MLEKO 1 x 5,00 5,00 A\nRABAT 999999999,9999\nRABAT 999999999,9999\n"
+                "SUMA PLN 5,00\n")
         wide = parse_receipt(
             "BIEDRONKA\nNIP 7791011327\n2026-11-30 12:34\n"
             "MLEKO 1 x 999999999,9999 999999999,9999 A\nSUMA PLN 999999999,9999\n")
@@ -532,6 +556,65 @@ NR KARTY ****5555
         with self.sessions.begin() as session:
             self.assertEqual(reconcile_receipt_links(session, "owner", self.now + 5), 0)
         self.assert_latched(parsed["receipt_id"], confirmed["version"])
+
+    def test_confirm_token_binds_remittance_fingerprint_and_stays_compact(self):
+        from hestia.budget.receipt_reconcile import reconcile_receipt_links
+
+        reference = "Ż" * 450
+        self.add_transaction("a", reference, amount="100", entry_reference=reference, booking_date="2026-11-30")
+        parsed = self.draft()
+        candidate = next(item for item in parsed["candidates"] if item["entry_reference"] == reference)
+        token = candidate["candidate_token"]
+        self.assertEqual(len(token), 43)
+        self.assertLessEqual(len(token), 4096)
+        self.assertNotIn(".", token)
+        self.assertNotIn(reference, token)
+        link = {"account_id": candidate["account_id"], "entry_reference": reference, "candidate_token": token}
+        saved = self.receipts.confirm("owner", confirm_values(parsed, link=link))["receipt"]
+        evidence = json.loads(self.receipt_row(parsed["receipt_id"]).linked_evidence)
+        self.assertEqual(evidence["entry_reference"], reference)
+        self.assertEqual(evidence["remittance_information"], ["Synthetic SHOP"])
+        self.assertEqual(len(evidence["financial_fingerprint"]), 64)
+        self.assertTrue(saved["linked"])
+
+        preview = self.draft(item="MLEKO INNE")
+        issued = next(item for item in preview["candidates"] if item["entry_reference"] == "debit")
+        debit = {"account_id": issued["account_id"], "entry_reference": "debit",
+                 "candidate_token": issued["candidate_token"]}
+        self.change_transaction(remittance_information=["Corrected synthetic text"])
+        with self.assertRaises(ReceiptError) as stale_text:
+            self.receipts.confirm("owner", confirm_values(preview, link=debit))
+        self.assertEqual((stale_text.exception.code, stale_text.exception.status),
+                         ("budget_receipt_stale_source", 409))
+        self.assertEqual(self.receipt_row(preview["receipt_id"]).status, "draft")
+        self.change_transaction(remittance_information=["Synthetic SHOP"])
+        self.change_transaction(amount="101")
+        with self.assertRaises(ReceiptError) as stale_amount:
+            self.receipts.confirm("owner", confirm_values(preview, link=debit))
+        self.assertEqual(stale_amount.exception.code, "budget_receipt_stale_source")
+        self.change_transaction(amount="100")
+
+        fresh = self.draft(item="MLEKO TRZECIE")
+        fresh_link = self.link()
+        fresh_link["candidate_token"] = next(
+            item["candidate_token"] for item in fresh["candidates"] if item["entry_reference"] == "debit")
+        with self.sessions.begin() as session:
+            session.delete(session.get(db.BudgetTransaction, (self.accounts["a"], "debit")))
+        with self.assertRaises(ReceiptError) as missing:
+            self.receipts.confirm("owner", confirm_values(fresh, link=fresh_link))
+        self.assertEqual((missing.exception.code, missing.exception.status),
+                         ("budget_receipt_stale_source", 409))
+        self.assertEqual(self.receipt_row(fresh["receipt_id"]).status, "draft")
+
+        self.add_transaction("a", "debit", amount="100", booking_date="2026-11-30")
+        rebound = self.draft()
+        confirmed = self.receipts.confirm("owner", confirm_values(rebound, link=self.link()))["receipt"]
+        self.change_transaction(remittance_information=["Changed after confirm"])
+        with self.sessions.begin() as session:
+            self.assertEqual(reconcile_receipt_links(session, "owner", self.now), 1)
+        with self.sessions.begin() as session:
+            self.assertEqual(reconcile_receipt_links(session, "owner", self.now + 1), 0)
+        self.assert_latched(rebound["receipt_id"], confirmed["version"])
 
     def test_creditor_metadata_must_match_the_ledger_fingerprint(self):
         self.metadata("a", "debit", {"creditor_name": "SYNTHETIC GROCER"})

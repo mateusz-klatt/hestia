@@ -111,65 +111,97 @@ def _pan_digit(char):
     return None
 
 
-def _mask_run(text, index):
-    """Length of the contiguous mask run containing ``index``. A lone ``x`` or ``*`` is an operator."""
-    if text[index] not in _PAN_MASKS:
-        return 0
-    start = index
-    while start and text[start - 1] in _PAN_MASKS:
-        start -= 1
-    end = index + 1
-    while end < len(text) and text[end] in _PAN_MASKS:
-        end += 1
-    return end - start
+def _pan_mask_flags(text):
+    """Mark mask characters that sit in a contiguous run of at least two.
+
+    A solitary ``x`` or ``*`` is a multiplication operator. One forward pass keeps
+    the span scan linear on a long mask run.
+    """
+    flags = bytearray(len(text))
+    index = 0
+    length = len(text)
+    while index < length:
+        if text[index] not in _PAN_MASKS:
+            index += 1
+            continue
+        end = index + 1
+        while end < length and text[end] in _PAN_MASKS:
+            end += 1
+        if end - index >= 2:
+            flags[index:end] = b"\x01" * (end - index)
+        index = end
+    return flags
 
 
-def _pan_symbol(text, index):
+def _pan_kind(text, flags, index):
     if _pan_digit(text[index]) is not None:
         return "digit"
-    if _mask_run(text, index) >= 2:
+    if flags[index]:
         return "mask"
     return None
 
 
+def _pan_group_length(text, flags, index):
+    length = len(text)
+    end = index
+    while end < length and _pan_kind(text, flags, end) is not None:
+        end += 1
+    return end - index
+
+
 def _pan_spans(text):
-    """12–19 digit PANs and masked PANs, allowing repeated in-line separators."""
+    """12–19 digit PANs and masked PANs, allowing repeated in-line separators.
+
+    A numeric reference after a gap does not swallow a PAN that is already in
+    range: the span closes before that reference instead of being discarded.
+    Each character is visited a constant number of times.
+    """
+    flags = _pan_mask_flags(text)
     spans = []
     length = len(text)
     index = 0
     while index < length:
-        if (_pan_symbol(text, index) is None
-                or (index and (_pan_symbol(text, index - 1) is not None or text[index - 1] in ".,"))):
+        if (_pan_kind(text, flags, index) is None
+                or (index and (_pan_kind(text, flags, index - 1) is not None or text[index - 1] in ".,"))):
             index += 1
             continue
         start = index
         digits = masks = 0
         end = index
-        while end < length:
-            kind = _pan_symbol(text, end)
+        cursor = index
+        accept = False
+        while cursor < length:
+            kind = _pan_kind(text, flags, cursor)
+            if kind is None:
+                break
+            if digits + masks >= 19:
+                accept = False
+                break
             if kind == "digit":
                 digits += 1
-            elif kind == "mask":
-                masks += 1
             else:
-                break
-            if digits + masks > 19:
-                break
-            cursor = end + 1
-            while cursor < length and _pan_gap(text[cursor]):
-                cursor += 1
-            if cursor < length and _pan_symbol(text, cursor) is not None:
-                end = cursor
+                masks += 1
+            cursor += 1
+            end = cursor
+            gap = cursor
+            while gap < length and _pan_gap(text[gap]):
+                gap += 1
+            if gap < length and _pan_kind(text, flags, gap) is not None:
+                if digits + masks + _pan_group_length(text, flags, gap) > 19:
+                    accept = 12 <= digits + masks <= 19
+                    break
+                cursor = gap
                 continue
-            end += 1
+            accept = True
             break
         count = digits + masks
-        if 12 <= count <= 19 and (masks or digits == count) and not (
-                end < length and _pan_symbol(text, end) is not None):
+        if accept and 12 <= count <= 19 and (masks or digits == count):
             spans.append((start, end))
             index = end
         else:
             index = start + 1
+            while index < length and _pan_kind(text, flags, index) is not None:
+                index += 1
     return spans
 
 
@@ -226,10 +258,28 @@ def _redact_card_continuations(text):
     return "\n".join(lines)
 
 
-def redact_pan(text):
+def _receipt_text(text):
+    """Reject oversized or control-bearing input before any PAN scan."""
     if not isinstance(text, str):
         raise ReceiptError()
+    try:
+        size = len(text.encode("utf-8"))
+    except UnicodeEncodeError:
+        raise ReceiptError() from None
+    if size < 1 or size > MAX_TEXT_BYTES or _CONTROL.search(text):
+        raise ReceiptError()
     text = unicodedata.normalize("NFC", text).replace("\r\n", "\n").replace("\r", "\n")
+    try:
+        size = len(text.encode("utf-8"))
+    except UnicodeEncodeError:
+        raise ReceiptError() from None
+    if size > MAX_TEXT_BYTES or _CONTROL.search(text):
+        raise ReceiptError()
+    return text
+
+
+def redact_pan(text):
+    text = _receipt_text(text)
     text = _TERMINAL.sub(lambda match: match[1] + " [REDACTED]", text)
     text = _redact_spans(text, _pan_spans(text))
     return _redact_card_continuations(text)
@@ -279,6 +329,11 @@ def _bounded_money(value, *, mismatch=False):
 
 def _decimal(value):
     return _bounded_money(value)
+
+
+def _bounded_sum(values):
+    """Reject an accumulated total that has left the receipt magnitude limit."""
+    return _bounded_money(sum_money(values))
 
 
 def _iso_date(year, month, day):
@@ -342,8 +397,8 @@ def _parse_lines(lines):
             if compare_money(amount, "0") < 0:
                 amount = negate_money(amount)
             line = result[-1]
-            line["discount_amount"] = sum_money((line["discount_amount"], amount))
-            line["net_line_total"] = sum_money((line["gross_line_total"], negate_money(line["discount_amount"])))
+            line["discount_amount"] = _bounded_sum((line["discount_amount"], amount))
+            line["net_line_total"] = _bounded_sum((line["gross_line_total"], negate_money(line["discount_amount"])))
             pending = None
             continue
         match = _ITEM.fullmatch(value)
@@ -376,12 +431,6 @@ def _parse_lines(lines):
 
 def parse_receipt(text):
     text = redact_pan(text)
-    try:
-        size = len(text.encode("utf-8"))
-    except UnicodeEncodeError:
-        raise ReceiptError() from None
-    if size < 1 or size > MAX_TEXT_BYTES or _CONTROL.search(text):
-        raise ReceiptError()
     lines = text.split("\n")
     if len(lines) > MAX_TEXT_LINES:
         raise ReceiptError()
@@ -421,13 +470,14 @@ def parse_receipt(text):
     has_cash = "gotowka" in key
     payment = "mixed" if has_card and has_cash else "blik" if "blik" in key else "card" if has_card else "cash" if has_cash else "unknown"
     parsed_lines = _parse_lines(lines)
-    net = sum_money(line["net_line_total"] for line in parsed_lines)
+    math_delta = None if total is None else _bounded_sum((
+        _bounded_sum(line["net_line_total"] for line in parsed_lines), negate_money(total)))
     return {
         "raw_shop_name": shop_name, "raw_nip": nip, "chain_key": chain_for(shop_name, nip),
         "receipt_kind": "refund" if "zwrot" in key else "purchase", "receipt_date": receipt_date,
         "receipt_time": receipt_time, "total_amount": total, "currency": "PLN" if total is not None else None,
         "payment_method": payment, "lines": parsed_lines,
-        "math_delta": None if total is None else sum_money((net, negate_money(total))),
+        "math_delta": math_delta,
         "raw_ocr_text": text,
     }
 

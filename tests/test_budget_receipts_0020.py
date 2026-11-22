@@ -231,9 +231,9 @@ class ReceiptMigration0020Tests(unittest.TestCase):
                     conn.exec_driver_sql(
                         "INSERT INTO budget_receipts (id, owner, status, source_kind, receipt_date, total_amount, "
                         "currency, payment_method, linked_account_id, linked_entry_ref, linked_fingerprint, "
-                        "linked_evidence, version, created_at, updated_at) VALUES "
+                        "version, created_at, updated_at) VALUES "
                         "(?, 'owner', 'confirmed', 'live_text', '2026-11-20', '100', 'PLN', 'card', "
-                        "'foreign', 'entry', 'fingerprint', '{}', 1, 1, 1)", (RECEIPT_A,))
+                        "'foreign', 'entry', 'fingerprint', 1, 1, 1)", (RECEIPT_A,))
             with self.assertRaises(IntegrityError):
                 with engine.begin() as conn:
                     conn.exec_driver_sql(
@@ -246,6 +246,25 @@ class ReceiptMigration0020Tests(unittest.TestCase):
                     "version, created_at, updated_at) VALUES (?, 'owner', 'draft', 'live_text', 'synthetic', 2.0, 1, 1, 1)",
                     (RECEIPT_B,))
                 self.assertEqual(conn.exec_driver_sql("SELECT COUNT(*) FROM budget_receipts").scalar(), 1)
+        finally:
+            engine.dispose()
+
+    def test_migration_does_not_commit_pending_caller_writes(self):
+        engine = db.make_engine(self.path)
+        try:
+            with engine.begin() as conn:
+                command.upgrade(db._alembic_config(conn), "0019")
+            with self.assertRaises(RuntimeError):
+                with engine.begin() as conn:
+                    conn.exec_driver_sql(
+                        "INSERT INTO users (username, password_hash, role) "
+                        "VALUES ('pending', 'h', 'admin')")
+                    command.upgrade(db._alembic_config(conn), "0020")
+            with engine.connect() as conn:
+                self.assertIsNone(conn.exec_driver_sql(
+                    "SELECT username FROM users WHERE username='pending'").scalar())
+                self.assertEqual(conn.exec_driver_sql(
+                    "SELECT version_num FROM alembic_version").scalar(), "0019")
         finally:
             engine.dispose()
 

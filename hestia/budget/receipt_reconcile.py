@@ -15,7 +15,7 @@ _CHUNK = 400
 _MAX_CREDITOR_LEN = 256
 _EVIDENCE_KEYS = (
     "owner", "account_id", "entry_reference", "transaction_date", "booking_date", "value_date",
-    "raw_shop_name", "raw_nip", "creditor_name",
+    "raw_shop_name", "raw_nip", "creditor_name", "remittance_information", "financial_fingerprint",
 )
 
 
@@ -99,14 +99,26 @@ def creditor_name(session, owner, account_id, entry_reference, fingerprint):
     return value
 
 
-def link_evidence(owner, account_id, entry_reference, payload, shop_name, nip, creditor):
+def _remittance(payload):
+    value = payload.get("remittance_information") if isinstance(payload, dict) else None
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        return []
+    return list(value)
+
+
+def link_evidence(owner, account_id, entry_reference, payload, shop_name, nip, creditor, fingerprint):
     payload = payload if isinstance(payload, dict) else {}
+    if fingerprint is not None and (
+            not isinstance(fingerprint, str) or len(fingerprint) != 64
+            or any(char not in "0123456789abcdef" for char in fingerprint)):
+        raise AnalyticsError()
     evidence = {
         "owner": owner, "account_id": account_id, "entry_reference": entry_reference,
         "transaction_date": _bound_date(payload.get("transaction_date")),
         "booking_date": _bound_date(payload.get("booking_date")),
         "value_date": _bound_date(payload.get("value_date")),
         "raw_shop_name": shop_name, "raw_nip": nip, "creditor_name": creditor,
+        "remittance_information": _remittance(payload), "financial_fingerprint": fingerprint,
     }
     if set(evidence) != set(_EVIDENCE_KEYS):
         raise AnalyticsError()
@@ -168,7 +180,8 @@ def reconcile_receipt_links(session, owner, now):
             payload = {} if transaction is None else _json(transaction.payload_json)
             creditor = creditor_name(session, owner, row.linked_account_id, row.linked_entry_ref, current)
             evidence = evidence_json(link_evidence(
-                owner, row.linked_account_id, row.linked_entry_ref, payload, row.raw_shop_name, row.raw_nip, creditor))
+                owner, row.linked_account_id, row.linked_entry_ref, payload, row.raw_shop_name, row.raw_nip,
+                creditor, current))
         except (AnalyticsError, ValueError, TypeError, RecursionError):
             evidence = None
         if current == row.linked_fingerprint and evidence == row.linked_evidence:
