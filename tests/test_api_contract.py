@@ -1,13 +1,15 @@
 """Tests for hestia.api_contract — the public API contract.
 
-Two guarantees:
+Contract guarantees:
   1. The checked-in ``docs/api/openapi.json`` never drifts from the models (regenerate with
      ``python -m hestia.api_contract``).
   2. Each request DTO accepts/rejects exactly what the authoritative runtime validator does, so the
      generated client types can never lie about what the server will accept.
+  3. The forecast addition leaves the OpenAPI 0.25.0 contract structurally intact.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import tempfile
 import unittest
@@ -51,6 +53,20 @@ class OpenApiArtifactTests(unittest.TestCase):
             api_contract.build_openapi(),
             "docs/api/openapi.json is stale — run `python -m hestia.api_contract`",
         )
+
+    def test_forecast_contract_is_strictly_additive_from_0_25_0(self):
+        document = api_contract.build_openapi()
+        self.assertEqual(document["info"]["version"], "0.26.0")
+        document["info"]["version"] = "0.25.0"
+        del document["paths"]["/api/budget/analytics/forecast"]
+        for suffix in ("", "Summary", "CurrencyTotal", "Deduplication", "Month", "Item"):
+            del document["components"]["schemas"]["BudgetAnalyticsForecast" + suffix]
+
+        # SHA-256 of canonical JSON parsed from dc03790:docs/api/openapi.json.
+        # Canonicalization ignores object key order and whitespace while preserving operation and schema content.
+        canonical = json.dumps(document, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        self.assertEqual(hashlib.sha256(canonical).hexdigest(),
+                         "80a427bb64b7d1eb9f7f84138e14ea97c78b0b2ab5b5c0e0165a61d6453db4b5")
 
     def test_openapi_is_well_formed_3_1(self):
         doc = api_contract.build_openapi()

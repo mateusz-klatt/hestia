@@ -1252,6 +1252,347 @@
         "title": "BudgetAnalyticsEffective",
         "type": "object"
       },
+      "BudgetAnalyticsForecast": {
+        "description": "Read-only estimate of scheduled and recurring commitments by UTC calendar month.",
+        "properties": {
+          "deduplications": {
+            "items": {
+              "$ref": "#/components/schemas/BudgetAnalyticsForecastDeduplication"
+            },
+            "title": "Deduplications",
+            "type": "array"
+          },
+          "end_month": {
+            "title": "End Month",
+            "type": "string"
+          },
+          "evaluation_date": {
+            "title": "Evaluation Date",
+            "type": "string"
+          },
+          "evaluation_timezone": {
+            "const": "UTC",
+            "title": "Evaluation Timezone",
+            "type": "string"
+          },
+          "freshness_stale": {
+            "title": "Freshness Stale",
+            "type": "boolean"
+          },
+          "horizon_months": {
+            "maximum": 12,
+            "minimum": 1,
+            "title": "Horizon Months",
+            "type": "integer"
+          },
+          "ledger_as_of": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ledger As Of"
+          },
+          "months": {
+            "items": {
+              "$ref": "#/components/schemas/BudgetAnalyticsForecastMonth"
+            },
+            "maxItems": 12,
+            "minItems": 1,
+            "title": "Months",
+            "type": "array"
+          },
+          "rule_version": {
+            "title": "Rule Version",
+            "type": "integer"
+          },
+          "schedules_version": {
+            "title": "Schedules Version",
+            "type": "string"
+          },
+          "snapshot_digest": {
+            "title": "Snapshot Digest",
+            "type": "string"
+          },
+          "stale_account_ids": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 200,
+            "title": "Stale Account Ids",
+            "type": "array"
+          },
+          "stale_account_ids_truncated": {
+            "title": "Stale Account Ids Truncated",
+            "type": "boolean"
+          },
+          "start_month": {
+            "title": "Start Month",
+            "type": "string"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/BudgetAnalyticsForecastSummary"
+          },
+          "totals": {
+            "items": {
+              "$ref": "#/components/schemas/BudgetAnalyticsForecastCurrencyTotal"
+            },
+            "title": "Totals",
+            "type": "array"
+          }
+        },
+        "required": [
+          "evaluation_date",
+          "evaluation_timezone",
+          "horizon_months",
+          "start_month",
+          "end_month",
+          "ledger_as_of",
+          "freshness_stale",
+          "stale_account_ids",
+          "stale_account_ids_truncated",
+          "snapshot_digest",
+          "schedules_version",
+          "rule_version",
+          "summary",
+          "totals",
+          "deduplications",
+          "months"
+        ],
+        "title": "BudgetAnalyticsForecast",
+        "type": "object"
+      },
+      "BudgetAnalyticsForecastCurrencyTotal": {
+        "description": "Exact decimal commitment totals in one currency.",
+        "properties": {
+          "currency": {
+            "title": "Currency",
+            "type": "string"
+          },
+          "estimated_total": {
+            "title": "Estimated Total",
+            "type": "string"
+          },
+          "scheduled_total": {
+            "title": "Scheduled Total",
+            "type": "string"
+          },
+          "total": {
+            "title": "Total",
+            "type": "string"
+          }
+        },
+        "required": [
+          "currency",
+          "total",
+          "scheduled_total",
+          "estimated_total"
+        ],
+        "title": "BudgetAnalyticsForecastCurrencyTotal",
+        "type": "object"
+      },
+      "BudgetAnalyticsForecastDeduplication": {
+        "properties": {
+          "account_stale": {
+            "title": "Account Stale",
+            "type": "boolean"
+          },
+          "amount": {
+            "title": "Amount",
+            "type": "string"
+          },
+          "currency": {
+            "title": "Currency",
+            "type": "string"
+          },
+          "day_distance": {
+            "maximum": 5,
+            "minimum": 0,
+            "title": "Day Distance",
+            "type": "integer"
+          },
+          "last_observed_date": {
+            "title": "Last Observed Date",
+            "type": "string"
+          },
+          "matched_due_date": {
+            "title": "Matched Due Date",
+            "type": "string"
+          },
+          "recurring_label": {
+            "maxLength": 256,
+            "title": "Recurring Label",
+            "type": "string"
+          },
+          "schedule_id": {
+            "title": "Schedule Id",
+            "type": "string"
+          },
+          "schedule_label": {
+            "maxLength": 256,
+            "title": "Schedule Label",
+            "type": "string"
+          }
+        },
+        "required": [
+          "schedule_id",
+          "schedule_label",
+          "recurring_label",
+          "amount",
+          "currency",
+          "matched_due_date",
+          "last_observed_date",
+          "day_distance",
+          "account_stale"
+        ],
+        "title": "BudgetAnalyticsForecastDeduplication",
+        "type": "object"
+      },
+      "BudgetAnalyticsForecastItem": {
+        "properties": {
+          "account_stale": {
+            "title": "Account Stale",
+            "type": "boolean"
+          },
+          "amount": {
+            "title": "Amount",
+            "type": "string"
+          },
+          "confidence": {
+            "enum": [
+              "scheduled",
+              "high",
+              "medium"
+            ],
+            "title": "Confidence",
+            "type": "string"
+          },
+          "currency": {
+            "title": "Currency",
+            "type": "string"
+          },
+          "expected_date": {
+            "title": "Expected Date",
+            "type": "string"
+          },
+          "label": {
+            "maxLength": 256,
+            "title": "Label",
+            "type": "string"
+          },
+          "past_due": {
+            "title": "Past Due",
+            "type": "boolean"
+          },
+          "schedule_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Schedule Id"
+          },
+          "source": {
+            "enum": [
+              "mortgage",
+              "recurring"
+            ],
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source",
+          "schedule_id",
+          "label",
+          "amount",
+          "currency",
+          "expected_date",
+          "confidence",
+          "past_due",
+          "account_stale"
+        ],
+        "title": "BudgetAnalyticsForecastItem",
+        "type": "object"
+      },
+      "BudgetAnalyticsForecastMonth": {
+        "properties": {
+          "currencies": {
+            "items": {
+              "$ref": "#/components/schemas/BudgetAnalyticsForecastCurrencyTotal"
+            },
+            "title": "Currencies",
+            "type": "array"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/BudgetAnalyticsForecastItem"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "month": {
+            "title": "Month",
+            "type": "string"
+          }
+        },
+        "required": [
+          "month",
+          "currencies",
+          "items"
+        ],
+        "title": "BudgetAnalyticsForecastMonth",
+        "type": "object"
+      },
+      "BudgetAnalyticsForecastSummary": {
+        "properties": {
+          "deduped_recurring_count": {
+            "title": "Deduped Recurring Count",
+            "type": "integer"
+          },
+          "excluded_accounts": {
+            "title": "Excluded Accounts",
+            "type": "integer"
+          },
+          "lapsed_recurring_count": {
+            "title": "Lapsed Recurring Count",
+            "type": "integer"
+          },
+          "overdue_mortgage_schedule_count": {
+            "title": "Overdue Mortgage Schedule Count",
+            "type": "integer"
+          },
+          "selected_accounts": {
+            "title": "Selected Accounts",
+            "type": "integer"
+          },
+          "stale_accounts": {
+            "title": "Stale Accounts",
+            "type": "integer"
+          },
+          "stale_recurring_count": {
+            "title": "Stale Recurring Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "selected_accounts",
+          "excluded_accounts",
+          "stale_accounts",
+          "overdue_mortgage_schedule_count",
+          "lapsed_recurring_count",
+          "deduped_recurring_count",
+          "stale_recurring_count"
+        ],
+        "title": "BudgetAnalyticsForecastSummary",
+        "type": "object"
+      },
       "BudgetAnalyticsFreshness": {
         "properties": {
           "account_id": {
@@ -9394,7 +9735,7 @@
   "info": {
     "description": "Local cloud-free smart-home control API. Generated from hestia/api_contract.py \u2014 do not edit by hand; run `python -m hestia.api_contract`.",
     "title": "hestia API",
-    "version": "0.25.0"
+    "version": "0.26.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -10289,6 +10630,129 @@
           }
         },
         "summary": "Save an owner-private local classification",
+        "x-required-role": "admin"
+      }
+    },
+    "/api/budget/analytics/forecast": {
+      "get": {
+        "description": "Read-only evaluation of unmarked mortgage instalments and active recurring charges from one local snapshot using the server UTC date. Matches recurring hints to individual scheduled instalments to suppress duplicate estimates. An optional currency filter scopes commitments, deduplications and their summary counts. Snapshot metadata and account freshness cover all selected accounts. The estimate excludes spending limits and makes no bank requests or stored changes.",
+        "operationId": "getBudgetAnalyticsForecast",
+        "parameters": [
+          {
+            "description": "Integer 1..12, starting with the current server UTC calendar month.",
+            "in": "query",
+            "name": "months",
+            "required": false,
+            "schema": {
+              "default": "3",
+              "pattern": "^[0-9]{1,2}$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "",
+            "in": "query",
+            "name": "currency",
+            "required": false,
+            "schema": {
+              "pattern": "^[A-Z]{3}$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetAnalyticsForecast"
+                }
+              }
+            },
+            "description": "Owner-private upcoming commitments estimate and freshness from one local snapshot."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Invalid forecast query: months must be an integer 1..12, currency must match ^[A-Z]{3}$, and unknown or duplicate parameters (including today) are rejected."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "session required; middleware may return an empty body"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "admin owner or browser-origin requirement failed; middleware may return an empty body"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "unknown, disabled or foreign resource"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "SQLite backend required: forecast requires HESTIA_PERSIST=sqlite."
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Forecast limit exceeded (>100,000 selected rows, >100 schedules, >1,200 paid marks per schedule, >200 active currency-filtered hints, >3,600 projected items, or >4 MiB UTF-8 JSON payload); zero partial totals returned."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Stored mortgage schedule, ledger, or metadata integrity check failed (`budget_analytics_data_error`), including stored-data helper errors mapped to 500 after forecast query validation, or unexpected internal failure (`budget_internal_error`)."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Analytics storage or budget configuration unavailable (`budget_analytics_unavailable` or `budget_unavailable`)."
+          }
+        },
+        "summary": "Read the owner-private upcoming commitments estimate",
         "x-required-role": "admin"
       }
     },

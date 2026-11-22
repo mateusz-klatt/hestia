@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import re
 
@@ -11,13 +12,14 @@ from .. import api_contract, store_sql
 from ..db import init_db
 from . import api
 from .analytics_core import AnalyticsError
-from .analytics_views import BudgetAnalyticsViews
+from .analytics_views import BudgetAnalyticsViews, _forecast_query
 from .views import BudgetUsersBackendRequired
 
 PREFIX = "/api/budget/analytics"
 FLAG = "HESTIA_BUDGET_ANALYTICS_ENABLED"
+MAX_FORECAST_RESPONSE_BYTES = 4 * 1024 * 1024
 READS = ("overview", "transactions", "categories", "rules", "transfers", "recurring", "spending-limits",
-         "mortgages", "inbox", "quarantine")
+         "mortgages", "inbox", "quarantine", "forecast")
 WRITES = {
     "category-create": (api_contract.BudgetAnalyticsCategoryCreateRequest, "create_category", "category"),
     "category-update": (api_contract.BudgetAnalyticsCategoryUpdateRequest, "update_category", "category"),
@@ -35,7 +37,8 @@ _QUERY_FIELDS = {"overview": {"period", "currency"},
                  "transfers": {"period", "currency", "status", "limit", "cursor"},
                  "recurring": {"currency"},
                  "spending-limits": {"period", "currency"},
-                 "quarantine": {"account_id"}}
+                 "quarantine": {"account_id"},
+                 "forecast": {"months", "currency"}}
 
 
 def enabled():
@@ -59,6 +62,8 @@ def _query(request, operation):
         if not re.fullmatch(r"[0-9]{1,3}", value, re.ASCII) or not 1 <= int(value) <= 200:
             raise AnalyticsError()
         values["limit"] = int(value)
+    if operation == "forecast":
+        _forecast_query(**values)
     return values
 
 
@@ -69,8 +74,24 @@ def _store(secret):
     return BudgetAnalyticsViews(sessions, cursor_secret=secret)
 
 
+def _encode_forecast(payload):
+    encoder = json.JSONEncoder(ensure_ascii=False, allow_nan=False, separators=(",", ":"))
+    body = bytearray()
+    try:
+        for chunk in encoder.iterencode(payload):
+            encoded = chunk.encode("utf-8")
+            if len(body) + len(encoded) > MAX_FORECAST_RESPONSE_BYTES:
+                raise AnalyticsError("budget_analytics_limit", 413)
+            body.extend(encoded)
+    except UnicodeEncodeError:
+        raise AnalyticsError("budget_analytics_data_error", 500) from None
+    return body
+
+
 def _read(owner, operation, query, secret):
     result = getattr(_store(secret), operation.replace("-", "_"))(owner, **query)
+    if operation == "forecast":
+        return _encode_forecast(result)
     return {operation: result} if operation in ("categories", "rules") else result
 
 
@@ -105,6 +126,9 @@ def register(app, read_json_body, *, auth_enabled, session_secret):
             if request.method == "GET":
                 query = _query(request, operation)
                 result = await asyncio.to_thread(_read, owner, operation, query, secret)
+                if operation == "forecast":
+                    return web.Response(body=result, content_type="application/json", charset="utf-8",
+                                        headers=api.PRIVATE_HEADERS)
             else:
                 api._browser(request, owner, secret)
                 max_bytes = 65536 if operation == "inbox-mark" else 16384
