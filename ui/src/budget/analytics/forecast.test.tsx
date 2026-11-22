@@ -187,6 +187,24 @@ describe("ForecastView", () => {
     expect(eur?.textContent).not.toContain("PLN");
   });
 
+  it.each([
+    { locale: "en-US", months: ["November 2026", "December 2026", "January 2027"] },
+    { locale: "pl-PL", months: ["listopad 2026", "grudzień 2026", "styczeń 2027"] },
+  ])("localizes the month sections and table row headers in $locale", async ({ locale, months }) => {
+    const api = fakeApi();
+    api.forecast.mockResolvedValue(ok(populatedForecast()));
+    await show(api, locale);
+
+    const sections = [...host.querySelectorAll("section.budget-month")];
+    expect(sections.map((section) => section.getAttribute("aria-label"))).toEqual(months);
+    expect(sections.map((section) => section.querySelector("h4")?.textContent)).toEqual(months);
+    const tables = host.querySelectorAll("table");
+    expect(tables).toHaveLength(2);
+    for (const table of tables) {
+      expect([...table.querySelectorAll('th[scope="row"]')].map((header) => header.textContent)).toEqual(months);
+    }
+  });
+
   it("refetches for horizons and currencies without writing storage or the URL", async () => {
     const api = fakeApi();
     api.forecast.mockResolvedValueOnce(ok({
@@ -224,6 +242,27 @@ describe("ForecastView", () => {
     await update(() => { old.resolve(ok(withItem("Stale PLN", "PLN"))); });
     expect(host.textContent).toContain("Fresh EUR");
     expect(host.textContent).not.toContain("Stale PLN");
+  });
+
+  it.each([
+    { status: 400, error: ANALYTICS_ERROR.invalidRequest },
+    { status: 500, error: "budget_internal_error" },
+  ])("shows an alert and clears loaded data when the current request returns $status", async ({ status, error }) => {
+    const api = fakeApi();
+    api.forecast.mockResolvedValueOnce(ok(populatedForecast())).mockResolvedValueOnce({ ok: false, status, error });
+    await show(api);
+    expect(host.textContent).toContain("Synthetic Home Loan");
+    expect(host.textContent).toContain("Synthetic Bank Mortgage");
+    expect(host.querySelector('svg[role="img"]')).not.toBeNull();
+
+    await choose(currency(), "EUR");
+
+    expect(api.forecast).toHaveBeenLastCalledWith(3, "EUR");
+    expect(host.querySelector('[role="alert"]')?.textContent).toBe("The forecast could not be loaded. Try again.");
+    expect(host.querySelector('svg[role="img"]')).toBeNull();
+    expect(host.querySelector("details")).toBeNull();
+    expect(host.textContent).not.toContain("Synthetic Home Loan");
+    expect(host.textContent).not.toContain("Synthetic Bank Mortgage");
   });
 
   it.each([401, 403])("passes a superseded %i to the access barrier before dropping it", async (status) => {
@@ -269,6 +308,29 @@ describe("ForecastView", () => {
     expect(api.forecast).toHaveBeenLastCalledWith(3, "CAD");
     expect(host.textContent).toContain("Synthetic CAD loan");
     expect(currency().value).toBe("CAD");
+  });
+
+  it("lets the user shorten the default horizon to 1 month after a 413", async () => {
+    const oneMonth = withItem("Synthetic one-month loan", "PLN");
+    const api = fakeApi();
+    api.forecast.mockResolvedValueOnce(limit).mockResolvedValueOnce(ok({
+      ...oneMonth, horizon_months: 1, end_month: oneMonth.start_month, months: oneMonth.months.slice(0, 1),
+    }));
+    await show(api);
+
+    expect(api.forecast).toHaveBeenNthCalledWith(1, 3, undefined);
+    expect(horizon().value).toBe("3");
+    expect([...horizon().options].map(({ value, text }) => [value, text])).toEqual([
+      ["1", "1 month"], ["3", "3 months"], ["6", "6 months"], ["12", "12 months"],
+    ]);
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain("choose a shorter horizon");
+
+    await choose(horizon(), "1");
+
+    expect(api.forecast).toHaveBeenNthCalledWith(2, 1, undefined);
+    expect(horizon().value).toBe("1");
+    expect(host.querySelector('[role="alert"]')).toBeNull();
+    expect(host.textContent).toContain("Synthetic one-month loan");
   });
 
   it("checks access loss from a superseded mortgage fallback", async () => {

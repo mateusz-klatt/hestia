@@ -2,10 +2,10 @@ import { useEffect, useRef, useState } from "react";
 import type { BudgetApi } from "../api";
 import { formatAmount } from "../model";
 import type { BudgetAccount, BudgetConnection } from "../model";
-import { accountName, labelOf, mortgageCurrencies, pluralPl, validCurrency } from "./model";
+import { accountName, labelOf, monthLabel, mortgageCurrencies, pluralPl, validCurrency } from "./model";
 import type { AnalyticsForecast, AnalyticsForecastMonth } from "./model";
 
-const horizons = [3, 6, 12] as const;
+const horizons = [1, 3, 6, 12] as const;
 type Horizon = typeof horizons[number];
 
 const forecastLabels = {
@@ -13,7 +13,7 @@ const forecastLabels = {
     title: "Forecast",
     intro: "Estimated upcoming commitments based on your mortgage schedules and monthly recurring expense patterns (at least three occurrences). This is an estimate only — not a guarantee, cashflow balance forecast, or prediction of variable spending.",
     horizon: "Forecast horizon",
-    months: (count: number) => `${String(count)} months`,
+    months: (count: number) => `${String(count)} ${count === 1 ? "month" : "months"}`,
     currencyFilter: "Filter forecast by currency",
     allCurrencies: "All currencies",
     currencyCode: "Currency code (ISO 4217)",
@@ -186,7 +186,7 @@ function ForecastChart({ months, currency, text, locale }: {
           <thead><tr><th scope="col">{text.month}</th><th scope="col">{text.total}</th></tr></thead>
           <tbody>
             {rows.map(({ month, amount }) => (
-              <tr key={month}><th scope="row">{month}</th><td>{formatAmount(amount, currency, locale)}</td></tr>
+              <tr key={month}><th scope="row">{monthLabel(month, locale)}</th><td>{formatAmount(amount, currency, locale)}</td></tr>
             ))}
           </tbody>
         </table>
@@ -196,9 +196,10 @@ function ForecastChart({ months, currency, text, locale }: {
 }
 
 function ForecastMonth({ month, text, locale }: { month: AnalyticsForecastMonth; text: ForecastLabels; locale: string }) {
+  const label = monthLabel(month.month, locale);
   return (
-    <section className="budget-total budget-month" aria-label={month.month}>
-      <h4>{month.month}</h4>
+    <section className="budget-total budget-month" aria-label={label}>
+      <h4>{label}</h4>
       {month.items.length === 0 ? <p className="budget-muted">{text.emptyMonth}</p> : (
         <>
           <div className="budget-totals">
