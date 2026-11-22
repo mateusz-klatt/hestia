@@ -1,7 +1,8 @@
 # Budget Receipts: Research & Design Proposal
 
 > **Status:** Revised design proposal v3 (Round-1 and Round-2 Grok 4.7 review findings resolved; **Q1–Q7** and operational rules **D1–D4** decided). No code, migrations, or privacy-policy edits ship with this document.  
-> **Baseline:** `master` at `81a432c` (schema `0019`, OpenAPI `0.25.0`, target stack Python 3.14 / `aiohttp` at `Dockerfile:10`, `requirements.txt:24`; SQLite + SQLAlchemy 2.0 + Alembic at `hestia/db.py:10-30`, `requirements.txt:25-26`; React 19 + TypeScript at `ui/package.json:29-31`; Docker at `docker-compose.yml:1-46`).
+> **Baseline:** `master` at `81a432c` (schema `0019`, OpenAPI `0.25.0`, target stack Python 3.14 / `aiohttp` at `Dockerfile:10`, `requirements.txt:24`; SQLite + SQLAlchemy 2.0 + Alembic at `hestia/db.py:10-30`, `requirements.txt:25-26`; React 19 + TypeScript at `ui/package.json:29-31`; Docker at `docker-compose.yml:1-46`).  
+> **v1d Extension (2026-11-22):** Normative design for Gmail receipt import, large-expense proof, and opaque-debit enrichment added in [§13](#13-v1d--gmail-import-and-proof-for-larger-expenses) against `master` at `518e5bb` (OpenAPI `0.29.0`, privacy-policy Gmail update `2ce999f`) and PR #238 (`feat/budget-receipts-v1a` at `ed853b0`, migration `0020`, OpenAPI `0.30.0`).
 
 ---
 
@@ -362,6 +363,8 @@ CREATE TABLE budget_product_aliases (
 
 - **`0021` downgrade order (child-first):** drop `ix_budget_receipt_lines_product` and v2 columns/FK on `budget_receipt_lines` via `batch_alter_table` → drop `budget_product_aliases` → drop `budget_normalized_products`.
 
+> **Cross-reference (`v1d`):** Schema deltas after `0021` (including expanded `source_kind`/`status`, proof-link metadata, manual attachment retention columns, and Gmail state/dedupe tables) are specified in [§13.3](#133-data-model-delta-migration-tbd-after-0021).
+
 ### 5.2 Photo storage hardening, DoS bounds, retention & log hygiene
 
 - **Dedicated `ReceiptFiles` module (not `ConsentFiles`):** `hestia/budget/consent_files.py:13,30-42` hardcodes `MAX_FILE_BYTES = 1 MiB` and JSON-only payloads. Build a dedicated `hestia/budget/receipt_files.py` storing binary `.webp` files under `HESTIA_BUDGET_RECEIPTS_DIR=/data/budget-receipts` (`docker-compose.yml:44`) while keeping `consent_files.py:72-100,147-159`'s exact OS invariants:
@@ -471,7 +474,7 @@ Every PR must pass the full Python statement+branch coverage gate, UI `typecheck
 | **v1c — Optional Cloud Vision opt-in** | Default-off configurable Cloud Vision adapter (Claude first), `0400` secret file, per-receipt UI opt-in + `privacy-policy.html` provider terms update, test #6 | **1.5–2 engineering days** |
 | **v2 — Product normalization & shop charts** | `0021` migration (`budget_normalized_products`, `budget_product_aliases`, `batch_alter_table`), exact `Decimal` unit extractor + alias matcher, shop comparison view + inline SVG charts | **5–7 engineering days** |
 
-**Total:** ~**11–14.5 days** for full v1 (`a+b+c`), or **5.5–7.5 days** for paste-only v1a; **+5–7 days** for v2 price comparison.
+**Total:** ~**11–14.5 days** for full v1 (`a+b+c`), or **5.5–7.5 days** for paste-only v1a; **+5–7 days** for v2 price comparison. For the additive `v1d.1`–`v1d.3` effort breakdown (after `v1a` + `v1b`), see [§13.8](#138-effort-estimate).
 
 ---
 
@@ -511,3 +514,245 @@ Every PR must pass the full Python statement+branch coverage gate, UI `typecheck
 - Anthropic Claude Vision & Commercial Terms: https://docs.anthropic.com/en/docs/build-with-claude/vision , https://www.anthropic.com/legal/commercial-terms
 - Google Gemini API Terms & Structured Outputs: https://ai.google.dev/gemini-api/terms , https://ai.google.dev/gemini-api/docs/structured-output
 - Open-source receipt parser references: https://github.com/filip-rupniewski/receipt_parsing , https://github.com/KamKubicki/fidl-plus , https://github.com/bhimrazy/receipt-ocr , https://github.com/Rutikasri/DocuParse_AI , https://github.com/YanzhongSu/lidl
+
+---
+
+## 13. v1d — Gmail import and proof for larger expenses
+
+> **Normative scope & implementation baseline:** `master` at `518e5bb` (schema `0019`, OpenAPI `0.29.0`, privacy-policy Gmail update `2ce999f` / PR `#237`) and `v1a` on `feat/budget-receipts-v1a` at `ed853b0` (PR `#238`, migration `0020`, OpenAPI `0.30.0`, `hestia/budget/receipt_api.py`, `receipt_store.py`, `receipt_parser.py`, `receipt_reconcile.py`).  
+> **Delivery order:** `v1a` (paste) → `v1b` (`ReceiptFiles`, `6 MiB` multipart framing, `Semaphore(1)` media decoding, 30-day file purge) → `v1d base + v1d.1` (Gmail receipt import) → `v1d.2` (large-expense proof linking, missing-proof flag, manual PDF attachments) → `v1d.3` (opaque-debit enrichment). All new flags default off.
+
+### 13.1 Owner decisions (2026-11-22) & feature gates
+
+| ID | Topic | Normative Rule |
+| --- | --- | --- |
+| **G1** | Google OAuth & mailbox scope | Reuse `.env` credentials `HESTIA_GOOGLE_CLIENT_ID`, `HESTIA_GOOGLE_CLIENT_SECRET`, and `HESTIA_GOOGLE_REFRESH_TOKEN` shared with `calendar_sync` (`docs/CALENDAR_SYNC.md:36-38,88-90`, `hestia/calendar_sync/config.py:53-54`). The OAuth client (`"Hestia Calendar"`, GCP project `klatt-ie`) is `In production` and Workspace-trusted (`docs/CALENDAR_SYNC.md:63-72`), carrying `gmail.readonly` for the **owner's mailbox only** (`users/me`). Refresh reuses the `GoogleCalendarProvider._token` flow (`hestia/calendar_sync/providers.py:168-199`). |
+| **G2** | Mail selection & spouse forwards | Fetch **only** receipt-like messages matching an explicit Gmail label (e.g., `"Paragony"`) or explicit `sender_allowlist`. The spouse forwards her e-receipts to the owner's mailbox; `v1d.1` unwraps forwarded messages and recovers the original merchant/sender hint in memory after validating outer envelope authentication. |
+| **G3** | Zero-body / zero-address persistence | Store **only** the parsed receipt fields (`raw_ocr_text = NULL`, `image_relpath = NULL`) plus `HMAC-SHA256(server_secret, Message-ID)` for deduplication. **Never** store raw email bodies, raw HTML, Gmail attachments, or email addresses anywhere in SQLite, `/data`, logs, or audit rows. |
+| **G4** | Untrusted HTML & PDF bounds | Convert email HTML to text with zero script execution and zero remote resource loads (`<= 1 MiB` HTML → `<= 32 KiB` / `500` lines text). Parse PDFs (both Gmail attachments in `v1d.1` and manual uploads in `v1d.2`) with byte (`<= 5 MiB`), page (`<= 10`), and decompressed-stream bounds in an off-loop thread with a timeout (`5 s`) and process-wide `Semaphore(1)`, matching `v1b`. |
+| **G5** | Sync cadence & history cursor | Run **on demand** and **at most hourly** (`3600 s`) while enabled, bounded to Gmail API quotas. Incremental sync uses `users.history` with a persisted `historyId`; initial backfill is bounded (default `365` days, max `500` messages total). |
+| **P1** | Single receipt model (no evidence table) | **No separate evidence table.** Reuse `budget_receipts` across `source_kind` values `paste` (`v1a` `live_text`), `photo` (`v1b` `local_ocr`/`cloud_ai`), `email`, and `attachment`. **"Proof"** is defined as a `confirmed` receipt linked to a transaction, using the same PAN redaction, retention boundaries, and `BEGIN IMMEDIATE` link re-verification (`receipt_store.py:296-365`). |
+| **P2** | Exact vs. FX / gross-net matching | Same-currency exact amount (`±4`d) → auto-suggest candidate (`match_tier = "exact"`). Cross-currency (e.g., Apple/OpenAI billed in `USD`/`EUR` vs. a `PLN` card debit such as `APPLE.COM/BILL 999.99 PLN` for ChatGPT) or gross/net difference → **suggestion only** (`match_tier = "fx_or_net"`), requiring explicit manual confirmation and **never** auto-linked. |
+| **P3** | Missing-proof flag & non-breaking API | Applies **only** to selected booked `DBIT` transactions with effective `kind == "expense"` — **excluding** transfers (`budget_transfer_legs` and accepted transfer pairs), Krypto (`kind == "excluded"`, `docs/BUDGET_MONTH.md:32`), and pass-through (`month_budget.load_month_config()`, `hestia/budget/month_budget.py:73-84,842-845`). Thresholds are per-currency in config, defaulting to `{"PLN": "500"}` (`>= 500 PLN`). UI displays count + list via a **new** route with a minor OpenAPI bump; existing endpoint responses stay unchanged. |
+| **P4** | Manual PDF attachments & privacy gate | `POST /api/budget/receipts/attach` accepts bounded manual PDF (or image) uploads, storing PAN-redacted `raw_ocr_text` plus an optional original file kept `48h` (draft) / `30d` (post-confirm), like photos. **`ui/public/privacy-policy.html` must be updated before enabling `v1d.2`/`v1d.3`.** |
+| **P5** | Opaque-debit enrichment (`v1d.3`) | Opaque bank debits (e.g., `"Płatność BLIK … Nr transakcji"` without merchant, `Przelewy24`/`P24`, `PayU`, `Tpay`, `Autopay`, `APPLE.COM/BILL`) match Gmail payment-confirmation emails by amount and date (`±4`d) as **suggestions only**; confirmation links a receipt without mutating `budget_transactions.payload_json` or `analytics_views.py` totals. |
+
+**Feature gates & runtime prerequisites (all default off):**
+
+1. Base budget & receipts gates (`hestia/budget/api.py:53-63`, `feat/budget-receipts-v1a:hestia/budget/receipt_api.py:19,30-31`): `HESTIA_BUDGET_HTTP_ENABLED=1`, `HESTIA_PERSIST=sqlite`, authoritative SQLite `admin` owner, and `HESTIA_BUDGET_RECEIPTS_ENABLED=1`.
+2. Gmail sync gate (`v1d.1` / `v1d.3`): `HESTIA_BUDGET_RECEIPTS_GMAIL_ENABLED=1` **and** readable server-only JSON config at `HESTIA_BUDGET_RECEIPTS_GMAIL_CONFIG` (default unset → disabled, matching `HESTIA_CALENDAR_CONFIG` at `hestia/calendar_sync/config.py:168-179`).
+3. Proof / attachment gate (`v1d.2`): `HESTIA_BUDGET_RECEIPTS_PROOF_ENABLED=1` (default `0`; must remain off until `ui/public/privacy-policy.html` covers manual PDF attachments).
+4. Stable dedupe key (`v1d.1`): `HESTIA_BUDGET_RECEIPTS_HMAC_SECRET_FILE` (`0400`/`0600` server-only secret file read via `hestia/budget/config.py:171-195`'s `_read_secret`), separate from `HESTIA_SESSION_SECRET` so rotating web session secrets never invalidates `budget_gmail_messages` deduplication.
+
+### 13.2 Phased architecture (`v1d.1`, `v1d.2`, `v1d.3`)
+
+```text
+[Owner Gmail (gmail.readonly)]
+   │  label:"Paragony" OR from:sender_allowlist (after:<365d>, cap 500 backfill / 100 per run)
+   ▼
+[Google OAuth refresh + HTTPTransport (_NoRedirect, ≤30s)]   (providers.py:46-70,168-199)
+   │
+   ├─ Outer Authentication-Results (dkim/spf pass) & sizeEstimate ≤ 10 MiB
+   ├─ Dedupe: HMAC-SHA256(hmac_secret, Message-ID) ∈ budget_gmail_messages? → skip
+   ├─ Spouse forward unwrap (in memory): message/rfc822 (depth ≤2) / forward block → merchant hint; strip addresses
+   ├─ HTML (≤1 MiB) → pure-Python HTMLParser (no scripts/CSS/remote URLs) → ≤32 KiB text
+   ├─ PDF attachment (≤5 MiB, ≤10p, %PDF-) → pypdf off-loop thread + Semaphore(1) + 5s timeout + zlib cap
+   ▼
+[PAN Redactor + Email Scrubber + Receipt/Invoice/Gateway Parser]
+   │  Gmail: raw_ocr_text = NULL, image_relpath = NULL, status = 'imported' (30d expiry, cap 200)
+   │  Manual PDF attach (v1d.2): raw_ocr_text (PAN-redacted) + ReceiptFiles PDF/WebP (48h draft / 30d confirmed)
+   ▼
+[Matcher: exact (±4d, same currency/amount) | fx_or_net (±7d, suggestion only)]
+   │  v1d.2 missing-proof view: DBIT + kind=expense + ≥ threshold (500 PLN) − transfers − Krypto − pass-through
+   │  v1d.3 opaque-debit view: BLIK/P24/PayU/PayPro/Apple debits matched to Gmail confirmations (suggestion only)
+   ▼
+[Owner Review & BEGIN IMMEDIATE Confirm] (reconcile_receipt_links latches needs_review on bank drift)
+```
+
+#### Phase `v1d.1` — Gmail import of receipts
+
+1. **Configuration (`HESTIA_BUDGET_RECEIPTS_GMAIL_CONFIG`):** Modeled on `hestia/calendar_sync/config.py:53-62,98-200` and `hestia/budget/month_budget.py:110-168` (rejecting duplicate JSON keys and constants via `_unique_error_fields` / `_reject_constant`, `MAX_CONFIG_BYTES = 16 KiB`). Stores **only** environment-variable / file-path references (never inline OAuth tokens):
+   - `owner`: existing SQLite `admin` username (`users.username`).
+   - `client_id_env` (`"HESTIA_GOOGLE_CLIENT_ID"`), `client_secret_env` (`"HESTIA_GOOGLE_CLIENT_SECRET"`), `refresh_token_env` (`"HESTIA_GOOGLE_REFRESH_TOKEN"`).
+   - `label_name`: optional Gmail label (e.g., `"Paragony"`, resolved via `GET /gmail/v1/users/me/labels` to immutable `labelId`).
+   - `sender_allowlist`: optional list of exact sender emails or `@domain` suffixes for direct receipts (e.g., `@email.apple.com`, `@tm.openai.com`, `allegro.pl`). **Fail closed:** at least one of `label_name` or non-empty `sender_allowlist` must be configured, or sync refuses with `configuration`.
+   - `spouse_forward_senders`: explicit exact email address(es) of the spouse allowed to forward e-receipts into the owner's mailbox.
+   - `backfill_days`: integer `1..365` (default `365`), `backfill_max_messages`: `1..500` (default `500`), `sync_interval_seconds`: integer `>= 3600` (default `3600`).
+   - `proof_thresholds`: currency map (`{"PLN": "500"}` default; consumed by `v1d.2`).
+2. **Transport & OAuth reuse (`hestia/budget/gmail_client.py`):** Reuses `HTTPTransport` (`_NoRedirect`, `30 s` timeout, bounded response read) and `GoogleCalendarProvider._token()` (`hestia/calendar_sync/providers.py:46-70,168-221`) against fixed constants `TOKEN_URL = "https://oauth2.googleapis.com/token"` and `GMAIL_API = "https://gmail.googleapis.com/gmail/v1/users/me"`. On HTTP `401`, invalidates cached access token and refreshes once (`providers.py:211-214`). On `invalid_grant` or `403` insufficient scope (`ACCESS_TOKEN_SCOPE_INSUFFICIENT`), latches `budget_gmail_state.attention = "authorization"` and halts background polling. On `429` or `403` rate-limit reason (`rateLimitExceeded`, `userRateLimitExceeded`, `quotaExceeded` per `providers.py:74-77`), honors `Retry-After` via `parse_retry_after` (`hestia/budget/rate_limit.py:117`) and exponential backoff (`min(21600, 60 * 2**failures)`).
+3. **Sync protocol (`users.history` + bounded initial backfill):**
+   - Serialized by a per-DB `fcntl.flock` (`hestia/calendar_sync/runtime.py:20-32`) across HTTP `POST /gmail-sync` and the background poller (`asyncio.create_task` loop at `hestia/server.py:264`, `hestia/proxy.py:1994`, running off-loop via `_settled_thread` per `hestia/budget/api.py:174-188` and stopping cleanly on shutdown like `BudgetJobService.stop` at `hestia/budget/jobs.py:208-221`).
+   - **Initial backfill (`history_id IS NULL`):**
+     1. Read `GET /profile` to capture starting `historyId` **before** listing so messages arriving mid-backfill are picked up on the first delta sync.
+     2. Query `GET /messages` with `q` built strictly from configured `label_name` / `sender_allowlist` / `spouse_forward_senders` + `after:<epoch_now - backfill_days*86400>`, `maxResults=100`, capped at `500` total messages across at most `5` list pages (`100` processed per sync run, recording progress or completing across bounded batches).
+   - **Incremental sync (`history_id IS NOT NULL`):**
+     1. Query `GET /history?startHistoryId=<id>&historyTypes=messageAdded&historyTypes=labelAdded` (filtering to `labelIds=[label_id]` when label-filtered, or checking returned message metadata against allowlist).
+     2. Fetch at most `MAX_SYNC_MESSAGES_PER_RUN = 100` candidate messages per run: pre-check `format=metadata` (`sizeEstimate`, `Message-ID`, `From`, `Authentication-Results`) or fetch `format=raw` while capping decoded RFC 5322 size at `MAX_GMAIL_MESSAGE_BYTES = 10 MiB` (`10_485_760` B). Oversized messages record `outcome = 'skipped_oversized'` in `budget_gmail_messages` without decoding payloads.
+     3. Commit parsed receipts, `budget_gmail_messages` tombstones, and the new `history_id` inside one `BEGIN IMMEDIATE` transaction (`hestia/budget/store.py:110-114`).
+   - **Expired cursor (`HTTP 404` on `users.history`):** Fall back to a bounded catch-up `messages.list` scan over `max(last_sync_at - 7d, now - backfill_days*86400)` (max `200` messages) relying on `message_id_hmac` dedupe, then store the fresh `profile.historyId`.
+   - **Quota ceiling:** Client paces calls (`>= 50 ms` gap, max `<= 110` API calls / `~550` quota units per hourly sync against Gmail's `250 units/user/sec` quota).
+4. **Spouse forwarding unwrap & address stripping:**
+   - Parse raw RFC 5322 bytes in memory using stdlib `email.parser.BytesParser(policy=email.policy.default)`.
+   - Verify Google MX's topmost `Authentication-Results` header (`mx.google.com`, ignoring any lower forged header) contains `dkim=pass` and (`spf=pass` or `dmarc=pass`) aligned with the outer sender when matching `sender_allowlist` or `spouse_forward_senders`.
+   - If the outer sender is the owner or in `spouse_forward_senders`, inspect attachments for `message/rfc822` (max recursion depth `2`) or bounded inline forward markers (`---------- Forwarded message ---------`, `Begin forwarded message:`, `Przekazana wiadomość`) to extract the original sender's display brand/domain token (`recovered_merchant_hint`, e.g., `Apple` / `OpenAI` / `Allegro` / `InPost`) and original date.
+   - **Never** treat unwrapped inner `From:` headers as an authentication bypass and **never** persist any email address. Before constructing `raw_shop_name` or line labels, run both `redact_pan()` (`feat/budget-receipts-v1a:hestia/budget/receipt_parser.py:94`) and an RFC 5322 email-address scrubber (`[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+` → removed).
+5. **Untrusted HTML & PDF extraction:**
+   - **HTML parts (`<= 1 MiB` raw decoded bytes):** Decode declared charset safely (`errors="replace"`), parse via pure-Python `html.parser.HTMLParser` (`convert_charrefs=True`, skipping HTML comments, zero JS/DOM engine, zero external CSS/image/link fetching, blocking `http:`/`https:`/`cid:`/`data:` loads), drop `<script>`, `<style>`, `<noscript>`, `<template>`, `<iframe>`, `<object>`, `<embed>`, `<svg>` subtrees entirely, emit line breaks on block/table boundaries (`<p>`, `<div>`, `<tr>`, `<li>`, `<br>`), normalize `NFC`, strip `Cc`/`Cf`/`Cs` characters, and cap at `32 KiB` / `500` lines before parsing.
+   - **PDF parts (`<= 5 MiB`, `%PDF-` magic):** Parse with pure-Python `pypdf` (BSD-3-Clause; no Poppler/MuPDF/Ghostscript C binaries in `hestia`), capped at `MAX_PDF_PAGES = 10`, `MAX_PDF_STREAM_BYTES = 4 MiB` per stream, `MAX_PDF_DECOMPRESSED_BYTES = 8 MiB` total, and `MAX_PDF_RECURSION = 64`, executing in a worker thread guarded by a process-wide `_PDF_PARSE_SEMAPHORE = threading.Semaphore(1)` created at startup and a cooperative `5 s` parse timeout (`PDF_PARSE_TIMEOUT_SECONDS = 5.0`). Encrypted/password-protected PDFs fail cleanly without brute-forcing.
+   - **Zero-body storage rule:** Gmail-imported rows persist with `status = 'imported'` (`MAX_GMAIL_PENDING = 200`, separate from `MAX_DRAFTS = 20` at `receipt_store.py:27`), `source_kind = 'email'` (body) or `'attachment'` (Gmail PDF/image), `raw_ocr_text = NULL`, `image_relpath = NULL`, `attachment_relpath = NULL`, and `import_expires_at = now + 30d`.
+
+#### Phase `v1d.2` — Proof linking, missing-proof flag & manual attachments
+
+1. **Source kinds & `validate_confirm` deltas:**
+   - Extend `budget_receipts.source_kind` `CHECK` to allow `('live_text', 'local_ocr', 'cloud_ai', 'paste', 'photo', 'email', 'attachment')` — preserving backward compatibility with `v1a`/`v1b` rows (`0020_budget_receipts.py:95`, `db.py:804`) while adopting the `v1d` taxonomy (`paste`/`photo`/`email`/`attachment`).
+   - Add `document_kind` (`'receipt' | 'invoice' | 'payment_confirmation'`, default `'receipt'`).
+   - Update `validate_confirm` (`feat/budget-receipts-v1a:hestia/budget/receipt_parser.py:362-403`): when `lines == []` and `source_kind IN ('email', 'attachment')`, accept `lines=[]` (still validating `total_amount > 0`, valid date/currency/payment method, and PAN/email redaction); whenever `lines` is non-empty (and always for `paste`/`live_text`/`photo`/`local_ocr`/`cloud_ai`), retain strict per-line `net = gross - discount` and `sum(net_line_total) == total_amount` validation.
+   - Support confirming directly from `status IN ('draft', 'imported', 'confirmed', 'needs_review')` (with `expected_version` CAS).
+2. **Exact vs. FX / gross-net matching & `BEGIN IMMEDIATE` verification:**
+   - Extend `BudgetReceiptStore._candidates` and `_verify_link` (`feat/budget-receipts-v1a:hestia/budget/receipt_store.py:245-365`):
+     - **Tier 1 — `exact` (auto-suggest):** Same currency, `canonical_money(tx.amount) == canonical_money(receipt.total_amount)`, `DBIT`/`CRDT` direction match, non-transfer, `BOOK`, `uncertain=False`, and `min_date_distance <= 4` (`D2`). Ranked top; still requires owner click to confirm.
+     - **Tier 2 — `fx_or_net` (suggestion only, manual confirmation required, never auto-linked):**
+       - *Cross-currency (`tx.currency != receipt.currency`):* Within `±7` calendar days (to accommodate card FX settlement lag) and same `DBIT`/`CRDT` direction; requires either a merchant/gateway token hit (including curated aliases such as `APPLE.COM/BILL` ↔ `apple`/`openai`/`chatgpt`) or explicit manual picker search.
+       - *Gross/net delta (same currency, `tx.amount != receipt.amount`):* Within `±4` days and same direction where `receipt.total_amount` differs by VAT/fee/FX-spread margin (e.g., within `0.70x..1.30x` or explicit manual picker selection).
+       - Every Tier-2 candidate returns `match_tier = "fx_or_net"`, `auto_suggest = False`, `requires_manual_confirm = True`.
+     - **Server re-check inside `BEGIN IMMEDIATE`:** `BudgetReceiptConfirmRequest.link` adds `link_basis: Literal["exact", "fx_or_net"] = "exact"` (default `"exact"` preserves strict `v1a` rejection of any currency/amount mismatch). When `link_basis == "fx_or_net"`, `_verify_link` still enforces `account.owner == owner`, `connection.owner == owner`, `account.enabled == True`, `tx.uncertain == False`, `BOOK`, not in `budget_transfer_legs`, matching `DBIT`/`CRDT`, `date_distance <= 7`, partial unique index `uq_budget_receipts_tx_link` (`409 budget_receipt_tx_already_linked`), and stores `linked_fingerprint = financial_fingerprint(payload)` + `link_basis = 'fx_or_net'`. Existing `reconcile_receipt_links` hooks (`receipt_reconcile.py:80-108`, `store.py:441,576,603`, `analytics_store.py:609-611`) automatically latch `needs_review` if the linked bank entry later changes or becomes a transfer leg.
+3. **Missing-proof evaluation (`GET /api/budget/receipts/missing-proof`):**
+   - Accepts optional `period` (`YYYY-MM` or `YYYY` via `analytics_core.parse_period`, defaulting to current `Europe/Warsaw` month via `month_budget.warsaw_date`) and optional `currency`; rejects unknown or duplicate query parameters (`400`, matching `analytics_api.py:60-72`).
+   - Evaluates a single read-only SQLite snapshot (`BudgetHTTPStore._read` + `projection_snapshot` at `hestia/budget/analytics_views.py:221-256`) without altering `analytics_views.py` totals or any existing API response:
+     - **Qualifying pool:** Selected (`enabled == True`), `BOOK`, `uncertain == False`, `payload["credit_debit_indicator"] == "DBIT"`, and `effective["kind"] == "expense"`.
+     - **Automatic & explicit exclusions:**
+       - Own-account transfers (`effective["kind"] == "transfer"` from `_accepted_projection` at `analytics_views.py:483-502`, plus explicit `budget_transfer_legs` exclusion at `hestia/db.py:694-700`).
+       - **Krypto:** Classified by owner rules/annotations as `effective["kind"] == "excluded"` (`docs/BUDGET_MONTH.md:32`), thus excluded automatically by `kind == "expense"`.
+       - **Pass-through:** Read `month_budget.load_month_config()` (`hestia/budget/month_budget.py:35,73-84,162-168`); if `settings.pass_through` is configured for `owner`, exclude any transaction with `effective["category_id"] in {settings.pass_through.mortgage_category_id, settings.pass_through.rent_category_id}` (`month_budget.py:842-845,910-913`).
+       - All `CRDT` entries (income, refunds, unclassified credits).
+     - **Threshold check:** Look up `currency` in `proof_thresholds` (default `{"PLN": "500"}`). If `currency` has a threshold and `compare_money(amount, threshold) >= 0` (`hestia/budget/analytics_core.py:81-86`), require a linked `BudgetReceipt` with `status == "confirmed"`. Currencies absent from `proof_thresholds` are omitted rather than guessed.
+     - **Flagging:** If unlinked → `missing_reason = "unlinked"`; if linked to a receipt latched `needs_review` → `missing_reason = "needs_review"`. Returns `missing_count`, `needs_review_count`, `total_flagged_count`, and bounded `items` (ordered by date descending, capped at `MAX_MISSING_PROOF_ITEMS = 500`, and `4 MiB` UTF-8 JSON limit via `_encode_bounded` at `hestia/budget/analytics_api.py:94-105`).
+4. **Manual PDF / image attachments (`POST /api/budget/receipts/attach`, `GET /api/budget/receipts/attachment`):**
+   - Multipart upload (`<= 6 MiB` total, raw file `<= 5 MiB`, `Content-Length` required, chunked rejected) verified by `_principal` + `_browser` **before** reading any body bytes (`hestia/budget/api.py:53-91`).
+   - Sniffs magic bytes: if `JPEG`/`PNG`/`WebP`, delegates to the `v1b` WebP re-encode + RapidOCR/Cloud-AI pipeline (`image_relpath` / `image_expires_at`, served via `GET /image`); if `%PDF-`, runs the bounded `pypdf` extractor under `_PDF_PARSE_SEMAPHORE`, applies `redact_pan()` + email scrubber, stores extracted text in `raw_ocr_text` (`<= 32 KiB`), and optionally stores the validated PDF bytes in `ReceiptFiles` (`attachment_relpath`, `attachment_mime = 'application/pdf'`, `attachment_expires_at`) within the shared `256 MiB` owner quota (**D4**) and `20`-draft quota.
+   - Supports attaching directly to a new draft (pre-filled with an optional `suggested_link` `{account_id, entry_reference}` from the missing-proof UI list) or attaching a PDF/photo file onto an existing owned draft (`receipt_id`, `expected_version`).
+   - Retention matches **Q2** & **D1**: `48 hours` for unconfirmed `draft`s, and `confirm` sets all non-null artifact deadlines (`image_expires_at`, `attachment_expires_at`, `raw_text_expires_at`) to `confirmed_at + 30d`.
+   - `GET /api/budget/receipts/attachment` streams owned PDF bytes via `dir_fd` + `O_NOFOLLOW` (`hestia/budget/consent_files.py:88-99`) with `Content-Type: application/pdf`, `Content-Disposition: attachment; filename="receipt-<uuid>.pdf"`, `X-Content-Type-Options: nosniff`, `Content-Security-Policy: default-src 'none'; sandbox`, `Cache-Control: no-store`, and `Referrer-Policy: no-referrer`.
+
+#### Phase `v1d.3` — Opaque-debit enrichment
+
+1. **Opaque debit identification:** Pure read helper identifies booked selected `DBIT` transactions (`effective.kind == "expense"` or `"auto"`, not in `budget_transfer_legs`) whose `remittance_information` / `creditor_name` matches opaque payment patterns (`Płatność BLIK` + `Nr transakcji` without merchant name, `Przelewy24`/`P24`/`PAYPRO`, `PayU`, `Tpay`/`Krajowy Integrator Płatności`, `Autopay`/`Blue Media`, `APPLE.COM/BILL`) or has empty/gateway-only `creditor_name`.
+2. **Confirmation-email ingestion & matching:** `v1d.1` parser templates extended to recognize Polish payment-gateway and subscription confirmation emails (`document_kind = "payment_confirmation"`), extracting sanitized merchant/item summary (email addresses removed), `total_amount`, `currency`, `receipt_date`, and `payment_method`. Matcher pairs unlinked `imported` / unlinked `confirmed` confirmations with opaque debits by exact amount/currency (or `fx_or_net`) within `±4` calendar days (`D2`).
+3. **Strict suggestion-only invariant:** `GET /api/budget/receipts/enrichment-suggestions` returns opaque debits with ranked `candidates` for owner review. Confirming a suggestion calls `POST /api/budget/receipts/confirm` inside `BEGIN IMMEDIATE` to link the `BudgetReceipt` to `(account_id, entry_reference)` — **never** mutating `budget_transactions.payload_json`, `budget_transaction_metadata`, or `analytics_views.py` spending totals.
+
+### 13.3 Data model delta (migration TBD after `0021`)
+
+Migration ID is **TBD after `0021`** (planned as `0022_budget_receipts_v1d` following `0020_budget_receipts` from `v1a` and `0021_budget_receipt_products` from `v2` in `§5.1`; if `v1d` ships before `v2`, `0021` / `0022` ordering swaps). All changes honor `PRAGMA foreign_keys=ON` (`hestia/db.py:757`), composite `(id, owner)` FKs, and child-first downgrades.
+
+1. **Migrate `budget_receipts` (`batch_alter_table`)** (preserving all `0020` rows and `uq_budget_receipts_tx_link` on `status IN ('confirmed', 'needs_review')`; **backfill `UPDATE budget_receipts SET link_basis = 'exact' WHERE linked_account_id IS NOT NULL` before applying the updated `ck_budget_receipts_link_fields` constraint**):
+   - Expand `ck_budget_receipts_status`: `status IN ('draft', 'imported', 'confirmed', 'needs_review')`.
+   - Expand `ck_budget_receipts_source`: `source_kind IN ('live_text', 'local_ocr', 'cloud_ai', 'paste', 'photo', 'email', 'attachment')`.
+   - Update `ck_budget_receipts_confirmed_fields`: `status IN ('draft', 'imported') OR (receipt_date IS NOT NULL AND total_amount IS NOT NULL AND currency IS NOT NULL AND payment_method IS NOT NULL)`.
+   - Update `ck_budget_receipts_link_fields`: `(linked_account_id IS NULL AND linked_entry_ref IS NULL AND linked_fingerprint IS NULL AND link_basis IS NULL) OR (status IN ('confirmed', 'needs_review') AND linked_account_id IS NOT NULL AND linked_entry_ref IS NOT NULL AND linked_fingerprint IS NOT NULL AND link_basis IS NOT NULL)`.
+   - Add columns:
+     - `document_kind TEXT NOT NULL DEFAULT 'receipt' CHECK (document_kind IN ('receipt', 'invoice', 'payment_confirmation'))`
+     - `link_basis TEXT NULL CHECK (link_basis IS NULL OR link_basis IN ('exact', 'fx_or_net'))`
+     - `attachment_relpath TEXT NULL`
+     - `attachment_mime TEXT NULL CHECK (attachment_mime IS NULL OR attachment_mime IN ('application/pdf'))`
+     - `attachment_expires_at REAL NULL`
+     - `import_expires_at REAL NULL` (30-day TTL for unconfirmed `'imported'` Gmail rows)
+
+2. **New tables (`budget_gmail_state` & `budget_gmail_messages`):**
+
+```sql
+CREATE TABLE budget_gmail_state (
+    owner                  TEXT PRIMARY KEY REFERENCES users(username),
+    history_id             TEXT NULL CHECK (history_id IS NULL OR length(history_id) BETWEEN 1 AND 64),
+    last_sync_at           REAL NULL CHECK (last_sync_at IS NULL OR last_sync_at >= 0),
+    next_sync_at           REAL NOT NULL DEFAULT 0 CHECK (next_sync_at >= 0),
+    backoff_until          REAL NOT NULL DEFAULT 0 CHECK (backoff_until >= 0),
+    failures               INTEGER NOT NULL DEFAULT 0 CHECK (failures >= 0),
+    attention              TEXT NULL CHECK (attention IS NULL OR attention IN ('authorization', 'configuration')),
+    last_http_status       INTEGER NULL CHECK (last_http_status IS NULL OR (last_http_status BETWEEN 100 AND 599)),
+    last_error             TEXT NULL CHECK (last_error IS NULL OR length(last_error) <= 64),
+    backfill_completed_at  REAL NULL CHECK (backfill_completed_at IS NULL OR backfill_completed_at >= 0),
+    version                INTEGER NOT NULL DEFAULT 1 CHECK (version >= 1)
+);
+
+CREATE TABLE budget_gmail_messages (
+    owner            TEXT NOT NULL REFERENCES users(username),
+    message_id_hmac  TEXT NOT NULL CHECK (length(message_id_hmac) = 64 AND message_id_hmac NOT GLOB '*[^0-9a-f]*'),
+    internal_date    REAL NOT NULL CHECK (internal_date >= 0),
+    outcome          TEXT NOT NULL CHECK (outcome IN ('imported', 'skipped_non_receipt', 'skipped_oversized', 'parse_failed', 'deleted')),
+    receipt_id       TEXT NULL,
+    created_at       REAL NOT NULL CHECK (created_at >= 0),
+    PRIMARY KEY (owner, message_id_hmac),
+    FOREIGN KEY (receipt_id, owner) REFERENCES budget_receipts(id, owner)
+);
+CREATE INDEX ix_budget_gmail_messages_owner_date ON budget_gmail_messages(owner, internal_date);
+```
+
+- **Runtime delete order on `receipts/delete` & draft/import purge:** When deleting or purging a `BudgetReceipt` whose `id` is referenced by `budget_gmail_messages.receipt_id`, first set `receipt_id = NULL, outcome = 'deleted'` inside `BEGIN IMMEDIATE` (no `ON DELETE CASCADE`), then delete `budget_receipt_lines` → `budget_receipts` → commit → unlink any disk files (`ReceiptFiles.delete`). Retaining the `message_id_hmac` row stops subsequent hourly syncs from re-importing a deleted/expired email.
+- **Migration downgrade order (child-first):** drop `ix_budget_gmail_messages_owner_date` → drop `budget_gmail_messages` → drop `budget_gmail_state` → `batch_alter_table` on `budget_receipts` dropping new columns and restoring `0020` `CHECK` constraints (after clearing/backing up `v1d`-only rows, matching `0019` backup guidance).
+
+### 13.4 API routes, role classification & body limits
+
+Every `v1d` route uses a static path and a single HTTP method, registered `_ADMIN` in `hestia/web.py:167-209` and `"admin"` in `hestia/api_contract.py:2549-2624` (pinned by `tests/test_web.py:1960-1967` and `tests/test_api_contract.py:420-428`), with `allow_head=False` on `GET` and `Cache-Control: no-store` / `Referrer-Policy: no-referrer` (`hestia/budget/api.py:38,214-216`). Disabled feature flags return `404` (`budget_receipts_disabled` when `HESTIA_BUDGET_RECEIPTS_ENABLED != "1"`, `budget_receipts_gmail_disabled` when `HESTIA_BUDGET_RECEIPTS_GMAIL_ENABLED != "1"`, `budget_receipts_proof_disabled` when `HESTIA_BUDGET_RECEIPTS_PROOF_ENABLED != "1"`). All `POST` routes execute `api._principal` and `api._browser` (`Origin` + `hestia_session`, rejecting `Authorization`) **before reading any request body bytes**. OpenAPI bumps by a minor version per phase (after `v1a`'s `0.30.0` and `v1b`).
+
+| Phase | Route | Role / CSRF / Framing | Body / Response Cap & Contract Behavior |
+| --- | --- | --- | --- |
+| `v1d.1` | `POST /api/budget/receipts/gmail-sync` | `_ADMIN`, `_principal` → `_browser` before body | JSON `<= 4 KiB` (`4,096` B, `{}` or `{force_catchup: bool}`); `60 s` cooldown + `flock`; returns sanitized `{ok, imported_count, skipped_count, history_id_present, attention, next_sync_at}` (zero mail subjects/addresses). |
+| `v1d.1` | `GET /api/budget/receipts/gmail-status` | `_ADMIN`, `allow_head=False` | No query params; returns `{enabled, configured, attention, last_sync_at, next_sync_at, backoff_until, failures, last_http_status, last_error, pending_imported_count}`. |
+| `v1d.2` | `POST /api/budget/receipts/attach` | `_ADMIN`, `_principal` → `_browser` before `Content-Length` check & multipart read | `multipart/form-data`, `Content-Length` required, chunked rejected, total `<= 6 MiB` (`file <= 5 MiB`, PDF `<= 10` pages or `v1b` WebP); accepts optional `receipt_id`+`expected_version` or creates a `48h` `draft`; requires `client_max_size >= 6 MiB` (from `v1b`) or bounded `request.content` streaming (`hestia/web.py:925-933,1164`). |
+| `v1d.2` | `GET /api/budget/receipts/attachment` | `_ADMIN`, `allow_head=False`, `?receipt_id=<uuid>` | Opens PDF via `ReceiptFiles` (`dir_fd` + `O_NOFOLLOW`), returns `application/pdf`, `Content-Disposition: attachment; filename="receipt-<uuid>.pdf"`, `X-Content-Type-Options: nosniff`, `Content-Security-Policy: default-src 'none'; sandbox`; foreign/unknown/absent returns `404`. |
+| `v1d.2` | `GET /api/budget/receipts/missing-proof` | `_ADMIN`, `allow_head=False`, optional `?period=YYYY-MM\|YYYY&currency=AAA` | **New operation** leaving all existing analytics/budget responses untouched; `<= 4 MiB` bounded UTF-8 JSON (`analytics_api.py:94-105`); returns `{period, start, end, evaluation_timezone, thresholds, missing_count, needs_review_count, total_flagged_count, items, items_cap, truncated}`. |
+| `v1d.3` | `GET /api/budget/receipts/enrichment-suggestions` | `_ADMIN`, `allow_head=False`, optional `?period=YYYY-MM&currency=AAA` | `<= 4 MiB` bounded UTF-8 JSON; lists opaque debits (`BLIK`/`P24`/`PayU`/`Tpay`/`Autopay`/`APPLE.COM/BILL`) with matching Gmail confirmation candidates (`match_tier`, `date_distance`, sanitized merchant label) for explicit owner confirmation via `POST /confirm`. |
+
+**Additive receipt-namespace DTO deltas (non-breaking to `/api/budget/*` and `/api/budget/analytics/*`):**
+- `BudgetReceiptConfirmRequest`: additive optional `link_basis: Literal["exact", "fx_or_net"] = "exact"` inside `link`, and `lines=[]` allowed when `source_kind IN ("email", "attachment")`.
+- `BudgetReceiptListRequest`: optional `status` filter expanded with `"imported"`; optional `document_kind` filter.
+- `BudgetReceiptSummary` / `BudgetReceiptDetail`: additive `document_kind`, `link_basis`, `attachment_available: bool`, `attachment_expires_at: float | None`, `import_expires_at: float | None`.
+- `BudgetReceiptCandidate`: additive `match_tier: Literal["exact", "fx_or_net"]`, `auto_suggest: bool`, `requires_manual_confirm: bool`.
+
+### 13.5 Threat model & mitigations
+
+| Threat | Attack / Failure Mode | Mandatory Mitigation |
+| --- | --- | --- |
+| **Malicious email HTML** | `<script>`, `onerror=`, SVG/CSS `url()`, tracking pixels (`<img src>`), `cid:` probing, billion-laughs nested tags, or bidi/control spoofing inside email bodies. | Pure-Python `HTMLParser` text extractor only (`<= 1 MiB` HTML → `<= 32 KiB` / `500` lines); drops `<script>`, `<style>`, `<noscript>`, `<template>`, `<iframe>`, `<object>`, `<embed>`, `<svg>`; strips all URLs/attributes and makes **zero** network requests; strips `Cc`/`Cf`/`Cs` characters; raw HTML is discarded immediately and never persisted or served. |
+| **Malicious PDF (Gmail & manual)** | `FlateDecode` decompression bomb, deeply nested object/XRef graph, embedded PDF JavaScript (`/JS`/`/OpenAction`), `>10` pages, C-library PDF parser RCE, or XSS via inline browser PDF preview. | Sniff `%PDF-`; enforce `<= 5 MiB` upload (`Content-Length`, no chunked) and `<= 10` pages; pure-Python `pypdf` only (no Poppler/MuPDF/Ghostscript rasterization in `hestia`); cap per-stream (`4 MiB`), total decompressed (`8 MiB`), and object recursion (`64`); execute in worker thread under process-wide `Semaphore(1)` and `5 s` timeout; never persist Gmail PDFs; serve manual PDFs solely with `Content-Disposition: attachment`, `nosniff`, and `Content-Security-Policy: default-src 'none'; sandbox`. |
+| **Header spoofing on forwarded or direct mail** | External attacker sends spoofed `From: spouse@...` or injects fake `---------- Forwarded message --------- From: Apple <no_reply@email.apple.com>` headers to plant false receipts or hijack bank links. | Require outer Gmail `Authentication-Results` from Google MX showing `dkim=pass` and (`spf=pass` or `dmarc=pass`) aligned with `sender_allowlist` or `spouse_forward_senders`; treat unwrapped `message/rfc822` or inline forwarded headers strictly as **untrusted extraction hints** (for merchant tokenization after stripping email addresses), never as an authorization identity; land all Gmail imports as unconfirmed `status = 'imported'` with zero auto-linking; verify every link inside `BEGIN IMMEDIATE`. |
+| **Quota & storage exhaustion** | Thousands of matching historical emails, rapid `gmail-sync` button mashing, `429` storms, or `MAX_DRAFTS = 20` / `/data` volume starvation. | Bound initial backfill (`365` days, max `500` messages) and per-run batch (`100` messages, `<= 10 MiB` raw mail); pace calls (`>= 50 ms`) and apply `Retry-After` + exponential backoff on `429`/`403 rateLimitExceeded` (`providers.py:74-77`, `rate_limit.py:117`); serialize syncs with `flock` + `60 s` HTTP cooldown; isolate Gmail unconfirmed rows under `status = 'imported'` (`MAX_GMAIL_PENDING = 200`) separate from `MAX_DRAFTS = 20`; enforce shared `256 MiB` `ReceiptFiles` `/data` cap for manual PDFs/photos and `4 MiB` JSON cap on `missing-proof`. |
+| **OAuth token, PII & address leakage** | Refresh/access tokens, raw email bodies, spouse/merchant email addresses, PANs, or amounts exposed in config files, logs, exceptions, DB, audit rows, or reverse-proxy logs. | Keep `HESTIA_GOOGLE_*` in `.env` and `HESTIA_BUDGET_RECEIPTS_HMAC_SECRET_FILE` as `0400`/`0600` (`config.py:171-195`); JSON config holds env-var names only (`calendar_sync/config.py:53-62`); `HTTPTransport` uses `_NoRedirect` and constant Google URLs (`providers.py:46-57,170`); exceptions/logs emit only fixed error codes/classes (`providers.py:5-6`, `client.py:77-115`); strip all email addresses + run `redact_pan()` before persisting any field; set `raw_ocr_text = NULL` on Gmail imports; store only `HMAC-SHA256` of `Message-ID`; log only sanitized IDs/statuses/source/document kinds in `budget_analytics_audit`. |
+
+### 13.6 Retention, purge & privacy-policy gates
+
+| Artifact / Record | Retention Lifetime | Purge / Cleanup Mechanism |
+| --- | --- | --- |
+| Interactive drafts (`status = 'draft'` — paste, photo, manual PDF) | **48 hours** from creation | Hourly `retention` sweep (`receipt_api.py:89-112`) and `ReceiptStore._purge` delete lines + receipt rows and unlink disk WebP/PDF via `ReceiptFiles.delete` (`§5.2`). |
+| Unconfirmed Gmail imports (`status = 'imported'`) | **30 days** (`import_expires_at = created_at + 30d`) | Same `_purge` sweep deletes unconfirmed lines + receipt rows while keeping `budget_gmail_messages` tombstone (`outcome = 'deleted'`) so hourly sync does not re-import. |
+| Manual PDF / photo proof (`raw_ocr_text`, `image_relpath`, `attachment_relpath`) | **30 days after confirmation** (`confirmed_at + 30d`) | `_purge` clears `raw_ocr_text`, `raw_text_expires_at`, `image_relpath`, `attachment_relpath`, `attachment_mime`, `attachment_expires_at`, and unlinks `/data/budget-receipts` files while keeping structured receipt/link rows until explicit deletion (**Q2**, **D1**). |
+| Gmail-sourced confirmed receipts (`email` / Gmail `attachment`) | `raw_ocr_text = NULL` & no stored file from creation; structured metadata kept until deleted | Zero mail bodies or files are ever written; owner `delete` clears `budget_gmail_messages.receipt_id = NULL` (`outcome = 'deleted'`) before deleting lines/receipt. |
+| Dedupe tombstones (`budget_gmail_messages`) | **400 days** (`internal_date < now - 400d`, exceeding `365d` backfill window) | Pruned during `_purge` / post-sync sweep so the dedupe table remains bounded without causing re-imports inside the backfill window. |
+
+- **Privacy policy status & gate:** Commit `2ce999f` (`#237`) updated `ui/public/privacy-policy.html:282-295` and `ui/public/terms-of-service.html:157-164` for `#gmail` receipt import (`gmail.readonly`, label/sender filtering, zero stored bodies/addresses, Google Limited Use). However, `ui/public/privacy-policy.html:268-281` does **not** yet disclose manual PDF attachment text extraction/30-day PDF storage (`v1d.2`) or Gmail payment-confirmation enrichment (`v1d.3`). **Operator gate:** `ui/public/privacy-policy.html` (and `terms-of-service.html` if needed) **must be updated before enabling `v1d.2` or `v1d.3`**.
+
+### 13.7 Testing & verification plan (`v1d` synthetic cases)
+
+Continuing `§10` (`#1–#17`), every `v1d` PR must pass full Python statement+branch coverage, UI `typecheck`/`lint`/`test`/`build`, and `test_every_registered_route_is_public_or_classified` / OpenAPI drift checks (`tests/test_web.py:1960-1967`, `tests/test_api_contract.py:49-54,420-428`) using synthetic fixtures only:
+
+18. **`test_gmail_oauth_token_refresh_and_auth_attention_latch`:** Uses injected `HTTPTransport` (`providers.py:173-199`) with `_NoRedirect`; refreshes expired access token once on `401`; latches `budget_gmail_state.attention = 'authorization'` on `invalid_grant` / insufficient scope and halts background sync without leaking tokens, URLs, or HTTP bodies in logs.
+19. **`test_gmail_history_sync_backfill_bounds_and_404_fallback`:** Initial sync captures `profile.historyId`, enforces `365d` / `500`-message backfill cap and `100`-message per-run cap; incremental `users.history` consumes `messageAdded` + `labelAdded` and advances `history_id` only after SQLite commit; `404` expired history triggers bounded catch-up without duplicates.
+20. **`test_gmail_dedupe_hmac_stores_no_bodies_or_addresses`:** Verifies `HMAC-SHA256(hmac_secret, Message-ID)` dedupe in `budget_gmail_messages`, asserts `raw_ocr_text IS NULL` and zero email addresses, HTML tags, or body strings appear anywhere in SQLite tables, `/data`, audit rows, or logs, and verifies deleted/expired imports stay suppressed on re-sync.
+21. **`test_gmail_forwarded_unwrap_and_header_spoofing_defense`:** Spouse `message/rfc822` and inline forwarded receipts recover the merchant/brand hint (`Apple`, `OpenAI`, `Allegro`) with email addresses stripped; spoofed outer `From` or forged inner forward headers failing `Authentication-Results` (`dkim`/`spf`) are rejected and never auto-confirm or bypass link verification.
+22. **`test_gmail_html_sanitization_blocks_scripts_and_remote_resources`:** Strips `<script>`, `<style>`, `<iframe>`, `<svg>`, tracking `<img src>`, `cid:` refs, and Unicode bidi controls with zero outbound network calls; enforces `1 MiB` HTML and `32 KiB` / `500`-line output bounds.
+23. **`test_gmail_quota_429_backoff_and_sync_lock`:** Verifies `429` and `403 rateLimitExceeded` (`providers.py:74-77`) honor `Retry-After` (`rate_limit.py:117`) and exponential backoff; `flock` prevents concurrent backfill/HTTP sync; `MAX_GMAIL_PENDING = 200` does not exhaust `MAX_DRAFTS = 20`.
+24. **`test_receipt_fx_and_gross_net_suggests_only_and_requires_manual_confirm`:** Covers USD/EUR invoice vs. `APPLE.COM/BILL 999.99 PLN` debit and same-currency gross/net VAT deltas: surfaces `match_tier = 'fx_or_net'` with `auto_suggest = False`; rejects default `link_basis = 'exact'` with `400`; validates `link_basis = 'fx_or_net'` inside `BEGIN IMMEDIATE` (persisting `linked_fingerprint`, enforcing `409` uniqueness and `reconcile_receipt_links` `needs_review` latching).
+25. **`test_missing_proof_threshold_and_exclusions`:** Flags `DBIT`, `kind='expense'` `>= 500 PLN` when unlinked or latched `needs_review`; excludes `< 500 PLN`, `CRDT`, `transfer` / `budget_transfer_legs`, Krypto (`kind='excluded'`), and `pass_through` mortgage/rent categories (`month_budget.load_month_config()`); verifies existing `overview`, `transactions`, and `monthly-budget` payloads are unchanged.
+26. **`test_manual_pdf_bomb_page_limit_timeout_and_attachment_headers`:** Rejects `> 5 MiB`, `> 10` pages, `FlateDecode` stream bombs (`> 4 MiB` stream / `> 8 MiB` total), password-encrypted PDFs, and non-PDF magic bytes; verifies `_PDF_PARSE_SEMAPHORE`, `5 s` timeout, `30d` confirmed file + `raw_ocr_text` purge, and `GET /attachment` `Content-Disposition: attachment` + `sandbox` CSP headers.
+27. **`test_opaque_debit_enrichment_suggests_without_mutating_ledger`:** Matches opaque `"Płatność BLIK … Nr transakcji"` / `PayU` / `Przelewy24` / `APPLE.COM/BILL` debits against Gmail payment confirmations by amount and `±4`d date as suggestions only; confirms link inside `BEGIN IMMEDIATE` while keeping `budget_transactions.payload_json` and `analytics_views.py` totals untouched.
+28. **`test_receipt_v1d_migration_upgrade_downgrade`:** Round-trips `0021 → 0022 (TBD) → 0021` under `PRAGMA foreign_keys=ON` (`hestia/db.py:757`) with child-first table/column removal and verifies `v1a`/`v1b` receipt compatibility.
+
+### 13.8 Effort estimate
+
+| Phase | Scope | Rough effort |
+| --- | --- | --- |
+| **v1d.1 — Gmail import of receipts** | `HESTIA_BUDGET_RECEIPTS_GMAIL_CONFIG` + `gmail_client.py` (reusing `HESTIA_GOOGLE_*` / `providers.py`), `users.history` + bounded 12m/500 backfill + hourly poller + `flock`, spouse-forward unwrap + `Authentication-Results` guard, HTML sanitizer + bounded `pypdf` extractor (`Semaphore(1)` + timeout), `budget_gmail_state`/`budget_gmail_messages` migration delta + `gmail-sync`/`gmail-status` routes + Gmail Inbox UI, tests #18–#23 & #28 | **5–6.5 engineering days** |
+| **v1d.2 — Proof linking, missing-proof & manual attachments** | `link_basis` (`exact` vs. `fx_or_net`) matching & `BEGIN IMMEDIATE` confirm + `lines=[]` support for email/attachment, `GET /missing-proof` (default `500 PLN`, excluding transfers/Krypto/pass-through), `POST /attach` + `GET /attachment` (`ReceiptFiles` PDF support + `30d` retention purge), UI missing-proof badge/list + attach flow + `privacy-policy.html` update, tests #24–#26 | **4–5.5 engineering days** |
+| **v1d.3 — Opaque-debit enrichment** | Payment-confirmation email parser templates (`document_kind='payment_confirmation'`), opaque-debit pattern detector (`BLIK`/`P24`/`PayU`/`Tpay`/`Autopay`/`APPLE.COM/BILL`), `GET /enrichment-suggestions` + UI suggestion review/confirm, test #27 | **2–3 engineering days** |
+
+**Total (`v1d.1`–`v1d.3`):** ~**11–15 engineering days** (sequenced after `v1a` + `v1b`).
