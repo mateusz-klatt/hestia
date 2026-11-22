@@ -1,6 +1,7 @@
 """Durable browser-bound consent claims; no provider calls or private-file reads."""
 from __future__ import annotations
 
+import hashlib
 import hmac
 import json
 import math
@@ -26,6 +27,9 @@ _IDENTITY_LIMIT = 1000
 _IDENTITY_BYTES = 256 * 1024
 _EVIDENCE = "account_identity_evidence"
 _UIDS = "account_uids"
+_LIMIT_ERROR = "budget_consent_limit"
+_DATA_ERROR = "budget_consent_data_error"
+_OPAQUE_CONSENT = "consent"
 
 
 class BudgetConsentError(BudgetStoreError):
@@ -517,9 +521,9 @@ class BudgetConsentStore(BudgetJobStore):
         try:
             reminders = evaluate_renewal_reminders(owner, evaluated_at, targets)
         except RenewalLimitError:
-            raise BudgetConsentError("budget_consent_limit", 413) from None
+            raise BudgetConsentError(_LIMIT_ERROR, 413) from None
         except RenewalInputError:
-            raise BudgetConsentError("budget_consent_invalid_request", 400) from None
+            raise BudgetConsentError(_DATA_ERROR, 500) from None
         return {
             "evaluated_at": evaluated_at,
             "lead_days": list(DEFAULT_LEAD_DAYS),
@@ -540,6 +544,119 @@ class BudgetConsentStore(BudgetJobStore):
                     "rule_version": item.rule_version,
                 }
                 for item in reminders
+            ],
+        }
+
+    @staticmethod
+    def _opaque_reconcile_id(owner, kind, raw_id):
+        """Domain-separated non-reversible opaque hash so raw DB/provider IDs never leave the server."""
+        payload = f"hestia/budget/consent-reconcile/v1\0{kind}\0{owner}\0{raw_id}".encode("utf-8")
+        return hashlib.sha256(payload).hexdigest()
+
+    def reconcile(self, owner, *, now=None):
+        """Read-only classification of owned consents and flows (zero actions, zero bank I/O)."""
+        from .consent_reconcile import (
+            DEFAULT_RETENTION_DAYS,
+            RULE_VERSION,
+            ConsentFlowRecord,
+            ConsentRecord,
+            ConsentReconcileInputError,
+            ConsentReconcileLimitError,
+            classify_consents,
+        )
+
+        evaluated_at = self.clock() if now is None else now
+        with self.sessions() as session:
+            session.execute(text("BEGIN"))
+            self._owner(session, owner)
+            connections = list(session.scalars(
+                select(Connection).where(Connection.owner == owner).order_by(Connection.id)))
+            consent_rows = list(session.scalars(
+                select(Consent).where(Consent.owner == owner).order_by(Consent.created_at, Consent.id)))
+            flow_rows = list(session.scalars(
+                select(Flow).where(Flow.owner == owner).order_by(Flow.created_at, Flow.id)))
+            active_consent_ids = {
+                row.id: self._opaque_reconcile_id(owner, _OPAQUE_CONSENT, row.active_consent_id)
+                for row in connections if row.active_consent_id is not None
+            }
+            valid_until_by_id = {}
+            consents = []
+            for row in consent_rows:
+                opaque_id = self._opaque_reconcile_id(owner, _OPAQUE_CONSENT, row.id)
+                valid_until_by_id[opaque_id] = row.valid_until
+                consents.append(ConsentRecord(
+                    owner=owner,
+                    consent_id=opaque_id,
+                    connection_id=row.connection_id,
+                    provenance=row.provenance,
+                    status=row.status,
+                    created_at=row.created_at,
+                    valid_until=row.valid_until,
+                    generation=row.generation,
+                ))
+            flows = [
+                ConsentFlowRecord(
+                    owner=owner,
+                    flow_id=self._opaque_reconcile_id(owner, "flow", row.id),
+                    connection_id=row.connection_id,
+                    status=row.status,
+                    created_at=row.created_at,
+                    expires_at=row.expires_at,
+                    candidate_consent_id=(None if row.candidate_consent_id is None
+                                          else self._opaque_reconcile_id(owner, _OPAQUE_CONSENT, row.candidate_consent_id)),
+                )
+                for row in flow_rows
+            ]
+        try:
+            report = classify_consents(
+                owner, evaluated_at, consents, flows, active_consent_ids=active_consent_ids,
+            )
+        except ConsentReconcileLimitError:
+            raise BudgetConsentError(_LIMIT_ERROR, 413) from None
+        except ConsentReconcileInputError:
+            raise BudgetConsentError(_DATA_ERROR, 500) from None
+        return {
+            "evaluated_at": evaluated_at,
+            "retention_days": DEFAULT_RETENTION_DAYS,
+            "rule_version": RULE_VERSION,
+            "summary": {
+                "consents_total": len(report.consents),
+                "flows_total": len(report.flows),
+                "needs_owner_review": (
+                    sum(1 for item in report.consents if item.needs_owner_review)
+                    + sum(1 for item in report.flows if item.needs_owner_review)
+                ),
+                "remote_close_eligible": sum(1 for item in report.consents if item.remote_close_eligible),
+                "local_retire_eligible": (
+                    sum(1 for item in report.consents if item.local_retire_eligible)
+                    + sum(1 for item in report.flows if item.local_retire_eligible)
+                ),
+            },
+            "consents": [
+                {
+                    "consent_id": item.consent_id,
+                    "connection_id": item.connection_id,
+                    "provenance": item.provenance,
+                    "status": item.status,
+                    "valid_until": valid_until_by_id[item.consent_id],
+                    "classification": item.classification,
+                    "needs_owner_review": item.needs_owner_review,
+                    "remote_close_eligible": item.remote_close_eligible,
+                    "local_retire_eligible": item.local_retire_eligible,
+                }
+                for item in report.consents
+            ],
+            "flows": [
+                {
+                    "flow_id": item.flow_id,
+                    "connection_id": item.connection_id,
+                    "status": item.status,
+                    "classification": item.classification,
+                    "needs_owner_review": item.needs_owner_review,
+                    "local_retire_eligible": item.local_retire_eligible,
+                    "candidate_consent_id": item.candidate_consent_id,
+                }
+                for item in report.flows
             ],
         }
 

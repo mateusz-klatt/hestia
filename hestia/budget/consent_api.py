@@ -241,8 +241,10 @@ def register(app, read_json_body, *, auth_enabled, session_secret, secure_cookie
                     payload = {"pending": await asyncio.to_thread(service.pending, owner, fingerprint, bindings)}
                 elif operation == "status":
                     payload = {"consents": await asyncio.to_thread(service.status, owner)}
-                else:
+                elif operation == "renewal-reminders":
                     payload = await asyncio.to_thread(service.renewal_reminders, owner)
+                else:
+                    payload = await asyncio.to_thread(service.reconcile, owner)
                 return web.json_response(payload, headers=api.PRIVATE_HEADERS)
             body, error = await read_json_body(request, 4096, reject_duplicates=True)
             if error:
@@ -275,7 +277,7 @@ def register(app, read_json_body, *, auth_enabled, session_secret, secure_cookie
     app.router.add_get(CALLBACK, callback, allow_head=False)
     app.router.add_get(COMPLETE, bridge, allow_head=False)
     app.router.add_get(SCRIPT, bridge, allow_head=False)
-    for operation in ("pending", "status", "renewal-reminders"):
+    for operation in ("pending", "status", "renewal-reminders", "reconcile"):
         app.router.add_get(PREFIX + "/" + operation, handle, allow_head=False)
     for operation in ("start", "complete", "cancel"):
         app.router.add_post(PREFIX + "/" + operation, handle)

@@ -303,5 +303,24 @@ outflow without a known accepted relationship remains spending within that scope
   and explicit `attention` code — never assuming a fixed 180-day lifetime — with lead tiers
   `(14, 7, 3, 1)` days.
 - Strictly **evaluation-only**: returns statuses, milestones, `valid_until`, remaining time
-  and `destination_kind` only (never session IDs, URLs, codes or PII destination targets),
-  triggers no notification delivery and never initiates consent renewal or modifies credentials.
+  and `destination_kind` only (fixed to `"owner_inbox"` until a future delivery-configuration
+  slice is introduced; never session IDs, URLs, codes or PII destination targets), triggers no
+  notification delivery and never initiates consent renewal or modifies credentials. Stored DB
+  integrity violations fail closed with HTTP 500 (`budget_consent_data_error`) rather than 400.
+
+## Read-only bank consent reconciliation (OpenAPI `0.22.0`, zero migration)
+
+- `GET /api/budget/consent/reconcile` (gated by `HESTIA_BUDGET_CONSENT_ENABLED=1`, exact
+  SQLite admin owner with signed browser session cookie, `allow_head=False`,
+  `Cache-Control: no-store`, zero query parameters, zero bank requests) classifies the owner's
+  stored `budget_consents` and `budget_consent_flows` via `consent_reconcile.classify_consents`
+  with defense-in-depth `active_consent_ids` pointers from `budget_connections`.
+- Strictly **read-only / informational**: introduces no close, retire or delete endpoints;
+  `remote_close_eligible` and `local_retire_eligible` are advisory flags only. External and
+  retired PoC sessions (`external_file`, `poc_retired`) always classify as `external_read_only`
+  with both eligibility flags `false`.
+- **Opaque identifiers:** `consent_id`, `flow_id` and `candidate_consent_id` are returned
+  exclusively as domain-separated SHA-256 hashes (never raw Enable Banking session IDs, DB
+  UUIDs, capsule refs, URLs, codes, `aspsp_id` or `psu_type`). Stored DB integrity errors fail
+  closed with HTTP 500 (`budget_consent_data_error`) and exceeding evaluation caps returns 413
+  (`budget_consent_limit`).

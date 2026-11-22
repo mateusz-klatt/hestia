@@ -14,7 +14,8 @@ _MONEY = re.compile(r"-?[0-9]+(?:\.[0-9]+)?\Z", re.ASCII)
 _PERIOD = re.compile(r"([0-9]{4})(?:-([0-9]{2}))?\Z", re.ASCII)
 _CODES = frozenset({"budget_analytics_invalid_request", "budget_analytics_not_found", "budget_analytics_conflict",
                     "budget_analytics_source_changed", "budget_analytics_stale_preview", "budget_analytics_stale_cursor", "budget_analytics_preview_expired",
-                    "budget_analytics_leg_reserved", "budget_analytics_limit", "budget_analytics_unavailable"})
+                    "budget_analytics_leg_reserved", "budget_analytics_limit", "budget_analytics_data_error",
+                    "budget_analytics_unavailable"})
 
 
 class AnalyticsError(ValueError):
@@ -22,7 +23,7 @@ class AnalyticsError(ValueError):
 
     def __init__(self, code="budget_analytics_invalid_request", status=400):
         self.code = code if isinstance(code, str) and code in _CODES else "budget_analytics_invalid_request"
-        self.status = status if type(status) is int and status in (400, 404, 409, 413, 503) else 400
+        self.status = status if type(status) is int and status in (400, 404, 409, 413, 500, 503) else 400
         super().__init__(self.code)
 
 
