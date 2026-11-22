@@ -4,13 +4,19 @@ from __future__ import annotations
 import json
 import math
 
-from sqlalchemy import select, tuple_
+from sqlalchemy import delete, select, tuple_
 
 from ..db import (BudgetAccount as Account, BudgetAnalyticsAudit as Audit, BudgetConnection as Connection,
-                  BudgetReceipt as Receipt, BudgetTransaction as Transaction, BudgetTransferLeg as Leg)
+                  BudgetReceipt as Receipt, BudgetTransaction as Transaction,
+                  BudgetTransactionMetadata as Metadata, BudgetTransferLeg as Leg)
 from .analytics_core import AnalyticsError, financial_fingerprint
 
 _CHUNK = 400
+_MAX_CREDITOR_LEN = 256
+_EVIDENCE_KEYS = (
+    "owner", "account_id", "entry_reference", "transaction_date", "booking_date", "value_date",
+    "raw_shop_name", "raw_nip", "creditor_name",
+)
 
 
 def audit_payload(row, action):
@@ -56,13 +62,71 @@ def _linked_transactions(session, owner, keys):
     return result
 
 
-def _reserved(session, keys):
+def _reserved(session, owner, keys):
     result = set()
     for offset in range(0, len(keys), _CHUNK):
         chunk = keys[offset:offset + _CHUNK]
-        result.update(session.execute(select(Leg.account_id, Leg.entry_reference).where(
-            tuple_(Leg.account_id, Leg.entry_reference).in_(chunk))).all())
+        result.update(session.execute(select(Leg.account_id, Leg.entry_reference).join(
+            Account, Account.id == Leg.account_id).where(
+            Account.owner == owner, tuple_(Leg.account_id, Leg.entry_reference).in_(chunk))).all())
     return result
+
+
+def _bound_date(value):
+    if not isinstance(value, str) or len(value) != 10:
+        return None
+    try:
+        from datetime import date
+        return value if date.fromisoformat(value).isoformat() == value else None
+    except ValueError:
+        return None
+
+
+def creditor_name(session, owner, account_id, entry_reference, fingerprint):
+    """Creditor text is usable only when its metadata row matches this ledger fingerprint."""
+    if fingerprint is None:
+        return None
+    metadata = session.get(Metadata, (account_id, entry_reference))
+    if metadata is None or metadata.owner != owner or metadata.ledger_fingerprint != fingerprint:
+        return None
+    try:
+        data = _json(metadata.payload_json)
+    except (ValueError, TypeError, RecursionError):
+        return None
+    value = data.get("creditor_name") if isinstance(data, dict) else None
+    if not isinstance(value, str) or not value or len(value) > _MAX_CREDITOR_LEN:
+        return None
+    return value
+
+
+def link_evidence(owner, account_id, entry_reference, payload, shop_name, nip, creditor):
+    payload = payload if isinstance(payload, dict) else {}
+    evidence = {
+        "owner": owner, "account_id": account_id, "entry_reference": entry_reference,
+        "transaction_date": _bound_date(payload.get("transaction_date")),
+        "booking_date": _bound_date(payload.get("booking_date")),
+        "value_date": _bound_date(payload.get("value_date")),
+        "raw_shop_name": shop_name, "raw_nip": nip, "creditor_name": creditor,
+    }
+    if set(evidence) != set(_EVIDENCE_KEYS):
+        raise AnalyticsError()
+    return evidence
+
+
+def evidence_json(evidence):
+    try:
+        raw = json.dumps(evidence, sort_keys=True, ensure_ascii=True, allow_nan=False, separators=(",", ":"))
+    except (ValueError, TypeError, OverflowError, RecursionError):
+        raise AnalyticsError() from None
+    if not 1 <= len(raw) <= 4096 or not raw.isascii():
+        raise AnalyticsError()
+    return raw
+
+
+def erase_receipt_audit(session, owner, receipt_id):
+    session.execute(delete(Audit).where(
+        Audit.owner == owner, Audit.subject_type == "receipt", Audit.subject_id == receipt_id,
+    ))
 
 
 def _fingerprint(row):
@@ -92,14 +156,22 @@ def reconcile_receipt_links(session, owner, now):
         return 0
     keys = sorted({(row.linked_account_id, row.linked_entry_ref) for row in linked})
     transactions = _linked_transactions(session, owner, keys)
-    reserved = _reserved(session, keys)
+    reserved = _reserved(session, owner, keys)
     changed = 0
     for row in linked:
         if row.status != "confirmed":
             continue
         key = (row.linked_account_id, row.linked_entry_ref)
-        current = None if key in reserved else _fingerprint(transactions.get(key))
-        if current == row.linked_fingerprint:
+        transaction = None if key in reserved else transactions.get(key)
+        current = _fingerprint(transaction)
+        try:
+            payload = {} if transaction is None else _json(transaction.payload_json)
+            creditor = creditor_name(session, owner, row.linked_account_id, row.linked_entry_ref, current)
+            evidence = evidence_json(link_evidence(
+                owner, row.linked_account_id, row.linked_entry_ref, payload, row.raw_shop_name, row.raw_nip, creditor))
+        except (AnalyticsError, ValueError, TypeError, RecursionError):
+            evidence = None
+        if current == row.linked_fingerprint and evidence == row.linked_evidence:
             continue
         before = audit_payload(row, "source_changed")
         row.status, row.version, row.updated_at = "needs_review", row.version + 1, now

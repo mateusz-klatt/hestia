@@ -1,6 +1,7 @@
 """Synthetic receipts v1a parser, matching, retention, privacy, drift and HTTP tests."""
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 import json
 import os
@@ -36,6 +37,13 @@ def confirm_values(parsed, *, link=None, **changes):
         "raw_shop_name", "raw_nip", "receipt_kind", "receipt_date", "receipt_time", "total_amount",
         "currency", "payment_method",
     )}
+    if link is not None and "candidate_token" not in link:
+        match = next((item for item in parsed.get("candidates", [])
+                      if item["account_id"] == link.get("account_id")
+                      and item["entry_reference"] == link.get("entry_reference")
+                      and item.get("candidate_token")), None)
+        if match is not None:
+            link = {**link, "candidate_token": match["candidate_token"]}
     values.update({
         "receipt_id": parsed["receipt_id"], "expected_version": parsed["version"], "link": link,
         "lines": [{key: line[key] for key in LINE_FIELDS} for line in draft["lines"]],
@@ -435,6 +443,199 @@ NR KARTY ****5555
         self.assertIn("debit", {item["entry_reference"] for item in parsed["candidates"]})
         result = self.receipts.confirm("owner", confirm_values(parsed, link=self.link()))
         self.assertEqual(result["receipt"]["status"], "confirmed")
+
+    def test_redactor_covers_repeated_separators_masks_unicode_and_continuations(self):
+        doubled = "5351  0055  5555  5555"
+        masked = "5351  ****  ****  5555"
+        fullwidth = "５３５１００５５５５５５５５５５"
+        self.assertEqual(redact_pan(doubled), "[REDACTED]")
+        self.assertEqual(redact_pan(masked), "[REDACTED]")
+        self.assertEqual(redact_pan(fullwidth), "[REDACTED]")
+        self.assertNotIn("5351005555555555", redact_pan("pay " + doubled + " end").replace(" ", ""))
+        self.assertNotIn("5555", redact_pan(masked))
+        continued = "NR KARTY\n5351  0055\n5555  5555\nSUMA PLN 5,00\nNIP 7791011327\n2026-11-20\n"
+        redacted = redact_pan(continued)
+        self.assertNotIn("5351", redacted)
+        self.assertNotIn("0055", redacted)
+        self.assertIn("SUMA PLN 5,00", redacted)
+        self.assertIn("7791011327", redacted)
+        self.assertIn("2026-11-20", redacted)
+        untouched = "NIP 7791011327\n2026-11-20\n"
+        self.assertEqual(redact_pan(untouched), untouched)
+
+    def test_money_magnitude_precision_and_folded_name_length_are_limited(self):
+        def text(item):
+            return f"BIEDRONKA\nNIP 7791011327\n2026-11-30 12:34\n{item}\nSUMA PLN 5,00\n"
+
+        hidden = parse_receipt(text("MLEKO 1 x 4111111111111111 5,00 A"))
+        self.assertNotIn("4111111111111111", hidden["raw_ocr_text"])
+        for line in hidden["lines"]:
+            self.assertNotIn("4111111111111111", str(line["unit_price_raw"]))
+        with self.assertRaises(ReceiptError):
+            parse_receipt(text("MLEKO 1 x 1,00000 5,00 A"))
+        with self.assertRaises(ReceiptError):
+            parse_receipt(text("MLEKO 1 x 1000000000 5,00 A"))
+        wide = parse_receipt(
+            "BIEDRONKA\nNIP 7791011327\n2026-11-30 12:34\n"
+            "MLEKO 1 x 999999999,9999 999999999,9999 A\nSUMA PLN 999999999,9999\n")
+        self.assertEqual(wide["lines"][0]["unit_price_raw"], "999999999.9999")
+        self.assertEqual(wide["total_amount"], "999999999.9999")
+        folded = "ß" * 128
+        with self.assertRaises(ReceiptError):
+            parse_receipt(text(f"{folded} 1 x 5,00 5,00 A"))
+        parsed = self.draft()
+        values = confirm_values(parsed)
+        values["lines"][0]["unit_price_raw"] = "4111111111111111"
+        with self.assertRaises(ReceiptError):
+            self.receipts.confirm("owner", values)
+        fraction = confirm_values(parsed)
+        fraction["lines"][0]["quantity"] = "1.00000"
+        with self.assertRaises(ReceiptError):
+            validate_confirm(fraction)
+        long_name = confirm_values(parsed)
+        long_name["lines"][0]["raw_name"] = folded
+        with self.assertRaises(ReceiptError):
+            validate_confirm(long_name)
+
+    def test_confirm_is_bound_to_preview_evidence_and_reconcile_is_idempotent(self):
+        from hestia.budget.receipt_reconcile import reconcile_receipt_links
+
+        self.add_transaction("a", "window", amount="100", booking_date="2026-11-10",
+                             value_date="2026-11-10", transaction_date="2026-11-20")
+        parsed = self.draft(day="2026-11-20")
+        candidate = next(item for item in parsed["candidates"] if item["entry_reference"] == "window")
+        link = {"account_id": candidate["account_id"], "entry_reference": "window",
+                "candidate_token": candidate["candidate_token"]}
+        merchant = confirm_values(parsed, link=link, raw_shop_name="INNY SKLEP")
+        with self.assertRaises(ReceiptError) as stale_merchant:
+            self.receipts.confirm("owner", merchant)
+        self.assertEqual((stale_merchant.exception.code, stale_merchant.exception.status),
+                         ("budget_receipt_stale_source", 409))
+        self.assertEqual(self.receipt_row(parsed["receipt_id"]).status, "draft")
+
+        self.change_transaction("a", "window", transaction_date="2026-10-01")
+        with self.assertRaises(ReceiptError) as stale_date:
+            self.receipts.confirm("owner", confirm_values(parsed, link=link))
+        self.assertEqual(stale_date.exception.code, "budget_receipt_stale_source")
+        self.assertEqual(self.receipt_row(parsed["receipt_id"]).status, "draft")
+
+        before = self.fingerprint("a", "window")
+        self.change_transaction("a", "window", transaction_date="2026-11-20")
+        self.assertEqual(self.fingerprint("a", "window"), before)
+        confirmed = self.receipts.confirm("owner", confirm_values(parsed, link=link))["receipt"]
+        self.assertTrue(confirmed["linked"])
+        self.assertIn("2026-11-20", self.receipt_row(parsed["receipt_id"]).linked_evidence)
+        self.change_transaction("a", "window", transaction_date="2026-10-01")
+        self.assertEqual(self.fingerprint("a", "window"), before)
+        with self.sessions.begin() as session:
+            self.assertEqual(reconcile_receipt_links(session, "owner", self.now), 1)
+        with self.sessions.begin() as session:
+            self.assertEqual(reconcile_receipt_links(session, "owner", self.now + 5), 0)
+        self.assert_latched(parsed["receipt_id"], confirmed["version"])
+
+    def test_creditor_metadata_must_match_the_ledger_fingerprint(self):
+        self.metadata("a", "debit", {"creditor_name": "SYNTHETIC GROCER"})
+        parsed = self.draft()
+        match = next(item for item in parsed["candidates"] if item["entry_reference"] == "debit")
+        self.assertEqual(match["creditor_name"], "SYNTHETIC GROCER")
+        with self.sessions.begin() as session:
+            session.get(db.BudgetTransactionMetadata, (self.accounts["a"], "debit")).ledger_fingerprint = "0" * 64
+        hidden = self.draft(total="8", item="MLEKO INNE")
+        self.assertTrue(hidden["candidates"] == [] or all(
+            item["creditor_name"] is None for item in hidden["candidates"]))
+        again = self.receipts.parse_text("owner", receipt_text())
+        debit = next(item for item in again["candidates"] if item["entry_reference"] == "debit")
+        self.assertIsNone(debit["creditor_name"])
+        with self.assertRaises(ReceiptError) as stale:
+            self.receipts.confirm("owner", confirm_values(parsed, link=self.link()))
+        self.assertEqual(stale.exception.code, "budget_receipt_stale_source")
+        self.assertEqual(self.receipt_row(parsed["receipt_id"]).status, "draft")
+        with self.sessions.begin() as session:
+            session.get(db.BudgetTransactionMetadata, (self.accounts["a"], "debit")).ledger_fingerprint = self.fingerprint()
+        saved = self.receipts.confirm("owner", confirm_values(parsed, link=self.link()))["receipt"]
+        self.assertIn("SYNTHETIC GROCER", self.receipt_row(parsed["receipt_id"]).linked_evidence)
+        self.assertTrue(saved["linked"])
+
+    def test_later_confirm_keeps_the_first_deadline(self):
+        parsed = self.draft()
+        first = self.receipts.confirm("owner", confirm_values(parsed))["receipt"]
+        self.now += 5000
+        edited = self.receipts.confirm("owner", confirm_values(
+            parsed, expected_version=first["version"], receipt_time="18:01"))["receipt"]
+        self.assertEqual(edited["raw_text_expires_at"], first["raw_text_expires_at"])
+        self.assertEqual(edited["image_expires_at"], first["image_expires_at"])
+        self.assertEqual(first["raw_text_expires_at"], self.now - 5000 + CONFIRMED_TEXT_TTL_SECONDS)
+        self.assertIsNotNone(edited["raw_ocr_text"])
+
+    def test_retain_expired_purges_drafts_when_the_flag_is_off(self):
+        expired = self.draft(total="7")
+        kept = self.draft()
+        confirmed = self.receipts.confirm("owner", confirm_values(kept))["receipt"]
+        self.now += DRAFT_TTL_SECONDS + 1
+        with mock.patch.dict(os.environ, {receipt_api.FLAG: "0"}), \
+                mock.patch("hestia.budget.api._secret", side_effect=AssertionError("browser secret")):
+            result = receipt_api.retain_expired(self.path, clock=lambda: self.now)
+        self.assertEqual(result, {"drafts_purged": 1, "raw_texts_purged": 0})
+        self.assertNotIn(expired["receipt_id"], json.dumps(result))
+        self.assertIsNone(self.receipt_row(expired["receipt_id"]))
+        row = self.receipt_row(kept["receipt_id"])
+        self.assertEqual(row.raw_text_expires_at, confirmed["raw_text_expires_at"])
+        self.assertIsNotNone(row.raw_ocr_text)
+
+    def test_delete_and_draft_purge_erase_receipt_audit_rows(self):
+        parsed = self.draft()
+        identifier = parsed["receipt_id"]
+        with self.sessions.begin() as session:
+            session.add(db.BudgetAnalyticsAudit(
+                owner="other", subject_type="receipt", subject_id=identifier, action="create",
+                before_json="null", after_json="{}", changed_at=1))
+            session.add(db.BudgetAnalyticsAudit(
+                owner="owner", subject_type="category", subject_id=identifier, action="create",
+                before_json="null", after_json="{}", changed_at=1))
+        deleted = self.receipts.delete("owner", {"receipt_id": identifier, "expected_version": 1})
+        self.assertEqual(deleted, {"ok": True, "deleted": True})
+        self.assertNotIn(identifier, json.dumps(deleted))
+        remaining = self.rows(db.BudgetAnalyticsAudit)
+        self.assertFalse(any(row.owner == "owner" and row.subject_type == "receipt" and row.subject_id == identifier
+                             for row in remaining))
+        self.assertTrue(any(row.owner == "other" and row.subject_id == identifier for row in remaining))
+        self.assertTrue(any(row.subject_type == "category" and row.subject_id == identifier for row in remaining))
+
+        draft = self.draft(total="7")
+        draft_id = draft["receipt_id"]
+        self.assertTrue(any(row.owner == "owner" and row.subject_type == "receipt" and row.subject_id == draft_id
+                            for row in self.rows(db.BudgetAnalyticsAudit)))
+        self.now += DRAFT_TTL_SECONDS + 1
+        purged = self.receipts.purge_expired("owner")
+        self.assertNotIn(draft_id, json.dumps(purged))
+        self.assertEqual(set(purged), {"drafts_purged", "raw_texts_purged"})
+        self.assertFalse(any(row.owner == "owner" and row.subject_type == "receipt" and row.subject_id == draft_id
+                             for row in self.rows(db.BudgetAnalyticsAudit)))
+
+
+class ReceiptRetentionSweepTests(fixture.unittest.IsolatedAsyncioTestCase):
+    async def test_sweep_calls_retain_expired_when_flag_is_off(self):
+        from aiohttp import web as aio_web
+
+        started = asyncio.Event()
+
+        async def settled(function):
+            self.assertIs(function, receipt_api.retain_expired)
+            started.set()
+            return {"drafts_purged": 0, "raw_texts_purged": 0}
+
+        app = aio_web.Application()
+        environ = os.environ.copy()
+        environ.pop(receipt_api.FLAG, None)
+        with mock.patch.dict(os.environ, environ, clear=True), \
+                mock.patch("hestia.budget.api._secret", side_effect=AssertionError("browser secret")), \
+                mock.patch("hestia.budget.api._settled_thread", settled):
+            receipt_api.register(app, lambda *_args, **_kwargs: None, auth_enabled=True, session_secret=None)
+            context = app.cleanup_ctx[-1](app).__aiter__()
+            await context.__anext__()
+            await asyncio.wait_for(started.wait(), 2)
+            with self.assertRaises(StopAsyncIteration):
+                await context.__anext__()
 
 
 class ReceiptHTTPTests(fixture.unittest.IsolatedAsyncioTestCase):

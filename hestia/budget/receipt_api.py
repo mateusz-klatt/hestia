@@ -31,11 +31,26 @@ def enabled():
     return os.environ.get(FLAG) == "1"
 
 
+_RETENTION_SECRET = b"hestia/budget/receipts/retention/v1"
+
+
 def _store(secret):
     engine, sessions = init_db()
     if not store_sql.is_users_db_authoritative(engine):
         raise BudgetUsersBackendRequired()
     return BudgetReceiptStore(sessions, clock=time.time, cursor_secret=secret)
+
+
+def retain_expired(path=None, clock=time.time):
+    """Purge expired drafts and raw text without the route flag or a browser secret.
+
+    A constant non-session key satisfies the store constructor. The sweep never
+    reads or writes a cursor, and it skips a database that is not the users backend.
+    """
+    engine, sessions = init_db(path)
+    if not store_sql.is_users_db_authoritative(engine):
+        return {"drafts_purged": 0, "raw_texts_purged": 0}
+    return BudgetReceiptStore(sessions, clock=clock, cursor_secret=_RETENTION_SECRET).purge_expired()
 
 
 def _receipt_id(request):
@@ -87,15 +102,10 @@ def register(app, read_json_body, *, auth_enabled, session_secret):
             return api._failure(exc, "receipts_" + operation)
 
     async def retention(_app):
-        if not enabled():
-            yield
-            return
-
         async def sweep():
             while True:
                 try:
-                    secret = api._secret(session_secret)
-                    await api._settled_thread(lambda: _store(secret).purge_expired())
+                    await api._settled_thread(retain_expired)
                 except (Exception, asyncio.CancelledError):
                     if asyncio.current_task().cancelling():
                         raise

@@ -17,9 +17,29 @@ _LINES = "budget_receipt_lines"
 _IX_SHOPS_OWNER_CHAIN = "ix_budget_shops_owner_chain"
 _IX_RECEIPTS_OWNER_DATE = "ix_budget_receipts_owner_date"
 _UQ_RECEIPTS_TX_LINK = "uq_budget_receipts_tx_link"
+_UQ_ACCOUNTS_ID_OWNER = "uq_budget_accounts_id_owner"
+
+
+def _real_transaction():
+    """Open a real SQLite transaction before the first DDL statement.
+
+    ``env.py`` already does this for the whole revision, including Alembic's
+    version update. Repeating the request here keeps upgrade and downgrade
+    atomic when a caller reaches the revision without that wrapper: pysqlite
+    must be out of implicit-commit mode and ``BEGIN`` must already be open.
+    An open transaction is left open so the version update commits with the DDL.
+    """
+    connection = op.get_bind()
+    raw = connection.connection.dbapi_connection
+    if raw.isolation_level is not None:
+        raw.isolation_level = None
+    if not raw.in_transaction:
+        connection.exec_driver_sql("BEGIN")
 
 
 def upgrade():
+    _real_transaction()
+    op.create_index(_UQ_ACCOUNTS_ID_OWNER, "budget_accounts", ["id", "owner"], unique=True)
     op.create_table(
         _SHOPS,
         sa.Column("id", sa.String(), primary_key=True),
@@ -67,6 +87,7 @@ def upgrade():
         sa.Column("linked_account_id", sa.String(), nullable=True),
         sa.Column("linked_entry_ref", sa.String(), nullable=True),
         sa.Column("linked_fingerprint", sa.String(), nullable=True),
+        sa.Column("linked_evidence", sa.Text(), nullable=True),
         sa.Column("version", sa.Integer(), nullable=False),
         sa.Column("created_at", sa.Float(), nullable=False),
         sa.Column("updated_at", sa.Float(), nullable=False),
@@ -76,6 +97,9 @@ def upgrade():
         sa.ForeignKeyConstraint(["linked_account_id", "linked_entry_ref"],
                                 ["budget_transactions.account_id", "budget_transactions.entry_reference"],
                                 name="fk_budget_receipts_transaction"),
+        sa.ForeignKeyConstraint(["linked_account_id", "owner"],
+                                ["budget_accounts.id", "budget_accounts.owner"],
+                                name="fk_budget_receipts_account_owner"),
         sa.UniqueConstraint("id", "owner", name="uq_budget_receipts_id_owner"),
         sa.CheckConstraint("raw_shop_name IS NULL OR length(raw_shop_name) <= 128",
                            name="ck_budget_receipts_raw_shop_name_len"),
@@ -99,10 +123,19 @@ def upgrade():
             name="ck_budget_receipts_confirmed_fields",
         ),
         sa.CheckConstraint(
-            "(linked_account_id IS NULL AND linked_entry_ref IS NULL AND linked_fingerprint IS NULL) "
+            "(linked_account_id IS NULL AND linked_entry_ref IS NULL AND linked_fingerprint IS NULL "
+            "AND linked_evidence IS NULL) "
             "OR (status != 'draft' AND linked_account_id IS NOT NULL AND linked_entry_ref IS NOT NULL "
-            "AND linked_fingerprint IS NOT NULL)",
+            "AND linked_fingerprint IS NOT NULL AND linked_evidence IS NOT NULL)",
             name="ck_budget_receipts_link_fields",
+        ),
+        sa.CheckConstraint(
+            "linked_evidence IS NULL OR length(linked_evidence) BETWEEN 1 AND 4096",
+            name="ck_budget_receipts_evidence_len",
+        ),
+        sa.CheckConstraint(
+            "raw_ocr_text IS NULL OR raw_text_expires_at IS NOT NULL",
+            name="ck_budget_receipts_raw_text_expiry",
         ),
         sa.CheckConstraint("version >= 1", name="ck_budget_receipts_version"),
     )
@@ -145,9 +178,11 @@ def upgrade():
 
 
 def downgrade():
+    _real_transaction()
     op.drop_index(_UQ_RECEIPTS_TX_LINK, table_name=_RECEIPTS)
     op.drop_index(_IX_RECEIPTS_OWNER_DATE, table_name=_RECEIPTS)
     op.drop_table(_LINES)
     op.drop_table(_RECEIPTS)
     op.drop_index(_IX_SHOPS_OWNER_CHAIN, table_name=_SHOPS)
     op.drop_table(_SHOPS)
+    op.drop_index(_UQ_ACCOUNTS_ID_OWNER, table_name="budget_accounts")

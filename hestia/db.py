@@ -279,7 +279,10 @@ class BudgetAccount(Base):
     """Stable owner-scoped identity, independent of session account UIDs."""
 
     __tablename__ = "budget_accounts"
-    __table_args__ = (UniqueConstraint("owner", "identification_hash"),)
+    __table_args__ = (
+        UniqueConstraint("owner", "identification_hash"),
+        Index("uq_budget_accounts_id_owner", "id", "owner", unique=True),
+    )
     id: Mapped[str] = mapped_column(primary_key=True)
     connection_id: Mapped[str] = mapped_column(ForeignKey("budget_connections.id"))
     owner: Mapped[str] = mapped_column(ForeignKey("users.username"))
@@ -781,6 +784,9 @@ class BudgetReceipt(Base):
         ForeignKeyConstraint(["linked_account_id", "linked_entry_ref"],
                              ["budget_transactions.account_id", "budget_transactions.entry_reference"],
                              name="fk_budget_receipts_transaction"),
+        ForeignKeyConstraint(["linked_account_id", "owner"],
+                             ["budget_accounts.id", "budget_accounts.owner"],
+                             name="fk_budget_receipts_account_owner"),
         UniqueConstraint("id", "owner", name="uq_budget_receipts_id_owner"),
         Index("ix_budget_receipts_owner_date", "owner", "receipt_date", "id"),
         Index("uq_budget_receipts_tx_link", "linked_account_id", "linked_entry_ref", unique=True,
@@ -808,10 +814,19 @@ class BudgetReceipt(Base):
             name="ck_budget_receipts_confirmed_fields",
         ),
         CheckConstraint(
-            "(linked_account_id IS NULL AND linked_entry_ref IS NULL AND linked_fingerprint IS NULL) "
+            "(linked_account_id IS NULL AND linked_entry_ref IS NULL AND linked_fingerprint IS NULL "
+            "AND linked_evidence IS NULL) "
             "OR (status != 'draft' AND linked_account_id IS NOT NULL AND linked_entry_ref IS NOT NULL "
-            "AND linked_fingerprint IS NOT NULL)",
+            "AND linked_fingerprint IS NOT NULL AND linked_evidence IS NOT NULL)",
             name="ck_budget_receipts_link_fields",
+        ),
+        CheckConstraint(
+            "linked_evidence IS NULL OR length(linked_evidence) BETWEEN 1 AND 4096",
+            name="ck_budget_receipts_evidence_len",
+        ),
+        CheckConstraint(
+            "raw_ocr_text IS NULL OR raw_text_expires_at IS NOT NULL",
+            name="ck_budget_receipts_raw_text_expiry",
         ),
         CheckConstraint("version >= 1", name="ck_budget_receipts_version"),
     )
@@ -835,6 +850,7 @@ class BudgetReceipt(Base):
     linked_account_id: Mapped[str | None]
     linked_entry_ref: Mapped[str | None]
     linked_fingerprint: Mapped[str | None]
+    linked_evidence: Mapped[str | None] = mapped_column(Text)
     version: Mapped[int]
     created_at: Mapped[float]
     updated_at: Mapped[float]
@@ -905,6 +921,27 @@ def _alembic_config(connection) -> Config:
     return cfg
 
 
+def open_sqlite_ddl_transaction(connection):
+    """Disable pysqlite's implicit commit-before-DDL and open one real ``BEGIN``.
+
+    SQLAlchemy's SQLite dialect does not emit ``BEGIN`` (``do_begin`` is a no-op) and
+    pysqlite commits before each DDL statement, so a failure mid-revision leaves tables
+    behind while ``alembic_version`` stays put. The returned isolation level must be
+    restored after ``run_migrations`` returns; restoring it does not end the transaction.
+    The caller commits or rolls back only after Alembic's revision update.
+    """
+    raw = connection.connection.dbapi_connection
+    previous = raw.isolation_level
+    raw.isolation_level = None
+    if not raw.in_transaction:
+        connection.exec_driver_sql("BEGIN")
+    return previous
+
+
+def restore_sqlite_isolation(connection, previous) -> None:
+    connection.connection.dbapi_connection.isolation_level = previous
+
+
 # One engine + session factory per resolved DB path, created (and Alembic-upgraded) ONCE for the
 # process lifetime. The hot store_sql paths (the ~30 s autosave, every audit row, each /api/db/stats)
 # call init_db on every invocation; without this they each built a fresh engine AND re-ran the Alembic
@@ -929,10 +966,10 @@ def _init_db_locked(path) -> tuple[Engine, sessionmaker[Session]]:
     if cached is not None:
         return cached
     engine = make_engine(key)
-    # The outer engine.begin() owns this connection and its commit. Alembic's env.py calls
-    # context.begin_transaction() on the same connection, but for SQLite (non-transactional
-    # DDL) that's a no-op context — there is no nested/second BEGIN, and the migration's DDL
-    # commits with the outer transaction.
+    # env.py opens one real SQLite transaction before the first DDL statement.
+    # This begin() commits that transaction only after Alembic updates alembic_version,
+    # and rolls it back — tables included — when a revision fails. Upgrade and downgrade
+    # both go through env.py, so either direction stays retryable.
     with engine.begin() as connection:
         command.upgrade(_alembic_config(connection), "head")
     result = (engine, sessionmaker(bind=engine))

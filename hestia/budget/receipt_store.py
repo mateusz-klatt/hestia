@@ -16,12 +16,13 @@ from sqlalchemy.exc import IntegrityError
 
 from ..db import (BudgetAccount as Account, BudgetConnection as Connection, BudgetReceipt as Receipt,
                   BudgetReceiptLine as Line, BudgetShop as Shop, BudgetTransaction as Transaction,
-                  BudgetTransactionMetadata as Metadata, BudgetTransferLeg as Leg)
+                  BudgetTransferLeg as Leg)
 from .analytics_core import (AnalyticsError, canonical_money, compare_money, financial_fingerprint, negate_money,
                              sum_money)
 from .receipt_parser import (CONFIRMED_TEXT_TTL_SECONDS, DRAFT_TTL_SECONDS, MAX_RECEIPT_LINES, ReceiptError,
                              merchant_tokens, parse_receipt, validate_confirm)
-from .receipt_reconcile import audit_payload, write_audit
+from .receipt_reconcile import (_EVIDENCE_KEYS, audit_payload, creditor_name, evidence_json, erase_receipt_audit,
+                                link_evidence, write_audit)
 from .views import BudgetHTTPStore
 
 MAX_DRAFTS = 20
@@ -29,6 +30,7 @@ MAX_CANDIDATES = 100
 CURSOR_TTL_SECONDS = 900
 MAX_CURSOR_CHARS = 8192
 _CURSOR_DOMAIN = b"hestia/budget/receipts/cursor/v1"
+_CANDIDATE_DOMAIN = b"hestia/budget/receipts/candidate/v1"
 _UUID = re.compile(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\Z", re.ASCII)
 _MONTH = re.compile(r"[0-9]{4}-[0-9]{2}\Z", re.ASCII)
 _SUMMARY_FIELDS = (
@@ -85,6 +87,7 @@ class BudgetReceiptStore(BudgetHTTPStore):
     def __init__(self, sessions, *, clock, cursor_secret):
         super().__init__(sessions, clock=clock, cursor_secret=cursor_secret)
         self._receipt_cursor_key = hashlib.sha256(_CURSOR_DOMAIN + b"\0" + cursor_secret).digest()
+        self._candidate_key = hashlib.sha256(_CANDIDATE_DOMAIN + b"\0" + cursor_secret).digest()
 
     def _now(self):
         now = self.clock()
@@ -153,10 +156,9 @@ class BudgetReceiptStore(BudgetHTTPStore):
         drafts = list(session.scalars(query))
         draft_count = 0
         for row in drafts:
-            before = audit_payload(row, "purge")
             session.execute(delete(Line).where(Line.receipt_id == row.id, Line.owner == row.owner))
+            erase_receipt_audit(session, row.owner, row.id)
             session.delete(row)
-            write_audit(session, row.owner, row, "purge", before, None, now)
             draft_count += 1
         query = select(Receipt).where(
             Receipt.status.in_(("confirmed", "needs_review")), Receipt.raw_ocr_text.is_not(None),
@@ -230,12 +232,14 @@ class BudgetReceiptStore(BudgetHTTPStore):
     @staticmethod
     def _candidate_rows(session, owner):
         active_link = exists().where(
+            Receipt.owner == owner,
             Receipt.linked_account_id == Transaction.account_id,
             Receipt.linked_entry_ref == Transaction.entry_reference,
             Receipt.status.in_(("confirmed", "needs_review")),
         )
         transfer_leg = exists().where(
             Leg.account_id == Transaction.account_id, Leg.entry_reference == Transaction.entry_reference,
+            Leg.account_id == Account.id, Account.owner == owner,
         )
         return session.scalars(select(Transaction).join(Account).join(Connection).where(
             Account.owner == owner, Connection.owner == owner, Account.enabled.is_(True),
@@ -266,15 +270,18 @@ class BudgetReceiptStore(BudgetHTTPStore):
                     continue
             except (AnalyticsError, ValueError, TypeError, KeyError, RecursionError):
                 continue
-            metadata = session.get(Metadata, (transaction.account_id, transaction.entry_reference))
-            creditor = None
-            if metadata is not None and metadata.owner == owner:
-                try:
-                    data = _json(metadata.payload_json)
-                    value = data.get("creditor_name") if isinstance(data, dict) else None
-                    creditor = value if isinstance(value, str) else None
-                except (ValueError, TypeError, RecursionError):
-                    creditor = None
+            try:
+                fingerprint = financial_fingerprint(payload)
+            except AnalyticsError:
+                continue
+            try:
+                creditor = creditor_name(session, owner, transaction.account_id, transaction.entry_reference, fingerprint)
+                evidence = link_evidence(
+                    owner, transaction.account_id, transaction.entry_reference, payload,
+                    row.raw_shop_name, row.raw_nip, creditor)
+                token = self._candidate_token(evidence)
+            except (AnalyticsError, ValueError, TypeError, RecursionError):
+                continue
             remittance = payload.get("remittance_information")
             if not isinstance(remittance, list):
                 remittance = []
@@ -284,10 +291,12 @@ class BudgetReceiptStore(BudgetHTTPStore):
             candidate = {
                 "account_id": transaction.account_id, "entry_reference": transaction.entry_reference,
                 "amount": canonical_money(payload["amount"]), "currency": payload["currency"],
-                "credit_debit_indicator": direction, "transaction_date": payload.get("transaction_date"),
-                "booking_date": payload.get("booking_date"), "value_date": payload.get("value_date"),
+                "credit_debit_indicator": direction,
+                "transaction_date": evidence["transaction_date"],
+                "booking_date": evidence["booking_date"], "value_date": evidence["value_date"],
                 "remittance_information": remittance, "creditor_name": creditor,
                 "merchant_token_hit": hit, "date_distance": distance,
+                "candidate_token": token,
             }
             ranked.append((not hit, distance, transaction.entry_reference, transaction.account_id, candidate))
         ranked.sort(key=lambda item: item[:4])
@@ -306,6 +315,7 @@ class BudgetReceiptStore(BudgetHTTPStore):
         if session.get(Leg, (link["account_id"], link["entry_reference"])) is not None:
             raise ReceiptError()
         other = session.scalar(select(Receipt).where(
+            Receipt.owner == owner,
             Receipt.linked_account_id == link["account_id"], Receipt.linked_entry_ref == link["entry_reference"],
             Receipt.status.in_(("confirmed", "needs_review")),
         ).limit(1))
@@ -329,6 +339,49 @@ class BudgetReceiptStore(BudgetHTTPStore):
             raise ReceiptError() from None
         return fingerprint
 
+    def _candidate_token(self, evidence):
+        raw = evidence_json(evidence).encode("ascii")
+        signature = hmac.new(self._candidate_key, raw, hashlib.sha256).digest()
+        body = base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
+        mac = base64.urlsafe_b64encode(signature).rstrip(b"=").decode("ascii")
+        return body + "." + mac
+
+    def _presented_evidence(self, token, owner, link):
+        try:
+            if not isinstance(token, str) or token.count(".") != 1:
+                raise ValueError
+            encoded, signature = token.split(".")
+            raw = base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4))
+            supplied = base64.urlsafe_b64decode(signature + "=" * (-len(signature) % 4))
+            if not hmac.compare_digest(hmac.new(self._candidate_key, raw, hashlib.sha256).digest(), supplied):
+                raise ValueError
+            evidence = _json(raw)
+            if (not isinstance(evidence, dict) or set(evidence) != set(_EVIDENCE_KEYS)
+                    or evidence["owner"] != owner or evidence["account_id"] != link["account_id"]
+                    or evidence["entry_reference"] != link["entry_reference"]):
+                raise ValueError
+            return evidence
+        except (ValueError, TypeError, KeyError, RecursionError, AnalyticsError):
+            raise ReceiptError() from None
+
+    def _confirmed_link(self, session, owner, cleaned, link, row):
+        presented = self._presented_evidence(link["candidate_token"], owner, link)
+        transaction = session.get(Transaction, (link["account_id"], link["entry_reference"]))
+        if transaction is None:
+            raise ReceiptError("budget_receipt_not_found", 404)
+        try:
+            payload = _json(transaction.payload_json)
+            fingerprint = None if transaction.uncertain else financial_fingerprint(payload)
+            creditor = creditor_name(session, owner, link["account_id"], link["entry_reference"], fingerprint)
+            current = link_evidence(
+                owner, link["account_id"], link["entry_reference"], payload,
+                cleaned["raw_shop_name"], cleaned["raw_nip"], creditor)
+        except (AnalyticsError, ValueError, TypeError, KeyError, RecursionError):
+            raise ReceiptError("budget_receipt_stale_source", 409) from None
+        if current != presented:
+            raise ReceiptError("budget_receipt_stale_source", 409)
+        return self._verify_link(session, owner, cleaned, link, row.id), evidence_json(current)
+
     def confirm(self, owner, values):
         cleaned = validate_confirm(values)
         with self.transaction() as session:
@@ -338,8 +391,9 @@ class BudgetReceiptStore(BudgetHTTPStore):
             row = self._owned(session, owner, values["receipt_id"])
             if row.version != values["expected_version"]:
                 raise ReceiptError("budget_receipt_conflict", 409)
-            fingerprint = (None if cleaned["link"] is None else
-                           self._verify_link(session, owner, cleaned, cleaned["link"], row.id))
+            row_was_draft = row.status == "draft"
+            link = cleaned["link"]
+            fingerprint = None if link is None else self._confirmed_link(session, owner, cleaned, link, row)
             before = audit_payload(row, "confirm")
             row.shop_id = self._shop_id(session, owner, cleaned)
             for key in ("raw_shop_name", "raw_nip", "receipt_kind", "receipt_date", "receipt_time",
@@ -348,15 +402,18 @@ class BudgetReceiptStore(BudgetHTTPStore):
             session.execute(delete(Line).where(Line.receipt_id == row.id, Line.owner == owner))
             for line in cleaned["lines"]:
                 session.add(Line(receipt_id=row.id, owner=owner, **line))
-            if cleaned["link"] is None:
-                row.linked_account_id, row.linked_entry_ref, row.linked_fingerprint = None, None, None
+            if link is None:
+                row.linked_account_id = row.linked_entry_ref = row.linked_fingerprint = row.linked_evidence = None
             else:
-                row.linked_account_id = cleaned["link"]["account_id"]
-                row.linked_entry_ref = cleaned["link"]["entry_reference"]
-                row.linked_fingerprint = fingerprint
+                row.linked_account_id = link["account_id"]
+                row.linked_entry_ref = link["entry_reference"]
+                row.linked_fingerprint, row.linked_evidence = fingerprint
             row.status, row.version, row.updated_at = "confirmed", row.version + 1, now
-            row.image_expires_at = now + CONFIRMED_TEXT_TTL_SECONDS
-            row.raw_text_expires_at = now + CONFIRMED_TEXT_TTL_SECONDS
+            if row_was_draft:
+                deadline = now + CONFIRMED_TEXT_TTL_SECONDS
+                if row.raw_ocr_text is not None:
+                    row.raw_text_expires_at = deadline
+                row.image_expires_at = deadline
             try:
                 session.flush()
             except IntegrityError:
@@ -522,11 +579,10 @@ class BudgetReceiptStore(BudgetHTTPStore):
             row = self._owned(session, owner, values["receipt_id"])
             if row.version != values["expected_version"]:
                 raise ReceiptError("budget_receipt_conflict", 409)
-            before = audit_payload(row, "delete")
             session.execute(delete(Line).where(Line.receipt_id == row.id, Line.owner == owner))
+            erase_receipt_audit(session, owner, row.id)
             session.delete(row)
             session.flush()
-            write_audit(session, owner, row, "delete", before, None, now)
             return {"ok": True, "deleted": True}
 
 

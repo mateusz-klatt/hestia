@@ -2494,6 +2494,9 @@ class BudgetReceiptLinkRequest(BaseModel):
     model_config = _STRICT
     account_id: BudgetId
     entry_reference: BudgetAnalyticsReference
+    candidate_token: Annotated[str, Field(
+        min_length=1, max_length=4096,
+        description="HMAC bound to the owner, transaction, three dates and merchant evidence shown at preview.")]
 
 
 class BudgetReceiptConfirmRequest(BaseModel):
@@ -2587,6 +2590,7 @@ class BudgetReceiptCandidate(BaseModel):
     creditor_name: str | None
     merchant_token_hit: bool
     date_distance: int
+    candidate_token: Annotated[str, Field(min_length=1, max_length=4096)]
 
 
 class BudgetReceiptParseResult(BaseModel):
@@ -3299,31 +3303,53 @@ def _budget_paths():
     return paths
 
 
+def _receipt_error(description):
+    return {"description": description, "content": {_APP_JSON: {"schema": _ref("BudgetError")}}}
+
+
 def _receipt_paths():
     prefix = "/api/budget/receipts/"
+    # 409 is per route. 411 and 415 are the shared JSON framing checks. 413 is the body cap,
+    # and parse-text also uses 413 when the owner already has 20 active drafts.
     writes = (
         ("parse-text", "parseBudgetReceiptText", "BudgetReceiptParseTextRequest", "BudgetReceiptParseResult",
-         "Paste Live Text, redact PAN data and create a 48-hour draft; JSON body cap 48 KiB."),
+         "Paste Live Text, redact PAN data and create a 48-hour draft; JSON body cap 48 KiB.",
+         "SQLite users backend is required (budget_requires_sqlite_users).",
+         "JSON body exceeds 49152 bytes, or the owner already has 20 active drafts (budget_receipt_quota_exceeded)."),
         ("confirm", "confirmBudgetReceipt", "BudgetReceiptConfirmRequest", "BudgetReceiptConfirmResult",
          "Validate exact line and total identities, review an optional bank link, and retain redacted text for 30 days; "
-         "JSON body cap 128 KiB."),
+         "JSON body cap 128 KiB.",
+         "Stale expected_version (budget_receipt_conflict), the bank transaction is already linked "
+         "(budget_receipt_tx_already_linked), or the candidate token no longer matches the owner, transaction, "
+         "dates and merchant evidence shown at preview (budget_receipt_stale_source). A missing SQLite users backend "
+         "also returns 409 (budget_requires_sqlite_users).",
+         "JSON body exceeds 131072 bytes."),
         ("list", "listBudgetReceipts", "BudgetReceiptListRequest", "BudgetReceiptListResult",
-         "Keyset-page owner receipts with filters in the JSON body, never URL query parameters."),
+         "Keyset-page owner receipts with filters in the JSON body, never URL query parameters.",
+         "SQLite users backend is required (budget_requires_sqlite_users).",
+         "JSON body exceeds 16384 bytes."),
         ("search", "searchBudgetReceipts", "BudgetReceiptSearchRequest", "BudgetReceiptListResult",
-         "Search owner receipts with the query in the JSON body, never reverse-proxy URL logs."),
+         "Search owner receipts with the query in the JSON body, never reverse-proxy URL logs.",
+         "SQLite users backend is required (budget_requires_sqlite_users).",
+         "JSON body exceeds 16384 bytes."),
         ("delete", "deleteBudgetReceipt", "BudgetReceiptDeleteRequest", "BudgetReceiptDeleteResult",
-         "Delete receipt lines before their owned receipt using expected_version CAS."),
+         "Delete receipt lines before their owned receipt using expected_version CAS.",
+         "Stale expected_version (budget_receipt_conflict). A missing SQLite users backend also returns 409 "
+         "(budget_requires_sqlite_users).",
+         "JSON body exceeds 16384 bytes."),
     )
     paths = {}
-    for name, operation, request, response, summary in writes:
+    for name, operation, request, response, summary, conflict, too_large in writes:
         responses = _budget_responses(response)
-        responses["409"]["description"] = "Stale receipt version or an already-linked bank transaction."
-        responses["413"] = {"description": "Active draft quota exceeded.",
-                            "content": {_APP_JSON: {"schema": _ref("BudgetError")}}}
+        responses["409"] = _receipt_error(conflict)
+        responses["411"] = _receipt_error("Content-Length is required.")
+        responses["413"] = _receipt_error(too_large)
+        responses["415"] = _receipt_error("Content-Type must be application/json.")
         paths[prefix + name] = {"post": {
             "operationId": operation, "summary": summary,
             "description": "Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Requires an authenticated SQLite admin "
-                           "owner, browser cookie and exact configured Origin before the body is read.",
+                           "owner, browser cookie and exact configured Origin before the body is read. "
+                           "411 means Content-Length is required and 415 means Content-Type must be application/json.",
             "requestBody": {"required": True, "content": {_APP_JSON: {"schema": _ref(request)}}},
             "responses": responses,
         }}
@@ -3341,6 +3367,8 @@ def _receipt_paths():
         if response is None:
             responses["200"] = {"description": "Owner-private WebP bytes (available from v1b).",
                                 "content": {"image/webp": {"schema": {"type": "string", "format": "binary"}}}}
+        responses["409"] = _receipt_error(
+            "SQLite users backend is required (budget_requires_sqlite_users). This read does not accept a JSON body.")
         paths[prefix + name] = {"get": {
             "operationId": operation, "summary": summary,
             "description": "Default-off owner-private read. Unknown and foreign receipt IDs both return 404.",

@@ -220,6 +220,24 @@ class BudgetOpenApiTests(unittest.TestCase):
             self.assertEqual(methods[method]["x-required-role"], "admin")
             if method == "post":
                 self.assertIn("requestBody", methods[method])
+                self.assertIn("Content-Length", methods[method]["responses"]["411"]["description"])
+                self.assertIn("application/json", methods[method]["responses"]["415"]["description"])
+                self.assertIn("bytes", methods[method]["responses"]["413"]["description"])
+            else:
+                self.assertNotIn("411", methods[method]["responses"])
+                self.assertNotIn("415", methods[method]["responses"])
+                self.assertIn("budget_requires_sqlite_users", methods[method]["responses"]["409"]["description"])
+        self.assertIn("budget_receipt_stale_source",
+                      receipts["/api/budget/receipts/confirm"]["post"]["responses"]["409"]["description"])
+        self.assertIn("budget_receipt_conflict",
+                      receipts["/api/budget/receipts/delete"]["post"]["responses"]["409"]["description"])
+        self.assertNotIn("budget_receipt_stale_source",
+                         receipts["/api/budget/receipts/parse-text"]["post"]["responses"]["409"]["description"])
+        parse_limit = receipts["/api/budget/receipts/parse-text"]["post"]["responses"]["413"]["description"]
+        self.assertIn("49152", parse_limit)
+        self.assertIn("budget_receipt_quota_exceeded", parse_limit)
+        self.assertIn("131072", receipts["/api/budget/receipts/confirm"]["post"]["responses"]["413"]["description"])
+        self.assertIn("16384", receipts["/api/budget/receipts/list"]["post"]["responses"]["413"]["description"])
         self.assertEqual(document["info"]["version"], "0.30.0")
         mark_desc = analytics["/api/budget/analytics/inbox-mark"]["post"]["description"]
         for phrase in ("reads_version", "1..100", "500"):

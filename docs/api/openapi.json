@@ -7082,6 +7082,12 @@
             ],
             "title": "Booking Date"
           },
+          "candidate_token": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "title": "Candidate Token",
+            "type": "string"
+          },
           "credit_debit_indicator": {
             "enum": [
               "DBIT",
@@ -7159,7 +7165,8 @@
           "remittance_information",
           "creditor_name",
           "merchant_token_hit",
-          "date_distance"
+          "date_distance",
+          "candidate_token"
         ],
         "title": "BudgetReceiptCandidate",
         "type": "object"
@@ -7847,6 +7854,13 @@
             "title": "Account Id",
             "type": "string"
           },
+          "candidate_token": {
+            "description": "HMAC bound to the owner, transaction, three dates and merchant evidence shown at preview.",
+            "maxLength": 4096,
+            "minLength": 1,
+            "title": "Candidate Token",
+            "type": "string"
+          },
           "entry_reference": {
             "maxLength": 1024,
             "minLength": 1,
@@ -7856,7 +7870,8 @@
         },
         "required": [
           "account_id",
-          "entry_reference"
+          "entry_reference",
+          "candidate_token"
         ],
         "title": "BudgetReceiptLinkRequest",
         "type": "object"
@@ -16038,7 +16053,7 @@
     },
     "/api/budget/receipts/confirm": {
       "post": {
-        "description": "Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Requires an authenticated SQLite admin owner, browser cookie and exact configured Origin before the body is read.",
+        "description": "Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Requires an authenticated SQLite admin owner, browser cookie and exact configured Origin before the body is read. 411 means Content-Length is required and 415 means Content-Type must be application/json.",
         "operationId": "confirmBudgetReceipt",
         "requestBody": {
           "content": {
@@ -16109,7 +16124,17 @@
                 }
               }
             },
-            "description": "Stale receipt version or an already-linked bank transaction."
+            "description": "Stale expected_version (budget_receipt_conflict), the bank transaction is already linked (budget_receipt_tx_already_linked), or the candidate token no longer matches the owner, transaction, dates and merchant evidence shown at preview (budget_receipt_stale_source). A missing SQLite users backend also returns 409 (budget_requires_sqlite_users)."
+          },
+          "411": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Content-Length is required."
           },
           "413": {
             "content": {
@@ -16119,7 +16144,17 @@
                 }
               }
             },
-            "description": "Active draft quota exceeded."
+            "description": "JSON body exceeds 131072 bytes."
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Content-Type must be application/json."
           },
           "500": {
             "content": {
@@ -16148,7 +16183,7 @@
     },
     "/api/budget/receipts/delete": {
       "post": {
-        "description": "Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Requires an authenticated SQLite admin owner, browser cookie and exact configured Origin before the body is read.",
+        "description": "Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Requires an authenticated SQLite admin owner, browser cookie and exact configured Origin before the body is read. 411 means Content-Length is required and 415 means Content-Type must be application/json.",
         "operationId": "deleteBudgetReceipt",
         "requestBody": {
           "content": {
@@ -16219,7 +16254,17 @@
                 }
               }
             },
-            "description": "Stale receipt version or an already-linked bank transaction."
+            "description": "Stale expected_version (budget_receipt_conflict). A missing SQLite users backend also returns 409 (budget_requires_sqlite_users)."
+          },
+          "411": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Content-Length is required."
           },
           "413": {
             "content": {
@@ -16229,7 +16274,17 @@
                 }
               }
             },
-            "description": "Active draft quota exceeded."
+            "description": "JSON body exceeds 16384 bytes."
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Content-Type must be application/json."
           },
           "500": {
             "content": {
@@ -16331,7 +16386,7 @@
                 }
               }
             },
-            "description": "SQLite session users required"
+            "description": "SQLite users backend is required (budget_requires_sqlite_users). This read does not accept a JSON body."
           },
           "500": {
             "content": {
@@ -16434,7 +16489,7 @@
                 }
               }
             },
-            "description": "SQLite session users required"
+            "description": "SQLite users backend is required (budget_requires_sqlite_users). This read does not accept a JSON body."
           },
           "500": {
             "content": {
@@ -16463,7 +16518,7 @@
     },
     "/api/budget/receipts/list": {
       "post": {
-        "description": "Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Requires an authenticated SQLite admin owner, browser cookie and exact configured Origin before the body is read.",
+        "description": "Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Requires an authenticated SQLite admin owner, browser cookie and exact configured Origin before the body is read. 411 means Content-Length is required and 415 means Content-Type must be application/json.",
         "operationId": "listBudgetReceipts",
         "requestBody": {
           "content": {
@@ -16534,7 +16589,17 @@
                 }
               }
             },
-            "description": "Stale receipt version or an already-linked bank transaction."
+            "description": "SQLite users backend is required (budget_requires_sqlite_users)."
+          },
+          "411": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Content-Length is required."
           },
           "413": {
             "content": {
@@ -16544,7 +16609,17 @@
                 }
               }
             },
-            "description": "Active draft quota exceeded."
+            "description": "JSON body exceeds 16384 bytes."
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Content-Type must be application/json."
           },
           "500": {
             "content": {
@@ -16573,7 +16648,7 @@
     },
     "/api/budget/receipts/parse-text": {
       "post": {
-        "description": "Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Requires an authenticated SQLite admin owner, browser cookie and exact configured Origin before the body is read.",
+        "description": "Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Requires an authenticated SQLite admin owner, browser cookie and exact configured Origin before the body is read. 411 means Content-Length is required and 415 means Content-Type must be application/json.",
         "operationId": "parseBudgetReceiptText",
         "requestBody": {
           "content": {
@@ -16644,7 +16719,17 @@
                 }
               }
             },
-            "description": "Stale receipt version or an already-linked bank transaction."
+            "description": "SQLite users backend is required (budget_requires_sqlite_users)."
+          },
+          "411": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Content-Length is required."
           },
           "413": {
             "content": {
@@ -16654,7 +16739,17 @@
                 }
               }
             },
-            "description": "Active draft quota exceeded."
+            "description": "JSON body exceeds 49152 bytes, or the owner already has 20 active drafts (budget_receipt_quota_exceeded)."
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Content-Type must be application/json."
           },
           "500": {
             "content": {
@@ -16683,7 +16778,7 @@
     },
     "/api/budget/receipts/search": {
       "post": {
-        "description": "Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Requires an authenticated SQLite admin owner, browser cookie and exact configured Origin before the body is read.",
+        "description": "Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Requires an authenticated SQLite admin owner, browser cookie and exact configured Origin before the body is read. 411 means Content-Length is required and 415 means Content-Type must be application/json.",
         "operationId": "searchBudgetReceipts",
         "requestBody": {
           "content": {
@@ -16754,7 +16849,17 @@
                 }
               }
             },
-            "description": "Stale receipt version or an already-linked bank transaction."
+            "description": "SQLite users backend is required (budget_requires_sqlite_users)."
+          },
+          "411": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Content-Length is required."
           },
           "413": {
             "content": {
@@ -16764,7 +16869,17 @@
                 }
               }
             },
-            "description": "Active draft quota exceeded."
+            "description": "JSON body exceeds 16384 bytes."
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Content-Type must be application/json."
           },
           "500": {
             "content": {

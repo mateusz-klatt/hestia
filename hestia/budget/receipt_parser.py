@@ -12,6 +12,8 @@ MAX_LINE_NAME_LEN = 128
 MAX_SHOP_NAME_LEN = 128
 MAX_TEXT_BYTES = 32 * 1024
 MAX_TEXT_LINES = 500
+MAX_MONEY_INTEGER_DIGITS = 9
+MAX_MONEY_FRACTION_DIGITS = 4
 DRAFT_TTL_SECONDS = 48 * 60 * 60
 CONFIRMED_TEXT_TTL_SECONDS = 30 * 24 * 60 * 60
 
@@ -35,13 +37,16 @@ _DATE_ISO = re.compile(r"(?<![0-9])([0-9]{4})-([0-9]{2})-([0-9]{2})(?![0-9])", r
 _DATE_PL = re.compile(r"(?<![0-9])([0-9]{2})[-.]([0-9]{2})[-.]([0-9]{4})(?![0-9])", re.ASCII)
 _TIME = re.compile(r"(?<![0-9])((?:[01][0-9]|2[0-3]):[0-5][0-9])(?![0-9])", re.ASCII)
 _NIP = re.compile(r"\bNIP\s*:?\s*([0-9][0-9 -]{8,16}[0-9])\b", re.IGNORECASE | re.ASCII)
-# Gaps iOS Live Text inserts between PAN digits. `\s` covers ASCII whitespace and
-# Unicode spaces (NBSP U+00A0, U+2000–U+200A including U+2007/U+2009/U+200A, U+202F,
-# U+3000). Dashes U+2010–U+2015 and "-" are not whitespace. Line breaks are excluded
-# so a NIP and a date on adjacent lines are not glued into a false PAN.
-_PAN_GAP = r"(?:(?!\n|\r|" "\u2028|\u2029" r")\s|[" "\u2010-\u2015" r"-])"
-_DIGIT_PAN = re.compile(rf"(?<![0-9*])(?:[0-9](?:{_PAN_GAP})?){{12,19}}(?![0-9])")
-_MASKED_PAN = re.compile(r"(?<![0-9*])(?:[0-9]{2,4})?\*{2,}[0-9]{2,4}(?![0-9*])", re.ASCII)
+# Separators Live Text inserts between PAN digits, including a run of them.
+# Whitespace covers ASCII and Unicode spaces. Dashes U+2010–U+2015 and "-" are not
+# whitespace. Line breaks are excluded so a NIP and a date on adjacent lines are
+# not glued into a false PAN.
+_PAN_NEWLINES = frozenset("\n\r\u2028\u2029")
+_PAN_DASHES = frozenset("-‐‑‒–—―")
+_PAN_MASKS = frozenset("*Xx•●#")
+_CARD_LABEL = re.compile(
+    r"(?i)(?:\bNR\s+KARTY\b|\bNUMER\s+KARTY\b|\bAID\b|\bPAN\b|\bCARD(?:\s+(?:NO|NUMBER))?\b|\bKARTA\b)"
+)
 _TERMINAL = re.compile(r"(?im)^(\s*(?:NR\s+KARTY|AID)\b)[^\n]*")
 _ITEM = re.compile(
     rf"^(?P<name>.+?)\s+(?:(?P<quantity>{_NUMBER})\s*(?P<unit>kg|g|dag|l|ml|szt|op)?"
@@ -75,8 +80,8 @@ _STOP_TOKENS = frozenset({"polska", "spolka", "zoo", "fiskalny", "paragon"})
 class ReceiptError(ValueError):
     CODES = frozenset({
         "budget_receipt_invalid_request", "budget_receipt_not_found", "budget_receipt_conflict",
-        "budget_receipt_tx_already_linked", "budget_receipt_total_mismatch", "budget_receipt_quota_exceeded",
-        "budget_receipt_unavailable",
+        "budget_receipt_stale_source", "budget_receipt_tx_already_linked", "budget_receipt_total_mismatch",
+        "budget_receipt_quota_exceeded", "budget_receipt_unavailable",
     })
 
     def __init__(self, code="budget_receipt_invalid_request", status=400):
@@ -91,13 +96,143 @@ def fold_text(value):
                    if unicodedata.category(char) != "Mn").casefold()
 
 
+def _pan_gap(char):
+    return char not in _PAN_NEWLINES and (char in _PAN_DASHES or char.isspace())
+
+
+def _pan_digit(char):
+    if "0" <= char <= "9":
+        return char
+    if unicodedata.category(char) == "Nd":
+        try:
+            return str(unicodedata.digit(char))
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+def _mask_run(text, index):
+    """Length of the contiguous mask run containing ``index``. A lone ``x`` or ``*`` is an operator."""
+    if text[index] not in _PAN_MASKS:
+        return 0
+    start = index
+    while start and text[start - 1] in _PAN_MASKS:
+        start -= 1
+    end = index + 1
+    while end < len(text) and text[end] in _PAN_MASKS:
+        end += 1
+    return end - start
+
+
+def _pan_symbol(text, index):
+    if _pan_digit(text[index]) is not None:
+        return "digit"
+    if _mask_run(text, index) >= 2:
+        return "mask"
+    return None
+
+
+def _pan_spans(text):
+    """12–19 digit PANs and masked PANs, allowing repeated in-line separators."""
+    spans = []
+    length = len(text)
+    index = 0
+    while index < length:
+        if (_pan_symbol(text, index) is None
+                or (index and (_pan_symbol(text, index - 1) is not None or text[index - 1] in ".,"))):
+            index += 1
+            continue
+        start = index
+        digits = masks = 0
+        end = index
+        while end < length:
+            kind = _pan_symbol(text, end)
+            if kind == "digit":
+                digits += 1
+            elif kind == "mask":
+                masks += 1
+            else:
+                break
+            if digits + masks > 19:
+                break
+            cursor = end + 1
+            while cursor < length and _pan_gap(text[cursor]):
+                cursor += 1
+            if cursor < length and _pan_symbol(text, cursor) is not None:
+                end = cursor
+                continue
+            end += 1
+            break
+        count = digits + masks
+        if 12 <= count <= 19 and (masks or digits == count) and not (
+                end < length and _pan_symbol(text, end) is not None):
+            spans.append((start, end))
+            index = end
+        else:
+            index = start + 1
+    return spans
+
+
+def _redact_spans(text, spans):
+    if not spans:
+        return text
+    parts = []
+    cursor = 0
+    for start, end in spans:
+        parts.append(text[cursor:start])
+        parts.append("[REDACTED]")
+        cursor = end
+    parts.append(text[cursor:])
+    return "".join(parts)
+
+
+def _card_fragment(line):
+    body = line.strip()
+    if not body or len(body) > 64:
+        return False
+    symbols = 0
+    for char in body:
+        if _pan_digit(char) is not None or char in _PAN_MASKS:
+            symbols += 1
+        elif not _pan_gap(char):
+            return False
+    return symbols > 0
+
+
+def _redact_card_continuations(text):
+    """Redact digit or mask lines that continue a card label split by OCR."""
+    lines = text.split("\n")
+    index = 0
+    while index < len(lines):
+        if _CARD_LABEL.search(lines[index]) is None:
+            index += 1
+            continue
+        following = []
+        cursor = index + 1
+        while cursor < len(lines) and _card_fragment(lines[cursor]):
+            following.append(cursor)
+            cursor += 1
+        digits = masks = 0
+        for line_no in (index, *following):
+            for char in lines[line_no]:
+                if _pan_digit(char) is not None:
+                    digits += 1
+                elif char in _PAN_MASKS:
+                    masks += 1
+        if following and (masks or 12 <= digits <= 19):
+            for line_no in following:
+                lines[line_no] = "[REDACTED]"
+        index = cursor
+    return "\n".join(lines)
+
+
 def redact_pan(text):
     if not isinstance(text, str):
         raise ReceiptError()
     text = unicodedata.normalize("NFC", text).replace("\r\n", "\n").replace("\r", "\n")
     text = _TERMINAL.sub(lambda match: match[1] + " [REDACTED]", text)
-    text = _MASKED_PAN.sub("[REDACTED]", text)
-    return _DIGIT_PAN.sub("[REDACTED]", text)
+    text = _redact_spans(text, _pan_spans(text))
+    return _redact_card_continuations(text)
 
 
 def valid_nip(value):
@@ -124,11 +259,26 @@ def merchant_tokens(shop_name, nip):
     return frozenset(tokens)
 
 
-def _decimal(value):
+def _bounded_money(value, *, mismatch=False):
     try:
-        return canonical_money(value.replace(",", "."))
-    except (AnalyticsError, AttributeError):
+        if not isinstance(value, str):
+            raise ValueError
+        normalized = value.replace(",", ".")
+        if len(normalized) > 80 or not _MONEY.fullmatch(normalized):
+            raise ValueError
+        integer, _, fraction = normalized.partition(".")
+        if (len(integer.removeprefix("-")) > MAX_MONEY_INTEGER_DIGITS
+                or len(fraction) > MAX_MONEY_FRACTION_DIGITS):
+            raise ValueError
+        return canonical_money(normalized)
+    except (ValueError, AnalyticsError):
+        if mismatch:
+            raise ReceiptError("budget_receipt_total_mismatch") from None
         raise ReceiptError() from None
+
+
+def _decimal(value):
+    return _bounded_money(value)
 
 
 def _iso_date(year, month, day):
@@ -162,14 +312,16 @@ def _line_kind(name, gross):
 
 def _make_line(name, match, line_no):
     raw_name = " ".join(name.strip().split())
-    if not raw_name or len(raw_name) > MAX_LINE_NAME_LEN or _CONTROL.search(raw_name):
+    raw_name_key = fold_text(raw_name)
+    if (not raw_name or len(raw_name) > MAX_LINE_NAME_LEN or not raw_name_key
+            or len(raw_name_key) > MAX_LINE_NAME_LEN or _CONTROL.search(raw_name)):
         raise ReceiptError()
     gross = _decimal(match["gross"])
     quantity = _decimal(match["quantity"] or "1")
     unit_price = _decimal(match["unit_price"] or gross)
     kind = _line_kind(raw_name, gross)
     return {
-        "line_no": line_no, "line_kind": kind, "raw_name": raw_name, "raw_name_key": fold_text(raw_name),
+        "line_no": line_no, "line_kind": kind, "raw_name": raw_name, "raw_name_key": raw_name_key,
         "ptu_code": match["ptu"].upper() if match["ptu"] else None,
         "quantity": quantity, "raw_unit": match["unit"].lower() if match["unit"] else None,
         "unit_price_raw": unit_price, "gross_line_total": gross, "discount_amount": "0",
@@ -309,14 +461,7 @@ def _confirm_date(value):
 
 
 def _confirm_money(value, *, mismatch=False):
-    try:
-        if not isinstance(value, str) or len(value) > 80 or not _MONEY.fullmatch(value):
-            raise ValueError
-        return canonical_money(value)
-    except (ValueError, AnalyticsError):
-        if mismatch:
-            raise ReceiptError("budget_receipt_total_mismatch") from None
-        raise ReceiptError() from None
+    return _bounded_money(value, mismatch=mismatch)
 
 
 def _validate_line(value, line_no):
@@ -392,9 +537,12 @@ def validate_confirm(values):
         raise ReceiptError("budget_receipt_total_mismatch")
     link = values["link"]
     if link is not None:
-        if (payment in ("cash", "mixed") or not isinstance(link, dict) or set(link) != {"account_id", "entry_reference"}
+        token = None if not isinstance(link, dict) else link.get("candidate_token")
+        if (payment in ("cash", "mixed") or not isinstance(link, dict)
+                or set(link) != {"account_id", "entry_reference", "candidate_token"}
                 or not isinstance(link["account_id"], str) or not 1 <= len(link["account_id"]) <= 128
-                or not isinstance(link["entry_reference"], str) or not 1 <= len(link["entry_reference"]) <= 1024):
+                or not isinstance(link["entry_reference"], str) or not 1 <= len(link["entry_reference"]) <= 1024
+                or not isinstance(token, str) or not 1 <= len(token) <= 4096 or "\n" in token or "\r" in token):
             raise ReceiptError()
     return {
         "raw_shop_name": shop, "raw_nip": nip, "receipt_kind": kind, "receipt_date": _confirm_date(values["receipt_date"]),
