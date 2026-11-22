@@ -1,14 +1,17 @@
 # Budget: read-only Enable Banking foundation
 
-Status as of 2026-11-21: deployed at migration `0014` are the CLI foundation,
-private HTTP API (2B.1), durable refresh jobs with an opt-in poller (2B.jobs),
-browser bank consent and renewal (2B.2/2B.3), and owner React budget screens (2C).
-The production screens include read-only download limits and Connect/Renew
-controls. Each server feature still has its own default-off flag; a new
-installation requires explicit activation. Remote session closure and spending
-analytics remain future work. This module does not make payments or categorise
-expenses. The public privacy policy and terms describe the budget module; keep
-them current before changing what is processed.
+Status as of 2026-11-22: deployed at migration `0019` (OpenAPI `0.24.0`) are the CLI
+foundation, private HTTP API (2B.1), durable refresh jobs with an opt-in poller
+(2B.jobs), browser bank consent and renewal (2B.2/2B.3) with read-only consent status
+and reconciliation views (`0.21.0`–`0.22.0`), per-connection history window and provider
+HTTP error diagnostics (`0016`), owner React budget screens (2C), and opt-in local
+spending analytics (2D: migrations `0015`, `0017`, `0018`, `0019` — Month/Year reports,
+categories/rules, reviewed own-account transfers, recurring hints, monthly spending
+limits, evaluation-only mortgage reminder schedules, and live active owner inbox).
+Each server feature still has its own default-off flag; a new installation requires
+explicit activation. Explicit remote session closure, outbound email/push delivery,
+automated erasure and bank payments remain unimplemented. The public privacy policy and
+terms describe the budget module; keep them current before changing what is processed.
 
 ## Decisions
 
@@ -227,6 +230,14 @@ admin owns the configured connections. Each admin sees only their own budget.
   and each account's transaction/balance deadline, suspension or in-progress
   acquisition, with readable account labels and excluded accounts marked. This
   panel cannot lift a restriction or contact a bank.
+- **Consent status** (visible when `capabilities.consent` is true) loads
+  `GET /api/budget/consent/renewal-reminders` and `GET /api/budget/consent/reconcile`
+  on demand. It summarises bank consent validity, external vs. Hestia-managed counts,
+  and advisory classification counts with localized attention diagnostics, without any
+  remote close, delete or bank-request controls.
+- **Analytics tabs** (visible when `capabilities.analytics` is true) add **Inbox**,
+  **Month**, **Year**, **Spending limits**, **Recurring**, **Mortgages**, and
+  **Categories and rules** alongside **Accounts**; see [BUDGET_2D.md](BUDGET_2D.md).
 - **Account detail** shows current balances from the bank interface. Earlier
   imported balance snapshots are listed as metadata only, never as current funds.
   Transactions are newest first, with 30/90-day, this-year and all-time presets,
@@ -250,8 +261,11 @@ successful sibling can refresh. Successful components and safe errors commit in
 one SQLite transaction. Network I/O never holds a database write transaction. Hestia's
 existing SQLAlchemy/Alembic engine supplies WAL, FULL durability and migrations.
 
-The requested window covers 365 calendar dates through today, with boundaries
-explicitly calculated in UTC (matching the provider API). Dates remain calendar
+The default requested window covers 365 calendar dates through today, with boundaries
+explicitly calculated in UTC (matching the provider API). Connections for banks whose
+AIS API enforces a shorter history ceiling may set optional `max_history_days`
+(`1..364`) in the connection config; coverage-aware quarantine preserves unresolved
+observations outside a narrowed window rather than erasing them. Dates remain calendar
 dates without invented times or conversions. Returned records
 are filtered locally because banks may ignore the requested start date. A year
 requested is not a promise that a bank supplies a complete year. Booking date is
@@ -719,27 +733,23 @@ no-store/no-referrer responses and fixed diagnostics without raw secrets.
 
 ## Next slices (not implemented here)
 
-1. Explicit remote closure of Hestia-created sessions and an owner-facing
-   reconciliation/retention workflow for uncertain or retired consents.
-2. Scheduled renewal reminders beyond the current UI's expiry/renewal status and
-   **Renew bank consent** action. Use actual provider `valid_until`, with no
-   universal 180-day assumption. Retaining an old local reference does not
-   guarantee it remains usable after a new SCA.
-3. Verify ING/BNP field shapes with owner-approved PoC sessions. Do not infer
-   support for cards, pending entries or statement due dates from bank branding.
-4. Year view and conservative categorisation/subscription hints with manual
-   correction. The owner must explicitly choose each account's kind (current,
-   savings, credit card or other); CACC or a product name is insufficient.
-   Card repayments/internal transfers must not duplicate spending;
-   recurring transactions do not prove unused subscriptions. Mortgage due dates
-   and forecasts require explicit schedule inputs and freshness indicators.
-5. Decide export, erasure and retention before broader use. Disabling a connection
-   stops acquisition and retains history; provider revocation is not local erasure.
-6. Staged live activation follows the runbook above. No bank data is sent to
-   external AI tools.
-7. Owner-facing limit recovery/review beyond the implemented read-only limit
+1. Explicit remote closure (`DELETE /sessions`) of Hestia-created sessions and an
+   owner-facing local retire/cleanup action building on the read-only reconciliation
+   view (`GET /api/budget/consent/reconcile`).
+2. Outbound owner-private notification delivery (push/email) beyond the implemented
+   live in-app **Inbox** (`GET /api/budget/analytics/inbox`) and evaluation-only
+   renewal/mortgage schedules, including private owner destination settings without
+   storing PII targets on schedules.
+3. Uncertain/unresolved transaction quarantine inspection and reconciliation UI.
+4. Effective-dated spending limits, multi-month / cashflow forecasting, or optional
+   budget export, erasure and retention workflows. Disabling a connection stops
+   acquisition and retains history; provider revocation is not local erasure.
+5. Owner-facing HTTP limit recovery/review beyond the implemented read-only limit
    panel; operator recovery remains in the CLI. Preserve deadlines and audit, and
    never erase quota history to compensate for a partial result.
+6. Verify additional bank (ASPSP) field shapes with owner-approved sessions before
+   expanding bank support; never infer card debt, pending entries or due dates from
+   bank branding, and never send bank data to external AI tools.
 
 ## Sources
 
@@ -755,11 +765,16 @@ Verified against the public documentation on 2026-11-20. Tests use synthetic
 records; production account data and credentials are not test fixtures.
 
 
-## Local reports and classifications
+## Local reports, alerts and classifications (2D)
 
-Migration 0015 and `HESTIA_BUDGET_ANALYTICS_ENABLED=1` add owner-private month/year
-reports, categories, manual classifications, previewed rules and reviewed own-account
-transfers. The feature is off by default and makes no additional provider requests.
-Structured account evidence is stored separately from display labels and original
-ledger records. See [BUDGET_2D.md](BUDGET_2D.md) for configuration, exact totals,
-conflicts, optional evidence import and operational limits.
+Migrations `0015`, `0017`, `0018` and `0019` together with
+`HESTIA_BUDGET_ANALYTICS_ENABLED=1` (OpenAPI `0.17.0`–`0.24.0`) add owner-private
+month/year reports, categories, manual classifications, previewed rules, reviewed
+own-account transfers, read-only recurring-charge hints, persisted monthly spending
+limits, evaluation-only mortgage reminder schedules and payment marks, and a live
+active alerts inbox with durable anti-ABA read markers. The feature is off by default
+and makes no additional provider requests. Structured account evidence is stored
+separately from display labels and original ledger records. See
+[BUDGET_2D.md](BUDGET_2D.md) and the draft [RELEASE_v1.8.0.md](RELEASE_v1.8.0.md)
+for routes, exact totals, conflicts, optional evidence import, operational limits and
+migration rollback notes.
