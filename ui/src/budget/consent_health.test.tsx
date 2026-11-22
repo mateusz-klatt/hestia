@@ -68,6 +68,9 @@ describe("ConsentHealthPanel", () => {
         { connection_id: "bank-3", bank_name: "Synthetic Bank C", valid_until: 1_799_900_000, seconds_remaining: -100_000,
           days_remaining: -2, status: "attention_required", active_milestone: "attention", reminder_due: true, paused: false,
           attention: "expired_session", destination_kind: "owner_inbox", rule_version: 1 },
+        { connection_id: "bank-4", bank_name: "Synthetic Bank D", valid_until: null, seconds_remaining: null,
+          days_remaining: null, status: "attention_required", active_milestone: "attention", reminder_due: true, paused: false,
+          attention: "future_unknown_code", destination_kind: "owner_inbox", rule_version: 1 },
       ]))),
       consentReconcile: vi.fn(() => ok(reconcileOf())),
     };
@@ -83,7 +86,9 @@ describe("ConsentHealthPanel", () => {
     expect(host.textContent).toContain("Authorization flows: 5");
     expect(host.textContent).toContain("178 days left");
     expect(host.textContent).toContain("1 day left");
-    expect(host.textContent).toContain("Attention: expired_session");
+    expect(host.textContent).toContain("Bank session expired — renewal needed");
+    expect(host.textContent).not.toContain("expired_session");
+    expect(host.textContent).not.toContain("future_unknown_code");
     expect(host.textContent).toContain("Paused");
     expect(host.textContent).toContain("Finished flow (retained)");
     expect(host.textContent).not.toContain(HASH_FLOW);
@@ -101,6 +106,9 @@ describe("ConsentHealthPanel", () => {
     expect(host.textContent).toContain("Zgody zewnętrzne (import): 3 · zarządzane przez Hestię: 0");
     expect(host.textContent).toContain("Pozostało 1 dzień");
     expect(host.textContent).toContain("Pozostało 178 dni");
+    expect(host.textContent).toContain("Sesja bankowa wygasła — wymagane odnowienie");
+    expect(host.textContent).not.toContain("expired_session");
+    expect(host.textContent).not.toContain("future_unknown_code");
     expect(host.textContent).toContain("Zakończona próba (zachowana)");
   });
 

@@ -111,12 +111,13 @@ def _post_identity_evidence(response, country, observed_at, *, allowed_hashes):
 class BudgetConsentService:
     def __init__(self, config, store, files, *, path, redirect_url,
                  client_factory=EnableBankingConsentClient, clock=time.time,
-                 monotonic=time.monotonic, sleeper=time.sleep, control=None):
+                 monotonic=time.monotonic, sleeper=time.sleep, control=None, opaque_secret=None):
         self.config, self.store, self.files = config, store, files
         self.path, self.redirect_url = path, _url(redirect_url)
         self.client_factory, self.clock = client_factory, clock
         self.monotonic, self.sleeper = monotonic, sleeper
         self.control = BudgetConsentControlStore(store.sessions, clock=clock) if control is None else control
+        self.opaque_secret = opaque_secret
 
     def _configured(self, flow):
         for item in self.config.connections:
@@ -285,8 +286,9 @@ class BudgetConsentService:
     def renewal_reminders(self, owner):
         return self.store.renewal_reminders(owner, now=self.clock())
 
-    def reconcile(self, owner):
-        return self.store.reconcile(owner, now=self.clock())
+    def reconcile(self, owner, *, opaque_secret=None):
+        secret = self.opaque_secret if opaque_secret is None else opaque_secret
+        return self.store.reconcile(owner, now=self.clock(), opaque_secret=secret)
 
     def _verify(self, response, connection, selected, *, identity_evidence=None):
         if not isinstance(response, dict) or response.get("status") != "AUTHORIZED":

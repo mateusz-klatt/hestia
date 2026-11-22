@@ -26,7 +26,15 @@ export const consentHealthLabels = {
     daysLeft: (days: number) => `${String(days)} ${days === 1 ? "day" : "days"} left`,
     expired: "Expired",
     paused: "Paused",
-    attention: (code: string) => `Attention: ${code}`,
+    attentionFallback: "Attention required",
+    attentions: {
+      authorization: "Bank authorization failed — reconnect may be needed",
+      invalid_session: "Bank session is no longer valid — reconnect needed",
+      expired_session: "Bank session expired — renewal needed",
+      consent_expired: "Bank consent expired — renewal needed",
+      session_mismatch: "Bank session does not match connection — reconnect needed",
+      configuration: "Connection configuration needs operator review",
+    },
     statuses: {
       attention_required: "Attention required",
       expired: "Expired",
@@ -83,7 +91,15 @@ export const consentHealthLabels = {
     daysLeft: (days: number) => `Pozostało ${String(days)} ${pluralPl(days, "dzień", "dni", "dni")}`,
     expired: "Wygasła",
     paused: "Wstrzymane",
-    attention: (code: string) => `Wymaga uwagi: ${code}`,
+    attentionFallback: "Wymaga uwagi",
+    attentions: {
+      authorization: "Błąd autoryzacji w banku — może być potrzebne ponowne połączenie",
+      invalid_session: "Sesja bankowa jest nieprawidłowa — wymagane ponowne połączenie",
+      expired_session: "Sesja bankowa wygasła — wymagane odnowienie",
+      consent_expired: "Zgoda bankowa wygasła — wymagane odnowienie",
+      session_mismatch: "Sesja bankowa nie pasuje do połączenia — wymagane ponowne połączenie",
+      configuration: "Konfiguracja połączenia wymaga sprawdzenia przez operatora",
+    },
     statuses: {
       attention_required: "Wymaga uwagi",
       expired: "Wygasła",
@@ -157,6 +173,10 @@ function externalConsentCount(renewals: BudgetConsentRenewalReminders | null,
   return externalConnections.size;
 }
 
+function attentionText(text: ConsentHealthLabels, code: string): string {
+  return (text.attentions as Readonly<Record<string, string>>)[code] ?? text.attentionFallback;
+}
+
 export function ConsentHealthPanel({ api, connections, text, locale, revision, onAccessLoss }: ConsentHealthPanelProps) {
   const [renewals, setRenewals] = useState<Loaded<BudgetConsentRenewalReminders>>({ state: "loading" });
   const [reconcile, setReconcile] = useState<Loaded<BudgetConsentReconcile>>({ state: "loading" });
@@ -212,7 +232,7 @@ export function ConsentHealthPanel({ api, connections, text, locale, revision, o
                         ? text.expired : text.daysLeft(item.days_remaining)}</span>
                     )}
                     {item.paused ? <span className="budget-warn">{text.paused}</span> : null}
-                    {item.attention === null ? null : <span className="budget-warn">{text.attention(item.attention)}</span>}
+                    {item.attention === null ? null : <span className="budget-warn">{attentionText(text, item.attention)}</span>}
                   </div>
                 </li>
               );
