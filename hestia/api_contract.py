@@ -2942,22 +2942,24 @@ def _analytics_paths():
     paths = {prefix + path: {"get": {"operationId": operation, "summary": "Read owner-private local budget analytics",
               "parameters": parameters, "responses": _analytics_responses(model)}}
              for path, operation, model, parameters in reads}
-    paths[prefix + "inbox"]["get"]["summary"] = "Read owner-private live active alerts inbox (pure read-only)"
-    paths[prefix + "inbox"]["get"]["description"] = (
-        "Pure read-only single-snapshot evaluation of currently active consent renewal, mortgage due and "
-        "spending-limit alerts against durable owner read markers (zero DB writes, zero bank requests). "
-        "Resolved alerts disappear automatically even if unread; read markers are not pruned in v1 (cap 500)."
-    )
-    paths[prefix + "quarantine"]["get"]["summary"] = "Read owner-private quarantine counts and safe entry metadata (read-only)"
-    paths[prefix + "quarantine"]["get"]["description"] = (
-        "Pure read-only single-snapshot summary of uncertain, unresolved and offline-import-unresolved observations "
-        "excluded from report totals (zero mutations, zero bank requests). Returns exact whole-scope and per-account "
-        "counts plus up to 200 safe details ordered newest effective date first (undated last), then observed_at "
-        "descending (entry_reference, date, status and exclusion reason only; never amounts, descriptions or "
-        "counterparty names). Whole-scope bounded integrity probes fail closed with 500 budget_analytics_data_error "
-        "for invalid stored reasons, sources, timestamps or SQL-verifiable payload fields (duplicate JSON keys are "
-        "validated on extracted candidate items)."
-    )
+    read_overrides = {
+        "inbox": ("Read owner-private live active alerts inbox (pure read-only)", (
+            "Pure read-only single-snapshot evaluation of currently active consent renewal, mortgage due and "
+            "spending-limit alerts against durable owner read markers (zero DB writes, zero bank requests). "
+            "Resolved alerts disappear automatically even if unread; read markers are not pruned in v1 (cap 500)."
+        )),
+        "quarantine": ("Read owner-private quarantine counts and safe entry metadata (read-only)", (
+            "Pure read-only single-snapshot summary of uncertain, unresolved and offline-import-unresolved observations "
+            "excluded from report totals (zero mutations, zero bank requests). Returns exact whole-scope and per-account "
+            "counts plus up to 200 safe details ordered newest effective date first (undated last), then observed_at "
+            "descending (entry_reference, date, status and exclusion reason only; never amounts, descriptions or "
+            "counterparty names). Whole-scope bounded integrity probes fail closed with 500 budget_analytics_data_error "
+            "for invalid stored reasons, sources, timestamps or SQL-verifiable payload fields (duplicate JSON keys are "
+            "validated on extracted candidate items)."
+        )),
+    }
+    for path, (summary, description) in read_overrides.items():
+        paths[prefix + path]["get"].update(summary=summary, description=description)
     writes = (
         ("category-create", "createBudgetAnalyticsCategory", "BudgetAnalyticsCategoryCreateRequest", "BudgetAnalyticsCategoryResult"),
         ("category-update", "updateBudgetAnalyticsCategory", "BudgetAnalyticsCategoryUpdateRequest", "BudgetAnalyticsCategoryResult"),
