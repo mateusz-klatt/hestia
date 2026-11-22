@@ -3,7 +3,8 @@ import { component } from "../fixtures";
 import type { AnalyticsCategory, AnalyticsInbox, AnalyticsInboxConsentItem, AnalyticsInboxItem,
   AnalyticsInboxMarkSaved, AnalyticsInboxMortgageItem, AnalyticsInboxSpendingLimitItem,
   AnalyticsMortgageReminder, AnalyticsMortgages, AnalyticsMortgageSchedule,
-  AnalyticsOverview, AnalyticsRecurring, AnalyticsRecurringHint, AnalyticsSpendingLimit, AnalyticsSpendingLimitStatus,
+  AnalyticsOverview, AnalyticsQuarantine, AnalyticsQuarantineAccount, AnalyticsQuarantineItem,
+  AnalyticsRecurring, AnalyticsRecurringHint, AnalyticsSpendingLimit, AnalyticsSpendingLimitStatus,
   AnalyticsSpendingLimits, AnnotationSaved, MortgagePaymentSaved, MortgageScheduleSaved, SpendingLimitSaved,
   TransferDecisionResult, AnalyticsTotals, AnalyticsTransaction, AnalyticsTransactions, TransferLeg, TransferList,
   TransferPair } from "./model";
@@ -97,6 +98,39 @@ export function recurringHint(changes: Partial<AnalyticsRecurringHint> = {}): An
 export function recurringOf(hints: AnalyticsRecurringHint[] = [], changes: Partial<AnalyticsRecurring> = {}): AnalyticsRecurring {
   return {
     snapshot_digest: "synthetic-digest", rule_version: 1, total_hints: hints.length, truncated: false, hints, ...changes,
+  };
+}
+
+export function quarantineItem(changes: Partial<AnalyticsQuarantineItem> = {}): AnalyticsQuarantineItem {
+  return {
+    bucket: "uncertain", account_id: "acc-1", selected: true, entry_reference: "synthetic-private-reference",
+    date: "2026-11-20", status: "BOOK", reason: "reference_conflict", source: "api", observed_at: 1_795_000_000,
+    ...changes,
+  };
+}
+
+export function quarantineAccount(changes: Partial<AnalyticsQuarantineAccount> = {}): AnalyticsQuarantineAccount {
+  return {
+    account_id: "acc-1", selected: true, uncertain_count: 0, unresolved_count: 0, import_unresolved_count: 0,
+    total_count: 0, ...changes,
+  };
+}
+
+export function quarantineOf(items: AnalyticsQuarantineItem[] = [], changes: Partial<AnalyticsQuarantine> = {}): AnalyticsQuarantine {
+  const uncertainCount = items.filter((item) => item.bucket === "uncertain").length;
+  const unresolvedCount = items.filter((item) => item.bucket === "unresolved").length;
+  const importCount = items.filter((item) => item.bucket === "import_unresolved").length;
+  return {
+    rule_version: 1,
+    summary: {
+      uncertain_count: uncertainCount, unresolved_count: unresolvedCount, import_unresolved_count: importCount,
+      total_count: items.length,
+    },
+    accounts: [quarantineAccount({
+      uncertain_count: uncertainCount, unresolved_count: unresolvedCount, import_unresolved_count: importCount,
+      total_count: items.length,
+    })],
+    items_cap: 200, truncated: false, items, ...changes,
   };
 }
 

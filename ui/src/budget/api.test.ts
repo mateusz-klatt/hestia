@@ -87,6 +87,18 @@ describe("budget api", () => {
     });
   });
 
+  it("builds quarantine reads with and without an account filter", async () => {
+    const fetchMock = respond(200, {});
+    await budgetApi.quarantine();
+    expect(sent(fetchMock).url.pathname).toMatch(/\/api\/budget\/analytics\/quarantine$/);
+    expect(sent(fetchMock).url.search).toBe("");
+    expect(sent(fetchMock).init.method).toBeUndefined();
+    await budgetApi.quarantine("acc-1");
+    expect(sent(fetchMock, 1).url.pathname).toMatch(/\/api\/budget\/analytics\/quarantine$/);
+    expect(Object.fromEntries(sent(fetchMock, 1).url.searchParams)).toEqual({ account_id: "acc-1" });
+    expect(sent(fetchMock, 1).init.method).toBeUndefined();
+  });
+
   it("sends refresh with its idempotency key, JSON body and no Authorization header", async () => {
     const fetchMock = respond(202, { ok: true, job: { id: "job", created: true } });
     await budgetApi.refresh(connection, { accountId: "local-a", operation: "balances" }, "synthetic-key-0000001");

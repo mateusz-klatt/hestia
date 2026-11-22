@@ -7,7 +7,7 @@ import type { BudgetAccount, BudgetCapabilities, BudgetConnection, BudgetConsent
   BudgetOperation, BudgetTransactions, ConsentIntent } from "./model";
 import { idempotencyKey } from "./model";
 import type { AnalyticsCategory, AnalyticsInbox, AnalyticsInboxMarkRequest, AnalyticsInboxMarkSaved,
-  AnalyticsMortgages, AnalyticsOverview, AnalyticsRecurring, AnalyticsRule,
+  AnalyticsMortgages, AnalyticsOverview, AnalyticsQuarantine, AnalyticsRecurring, AnalyticsRule,
   AnalyticsSpendingLimits, AnalyticsTransactions, AnnotationRequest, AnnotationSaved, CategoryCreateRequest,
   CategorySaved, CategoryUpdateRequest, MortgagePaymentSaved, MortgagePaymentSetRequest, MortgageSaveRequest,
   MortgageScheduleSaved, RuleCandidate, RulePreview, RuleSaved, SpendingLimitSaveRequest, SpendingLimitSaved,
@@ -105,6 +105,8 @@ export const budgetApi = {
   saveRule: (previewId: string) => post<{ rule: RuleSaved }>("analytics/rule-save", { preview_id: previewId }),
   /** Read-only recurring-charge hints computed by the server across selected eligible expenses. */
   recurring: (currency?: string) => call<AnalyticsRecurring>(url("analytics/recurring", { currency })),
+  /** Exact quarantine counts and bounded safe metadata, optionally for one owned account. */
+  quarantine: (accountId?: string) => call<AnalyticsQuarantine>(url("analytics/quarantine", { account_id: accountId })),
   /** Monthly category spending limits and server-evaluated statuses for one YYYY-MM period. */
   spendingLimits: (period: string, currency?: string) =>
     call<AnalyticsSpendingLimits>(url("analytics/spending-limits", { period, currency })),

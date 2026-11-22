@@ -319,6 +319,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/budget/analytics/quarantine": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read owner-private quarantine counts and safe entry metadata (read-only)
+         * @description Pure read-only single-snapshot summary of uncertain, unresolved and offline-import-unresolved observations excluded from report totals (zero mutations, zero bank requests). Returns exact whole-scope and per-account counts plus up to 200 safe details ordered newest effective date first (undated last), then observed_at descending (entry_reference, date, status and exclusion reason only; never amounts, descriptions or counterparty names). Whole-scope bounded integrity probes fail closed with 500 budget_analytics_data_error for invalid stored reasons, sources, timestamps or SQL-verifiable payload fields (duplicate JSON keys are validated on extracted candidate items).
+         */
+        get: operations["getBudgetAnalyticsQuarantine"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/budget/analytics/recurring": {
         parameters: {
             query?: never;
@@ -2266,6 +2286,79 @@ export interface components {
              */
             ok: true;
             preview: components["schemas"]["BudgetAnalyticsPreview"];
+        };
+        /**
+         * BudgetAnalyticsQuarantine
+         * @description Read-only owner-scoped quarantine counts and bounded safe entry metadata (zero mutations, zero bank I/O).
+         */
+        BudgetAnalyticsQuarantine: {
+            /** Accounts */
+            accounts: components["schemas"]["BudgetAnalyticsQuarantineAccount"][];
+            /** Items */
+            items: components["schemas"]["BudgetAnalyticsQuarantineItem"][];
+            /** Items Cap */
+            items_cap: number;
+            /** Rule Version */
+            rule_version: number;
+            summary: components["schemas"]["BudgetAnalyticsQuarantineSummary"];
+            /** Truncated */
+            truncated: boolean;
+        };
+        /** BudgetAnalyticsQuarantineAccount */
+        BudgetAnalyticsQuarantineAccount: {
+            /** Account Id */
+            account_id: string;
+            /** Import Unresolved Count */
+            import_unresolved_count: number;
+            /** Selected */
+            selected: boolean;
+            /** Total Count */
+            total_count: number;
+            /** Uncertain Count */
+            uncertain_count: number;
+            /** Unresolved Count */
+            unresolved_count: number;
+        };
+        /**
+         * BudgetAnalyticsQuarantineItem
+         * @description Safe non-prose quarantine entry (ref, date, status and exclusion reason only; no descriptions or amounts).
+         */
+        BudgetAnalyticsQuarantineItem: {
+            /** Account Id */
+            account_id: string;
+            /**
+             * Bucket
+             * @enum {string}
+             */
+            bucket: "uncertain" | "unresolved" | "import_unresolved";
+            /** Date */
+            date: string | null;
+            /** Entry Reference */
+            entry_reference: string | null;
+            /** Observed At */
+            observed_at: number;
+            /**
+             * Reason
+             * @enum {string}
+             */
+            reason: "non_booked_status" | "missing_reference" | "missing_date" | "reference_conflict" | "non_canonical" | "api_preserved" | "stale_conflict" | "same_time_conflict";
+            /** Selected */
+            selected: boolean;
+            /** Source */
+            source: string;
+            /** Status */
+            status: string | null;
+        };
+        /** BudgetAnalyticsQuarantineSummary */
+        BudgetAnalyticsQuarantineSummary: {
+            /** Import Unresolved Count */
+            import_unresolved_count: number;
+            /** Total Count */
+            total_count: number;
+            /** Uncertain Count */
+            uncertain_count: number;
+            /** Unresolved Count */
+            unresolved_count: number;
         };
         /** BudgetAnalyticsRecurring */
         BudgetAnalyticsRecurring: {
@@ -5930,6 +6023,101 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["BudgetAnalyticsOverview"];
+                };
+            };
+            /** @description invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description session required; middleware may return an empty body */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description admin owner or browser-origin requirement failed; middleware may return an empty body */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description unknown, disabled or foreign resource */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Version, financial source, reserved transfer leg, preview or cursor changed; reload and review. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Explicit analytics processing or owner configuration limit; no partial totals. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description budget configuration unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+        };
+    };
+    getBudgetAnalyticsQuarantine: {
+        parameters: {
+            query?: {
+                /** @description Optional owned local account ID filter. */
+                account_id?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description owner-scoped stored state; no bank request */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetAnalyticsQuarantine"];
                 };
             };
             /** @description invalid request */
