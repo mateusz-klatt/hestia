@@ -192,11 +192,12 @@ class BudgetOpenApiTests(unittest.TestCase):
             self.assertEqual(set(methods), {method})
             self.assertEqual(methods[method]["x-required-role"], "admin")
         self.assertEqual(set(consent), {"/api/budget/consent/" + name for name in
-            ("pending", "status", "renewal-reminders", "start", "complete", "cancel")} | {"/api/budget/enable-banking/callback"})
+            ("pending", "status", "renewal-reminders", "reconcile", "start", "complete", "cancel")} | {"/api/budget/enable-banking/callback"})
         for path, methods in consent.items():
             for entry in methods.values():
                 self.assertEqual(entry["x-required-role"], "public" if path.endswith("callback") else "admin")
-        self.assertIn("413", consent["/api/budget/consent/renewal-reminders"]["get"]["responses"])
+        for read_path in ("/api/budget/consent/renewal-reminders", "/api/budget/consent/reconcile"):
+            self.assertIn("413", consent[read_path]["get"]["responses"])
         analytics_reads = {"overview", "transactions", "categories", "rules", "transfers", "recurring",
                            "spending-limits", "mortgages"}
         analytics_writes = {"category-create", "category-update", "annotation", "rule-preview", "rule-save",
@@ -207,7 +208,7 @@ class BudgetOpenApiTests(unittest.TestCase):
             self.assertEqual(set(methods), {method})
             self.assertEqual(methods[method]["x-required-role"], "admin")
             self.assertIn("413", methods[method]["responses"])
-        self.assertEqual(document["info"]["version"], "0.21.0")
+        self.assertEqual(document["info"]["version"], "0.22.0")
         refresh = budget["/api/budget/refresh"]["post"]
         self.assertEqual(refresh["parameters"][0]["name"], "Idempotency-Key")
         self.assertTrue(refresh["parameters"][0]["required"])
@@ -248,8 +249,10 @@ class BudgetOpenApiTests(unittest.TestCase):
         for name in ("BudgetAnalyticsMortgageSaveRequest", "BudgetAnalyticsMortgageSchedule",
                      "BudgetAnalyticsMortgageReminder", "BudgetConsentRenewalReminder"):
             self.assertNotIn("destination_target", schemas[name]["properties"])
-        for sensitive in ("session_id", "authorization_url", "code", "capsule_ref"):
+        for sensitive in ("session_id", "authorization_url", "code", "capsule_ref", "aspsp_id", "psu_type"):
             self.assertNotIn(sensitive, schemas["BudgetConsentRenewalReminder"]["properties"])
+            self.assertNotIn(sensitive, schemas["BudgetConsentReconcileConsent"]["properties"])
+            self.assertNotIn(sensitive, schemas["BudgetConsentReconcileFlow"]["properties"])
         self.assertEqual(schemas["BudgetAnalyticsSpendingLimit"]["properties"]["monthly_limit"]["type"], "string")
         for field in ("monthly_limit", "expenses", "refunds", "net_spending", "remaining", "over_by"):
             self.assertEqual(schemas["BudgetAnalyticsSpendingLimitStatus"]["properties"][field]["type"], "string")

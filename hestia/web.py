@@ -168,6 +168,7 @@ _ROUTE_MIN_ROLE = {
     ("GET", "/api/budget/consent/pending"): _ADMIN,
     ("GET", "/api/budget/consent/status"): _ADMIN,
     ("GET", "/api/budget/consent/renewal-reminders"): _ADMIN,
+    ("GET", "/api/budget/consent/reconcile"): _ADMIN,
     ("POST", "/api/budget/consent/start"): _ADMIN,
     ("POST", "/api/budget/consent/complete"): _ADMIN,
     ("POST", "/api/budget/consent/cancel"): _ADMIN,

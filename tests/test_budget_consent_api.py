@@ -62,6 +62,20 @@ class ConsentAPITests(unittest.IsolatedAsyncioTestCase):
             "rule_version": 1,
             "reminders": [],
         }
+        self.service.reconcile.return_value = {
+            "evaluated_at": 1_800_000_000.0,
+            "retention_days": 90,
+            "rule_version": 1,
+            "summary": {
+                "consents_total": 0,
+                "flows_total": 0,
+                "needs_owner_review": 0,
+                "remote_close_eligible": 0,
+                "local_retire_eligible": 0,
+            },
+            "consents": [],
+            "flows": [],
+        }
         self.service.complete.return_value = {"flow_id": FLOW, "status": "adopted"}
         self.service.cancel.return_value = {"flow_id": FLOW, "status": "canceled"}
         self.service.invalidate_bindings.return_value = 1
@@ -133,7 +147,8 @@ class ConsentAPITests(unittest.IsolatedAsyncioTestCase):
         cookie = response.cookies[module.cookie_name(FLOW)]
         self.assertEqual((cookie.value, cookie["max-age"], cookie["path"], cookie["samesite"]), (NONCE, "900", "/", "Lax"))
         self.assertTrue(cookie["secure"] and cookie["httponly"])
-        for operation, key in (("pending", "pending"), ("status", "consents"), ("renewal-reminders", "reminders")):
+        for operation, key in (("pending", "pending"), ("status", "consents"),
+                               ("renewal-reminders", "reminders"), ("reconcile", "summary")):
             response = await self.get(operation)
             self.assertEqual(response.status, 200)
             self.assertIn(key, await response.json())
@@ -624,11 +639,11 @@ class ConsentAPITests(unittest.IsolatedAsyncioTestCase):
             off = await self.get("renewal-reminders")
             self.assertEqual(off.status, 503); await off.read()
 
-        # Invalid evaluation input -> 400; exceeding MAX_CONNECTIONS -> 413.
+        # Stored data integrity error -> 500; exceeding MAX_CONNECTIONS -> 413.
         real.clock = lambda: -1.0
         bad = await self.get("renewal-reminders")
-        self.assertEqual(bad.status, 400)
-        self.assertEqual((await bad.json())["error"], "budget_consent_invalid_request")
+        self.assertEqual(bad.status, 500)
+        self.assertEqual((await bad.json())["error"], "budget_consent_data_error")
 
         real.clock = lambda: fixed_now
         with self.sessions.begin() as session:
@@ -641,5 +656,170 @@ class ConsentAPITests(unittest.IsolatedAsyncioTestCase):
         over = await self.get("renewal-reminders")
         self.assertEqual(over.status, 413)
         self.assertEqual((await over.json())["error"], "budget_consent_limit")
+        self.assertEqual(calls, [])
+        self.audit.assert_not_called()
+
+    async def test_real_consent_reconcile_read_only_opaque_ids_owner_scoped_and_errors(self):
+        from hestia import api_contract
+        from hestia.budget import consent_reconcile as cr
+
+        fixed_now = 1_800_000_000.0
+        _, calls = self.real_service()
+        real = self.client.server.app[module.KEY].service
+        real.clock = lambda: fixed_now
+        real.store.clock = lambda: fixed_now
+        day = cr.SECONDS_PER_DAY
+        raw_ids = ("c-active", "c-retired-valid", "c-retired-prunable", "c-poc", "c-uncertain",
+                   "c-mismatch", "f-uncertain", "f-prunable", "bob-consent", "bob-flow")
+
+        with self.sessions.begin() as session:
+            session.add(db.BudgetConnection(
+                id="alice-conn-2", owner="alice", application_id=self.config.application_id,
+                bank_name="Second Bank", country="PL", enabled=True, paused=False,
+                active_consent_id="c-mismatch", next_attempt=0, failures=0,
+            ))
+            session.get(db.BudgetConnection, "bank").active_consent_id = "c-active"
+            session.add_all([
+                db.BudgetConsent(id="c-active", owner="alice", connection_id="bank",
+                                 application_id=self.config.application_id, bank_name="Synthetic Bank", country="PL",
+                                 provenance="hestia_created", status="ACTIVE", capsule_ref="cap-1",
+                                 valid_until=fixed_now + 30 * day, generation=2, metadata_json="{}", created_at=fixed_now - 5 * day),
+                db.BudgetConsent(id="c-retired-valid", owner="alice", connection_id="bank",
+                                 application_id=self.config.application_id, bank_name="Synthetic Bank", country="PL",
+                                 provenance="hestia_created", status="RETIRED", capsule_ref="cap-2",
+                                 valid_until=fixed_now + 10 * day, generation=1, metadata_json="{}", created_at=fixed_now - 20 * day),
+                db.BudgetConsent(id="c-retired-prunable", owner="alice", connection_id="bank",
+                                 application_id=self.config.application_id, bank_name="Synthetic Bank", country="PL",
+                                 provenance="hestia_created", status="RETIRED", capsule_ref="cap-3",
+                                 valid_until=fixed_now - 100 * day, generation=1, metadata_json="{}", created_at=fixed_now - 120 * day),
+                db.BudgetConsent(id="c-poc", owner="alice", connection_id="bank",
+                                 application_id=self.config.application_id, bank_name="Synthetic Bank", country="PL",
+                                 provenance="poc_retired", status="ACTIVE", capsule_ref="cap-poc",
+                                 valid_until=fixed_now - 100 * day, generation=1, metadata_json="{}", created_at=fixed_now - 130 * day),
+                db.BudgetConsent(id="c-uncertain", owner="alice", connection_id="bank",
+                                 application_id=self.config.application_id, bank_name="Synthetic Bank", country="PL",
+                                 provenance="hestia_created", status="UNADOPTED", capsule_ref="cap-4",
+                                 valid_until=fixed_now + 10 * day, generation=3, metadata_json="{}", created_at=fixed_now - day),
+                db.BudgetConsent(id="c-mismatch", owner="alice", connection_id="alice-conn-2",
+                                 application_id=self.config.application_id, bank_name="Second Bank", country="PL",
+                                 provenance="hestia_created", status="RETIRED", capsule_ref="cap-5",
+                                 valid_until=fixed_now + 5 * day, generation=1, metadata_json="{}", created_at=fixed_now - 2 * day),
+                db.BudgetConsent(id="bob-consent", owner="bob", connection_id="bob-bank",
+                                 application_id=self.config.application_id, bank_name="Synthetic Bank", country="PL",
+                                 provenance="hestia_created", status="ACTIVE", capsule_ref="cap-bob",
+                                 valid_until=fixed_now + 10 * day, generation=1, metadata_json="{}", created_at=fixed_now - day),
+            ])
+            session.add_all([
+                db.BudgetConsentFlow(id="f-uncertain", owner="alice", connection_id="bank",
+                                     application_id=self.config.application_id, bank_name="Synthetic Bank", country="PL",
+                                     intent="renew", expected_connection_version=1, expected_generation=2,
+                                     state_hash="1" * 64, nonce_hash="2" * 64, auth_fingerprint="3" * 64,
+                                     binding_revision=1, flow_revision=1, created_at=fixed_now - day,
+                                     expires_at=fixed_now - day + 900, status="exchange_uncertain",
+                                     error="exchange_uncertain", candidate_consent_id="c-uncertain"),
+                db.BudgetConsentFlow(id="f-prunable", owner="alice", connection_id="bank",
+                                     application_id=self.config.application_id, bank_name="Synthetic Bank", country="PL",
+                                     intent="connect", expected_connection_version=1, expected_generation=1,
+                                     state_hash="4" * 64, nonce_hash="5" * 64, auth_fingerprint="6" * 64,
+                                     binding_revision=2, flow_revision=2, created_at=fixed_now - 101 * day,
+                                     expires_at=fixed_now - 100 * day, status="canceled",
+                                     error="canceled", candidate_consent_id=None),
+                db.BudgetConsentFlow(id="bob-flow", owner="bob", connection_id="bob-bank",
+                                     application_id=self.config.application_id, bank_name="Synthetic Bank", country="PL",
+                                     intent="connect", expected_connection_version=1, expected_generation=0,
+                                     state_hash="7" * 64, nonce_hash="8" * 64, auth_fingerprint="9" * 64,
+                                     binding_revision=1, flow_revision=1, created_at=fixed_now - day,
+                                     expires_at=fixed_now + 900, status="started",
+                                     error=None, candidate_consent_id=None),
+            ])
+
+        response = await self.get("reconcile")
+        self.assertEqual(response.status, 200, await response.text())
+        self.private(response)
+        payload = await response.json()
+        parsed = api_contract.BudgetConsentReconcile.model_validate(payload)
+        self.assertEqual(parsed.model_dump(mode="json"), payload)
+        self.assertEqual((payload["evaluated_at"], payload["retention_days"], payload["rule_version"]),
+                         (fixed_now, cr.DEFAULT_RETENTION_DAYS, cr.RULE_VERSION))
+        self.assertEqual(payload["summary"], {
+            "consents_total": 6,
+            "flows_total": 2,
+            "needs_owner_review": 4,
+            "remote_close_eligible": 1,
+            "local_retire_eligible": 2,
+        })
+
+        # Raw DB IDs and sensitive fields never appear anywhere in the serialized response.
+        wire = json.dumps(payload)
+        for raw in raw_ids:
+            self.assertNotIn(raw, wire)
+        for forbidden in ("session_id", "capsule_ref", "authorization_url", "aspsp_id", "psu_type",
+                          "state_hash", "nonce_hash", "auth_fingerprint", "cap-"):
+            self.assertNotIn(forbidden, wire)
+
+        opaque = real.store._opaque_reconcile_id
+        by_consent = {row["consent_id"]: row for row in payload["consents"]}
+        by_flow = {row["flow_id"]: row for row in payload["flows"]}
+        for cid in by_consent:
+            self.assertRegex(cid, r"^[0-9a-f]{64}$")
+        for fid in by_flow:
+            self.assertRegex(fid, r"^[0-9a-f]{64}$")
+
+        self.assertEqual(by_consent[opaque("alice", "consent", "c-active")]["classification"], "active_current")
+        self.assertEqual(by_consent[opaque("alice", "consent", "c-retired-valid")]["classification"], "retired_still_valid")
+        self.assertTrue(by_consent[opaque("alice", "consent", "c-retired-valid")]["remote_close_eligible"])
+        self.assertEqual(by_consent[opaque("alice", "consent", "c-retired-prunable")]["classification"], "retired_prunable")
+        self.assertTrue(by_consent[opaque("alice", "consent", "c-retired-prunable")]["local_retire_eligible"])
+        poc = by_consent[opaque("alice", "consent", "c-poc")]
+        self.assertEqual((poc["classification"], poc["needs_owner_review"], poc["remote_close_eligible"], poc["local_retire_eligible"]),
+                         ("external_read_only", False, False, False))
+        unc = by_consent[opaque("alice", "consent", "c-uncertain")]
+        self.assertEqual((unc["classification"], unc["needs_owner_review"], unc["remote_close_eligible"], unc["local_retire_eligible"]),
+                         ("uncertain_flow_evidence", True, False, False))
+        mis = by_consent[opaque("alice", "consent", "c-mismatch")]
+        self.assertEqual((mis["classification"], mis["needs_owner_review"], mis["remote_close_eligible"], mis["local_retire_eligible"]),
+                         ("active_pointer_mismatch", True, False, False))
+        f_unc = by_flow[opaque("alice", "flow", "f-uncertain")]
+        self.assertEqual((f_unc["classification"], f_unc["candidate_consent_id"]),
+                         ("uncertain_exchange_review", opaque("alice", "consent", "c-uncertain")))
+        f_pru = by_flow[opaque("alice", "flow", "f-prunable")]
+        self.assertEqual((f_pru["classification"], f_pru["candidate_consent_id"], f_pru["local_retire_eligible"]),
+                         ("terminal_prunable", None, True))
+
+        # Owner isolation: Bob sees only Bob's rows.
+        bob_resp = await self.get("reconcile", headers=self.headers("bob", origin=False))
+        self.assertEqual(bob_resp.status, 200)
+        bob_body = await bob_resp.json()
+        self.assertEqual((bob_body["summary"]["consents_total"], bob_body["summary"]["flows_total"]), (1, 1))
+        self.assertEqual(bob_body["consents"][0]["connection_id"], "bob-bank")
+
+        # Direct store call with default now=None uses store.clock.
+        self.assertEqual(real.store.reconcile("alice")["evaluated_at"], fixed_now)
+
+        # Auth, method, query and flag guards fail closed without touching provider or DB rows.
+        for user, status in (("viewer", 403), ("operator", 403), ("disabled", 401)):
+            denied = await self.get("reconcile", headers=self.headers(user, origin=False))
+            self.assertEqual(denied.status, status); await denied.read()
+        bearer = await self.get("reconcile", headers=self.headers(bearer=True, origin=False))
+        self.assertEqual(bearer.status, 403); await bearer.read()
+        query = await self.get("reconcile", params={"retention_days": "1"})
+        self.assertEqual(query.status, 400); await query.read()
+        head = await self.client.head(module.PREFIX + "/reconcile", headers=self.headers(origin=False))
+        self.assertEqual(head.status, 405); await head.read()
+        with mock.patch.dict(os.environ, {module.FLAG: "0"}):
+            off = await self.get("reconcile")
+            self.assertEqual(off.status, 503); await off.read()
+
+        # Stored DB integrity error -> 500; evaluation cap -> 413.
+        real.clock = lambda: -1.0
+        bad = await self.get("reconcile")
+        self.assertEqual(bad.status, 500)
+        self.assertEqual((await bad.json())["error"], "budget_consent_data_error")
+
+        real.clock = lambda: fixed_now
+        with mock.patch.object(cr, "classify_consents", side_effect=cr.ConsentReconcileLimitError()):
+            over = await self.get("reconcile")
+            self.assertEqual(over.status, 413)
+            self.assertEqual((await over.json())["error"], "budget_consent_limit")
         self.assertEqual(calls, [])
         self.audit.assert_not_called()

@@ -66,7 +66,8 @@ from pydantic.json_schema import models_json_schema
 # 0.19.0: owner-private persisted monthly category spending limits (migration 0017).
 # 0.20.0: owner-private persisted mortgage reminder schedules and payment marks (migration 0018, evaluation-only).
 # 0.21.0: read-only bank consent renewal reminder evaluation (GET /api/budget/consent/renewal-reminders, zero migration).
-CONTRACT_VERSION = "0.21.0"
+# 0.22.0: read-only bank consent reconciliation classification (GET /api/budget/consent/reconcile, zero migration).
+CONTRACT_VERSION = "0.22.0"
 OPENAPI_PATH = Path(__file__).resolve().parent.parent / "docs" / "api" / "openapi.json"
 
 # De-duplicated string literals (SonarPython S1192): the OpenAPI content-type, the paths reused
@@ -1127,6 +1128,55 @@ class BudgetConsentRenewalReminders(BaseModel):
     reminders: list[BudgetConsentRenewalReminder]
 
 
+class BudgetConsentReconcileSummary(BaseModel):
+    model_config = _READ
+    consents_total: int
+    flows_total: int
+    needs_owner_review: int
+    remote_close_eligible: int
+    local_retire_eligible: int
+
+
+class BudgetConsentReconcileConsent(BaseModel):
+    """Informational consent classification; consent_id is an opaque non-reversible hash, never a provider session ID."""
+
+    model_config = _READ
+    consent_id: str
+    connection_id: str
+    provenance: Literal["hestia_created", "external_file", "poc_retired"]
+    status: Literal["ACTIVE", "UNADOPTED", "RETIRED"]
+    valid_until: float | None
+    classification: str
+    needs_owner_review: bool
+    remote_close_eligible: bool
+    local_retire_eligible: bool
+
+
+class BudgetConsentReconcileFlow(BaseModel):
+    """Informational consent-flow classification; flow_id and candidate_consent_id are opaque non-reversible hashes."""
+
+    model_config = _READ
+    flow_id: str
+    connection_id: str
+    status: str
+    classification: str
+    needs_owner_review: bool
+    local_retire_eligible: bool
+    candidate_consent_id: str | None
+
+
+class BudgetConsentReconcile(BaseModel):
+    """Read-only reconciliation report; *_eligible fields are informational only and trigger no deletion or remote closure."""
+
+    model_config = _READ
+    evaluated_at: float
+    retention_days: int
+    rule_version: int
+    summary: BudgetConsentReconcileSummary
+    consents: list[BudgetConsentReconcileConsent]
+    flows: list[BudgetConsentReconcileFlow]
+
+
 class BudgetConsentStarted(BaseModel):
     model_config = _READ
     ok: Literal[True]
@@ -2021,8 +2071,8 @@ _ANALYTICS_MODELS = (BudgetAnalyticsCategoryCreateRequest, BudgetAnalyticsCatego
 _BUDGET_MODELS = (BudgetSelectionRequest, BudgetKindRequest, BudgetConnectionStateRequest,
                   BudgetBackgroundSelectionRequest, BudgetRefreshRequest,
                   BudgetConsentStartRequest, BudgetConsentFlowRequest, BudgetConsentPending,
-                  BudgetConsents, BudgetConsentRenewalReminders, BudgetConsentStarted, BudgetConsentCompleted,
-                  BudgetConsentCanceled,
+                  BudgetConsents, BudgetConsentRenewalReminders, BudgetConsentReconcile,
+                  BudgetConsentStarted, BudgetConsentCompleted, BudgetConsentCanceled,
                   BudgetConnections, BudgetAccounts, BudgetStatus, BudgetTransactions,
                   BudgetBalances, BudgetLimits, BudgetJobs, BudgetAccountSaved, BudgetConnectionSaved,
                   BudgetRefreshAccepted, BudgetError, BudgetConflict)
@@ -2058,6 +2108,7 @@ _PATH_ROLES = {
     ("GET", "/api/budget/consent/pending"): "admin",
     ("GET", "/api/budget/consent/status"): "admin",
     ("GET", "/api/budget/consent/renewal-reminders"): "admin",
+    ("GET", "/api/budget/consent/reconcile"): "admin",
     ("POST", "/api/budget/consent/start"): "admin",
     ("POST", "/api/budget/consent/complete"): "admin",
     ("POST", "/api/budget/consent/cancel"): "admin",
@@ -2722,6 +2773,7 @@ def _consent_paths():
         ("pending", "get", "getBudgetConsentPending", None, "BudgetConsentPending"),
         ("status", "get", "getBudgetConsents", None, "BudgetConsents"),
         ("renewal-reminders", "get", "getBudgetConsentRenewalReminders", None, "BudgetConsentRenewalReminders"),
+        ("reconcile", "get", "getBudgetConsentReconcile", None, "BudgetConsentReconcile"),
         ("start", "post", "startBudgetConsent", "BudgetConsentStartRequest", "BudgetConsentStarted"),
         ("complete", "post", "completeBudgetConsent", "BudgetConsentFlowRequest", "BudgetConsentCompleted"),
         ("cancel", "post", "cancelBudgetConsent", "BudgetConsentFlowRequest", "BudgetConsentCanceled"),
@@ -2732,8 +2784,8 @@ def _consent_paths():
             responses["202"] = {"description": "Known candidate awaits verification/adoption, or exchange is uncertain. "
                 "Repeating complete never repeats POST /sessions. No acquisition quota is reset.",
                 "content": {_APP_JSON: {"schema": _ref(response)}}}
-        if name == "renewal-reminders":
-            responses["413"] = {"description": "Owner connection evaluation cap exceeded; no partial reminders returned.",
+        if name in ("renewal-reminders", "reconcile"):
+            responses["413"] = {"description": "Owner consent evaluation cap exceeded; no partial results returned.",
                                 "content": {_APP_JSON: {"schema": _ref("BudgetError")}}}
         responses["429"] = {"description": "Durable consent throttle or provider cooldown; no automatic new consent.",
                              "content": {_APP_JSON: {"schema": _ref("BudgetError")}}}

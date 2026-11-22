@@ -285,6 +285,9 @@ class BudgetConsentService:
     def renewal_reminders(self, owner):
         return self.store.renewal_reminders(owner, now=self.clock())
 
+    def reconcile(self, owner):
+        return self.store.reconcile(owner, now=self.clock())
+
     def _verify(self, response, connection, selected, *, identity_evidence=None):
         if not isinstance(response, dict) or response.get("status") != "AUTHORIZED":
             raise BudgetDataError("invalid_session")

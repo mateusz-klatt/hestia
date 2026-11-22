@@ -455,7 +455,7 @@ class MortgageViewsAndAPI0018Tests(unittest.IsolatedAsyncioTestCase):
         overview_after = await (await self.get("overview")).json()
         self.assertEqual(overview_after["snapshot_digest"], before_digest)
 
-        # Direct views tests: ledger_as_of=None when empty + MortgageInputError->400 & MortgageLimitError->413 mapping.
+        # Direct views tests: ledger_as_of=None when empty + MortgageInputError->500 & MortgageLimitError->413 mapping.
         views = BudgetAnalyticsViews(self.sessions, clock=lambda: fixed_now, cursor_secret=b"synthetic-only")
         bob_view = views.mortgages("bob")
         self.assertEqual(bob_view["evaluation_date"], "2026-11-21")
@@ -471,7 +471,7 @@ class MortgageViewsAndAPI0018Tests(unittest.IsolatedAsyncioTestCase):
         with mock.patch.object(mr, "evaluate_mortgage_reminders", side_effect=mr.MortgageInputError()):
             with self.assertRaises(AnalyticsError) as bad_eval:
                 views.mortgages("emptyadmin")
-            self.assertEqual(bad_eval.exception.status, 400)
+            self.assertEqual((bad_eval.exception.code, bad_eval.exception.status), ("budget_analytics_data_error", 500))
         with mock.patch.object(mr, "evaluate_mortgage_reminders", side_effect=mr.MortgageLimitError()):
             with self.assertRaises(AnalyticsError) as limit_eval:
                 views.mortgages("emptyadmin")

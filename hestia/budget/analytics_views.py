@@ -842,7 +842,7 @@ class BudgetAnalyticsViews(BudgetAnalyticsStore):
             except MortgageLimitError:
                 raise AnalyticsError("budget_analytics_limit", 413) from None
             except MortgageInputError:
-                raise AnalyticsError() from None
+                raise AnalyticsError("budget_analytics_data_error", 500) from None
             return {
                 "evaluation_date": evaluation_date,
                 "evaluation_timezone": "UTC",
