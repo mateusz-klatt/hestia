@@ -6,9 +6,9 @@ import type { BudgetApi, BudgetResult } from "./api";
 import { Budget } from "./budget";
 import { account, componentLimit, connection, sharedLimit } from "./fixtures";
 import type { BudgetAccount, BudgetBalances, BudgetJob, BudgetTransaction, BudgetTransactions } from "./model";
-import { entriesOf, inboxConsentItem, inboxMarkSaved, inboxOf, mortgageReminder, mortgageSchedule, mortgagesOf,
-  overviewOf, quarantineOf, recurringHint, recurringOf, spendingLimit, spendingLimitsOf, spendingLimitStatus,
-  transfersOf } from "./analytics/fixtures";
+import { entriesOf, forecastCurrencyTotal, forecastItem, forecastOf, inboxConsentItem, inboxMarkSaved, inboxOf,
+  mortgageReminder, mortgageSchedule, mortgagesOf, overviewOf, quarantineOf, recurringHint, recurringOf, spendingLimit,
+  spendingLimitsOf, spendingLimitStatus, transfersOf } from "./analytics/fixtures";
 
 type Settle<T> = (value: BudgetResult<T>) => void;
 
@@ -85,6 +85,7 @@ function fakeApi(accounts: BudgetAccount[] = [account({ display })]) {
     spendingLimits: vi.fn<BudgetApi["spendingLimits"]>((period) => ok(spendingLimitsOf(period))),
     saveSpendingLimit: vi.fn<BudgetApi["saveSpendingLimit"]>(),
     mortgages: vi.fn<BudgetApi["mortgages"]>(() => ok(mortgagesOf())),
+    forecast: vi.fn<BudgetApi["forecast"]>(() => ok(forecastOf())),
     saveMortgage: vi.fn<BudgetApi["saveMortgage"]>(),
     setMortgagePayment: vi.fn<BudgetApi["setMortgagePayment"]>(),
     inbox: vi.fn<BudgetApi["inbox"]>(() => ok(inboxOf())),
@@ -908,7 +909,7 @@ describe("analytics views", () => {
     expect(api.overview).not.toHaveBeenCalled();
   });
 
-  it("gates the quarantine tab on analytics and places it immediately after Mortgages", async () => {
+  it("gates the quarantine tab on analytics and places it immediately after Forecast", async () => {
     const api = fakeApi();
     await render(api);
     expect([...host.querySelectorAll("button")].some((item) => item.textContent === "Quarantine")).toBe(false);
@@ -917,7 +918,7 @@ describe("analytics views", () => {
     api.connections.mockImplementation(() => ok({ connections: [connection], capabilities: analysis }));
     await click(button("Reload"));
     const tabs = [...host.querySelectorAll(".budget-views button")].map((item) => item.textContent);
-    expect(tabs.indexOf("Quarantine")).toBe(tabs.indexOf("Mortgages") + 1);
+    expect(tabs.indexOf("Quarantine")).toBe(tabs.indexOf("Forecast") + 1);
     await click(button("Quarantine"));
     expect(api.quarantine).toHaveBeenCalledWith(undefined);
     expect(host.textContent).toContain("All entries are included in totals.");
@@ -928,6 +929,26 @@ describe("analytics views", () => {
     expect(host.querySelector(".budget-views")).toBeNull();
     expect(host.textContent).not.toContain("All entries are included in totals.");
     expect(host.textContent).toContain("Synthetic Current ••0001");
+  });
+
+  it("offers Forecast after Mortgages only while analytics is enabled", async () => {
+    const api = fakeApi();
+    await render(api);
+    expect(host.textContent).not.toContain("Forecast");
+    expect(api.forecast).not.toHaveBeenCalled();
+
+    api.connections.mockImplementationOnce(() => ok({ connections: [connection], capabilities: analysis }));
+    await click(button("Reload"));
+    expect(button("Mortgages").nextElementSibling).toBe(button("Forecast"));
+    expect(api.forecast).not.toHaveBeenCalled();
+    await click(button("Forecast"));
+    expect(button("Forecast").getAttribute("aria-pressed")).toBe("true");
+    expect(api.forecast).toHaveBeenCalledTimes(1);
+
+    await click(button("Reload"));
+    expect(host.textContent).not.toContain("Forecast");
+    expect(host.textContent).toContain("Synthetic Current ••0001");
+    expect(api.forecast).toHaveBeenCalledTimes(1);
   });
 
   it("switches between accounts and the month view", async () => {
@@ -1003,6 +1024,33 @@ describe("analytics views", () => {
     expect(host.textContent).toContain("Only the budget's owner");
     expect(host.querySelector(".budget-views")).toBeNull();
   });
+
+  it.each([[401, "budget_not_signed_in"], [403, "budget_forbidden"]])(
+    "clears loaded forecast data and the whole budget when a forecast read returns %s", async (status, error) => {
+      const api = fakeApi();
+      const label = "Synthetic Forecast Commitment";
+      const amount = "29.95";
+      const total = forecastCurrencyTotal({ total: amount, scheduled_total: amount });
+      const data = forecastOf();
+      const months = data.months.map((month) => month.month === data.start_month ? {
+        ...month, currencies: [total], items: [forecastItem({ label, amount })],
+      } : month);
+      api.connections.mockImplementation(() => ok({ connections: [connection], capabilities: analysis }));
+      api.forecast.mockImplementationOnce(() => ok({ ...data, totals: [total], months }))
+        .mockImplementationOnce(() => fail(status, error));
+      await render(api);
+      await click(button("Forecast"));
+      expect(host.textContent).toContain(label);
+      expect(host.textContent).toContain(`${amount} PLN`);
+
+      await click(button("Reload"));
+      expect(api.forecast).toHaveBeenCalledTimes(2);
+      expect(host.textContent).toContain("Only the budget's owner");
+      expect(host.textContent).not.toContain(label);
+      expect(host.textContent).not.toContain(`${amount} PLN`);
+      expect(host.querySelector(".budget-views")).toBeNull();
+    },
+  );
 
   it("clears the whole budget when the spending limits read reports lost access", async () => {
     const api = fakeApi();

@@ -44,6 +44,13 @@ export type MortgageScheduleSaved = Schemas["BudgetAnalyticsMortgageScheduleSave
 export type MortgagePaymentSetRequest = Schemas["BudgetAnalyticsMortgagePaymentSetRequest"];
 export type MortgagePaymentSaved = Schemas["BudgetAnalyticsMortgagePaymentSaved"];
 
+export type AnalyticsForecast = Schemas["BudgetAnalyticsForecast"];
+export type AnalyticsForecastSummary = Schemas["BudgetAnalyticsForecastSummary"];
+export type AnalyticsForecastCurrencyTotal = Schemas["BudgetAnalyticsForecastCurrencyTotal"];
+export type AnalyticsForecastDeduplication = Schemas["BudgetAnalyticsForecastDeduplication"];
+export type AnalyticsForecastMonth = Schemas["BudgetAnalyticsForecastMonth"];
+export type AnalyticsForecastItem = Schemas["BudgetAnalyticsForecastItem"];
+
 export type AnalyticsInboxConsentItem = Schemas["BudgetAnalyticsInboxConsentItem"];
 export type AnalyticsInboxMortgageItem = Schemas["BudgetAnalyticsInboxMortgageItem"];
 export type AnalyticsInboxSpendingLimitItem = Schemas["BudgetAnalyticsInboxSpendingLimitItem"];

@@ -12,6 +12,7 @@ import type { BudgetAccount, BudgetBalances, BudgetCapabilities, BudgetConnectio
   BudgetConsent, BudgetConsentFlow, BudgetLimit, BudgetSharedLimit, BudgetTransaction, DateRange,
   LimitState } from "./model";
 import { ConsentHealthPanel, consentHealthLabels } from "./consent_health";
+import { ForecastView } from "./analytics/forecast";
 import { InboxView, inboxLabels } from "./analytics/inbox";
 import { MonthView, monthLabels } from "./analytics/month";
 import { MortgagesView, mortgagesLabels } from "./analytics/mortgages";
@@ -26,7 +27,7 @@ import "./budget.css";
 const labels = {
   en: {
     title: "Budget", subtitle: "Your private household finances.", reload: "Reload", loading: "Loading budget…",
-    views: { accounts: "Accounts", inbox: "Inbox", month: "Month", year: "Year", limits: "Spending limits", recurring: "Recurring", mortgages: "Mortgages", quarantine: "Quarantine", rules: "Categories and rules" }, viewsLabel: "Budget view",
+    views: { accounts: "Accounts", inbox: "Inbox", month: "Month", year: "Year", limits: "Spending limits", recurring: "Recurring", mortgages: "Mortgages", forecast: "Forecast", quarantine: "Quarantine", rules: "Categories and rules" }, viewsLabel: "Budget view",
     disabled: "The budget is not enabled on this server.", denied: "Only the budget's owner can view it.",
     error: "The budget could not be loaded. Try again.", empty: "No bank connections are configured.",
     account: "Account", refresh: "Refresh from bank", refreshing: "Refresh queued…",
@@ -72,7 +73,7 @@ const labels = {
   },
   pl: {
     title: "Budżet", subtitle: "Prywatne finanse domowe.", reload: "Wczytaj ponownie", loading: "Wczytywanie budżetu…",
-    views: { accounts: "Konta", inbox: "Skrzynka", month: "Miesiąc", year: "Rok", limits: "Limity wydatków", recurring: "Cykliczne", mortgages: "Hipoteka", quarantine: "Kwarantanna", rules: "Kategorie i reguły" }, viewsLabel: "Widok budżetu",
+    views: { accounts: "Konta", inbox: "Skrzynka", month: "Miesiąc", year: "Rok", limits: "Limity wydatków", recurring: "Cykliczne", mortgages: "Hipoteka", forecast: "Prognoza", quarantine: "Kwarantanna", rules: "Kategorie i reguły" }, viewsLabel: "Widok budżetu",
     disabled: "Budżet nie jest włączony na tym serwerze.", denied: "Budżet widzi tylko jego właściciel.",
     error: "Nie udało się wczytać budżetu. Spróbuj ponownie.", empty: "Brak skonfigurowanych połączeń z bankiem.",
     account: "Konto", refresh: "Odśwież z banku", refreshing: "Odświeżanie w kolejce…",
@@ -134,7 +135,7 @@ function pick(): { text: Labels; consentHealth: typeof consentHealthLabels.en; i
     quarantine: pl ? quarantineLabels.pl : quarantineLabels.en, rules: pl ? rulesLabels.pl : rulesLabels.en, locale };
 }
 
-type View = "accounts" | "inbox" | "month" | "year" | "limits" | "recurring" | "mortgages" | "quarantine" | "rules";
+type View = "accounts" | "inbox" | "month" | "year" | "limits" | "recurring" | "mortgages" | "forecast" | "quarantine" | "rules";
 
 type Load = "loading" | "ready" | "disabled" | "denied" | "error";
 
@@ -418,7 +419,7 @@ export function Budget({ active, api = budgetApi, pollMs = 2000, principal,
   }
   const opened = accounts.find((account) => account.id === detail) ?? null;
   const analysis = hasAnalytics(capabilities);
-  // The month view exists only while the server offers analysis; otherwise the accounts view is shown.
+  // Analytics views are available only while the server offers analytics.
   const shownView: View = analysis ? view : "accounts";
   return (
     <section className="budget-app">
@@ -448,7 +449,7 @@ export function Budget({ active, api = budgetApi, pollMs = 2000, principal,
       )}
       {analysis ? (
         <div className="budget-views" role="group" aria-label={text.viewsLabel}>
-          {(["accounts", "inbox", "month", "year", "limits", "recurring", "mortgages", "quarantine", "rules"] as const).map((item) => (
+          {(["accounts", "inbox", "month", "year", "limits", "recurring", "mortgages", "forecast", "quarantine", "rules"] as const).map((item) => (
             <button type="button" key={item} aria-pressed={shownView === item}
               onClick={() => { setView(item); if (item === "month") setFocusMonth(undefined); }}>{text.views[item]}</button>
           ))}
@@ -478,6 +479,9 @@ export function Budget({ active, api = budgetApi, pollMs = 2000, principal,
       ) : shownView === "mortgages" ? (
         <MortgagesView api={api} accounts={accounts} text={mortgagesText} locale={locale} revision={revision}
           onAccessLoss={barrier} />
+      ) : shownView === "forecast" ? (
+        <ForecastView api={api} accounts={accounts} connections={connections} locale={locale} revision={revision}
+          onAccessLoss={barrier} onOpenMortgages={() => { setView("mortgages"); }} />
       ) : shownView === "quarantine" ? (
         <QuarantineView api={api} accounts={accounts} connections={connections} text={quarantineText} revision={revision}
           onAccessLoss={barrier} />

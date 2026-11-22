@@ -1,6 +1,7 @@
 // Synthetic analytics fixtures only; no real account, transaction or bank data.
 import { component } from "../fixtures";
-import type { AnalyticsCategory, AnalyticsInbox, AnalyticsInboxConsentItem, AnalyticsInboxItem,
+import type { AnalyticsCategory, AnalyticsForecast, AnalyticsForecastCurrencyTotal, AnalyticsForecastDeduplication,
+  AnalyticsForecastItem, AnalyticsInbox, AnalyticsInboxConsentItem, AnalyticsInboxItem,
   AnalyticsInboxMarkSaved, AnalyticsInboxMortgageItem, AnalyticsInboxSpendingLimitItem,
   AnalyticsMortgageReminder, AnalyticsMortgages, AnalyticsMortgageSchedule,
   AnalyticsOverview, AnalyticsQuarantine, AnalyticsQuarantineAccount, AnalyticsQuarantineItem,
@@ -196,6 +197,41 @@ export function mortgagePaymentSaved(changes: Partial<MortgagePaymentSaved> = {}
   return {
     schedule_id: "mtg-1", version: 2, month: "2026-11", paid: true, paid_months: ["2026-10", "2026-11"],
     changed: true, ...changes,
+  };
+}
+
+export function forecastOf(changes: Partial<AnalyticsForecast> = {}): AnalyticsForecast {
+  return {
+    evaluation_date: "2026-11-22", evaluation_timezone: "UTC", horizon_months: 3,
+    start_month: "2026-11", end_month: "2027-01", ledger_as_of: "2026-11-21", freshness_stale: false,
+    stale_account_ids: [], stale_account_ids_truncated: false, snapshot_digest: "synthetic-digest",
+    schedules_version: "synthetic-schedules-v1", rule_version: 1,
+    summary: {
+      selected_accounts: 1, excluded_accounts: 0, stale_accounts: 0, overdue_mortgage_schedule_count: 0,
+      lapsed_recurring_count: 0, deduped_recurring_count: 0, stale_recurring_count: 0,
+    },
+    totals: [], deduplications: [],
+    months: ["2026-11", "2026-12", "2027-01"].map((month) => ({ month, currencies: [], items: [] })),
+    ...changes,
+  };
+}
+
+export function forecastItem(changes: Partial<AnalyticsForecastItem> = {}): AnalyticsForecastItem {
+  return {
+    source: "mortgage", schedule_id: "mtg-1", label: "Synthetic Home Loan", amount: "2450.5", currency: "PLN",
+    expected_date: "2026-11-10", confidence: "scheduled", past_due: true, account_stale: false, ...changes,
+  };
+}
+
+export function forecastCurrencyTotal(changes: Partial<AnalyticsForecastCurrencyTotal> = {}): AnalyticsForecastCurrencyTotal {
+  return { currency: "PLN", total: "2450.5", scheduled_total: "2450.5", estimated_total: "0", ...changes };
+}
+
+export function forecastDeduplication(changes: Partial<AnalyticsForecastDeduplication> = {}): AnalyticsForecastDeduplication {
+  return {
+    schedule_id: "mtg-1", schedule_label: "Synthetic Home Loan", recurring_label: "Synthetic Bank Mortgage",
+    amount: "2450.5", currency: "PLN", matched_due_date: "2026-10-10", last_observed_date: "2026-10-11",
+    day_distance: 1, account_stale: true, ...changes,
   };
 }
 
