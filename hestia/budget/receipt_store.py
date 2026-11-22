@@ -8,6 +8,7 @@ import hmac
 import json
 import math
 import re
+from types import SimpleNamespace
 import uuid
 
 from sqlalchemy import delete, exists, func, or_, select
@@ -180,6 +181,7 @@ class BudgetReceiptStore(BudgetHTTPStore):
 
     def parse_text(self, owner, text):
         parsed = parse_receipt(text)
+        candidates = self._read_candidates(owner, parsed)
         with self.transaction() as session:
             self._owner(session, owner)
             now = self._now()
@@ -208,9 +210,22 @@ class BudgetReceiptStore(BudgetHTTPStore):
                 }, line_no=values["line_no"]))
             session.flush()
             write_audit(session, owner, row, "create", None, audit_payload(row, "create"), now)
-            candidates = self._candidates(session, owner, row, parsed)
-            return {"receipt_id": identifier, "draft": self._detail(session, row), "candidates": candidates,
-                    "version": 1}
+            detail = self._detail(session, row)
+        return {"receipt_id": identifier, "draft": detail, "candidates": candidates, "version": 1}
+
+    def _read_candidates(self, owner, parsed):
+        """Match in a deferred read snapshot so the scan does not hold the writer lock.
+
+        ``confirm`` re-checks the chosen link inside ``BEGIN IMMEDIATE``.
+        """
+        preview = SimpleNamespace(
+            total_amount=parsed["total_amount"], currency=parsed["currency"],
+            receipt_date=parsed["receipt_date"], payment_method=parsed["payment_method"],
+            receipt_kind=parsed["receipt_kind"], raw_shop_name=parsed["raw_shop_name"],
+            raw_nip=parsed["raw_nip"],
+        )
+        with self._read(owner) as session:
+            return self._candidates(session, owner, preview, parsed)
 
     @staticmethod
     def _candidate_rows(session, owner):
@@ -386,14 +401,22 @@ class BudgetReceiptStore(BudgetHTTPStore):
 
     @staticmethod
     def _after_cursor(row, cursor):
+        """Rows strictly after the cursor under ``ORDER BY receipt_date DESC, id``.
+
+        SQLite sorts NULL dates last on DESC, then ``id`` ascending. A NULL cursor
+        therefore excludes every dated row, and a dated cursor includes every NULL row.
+        """
         if cursor is None:
             return True
         last_date, last_id = cursor
-        if row.receipt_date is None:
-            return last_date is None and row.id > last_id
-        if last_date is None or row.receipt_date < last_date:
+        row_date = row.receipt_date
+        if row_date == last_date:
+            return row.id > last_id
+        if row_date is None:
             return True
-        return row.receipt_date == last_date and row.id > last_id
+        if last_date is None:
+            return False
+        return row_date < last_date
 
     @staticmethod
     def _filters(values, *, search):

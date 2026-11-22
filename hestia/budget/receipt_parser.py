@@ -35,7 +35,12 @@ _DATE_ISO = re.compile(r"(?<![0-9])([0-9]{4})-([0-9]{2})-([0-9]{2})(?![0-9])", r
 _DATE_PL = re.compile(r"(?<![0-9])([0-9]{2})[-.]([0-9]{2})[-.]([0-9]{4})(?![0-9])", re.ASCII)
 _TIME = re.compile(r"(?<![0-9])((?:[01][0-9]|2[0-3]):[0-5][0-9])(?![0-9])", re.ASCII)
 _NIP = re.compile(r"\bNIP\s*:?\s*([0-9][0-9 -]{8,16}[0-9])\b", re.IGNORECASE | re.ASCII)
-_DIGIT_PAN = re.compile(r"(?<![0-9*])(?:[0-9][ -]?){12,19}(?![0-9])", re.ASCII)
+# Gaps iOS Live Text inserts between PAN digits. `\s` covers ASCII whitespace and
+# Unicode spaces (NBSP U+00A0, U+2000–U+200A including U+2007/U+2009/U+200A, U+202F,
+# U+3000). Dashes U+2010–U+2015 and "-" are not whitespace. Line breaks are excluded
+# so a NIP and a date on adjacent lines are not glued into a false PAN.
+_PAN_GAP = r"(?:(?!\n|\r|" "\u2028|\u2029" r")\s|[" "\u2010-\u2015" r"-])"
+_DIGIT_PAN = re.compile(rf"(?<![0-9*])(?:[0-9](?:{_PAN_GAP})?){{12,19}}(?![0-9])")
 _MASKED_PAN = re.compile(r"(?<![0-9*])(?:[0-9]{2,4})?\*{2,}[0-9]{2,4}(?![0-9*])", re.ASCII)
 _TERMINAL = re.compile(r"(?im)^(\s*(?:NR\s+KARTY|AID)\b)[^\n]*")
 _ITEM = re.compile(
@@ -284,6 +289,9 @@ def _clean_text(value, *, limit, optional=False):
             unicodedata.category(char) in ("Cf", "Cs") for char in value):
         raise ReceiptError()
     value = " ".join(unicodedata.normalize("NFC", value).split())
+    if not value or len(value) > limit:
+        raise ReceiptError()
+    value = redact_pan(value)
     if not value or len(value) > limit:
         raise ReceiptError()
     return value

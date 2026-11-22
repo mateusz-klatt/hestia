@@ -96,6 +96,56 @@ NR KARTY ****5555
             with self.subTest(invalid_size=len(invalid)), self.assertRaises(ReceiptError):
                 parse_receipt(invalid)
 
+    def test_redact_pan_accepts_unicode_separators(self):
+        groups = ("5351", "0055", "5555", "5555")
+        digits = "".join(groups)
+        for sep in ("\u00a0", "\u2007", "\u202f", "\u2009", "\u200a", "\u2000", "\u3000",
+                    "\u2010", "\u2011", "\u2012", "\u2013", "\u2014", "\u2015", " ", "-", "\t"):
+            sample = sep.join(groups)
+            self.assertEqual(redact_pan(sample), "[REDACTED]", sep.encode("unicode_escape"))
+            self.assertNotIn(digits, redact_pan("prefix " + sample + " suffix"))
+        nip = "779\u00a0101\u00a013\u00a027"
+        self.assertEqual(redact_pan("NIP " + nip), "NIP " + nip)
+        adjacent = "NIP 7791011327\n2026-11-20 12:34\n"
+        self.assertEqual(redact_pan(adjacent), adjacent)
+        nbsp_pan = "\u00a0".join(groups)
+        text = ("BIEDRONKA\nNIP 7791011327\n2026-11-20 12:34\nMLEKO " + nbsp_pan
+                + "\n1 x 5,00 5,00 A\nSUMA PLN 5,00\n")
+        parsed = parse_receipt(text)
+        self.assertIn("[REDACTED]", parsed["raw_ocr_text"])
+        self.assertNotIn(digits, parsed["raw_ocr_text"].replace("\u00a0", ""))
+        self.assertNotIn(nbsp_pan, parsed["raw_ocr_text"])
+        self.assertIn("7791011327", parsed["raw_ocr_text"])
+        for line in parsed["lines"]:
+            self.assertNotIn(digits, line["raw_name"].replace("\u00a0", ""))
+            self.assertNotIn(nbsp_pan, line["raw_name"])
+
+    def test_confirm_redacts_pan_in_shop_name_and_line_name(self):
+        parsed = self.draft()
+        nbsp_pan = "5351\u00a00055\u00a05555\u00a05555"
+        dash_pan = "5351\u20130055\u20135555\u20135555"
+        unit_pan = "411111111111"
+        values = confirm_values(parsed, raw_shop_name=f"BIEDRONKA {nbsp_pan}")
+        values["lines"][0]["raw_name"] = f"MLEKO {dash_pan}"
+        values["lines"][0]["raw_unit"] = unit_pan
+        saved = self.receipts.confirm("owner", values)["receipt"]
+        row = self.receipt_row(parsed["receipt_id"])
+        line = next(item for item in self.rows(db.BudgetReceiptLine) if item.receipt_id == row.id)
+        for secret in (nbsp_pan, dash_pan, "5351005555555555", unit_pan):
+            self.assertNotIn(secret, saved["raw_shop_name"])
+            self.assertNotIn(secret, saved["lines"][0]["raw_name"])
+            self.assertNotIn(secret, saved["lines"][0]["raw_name_key"])
+            self.assertNotIn(secret, saved["lines"][0]["raw_unit"])
+            self.assertNotIn(secret, row.raw_shop_name)
+            self.assertNotIn(secret, line.raw_name)
+            self.assertNotIn(secret, line.raw_name_key)
+            self.assertNotIn(secret, line.raw_unit)
+        self.assertEqual(row.raw_shop_name, "BIEDRONKA [REDACTED]")
+        self.assertEqual((line.raw_name, line.raw_name_key, line.raw_unit),
+                         ("MLEKO [REDACTED]", "mleko [redacted]", "[REDACTED]"))
+        self.assertEqual(saved["raw_shop_name"], row.raw_shop_name)
+        self.assertEqual(saved["lines"][0]["raw_name"], line.raw_name)
+
     def test_receipt_match_friday_purchase_booked_monday(self):
         self.add_transaction("a", "monday", amount="100", booking_date="2026-11-23", transaction_date=None)
         parsed = self.draft(day="2026-11-20")
@@ -145,6 +195,15 @@ NR KARTY ****5555
         with self.assertRaises(ReceiptError) as stale:
             self.receipts.confirm("owner", confirm_values(first, expected_version=99))
         self.assertEqual((stale.exception.code, stale.exception.status), ("budget_receipt_conflict", 409))
+        with mock.patch.object(BudgetReceiptStore, "_verify_link", return_value="fingerprint"):
+            with self.assertRaises(ReceiptError) as raced:
+                self.receipts.confirm("owner", confirm_values(second, link=self.link()))
+        self.assertEqual((raced.exception.code, raced.exception.status),
+                         ("budget_receipt_tx_already_linked", 409))
+        raced_row = self.receipt_row(second["receipt_id"])
+        self.assertEqual((raced_row.status, raced_row.linked_account_id, raced_row.linked_entry_ref,
+                          raced_row.version), ("draft", None, None, 1))
+        self.assertEqual(self.receipt_row(first["receipt_id"]).linked_entry_ref, "debit")
 
     def assert_latched(self, identifier, previous_version):
         row = self.receipt_row(identifier)
@@ -297,6 +356,79 @@ NR KARTY ****5555
                                  ("budget_receipt_total_mismatch", 400))
         self.assertEqual(validate_confirm(valid)["total_amount"], "100")
 
+    def test_parse_text_resolves_candidates_outside_the_write_transaction(self):
+        from contextlib import contextmanager
+        in_write = False
+        real_tx = BudgetReceiptStore.transaction
+        real_candidates = BudgetReceiptStore._candidates
+        seen = {"called": False}
+
+        @contextmanager
+        def tracking(store):
+            nonlocal in_write
+            with real_tx(store) as session:
+                in_write = True
+                try:
+                    yield session
+                finally:
+                    in_write = False
+
+        def spy(store, session, owner, row, parsed):
+            seen["called"] = True
+            self.assertFalse(in_write)
+            return real_candidates(store, session, owner, row, parsed)
+
+        with mock.patch.object(BudgetReceiptStore, "transaction", tracking), \
+                mock.patch.object(BudgetReceiptStore, "_candidates", spy):
+            parsed = self.draft()
+        self.assertTrue(seen["called"])
+        self.assertTrue(parsed["candidates"])
+
+    def test_receipt_list_and_search_page_mixed_null_dates(self):
+        from sqlalchemy import select
+        dated = [self.draft(day=day, item="MLEKO WSPOLNY")
+                 for day in ("2026-11-30", "2026-11-20", "2026-11-01")]
+        undated_text = "SKLEP WSPOLNY\nMLEKO WSPOLNY 1 x 5,00 5,00 A\nSUMA PLN 5,00\nGOTOWKA\n"
+        undated = [self.receipts.parse_text("owner", undated_text) for _ in range(4)]
+        dates = {item["receipt_id"]: item["draft"]["receipt_date"] for item in dated + undated}
+        self.assertEqual(sum(value is None for value in dates.values()), 4)
+        with self.sessions() as session:
+            expected = [row.id for row in session.scalars(select(db.BudgetReceipt).where(
+                db.BudgetReceipt.owner == "owner").order_by(
+                    db.BudgetReceipt.receipt_date.desc(), db.BudgetReceipt.id))]
+        self.assertEqual(len(expected), 7)
+        self.assertIsNotNone(dates[expected[2]])
+        self.assertIsNone(dates[expected[3]])
+
+        def collect(search):
+            seen, cursor, guard = [], None, 0
+            while True:
+                body = {"limit": 2, "query": "wspolny"} if search else {"limit": 2}
+                if cursor is not None:
+                    body["cursor"] = cursor
+                page = (self.receipts.search if search else self.receipts.list)("owner", body)
+                identifiers = [item["receipt_id"] for item in page["receipts"]]
+                self.assertLessEqual(len(identifiers), 2)
+                seen.extend(identifiers)
+                cursor = page["next_cursor"]
+                guard += 1
+                self.assertLess(guard, 8)
+                if cursor is None:
+                    break
+                self.assertEqual(len(identifiers), 2)
+            return seen
+
+        listed = collect(False)
+        self.assertEqual(listed, expected)
+        self.assertEqual(len(listed), len(set(listed)))
+        seen_null = False
+        for identifier in listed:
+            if dates[identifier] is None:
+                seen_null = True
+            else:
+                self.assertFalse(seen_null)
+        self.assertEqual(collect(True), expected)
+
     def test_receipt_match_allows_excluded_category_purchase(self):
         self.annotation(kind="excluded")
         parsed = self.draft()
@@ -384,9 +516,13 @@ class ReceiptHTTPTests(fixture.unittest.IsolatedAsyncioTestCase):
             oversized = await self.client.post(receipt_api.PREFIX + "/" + operation, data=b" " * (size + 1),
                                                headers={**self.headers(origin=True), "Content-Type": "application/json"})
             self.assertEqual(oversized.status, 413)
-        old_global_cap = await self.client.post(receipt_api.PREFIX + "/confirm", data=b" " * 70000,
-                                                headers={**self.headers(origin=True), "Content-Type": "application/json"})
-        self.assertEqual(old_global_cap.status, 400)
+            self.assertIn(str(size), (await oversized.json())["error"])
+        # 128 KiB is above the 69632 application cap and still reaches confirm's parser.
+        at_confirm_cap = await self.client.post(
+            receipt_api.PREFIX + "/confirm", data=b" " * 131072,
+            headers={**self.headers(origin=True), "Content-Type": "application/json"})
+        self.assertEqual(at_confirm_cap.status, 400)
+        self.assertEqual((await at_confirm_cap.json())["error"], "invalid JSON")
         missing_origin = await self.post("parse-text", {"text": "private"}, headers=self.headers())
         self.assertEqual(missing_origin.status, 403)
         bearer = await self.post("parse-text", {"text": "private"},

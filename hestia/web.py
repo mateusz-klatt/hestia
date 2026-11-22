@@ -1167,7 +1167,7 @@ def make_app(rt):
     from .calendar_sync.api import register as register_calendars
     from .budget.api import register as register_budget
     app = web.Application(
-        client_max_size=6 * 1024 * 1024,
+        client_max_size=MAX_RULE_BODY + 4096,  # 69632; route caps run before the body is read
         middlewares=[_auth_middleware, _empty_404_405_middleware],   # auth OUTERMOST: gate before routing
     )
     app[_RT_KEY] = rt
