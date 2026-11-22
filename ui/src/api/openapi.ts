@@ -285,6 +285,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/budget/analytics/monthly-budget/charts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read the owner-private monthly budget dashboard and chart series
+         * @description Pure read-only single-snapshot monthly budget dashboard and chart series evaluated in Europe/Warsaw from one UTC instant. Returns the MonthlyBudget dashboard alongside cumulative daily spending through cutoff and 6 or 12 historical monthly category/income buckets computed with each month's configured income window. Returns series=null when unconfigured. Makes no bank requests and no database writes.
+         */
+        get: operations["getBudgetAnalyticsMonthlyBudgetCharts"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/budget/analytics/mortgage-payment-set": {
         parameters: {
             query?: never;
@@ -2247,6 +2267,15 @@ export interface components {
              */
             status: "unavailable";
         };
+        /** BudgetAnalyticsMonthlyBudgetCategoryLabel */
+        BudgetAnalyticsMonthlyBudgetCategoryLabel: {
+            /** Archived */
+            archived: boolean;
+            /** Category Id */
+            category_id: string;
+            /** Name */
+            name: string;
+        };
         /** BudgetAnalyticsMonthlyBudgetCategoryLimit */
         BudgetAnalyticsMonthlyBudgetCategoryLimit: {
             /** Monthly Limit */
@@ -2281,6 +2310,14 @@ export interface components {
             /** Refunds */
             refunds: string;
         };
+        /**
+         * BudgetAnalyticsMonthlyBudgetCharts
+         * @description Read-only owner-private monthly budget dashboard and chart series evaluated from one snapshot.
+         */
+        BudgetAnalyticsMonthlyBudgetCharts: {
+            budget: components["schemas"]["BudgetAnalyticsMonthlyBudget"];
+            series: components["schemas"]["BudgetAnalyticsMonthlyBudgetSeries"] | null;
+        };
         /** BudgetAnalyticsMonthlyBudgetConfiguration */
         BudgetAnalyticsMonthlyBudgetConfiguration: {
             income_window?: components["schemas"]["BudgetAnalyticsMonthlyBudgetIncomeWindow"];
@@ -2311,6 +2348,13 @@ export interface components {
             stale_selected_accounts: number;
             /** Transfer Scan Limited */
             transfer_scan_limited: boolean;
+        };
+        /** BudgetAnalyticsMonthlyBudgetDailyPoint */
+        BudgetAnalyticsMonthlyBudgetDailyPoint: {
+            /** Cumulative Spent */
+            cumulative_spent: string;
+            /** Date */
+            date: string;
         };
         /** BudgetAnalyticsMonthlyBudgetExpectedIncome */
         BudgetAnalyticsMonthlyBudgetExpectedIncome: {
@@ -2393,6 +2437,41 @@ export interface components {
             denominator: number;
             /** Numerator */
             numerator: string;
+        };
+        /** BudgetAnalyticsMonthlyBudgetSeries */
+        BudgetAnalyticsMonthlyBudgetSeries: {
+            /** Category Labels */
+            category_labels: components["schemas"]["BudgetAnalyticsMonthlyBudgetCategoryLabel"][];
+            /** Daily */
+            daily: components["schemas"]["BudgetAnalyticsMonthlyBudgetDailyPoint"][];
+            /** Months */
+            months: components["schemas"]["BudgetAnalyticsMonthlyBudgetSeriesMonth"][];
+        };
+        /** BudgetAnalyticsMonthlyBudgetSeriesCategory */
+        BudgetAnalyticsMonthlyBudgetSeriesCategory: {
+            /** Category Id */
+            category_id: string | null;
+            /** Net Spending */
+            net_spending: string;
+        };
+        /** BudgetAnalyticsMonthlyBudgetSeriesMonth */
+        BudgetAnalyticsMonthlyBudgetSeriesMonth: {
+            /** Categories */
+            categories: components["schemas"]["BudgetAnalyticsMonthlyBudgetSeriesCategory"][];
+            /** Has Activity */
+            has_activity: boolean;
+            /** Income Estimate Partial */
+            income_estimate_partial: boolean;
+            /** Is Current Month */
+            is_current_month: boolean;
+            /** Period */
+            period: string;
+            /** Provisional */
+            provisional: boolean;
+            /** Spent */
+            spent: string;
+            /** Start Budget */
+            start_budget: string;
         };
         /** BudgetAnalyticsMonthlyBudgetSummary */
         BudgetAnalyticsMonthlyBudgetSummary: {
@@ -6258,6 +6337,105 @@ export interface operations {
                 };
             };
             /** @description Monthly budget limit exceeded (>100,000 selected rows, >1,000 category limits, >192-character aggregate decimal output, or >4 MiB UTF-8 JSON payload); no partial totals returned. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Stored ledger, category, limit, metadata, or timestamp integrity check failed (`budget_analytics_data_error`), including stored-data helper errors mapped to 500 after query validation, or unexpected internal failure (`budget_internal_error`). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Analytics storage, Europe/Warsaw time zone, or monthly budget configuration unavailable (`budget_analytics_unavailable` or `budget_unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+        };
+    };
+    getBudgetAnalyticsMonthlyBudgetCharts: {
+        parameters: {
+            query?: {
+                /** @description Optional calendar month YYYY-MM, 1900 through the current Europe/Warsaw month; defaults to current month. */
+                period?: string;
+                /** @description Optional uppercase 3-letter ISO currency code; defaults to PLN. */
+                currency?: string;
+                /** @description Optional monthly history window (6 or 12 months); defaults to 6. */
+                history?: "6" | "12";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Owner-private monthly budget dashboard and chart series from one local snapshot. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetAnalyticsMonthlyBudgetCharts"];
+                };
+            };
+            /** @description Invalid monthly budget charts query: period must match ^[0-9]{4}-[0-9]{2}$ through the current Europe/Warsaw month, currency must match ^[A-Z]{3}$, history must be 6 or 12, and unknown or duplicate parameters are rejected. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description session required; middleware may return an empty body */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description admin owner or browser-origin requirement failed; middleware may return an empty body */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description unknown, disabled or foreign resource */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description SQLite backend required: monthly-budget/charts requires HESTIA_PERSIST=sqlite. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Monthly budget charts limit exceeded (>100,000 selected rows, >1,000 category limits, >192-character aggregate decimal output, or >4 MiB UTF-8 JSON payload); no partial totals returned. */
             413: {
                 headers: {
                     [name: string]: unknown;

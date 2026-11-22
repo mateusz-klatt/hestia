@@ -125,6 +125,37 @@ def _eval(
     )
 
 
+def _eval_charts(*, history: int = 6, **kwargs) -> dict:
+    evaluated_at = kwargs.get("evaluated_at") or _utc_ts("2026-11-22T12:00:00Z")
+    categories = kwargs.get("categories") or [
+        _cat("cat-salary", "Wynagrodzenie"),
+        _cat("cat-zus", "Świadczenia ZUS"),
+        _cat("cat-rent", "Najem"),
+        _cat("cat-mortgage", "Hipoteka"),
+        _cat("cat-food", "Zakupy"),
+        _cat("cat-other-inc", "Inne"),
+    ]
+    timestamps = kwargs.get("account_component_timestamps") or {"acc-a": evaluated_at, "acc-b": evaluated_at}
+    identities = kwargs.get("identities") or {acct: [] for acct in timestamps}
+    return month_budget.evaluate_monthly_budget_charts(
+        owner="owner",
+        period=kwargs.get("period", "2026-11"),
+        currency=kwargs.get("currency", "PLN"),
+        history=history,
+        evaluated_at=evaluated_at,
+        transactions=kwargs.get("transactions", ()),
+        transfers=kwargs.get("transfers", ()),
+        scan_limited=kwargs.get("scan_limited", False),
+        categories=categories,
+        rules=kwargs.get("rules", ()),
+        identities=identities,
+        limits=kwargs.get("limits", ()),
+        account_component_timestamps=timestamps,
+        account_kinds=kwargs.get("account_kinds") or {},
+        settings=kwargs.get("settings"),
+    )
+
+
 DEFAULT_SETTINGS = month_budget.MonthBudgetSettings(
     income_category_ids=("cat-salary", "cat-zus"),
     pass_through=month_budget.PassThroughSettings(rent_category_id="cat-rent", mortgage_category_id="cat-mortgage"),
@@ -1184,3 +1215,270 @@ class MonthlyBudgetLedgerFreshnessTests(unittest.TestCase):
                                   metadata={"debtor_name": 123})],
                 settings=month_budget.MonthBudgetSettings(("cat-salary",)),
             )
+
+
+class MonthlyBudgetChartsTests(unittest.TestCase):
+    def _assert_spending_identity(self, charts: dict) -> None:
+        budget = charts["budget"]
+        series = charts["series"]
+        self.assertIsNotNone(series)
+        spent = budget["summary"]["spent"]
+        self.assertEqual(series["daily"][-1]["cumulative_spent"], spent)
+        self.assertEqual(series["months"][-1]["period"], budget["period"])
+        self.assertEqual(series["months"][-1]["spent"], spent)
+        self.assertEqual(
+            month_budget.core.sum_money(row["net_spending"] for row in budget["category_spend"]),
+            spent,
+        )
+        self.assertEqual(
+            month_budget.core.sum_money(row["net_spending"] for row in series["months"][-1]["categories"]),
+            spent,
+        )
+
+    def test_charts_query_validation_and_unconfigured_series_null(self):
+        self.assertEqual(month_budget.validate_monthly_budget_charts_query(None, None, None), (None, "PLN", 6))
+        self.assertEqual(month_budget.validate_monthly_budget_charts_query("2026-10", "EUR", "6"), ("2026-10", "EUR", 6))
+        self.assertEqual(month_budget.validate_monthly_budget_charts_query(None, "PLN", "12"), (None, "PLN", 12))
+        for bad_history in ("", "0", "1", "3", "06", " 6", "6\n", "6.0", "13", "twelve", 6, True):
+            with self.subTest(bad_history=bad_history), self.assertRaises(month_budget.MonthInputError):
+                month_budget.validate_monthly_budget_charts_query(None, None, bad_history)
+        for bad_eval_history in (0, 3, 24, True, "6", None):
+            with self.subTest(bad_eval_history=bad_eval_history), self.assertRaises(month_budget.MonthInputError):
+                _eval_charts(history=bad_eval_history, settings=DEFAULT_SETTINGS)
+
+        unconfigured = _eval_charts(
+            transactions=[_tx("acc-a", "exp", amount="50", booking_date="2026-11-05")],
+            settings=None,
+        )
+        api_contract.BudgetAnalyticsMonthlyBudgetCharts.model_validate(unconfigured)
+        self.assertEqual(unconfigured["budget"]["configuration"], {"status": "unconfigured", "source": "none"})
+        self.assertIsNone(unconfigured["series"])
+
+    def test_identity_late_rent_unused_mortgage_refund_negative_refunds_and_uncategorised(self):
+        txs = [
+            _tx("acc-a", "sal", amount="10000", direction="CRDT", booking_date="2026-11-01",
+                kind="income", category_id="cat-salary", source="manual"),
+            # Day 3: prior-month food refund -> daily cumulative dips negative (-40)!
+            _tx("acc-a", "food-ref", amount="40", direction="CRDT", booking_date="2026-11-03",
+                kind="refund", category_id="cat-food", source="manual"),
+            # Day 5: mortgage debit 2500 (covered 2000 by late rent on day 20 -> adjusted +500 on Nov 5!)
+            _tx("acc-a", "mort-1", amount="2000", booking_date="2026-11-05", transaction_date="2026-11-05",
+                kind="expense", category_id="cat-mortgage", source="manual"),
+            _tx("acc-a", "mort-2", amount="500", booking_date="2026-11-10", transaction_date="2026-11-10",
+                kind="expense", category_id="cat-mortgage", source="manual"),
+            _tx("acc-a", "rent-late", amount="2000", direction="CRDT", booking_date="2026-11-20",
+                kind="income", category_id="cat-rent", source="manual"),
+            # Day 12: uncategorised expense (120) + day 15: food expense (25)
+            _tx("acc-a", "uncat", amount="120", booking_date="2026-11-12", transaction_date="2026-11-12",
+                kind="expense", category_id=None, source="manual"),
+            _tx("acc-a", "food-exp", amount="25", booking_date="2026-11-15", transaction_date="2026-11-15",
+                kind="expense", category_id="cat-food", source="manual"),
+        ]
+        # Include an enabled limit with zero spending (cat-other-inc) to verify category_spend includes it while
+        # series identity holds identically.
+        limits = [
+            {"category_id": "cat-other-inc", "currency": "PLN", "monthly_limit": "300", "warning_percent": 80, "enabled": True},
+        ]
+        charts = _eval_charts(transactions=txs, limits=limits, settings=DEFAULT_SETTINGS)
+        api_contract.BudgetAnalyticsMonthlyBudgetCharts.model_validate(charts)
+        self._assert_spending_identity(charts)
+        self.assertEqual(charts["budget"]["summary"]["spent"], "605")  # -40 + 500 + 120 + 25
+
+        daily = {row["date"]: row["cumulative_spent"] for row in charts["series"]["daily"]}
+        self.assertEqual(len(daily), 22)  # 2026-11-01..2026-11-22 including zero-activity days
+        self.assertEqual(daily["2026-11-02"], "0")
+        self.assertEqual(daily["2026-11-03"], "-40")
+        self.assertEqual(daily["2026-11-05"], "-40")  # mort-1 (2000) completely covered by late rent!
+        self.assertEqual(daily["2026-11-10"], "460")  # mort-2 (500) uncovered!
+        self.assertEqual(daily["2026-11-12"], "580")
+        self.assertEqual(daily["2026-11-15"], "605")
+        self.assertEqual(daily["2026-11-22"], "605")
+
+        # Unused mortgage refund case: F=700 > M=400, food=100, uncategorised refund=-200 -> net spent=-100.
+        refund_txs = [
+            _tx("acc-a", "m", amount="400", booking_date="2026-11-05", transaction_date="2026-11-05",
+                kind="expense", category_id="cat-mortgage", source="manual"),
+            _tx("acc-a", "m-r1", amount="400", direction="CRDT", booking_date="2026-11-06",
+                kind="refund", category_id="cat-mortgage", source="manual"),
+            _tx("acc-a", "m-r2", amount="300", direction="CRDT", booking_date="2026-11-07",
+                kind="refund", category_id="cat-mortgage", source="manual"),
+            _tx("acc-a", "rent", amount="1000", direction="CRDT", booking_date="2026-11-08",
+                kind="income", category_id="cat-rent", source="manual"),
+            _tx("acc-a", "food", amount="100", booking_date="2026-11-09", transaction_date="2026-11-09",
+                kind="expense", category_id="cat-food", source="manual"),
+            _tx("acc-a", "uncat-ref", amount="200", direction="CRDT", booking_date="2026-11-11",
+                kind="refund", category_id=None, source="manual"),
+        ]
+        refund_charts = _eval_charts(transactions=refund_txs, settings=DEFAULT_SETTINGS)
+        api_contract.BudgetAnalyticsMonthlyBudgetCharts.model_validate(refund_charts)
+        self._assert_spending_identity(refund_charts)
+        r_daily = {row["date"]: row["cumulative_spent"] for row in refund_charts["series"]["daily"]}
+        self.assertEqual(r_daily["2026-11-05"], "400")
+        self.assertEqual(r_daily["2026-11-06"], "0")
+        self.assertEqual(r_daily["2026-11-07"], "0")  # unused mortgage refund stays out!
+        self.assertEqual(r_daily["2026-11-09"], "100")
+        self.assertEqual(r_daily["2026-11-11"], "-100")
+        self.assertEqual(refund_charts["budget"]["summary"]["spent"], "-100")
+        labels = refund_charts["series"]["category_labels"]
+        self.assertEqual([item["category_id"] for item in labels], ["cat-food", "cat-mortgage"])
+
+    def test_history_6_12_earliest_1900_closed_vs_current_provisional_and_income_window(self):
+        cfg = month_budget.MonthBudgetSettings(
+            ("cat-salary", "cat-zus"),
+            pass_through=month_budget.PassThroughSettings("cat-rent", "cat-mortgage"),
+            income_window_start_day=20,
+        )
+        cats = [
+            _cat("cat-salary", "Wynagrodzenie"),
+            _cat("cat-zus", "Świadczenia ZUS"),
+            _cat("cat-rent", "Najem"),
+            _cat("cat-mortgage", "Hipoteka"),
+            _cat("cat-food", "Zakupy", archived=True),
+        ]
+        txs = [
+            # Income in 2025-12 window [2025-11-20..2025-12-19]
+            _tx("acc-a", "inc-dec25", amount="4000", direction="CRDT", booking_date="2025-11-25",
+                kind="income", category_id="cat-salary", source="manual"),
+            # Income in 2026-10 window [2026-09-20..2026-10-19]
+            _tx("acc-a", "inc-oct", amount="5000", direction="CRDT", booking_date="2026-09-26",
+                kind="income", category_id="cat-salary", source="manual", metadata={"debtor_name": "Acme"}),
+            # Income in 2026-11 window [2026-10-20..2026-11-19] -> salary 2026-10-30 + weekend 2026-11-01 + ZUS 2026-11-10
+            _tx("acc-a", "inc-nov-1", amount="6000", direction="CRDT", booking_date="2026-10-30",
+                kind="income", category_id="cat-salary", source="manual", metadata={"debtor_name": "Acme"}),
+            _tx("acc-a", "inc-nov-zus", amount="800", direction="CRDT", booking_date="2026-11-10",
+                kind="income", category_id="cat-zus", source="manual", metadata={"debtor_name": "ZUS"}),
+            # Income in 2026-12 window [2026-11-20..2026-12-19] -> must NOT enter Nov!
+            _tx("acc-a", "inc-dec26", amount="7000", direction="CRDT", booking_date="2026-11-26",
+                kind="income", category_id="cat-salary", source="manual"),
+            # Closed month 2026-09: implicit debit -> provisional=True on 2026-09 bucket only!
+            _tx("acc-a", "sep-imp", amount="120", booking_date="2026-09-10", transaction_date="2026-09-10"),
+            # Closed month 2026-08: excluded only -> has_activity=True, provisional=False even with scan_limited=True!
+            _tx("acc-a", "aug-excl", amount="50", booking_date="2026-08-10", kind="excluded", source="manual"),
+            # Closed month 2026-07: refund -> negative historical bucket spent!
+            _tx("acc-a", "jul-ref", amount="35", direction="CRDT", booking_date="2026-07-14",
+                kind="refund", category_id="cat-food", source="manual"),
+            # Current month 2026-11: clean explicit expense on card/manual -> provisional=False when scan_limited=False
+            _tx("acc-a", "nov-exp", amount="250", booking_date="2026-11-04", transaction_date="2026-11-04",
+                kind="expense", category_id="cat-food", source="manual",
+                annotation={"version": 1, "mode": "manual", "category_id": "cat-food", "kind": "expense", "stale": False}),
+            # Missing ZUS in Oct -> partial expected income in Nov!
+        ]
+        # Evaluated at 2026-11-28 (current month): 12 months
+        current_12 = _eval_charts(
+            period="2026-11",
+            history=12,
+            evaluated_at=_utc_ts("2026-11-28T12:00:00Z"),
+            transactions=txs,
+            categories=cats,
+            scan_limited=True,
+            settings=cfg,
+        )
+        api_contract.BudgetAnalyticsMonthlyBudgetCharts.model_validate(current_12)
+        self._assert_spending_identity(current_12)
+        months_12 = current_12["series"]["months"]
+        self.assertEqual([m["period"] for m in months_12], [
+            "2025-12", "2026-01", "2026-02", "2026-03", "2026-04", "2026-05",
+            "2026-06", "2026-07", "2026-08", "2026-09", "2026-10", "2026-11",
+        ])
+        by_m = {m["period"]: m for m in months_12}
+        self.assertEqual(by_m["2025-12"]["start_budget"], "4000")
+        self.assertEqual(by_m["2026-07"]["spent"], "-35")
+        self.assertEqual(by_m["2026-08"]["has_activity"], True)
+        self.assertFalse(by_m["2026-08"]["provisional"])  # excluded-only ignores scan_limited!
+        self.assertTrue(by_m["2026-09"]["provisional"])
+        self.assertEqual(by_m["2026-09"]["spent"], "120")
+        self.assertEqual(by_m["2026-10"]["start_budget"], "5000")
+        self.assertFalse(by_m["2026-10"]["is_current_month"])
+        self.assertFalse(by_m["2026-10"]["income_estimate_partial"])
+        self.assertEqual(by_m["2026-11"]["start_budget"], "6800")
+        self.assertTrue(by_m["2026-11"]["is_current_month"])
+        self.assertTrue(by_m["2026-11"]["income_estimate_partial"])
+        self.assertTrue(by_m["2026-11"]["provisional"])  # scan_limited + affecting unexcluded rows
+        self.assertEqual(len(current_12["series"]["daily"]), 28)
+        self.assertEqual(current_12["series"]["category_labels"], [
+            {"category_id": "cat-food", "name": "Zakupy", "archived": True},
+        ])
+
+        # Closed month 2026-10 evaluated at 2026-11-28: full 31 daily points, all buckets is_current_month=False & partial=False
+        closed_6 = _eval_charts(
+            period="2026-10",
+            history=6,
+            evaluated_at=_utc_ts("2026-11-28T12:00:00Z"),
+            transactions=txs,
+            categories=cats,
+            settings=cfg,
+        )
+        api_contract.BudgetAnalyticsMonthlyBudgetCharts.model_validate(closed_6)
+        self._assert_spending_identity(closed_6)
+        self.assertEqual(len(closed_6["series"]["daily"]), 31)
+        self.assertEqual([m["period"] for m in closed_6["series"]["months"]],
+                         ["2026-05", "2026-06", "2026-07", "2026-08", "2026-09", "2026-10"])
+        self.assertFalse(any(m["is_current_month"] for m in closed_6["series"]["months"]))
+        self.assertFalse(any(m["income_estimate_partial"] for m in closed_6["series"]["months"]))
+
+        # Earliest supported period clamping (1900-03 -> 3 buckets, 1900-01 -> 1 bucket + 1899-12 income window)
+        early_cfg = month_budget.MonthBudgetSettings(("cat-salary",), income_window_start_day=20)
+        early_txs = [
+            _tx("acc-a", "old-inc", amount="300", direction="CRDT", booking_date="1899-12-25",
+                kind="income", category_id="cat-salary", source="manual"),
+        ]
+        early_1900 = _eval_charts(
+            period="1900-03", history=6, evaluated_at=_utc_ts("2026-11-22T12:00:00Z"),
+            transactions=early_txs, categories=cats, settings=early_cfg,
+        )
+        self.assertEqual([m["period"] for m in early_1900["series"]["months"]], ["1900-01", "1900-02", "1900-03"])
+        self.assertEqual(early_1900["series"]["months"][0]["start_budget"], "300")
+
+        # 192-char aggregate bound enforced on daily & monthly buckets
+        with mock.patch.object(month_budget, "MAX_AGGREGATE_CHARS", 4):
+            with self.assertRaises(month_budget.MonthLimitError):
+                _eval_charts(
+                    period="2026-11",
+                    evaluated_at=_utc_ts("2026-11-22T12:00:00Z"),
+                    transactions=[_tx("acc-a", "sep-big", amount="12345", booking_date="2026-09-10")],
+                    categories=cats,
+                    settings=cfg,
+                )
+
+    def test_evaluate_monthly_budget_matches_charts_budget(self):
+        cfg = month_budget.MonthBudgetSettings(
+            ("cat-salary", "cat-zus"),
+            pass_through=month_budget.PassThroughSettings("cat-rent", "cat-mortgage"),
+            income_window_start_day=20,
+        )
+        txs = [
+            _tx("acc-a", "oct-sal", amount="5000", direction="CRDT", booking_date="2026-09-26",
+                kind="income", category_id="cat-salary", source="manual", metadata={"debtor_name": "Employer"}),
+            _tx("acc-a", "nov-sal", amount="5500", direction="CRDT", booking_date="2026-10-26",
+                kind="income", category_id="cat-salary", source="manual", metadata={"debtor_name": "Employer"}),
+            _tx("acc-a", "oct-zus", amount="800", direction="CRDT", booking_date="2026-10-10",
+                kind="income", category_id="cat-zus", source="manual", metadata={"debtor_name": "ZUS"}),
+            _tx("acc-a", "mort", amount="2200", booking_date="2026-11-05", transaction_date="2026-11-05",
+                kind="expense", category_id="cat-mortgage", source="manual"),
+            _tx("acc-a", "rent", amount="1800", direction="CRDT", booking_date="2026-11-12",
+                kind="income", category_id="cat-rent", source="manual"),
+            _tx("acc-a", "food-ref", amount="30", direction="CRDT", booking_date="2026-11-07",
+                kind="refund", category_id="cat-food", source="manual"),
+            _tx("acc-a", "imp", amount="45", booking_date="2026-11-09"),
+        ]
+        limits = [{"category_id": "cat-food", "currency": "PLN", "monthly_limit": "100", "warning_percent": 80, "enabled": True}]
+        ts = _utc_ts("2026-11-22T12:00:00Z")
+
+        for settings, period in ((cfg, "2026-11"), (cfg, "2026-10"), (None, "2026-11")):
+            with self.subTest(configured=settings is not None, period=period):
+                budget = _eval(period=period, evaluated_at=ts, transactions=txs, limits=limits, settings=settings)
+                charts = _eval_charts(period=period, history=12, evaluated_at=ts, transactions=txs, limits=limits, settings=settings)
+                self.assertEqual(charts["budget"], budget)
+
+        # Window income before calendar month marks has_activity on both budget and matching series bucket.
+        early_income = _tx(
+            "acc-a", "early-inc", amount="5000", direction="CRDT", booking_date="2026-10-26",
+            kind="income", category_id="cat-salary", source="manual", metadata={"debtor_name": "Employer"},
+        )
+        early_cfg = month_budget.MonthBudgetSettings(("cat-salary",), income_window_start_day=20)
+        early_ts = _utc_ts("2026-11-05T12:00:00Z")
+        early_budget = _eval(period="2026-11", evaluated_at=early_ts, transactions=[early_income], settings=early_cfg)
+        early_charts = _eval_charts(period="2026-11", evaluated_at=early_ts, transactions=[early_income], settings=early_cfg)
+        self.assertEqual(early_charts["budget"], early_budget)
+        self.assertTrue(early_charts["budget"]["coverage"]["has_activity"])
+        self.assertTrue(early_charts["series"]["months"][-1]["has_activity"])

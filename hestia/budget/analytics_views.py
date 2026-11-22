@@ -598,6 +598,13 @@ def _monthly_budget_query(period=None, currency=None):
         raise AnalyticsError() from None
 
 
+def _monthly_budget_charts_query(period=None, currency=None, history=None):
+    try:
+        return month_budget_mod.validate_monthly_budget_charts_query(period, currency, history)
+    except month_budget_mod.MonthInputError:
+        raise AnalyticsError() from None
+
+
 def _source_digest(session, owner):
     """Digest of everything the projection reads for ``owner``: all columns of the rows it loads
     (equal to or a superset of its own filters) and the owner-wide counts it reports.
@@ -957,9 +964,7 @@ class BudgetAnalyticsViews(BudgetAnalyticsStore):
             account.owner == owner, db.BudgetConnection.owner == owner, account.enabled))
         return {account_id: stamp for account_id, stamp in rows}
 
-    def monthly_budget(self, owner, *, period=None, currency=None):
-        """Evaluate owner-private monthly budget dashboard in one read-only SQLite snapshot."""
-        period, currency = _monthly_budget_query(period, currency)
+    def _evaluate_monthly_budget_snapshot(self, owner, *, period, currency, evaluator):
         try:
             with _read_lock, self._read(owner) as session:
                 evaluated_at = float(self._now())
@@ -976,7 +981,7 @@ class BudgetAnalyticsViews(BudgetAnalyticsStore):
                 account_timestamps = self._selected_transaction_component_timestamps(session, owner)
                 account_kinds = {row["id"]: row["kind"] for row in snapshot["accounts"]
                                  if row["enabled"] and row["kind_confirmed_at"] is not None}
-                return month_budget_mod.evaluate_monthly_budget(
+                return evaluator(
                     owner=owner, period=period, currency=currency, evaluated_at=evaluated_at,
                     transactions=snapshot["transactions"], transfers=snapshot["_transfers"],
                     scan_limited=snapshot["_scan_limited"], categories=snapshot["categories"],
@@ -993,6 +998,23 @@ class BudgetAnalyticsViews(BudgetAnalyticsStore):
             if exc.status == 400:
                 raise AnalyticsError(_DATA_ERROR, 500) from None
             raise
+
+    def monthly_budget(self, owner, *, period=None, currency=None):
+        """Evaluate owner-private monthly budget dashboard in one read-only SQLite snapshot."""
+        period, currency = _monthly_budget_query(period, currency)
+        return self._evaluate_monthly_budget_snapshot(
+            owner, period=period, currency=currency, evaluator=month_budget_mod.evaluate_monthly_budget,
+        )
+
+    def monthly_budget_charts(self, owner, *, period=None, currency=None, history=None):
+        """Evaluate owner-private monthly budget dashboard and chart series in one read-only SQLite snapshot."""
+        period, currency, history_months = _monthly_budget_charts_query(period, currency, history)
+        return self._evaluate_monthly_budget_snapshot(
+            owner,
+            period=period,
+            currency=currency,
+            evaluator=lambda **kwargs: month_budget_mod.evaluate_monthly_budget_charts(**kwargs, history=history_months),
+        )
 
     @staticmethod
     def _inbox_consent_entries(session, owner, evaluated_at):

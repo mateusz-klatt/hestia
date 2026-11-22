@@ -4,13 +4,13 @@ import type { AnalyticsCategory, AnalyticsForecast, AnalyticsForecastCurrencyTot
   AnalyticsForecastItem, AnalyticsInbox, AnalyticsInboxConsentItem, AnalyticsInboxItem,
   AnalyticsInboxMarkSaved, AnalyticsInboxMortgageItem, AnalyticsInboxSpendingLimitItem,
   AnalyticsMonthlyBudget, AnalyticsMonthlyBudgetCategoryLimit, AnalyticsMonthlyBudgetCategorySpend,
-  AnalyticsMonthlyBudgetExpectedIncome, AnalyticsMonthlyBudgetPace, AnalyticsMonthlyBudgetPassThrough,
-  AnalyticsMortgageReminder, AnalyticsMortgages, AnalyticsMortgageSchedule,
-  AnalyticsOverview, AnalyticsQuarantine, AnalyticsQuarantineAccount, AnalyticsQuarantineItem,
-  AnalyticsRecurring, AnalyticsRecurringHint, AnalyticsSpendingLimit, AnalyticsSpendingLimitStatus,
-  AnalyticsSpendingLimits, AnnotationSaved, MortgagePaymentSaved, MortgageScheduleSaved, SpendingLimitSaved,
-  TransferDecisionResult, AnalyticsTotals, AnalyticsTransaction, AnalyticsTransactions, TransferLeg, TransferList,
-  TransferPair } from "./model";
+  AnalyticsMonthlyBudgetCharts, AnalyticsMonthlyBudgetExpectedIncome, AnalyticsMonthlyBudgetPace,
+  AnalyticsMonthlyBudgetPassThrough, AnalyticsMonthlyBudgetSeries, AnalyticsMortgageReminder, AnalyticsMortgages,
+  AnalyticsMortgageSchedule, AnalyticsOverview, AnalyticsQuarantine, AnalyticsQuarantineAccount,
+  AnalyticsQuarantineItem, AnalyticsRecurring, AnalyticsRecurringHint, AnalyticsSpendingLimit,
+  AnalyticsSpendingLimitStatus, AnalyticsSpendingLimits, AnnotationSaved, MortgagePaymentSaved,
+  MortgageScheduleSaved, SpendingLimitSaved, TransferDecisionResult, AnalyticsTotals, AnalyticsTransaction,
+  AnalyticsTransactions, TransferLeg, TransferList, TransferPair } from "./model";
 
 export function totals(currency: string, changes: Partial<AnalyticsTotals> = {}): AnalyticsTotals {
   return {
@@ -414,4 +414,60 @@ export function monthlyBudgetOf(changes: Partial<AnalyticsMonthlyBudget> = {}): 
     card_exposure: { status: "unavailable", amount: null, as_of_date: null },
     ...changes,
   };
+}
+
+export function monthlyBudgetSeriesOf(
+  changes: Partial<AnalyticsMonthlyBudgetSeries> = {},
+): AnalyticsMonthlyBudgetSeries {
+  return {
+    daily: [
+      { date: "2026-11-01", cumulative_spent: "0" },
+      { date: "2026-11-05", cumulative_spent: "120.5" },
+      { date: "2026-11-10", cumulative_spent: "320.5" },
+    ],
+    months: [
+      {
+        period: "2026-06", has_activity: false, is_current_month: false, income_estimate_partial: false,
+        provisional: false, start_budget: "0", spent: "0", categories: [],
+      },
+      {
+        period: "2026-07", has_activity: true, is_current_month: false, income_estimate_partial: false,
+        provisional: false, start_budget: "4500", spent: "2100",
+        categories: [{ category_id: "cat-food", net_spending: "2100" }],
+      },
+      {
+        period: "2026-08", has_activity: true, is_current_month: false, income_estimate_partial: false,
+        provisional: false, start_budget: "4800", spent: "2500",
+        categories: [{ category_id: "cat-food", net_spending: "2500" }],
+      },
+      {
+        period: "2026-09", has_activity: true, is_current_month: false, income_estimate_partial: false,
+        provisional: false, start_budget: "4900", spent: "2600",
+        categories: [{ category_id: "cat-food", net_spending: "2600" }],
+      },
+      {
+        period: "2026-10", has_activity: true, is_current_month: false, income_estimate_partial: false,
+        provisional: false, start_budget: "5000", spent: "2400",
+        categories: [{ category_id: "cat-food", net_spending: "2400" }],
+      },
+      {
+        period: "2026-11", has_activity: true, is_current_month: true, income_estimate_partial: false,
+        provisional: false, start_budget: "5000", spent: "320.5",
+        categories: [{ category_id: "cat-food", net_spending: "320.5" }],
+      },
+    ],
+    category_labels: [{ category_id: "cat-food", name: "Synthetic Food", archived: false }],
+    ...changes,
+  };
+}
+
+export function monthlyBudgetChartsOf(
+  budgetChanges: Partial<AnalyticsMonthlyBudget> = {},
+  seriesChanges?: Partial<AnalyticsMonthlyBudgetSeries> | null,
+): AnalyticsMonthlyBudgetCharts {
+  const budget = monthlyBudgetOf(budgetChanges);
+  if (seriesChanges === null || budget.configuration.status === "unconfigured") {
+    return { budget, series: null };
+  }
+  return { budget, series: monthlyBudgetSeriesOf(seriesChanges) };
 }

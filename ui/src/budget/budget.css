@@ -127,13 +127,32 @@
 .budget-consent-status[data-status="attention_required"], .budget-consent-status[data-status="expired"], .budget-consent-status[data-status="due_soon"] { border-color: var(--accent); color: var(--accent); font-weight: 600; }
 .budget-inbox-item.is-read { opacity: .72; }
 .budget-inbox-status[data-status="attention_required"], .budget-inbox-status[data-status="expired"], .budget-inbox-status[data-status="overdue"], .budget-inbox-status[data-status="due_today"], .budget-inbox-status[data-status="exceeded"], .budget-inbox-status[data-status="at_limit"] { border-color: var(--accent); color: var(--accent); font-weight: 600; }
-.budget-month-dashboard { color: var(--fg); }
+.budget-month-dashboard {
+  color: var(--fg);
+  --chart-spend: #9e3f0e;
+  --chart-budget: #245b7c;
+  --chart-expected: #6d4c93;
+  --chart-income: #246b29;
+  --chart-cat-1: #9e3f0e;
+  --chart-cat-2: #245b7c;
+  --chart-cat-3: #246b29;
+  --chart-cat-4: #6d4c93;
+  --chart-cat-5: #946300;
+  --chart-cat-other: #6e6357;
+}
 .budget-month-dashboard-controls { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: end; gap: .6rem 1rem; }
 .budget-month-dashboard-controls .budget-range { margin-bottom: 0; }
 .budget-month-basis { font-size: .85rem; color: var(--fg-soft); display: flex; flex-wrap: wrap; align-items: baseline; gap: .2rem .4rem; }
 .budget-month-dashboard .budget-warn, .budget-month-dashboard .budget-link, .budget-month-dashboard .budget-limit-status[data-status="approaching"], .budget-month-dashboard .budget-limit-status[data-status="at_limit"], .budget-month-dashboard .budget-limit-status[data-status="exceeded"] { color: color-mix(in srgb, var(--accent) 75%, #000); }
 .budget-table-wrap { overflow-x: auto; max-width: 100%; border: 1px solid var(--border); border-radius: .5rem; }
-.budget-table-wrap:focus-visible, .budget-month-dashboard button:focus-visible, .budget-month-dashboard select:focus-visible, .budget-month-dashboard input:focus-visible { outline: 2px solid color-mix(in srgb, var(--accent) 75%, #000); outline-offset: 2px; }
+.budget-table-wrap:focus-visible, .budget-month-dashboard button:focus-visible, .budget-month-dashboard select:focus-visible, .budget-month-dashboard input:focus-visible, .budget-month-dashboard summary:focus-visible { outline: 2px solid color-mix(in srgb, var(--accent) 75%, #000); outline-offset: 2px; }
+.budget-month-charts { display: grid; grid-template-columns: minmax(0, 1fr); gap: .8rem; }
+.budget-month-chart { display: grid; gap: .5rem; min-width: 0; }
+.budget-month-chart svg { display: block; width: 100%; height: auto; max-width: 100%; }
+.budget-chart-legend { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: .35rem .85rem; font-size: .8rem; color: var(--fg-soft); }
+.budget-chart-legend li { display: inline-flex; align-items: center; gap: .35rem; min-width: 0; overflow-wrap: anywhere; }
+.budget-chart-swatch { width: .85rem; height: .85rem; border-radius: .15rem; flex: 0 0 auto; border: 1px solid var(--fg); }
+.budget-chart-line-swatch { width: 1.1rem; height: 0; flex: 0 0 auto; border-top: 2px solid currentColor; }
 .budget-month-dashboard-table { width: 100%; border-collapse: collapse; font-size: .85rem; }
 .budget-month-dashboard-table th, .budget-month-dashboard-table td { padding: .4rem .5rem; border-top: 1px solid var(--border); text-align: end; vertical-align: top; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .budget-month-dashboard-table th[scope="row"], .budget-month-dashboard-table thead th:first-child { text-align: start; white-space: normal; overflow-wrap: anywhere; }

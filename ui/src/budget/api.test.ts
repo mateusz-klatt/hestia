@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { forecastOf, monthlyBudgetOf } from "./analytics/fixtures";
+import { forecastOf, monthlyBudgetChartsOf, monthlyBudgetOf } from "./analytics/fixtures";
 import { budgetApi } from "./api";
 import { account, connection } from "./fixtures";
 
@@ -147,6 +147,23 @@ describe("budget api", () => {
     expect(Object.fromEntries(sent(fetchMock, 2).url.searchParams)).toEqual({ period: "2026-10" });
     await budgetApi.monthlyBudget(undefined, "PLN");
     expect(Object.fromEntries(sent(fetchMock, 3).url.searchParams)).toEqual({ currency: "PLN" });
+  });
+
+  it("reads monthly budget charts with optional period, currency, and history query parameters", async () => {
+    const data = monthlyBudgetChartsOf();
+    const fetchMock = respond(200, data);
+    expect(await budgetApi.monthlyBudgetCharts()).toEqual({ ok: true, data });
+    const { url, init } = sent(fetchMock);
+    expect(url.pathname).toMatch(/\/api\/budget\/analytics\/monthly-budget\/charts$/);
+    expect(url.search).toBe("");
+    expect(init).toEqual({ credentials: "same-origin", cache: "no-store" });
+
+    await budgetApi.monthlyBudgetCharts("2026-10", "EUR", 12);
+    expect(Object.fromEntries(sent(fetchMock, 1).url.searchParams)).toEqual({
+      period: "2026-10", currency: "EUR", history: "12",
+    });
+    await budgetApi.monthlyBudgetCharts(undefined, "PLN", 6);
+    expect(Object.fromEntries(sent(fetchMock, 2).url.searchParams)).toEqual({ currency: "PLN", history: "6" });
   });
 
   it("sends every control with the entity's current version", async () => {

@@ -76,7 +76,8 @@ from pydantic.json_schema import models_json_schema
 # 0.26.0: read-only upcoming commitments forecast (GET /api/budget/analytics/forecast, zero migration).
 # 0.27.0: read-only owner-private monthly budget dashboard (GET /api/budget/analytics/monthly-budget, zero migration).
 # 0.28.0: additive optional income window on monthly-budget configuration (zero migration).
-CONTRACT_VERSION = "0.28.0"
+# 0.29.0: read-only owner-private monthly budget charts (GET /api/budget/analytics/monthly-budget/charts, zero migration).
+CONTRACT_VERSION = "0.29.0"
 OPENAPI_PATH = Path(__file__).resolve().parent.parent / "docs" / "api" / "openapi.json"
 
 # De-duplicated string literals (SonarPython S1192): the OpenAPI content-type, the paths reused
@@ -2464,6 +2465,51 @@ class BudgetAnalyticsMonthlyBudget(BaseModel):
     card_exposure: BudgetAnalyticsMonthlyBudgetCardExposure
 
 
+class BudgetAnalyticsMonthlyBudgetDailyPoint(BaseModel):
+    model_config = _READ
+    date: str
+    cumulative_spent: BudgetAnalyticsMonthlyBudgetMoney
+
+
+class BudgetAnalyticsMonthlyBudgetSeriesCategory(BaseModel):
+    model_config = _READ
+    category_id: str | None
+    net_spending: BudgetAnalyticsMonthlyBudgetMoney
+
+
+class BudgetAnalyticsMonthlyBudgetSeriesMonth(BaseModel):
+    model_config = _READ
+    period: str
+    has_activity: bool
+    is_current_month: bool
+    income_estimate_partial: bool
+    provisional: bool
+    start_budget: BudgetAnalyticsMonthlyBudgetMoney
+    spent: BudgetAnalyticsMonthlyBudgetMoney
+    categories: list[BudgetAnalyticsMonthlyBudgetSeriesCategory]
+
+
+class BudgetAnalyticsMonthlyBudgetCategoryLabel(BaseModel):
+    model_config = _READ
+    category_id: str
+    name: str
+    archived: bool
+
+
+class BudgetAnalyticsMonthlyBudgetSeries(BaseModel):
+    model_config = _READ
+    daily: Annotated[list[BudgetAnalyticsMonthlyBudgetDailyPoint], Field(min_length=1, max_length=31)]
+    months: Annotated[list[BudgetAnalyticsMonthlyBudgetSeriesMonth], Field(min_length=1, max_length=12)]
+    category_labels: list[BudgetAnalyticsMonthlyBudgetCategoryLabel]
+
+
+class BudgetAnalyticsMonthlyBudgetCharts(BaseModel):
+    """Read-only owner-private monthly budget dashboard and chart series evaluated from one snapshot."""
+    model_config = _READ
+    budget: BudgetAnalyticsMonthlyBudget
+    series: BudgetAnalyticsMonthlyBudgetSeries | None
+
+
 _ANALYTICS_MODELS = (BudgetAnalyticsCategoryCreateRequest, BudgetAnalyticsCategoryUpdateRequest,
                      BudgetAnalyticsAnnotationRequest, BudgetAnalyticsRulePreviewRequest,
                      BudgetAnalyticsRuleSaveRequest, BudgetAnalyticsTransferDecisionRequest,
@@ -2477,7 +2523,10 @@ _ANALYTICS_MODELS = (BudgetAnalyticsCategoryCreateRequest, BudgetAnalyticsCatego
                      BudgetAnalyticsMortgages, BudgetAnalyticsMortgageScheduleResult,
                      BudgetAnalyticsMortgagePaymentResult, BudgetAnalyticsInbox,
                      BudgetAnalyticsInboxMarkResult, BudgetAnalyticsQuarantine, BudgetAnalyticsForecast,
-                     BudgetAnalyticsMonthlyBudget)
+                     BudgetAnalyticsMonthlyBudget, BudgetAnalyticsMonthlyBudgetDailyPoint,
+                     BudgetAnalyticsMonthlyBudgetSeriesCategory, BudgetAnalyticsMonthlyBudgetSeriesMonth,
+                     BudgetAnalyticsMonthlyBudgetCategoryLabel, BudgetAnalyticsMonthlyBudgetSeries,
+                     BudgetAnalyticsMonthlyBudgetCharts)
 
 
 _BUDGET_MODELS = (BudgetSelectionRequest, BudgetKindRequest, BudgetConnectionStateRequest,
@@ -2510,6 +2559,7 @@ _PATH_ROLES = {
     ("GET", "/api/budget/analytics/quarantine"): "admin",
     ("GET", "/api/budget/analytics/forecast"): "admin",
     ("GET", "/api/budget/analytics/monthly-budget"): "admin",
+    ("GET", "/api/budget/analytics/monthly-budget/charts"): "admin",
     ("POST", "/api/budget/analytics/category-create"): "admin",
     ("POST", "/api/budget/analytics/category-update"): "admin",
     ("POST", "/api/budget/analytics/annotation"): "admin",
@@ -3150,6 +3200,11 @@ def _analytics_paths():
         schema={"type": "string", "pattern": "^[A-Z]{3}$", "default": "PLN"},
         description="Optional uppercase 3-letter ISO currency code; defaults to PLN.",
     )
+    month_history = _budget_query(
+        "history",
+        schema={"type": "string", "enum": ["6", "12"], "default": "6"},
+        description="Optional monthly history window (6 or 12 months); defaults to 6.",
+    )
     reads = (
         ("overview", "getBudgetAnalyticsOverview", "BudgetAnalyticsOverview", [period, currency]),
         ("transactions", "getBudgetAnalyticsTransactions", "BudgetAnalyticsTransactions",
@@ -3169,6 +3224,8 @@ def _analytics_paths():
         ("forecast", "getBudgetAnalyticsForecast", "BudgetAnalyticsForecast", [horizon, currency]),
         ("monthly-budget", "getBudgetAnalyticsMonthlyBudget", "BudgetAnalyticsMonthlyBudget",
          [month_optional, month_currency]),
+        ("monthly-budget/charts", "getBudgetAnalyticsMonthlyBudgetCharts", "BudgetAnalyticsMonthlyBudgetCharts",
+         [month_optional, month_currency, month_history]),
     )
     paths = {prefix + path: {"get": {"operationId": operation, "summary": "Read owner-private local budget analytics",
               "parameters": parameters, "responses": _analytics_responses(model)}}
@@ -3201,6 +3258,12 @@ def _analytics_paths():
             "unresolved transfer and repayment candidate provisional flags, previous-month expected income estimates "
             "(including cross-account salary matching), and spending pace. Card exposure is reported as unavailable in P1. "
             "Makes no bank requests and no database writes."
+        )),
+        "monthly-budget/charts": ("Read the owner-private monthly budget dashboard and chart series", (
+            "Pure read-only single-snapshot monthly budget dashboard and chart series evaluated in Europe/Warsaw "
+            "from one UTC instant. Returns the MonthlyBudget dashboard alongside cumulative daily spending through "
+            "cutoff and 6 or 12 historical monthly category/income buckets computed with each month's configured income "
+            "window. Returns series=null when unconfigured. Makes no bank requests and no database writes."
         )),
     }
     for path, (summary, description) in read_overrides.items():
@@ -3238,6 +3301,20 @@ def _analytics_paths():
     }
     for code, description in month_descriptions.items():
         month_responses[code]["description"] = description
+    charts_responses = paths[prefix + "monthly-budget/charts"]["get"]["responses"]
+    charts_descriptions = {
+        "200": "Owner-private monthly budget dashboard and chart series from one local snapshot.",
+        "400": "Invalid monthly budget charts query: period must match ^[0-9]{4}-[0-9]{2}$ through the current "
+               "Europe/Warsaw month, currency must match ^[A-Z]{3}$, history must be 6 or 12, and unknown or "
+               "duplicate parameters are rejected.",
+        "409": "SQLite backend required: monthly-budget/charts requires HESTIA_PERSIST=sqlite.",
+        "413": "Monthly budget charts limit exceeded (>100,000 selected rows, >1,000 category limits, "
+               ">192-character aggregate decimal output, or >4 MiB UTF-8 JSON payload); no partial totals returned.",
+        "500": month_descriptions["500"],
+        "503": month_descriptions["503"],
+    }
+    for code, description in charts_descriptions.items():
+        charts_responses[code]["description"] = description
     writes = (
         ("category-create", "createBudgetAnalyticsCategory", "BudgetAnalyticsCategoryCreateRequest", "BudgetAnalyticsCategoryResult"),
         ("category-update", "updateBudgetAnalyticsCategory", "BudgetAnalyticsCategoryUpdateRequest", "BudgetAnalyticsCategoryResult"),
