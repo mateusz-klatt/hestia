@@ -124,12 +124,15 @@ export type AnnotationRequest = Schemas["BudgetAnalyticsAnnotationRequest"];
 export type CategoryChoice = { mode: "auto" } | { mode: "manual"; category_id: string | null };
 
 /** "auto" resets both category and type to rules and defaults; any explicit type is part of a manual decision. */
-export function annotationRequest(row: AnalyticsTransaction, category: CategoryChoice, kind: KindChoice): AnnotationRequest {
+export function annotationRequest(row: AnalyticsTransaction, category: CategoryChoice, kind: KindChoice,
+  label?: string | null): AnnotationRequest {
+  const trimmed = typeof label === "string" ? label.trim() : "";
   return {
     account_id: row.account_id, entry_reference: row.entry_reference, mode: category.mode,
     category_id: category.mode === "manual" ? category.category_id : null, kind: category.mode === "manual" ? kind : "auto",
     expected_fingerprint: row.fingerprint, expected_version: row.annotation.version,
-  };
+    label: trimmed === "" ? null : trimmed,
+  } as AnnotationRequest;
 }
 
 /** The editor's starting choice: what the owner set before, or automatic. */

@@ -36,6 +36,7 @@ export interface MonthBudgetChartLabels {
   unknownCategory: string;
   archived: string;
   category: string;
+  oneOffTag?: string;
   chartDailyDesc: (currency: string, start: string, cutoff: string) => string;
   chartCategoriesDesc: (count: number, currency: string) => string;
   chartIncomeSpendDesc: (count: number, currency: string) => string;
@@ -55,6 +56,7 @@ const TOP_CATEGORY_COLORS = [
   "var(--chart-cat-5)",
 ] as const;
 const OTHER_CATEGORY_COLOR = "var(--chart-cat-other)";
+const ONE_OFF_COLOR = "var(--chart-cat-one-off)";
 
 function signedBigInt(value: string): { coeff: bigint; scale: number } {
   const parsed = parseScaledInt(value);
@@ -355,9 +357,11 @@ function CumulativeDailyChart({ budget, daily, locale, text }: {
 
 export interface RankedCategory {
   id: string | null;
+  seriesKey: string;
   name: string;
   archived: boolean;
   absTotal: bigint;
+  oneOff: boolean;
 }
 
 export interface CategorySlice {
@@ -382,7 +386,8 @@ export interface CategoryChartModel {
   hasOtherPositive: boolean;
   hasOtherNegative: boolean;
   allCategories: RankedCategory[];
-  byMonthAndCategory: Map<string, Map<string | null, string>>;
+  oneOffs: RankedCategory[];
+  byMonthAndCategory: Map<string, Map<string, string>>;
   stacks: MonthCategoryStack[];
 }
 
@@ -398,33 +403,47 @@ export function buildCategoryChartModel(
   }
   const { scale } = alignDecimals(allNetStrings);
 
-  const perMonthBig = new Map<string, Map<string | null, bigint>>();
-  const byMonthAndCategory = new Map<string, Map<string | null, string>>();
-  const absTotals = new Map<string | null, bigint>();
+  const perMonthBig = new Map<string, Map<string, bigint>>();
+  const byMonthAndCategory = new Map<string, Map<string, string>>();
+  const absTotals = new Map<string, bigint>();
+  const oneOffAbs = new Map<string, bigint>();
+  const oneOffNames = new Map<string, { id: string | null; name: string }>();
 
   for (const month of months) {
-    const bigMap = new Map<string | null, bigint>();
-    const strMap = new Map<string | null, string>();
+    const bigMap = new Map<string, bigint>();
+    const strMap = new Map<string, string>();
     for (const entry of month.categories) {
-      const parsed = signedBigInt(entry.net_spending);
+      const point = chartPoint(entry);
+      const key = seriesKeyOf(point);
+      const parsed = signedBigInt(point.net_spending);
       const scaled = parsed.coeff * (10n ** BigInt(scale - parsed.scale));
-      bigMap.set(entry.category_id, scaled);
-      strMap.set(entry.category_id, entry.net_spending);
+      bigMap.set(key, (bigMap.get(key) ?? 0n) + scaled);
+      strMap.set(key, point.net_spending);
       const absVal = scaled < 0n ? -scaled : scaled;
-      absTotals.set(entry.category_id, (absTotals.get(entry.category_id) ?? 0n) + absVal);
+      if (point.one_off) {
+        oneOffAbs.set(key, (oneOffAbs.get(key) ?? 0n) + absVal);
+        oneOffNames.set(key, { id: point.category_id, name: point.name ?? options.unknownCategory });
+      } else {
+        absTotals.set(key, (absTotals.get(key) ?? 0n) + absVal);
+      }
     }
     perMonthBig.set(month.period, bigMap);
     byMonthAndCategory.set(month.period, strMap);
   }
 
-  const allCategories: RankedCategory[] = [...absTotals.entries()].map(([id, absTotal]) => {
-    if (id === null) return { id: null, name: options.uncategorised, archived: false, absTotal };
+  const allCategories: RankedCategory[] = [...absTotals.entries()].map(([seriesKey, absTotal]) => {
+    const id = seriesKey === "c:" ? null : seriesKey.slice(2);
+    if (id === null) {
+      return { id: null, seriesKey, name: options.uncategorised, archived: false, absTotal, oneOff: false };
+    }
     const meta = labelLookup.get(id);
     return {
       id,
+      seriesKey,
       name: meta?.name ?? options.unknownCategory,
       archived: meta?.archived ?? false,
       absTotal,
+      oneOff: false,
     };
   });
 
@@ -436,38 +455,53 @@ export function buildCategoryChartModel(
     return idA < idB ? -1 : idA > idB ? 1 : 0;
   });
 
+  const oneOffs: RankedCategory[] = [...oneOffAbs.entries()].map(([seriesKey, absTotal]) => {
+    const meta = oneOffNames.get(seriesKey);
+    return {
+      id: meta?.id ?? null,
+      seriesKey,
+      name: meta?.name ?? options.unknownCategory,
+      archived: false,
+      absTotal,
+      oneOff: true,
+    };
+  });
+  oneOffs.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : a.seriesKey < b.seriesKey ? -1 : 1));
+
   const nonzeroCategories = allCategories.filter((item) => item.absTotal > 0n);
   const displayed = nonzeroCategories.slice(0, 5);
-  const restIds = new Set(nonzeroCategories.slice(5).map((item) => item.id));
-  const displayedColor = new Map<string | null, string>(
-    displayed.map((item, index) => [item.id, TOP_CATEGORY_COLORS[index] ?? OTHER_CATEGORY_COLOR]),
+  const restKeys = new Set(nonzeroCategories.slice(5).map((item) => item.seriesKey));
+  const displayedColor = new Map<string, string>(
+    displayed.map((item, index) => [item.seriesKey, TOP_CATEGORY_COLORS[index] ?? OTHER_CATEGORY_COLOR]),
   );
 
   let hasOtherPositive = false;
   let hasOtherNegative = false;
   const stacks: MonthCategoryStack[] = months.map((month) => {
-    const bigMap = perMonthBig.get(month.period) ?? new Map<string | null, bigint>();
+    const bigMap = perMonthBig.get(month.period) ?? new Map<string, bigint>();
     let posCursor = 0n;
     let negCursor = 0n;
     const slices: CategorySlice[] = [];
 
-    for (const cat of displayed) {
-      const val = bigMap.get(cat.id) ?? 0n;
-      const color = displayedColor.get(cat.id) ?? OTHER_CATEGORY_COLOR;
-      const sliceKey = cat.id === null ? "__uncategorised__" : cat.id;
+    const pushSlice = (key: string, label: string, color: string, val: bigint) => {
       if (val > 0n) {
-        slices.push({ key: sliceKey, label: cat.name, color, value: val, y0: posCursor, y1: posCursor + val });
+        slices.push({ key, label, color, value: val, y0: posCursor, y1: posCursor + val });
         posCursor += val;
       } else if (val < 0n) {
-        slices.push({ key: sliceKey, label: cat.name, color, value: val, y0: negCursor, y1: negCursor + val });
+        slices.push({ key, label, color, value: val, y0: negCursor, y1: negCursor + val });
         negCursor += val;
       }
+    };
+
+    for (const cat of displayed) {
+      pushSlice(cat.seriesKey, cat.name, displayedColor.get(cat.seriesKey) ?? OTHER_CATEGORY_COLOR,
+        bigMap.get(cat.seriesKey) ?? 0n);
     }
 
     let otherPos = 0n;
     let otherNeg = 0n;
-    for (const id of restIds) {
-      const val = bigMap.get(id) ?? 0n;
+    for (const key of restKeys) {
+      const val = bigMap.get(key) ?? 0n;
       if (val > 0n) otherPos += val;
       else if (val < 0n) otherNeg += val;
     }
@@ -487,11 +521,31 @@ export function buildCategoryChartModel(
       });
       negCursor += otherNeg;
     }
+    for (const cat of oneOffs) {
+      pushSlice(cat.seriesKey, cat.name, ONE_OFF_COLOR, bigMap.get(cat.seriesKey) ?? 0n);
+    }
 
     return { month, slices, posTotal: posCursor, negTotal: negCursor };
   });
 
-  return { scale, displayed, hasOtherPositive, hasOtherNegative, allCategories, byMonthAndCategory, stacks };
+  return { scale, displayed, hasOtherPositive, hasOtherNegative, allCategories, oneOffs, byMonthAndCategory, stacks };
+}
+
+function chartPoint(entry: { category_id: string | null; net_spending: string }): {
+  category_id: string | null; net_spending: string; one_off: boolean; name: string | null;
+} {
+  const extra = entry as { one_off?: boolean; name?: string | null };
+  const name = typeof extra.name === "string" && extra.name !== "" ? extra.name : null;
+  return {
+    category_id: entry.category_id,
+    net_spending: entry.net_spending,
+    one_off: extra.one_off === true && name !== null,
+    name,
+  };
+}
+
+function seriesKeyOf(point: { category_id: string | null; one_off: boolean; name: string | null }): string {
+  return point.one_off ? `o:${point.category_id ?? ""}:${point.name ?? ""}` : `c:${point.category_id ?? ""}`;
 }
 
 function monthTickSuffix(month: AnalyticsMonthlyBudgetSeriesMonth): string {
@@ -565,12 +619,22 @@ function CategorySpendingChart({ series, currency, locale, text }: {
       </svg>
       <ul className="budget-chart-legend">
         {model.displayed.map((cat, index) => (
-          <li key={cat.id ?? "__uncategorised__"}>
+          <li key={cat.seriesKey}>
             <span className="budget-chart-swatch"
               style={{ background: TOP_CATEGORY_COLORS[index] ?? OTHER_CATEGORY_COLOR, borderColor: "transparent" }} aria-hidden="true" />
             <span>
               {cat.name}
               {cat.archived ? <small className="budget-muted"> ({text.archived})</small> : null}
+            </span>
+          </li>
+        ))}
+        {model.oneOffs.map((cat) => (
+          <li key={cat.seriesKey} className="budget-one-off">
+            <span className="budget-chart-swatch"
+              style={{ background: ONE_OFF_COLOR, borderColor: "transparent" }} aria-hidden="true" />
+            <span>
+              {cat.name}
+              <small className="budget-one-off-tag">{text.oneOffTag ?? "one-off"}</small>
             </span>
           </li>
         ))}
@@ -604,14 +668,15 @@ function CategorySpendingChart({ series, currency, locale, text }: {
               </tr>
             </thead>
             <tbody>
-              {model.allCategories.map((cat) => (
-                <tr key={cat.id ?? "__uncategorised__"} className={cat.id === null ? "is-uncategorised" : undefined}>
+              {[...model.allCategories, ...model.oneOffs].map((cat) => (
+                <tr key={cat.seriesKey} className={cat.oneOff ? "budget-one-off" : cat.id === null ? "is-uncategorised" : undefined}>
                   <th scope="row">
                     {cat.name}
+                    {cat.oneOff ? <small className="budget-one-off-tag">{text.oneOffTag ?? "one-off"}</small> : null}
                     {cat.archived ? <small className="budget-muted"> ({text.archived})</small> : null}
                   </th>
                   {series.months.map((month) => {
-                    const value = model.byMonthAndCategory.get(month.period)?.get(cat.id);
+                    const value = model.byMonthAndCategory.get(month.period)?.get(cat.seriesKey);
                     return <td key={month.period}>{value === undefined ? text.noValue : money(value)}</td>;
                   })}
                 </tr>

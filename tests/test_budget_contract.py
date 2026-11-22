@@ -211,7 +211,7 @@ class BudgetOpenApiTests(unittest.TestCase):
             self.assertEqual(set(methods), {method})
             self.assertEqual(methods[method]["x-required-role"], "admin")
             self.assertIn("413", methods[method]["responses"])
-        self.assertEqual(document["info"]["version"], "0.30.0")
+        self.assertEqual(document["info"]["version"], "0.31.0")
         batch = analytics["/api/budget/analytics/rule-batch-preview"]["post"]["description"]
         self.assertIn("1..100", batch)
         self.assertIn("All-or-nothing", batch)
@@ -383,9 +383,10 @@ class BudgetOpenApiTests(unittest.TestCase):
             self.assertIn("monthly-budget/charts", responses["409"]["description"])
 
         schemas = doc["components"]["schemas"]
+        optional = {"SeriesCategory": {"name", "one_off"}}
         for suffix, keys in {
             "DailyPoint": {"date", "cumulative_spent"},
-            "SeriesCategory": {"category_id", "net_spending"},
+            "SeriesCategory": {"category_id", "net_spending", "name", "one_off"},
             "SeriesMonth": {"period", "has_activity", "is_current_month", "income_estimate_partial",
                             "provisional", "start_budget", "spent", "categories"},
             "CategoryLabel": {"category_id", "name", "archived"},
@@ -395,7 +396,7 @@ class BudgetOpenApiTests(unittest.TestCase):
             with self.subTest(schema=suffix):
                 schema = schemas["BudgetAnalyticsMonthlyBudget" + suffix]
                 self.assertEqual(set(schema["properties"]), keys)
-                self.assertEqual(set(schema["required"]), keys)
+                self.assertEqual(set(schema["required"]), keys - optional.get(suffix, set()))
                 self.assertNotIn("additionalProperties", schema)
         series_props = schemas["BudgetAnalyticsMonthlyBudgetSeries"]["properties"]
         self.assertEqual((series_props["daily"]["minItems"], series_props["daily"]["maxItems"]), (1, 31))

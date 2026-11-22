@@ -96,6 +96,8 @@
 .budget-entry-facts { display: flex; flex-wrap: wrap; align-items: center; gap: .3rem .6rem; font-size: .8rem; color: var(--fg-soft); }
 .budget-entry-facts button { min-height: 2rem; padding-inline: .6rem; }
 .budget-chip { border: 1px solid var(--border); border-radius: 999px; padding: .05rem .5rem; color: var(--fg); background: var(--bg, transparent); }
+.budget-one-off { font-style: italic; }
+.budget-one-off-tag { font-style: normal; font-size: .75rem; margin-left: .35rem; }
 .budget-entry-editor { display: flex; flex-wrap: wrap; gap: .5rem; align-items: end; padding: .4rem 0; }
 .budget-entry-editor label { display: grid; gap: .2rem; font-size: .8rem; color: var(--fg-soft); }
 .budget-pair-picker { display: grid; gap: .4rem; padding: .4rem 0; }
@@ -155,6 +157,7 @@
   --chart-cat-4: #6d4c93;
   --chart-cat-5: #946300;
   --chart-cat-other: #6e6357;
+  --chart-cat-one-off: #0f6e6e;
 }
 .budget-month-dashboard-controls { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: end; gap: .6rem 1rem; }
 .budget-month-dashboard-controls .budget-range { margin-bottom: 0; }

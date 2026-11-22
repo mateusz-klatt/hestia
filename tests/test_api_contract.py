@@ -56,7 +56,7 @@ class OpenApiArtifactTests(unittest.TestCase):
 
     def test_monthly_budget_contract_is_strictly_additive_from_0_27_0(self):
         document = api_contract.build_openapi()
-        self.assertEqual(document["info"]["version"], "0.30.0")
+        self.assertEqual(document["info"]["version"], "0.31.0")
         # Strip this batch addition and compare with the 0.29.0 monthly-budget contract.
         for path in ("/api/budget/analytics/rule-batch-preview", "/api/budget/analytics/rule-batch-save"):
             del document["paths"][path]
@@ -64,6 +64,20 @@ class OpenApiArtifactTests(unittest.TestCase):
                      "BudgetAnalyticsBatchPreview", "BudgetAnalyticsBatchPreviewResult",
                      "BudgetAnalyticsRuleBatch", "BudgetAnalyticsRuleBatchResult"):
             del document["components"]["schemas"][name]
+        # 0.31.0 one-off label is additive. Remove it before the 0.29.0 digest.
+        for schema, field in (
+            ("BudgetAnalyticsAnnotationRequest", "label"),
+            ("BudgetAnalyticsAnnotationSaved", "label"),
+            ("BudgetAnalyticsAnnotation", "label"),
+            ("BudgetAnalyticsCategoryTotal", "one_off"),
+            ("BudgetAnalyticsMonthlyBudgetSeriesCategory", "name"),
+            ("BudgetAnalyticsMonthlyBudgetSeriesCategory", "one_off"),
+        ):
+            properties = document["components"]["schemas"][schema]["properties"]
+            properties.pop(field, None)
+            required = document["components"]["schemas"][schema].get("required")
+            if isinstance(required, list) and field in required:
+                required.remove(field)
         document["info"]["version"] = "0.29.0"
         canonical_0_29 = json.dumps(document, sort_keys=True, separators=(",", ":")).encode("utf-8")
         self.assertEqual(hashlib.sha256(canonical_0_29).hexdigest(),

@@ -128,6 +128,22 @@ describe("period overview", () => {
     expect(eur?.textContent).not.toContain("Synthetic Food");
   });
 
+  it("shows a labelled amount on its own row with a one-off tag", async () => {
+    const data = rich("2026-11");
+    data.categories = [...data.categories, {
+      currency: "PLN", category_id: null, name: "Remont łazienki", archived: false,
+      expenses: "2000", refunds: "0", net_spending: "2000", one_off: true,
+    }];
+    await show((period) => Promise.resolve<Answer>({ ok: true, data: { ...data, period } }));
+    const row = host.querySelector(".budget-one-off");
+    expect(row?.textContent).toContain("Remont łazienki");
+    expect(row?.textContent).toContain("one-off");
+    expect(row?.textContent).toContain("2,000.00 PLN");
+    expect(row?.classList.contains("is-uncategorised")).toBe(false);
+    await show((period) => Promise.resolve<Answer>({ ok: true, data: { ...data, period } }), { text: overviewLabels.pl, locale: "pl" });
+    expect(host.querySelector(".budget-one-off")?.textContent).toContain("jednorazowe");
+  });
+
   it("explains transfers to review, re-check, boundary cases and a limited scan", async () => {
     await show((period) => Promise.resolve<Answer>({ ok: true, data: rich(period, {
       transfer_summary: { suggested: 3, review: 1, accepted: 5, rejected: 2, boundary: 4, scan_limited: true } }) }));

@@ -683,6 +683,9 @@ class _BucketAccum:
     mortgage_refund_legs: list[_MortgageLeg] = field(default_factory=list)
     ordinary_expenses: dict[str | None, list[str]] = field(default_factory=lambda: defaultdict(list))
     ordinary_refunds: dict[str | None, list[str]] = field(default_factory=lambda: defaultdict(list))
+    # (label, category_id) amounts that also sit in the ordinary maps.
+    # Mortgage pass-through legs are not recorded here.
+    one_offs: dict[tuple[str, str | None], dict[str, list[str]]] = field(default_factory=dict)
     observed_spend_categories: set[str | None] = field(default_factory=set)
 
 
@@ -755,6 +758,62 @@ def _bucket_category_totals(
     start_budget = _sum_money_checked(bucket.start_budget_amounts)
     spent = _sum_money_checked(spent_terms)
     return pass_through_wire, adj_exp_dates, adj_ref_dates, category_rows, start_budget, spent
+
+
+def _note_one_off(bucket: _BucketAccum, annotation: Mapping, cat_id: str | None, amount: str, *, refund: bool) -> None:
+    """Remember a labelled ordinary expense or refund. The amount stays in the ordinary map too."""
+    label = core.active_one_off_label(annotation, amount)
+    if not isinstance(label, str):
+        return
+    slot = bucket.one_offs.setdefault((label, cat_id), {"expenses": [], "refunds": []})
+    slot["refunds" if refund else "expenses"].append(amount)
+
+
+def _zero_money(value: str) -> bool:
+    return core.compare_money(value, _ZERO) == 0
+
+
+def _series_categories(
+    category_rows: Sequence[tuple[str | None, str, str, str]],
+    one_offs: Mapping[tuple[str, str | None], Mapping[str, Sequence[str]]],
+    *,
+    observed: set[str | None] | None = None,
+) -> list[dict]:
+    """Move labelled nets into their own series rows. The sum of nets stays equal to spent.
+
+    A category row disappears only when a label took every remaining expense and refund.
+    A genuine zero (expenses equal refunds, nothing labelled) stays. Mortgage pass-through
+    rows are untouched because those legs are never recorded in ``one_offs``.
+    """
+    taken_exp: dict[str | None, str] = {}
+    taken_ref: dict[str | None, str] = {}
+    prepared: list[tuple[str, str | None, str, str]] = []
+    for (label, cat_id), slot in one_offs.items():
+        exp = _sum_money_checked(slot.get("expenses", ()))
+        ref = _sum_money_checked(slot.get("refunds", ()))
+        taken_exp[cat_id] = _sum_money_checked((taken_exp.get(cat_id, _ZERO), exp))
+        taken_ref[cat_id] = _sum_money_checked((taken_ref.get(cat_id, _ZERO), ref))
+        prepared.append((label, cat_id, exp, ref))
+    result: list[dict] = []
+    for cat_id, exp_total, ref_total, net_total in category_rows:
+        if observed is not None and cat_id not in observed:
+            continue
+        if cat_id in taken_exp:
+            remain_exp = _sub_money(exp_total, taken_exp.get(cat_id, _ZERO))
+            remain_ref = _sub_money(ref_total, taken_ref.get(cat_id, _ZERO))
+            if _zero_money(remain_exp) and _zero_money(remain_ref):
+                continue
+            net_total = _sub_money(remain_exp, remain_ref)
+        result.append({"category_id": cat_id, "name": None, "one_off": False, "net_spending": net_total})
+    for label, cat_id, exp, ref in sorted(prepared, key=lambda item: (item[0], item[1] is None, item[1] or "")):
+        if observed is not None and cat_id not in observed:
+            continue
+        if _zero_money(exp) and _zero_money(ref):
+            continue
+        result.append({
+            "category_id": cat_id, "name": label, "one_off": True, "net_spending": _sub_money(exp, ref),
+        })
+    return result
 
 
 def _build_daily_series(
@@ -913,6 +972,7 @@ def _evaluate_monthly_budget_core(
                         )
                     else:
                         cal_bucket.ordinary_expenses[cat_id].append(amount)
+                        _note_one_off(cal_bucket, row["annotation"], cat_id, amount, refund=False)
                         if include_series and cal_period == effective_period:
                             ordinary_by_date[report_date].append(amount)
                 elif direction == "CRDT":
@@ -928,6 +988,7 @@ def _evaluate_monthly_budget_core(
                             )
                         else:
                             cal_bucket.ordinary_refunds[cat_id].append(amount)
+                            _note_one_off(cal_bucket, row["annotation"], cat_id, amount, refund=True)
                             if include_series and cal_period == effective_period:
                                 ordinary_by_date[report_date].append(core.negate_money(amount))
                     elif kind == "income" and rent_cat_id is not None and cat_id == rent_cat_id:
@@ -1051,16 +1112,14 @@ def _evaluate_monthly_budget_core(
         bucket = buckets[p]
         if p == effective_period:
             b_start_budget, b_spent = start_budget, spent
-            b_categories = [
-                {"category_id": cat_id, "net_spending": net_total}
-                for cat_id, _, _, net_total in selected_rows
-                if cat_id in bucket.observed_spend_categories
-            ]
+            b_categories = _series_categories(
+                selected_rows, bucket.one_offs, observed=bucket.observed_spend_categories,
+            )
             b_provisional = provisional
             b_partial = expected_income["status"] == "partial"
         else:
             _, _, _, b_rows, b_start_budget, b_spent = _bucket_category_totals(bucket, pass_through_cfg)
-            b_categories = [{"category_id": cat_id, "net_spending": net_total} for cat_id, _, _, net_total in b_rows]
+            b_categories = _series_categories(b_rows, bucket.one_offs)
             b_provisional = bucket.pending_transfer_rows > 0 or bool(scan_limited and bucket.has_affecting_unexcluded)
             b_partial = False
         for item in b_categories:

@@ -14,7 +14,7 @@ export const overviewLabels = {
     income: "Income", unclassified: "To classify", unclassifiedHelp: "incoming payments not yet marked as income or refund",
     transfers: "Own transfers", transferOut: "out", transferIn: "in", transfersHelp: "not counted as spending or income",
     excluded: "Left out by you", excludedOut: "out", excludedIn: "in",
-    categories: "Spending by category", uncategorised: "Uncategorised", archived: "archived",
+    categories: "Spending by category", uncategorised: "Uncategorised", archived: "archived", oneOff: "one-off",
     scope: (selected: number, excluded: number) =>
       `${String(selected)} accounts in the budget${excluded > 0 ? ` (${String(excluded)} excluded)` : ""} · change this on the Accounts tab`,
     current: "This period is still in progress.", partial: "Incomplete data",
@@ -32,7 +32,7 @@ export const overviewLabels = {
     income: "Wpływy", unclassified: "Do sklasyfikowania", unclassifiedHelp: "wpływy jeszcze nieoznaczone jako dochód ani zwrot",
     transfers: "Przelewy własne", transferOut: "wyszło", transferIn: "weszło", transfersHelp: "nie liczą się do wydatków ani wpływów",
     excluded: "Pominięte przez Ciebie", excludedOut: "wyszło", excludedIn: "weszło",
-    categories: "Wydatki według kategorii", uncategorised: "Bez kategorii", archived: "archiwalna",
+    categories: "Wydatki według kategorii", uncategorised: "Bez kategorii", archived: "archiwalna", oneOff: "jednorazowe",
     scope: (selected: number, excluded: number) =>
       `Kont w budżecie: ${String(selected)}${excluded > 0 ? ` (wykluczone: ${String(excluded)})` : ""} · zmienisz to na karcie Konta`,
     current: "Ten okres jeszcze trwa.", partial: "Dane niepełne",
@@ -195,15 +195,25 @@ function CurrencyCard({ total, categories, partial, text, locale }: CardProps) {
         <table className="budget-categories" aria-label={`${text.categories} ${total.currency}`}>
           <caption>{text.categories}</caption>
           <tbody>
-            {categories.map((item) => (
-              <tr key={item.category_id ?? "uncategorised"} className={item.category_id === null ? "is-uncategorised" : undefined}>
-                <th scope="row">
-                  {item.category_id === null ? text.uncategorised : item.name ?? text.uncategorised}
-                  {item.archived ? <small> ({text.archived})</small> : null}
-                </th>
-                <td>{money(item.net_spending)}</td>
-              </tr>
-            ))}
+            {categories.map((item) => {
+              const oneOff = (item as { one_off?: boolean }).one_off === true;
+              const rowKey = oneOff
+                ? `one-off:${item.category_id ?? ""}:${item.name ?? ""}`
+                : (item.category_id ?? "uncategorised");
+              const label = oneOff
+                ? (item.name ?? text.uncategorised)
+                : (item.category_id === null ? text.uncategorised : item.name ?? text.uncategorised);
+              return (
+                <tr key={rowKey} className={oneOff ? "budget-one-off" : item.category_id === null ? "is-uncategorised" : undefined}>
+                  <th scope="row">
+                    {label}
+                    {oneOff ? <small className="budget-one-off-tag">{text.oneOff}</small> : null}
+                    {item.archived ? <small> ({text.archived})</small> : null}
+                  </th>
+                  <td>{money(item.net_spending)}</td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       )}

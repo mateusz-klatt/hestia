@@ -79,7 +79,10 @@ from pydantic.json_schema import models_json_schema
 # 0.29.0: read-only owner-private monthly budget charts (GET /api/budget/analytics/monthly-budget/charts, zero migration).
 # 0.30.0: batch rule preview and save (POST /api/budget/analytics/rule-batch-preview and rule-batch-save,
 #         zero migration). This branch merges first; the open follow-ups take 0.31.0 and 0.32.0.
-CONTRACT_VERSION = "0.30.0"
+# 0.31.0: optional one-off label on a budget annotation (migration 0023; re-parent after 0020, 0021
+#         and 0022 at merge). Charts and category summaries can report that label as its own entry.
+#         Other open branches also use 0.31.0; re-bump this minor at merge if those land first.
+CONTRACT_VERSION = "0.31.0"
 OPENAPI_PATH = Path(__file__).resolve().parent.parent / "docs" / "api" / "openapi.json"
 
 # De-duplicated string literals (SonarPython S1192): the OpenAPI content-type, the paths reused
@@ -1557,6 +1560,8 @@ class BudgetAnalyticsAnnotationRequest(BaseModel):
     kind: BudgetAnalyticsKind
     expected_version: BudgetAnalyticsVersion
     expected_fingerprint: BudgetAnalyticsFingerprint
+    # Absent or null clears the label. The default stays out of the schema so generated clients treat it as optional.
+    label: Annotated[str | None, Field(max_length=80, json_schema_extra=_OMIT)] = None
 
 
 class BudgetAnalyticsRulePreviewRequest(BaseModel):
@@ -1630,6 +1635,7 @@ class BudgetAnalyticsAnnotationSaved(BaseModel):
     ledger_fingerprint: str
     version: int
     updated_at: float | None
+    label: Annotated[str | None, Field(json_schema_extra=_OMIT)] = None
     changed: bool
 
 
@@ -1735,6 +1741,7 @@ class BudgetAnalyticsAnnotation(BaseModel):
     category_id: str | None
     kind: str
     stale: bool
+    label: Annotated[str | None, Field(json_schema_extra=_OMIT)] = None
 
 
 class BudgetAnalyticsEffective(BaseModel):
@@ -1816,6 +1823,7 @@ class BudgetAnalyticsCategoryTotal(BaseModel):
     expenses: str
     refunds: str
     net_spending: str
+    one_off: Annotated[bool, Field(json_schema_extra=_OMIT)] = False
 
 
 class BudgetAnalyticsFreshness(BaseModel):
@@ -2515,6 +2523,8 @@ class BudgetAnalyticsMonthlyBudgetDailyPoint(BaseModel):
 class BudgetAnalyticsMonthlyBudgetSeriesCategory(BaseModel):
     model_config = _READ
     category_id: str | None
+    name: Annotated[str | None, Field(json_schema_extra=_OMIT)] = None
+    one_off: Annotated[bool, Field(json_schema_extra=_OMIT)] = False
     net_spending: BudgetAnalyticsMonthlyBudgetMoney
 
 
