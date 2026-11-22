@@ -132,7 +132,7 @@ export function annotationRequest(row: AnalyticsTransaction, category: CategoryC
     category_id: category.mode === "manual" ? category.category_id : null, kind: category.mode === "manual" ? kind : "auto",
     expected_fingerprint: row.fingerprint, expected_version: row.annotation.version,
     label: trimmed === "" ? null : trimmed,
-  } as AnnotationRequest;
+  };
 }
 
 /** The editor's starting choice: what the owner set before, or automatic. */

@@ -203,7 +203,7 @@ describe("period entries", () => {
     const annotated = entry("e1", {
       annotation: {
         version: 3, mode: "manual", category_id: "cat-food", kind: "expense", stale: true, label: phrase,
-      } as AnalyticsTransaction["annotation"],
+      },
     });
     const api = fakeApi([annotated]);
     await show(api);

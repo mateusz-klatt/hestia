@@ -15,7 +15,7 @@ function category(id: string, net: string): SeriesCategory {
 }
 
 function oneOff(name: string, net: string): SeriesCategory {
-  return { category_id: null, net_spending: net, one_off: true, name } as SeriesCategory;
+  return { category_id: null, net_spending: net, one_off: true, name };
 }
 
 const options = { uncategorised: "Uncategorised", unknownCategory: "Category", otherCategory: "Other" };
