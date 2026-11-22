@@ -627,8 +627,14 @@ class BudgetOwnerInboxRead(Base):
 
 class BudgetAnnotation(Base):
     __tablename__ = "budget_annotations"
-    __table_args__ = (ForeignKeyConstraint(["account_id", "entry_reference"],
-                                           ["budget_transactions.account_id", "budget_transactions.entry_reference"]),)
+    __table_args__ = (
+        ForeignKeyConstraint(["account_id", "entry_reference"],
+                             ["budget_transactions.account_id", "budget_transactions.entry_reference"]),
+        CheckConstraint(
+            "label IS NULL OR (length(label) >= 1 AND length(label) <= 80 AND label = trim(label))",
+            name="ck_budget_annotations_label",
+        ),
+    )
     account_id: Mapped[str] = mapped_column(primary_key=True)
     entry_reference: Mapped[str] = mapped_column(primary_key=True)
     owner: Mapped[str] = mapped_column(ForeignKey("users.username"))
@@ -638,6 +644,7 @@ class BudgetAnnotation(Base):
     ledger_fingerprint: Mapped[str]
     version: Mapped[int]
     updated_at: Mapped[float]
+    label: Mapped[str | None] = mapped_column(Text())
 
 
 class BudgetRule(Base):
