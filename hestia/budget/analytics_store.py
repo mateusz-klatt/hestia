@@ -31,7 +31,7 @@ from .views import BudgetHTTPStore
 
 MAX_CATEGORY_LIMITS = 200
 _LIMIT_ERROR = "budget_analytics_limit"
-MAX_RULES = 500
+MAX_RULES = 5000
 MAX_BATCH_RULES = 100
 _HASH = re.compile(r"[a-f0-9]{64}\Z", re.ASCII)
 _CURRENCY = re.compile(r"[A-Z]{3}\Z", re.ASCII)
