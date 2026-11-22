@@ -6,6 +6,7 @@ import { formatAmount } from "../model";
 import { formatRatioHalfEven, formatScaledBigInt, isZero, parseScaledInt } from "./model";
 import type { AnalyticsMonthlyBudget, AnalyticsMonthlyBudgetCategoryLabel, AnalyticsMonthlyBudgetDailyPoint,
   AnalyticsMonthlyBudgetSeries, AnalyticsMonthlyBudgetSeriesMonth } from "./model";
+import type { MonthPaceProjection, ScheduledPaceItem } from "./month_budget_pace";
 
 export interface MonthBudgetChartLabels {
   chartsSectionTitle: string;
@@ -20,6 +21,7 @@ export interface MonthBudgetChartLabels {
   bookedBudgetLine: string;
   expectedBudgetLine: string;
   paceExtensionLine: string;
+  overdue: string;
   exhaustionMarker: (day: number) => string;
   incompleteMonth: string;
   currentMonth: string;
@@ -191,9 +193,15 @@ function YAxisGrid({ scaleObj, scale, denom, locale }: {
 // Chart 1: Cumulative daily spend
 // ---------------------------------------------------------------------------
 
-function CumulativeDailyChart({ budget, daily, locale, text }: {
+function scheduledItemLabel(item: ScheduledPaceItem, currency: string, locale: string, overdue: string): string {
+  const date = `${String(Number(item.expectedDate.slice(8, 10)))}.${item.expectedDate.slice(5, 7)}`;
+  return `${date} · ${item.label} · ${formatAmount(item.amount, currency, locale)}${item.overdue ? ` · ${overdue}` : ""}`;
+}
+
+function CumulativeDailyChart({ budget, daily, paceProjection, locale, text }: {
   budget: AnalyticsMonthlyBudget;
   daily: readonly AnalyticsMonthlyBudgetDailyPoint[];
+  paceProjection: MonthPaceProjection | null;
   locale: string;
   text: MonthBudgetChartLabels;
 }) {
@@ -203,20 +211,22 @@ function CumulativeDailyChart({ budget, daily, locale, text }: {
   const startBudget = budget.summary?.start_budget ?? "0";
   const pace = budget.pace;
   const activePace = budget.period === budget.current_month && pace !== null && pace.status !== "historical" ? pace : null;
+  const projection = activePace === null ? null : paceProjection;
   const hasExpectedBudget = pace !== null && pace.basis === "received_plus_expected";
   const expectedBudget = pace?.budget ?? startBudget;
-  const projected = activePace?.projected_month_spend ?? null;
-  const exhaustionDay = activePace?.exhaustion_day ?? null;
-  const daysInMonth = Math.max(daily.length, Number(budget.end.slice(8, 10)) || 30);
-  const cutoffDay = daily.length;
+  const projected = projection?.projectedMonthSpend ?? null;
+  const exhaustionDay = projection?.exhaustionDay ?? null;
+  const cutoffDay = Number(budget.cutoff.slice(8, 10)) || daily.length;
+  const daysInMonth = Math.max(daily.length, Number(budget.end.slice(8, 10)) || 30, cutoffDay);
   const lastPoint = daily.at(-1);
   const lastCumulative = lastPoint?.cumulative_spent ?? "0";
+  const projectionNumerators = projection?.points.flatMap((point) => [point.before.numerator, point.value.numerator]) ?? [];
 
   const rawMoney = [
     ...daily.map((point) => point.cumulative_spent),
     startBudget,
     ...(hasExpectedBudget ? [expectedBudget] : []),
-    ...(projected !== null ? [projected.numerator] : []),
+    ...projectionNumerators,
   ];
   const { scale, coeffs } = alignDecimals(rawMoney);
   const denom = BigInt(projected?.denominator ?? 1);
@@ -224,15 +234,15 @@ function CumulativeDailyChart({ budget, daily, locale, text }: {
   const bookedCoeff = (coeffs[daily.length] ?? 0n) * denom;
   const expectedIndex = daily.length + 1;
   const expectedCoeff = hasExpectedBudget ? (coeffs[expectedIndex] ?? 0n) * denom : bookedCoeff;
-  const projectedCoeff = projected !== null ? (coeffs.at(-1) ?? 0n) : null;
+  const projectionIndex = daily.length + 1 + (hasExpectedBudget ? 1 : 0);
+  const projectionCoeffs = projectionNumerators.map((_, index) => coeffs[projectionIndex + index] ?? 0n);
 
-  const domainValues = [
+  const yScale = buildYScale([
     ...dailyCoeffs,
     bookedCoeff,
     ...(hasExpectedBudget ? [expectedCoeff] : []),
-    ...(projectedCoeff !== null ? [projectedCoeff] : []),
-  ];
-  const yScale = buildYScale(domainValues);
+    ...projectionCoeffs,
+  ]);
 
   const toX = (day: number): number => {
     if (daysInMonth <= 1) return Number(((PLOT_LEFT + PLOT_RIGHT) / 2).toFixed(2));
@@ -246,12 +256,19 @@ function CumulativeDailyChart({ budget, daily, locale, text }: {
   const cutoffY = yScale.toY(dailyCoeffs.at(-1) ?? 0n);
   const bookedY = yScale.toY(bookedCoeff);
   const expectedY = yScale.toY(expectedCoeff);
-  const showPaceExtension = activePace !== null && projectedCoeff !== null && cutoffDay < daysInMonth;
-  const projectedEndX = toX(daysInMonth);
-  const projectedEndY = projectedCoeff !== null ? yScale.toY(projectedCoeff) : cutoffY;
+  const showPaceExtension = projection !== null && projection.points.length > 0;
+  const pacePoints = projection?.points.flatMap((point, index) => {
+    const x = toX(point.day);
+    const before = projectionCoeffs[index * 2] ?? 0n;
+    const value = projectionCoeffs[index * 2 + 1] ?? 0n;
+    const points = [`${String(x)},${String(yScale.toY(before))}`];
+    if (before !== value) points.push(`${String(x)},${String(yScale.toY(value))}`);
+    return points;
+  }) ?? [];
+  const pacePolylinePoints = [`${String(cutoffX)},${String(cutoffY)}`, ...pacePoints].join(" ");
   const exhaustionX = exhaustionDay !== null ? toX(exhaustionDay) : null;
   const exhaustionY = exhaustionDay !== null
-    ? (pace?.status === "already_reached" ? cutoffY : expectedY)
+    ? (projection?.status === "already_reached" ? cutoffY : expectedY)
     : null;
 
   const ticks = [...new Set([1, 10, 20, daysInMonth].filter((day) => day <= daysInMonth && (day === daysInMonth || daysInMonth - day >= 3)))];
@@ -275,9 +292,18 @@ function CumulativeDailyChart({ budget, daily, locale, text }: {
         ) : null}
         <circle cx={cutoffX} cy={cutoffY} r="3" fill="var(--chart-spend)" />
         {showPaceExtension ? (
-          <line className="budget-chart-pace-line" x1={cutoffX} y1={cutoffY} x2={projectedEndX} y2={projectedEndY}
-            stroke="var(--chart-spend)" strokeWidth="1.8" strokeDasharray="2 4" />
+          <polyline className="budget-chart-pace-line" fill="none" stroke="var(--chart-spend)" strokeWidth="1.8"
+            strokeDasharray="2 4" strokeLinejoin="round" strokeLinecap="round" points={pacePolylinePoints} />
         ) : null}
+        {projection?.points.map((point, index) => point.items.length === 0 ? null : (
+          <g key={point.date} className="budget-chart-scheduled-step"
+            data-overdue={point.items.some((item) => item.overdue)}>
+            <title>{point.items.map((item) => scheduledItemLabel(item, currency, locale, text.overdue)).join("\n")}</title>
+            <circle cx={toX(point.day)} cy={yScale.toY(projectionCoeffs[index * 2 + 1] ?? 0n)} r="4"
+              fill="var(--surface)" stroke={point.items.some((item) => item.overdue) ? "var(--err)" : "var(--chart-expected)"}
+              strokeWidth="2" />
+          </g>
+        ))}
         {exhaustionDay !== null && exhaustionX !== null && exhaustionY !== null ? (
           <g className="budget-chart-exhaustion">
             <line x1={exhaustionX} y1={PLOT_TOP} x2={exhaustionX} y2={PLOT_BOTTOM} stroke="var(--err)" strokeWidth="1.2" strokeDasharray="3 2" />
@@ -317,6 +343,11 @@ function CumulativeDailyChart({ budget, daily, locale, text }: {
             <span>{text.paceExtensionLine}: <strong>{formatRatioHalfEven(projected, currency, locale)}</strong></span>
           </li>
         ) : null}
+        {projection?.scheduledItems.map((item, index) => (
+          <li key={`${item.expectedDate}-${String(index)}`} className={item.overdue ? "budget-warn" : undefined}>
+            <span>{scheduledItemLabel(item, currency, locale, text.overdue)}</span>
+          </li>
+        ))}
         {exhaustionDay !== null ? (
           <li className="budget-warn">
             <span>{text.exhaustionMarker(exhaustionDay)}</span>
@@ -826,15 +857,17 @@ function IncomeVsSpendChart({ budget, months, locale, text }: {
   );
 }
 
-export function MonthBudgetCharts({ budget, series, locale, text }: {
+export function MonthBudgetCharts({ budget, series, paceProjection, locale, text }: {
   budget: AnalyticsMonthlyBudget;
   series: AnalyticsMonthlyBudgetSeries;
+  paceProjection: MonthPaceProjection | null;
   locale: string;
   text: MonthBudgetChartLabels;
 }) {
   return (
     <section className="budget-month-charts" aria-label={text.chartsSectionTitle}>
-      <CumulativeDailyChart budget={budget} daily={series.daily} locale={locale} text={text} />
+      <CumulativeDailyChart budget={budget} daily={series.daily} paceProjection={paceProjection}
+        locale={locale} text={text} />
       <CategorySpendingChart series={series} currency={budget.currency} locale={locale} text={text} />
       <IncomeVsSpendChart budget={budget} months={series.months} locale={locale} text={text} />
     </section>

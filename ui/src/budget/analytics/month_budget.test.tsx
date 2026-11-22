@@ -5,9 +5,9 @@ import type { Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BudgetApi, BudgetResult } from "../api";
 import { account } from "../fixtures";
-import { categoryList, monthlyBudgetCategoryLimit, monthlyBudgetCategorySpend, monthlyBudgetChartsOf,
-  monthlyBudgetExpectedIncome, monthlyBudgetPace, monthlyBudgetPassThrough,
-  monthlyBudgetSeriesOf } from "./fixtures";
+import { categoryList, forecastItem, forecastOf, monthlyBudgetCategoryLimit, monthlyBudgetCategorySpend,
+  monthlyBudgetChartsOf, monthlyBudgetExpectedIncome, monthlyBudgetPace, monthlyBudgetPassThrough,
+  monthlyBudgetSeriesOf, mortgagesOf, recurringOf } from "./fixtures";
 import { ANALYTICS_ERROR } from "./model";
 import type { AnalyticsCategory, AnalyticsMonthlyBudgetCharts } from "./model";
 import { MonthBudgetView, monthBudgetLabels } from "./month_budget";
@@ -39,7 +39,10 @@ function fakeApi() {
       { id: "cat-mortgage", name: "Synthetic Mortgage", archived: false, version: 1, created_at: 1, updated_at: 1 },
       { id: "cat-lookup", name: "Synthetic Lookup", archived: false, version: 1, created_at: 1, updated_at: 1 },
     ] })),
-  } satisfies Pick<BudgetApi, "monthlyBudgetCharts" | "categories">;
+    forecast: vi.fn<BudgetApi["forecast"]>().mockResolvedValue(ok(forecastOf())),
+    mortgages: vi.fn<BudgetApi["mortgages"]>().mockResolvedValue(ok(mortgagesOf())),
+    recurring: vi.fn<BudgetApi["recurring"]>().mockResolvedValue(ok(recurringOf())),
+  } satisfies Pick<BudgetApi, "monthlyBudgetCharts" | "categories" | "forecast" | "mortgages" | "recurring">;
 }
 
 let host: HTMLElement;
@@ -64,7 +67,7 @@ async function settle(): Promise<void> {
 }
 
 async function show(
-  api: Pick<BudgetApi, "monthlyBudgetCharts" | "categories">,
+  api: Pick<BudgetApi, "monthlyBudgetCharts" | "categories" | "forecast" | "mortgages" | "recurring">,
   options: {
     locale?: string;
     revision?: number;
@@ -252,6 +255,9 @@ describe("MonthBudgetView", () => {
     await settle();
     expect(host.querySelector('[role="status"]')).toBeNull();
     expect(host.querySelector(".budget-month-nav h3")?.textContent).toBe("November 2026");
+    expect(api.forecast).toHaveBeenCalledWith(1, "PLN");
+    expect(api.mortgages).toHaveBeenCalledWith();
+    expect(api.recurring).toHaveBeenCalledWith("PLN");
   });
 
   it("renders unconfigured state without summary, pace, category tables, or charts, and handles missing ledger timestamp", async () => {
@@ -543,7 +549,7 @@ describe("MonthBudgetView", () => {
     expect(host.textContent).toContain("Budget received");
     expect(host.textContent).toContain("5,000.00 PLN");
     expect(host.textContent).toContain("Spent to date (Provisional totals)");
-    expect(host.textContent).toContain("Remaining (Provisional totals)");
+    expect(host.textContent).toContain("Remaining at month end (Provisional totals)");
     expect(host.querySelector("progress")?.value).toBe(70);
 
     const expectedCard = host.querySelector('[aria-label="Expected income"]');
@@ -561,8 +567,8 @@ describe("MonthBudgetView", () => {
     expect(paceCard?.textContent).toContain("Based on budget received + expected");
     expect(paceCard?.textContent).toContain("7,500.00 PLN");
     expect(paceCard?.textContent).toContain("At this pace the budget runs out around day 27.");
-    expect(paceCard?.textContent).toContain("6,172,839,450,617,283,945.02 PLN / day");
-    expect(paceCard?.textContent).toContain("6,000.00 PLN");
+    expect(paceCard?.textContent).toContain("159.09 PLN / day");
+    expect(paceCard?.textContent).toContain("4,772.73 PLN");
 
     // Chart 1 renders booked budget line, expected-inclusive budget line, pace extension, exhaustion marker, and refund dip!
     const dailyChart = host.querySelector('[aria-label="Cumulative spending · PLN"]');
@@ -579,6 +585,51 @@ describe("MonthBudgetView", () => {
     const incomeChart = host.querySelector('[aria-label="Income and spending · PLN"]');
     expect(incomeChart?.querySelector(".budget-chart-expected-bar")).not.toBeNull();
     expect(incomeChart?.textContent).toContain("Expected income: 2,500.00 PLN");
+  });
+
+  it("draws a scheduled mortgage step and uses it for projected spend and headroom", async () => {
+    const api = fakeApi();
+    api.forecast.mockResolvedValue(ok(forecastOf({
+      months: [{
+        month: "2026-12",
+        currencies: [],
+        items: [forecastItem({
+          label: "Kredyt hipoteczny – mieszkanie",
+          amount: "6286.90",
+          expected_date: "2026-12-05",
+          past_due: false,
+        })],
+      }],
+    })));
+    api.monthlyBudgetCharts.mockResolvedValue(ok(monthlyBudgetChartsOf({
+      period: "2026-12",
+      current_month: "2026-12",
+      start: "2026-12-01",
+      end: "2026-12-31",
+      cutoff: "2026-12-01",
+      evaluation_date: "2026-12-01",
+      summary: { start_budget: "10000", spent: "100", remaining: "9900" },
+      pace: monthlyBudgetPace({ budget: "10000" }),
+    }, {
+      daily: [{ date: "2026-12-01", cumulative_spent: "100" }],
+      months: [],
+      category_labels: [],
+    })));
+    await show(api, { locale: "pl-PL" });
+
+    expect(api.forecast).toHaveBeenCalledWith(1, "PLN");
+    const paceCard = host.querySelector('[aria-label="Tempo wydatków"]');
+    expect(paceCard?.textContent).toMatch(/9[\s\u00a0]386,90 PLN/);
+    const summaryCard = host.querySelector('[aria-label="Podsumowanie miesiąca"]');
+    expect(summaryCard?.textContent).toContain("Pozostało na koniec miesiąca");
+    expect(summaryCard?.textContent).toContain("613,10 PLN");
+    const marker = host.querySelector(".budget-chart-scheduled-step");
+    expect(marker).not.toBeNull();
+    expect(marker?.querySelector("title")?.textContent).toMatch(
+      /5\.12 · Kredyt hipoteczny – mieszkanie · 6[\s\u00a0]286,90 PLN/,
+    );
+    expect(host.textContent).not.toContain("zaległe");
+    for (const svg of host.querySelectorAll("svg")) assertBoundedSvgCoordinates(svg);
   });
 
   it("renders all expected income variants and all remaining pace variants", async () => {
@@ -666,6 +717,9 @@ describe("MonthBudgetView", () => {
     expect(host.textContent).not.toContain("Wydano do dziś");
     expect(host.textContent).toContain("Zamknięty miesiąc — tylko zaksięgowane wpływy.");
     expect(host.textContent).toContain("Zamknięty miesiąc — nie wylicza się prognozy tempa.");
+    expect(api.forecast).not.toHaveBeenCalled();
+    expect(api.mortgages).not.toHaveBeenCalled();
+    expect(api.recurring).not.toHaveBeenCalled();
     expect(host.querySelector(".budget-chart-pace-line")).toBeNull();
     expect(host.querySelector(".budget-chart-exhaustion")).toBeNull();
     expect(host.querySelector(".budget-chart-expected-line")).toBeNull();

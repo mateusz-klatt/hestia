@@ -99,12 +99,16 @@ function paidScheduledAmounts(budget: AnalyticsMonthlyBudget, data?: MonthPaceSc
   };
 }
 
+function hasKnownDueDate(source: string, confidence: string): boolean {
+  return source === "mortgage" || (source === "recurring" && confidence === "high");
+}
+
 function scheduledItems(budget: AnalyticsMonthlyBudget, data: MonthPaceScheduleData | undefined,
   paidScheduleIds: ReadonlySet<string>): ScheduledPaceItem[] {
   const month = data?.forecast.months.find((item) => item.month === budget.period);
   const cutoffDay = Number(budget.evaluation_date.slice(8, 10));
   return (month?.items ?? []).filter((item) => item.currency === budget.currency
-    && (item.source === "mortgage" || (item.source === "recurring" && item.confidence === "high"))
+    && hasKnownDueDate(item.source, item.confidence)
     && !(item.source === "mortgage" && item.schedule_id !== null && paidScheduleIds.has(item.schedule_id)))
     .map((item) => {
       const overdue = item.expected_date < budget.evaluation_date;
@@ -188,7 +192,10 @@ export function buildMonthPaceProjection(
   const dailyRate = points.length === 0 ? null : ratio(discretionaryUnits, scale, cutoffDay);
   let status: AnalyticsMonthlyBudgetPace["status"];
   let exhaustionDay: number | null = null;
-  if (budgetUnits <= 0n) {
+  if (paid.amounts.length === 0 && scheduled.length === 0) {
+    status = pace.status;
+    exhaustionDay = pace.exhaustion_day;
+  } else if (budgetUnits <= 0n) {
     status = "no_budget";
   } else if (spentUnits >= budgetUnits) {
     status = "already_reached";
