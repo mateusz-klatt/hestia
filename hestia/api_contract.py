@@ -67,7 +67,9 @@ from pydantic.json_schema import models_json_schema
 # 0.20.0: owner-private persisted mortgage reminder schedules and payment marks (migration 0018, evaluation-only).
 # 0.21.0: read-only bank consent renewal reminder evaluation (GET /api/budget/consent/renewal-reminders, zero migration).
 # 0.22.0: read-only bank consent reconciliation classification (GET /api/budget/consent/reconcile, zero migration).
-CONTRACT_VERSION = "0.22.0"
+# 0.23.0: owner-private live active alerts inbox and durable anti-ABA read markers (migration 0019,
+#         GET /api/budget/analytics/inbox, POST /api/budget/analytics/inbox-mark).
+CONTRACT_VERSION = "0.23.0"
 OPENAPI_PATH = Path(__file__).resolve().parent.parent / "docs" / "api" / "openapi.json"
 
 # De-duplicated string literals (SonarPython S1192): the OpenAPI content-type, the paths reused
@@ -2054,18 +2056,132 @@ class BudgetAnalyticsMortgages(BaseModel):
     reminders: list[BudgetAnalyticsMortgageReminder]
 
 
+BudgetAnalyticsInboxKind = Literal["consent_renewal", "mortgage_due", "spending_limit"]
+BudgetAnalyticsInboxMilestone = Annotated[str, Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9:_-]+$")]
+
+
+class BudgetAnalyticsInboxKeyRequest(BaseModel):
+    """One opaque owner-inbox alert key (kind, stable local subject_id, milestone)."""
+    model_config = _STRICT
+    kind: BudgetAnalyticsInboxKind
+    subject_id: BudgetAnalyticsFingerprint
+    milestone: BudgetAnalyticsInboxMilestone
+
+
+class BudgetAnalyticsInboxMarkRequest(BaseModel):
+    """Atomically mark or unmark 1..100 owner-inbox alert keys under anti-ABA reads_version CAS."""
+    model_config = _STRICT
+    items: Annotated[list[BudgetAnalyticsInboxKeyRequest], Field(min_length=1, max_length=100)]
+    read: bool
+    expected_reads_version: BudgetAnalyticsFingerprint
+
+
+class BudgetAnalyticsInboxConsentParams(BaseModel):
+    """Strictly allowlisted live params for a consent_renewal alert (zero bank/provider IDs)."""
+    model_config = _READ
+    status: Literal["attention_required", "expired", "due_soon"]
+    valid_until: float | None
+    days_remaining: int | None
+    attention: str | None
+    paused: bool
+
+
+class BudgetAnalyticsInboxMortgageParams(BaseModel):
+    """Strictly allowlisted live params for a mortgage_due alert (zero labels or amounts)."""
+    model_config = _READ
+    status: Literal["overdue", "due_today", "due_soon"]
+    due_date: str
+    days_until_due: int
+    currency: str
+    freshness_stale: bool
+
+
+class BudgetAnalyticsInboxSpendingLimitParams(BaseModel):
+    """Strictly allowlisted live params for a spending_limit alert (zero category names or amounts)."""
+    model_config = _READ
+    status: Literal["approaching", "at_limit", "exceeded"]
+    period: str
+    currency: str
+    warning_percent: int
+    percent_used_floor: int
+
+
+class BudgetAnalyticsInboxItemBase(BaseModel):
+    model_config = _READ
+    subject_id: str
+    milestone: str
+    read: bool
+    read_at: float | None
+
+
+class BudgetAnalyticsInboxConsentItem(BudgetAnalyticsInboxItemBase):
+    kind: Literal["consent_renewal"]
+    params: BudgetAnalyticsInboxConsentParams
+
+
+class BudgetAnalyticsInboxMortgageItem(BudgetAnalyticsInboxItemBase):
+    kind: Literal["mortgage_due"]
+    params: BudgetAnalyticsInboxMortgageParams
+
+
+class BudgetAnalyticsInboxSpendingLimitItem(BudgetAnalyticsInboxItemBase):
+    kind: Literal["spending_limit"]
+    params: BudgetAnalyticsInboxSpendingLimitParams
+
+
+BudgetAnalyticsInboxItem = Annotated[
+    BudgetAnalyticsInboxConsentItem | BudgetAnalyticsInboxMortgageItem | BudgetAnalyticsInboxSpendingLimitItem,
+    Field(discriminator="kind"),
+]
+
+
+class BudgetAnalyticsInbox(BaseModel):
+    """Owner-private live active alerts evaluated in one SQLite read snapshot (pure read-only, zero DB writes).
+    Represents currently active alerts only: resolved alerts disappear automatically even if unread.
+    Read markers are durable dedupe receipts (no pruning in v1, cap 500 per owner)."""
+    model_config = _READ
+    evaluation_date: str
+    evaluation_timezone: Literal["UTC"]
+    evaluated_at: float
+    reads_revision: int
+    reads_version: str
+    reads_count: int
+    reads_cap: int
+    unread_count: int
+    rule_version: int
+    items: list[BudgetAnalyticsInboxItem]
+
+
+class BudgetAnalyticsInboxMarkSaved(BaseModel):
+    model_config = _READ
+    read: bool
+    changed: bool
+    changed_count: int
+    reads_revision: int
+    reads_version: str
+    reads_count: int
+    reads_cap: int
+
+
+class BudgetAnalyticsInboxMarkResult(BaseModel):
+    model_config = _READ
+    ok: Literal[True]
+    inbox: BudgetAnalyticsInboxMarkSaved
+
+
 _ANALYTICS_MODELS = (BudgetAnalyticsCategoryCreateRequest, BudgetAnalyticsCategoryUpdateRequest,
                      BudgetAnalyticsAnnotationRequest, BudgetAnalyticsRulePreviewRequest,
                      BudgetAnalyticsRuleSaveRequest, BudgetAnalyticsTransferDecisionRequest,
                      BudgetAnalyticsSpendingLimitSaveRequest, BudgetAnalyticsMortgageSaveRequest,
-                     BudgetAnalyticsMortgagePaymentSetRequest,
+                     BudgetAnalyticsMortgagePaymentSetRequest, BudgetAnalyticsInboxMarkRequest,
                      BudgetAnalyticsCategories, BudgetAnalyticsCategoryResult, BudgetAnalyticsAnnotationResult,
                      BudgetAnalyticsRules, BudgetAnalyticsRuleResult, BudgetAnalyticsPreviewResult,
                      BudgetAnalyticsOverview, BudgetAnalyticsTransactions, BudgetAnalyticsTransfers,
                      BudgetAnalyticsDecisionResult, BudgetAnalyticsRecurring,
                      BudgetAnalyticsSpendingLimits, BudgetAnalyticsSpendingLimitResult,
                      BudgetAnalyticsMortgages, BudgetAnalyticsMortgageScheduleResult,
-                     BudgetAnalyticsMortgagePaymentResult)
+                     BudgetAnalyticsMortgagePaymentResult, BudgetAnalyticsInbox,
+                     BudgetAnalyticsInboxMarkResult)
 
 
 _BUDGET_MODELS = (BudgetSelectionRequest, BudgetKindRequest, BudgetConnectionStateRequest,
@@ -2094,6 +2210,7 @@ _PATH_ROLES = {
     ("GET", "/api/budget/analytics/recurring"): "admin",
     ("GET", "/api/budget/analytics/spending-limits"): "admin",
     ("GET", "/api/budget/analytics/mortgages"): "admin",
+    ("GET", "/api/budget/analytics/inbox"): "admin",
     ("POST", "/api/budget/analytics/category-create"): "admin",
     ("POST", "/api/budget/analytics/category-update"): "admin",
     ("POST", "/api/budget/analytics/annotation"): "admin",
@@ -2103,6 +2220,7 @@ _PATH_ROLES = {
     ("POST", "/api/budget/analytics/spending-limit-save"): "admin",
     ("POST", "/api/budget/analytics/mortgage-save"): "admin",
     ("POST", "/api/budget/analytics/mortgage-payment-set"): "admin",
+    ("POST", "/api/budget/analytics/inbox-mark"): "admin",
 
     ("GET", "/api/budget/enable-banking/callback"): "public",
     ("GET", "/api/budget/consent/pending"): "admin",
@@ -2734,10 +2852,17 @@ def _analytics_paths():
         ("recurring", "getBudgetAnalyticsRecurring", "BudgetAnalyticsRecurring", [currency]),
         ("spending-limits", "getBudgetAnalyticsSpendingLimits", "BudgetAnalyticsSpendingLimits", [month, currency]),
         ("mortgages", "getBudgetAnalyticsMortgages", "BudgetAnalyticsMortgages", []),
+        ("inbox", "getBudgetAnalyticsInbox", "BudgetAnalyticsInbox", []),
     )
     paths = {prefix + path: {"get": {"operationId": operation, "summary": "Read owner-private local budget analytics",
               "parameters": parameters, "responses": _analytics_responses(model)}}
              for path, operation, model, parameters in reads}
+    paths[prefix + "inbox"]["get"]["summary"] = "Read owner-private live active alerts inbox (pure read-only)"
+    paths[prefix + "inbox"]["get"]["description"] = (
+        "Pure read-only single-snapshot evaluation of currently active consent renewal, mortgage due and "
+        "spending-limit alerts against durable owner read markers (zero DB writes, zero bank requests). "
+        "Resolved alerts disappear automatically even if unread; read markers are not pruned in v1 (cap 500)."
+    )
     writes = (
         ("category-create", "createBudgetAnalyticsCategory", "BudgetAnalyticsCategoryCreateRequest", "BudgetAnalyticsCategoryResult"),
         ("category-update", "updateBudgetAnalyticsCategory", "BudgetAnalyticsCategoryUpdateRequest", "BudgetAnalyticsCategoryResult"),
@@ -2748,6 +2873,7 @@ def _analytics_paths():
         ("spending-limit-save", "saveBudgetAnalyticsSpendingLimit", "BudgetAnalyticsSpendingLimitSaveRequest", "BudgetAnalyticsSpendingLimitResult"),
         ("mortgage-save", "saveBudgetAnalyticsMortgage", "BudgetAnalyticsMortgageSaveRequest", "BudgetAnalyticsMortgageScheduleResult"),
         ("mortgage-payment-set", "setBudgetAnalyticsMortgagePayment", "BudgetAnalyticsMortgagePaymentSetRequest", "BudgetAnalyticsMortgagePaymentResult"),
+        ("inbox-mark", "markBudgetAnalyticsInbox", "BudgetAnalyticsInboxMarkRequest", "BudgetAnalyticsInboxMarkResult"),
     )
     for path, operation, request, model in writes:
         paths[prefix + path] = {"post": {"operationId": operation, "summary": "Save an owner-private local classification",

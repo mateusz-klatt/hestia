@@ -326,3 +326,59 @@ outflow without a known accepted relationship remains spending within that scope
   rotations**; the UI uses them solely as ephemeral React keys and never displays or persists them.
   Stored DB integrity or missing-secret errors fail closed with HTTP 500
   (`budget_consent_data_error`) and exceeding evaluation caps returns 413 (`budget_consent_limit`).
+
+## Owner-private live active alerts inbox (schema 0019, Variant D)
+
+- **Live active alerts semantics (`GET /api/budget/analytics/inbox`):**
+  - Strictly **pure read-only** (zero SQLite writes, zero bank I/O, zero query parameters,
+    gated by `HESTIA_BUDGET_ANALYTICS_ENABLED=1`, exact SQLite admin owner, `allow_head=False`,
+    `Cache-Control: no-store`).
+  - Represents **currently active alerts only**: once an underlying condition resolves (for
+    example a mortgage installment is marked paid, a consent is renewed or attention clears,
+    or spending drops below the warning threshold), that alert disappears automatically from
+    `GET /inbox` even if it was still unread.
+  - Evaluates all three live sources (`consent_renewal`, `mortgage_due`, `spending_limit` for
+    the current server UTC month) and persisted read markers inside **one single SQLite read
+    snapshot** against one server UTC clock reading (`evaluation_date`, `evaluation_timezone: "UTC"`,
+    `evaluated_at`), reusing the memoised spending projection when enabled spending limits exist.
+  - Items are sorted deterministically without `created_at` (unread before read, then kind,
+    severity, `subject_id` and `milestone`). `items`, `unread_count`, `reads_count`, `reads_cap`,
+    `reads_revision` and `reads_version` all reflect that single snapshot.
+- **Tables (strictly outside `_source_digest`):**
+  - `budget_owner_inbox_state`: per-owner monotonic `reads_revision` (`CHECK >= 0`) and
+    `updated_at` (`CHECK >= 0`) with restrictive `owner -> users.username` FK (no `CASCADE`).
+    Starts at `0` when absent; increments `+1` atomically only on actual mark/unmark changes.
+  - `budget_owner_inbox_reads`: composite PK `(owner, kind, subject_id, milestone)`, restrictive
+    `owner -> users.username` FK (no `CASCADE`), `read_at >= 0`, DB-level CHECK constraints on
+    allowed `kind`, 64-lowercase-hex `subject_id` and `1..128` `milestone` length, plus an index
+    on `owner`.
+- **Durable dedupe receipts (no automatic pruning in v1) and cap 500:**
+  - Read markers are **never pruned automatically in v1** (temporary inactivity does not prove
+    permanent disappearance; deleting a marker could resurrect a returning alert as unread).
+  - Cap: `MAX_INBOX_READS = 500` persisted read markers per owner, enforced on **create only**.
+    Exceeding the cap fails explicitly with HTTP `413` (`budget_analytics_limit`) without partial
+    writes; unmarking (`read=false`) and no-ops on existing markers always remain permitted even
+    at the cap. `reads_count` and `reads_cap` expose capacity directly in responses.
+- **Anti-ABA CAS and atomic batch marking (`POST /api/budget/analytics/inbox-mark`):**
+  - Accepts `{items: [{kind, subject_id, milestone}, ...], read: bool, expected_reads_version: str}`
+    (strict `1..100` items, order-preserving deduplication, HTTPS Origin + signed browser cookie).
+  - `reads_version` hashes only `owner`, monotonic `reads_revision` and persisted read markers
+    (never live active alert keys or ledger rows), so background refreshes do not break CAS while
+    `mark -> unmark` always produces a distinct `reads_version` (preventing ABA).
+  - Runs inside one atomic `BEGIN IMMEDIATE` transaction: verifies enabled admin owner, enforces
+    strict CAS BEFORE no-op (`409 budget_analytics_conflict`), re-evaluates live activity for any
+    unmarked keys when `read=true`, and rejects the **entire batch** (`409 budget_analytics_source_changed`)
+    if any unmarked key is no longer currently active (already-marked keys are no-ops).
+- **Privacy, milestones and sanitized audit:**
+  - `subject_id` is a stable domain-separated local SHA-256 digest (`owner + kind + local_id`),
+    never exposing provider IDs or raw DB UUIDs.
+  - `consent_renewal` milestones include both `consent_generation` and `valid_until` expiry tag;
+    `mortgage_due` and `spending_limit` milestones key once per `(YYYY-MM, status)`.
+  - Live `params` are strictly allowlisted per kind (zero bank names, labels, amounts, account
+    IDs, error prose, destination targets or PII).
+  - Changes write sanitized metadata only to `budget_analytics_audit` (`owner_inbox_read`, opaque
+    SHA-256 `key_token`, `kind`, `reads_revision`, `read`), outside shared home audit and SSE.
+    No outbound email/push delivery or shared calendar channel is introduced.
+- **Backup and downgrade (`0019 → 0018`):** back up SQLite before downgrading. Downgrade drops
+  `budget_owner_inbox_reads` and `budget_owner_inbox_state` while preserving sanitized
+  `budget_analytics_audit` rows.

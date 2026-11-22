@@ -84,14 +84,17 @@ class BudgetAnalyticsAPITests(unittest.IsolatedAsyncioTestCase):
                                   "remind_days_before": 5, "destination_kind": "owner_inbox",
                                   "enabled": True, "expected_version": 0},
                 "mortgage-payment-set": {"schedule_id": "unknown", "month": "2026-01", "paid": True,
-                                         "expected_version": 1}}
+                                         "expected_version": 1},
+                "inbox-mark": {"items": [{"kind": "consent_renewal", "subject_id": "a" * 64, "milestone": "g0:exp0:expired"}],
+                               "read": True, "expected_reads_version": "0" * 64}}
 
-    async def test_all_eight_reads_are_private_local_bounded_and_match_wire_models(self):
+    async def test_all_nine_reads_are_private_local_bounded_and_match_wire_models(self):
         models = {"overview": api_contract.BudgetAnalyticsOverview, "transactions": api_contract.BudgetAnalyticsTransactions,
                   "categories": api_contract.BudgetAnalyticsCategories, "rules": api_contract.BudgetAnalyticsRules,
                   "transfers": api_contract.BudgetAnalyticsTransfers, "recurring": api_contract.BudgetAnalyticsRecurring,
                   "spending-limits": api_contract.BudgetAnalyticsSpendingLimits,
-                  "mortgages": api_contract.BudgetAnalyticsMortgages}
+                  "mortgages": api_contract.BudgetAnalyticsMortgages,
+                  "inbox": api_contract.BudgetAnalyticsInbox}
         before = len(self.rows(db.BudgetAcquisition))
         with mock.patch.object(config, "load_config", side_effect=AssertionError("No configuration read")), \
              mock.patch.object(runtime, "credentials") as credentials, \
