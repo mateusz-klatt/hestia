@@ -194,6 +194,15 @@ class PeriodAndRuleTests(unittest.TestCase):
                                      "operator": "regex", "value": "shop", "priority": 0}], payload(), None),
             ("expense debit", [expense], payload(), None),
             ("expense credit", [expense], payload(credit_debit_indicator="CRDT"), None),
+            ("income credit", [{**base, "id": "inc", "kind": "income", "value": "shop"}],
+             payload(credit_debit_indicator="CRDT"), None),
+            ("income debit", [{**base, "id": "inc", "kind": "income", "value": "shop"}],
+             payload(credit_debit_indicator="DBIT"), None),
+            ("refund credit", [{**base, "id": "ref", "kind": "refund", "value": "shop"}],
+             payload(credit_debit_indicator="CRDT"), None),
+            ("excluded credit", [{**base, "id": "exc", "kind": "excluded", "value": "shop"}],
+             payload(credit_debit_indicator="CRDT"), None),
+            ("unknown kind", [{**base, "id": "bad", "kind": "bad", "value": "shop"}], payload(), None),
         )
         for name, rules, body, metadata in cases:
             with self.subTest(name=name):

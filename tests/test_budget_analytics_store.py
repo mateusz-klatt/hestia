@@ -911,6 +911,60 @@ class RuleBatchTests(AnalyticsCase):
         stored = next(row for row in self.rows(db.BudgetRulePreview) if row.id == batch["preview_id"])
         self.assertIsNone(stored.saved_rule_id)
 
+    def test_proposed_handles_unwatched_and_unsafe_rule_fallbacks_and_unfolded_rows(self):
+        from hestia.budget.analytics_views import projection_snapshot
+
+        with self.sessions.begin() as session:
+            snapshot = projection_snapshot(session, "owner")
+        rule = {**self.candidate(kind="excluded"), "id": "proposed-1"}
+        stripped = [{key: value for key, value in row.items() if key != "_match_texts"}
+                    for row in snapshot["transactions"]]
+        expected = BudgetAnalyticsStore._proposed(snapshot["transactions"], [rule], watch=[rule])
+        self.assertGreater(expected[0], 0)
+        self.assertEqual(BudgetAnalyticsStore._proposed(stripped, [rule]), expected)
+        self.assertEqual(BudgetAnalyticsStore._proposed(snapshot["transactions"], [rule],
+                                                         watch=[rule | {"field": "execute"}]), expected)
+
+    def test_snapshot_digest_falls_back_when_stored_rule_is_unsafe(self):
+        with self.sessions.begin() as session:
+            session.add(db.BudgetRule(id=str(uuid.uuid4()), owner="owner", field="execute", operator="contains",
+                        value="x", category_id=None, kind="bad", priority=1, enabled=True, version=1,
+                        created_at=self.now, updated_at=self.now))
+        preview = self.store.preview_rules("owner", [self.candidate()])
+        saved = self.store.save_rules("owner", preview["preview_id"])
+        self.assertTrue(saved["changed"])
+        self.assertEqual(len(saved["rules"]), 1)
+
+    def test_batch_expiry_unsaved_cross_save_and_corrupt_or_tampered_replays(self):
+        expired = self.store.preview_rules("owner", [self.candidate(value="exp")])
+        self.now += 900
+        with self.assertRaises(AnalyticsError) as exc:
+            self.store.save_rules("owner", expired["preview_id"])
+        self.assertEqual((exc.exception.code, exc.exception.status), ("budget_analytics_preview_expired", 409))
+
+        single = self.store.preview_rule("owner", self.candidate(value="single-ok"))
+        saved_single = self.store.save_rule("owner", single["preview_id"])
+        with self.sessions.begin() as session:
+            session.get(db.BudgetRulePreview, single["preview_id"]).candidate_json = "{corrupt-json"
+        replayed_single = self.store.save_rule("owner", single["preview_id"])
+        self.assertEqual((replayed_single["id"], replayed_single["changed"]), (saved_single["id"], False))
+
+        unsaved_batch = self.store.preview_rules("owner", [self.candidate(value="shop")])
+        with self.assertRaises(AnalyticsError) as cross:
+            self.store.save_rule("owner", unsaved_batch["preview_id"])
+        self.assertEqual(cross.exception.status, 400)
+
+        saved_batch = self.store.save_rules("owner", unsaved_batch["preview_id"])
+        self.assertTrue(saved_batch["changed"])
+        with self.sessions.begin() as session:
+            row = session.get(db.BudgetRulePreview, unsaved_batch["preview_id"])
+            payload = json.loads(row.candidate_json)
+            del payload["candidates"][0]["_proposed_id"]
+            row.candidate_json = json.dumps(payload)
+        with self.assertRaises(AnalyticsError) as tampered:
+            self.store.save_rules("owner", unsaved_batch["preview_id"])
+        self.assertEqual(tampered.exception.status, 400)
+
 
 class SpendingLimitStoreTests(AnalyticsCase):
     def save(self, category_id, **changes):
