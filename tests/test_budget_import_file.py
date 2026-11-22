@@ -183,6 +183,21 @@ class ImportParserTests(unittest.TestCase):
             raw = document(); raw["balances"]["balances"] = rows
             self.assert_invalid(raw)
 
+    def test_c0_controls_in_offline_import_follow_normalization_rules(self):
+        raw = document()
+        raw["transactions"]["transactions"] = [
+            transaction("\x00short", remittance_information=["a\x00b\x01\x7f\t\n\r"]),
+            transaction("other\x1fref", remittance_information=["plain"]),
+        ]
+        result = self.parse(raw)
+        self.assertEqual([tx["entry_reference"] for tx in result.transactions], [None, None])
+        self.assertEqual(result.transactions[0]["remittance_information"], ["a\ufffdb\ufffd\ufffd\t\n\r"])
+        for bad_name in ("\x00bal", "bal\x01", "bal\t", "bal\n", "bal\r", "bal\x7f"):
+            bad = document()
+            bad["balances"]["balances"] = [balance(name=bad_name)]
+            with self.subTest(bad_name=repr(bad_name)):
+                self.assert_invalid(bad, "invalid_data")
+
     def test_input_normalized_and_record_limits_apply_before_returning_any_snapshot(self):
         self.assertEqual(import_file.MAX_IMPORT_BYTES, 32 * 1024 * 1024)
         self.assertEqual(import_file.MAX_NORMALIZED_BYTES, 32 * 1024 * 1024)

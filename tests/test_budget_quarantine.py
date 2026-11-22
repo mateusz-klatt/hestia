@@ -8,6 +8,8 @@ from hestia import api_contract, db
 from hestia.budget import quarantine as qmod
 from hestia.budget.analytics_core import AnalyticsError
 from hestia.budget.analytics_views import BudgetAnalyticsViews
+from hestia.budget.import_file import parse_import
+from hestia.budget.normalize import AccountSnapshot, Snapshot, normalize_transaction
 from tests import test_budget_analytics_api as analytics_fixture
 from tests.test_budget_analytics_store import AnalyticsCase
 from tests.test_budget_store import transaction
@@ -449,6 +451,65 @@ class QuarantineViewsTests(AnalyticsCase):
         with self.assertRaises(AnalyticsError) as bad_unc:
             self.views.quarantine("owner")
         self.assertEqual((bad_unc.exception.code, bad_unc.exception.status), ("budget_analytics_data_error", 500))
+
+    def test_provider_nul_entry_reference_normalizes_to_unresolved_without_quarantine_500(self):
+        provider_tx = {
+            "entry_reference": "\x00short-ref",
+            "transaction_amount": {"amount": "42.50", "currency": "PLN"},
+            "credit_debit_indicator": "DBIT",
+            "status": "BOOK",
+            "booking_date": "2026-11-18",
+            "value_date": None,
+            "transaction_date": None,
+            "remittance_information": ["Desc\x00with\x01c0\x7f\t\n\r"],
+        }
+        normalized = normalize_transaction(provider_tx)
+        self.assertIsNone(normalized["entry_reference"])
+        self.assertEqual(normalized["remittance_information"], ["Desc\ufffdwith\ufffdc0\ufffd\t\n\r"])
+        observations = (
+            AccountSnapshot("a", (), (normalized,)),
+            AccountSnapshot("b", None, None),
+            AccountSnapshot("c", None, None),
+            AccountSnapshot("d", None, None),
+        )
+        self.store.commit_snapshot("bank", Snapshot(self.now + 1000, observations, "2026-11-01", "2026-11-30"))
+
+        report = self.views.quarantine("owner", account_id=self.account_id)
+        api_contract.BudgetAnalyticsQuarantine.model_validate(report)
+        self.assertEqual(report["summary"], {
+            "uncertain_count": 0, "unresolved_count": 1, "import_unresolved_count": 0, "total_count": 1,
+        })
+        self.assertEqual(len(report["items"]), 1)
+        item = report["items"][0]
+        self.assertEqual(item["bucket"], qmod.BUCKET_UNRESOLVED)
+        self.assertIsNone(item["entry_reference"])
+        self.assertEqual(item["reason"], "missing_reference")
+        self.assertEqual(item["date"], "2026-11-18")
+        self.assertEqual(item["status"], "BOOK")
+
+        # Offline import with leading NUL entry_reference also stays unresolved without failing quarantine.
+        imported = parse_import({
+            "version": 1,
+            "connection_id": "bank",
+            "aspsp": {"name": "Synthetic Bank", "country": "PL"},
+            "identification_hash": "a",
+            "fetched_at": "1970-01-02T00:00:00Z",
+            "complete": True,
+            "transactions": {"transactions": [provider_tx], "continuation_key": None},
+        }, self.config, now=self.now)
+        import_report = self.store.import_snapshot(self.config, imported)
+        self.assertEqual(import_report["unresolved"], 1)
+
+        combined = self.views.quarantine("owner", account_id=self.account_id)
+        api_contract.BudgetAnalyticsQuarantine.model_validate(combined)
+        self.assertEqual(combined["summary"], {
+            "uncertain_count": 0, "unresolved_count": 1, "import_unresolved_count": 1, "total_count": 2,
+        })
+        self.assertTrue(all(row["entry_reference"] is None for row in combined["items"]))
+        self.assertEqual({(row["bucket"], row["reason"]) for row in combined["items"]}, {
+            (qmod.BUCKET_UNRESOLVED, "missing_reference"),
+            (qmod.BUCKET_IMPORT_UNRESOLVED, "non_canonical"),
+        })
 
 
 class QuarantineHTTPAPITests(unittest.IsolatedAsyncioTestCase):

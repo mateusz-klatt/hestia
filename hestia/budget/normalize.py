@@ -27,6 +27,8 @@ _UUID = re.compile(r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}", re.A
 _MONEY = re.compile(r"-?[0-9]+(?:\.[0-9]+)?", re.ASCII)
 _CURRENCY = re.compile(r"[A-Z]{3}", re.ASCII)
 _DATE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", re.ASCII)
+_CONTROL = re.compile(r"[\x00-\x1f\x7f]")
+_REMITTANCE_CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 
 
 class BudgetDataError(ValueError):
@@ -75,13 +77,15 @@ def _object(value):
 
 
 def _text(value, *, limit=1024):
-    if not isinstance(value, str) or not value.strip() or len(value) > limit:
+    if not isinstance(value, str) or not value.strip() or len(value) > limit or _CONTROL.search(value):
         raise BudgetDataError()
     return value
 
 
 def _optional_text(value):
-    return None if value is None or value == "" else _text(value)
+    if value is None or value == "" or (isinstance(value, str) and _CONTROL.search(value)):
+        return None
+    return _text(value)
 
 
 def _date(value):
@@ -124,13 +128,15 @@ def normalize_transaction(value):
     lines = value.get("remittance_information")
     if lines is None:
         lines = []
-    if (not isinstance(lines, list) or len(lines) > 100
-            or any(not isinstance(line, str) or len(line) > 4096 for line in lines)):
+    if not isinstance(lines, list) or len(lines) > 100 or any(not isinstance(line, str) for line in lines):
+        raise BudgetDataError()
+    cleaned_lines = [_REMITTANCE_CONTROL.sub("\ufffd", line) for line in lines]
+    if any(len(line) > 4096 for line in cleaned_lines):
         raise BudgetDataError()
     return {"entry_reference": _optional_text(value.get("entry_reference")), **money,
             "credit_debit_indicator": direction, "status": status,
             "booking_date": _date(value.get("booking_date")), "value_date": _date(value.get("value_date")),
-            "transaction_date": _date(value.get("transaction_date")), "remittance_information": list(lines)}
+            "transaction_date": _date(value.get("transaction_date")), "remittance_information": cleaned_lines}
 
 
 def normalize_balances(value):
