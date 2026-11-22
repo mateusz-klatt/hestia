@@ -3,6 +3,8 @@
 // plus keyboard-operable exact HTML data tables.
 import { useId } from "react";
 import { formatAmount } from "../model";
+import { categoryParentMap, hasCategoryParents, rollupNetAmounts } from "./category_tree";
+import type { CategoryLink } from "./category_tree";
 import { formatRatioHalfEven, formatScaledBigInt, isZero, parseScaledInt } from "./model";
 import type { AnalyticsMonthlyBudget, AnalyticsMonthlyBudgetCategoryLabel, AnalyticsMonthlyBudgetDailyPoint,
   AnalyticsMonthlyBudgetSeries, AnalyticsMonthlyBudgetSeriesMonth } from "./model";
@@ -386,14 +388,34 @@ export interface CategoryChartModel {
   stacks: MonthCategoryStack[];
 }
 
+function topLevelMonths(
+  months: readonly AnalyticsMonthlyBudgetSeriesMonth[],
+  labels: readonly AnalyticsMonthlyBudgetCategoryLabel[],
+  categories: readonly CategoryLink[] | undefined,
+): { months: readonly AnalyticsMonthlyBudgetSeriesMonth[]; labels: readonly AnalyticsMonthlyBudgetCategoryLabel[] } {
+  if (categories === undefined || !hasCategoryParents(categories)) return { months, labels };
+  const parents = categoryParentMap(categories);
+  const merged = new Map(labels.map((item) => [item.category_id, item]));
+  for (const item of categories) {
+    if (!merged.has(item.id)) merged.set(item.id, { category_id: item.id, name: item.name, archived: item.archived });
+  }
+  return {
+    labels: [...merged.values()],
+    months: months.map((month) => ({ ...month, categories: rollupNetAmounts(month.categories, parents, null) })),
+  };
+}
+
 export function buildCategoryChartModel(
   months: readonly AnalyticsMonthlyBudgetSeriesMonth[],
   categoryLabels: readonly AnalyticsMonthlyBudgetCategoryLabel[],
   options: { uncategorised: string; unknownCategory: string; otherCategory: string },
+  categories?: readonly CategoryLink[],
 ): CategoryChartModel {
-  const labelLookup = new Map(categoryLabels.map((item) => [item.category_id, item]));
+  const prepared = topLevelMonths(months, categoryLabels, categories);
+  const chartMonths = prepared.months;
+  const labelLookup = new Map(prepared.labels.map((item) => [item.category_id, item]));
   const allNetStrings: string[] = [];
-  for (const month of months) {
+  for (const month of chartMonths) {
     for (const cat of month.categories) allNetStrings.push(cat.net_spending);
   }
   const { scale } = alignDecimals(allNetStrings);
@@ -402,7 +424,7 @@ export function buildCategoryChartModel(
   const byMonthAndCategory = new Map<string, Map<string | null, string>>();
   const absTotals = new Map<string | null, bigint>();
 
-  for (const month of months) {
+  for (const month of chartMonths) {
     const bigMap = new Map<string | null, bigint>();
     const strMap = new Map<string | null, string>();
     for (const entry of month.categories) {
@@ -445,7 +467,7 @@ export function buildCategoryChartModel(
 
   let hasOtherPositive = false;
   let hasOtherNegative = false;
-  const stacks: MonthCategoryStack[] = months.map((month) => {
+  const stacks: MonthCategoryStack[] = chartMonths.map((month) => {
     const bigMap = perMonthBig.get(month.period) ?? new Map<string | null, bigint>();
     let posCursor = 0n;
     let negCursor = 0n;
@@ -498,11 +520,12 @@ function monthTickSuffix(month: AnalyticsMonthlyBudgetSeriesMonth): string {
   return `${month.is_current_month ? "*" : ""}${month.provisional ? "~" : ""}`;
 }
 
-function CategorySpendingChart({ series, currency, locale, text }: {
+function CategorySpendingChart({ series, currency, locale, text, categories }: {
   series: AnalyticsMonthlyBudgetSeries;
   currency: string;
   locale: string;
   text: MonthBudgetChartLabels;
+  categories?: readonly CategoryLink[] | undefined;
 }) {
   const id = useId();
   const money = (amount: string) => formatAmount(amount, currency, locale);
@@ -510,7 +533,7 @@ function CategorySpendingChart({ series, currency, locale, text }: {
     uncategorised: text.uncategorised,
     unknownCategory: text.unknownCategory,
     otherCategory: text.otherCategory,
-  });
+  }, categories);
 
   const yScale = buildYScale(model.stacks.flatMap((stack) => [stack.posTotal, stack.negTotal]));
   const count = Math.max(1, series.months.length);
@@ -826,16 +849,17 @@ function IncomeVsSpendChart({ budget, months, locale, text }: {
   );
 }
 
-export function MonthBudgetCharts({ budget, series, locale, text }: {
+export function MonthBudgetCharts({ budget, series, locale, text, categories }: {
   budget: AnalyticsMonthlyBudget;
   series: AnalyticsMonthlyBudgetSeries;
   locale: string;
   text: MonthBudgetChartLabels;
+  categories?: readonly CategoryLink[] | undefined;
 }) {
   return (
     <section className="budget-month-charts" aria-label={text.chartsSectionTitle}>
       <CumulativeDailyChart budget={budget} daily={series.daily} locale={locale} text={text} />
-      <CategorySpendingChart series={series} currency={budget.currency} locale={locale} text={text} />
+      <CategorySpendingChart series={series} currency={budget.currency} locale={locale} text={text} categories={categories} />
       <IncomeVsSpendChart budget={budget} months={series.months} locale={locale} text={text} />
     </section>
   );

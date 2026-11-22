@@ -44,6 +44,7 @@ export function MonthView({ api, accounts, connections = [], text, locale, revis
   const [currencies, setCurrencies] = useState<string[]>([]);
   const changed = useCallback(() => { setChanges((current) => current + 1); }, []);
   const overview = useCallback((period: string) => api.overview(period), [api]);
+  const loadCategories = useCallback(() => api.categories(), [api]);
   return (
     <section className="budget-month" aria-label={monthLabel(month, locale)}>
       <nav className="budget-month-nav">
@@ -53,7 +54,7 @@ export function MonthView({ api, accounts, connections = [], text, locale, revis
           onClick={() => { setMonth((value) => (isMonth(value) && value < latest ? shiftMonth(value, 1) : value)); }}>▶</button>
       </nav>
       <OverviewPanel overview={overview} period={month} current={month === latest} accounts={accounts} connections={connections} text={text.overview}
-        locale={locale} revision={revision + changes} onAccessLoss={onAccessLoss} onCurrencies={setCurrencies} />
+        locale={locale} revision={revision + changes} onAccessLoss={onAccessLoss} onCurrencies={setCurrencies} loadCategories={loadCategories} />
       <TransfersPanel api={api} period={month} accounts={accounts} connections={connections} text={text.transfers} locale={locale}
         revision={revision + changes} onAccessLoss={onAccessLoss} onChanged={changed} />
       <TransactionsPanel api={api} period={month} currencies={currencies} accounts={accounts} connections={connections} text={text.entries}

@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import type { BudgetApi } from "../api";
 import { formatAmount, when } from "../model";
 import type { BudgetAccount } from "../model";
+import { groupCategoryTotals, hasCategoryParents, visibleCategoryRows } from "./category_tree";
 import { clampPercentString, formatRatioHalfEven, isPositiveDecimal, isZero, labelOf,
   monthLabel, monthlyBudgetCurrencies, pluralPl, ratioPercentFloor, shiftMonth, validCurrency } from "./model";
 import type { AnalyticsCategory, AnalyticsMonthlyBudget, AnalyticsMonthlyBudgetCharts,
@@ -101,6 +102,8 @@ export const monthBudgetLabels = {
     uncategorised: "Uncategorised",
     unknownCategory: "Category",
     archived: "archived",
+    collapseCategory: (name: string) => `Collapse ${name}`,
+    expandCategory: (name: string) => `Expand ${name}`,
     noExpenses: "No category spending recorded in this month.",
     limitStatuses: {
       within: "Within limit",
@@ -233,6 +236,8 @@ export const monthBudgetLabels = {
     uncategorised: "Bez kategorii",
     unknownCategory: "Kategoria",
     archived: "archiwalna",
+    collapseCategory: (name: string) => `Zwiń ${name}`,
+    expandCategory: (name: string) => `Rozwiń ${name}`,
     noExpenses: "Brak wydatków w kategoriach w tym miesiącu.",
     limitStatuses: {
       within: "W limicie",
@@ -462,6 +467,34 @@ function PassThroughCard({ passThrough, currency, categoryMap, text, locale }: {
   );
 }
 
+type CategorySpend = AnalyticsMonthlyBudget["category_spend"][number];
+
+function shownCategorySpend(
+  rows: readonly CategorySpend[],
+  categories: readonly AnalyticsCategory[],
+  locale: string,
+  collapsed: ReadonlySet<string>,
+): {
+  key: string; category_id: string | null; name: string | null; archived: boolean; depth: number;
+  has_children: boolean; expenses: string; refunds: string; net_spending: string;
+  limit: CategorySpend["limit"]; tree: boolean;
+}[] {
+  if (!hasCategoryParents(categories)) {
+    return rows.map((row, index) => ({
+      key: row.category_id ?? `uncategorised-${String(index)}`,
+      category_id: row.category_id, name: row.name, archived: row.archived, depth: 0, has_children: false,
+      expenses: row.expenses, refunds: row.refunds, net_spending: row.net_spending, limit: row.limit, tree: false,
+    }));
+  }
+  const limits = new Map(rows.map((row) => [row.category_id, row.limit]));
+  return visibleCategoryRows(groupCategoryTotals(rows, categories, locale), collapsed).map((row) => ({
+    key: row.category_id ?? "uncategorised",
+    category_id: row.category_id, name: row.name, archived: row.archived, depth: row.depth,
+    has_children: row.has_children, expenses: row.expenses, refunds: row.refunds, net_spending: row.net_spending,
+    limit: limits.get(row.category_id) ?? null, tree: true,
+  }));
+}
+
 export function MonthBudgetView({ api, accounts, text, locale, revision, onAccessLoss, onOpenMonth }: MonthBudgetViewProps) {
   const [period, setPeriod] = useState<string | undefined>(undefined);
   const [currency, setCurrency] = useState("PLN");
@@ -581,8 +614,8 @@ export function MonthBudgetView({ api, accounts, text, locale, revision, onAcces
       {shown.state === "error" ? <p className="budget-notice" role="alert">{text.error}</p> : null}
 
       {data === null ? null : (
-        <ReadyDashboard data={data} series={series} categoryMap={categoryMap} text={text} locale={locale}
-          onOpenMonth={onOpenMonth} />
+        <ReadyDashboard data={data} series={series} categoryMap={categoryMap} categories={categories} text={text}
+          locale={locale} onOpenMonth={onOpenMonth} />
       )}
     </section>
   );
@@ -598,14 +631,24 @@ function SummaryMeter({ spent, budget, label }: { spent: string; budget: string;
   );
 }
 
-function ReadyDashboard({ data, series, categoryMap, text, locale, onOpenMonth }: {
+function ReadyDashboard({ data, series, categoryMap, categories, text, locale, onOpenMonth }: {
   data: AnalyticsMonthlyBudget;
   series: AnalyticsMonthlyBudgetSeries | null;
   categoryMap: ReadonlyMap<string, string>;
+  categories: readonly AnalyticsCategory[];
   text: MonthBudgetLabels;
   locale: string;
   onOpenMonth: (month: string, serverCurrentMonth: string) => void;
 }) {
+  const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set());
+  const toggleCategory = (id: string) => {
+    setCollapsed((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
   const money = (amount: string) => formatAmount(amount, data.currency, locale);
   const ledgerStamp = when(data.coverage.ledger_as_of, locale);
   const isCurrent = data.period === data.current_month;
@@ -727,14 +770,23 @@ function ReadyDashboard({ data, series, categoryMap, text, locale, onOpenMonth }
                     </tr>
                   </thead>
                   <tbody>
-                    {data.category_spend.map((row, index) => {
+                    {shownCategorySpend(data.category_spend, categories, locale, collapsed).map((row) => {
                       const label = row.category_id === null
                         ? text.uncategorised
                         : (row.name ?? categoryMap.get(row.category_id) ?? text.unknownCategory);
+                      const categoryId = row.category_id;
+                      const closed = categoryId !== null && collapsed.has(categoryId);
                       return (
-                        <tr key={row.category_id ?? `uncategorised-${String(index)}`}
-                          className={row.category_id === null ? "is-uncategorised" : undefined}>
+                        <tr key={row.key} data-depth={row.tree ? row.depth : undefined}
+                          className={categoryId === null ? "is-uncategorised" : undefined}>
                           <th scope="row">
+                            {row.tree && row.has_children && categoryId !== null ? (
+                              <button type="button" className="budget-tree-toggle" aria-expanded={!closed}
+                                aria-label={closed ? text.expandCategory(label) : text.collapseCategory(label)}
+                                onClick={() => { toggleCategory(categoryId); }}>
+                                {closed ? "▸" : "▾"}
+                              </button>
+                            ) : null}
                             {label}
                             {row.archived ? <small className="budget-muted"> ({text.archived})</small> : null}
                           </th>
@@ -772,7 +824,7 @@ function ReadyDashboard({ data, series, categoryMap, text, locale, onOpenMonth }
           </section>
 
           {series === null ? null : (
-            <MonthBudgetCharts budget={data} series={series} locale={locale} text={text} />
+            <MonthBudgetCharts budget={data} series={series} categories={categories} locale={locale} text={text} />
           )}
         </>
       )}

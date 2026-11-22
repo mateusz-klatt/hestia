@@ -506,7 +506,7 @@ export function Budget({ active, api = budgetApi, pollMs = 2000, principal,
         <QuarantineView api={api} accounts={accounts} connections={connections} text={quarantineText} revision={revision}
           onAccessLoss={barrier} />
       ) : shownView === "rules" ? (
-        <CategoriesView api={api} accounts={accounts} connections={connections} text={rulesText} revision={revision} onAccessLoss={barrier} />
+        <CategoriesView api={api} accounts={accounts} connections={connections} text={rulesText} locale={locale} revision={revision} onAccessLoss={barrier} />
       ) : (
         <>
         {connections.length === 0 ? <p className="budget-status">{text.empty}</p> : null}

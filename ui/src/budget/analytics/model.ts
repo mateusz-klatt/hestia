@@ -1,5 +1,6 @@
-// Spending analytics (2D) helpers. Every total is computed by the server per currency and arrives as a decimal
-// STRING; the browser never adds, subtracts, converts or mixes amounts. Periods are "YYYY-MM" or "YYYY".
+// Spending analytics (2D) helpers. Currency totals are computed by the server and arrive as decimal STRINGS.
+// A category tree adds a parent's own amount to its descendants; nothing is converted or mixed across currencies.
+// Periods are "YYYY-MM" or "YYYY".
 import type { components } from "../../api/openapi";
 import type { BudgetAccount, BudgetCapabilities, BudgetConnection } from "../model";
 import { accountLabel, formatAmount } from "../model";

@@ -1,12 +1,13 @@
-// Period overview of the owner's spending (2D). Shows only server-computed per-currency totals for the selected
-// accounts; data live in component state only and every response passes the budget's access barrier.
+// Period overview of the owner's spending (2D). Currency totals stay server-computed. When categories have
+// parents, each parent row adds its own amount to its descendants. Every response passes the access barrier.
 import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import type { BudgetResult } from "../api";
 import type { BudgetAccount, BudgetConnection } from "../model";
 import { formatAmount } from "../model";
+import { groupCategoryTotals, hasCategoryParents, visibleCategoryRows } from "./category_tree";
 import { accountName, isZero, staleAccounts } from "./model";
-import type { AnalyticsCategoryTotal, AnalyticsOverview, AnalyticsTotals } from "./model";
+import type { AnalyticsCategory, AnalyticsCategoryTotal, AnalyticsOverview, AnalyticsTotals } from "./model";
 
 export const overviewLabels = {
   en: {
@@ -15,6 +16,7 @@ export const overviewLabels = {
     transfers: "Own transfers", transferOut: "out", transferIn: "in", transfersHelp: "not counted as spending or income",
     excluded: "Left out by you", excludedOut: "out", excludedIn: "in",
     categories: "Spending by category", uncategorised: "Uncategorised", archived: "archived",
+    collapseCategory: (name: string) => `Collapse ${name}`, expandCategory: (name: string) => `Expand ${name}`,
     scope: (selected: number, excluded: number) =>
       `${String(selected)} accounts in the budget${excluded > 0 ? ` (${String(excluded)} excluded)` : ""} · change this on the Accounts tab`,
     current: "This period is still in progress.", partial: "Incomplete data",
@@ -33,6 +35,7 @@ export const overviewLabels = {
     transfers: "Przelewy własne", transferOut: "wyszło", transferIn: "weszło", transfersHelp: "nie liczą się do wydatków ani wpływów",
     excluded: "Pominięte przez Ciebie", excludedOut: "wyszło", excludedIn: "weszło",
     categories: "Wydatki według kategorii", uncategorised: "Bez kategorii", archived: "archiwalna",
+    collapseCategory: (name: string) => `Zwiń ${name}`, expandCategory: (name: string) => `Rozwiń ${name}`,
     scope: (selected: number, excluded: number) =>
       `Kont w budżecie: ${String(selected)}${excluded > 0 ? ` (wykluczone: ${String(excluded)})` : ""} · zmienisz to na karcie Konta`,
     current: "Ten okres jeszcze trwa.", partial: "Dane niepełne",
@@ -66,17 +69,21 @@ export interface OverviewProps {
   onCurrencies?: ((currencies: string[]) => void) | undefined;
   /** Extra content drawn from the same answer (the year's month table). */
   details?: ((data: AnalyticsOverview) => ReactNode) | undefined;
+  /** Owner categories. When any has a parent, the spending list becomes a collapsible tree. */
+  loadCategories?: (() => Promise<BudgetResult<{ categories: AnalyticsCategory[] }>>) | undefined;
 }
 
 export function OverviewPanel({ overview, period, current, accounts, connections = [], text, locale, revision, onAccessLoss,
-  onCurrencies, details }: OverviewProps) {
+  onCurrencies, details, loadCategories }: OverviewProps) {
   const [shown, setShown] = useState<Shown>({ state: "loading" });
+  const [links, setLinks] = useState<readonly AnalyticsCategory[]>([]);
   // Every period change or reload takes a new generation; an older answer can never replace a newer period.
   const generation = useRef(0);
 
   useEffect(() => {
     const token = ++generation.current;
     setShown({ state: "loading" });
+    setLinks([]);
     void overview(period).then((result) => {
       if (onAccessLoss(result) || token !== generation.current) return;
       // Never show totals labelled with a period other than the one asked for.
@@ -87,7 +94,13 @@ export function OverviewPanel({ overview, period, current, accounts, connections
         setShown({ state: "error" });
       }
     });
-  }, [overview, period, revision, onAccessLoss, onCurrencies]);
+    if (loadCategories !== undefined) {
+      void loadCategories().then((result) => {
+        if (onAccessLoss(result) || token !== generation.current) return;
+        setLinks(result.ok ? result.data.categories : []);
+      });
+    }
+  }, [overview, period, revision, onAccessLoss, onCurrencies, loadCategories]);
   useEffect(() => () => { generation.current += 1; }, []);
 
   const name = (id: string) => accountName(accounts, connections, id, text.account);
@@ -96,15 +109,18 @@ export function OverviewPanel({ overview, period, current, accounts, connections
   if (shown.state === "error") return <p className="budget-notice" role="alert">{text.error}</p>;
   return (
     <>
-      <OverviewBody data={shown.data} current={current} name={name} text={text} locale={locale} />
+      <OverviewBody data={shown.data} current={current} name={name} text={text} locale={locale} links={links} />
       {details?.(shown.data)}
     </>
   );
 }
 
-interface BodyProps { data: AnalyticsOverview; current: boolean; name: (id: string) => string; text: OverviewLabels; locale: string }
+interface BodyProps {
+  data: AnalyticsOverview; current: boolean; name: (id: string) => string; text: OverviewLabels; locale: string;
+  links: readonly AnalyticsCategory[];
+}
 
-function OverviewBody({ data, current, name, text, locale }: BodyProps) {
+function OverviewBody({ data, current, name, text, locale, links }: BodyProps) {
   const { scope, transfer_summary: transfers } = data;
   const stale = staleAccounts(scope);
   const skipped = [[scope.uncertain_count, text.uncertain], [scope.unresolved_count, text.unresolved],
@@ -126,7 +142,7 @@ function OverviewBody({ data, current, name, text, locale }: BodyProps) {
         <div className="budget-totals">
           {data.currencies.map((total) => (
             <CurrencyCard key={total.currency} total={total} partial={stale.length > 0} text={text} locale={locale}
-              categories={data.categories.filter((item) => item.currency === total.currency)} />
+              categories={data.categories.filter((item) => item.currency === total.currency)} links={links} />
           ))}
         </div>
       )}
@@ -135,7 +151,10 @@ function OverviewBody({ data, current, name, text, locale }: BodyProps) {
   );
 }
 
-interface CardProps { total: AnalyticsTotals; categories: AnalyticsCategoryTotal[]; partial: boolean; text: OverviewLabels; locale: string }
+interface CardProps {
+  total: AnalyticsTotals; categories: AnalyticsCategoryTotal[]; links: readonly AnalyticsCategory[];
+  partial: boolean; text: OverviewLabels; locale: string;
+}
 
 function Amount({ value }: { value: string }) {
   return <span className="budget-amount">{value}</span>;
@@ -151,8 +170,19 @@ function Compound({ parts }: { parts: readonly (readonly [string, string])[] }) 
   ));
 }
 
-function CurrencyCard({ total, categories, partial, text, locale }: CardProps) {
+function CurrencyCard({ total, categories, links, partial, text, locale }: CardProps) {
+  const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set());
   const money = (amount: string) => formatAmount(amount, total.currency, locale);
+  const tree = hasCategoryParents(links);
+  const rows = tree ? visibleCategoryRows(groupCategoryTotals(categories, links, locale), collapsed) : [];
+  const toggle = (id: string) => {
+    setCollapsed((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
   const transfers = !isZero(total.transfer_debits) || !isZero(total.transfer_credits);
   const excluded = !isZero(total.excluded_debits) || !isZero(total.excluded_credits);
   return (
@@ -195,7 +225,28 @@ function CurrencyCard({ total, categories, partial, text, locale }: CardProps) {
         <table className="budget-categories" aria-label={`${text.categories} ${total.currency}`}>
           <caption>{text.categories}</caption>
           <tbody>
-            {categories.map((item) => (
+            {tree ? rows.map((item) => {
+              const id = item.category_id;
+              const label = id === null ? text.uncategorised : item.name;
+              const open = id === null || !collapsed.has(id);
+              return (
+                <tr key={id ?? "uncategorised"} data-depth={item.depth}
+                  className={id === null ? "is-uncategorised" : undefined}>
+                  <th scope="row">
+                    {item.has_children && id !== null ? (
+                      <button type="button" className="budget-tree-toggle" aria-expanded={open}
+                        aria-label={open ? text.collapseCategory(label) : text.expandCategory(label)}
+                        onClick={() => { toggle(id); }}>
+                        {open ? "▾" : "▸"}
+                      </button>
+                    ) : null}
+                    {label}
+                    {item.archived ? <small> ({text.archived})</small> : null}
+                  </th>
+                  <td>{money(item.net_spending)}</td>
+                </tr>
+              );
+            }) : categories.map((item) => (
               <tr key={item.category_id ?? "uncategorised"} className={item.category_id === null ? "is-uncategorised" : undefined}>
                 <th scope="row">
                   {item.category_id === null ? text.uncategorised : item.name ?? text.uncategorised}

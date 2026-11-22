@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { BudgetApi, BudgetResult } from "../api";
 import type { BudgetAccount, BudgetConnection } from "../model";
+import { listCategoryTree, parentChoices } from "./category_tree";
+import type { ParentChoice } from "./category_tree";
 import { ANALYTICS_ERROR, CATEGORY_NAME_MAX, KIND_CHOICES, RELOAD_ERRORS, accountName as nameOf, labelOf, RULE_FIELDS, RULE_OPERATORS, RULE_PRIORITY_MAX, RULE_VALUE_MAX, ruleCandidate,
   validCandidate, validCategoryName } from "./model";
 import type { AnalyticsCategory, AnalyticsRule, KindChoice, RuleCandidate, RulePreview } from "./model";
@@ -11,6 +13,8 @@ export const rulesLabels = {
   en: {
     categories: "Categories", rules: "Rules", name: "Name", add: "Add category", rename: "Rename", save: "Save", cancel: "Cancel",
     archive: "Archive", restore: "Restore", archived: "archived", noCategories: "No categories yet.",
+    parent: "Parent category", noParent: "Top level",
+    archiveBlocked: "Move or archive its subcategories first.",
     rulesHelp: "Rules sort new and existing entries automatically. Your own choice on an entry always wins over a rule.",
     noRules: "No rules yet.", newRule: "New rule", edit: "Edit", field: "When", operator: "", value: "text",
     fields: { description: "description", counterparty_name: "counterparty", mcc: "card merchant code" },
@@ -28,6 +32,8 @@ export const rulesLabels = {
   pl: {
     categories: "Kategorie", rules: "Reguły", name: "Nazwa", add: "Dodaj kategorię", rename: "Zmień nazwę", save: "Zapisz",
     cancel: "Anuluj", archive: "Archiwizuj", restore: "Przywróć", archived: "archiwalna", noCategories: "Nie ma jeszcze kategorii.",
+    parent: "Kategoria nadrzędna", noParent: "Najwyższy poziom",
+    archiveBlocked: "Najpierw przenieś albo zarchiwizuj jej podkategorie.",
     rulesHelp: "Reguły porządkują nowe i dotychczasowe pozycje automatycznie. Twój ręczny wybór przy pozycji zawsze ma pierwszeństwo.",
     noRules: "Nie ma jeszcze reguł.", newRule: "Nowa reguła", edit: "Edytuj", field: "Gdy", operator: "", value: "tekst",
     fields: { description: "opis", counterparty_name: "kontrahent", mcc: "kod branży karty" },
@@ -53,11 +59,12 @@ export interface CategoriesViewProps {
   accounts: readonly BudgetAccount[];
   connections?: readonly BudgetConnection[] | undefined;
   text: RulesLabels;
+  locale?: string;
   revision: number;
   onAccessLoss: Loss;
 }
 
-export function CategoriesView({ api, accounts, connections = [], text, revision, onAccessLoss }: CategoriesViewProps) {
+export function CategoriesView({ api, accounts, connections = [], text, locale = "en", revision, onAccessLoss }: CategoriesViewProps) {
   const [categories, setCategories] = useState<Listed<AnalyticsCategory>>("loading");
   const [rules, setRules] = useState<Listed<AnalyticsRule>>("loading");
   const [changes, setChanges] = useState(0);
@@ -94,7 +101,7 @@ export function CategoriesView({ api, accounts, connections = [], text, revision
   const shown = Array.isArray(categories) ? categories : [];
   return (
     <section className="budget-month" aria-label={`${text.categories} · ${text.rules}`}>
-      <CategoriesPanel categories={categories} api={api} run={run} text={text} onSaved={reload} epoch={epoch} />
+      <CategoriesPanel categories={categories} api={api} run={run} text={text} locale={locale} onSaved={reload} epoch={epoch} />
       <RulesPanel rules={rules} categories={shown} accounts={accounts} connections={connections} api={api} run={run} text={text} onSaved={reload} epoch={epoch} />
     </section>
   );
@@ -115,14 +122,32 @@ interface CategoriesProps {
   api: Pick<BudgetApi, "createCategory" | "updateCategory">;
   run: Run;
   text: RulesLabels;
+  locale: string;
   onSaved: () => void;
   /** Changes with every reload of the view. */
   epoch: number;
 }
 
-function CategoriesPanel({ categories, api, run, text, onSaved, epoch }: CategoriesProps) {
+function ParentField({ label, none, value, choices, disabled, onChange }: {
+  label: string; none: string; value: string; choices: readonly ParentChoice[]; disabled: boolean;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <label>{label}
+      <select name="parent_id" value={value} disabled={disabled} onChange={(event) => { onChange(event.currentTarget.value); }}>
+        <option value="">{none}</option>
+        {choices.map((choice) => (
+          <option key={choice.id} value={choice.id}>{"\u2003".repeat(Math.max(0, choice.depth - 1))}{choice.name}</option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
+function CategoriesPanel({ categories, api, run, text, locale, onSaved, epoch }: CategoriesProps) {
   const [draft, setDraft] = useState("");
-  const [renaming, setRenaming] = useState<{ id: string; name: string } | null>(null);
+  const [draftParent, setDraftParent] = useState("");
+  const [renaming, setRenaming] = useState<{ id: string; name: string; parent: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   // A reload settles whatever was pending: its answer is discarded, so its controls must not stay locked.
@@ -138,9 +163,12 @@ function CategoriesPanel({ categories, api, run, text, onSaved, epoch }: Categor
     done();
     onSaved();
   };
-  const update = (category: AnalyticsCategory, changes: { name?: string; archived?: boolean }) =>
-    () => api.updateCategory({ category_id: category.id, name: changes.name ?? category.name, archived: changes.archived ?? category.archived,
-      expected_version: category.version });
+  const update = (category: AnalyticsCategory, changes: { name?: string; archived?: boolean; parent_id?: string | null }) =>
+    () => api.updateCategory({
+      category_id: category.id, name: changes.name ?? category.name, archived: changes.archived ?? category.archived,
+      expected_version: category.version,
+      parent_id: changes.parent_id === undefined ? category.parent_id : changes.parent_id,
+    });
 
   return (
     <section className="budget-entries" aria-label={text.categories}>
@@ -151,44 +179,60 @@ function CategoriesPanel({ categories, api, run, text, onSaved, epoch }: Categor
       {Array.isArray(categories) && categories.length === 0 ? <p className="budget-muted">{text.noCategories}</p> : null}
       {Array.isArray(categories) && categories.length > 0 ? (
         <ul className="budget-entry-list">
-          {categories.map((category) => (
-            <li key={category.id} className="budget-entry budget-category">
-              {renaming?.id === category.id ? (
-                <form className="budget-entry-editor" onSubmit={(event) => {
-                  event.preventDefault();
-                  if (validCategoryName(renaming.name)) {
-                    void save(update(category, { name: renaming.name.trim() }), () => { setRenaming(null); });
-                  }
-                }}>
-                  <label>{text.name}
-                    <input name="category_name" maxLength={CATEGORY_NAME_MAX} value={renaming.name}
-                      onChange={(event) => { setRenaming({ id: category.id, name: event.currentTarget.value }); }} />
-                  </label>
-                  <button type="submit" className="budget-primary" disabled={busy || !validCategoryName(renaming.name)}>{text.save}</button>
-                  <button type="button" disabled={busy} onClick={() => { setRenaming(null); }}>{text.cancel}</button>
-                </form>
-              ) : (
-                <div className="budget-entry-facts">
-                  <strong className={category.archived ? "budget-muted" : undefined}>{category.name}</strong>
-                  {category.archived ? <span>({text.archived})</span> : null}
-                  <button type="button" disabled={busy} onClick={() => { setRenaming({ id: category.id, name: category.name }); }}>{text.rename}</button>
-                  <button type="button" disabled={busy}
-                    onClick={() => { void save(update(category, { archived: !category.archived }), () => undefined); }}>
-                    {category.archived ? text.restore : text.archive}
-                  </button>
-                </div>
-              )}
-            </li>
-          ))}
+          {listCategoryTree(categories, locale).map(({ category, depth, has_children }) => {
+            const archiveBlocked = has_children && !category.archived;
+            return (
+              <li key={category.id} className="budget-entry budget-category" data-depth={depth}>
+                {renaming?.id === category.id ? (
+                  <form className="budget-entry-editor" onSubmit={(event) => {
+                    event.preventDefault();
+                    if (validCategoryName(renaming.name)) {
+                      void save(update(category, {
+                        name: renaming.name.trim(),
+                        parent_id: renaming.parent === "" ? null : renaming.parent,
+                      }), () => { setRenaming(null); });
+                    }
+                  }}>
+                    <label>{text.name}
+                      <input name="category_name" maxLength={CATEGORY_NAME_MAX} value={renaming.name}
+                        onChange={(event) => { setRenaming({ id: category.id, name: event.currentTarget.value, parent: renaming.parent }); }} />
+                    </label>
+                    <ParentField label={text.parent} none={text.noParent} value={renaming.parent} disabled={busy}
+                      choices={parentChoices(categories, category.id, locale)}
+                      onChange={(parent) => { setRenaming({ id: category.id, name: renaming.name, parent }); }} />
+                    <button type="submit" className="budget-primary" disabled={busy || !validCategoryName(renaming.name)}>{text.save}</button>
+                    <button type="button" disabled={busy} onClick={() => { setRenaming(null); }}>{text.cancel}</button>
+                  </form>
+                ) : (
+                  <div className="budget-entry-facts">
+                    <strong className={category.archived ? "budget-muted" : undefined}>{category.name}</strong>
+                    {category.archived ? <span>({text.archived})</span> : null}
+                    <button type="button" disabled={busy} onClick={() => { setRenaming({ id: category.id, name: category.name, parent: category.parent_id ?? "" }); }}>{text.rename}</button>
+                    <button type="button" disabled={busy || archiveBlocked} title={archiveBlocked ? text.archiveBlocked : undefined}
+                      onClick={() => { void save(update(category, { archived: !category.archived }), () => undefined); }}>
+                      {category.archived ? text.restore : text.archive}
+                    </button>
+                  </div>
+                )}
+              </li>
+            );
+          })}
         </ul>
       ) : null}
       <form className="budget-entry-editor" onSubmit={(event) => {
         event.preventDefault();
-        if (validCategoryName(draft)) void save(() => api.createCategory({ name: draft.trim() }), () => { setDraft(""); });
+        if (validCategoryName(draft)) {
+          void save(() => api.createCategory({ name: draft.trim(), parent_id: draftParent === "" ? null : draftParent }), () => {
+            setDraft("");
+            setDraftParent("");
+          });
+        }
       }}>
         <label>{text.name}
           <input name="category_name" maxLength={CATEGORY_NAME_MAX} value={draft} onChange={(event) => { setDraft(event.currentTarget.value); }} />
         </label>
+        <ParentField label={text.parent} none={text.noParent} value={draftParent} disabled={busy}
+          choices={parentChoices(Array.isArray(categories) ? categories : [], null, locale)} onChange={setDraftParent} />
         <button type="submit" disabled={busy || !validCategoryName(draft)}>{text.add}</button>
       </form>
     </section>

@@ -48,8 +48,8 @@ export function entry(reference: string, changes: Partial<AnalyticsTransaction> 
 }
 
 export const categoryList: AnalyticsCategory[] = [
-  { id: "cat-food", name: "Synthetic Food", archived: false, version: 1, created_at: 1, updated_at: 1 },
-  { id: "cat-old", name: "Synthetic Old", archived: true, version: 3, created_at: 1, updated_at: 2 },
+  { id: "cat-food", name: "Synthetic Food", archived: false, version: 1, created_at: 1, updated_at: 1, parent_id: null },
+  { id: "cat-old", name: "Synthetic Old", archived: true, version: 3, created_at: 1, updated_at: 2, parent_id: null },
 ];
 
 export function leg(account: string, reference: string, changes: Partial<TransferLeg> = {}): TransferLeg {
