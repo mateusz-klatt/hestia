@@ -268,9 +268,12 @@ describe("MonthBudgetView", () => {
 
   it.each([
     { status: 400, error: ANALYTICS_ERROR.invalidRequest, alert: monthBudgetLabels.en.badRequest },
+    { status: 404, error: "budget_analytics_disabled", alert: monthBudgetLabels.en.error },
+    { status: 409, error: "budget_requires_sqlite_users", alert: monthBudgetLabels.en.error },
     { status: 413, error: ANALYTICS_ERROR.limit, alert: monthBudgetLabels.en.limit },
     { status: 500, error: "budget_internal_error", alert: monthBudgetLabels.en.error },
-  ])("clears stale loaded data and shows fixed alert on $status", async ({ status, error, alert }) => {
+    { status: 503, error: "budget_unavailable", alert: monthBudgetLabels.en.error },
+  ])("clears stale loaded data and shows fixed alert on $status ($error)", async ({ status, error, alert }) => {
     const api = fakeApi();
     api.monthlyBudget
       .mockResolvedValueOnce(ok(monthlyBudgetOf({
@@ -288,10 +291,26 @@ describe("MonthBudgetView", () => {
     await chooseCurrency("EUR");
     expect(api.monthlyBudget).toHaveBeenLastCalledWith(undefined, "EUR");
     expect(host.querySelector('[role="alert"]')?.textContent).toBe(alert);
+    expect(host.textContent).not.toContain(error);
     expect(host.textContent).not.toContain("8,888.00");
     expect(host.textContent).not.toContain("Synthetic Food");
     expect(host.textContent).not.toContain("Rent and mortgage");
     expect(host.querySelector("table")).toBeNull();
+  });
+
+  it("handles 404 budget_analytics_disabled, 409 conflict, and 503 unavailable on initial load", async () => {
+    for (const [status, error] of [
+      [404, "budget_analytics_disabled"],
+      [409, "budget_requires_sqlite_users"],
+      [503, "budget_analytics_unavailable"],
+    ] as const) {
+      const api = fakeApi();
+      api.monthlyBudget.mockResolvedValueOnce({ ok: false, status, error });
+      await show(api);
+      expect(host.querySelector('[role="alert"]')?.textContent).toBe(monthBudgetLabels.en.error);
+      expect(host.textContent).not.toContain(error);
+      expect(host.querySelector("table")).toBeNull();
+    }
   });
 
   it("recovers from 413 using manual currency code and rejects invalid manual submits", async () => {
@@ -400,6 +419,7 @@ describe("MonthBudgetView", () => {
     expect(host.textContent).toContain("Partial income evidence — remaining expected income could not be estimated reliably.");
     expect(host.textContent).toContain("At this pace the budget will run out before month end.");
     expect(host.querySelector("progress")?.value).toBe(100);
+    expect(host.textContent).toContain("Spent compared to budget received: 200%");
 
     // 2. estimated + already_reached with day
     api.monthlyBudget.mockResolvedValue(ok(monthlyBudgetOf({
@@ -625,7 +645,7 @@ describe("MonthBudgetView", () => {
     expect(api.categories).toHaveBeenCalledTimes(1);
 
     await click(button("View transactions"));
-    expect(onOpenMonth).toHaveBeenCalledWith("2026-10", "2026-10-31");
+    expect(onOpenMonth).toHaveBeenCalledWith("2026-10", "2026-11");
 
     await click(labelledButton("Next month"));
     expect(api.monthlyBudget).toHaveBeenLastCalledWith("2026-11", "EUR");
@@ -655,7 +675,7 @@ describe("MonthBudgetView", () => {
     const links = [...host.querySelectorAll("button")].filter((item) => item.textContent === "View transactions");
     expect(links).toHaveLength(2);
     await click(links[1] as HTMLButtonElement);
-    expect(onOpenMonth).toHaveBeenCalledWith("2026-11", "2026-11-22");
+    expect(onOpenMonth).toHaveBeenCalledWith("2026-11", "2026-11");
   });
 
   it("drops stale responses and refuses mismatched period responses", async () => {

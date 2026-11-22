@@ -5,8 +5,8 @@ import { useEffect, useRef, useState } from "react";
 import type { BudgetApi } from "../api";
 import { formatAmount, when } from "../model";
 import type { BudgetAccount } from "../model";
-import { clampPercentString, clampedRatioPercent, formatRatioHalfEven, isPositiveDecimal, isZero, labelOf,
-  monthLabel, monthlyBudgetCurrencies, pluralPl, shiftMonth, validCurrency } from "./model";
+import { clampPercentString, formatRatioHalfEven, isPositiveDecimal, isZero, labelOf,
+  monthLabel, monthlyBudgetCurrencies, pluralPl, ratioPercentFloor, shiftMonth, validCurrency } from "./model";
 import type { AnalyticsCategory, AnalyticsMonthlyBudget, AnalyticsMonthlyBudgetExpectedIncome,
   AnalyticsMonthlyBudgetPace, AnalyticsMonthlyBudgetPassThrough } from "./model";
 
@@ -234,7 +234,7 @@ export interface MonthBudgetViewProps {
   locale: string;
   revision: number;
   onAccessLoss: (result: { ok: boolean; status?: number; error?: string }) => boolean;
-  onOpenMonth: (month: string, cutoff: string) => void;
+  onOpenMonth: (month: string, serverCurrentMonth: string) => void;
 }
 
 function paceSentence(pace: AnalyticsMonthlyBudgetPace, text: MonthBudgetLabels): string {
@@ -510,12 +510,22 @@ export function MonthBudgetView({ api, accounts, text, locale, revision, onAcces
   );
 }
 
+function SummaryMeter({ spent, budget, label }: { spent: string; budget: string; label: string }) {
+  const percentFloor = ratioPercentFloor(spent, budget);
+  return (
+    <div className="budget-limit-meter">
+      <progress value={clampPercentString(percentFloor)} max={100} aria-label={label} />
+      <span className="budget-muted">{label}: {percentFloor}%</span>
+    </div>
+  );
+}
+
 function ReadyDashboard({ data, categoryMap, text, locale, onOpenMonth }: {
   data: AnalyticsMonthlyBudget;
   categoryMap: ReadonlyMap<string, string>;
   text: MonthBudgetLabels;
   locale: string;
-  onOpenMonth: (month: string, cutoff: string) => void;
+  onOpenMonth: (month: string, serverCurrentMonth: string) => void;
 }) {
   const money = (amount: string) => formatAmount(amount, data.currency, locale);
   const ledgerStamp = when(data.coverage.ledger_as_of, locale);
@@ -535,7 +545,7 @@ function ReadyDashboard({ data, categoryMap, text, locale, onOpenMonth }: {
       <div className="budget-month-basis">
         <span>{text.purchaseDateBasis(data.cutoff)}</span>
         {" · "}
-        <button type="button" className="budget-link" onClick={() => { onOpenMonth(data.period, data.cutoff); }}>
+        <button type="button" className="budget-link" onClick={() => { onOpenMonth(data.period, data.current_month); }}>
           {text.viewTransactions}
         </button>
         {data.coverage.purchase_date_fallback_count > 0 ? (
@@ -559,7 +569,7 @@ function ReadyDashboard({ data, categoryMap, text, locale, onOpenMonth }: {
             <p className="budget-notice" role="note">
               {text.pendingTransfers(data.coverage.pending_transfer_rows)}
               {" "}
-              <button type="button" className="budget-link" onClick={() => { onOpenMonth(data.period, data.cutoff); }}>
+              <button type="button" className="budget-link" onClick={() => { onOpenMonth(data.period, data.current_month); }}>
                 {text.viewTransactions}
               </button>
             </p>
@@ -589,13 +599,7 @@ function ReadyDashboard({ data, categoryMap, text, locale, onOpenMonth }: {
                 <dd><strong>{money(data.summary.remaining)}</strong></dd>
               </dl>
               {isPositiveDecimal(data.summary.start_budget) ? (
-                <div className="budget-limit-meter">
-                  <progress value={clampedRatioPercent(data.summary.spent, data.summary.start_budget)} max={100}
-                    aria-label={text.spentVsBudget} />
-                  <span className="budget-muted">
-                    {text.spentVsBudget}: {String(clampedRatioPercent(data.summary.spent, data.summary.start_budget))}%
-                  </span>
-                </div>
+                <SummaryMeter spent={data.summary.spent} budget={data.summary.start_budget} label={text.spentVsBudget} />
               ) : null}
             </article>
 

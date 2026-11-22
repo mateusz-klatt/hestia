@@ -957,12 +957,39 @@ describe("analytics views", () => {
     expect(button("Month").getAttribute("aria-pressed")).toBe("true");
     expect(api.overview).toHaveBeenLastCalledWith("2026-11");
 
-    // Malformed cutoff falls back cleanly without breaking Month view navigation.
+    // Malformed server current_month falls back cleanly without breaking Month view navigation.
     await click(button("Monthly budget"));
-    api.monthlyBudget.mockImplementation(() => ok(monthlyBudgetOf({ period: "2026-10", cutoff: "invalid", current_month: "2026-11" })));
+    api.monthlyBudget.mockImplementation(() => ok(monthlyBudgetOf({ period: "2026-10", cutoff: "2026-10-31", current_month: "invalid" })));
     await click(button("Reload"));
     await click(button("View transactions"));
     expect(button("Month").getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("opens a closed month from Monthly budget with Next month enabled and without the in-progress notice", async () => {
+    const api = fakeApi();
+    api.connections.mockImplementation(() => ok({ connections: [connection], capabilities: analysis }));
+    api.monthlyBudget.mockImplementation(() => ok(monthlyBudgetOf({
+      period: "2024-01",
+      start: "2024-01-01",
+      end: "2024-01-31",
+      cutoff: "2024-01-31",
+      current_month: "2024-02",
+    })));
+    await render(api);
+
+    await click(button("View transactions"));
+    expect(button("Month").getAttribute("aria-pressed")).toBe("true");
+    expect(api.overview).toHaveBeenLastCalledWith("2024-01");
+    expect(host.querySelector(".budget-month-nav h3")?.textContent).toBe("January 2024");
+    const nextMonth = () => host.querySelector<HTMLButtonElement>('button[aria-label="Next month"]');
+    expect(nextMonth()?.disabled).toBe(false);
+    expect(host.textContent).not.toContain("This period is still in progress.");
+
+    await click(nextMonth() as HTMLButtonElement);
+    expect(api.overview).toHaveBeenLastCalledWith("2024-02");
+    expect(host.querySelector(".budget-month-nav h3")?.textContent).toBe("February 2024");
+    expect(nextMonth()?.disabled).toBe(true);
+    expect(host.textContent).toContain("This period is still in progress.");
   });
 
   it("offers Forecast after Mortgages only while analytics is enabled", async () => {

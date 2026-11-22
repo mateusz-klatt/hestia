@@ -139,13 +139,12 @@ function pick(): { text: Labels; consentHealth: typeof consentHealthLabels.en; i
 
 type View = "monthly_budget" | "accounts" | "inbox" | "month" | "year" | "limits" | "recurring" | "mortgages" | "forecast" | "quarantine" | "rules";
 
-function cutoffToToday(cutoff: string): (() => Date) | undefined {
-  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(cutoff);
+function serverMonthToToday(month: string): (() => Date) | undefined {
+  const match = /^(\d{4})-(0[1-9]|1[0-2])$/.exec(month);
   if (match === null) return undefined;
   const year = Number(match[1]);
-  const month = Number(match[2]);
-  const day = Number(match[3]);
-  return () => new Date(year, month - 1, day, 12);
+  const monthIndex = Number(match[2]) - 1;
+  return () => new Date(year, monthIndex, 15, 12);
 }
 
 type Load = "loading" | "ready" | "disabled" | "denied" | "error";
@@ -471,9 +470,9 @@ export function Budget({ active, api = budgetApi, pollMs = 2000, principal,
       ) : null}
       {shownView === "monthly_budget" ? (
         <MonthBudgetView api={api} accounts={accounts} text={monthBudgetText} locale={locale} revision={revision}
-          onAccessLoss={barrier} onOpenMonth={(month, cutoff) => {
+          onAccessLoss={barrier} onOpenMonth={(month, serverCurrentMonth) => {
             setFocusMonth(month);
-            setFocusToday(() => cutoffToToday(cutoff));
+            setFocusToday(() => serverMonthToToday(serverCurrentMonth));
             setView("month");
           }} />
       ) : shownView === "inbox" ? (

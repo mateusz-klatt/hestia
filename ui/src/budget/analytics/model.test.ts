@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { accountName, annotationRequest, canPair, canonicalAmount, clampPercentString, clampedRatioPercent, counterparty,
+import { accountName, annotationRequest, canPair, canonicalAmount, clampPercentString, counterparty,
   currentMonth, daysBetween, formatRatioHalfEven, hasAnalytics, isMonth, isPositiveDecimal, isZero, kindChoice,
   kindChoicesFor, legsMatch, limitCurrencies, manualPairRequest, monthLabel, monthlyBudgetCurrencies, mortgageCurrencies,
-  pairCandidates, pairDate, pairPeriods, parseIntInRange, parseWarningPercent, pluralPl, recurringCurrencies,
-  shiftMonth, transferActions, transferDecision, validCurrency, validIsoDate, validLimitAmount,
+  pairCandidates, pairDate, pairPeriods, parseIntInRange, parseWarningPercent, pluralPl, ratioPercentFloor,
+  recurringCurrencies, shiftMonth, transferActions, transferDecision, validCurrency, validIsoDate, validLimitAmount,
   validMortgageLabel } from "./model";
 import type { AnalyticsTransaction } from "./model";
 import { entry, leg, mortgageSchedule, pair, recurringHint, spendingLimit } from "./fixtures";
@@ -335,12 +335,13 @@ describe("analytics decisions", () => {
     expect(formatRatioHalfEven({ numerator: "bad", denominator: 2 }, "PLN", "en-US")).toBe("bad PLN");
     expect(formatRatioHalfEven({ numerator: "10", denominator: 0 }, "PLN", "en-US")).toBe("10 PLN");
 
-    expect(clampedRatioPercent("250", "1000")).toBe(25);
-    expect(clampedRatioPercent("1500", "1000")).toBe(100);
-    expect(clampedRatioPercent("-10", "1000")).toBe(0);
-    expect(clampedRatioPercent("10", "0")).toBe(0);
-    expect(clampedRatioPercent("10", "-50")).toBe(0);
-    expect(clampedRatioPercent("bad", "100")).toBe(0);
+    expect(ratioPercentFloor("250", "1000")).toBe("25");
+    expect(ratioPercentFloor("1500", "1000")).toBe("150");
+    expect(ratioPercentFloor("12345678901234567890123", "1")).toBe("1234567890123456789012300");
+    expect(ratioPercentFloor("-10", "1000")).toBe("0");
+    expect(ratioPercentFloor("10", "0")).toBe("0");
+    expect(ratioPercentFloor("10", "-50")).toBe("0");
+    expect(ratioPercentFloor("bad", "100")).toBe("0");
 
     expect(clampPercentString("0")).toBe(0);
     expect(clampPercentString("64")).toBe(64);

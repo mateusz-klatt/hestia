@@ -544,17 +544,16 @@ export function formatRatioHalfEven(ratio: AnalyticsMonthlyBudgetRatio, currency
   return formatAmount(decimal, currency, locale);
 }
 
-/** Exact integer percentage clamped to [0, 100] from two decimal strings, never parsing floats. */
-export function clampedRatioPercent(numerator: string, denominator: string): number {
+/** Exact nonnegative integer floor percentage string from two decimal strings, unclamped, never parsing floats. */
+export function ratioPercentFloor(numerator: string, denominator: string): string {
   const num = parseScaledInt(numerator);
   const den = parseScaledInt(denominator);
-  if (num === null || den === null) return 0;
+  if (num === null || den === null) return "0";
   const scale = Math.max(num.scale, den.scale);
   const numAligned = (num.negative ? -num.coeff : num.coeff) * (10n ** BigInt(scale - num.scale));
   const denAligned = (den.negative ? -den.coeff : den.coeff) * (10n ** BigInt(scale - den.scale));
-  if (denAligned <= 0n || numAligned <= 0n) return 0;
-  if (numAligned >= denAligned) return 100;
-  return Number((numAligned * 100n) / denAligned);
+  if (denAligned <= 0n || numAligned <= 0n) return "0";
+  return String((numAligned * 100n) / denAligned);
 }
 
 /** Clamp a canonical nonnegative integer percentage string to [0, 100] for visual progress bars. */
