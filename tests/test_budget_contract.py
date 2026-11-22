@@ -199,7 +199,7 @@ class BudgetOpenApiTests(unittest.TestCase):
         for read_path in ("/api/budget/consent/renewal-reminders", "/api/budget/consent/reconcile"):
             self.assertIn("413", consent[read_path]["get"]["responses"])
         analytics_reads = {"overview", "transactions", "categories", "rules", "transfers", "recurring",
-                           "spending-limits", "mortgages", "inbox"}
+                           "spending-limits", "mortgages", "inbox", "quarantine"}
         analytics_writes = {"category-create", "category-update", "annotation", "rule-preview", "rule-save",
                             "transfer-decision", "spending-limit-save", "mortgage-save", "mortgage-payment-set",
                             "inbox-mark"}
@@ -209,7 +209,7 @@ class BudgetOpenApiTests(unittest.TestCase):
             self.assertEqual(set(methods), {method})
             self.assertEqual(methods[method]["x-required-role"], "admin")
             self.assertIn("413", methods[method]["responses"])
-        self.assertEqual(document["info"]["version"], "0.24.0")
+        self.assertEqual(document["info"]["version"], "0.25.0")
         mark_desc = analytics["/api/budget/analytics/inbox-mark"]["post"]["description"]
         for phrase in ("reads_version", "1..100", "500"):
             self.assertIn(phrase, mark_desc)
@@ -267,6 +267,14 @@ class BudgetOpenApiTests(unittest.TestCase):
         self.assertEqual(set(schemas["BudgetAnalyticsInboxConsentRef"]["properties"]), {"connection_id"})
         self.assertEqual(set(schemas["BudgetAnalyticsInboxMortgageRef"]["properties"]), {"schedule_id"})
         self.assertEqual(set(schemas["BudgetAnalyticsInboxSpendingLimitRef"]["properties"]), {"category_id", "currency"})
+        q_item_props = schemas["BudgetAnalyticsQuarantineItem"]["properties"]
+        self.assertEqual(
+            set(q_item_props),
+            {"bucket", "account_id", "selected", "entry_reference", "date", "status", "reason", "source", "observed_at"},
+        )
+        for forbidden in ("amount", "currency", "remittance_information", "description", "creditor_name",
+                          "debtor_name", "credit_debit_indicator", "transaction_id", "identification_hash"):
+            self.assertNotIn(forbidden, q_item_props)
         self.assertEqual(schemas["BudgetAnalyticsSpendingLimit"]["properties"]["monthly_limit"]["type"], "string")
         for field in ("monthly_limit", "expenses", "refunds", "net_spending", "remaining", "over_by"):
             self.assertEqual(schemas["BudgetAnalyticsSpendingLimitStatus"]["properties"][field]["type"], "string")

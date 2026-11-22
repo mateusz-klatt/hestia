@@ -419,3 +419,23 @@ query strings; any `401`/`403`/`404` access loss clears all budget state immedia
   payment marks evaluated against server UTC today (`evaluation_date`), with zero PII targets.
 - **Categories and rules (`Kategorie i reguły`):** owner categories and mandatory
   preview-before-save deterministic classification rules.
+
+## Read-only quarantine inspection (OpenAPI `0.25.0`, zero migration)
+
+- `GET /api/budget/analytics/quarantine` (optional `account_id`, gated by
+  `HESTIA_BUDGET_ANALYTICS_ENABLED=1`, exact SQLite admin owner, `allow_head=False`,
+  `Cache-Control: no-store`, zero DB writes, zero bank requests) explains why observations
+  are excluded from canonical report totals without introducing any mutation or resolution
+  actions.
+- **Counts primary:** returns exact whole-scope and per-account counts across all owned
+  accounts (selected and excluded alike) for `uncertain_count`, `unresolved_count`, and
+  `import_unresolved_count`, matching `_owner_counts` when unfiltered. Passing an unknown
+  or foreign `account_id` returns `404 budget_analytics_not_found`.
+- **Safe non-prose detail allowlist:** returns at most `200` deterministically ordered
+  detail entries (`items_cap: 200`, `truncated` flag) containing exclusively `bucket`,
+  `account_id`, `selected`, `entry_reference`, effective ISO `date`, fixed bank `status`,
+  fixed exclusion `reason` (`non_booked_status`, `missing_reference`, `missing_date`,
+  `reference_conflict`, `non_canonical`, `api_preserved`, `stale_conflict`,
+  `same_time_conflict`), `source`, and `observed_at` — never transaction descriptions
+  (`remittance_information`), amounts, currencies, or counterparty names. Stored payload
+  integrity errors fail closed with HTTP `500` (`budget_analytics_data_error`).

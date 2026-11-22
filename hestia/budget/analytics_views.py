@@ -28,6 +28,7 @@ from sqlalchemy import func, or_, select
 from .. import db
 from . import analytics_core as core
 from . import owner_inbox as inbox_mod
+from . import quarantine as quarantine_mod
 from .analytics_core import AnalyticsError
 from .analytics_store import BudgetAnalyticsStore, _CATEGORY_LIMIT_FIELDS, _dict
 from .client import _reject_constant, _unique_error_fields
@@ -1096,6 +1097,122 @@ class BudgetAnalyticsViews(BudgetAnalyticsStore):
                 "read": read, "changed": True, "changed_count": len(changed_keys),
                 "reads_revision": new_revision, "reads_version": new_version,
                 "reads_count": len(new_tuples), "reads_cap": inbox_mod.MAX_INBOX_READS,
+            }
+
+    @staticmethod
+    def _quarantine_counts(session, account_ids):
+        if not account_ids:
+            return {}, {}, {}
+        uncertain = dict(session.execute(
+            select(db.BudgetTransaction.account_id, func.count())
+            .where(db.BudgetTransaction.account_id.in_(account_ids), db.BudgetTransaction.uncertain.is_(True))
+            .group_by(db.BudgetTransaction.account_id)).all())
+        unresolved = dict(session.execute(
+            select(db.BudgetUnresolved.account_id, func.count())
+            .where(db.BudgetUnresolved.account_id.in_(account_ids))
+            .group_by(db.BudgetUnresolved.account_id)).all())
+        imported = dict(session.execute(
+            select(db.BudgetImportBatch.account_id, func.count())
+            .select_from(db.BudgetImportUnresolved)
+            .join(db.BudgetImportBatch, db.BudgetImportUnresolved.batch_id == db.BudgetImportBatch.id)
+            .where(db.BudgetImportBatch.account_id.in_(account_ids))
+            .group_by(db.BudgetImportBatch.account_id)).all())
+        return uncertain, unresolved, imported
+
+    @staticmethod
+    def _quarantine_items(session, account_ids, selected_map):
+        if not account_ids:
+            return []
+        cap = quarantine_mod.MAX_QUARANTINE_ITEMS
+        raw_items = []
+        uncertain_rows = session.scalars(
+            select(db.BudgetTransaction)
+            .where(db.BudgetTransaction.account_id.in_(account_ids), db.BudgetTransaction.uncertain.is_(True))
+            .order_by(db.BudgetTransaction.observed_at.desc(), db.BudgetTransaction.account_id,
+                      db.BudgetTransaction.entry_reference)
+            .limit(cap))
+        for row in uncertain_rows:
+            raw_items.append(quarantine_mod.extract_safe_item(
+                bucket=quarantine_mod.BUCKET_UNCERTAIN, account_id=row.account_id,
+                selected=selected_map[row.account_id], payload_json=row.payload_json,
+                source=row.source, observed_at=row.observed_at,
+            ))
+        unresolved_rows = session.scalars(
+            select(db.BudgetUnresolved)
+            .where(db.BudgetUnresolved.account_id.in_(account_ids))
+            .order_by(db.BudgetUnresolved.observed_at.desc(), db.BudgetUnresolved.account_id,
+                      db.BudgetUnresolved.ordinal)
+            .limit(cap))
+        for row in unresolved_rows:
+            raw_items.append(quarantine_mod.extract_safe_item(
+                bucket=quarantine_mod.BUCKET_UNRESOLVED, account_id=row.account_id,
+                selected=selected_map[row.account_id], payload_json=row.payload_json,
+                source="api", observed_at=row.observed_at,
+            ))
+        import_rows = session.execute(
+            select(db.BudgetImportUnresolved, db.BudgetImportBatch.account_id, db.BudgetImportBatch.fetched_at)
+            .join(db.BudgetImportBatch, db.BudgetImportUnresolved.batch_id == db.BudgetImportBatch.id)
+            .where(db.BudgetImportBatch.account_id.in_(account_ids))
+            .order_by(db.BudgetImportBatch.fetched_at.desc(), db.BudgetImportBatch.account_id,
+                      db.BudgetImportUnresolved.batch_id, db.BudgetImportUnresolved.ordinal)
+            .limit(cap)).all()
+        for row, acc_id, fetched_at in import_rows:
+            raw_items.append(quarantine_mod.extract_safe_item(
+                bucket=quarantine_mod.BUCKET_IMPORT_UNRESOLVED, account_id=acc_id,
+                selected=selected_map[acc_id], payload_json=row.payload_json,
+                source="offline_import", observed_at=fetched_at, stored_reason=row.reason,
+            ))
+        return quarantine_mod.sort_quarantine_items(raw_items, limit=cap)
+
+    def quarantine(self, owner, *, account_id=None):
+        """Pure read-only quarantine counts and safe ref/date/status/reason details (zero prose/amounts)."""
+        if account_id is not None and (not isinstance(account_id, str) or not account_id or len(account_id) > 128):
+            raise AnalyticsError()
+        with _read_lock, self._read(owner) as session:
+            accounts = list(session.scalars(
+                select(db.BudgetAccount).join(db.BudgetConnection).where(
+                    db.BudgetAccount.owner == owner, db.BudgetConnection.owner == owner)
+                .order_by(db.BudgetAccount.id)))
+            if account_id is not None:
+                accounts = [row for row in accounts if row.id == account_id]
+                if not accounts:
+                    raise AnalyticsError("budget_analytics_not_found", 404)
+            account_ids = [row.id for row in accounts]
+            selected_map = {row.id: row.enabled for row in accounts}
+            uncertain_counts, unresolved_counts, import_counts = self._quarantine_counts(session, account_ids)
+            try:
+                items = self._quarantine_items(session, account_ids, selected_map)
+            except quarantine_mod.QuarantineDataError:
+                raise AnalyticsError(_DATA_ERROR, 500) from None
+            account_rows = []
+            for acc in accounts:
+                u_cnt = uncertain_counts.get(acc.id, 0)
+                r_cnt = unresolved_counts.get(acc.id, 0)
+                i_cnt = import_counts.get(acc.id, 0)
+                account_rows.append({
+                    "account_id": acc.id,
+                    "selected": acc.enabled,
+                    "uncertain_count": u_cnt,
+                    "unresolved_count": r_cnt,
+                    "import_unresolved_count": i_cnt,
+                    "total_count": u_cnt + r_cnt + i_cnt,
+                })
+            total_u = sum(row["uncertain_count"] for row in account_rows)
+            total_r = sum(row["unresolved_count"] for row in account_rows)
+            total_i = sum(row["import_unresolved_count"] for row in account_rows)
+            total_all = total_u + total_r + total_i
+            return {
+                "rule_version": quarantine_mod.RULE_VERSION,
+                "summary": {
+                    "uncertain_count": total_u,
+                    "unresolved_count": total_r,
+                    "import_unresolved_count": total_i,
+                    "total_count": total_all,
+                },
+                "accounts": account_rows,
+                "items_cap": quarantine_mod.MAX_QUARANTINE_ITEMS,
+                "truncated": total_all > len(items),
+                "items": items,
             }
 
 
