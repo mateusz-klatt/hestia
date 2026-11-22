@@ -56,7 +56,15 @@ class OpenApiArtifactTests(unittest.TestCase):
 
     def test_monthly_budget_contract_is_strictly_additive_from_0_27_0(self):
         document = api_contract.build_openapi()
-        self.assertEqual(document["info"]["version"], "0.28.0")
+        self.assertEqual(document["info"]["version"], "0.29.0")
+        del document["paths"]["/api/budget/analytics/monthly-budget/charts"]
+        for suffix in ("DailyPoint", "SeriesCategory", "SeriesMonth", "CategoryLabel", "Series", "Charts"):
+            del document["components"]["schemas"]["BudgetAnalyticsMonthlyBudget" + suffix]
+        document["info"]["version"] = "0.28.0"
+        canonical_0_28 = json.dumps(document, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        self.assertEqual(hashlib.sha256(canonical_0_28).hexdigest(),
+                         "c5bcae67df899fd1ad3a8527b17244aef0251a65e7b7e4d115b7a6e4e6e832fd")
+
         del document["components"]["schemas"]["BudgetAnalyticsMonthlyBudgetConfiguration"]["properties"]["income_window"]
         del document["components"]["schemas"]["BudgetAnalyticsMonthlyBudgetIncomeWindow"]
         document["info"]["version"] = "0.27.0"

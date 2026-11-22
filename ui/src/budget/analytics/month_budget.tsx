@@ -1,4 +1,4 @@
-// Read-only owner-private monthly budget dashboard (P1, OpenAPI 0.28.0).
+// Read-only owner-private monthly budget dashboard and charts (P1 & P2, OpenAPI 0.29.0).
 // Evaluates in Europe/Warsaw from one snapshot on the server; all amounts stay decimal strings end to end,
 // ratios divide via BigInt half-even rounding, and no raw IDs or remittance text ever enter the DOM.
 import { useEffect, useRef, useState } from "react";
@@ -7,8 +7,10 @@ import { formatAmount, when } from "../model";
 import type { BudgetAccount } from "../model";
 import { clampPercentString, formatRatioHalfEven, isPositiveDecimal, isZero, labelOf,
   monthLabel, monthlyBudgetCurrencies, pluralPl, ratioPercentFloor, shiftMonth, validCurrency } from "./model";
-import type { AnalyticsCategory, AnalyticsMonthlyBudget, AnalyticsMonthlyBudgetExpectedIncome,
-  AnalyticsMonthlyBudgetIncomeWindow, AnalyticsMonthlyBudgetPace, AnalyticsMonthlyBudgetPassThrough } from "./model";
+import type { AnalyticsCategory, AnalyticsMonthlyBudget, AnalyticsMonthlyBudgetCharts,
+  AnalyticsMonthlyBudgetExpectedIncome, AnalyticsMonthlyBudgetIncomeWindow, AnalyticsMonthlyBudgetPace,
+  AnalyticsMonthlyBudgetPassThrough, AnalyticsMonthlyBudgetSeries } from "./model";
+import { MonthBudgetCharts } from "./month_budget_charts";
 
 export const monthBudgetLabels = {
   en: {
@@ -114,6 +116,33 @@ export const monthBudgetLabels = {
     cardStatuses: { unavailable: "Unavailable" },
     unavailable: "Unavailable",
     cardExposureNote: "Card exposure stays unavailable until bank sign and full transaction-window coverage are verified.",
+    chartsSectionTitle: "Charts",
+    chartHistory: "Chart history",
+    historyMonths: (count: number) => `${String(count)} months`,
+    showData: "Show data",
+    chartDailyTitle: "Cumulative spending",
+    chartCategoriesTitle: "Spending by category",
+    chartIncomeSpendTitle: "Income and spending",
+    otherCategory: "Other",
+    dateLabel: "Date",
+    monthColumn: "Month",
+    cumulativeSpentLabel: "Cumulative spending",
+    bookedBudgetLine: "Booked budget",
+    expectedBudgetLine: "Budget + expected",
+    paceExtensionLine: "Pace projection",
+    exhaustionMarker: (day: number) => `Exhaustion ~day ${String(day)}`,
+    incompleteMonth: "Incomplete month",
+    currentMonth: "Current month",
+    expectedIncomeLegend: "Expected income",
+    statusColumn: "Status",
+    totalLabel: "Total",
+    noValue: "—",
+    chartDailyDesc: (currency: string, start: string, cutoff: string) =>
+      `Cumulative net spending in ${currency} from ${start} through ${cutoff} compared against budget.`,
+    chartCategoriesDesc: (count: number, currency: string) =>
+      `Monthly stacked category net spending in ${currency} across ${String(count)} months.`,
+    chartIncomeSpendDesc: (count: number, currency: string) =>
+      `Monthly booked income and net spending in ${currency} across ${String(count)} months.`,
   },
   pl: {
     title: "Budżet miesiąca",
@@ -219,16 +248,43 @@ export const monthBudgetLabels = {
     cardStatuses: { unavailable: "Niedostępne" },
     unavailable: "Niedostępne",
     cardExposureNote: "Ekspozycja kartowa pozostaje niedostępna do czasu potwierdzenia znaku salda i pełnego okna historii transakcji.",
+    chartsSectionTitle: "Wykresy",
+    chartHistory: "Zakres wykresów",
+    historyMonths: (count: number) => `${String(count)} ${pluralPl(count, "miesiąc", "miesiące", "miesięcy")}`,
+    showData: "Pokaż dane",
+    chartDailyTitle: "Wydatki narastająco",
+    chartCategoriesTitle: "Wydatki według kategorii",
+    chartIncomeSpendTitle: "Wpływy i wydatki",
+    otherCategory: "Pozostałe",
+    dateLabel: "Data",
+    monthColumn: "Miesiąc",
+    cumulativeSpentLabel: "Wydatki narastająco",
+    bookedBudgetLine: "Budżet z wpływów",
+    expectedBudgetLine: "Budżet + oczekiwane",
+    paceExtensionLine: "Prognoza tempa",
+    exhaustionMarker: (day: number) => `Wyczerpanie ~dzień ${String(day)}`,
+    incompleteMonth: "Niepełny miesiąc",
+    currentMonth: "Bieżący miesiąc",
+    expectedIncomeLegend: "Oczekiwane wpływy",
+    statusColumn: "Status",
+    totalLabel: "Razem",
+    noValue: "—",
+    chartDailyDesc: (currency: string, start: string, cutoff: string) =>
+      `Skumulowane wydatki netto w walucie ${currency} od ${start} do ${cutoff} na tle budżetu.`,
+    chartCategoriesDesc: (count: number, currency: string) =>
+      `Miesięczne wydatki netto według kategorii w walucie ${currency} dla ${String(count)} ${pluralPl(count, "miesiąca", "miesięcy", "miesięcy")}.`,
+    chartIncomeSpendDesc: (count: number, currency: string) =>
+      `Miesięczne wpływy do budżetu i wydatki netto w walucie ${currency} dla ${String(count)} ${pluralPl(count, "miesiąca", "miesięcy", "miesięcy")}.`,
   },
 };
 export type MonthBudgetLabels = typeof monthBudgetLabels.en;
 
 type Shown =
   | { state: "loading" | "badRequest" | "limit" | "error" }
-  | { state: "ready"; data: AnalyticsMonthlyBudget };
+  | { state: "ready"; data: AnalyticsMonthlyBudgetCharts };
 
 export interface MonthBudgetViewProps {
-  api: Pick<BudgetApi, "monthlyBudget" | "categories">;
+  api: Pick<BudgetApi, "monthlyBudgetCharts" | "categories">;
   accounts: readonly BudgetAccount[];
   text: MonthBudgetLabels;
   locale: string;
@@ -409,6 +465,7 @@ function PassThroughCard({ passThrough, currency, categoryMap, text, locale }: {
 export function MonthBudgetView({ api, accounts, text, locale, revision, onAccessLoss, onOpenMonth }: MonthBudgetViewProps) {
   const [period, setPeriod] = useState<string | undefined>(undefined);
   const [currency, setCurrency] = useState("PLN");
+  const [history, setHistory] = useState<6 | 12>(6);
   const [discoveredCurrencies, setDiscoveredCurrencies] = useState<string[]>([]);
   const [serverCurrentMonth, setServerCurrentMonth] = useState<string | null>(null);
   const [manualCode, setManualCode] = useState("");
@@ -430,7 +487,7 @@ export function MonthBudgetView({ api, accounts, text, locale, revision, onAcces
     revisionRef.current = revision;
     if (prevRevision !== revision) setCategories([]);
     setShown({ state: "loading" });
-    void api.monthlyBudget(period, currency).then((result) => {
+    void api.monthlyBudgetCharts(period, currency, history).then((result) => {
       // Run the access barrier before dropping superseded answers so a 401/403/disabled always clears the view.
       if (onAccessLoss(result) || token !== generation.current) return;
       if (!result.ok) {
@@ -438,14 +495,15 @@ export function MonthBudgetView({ api, accounts, text, locale, revision, onAcces
         setShown({ state });
         return;
       }
-      if (period !== undefined && result.data.period !== period) {
+      const { budget } = result.data;
+      if (period !== undefined && budget.period !== period) {
         setShown({ state: "error" });
         return;
       }
-      setServerCurrentMonth(result.data.current_month);
-      setDiscoveredCurrencies((previous) => monthlyBudgetCurrencies([...result.data.available_currencies, ...previous]));
+      setServerCurrentMonth(budget.current_month);
+      setDiscoveredCurrencies((previous) => monthlyBudgetCurrencies([...budget.available_currencies, ...previous]));
       setShown({ state: "ready", data: result.data });
-      if (result.data.configuration.status === "ready" && categoriesLoadedRev.current !== revision) {
+      if (budget.configuration.status === "ready" && categoriesLoadedRev.current !== revision) {
         void api.categories().then((catResult) => {
           if (onAccessLoss(catResult) || !mounted.current || revision !== revisionRef.current) return;
           if (catResult.ok) {
@@ -456,9 +514,11 @@ export function MonthBudgetView({ api, accounts, text, locale, revision, onAcces
       }
     });
     return () => { generation.current += 1; };
-  }, [api, period, currency, revision, onAccessLoss]);
+  }, [api, period, currency, history, revision, onAccessLoss]);
 
-  const data = shown.state === "ready" ? shown.data : null;
+  const readyPayload = shown.state === "ready" ? shown.data : null;
+  const data = readyPayload?.budget ?? null;
+  const series = readyPayload?.series ?? null;
   const nav = serverCurrentMonth === null
     ? null
     : { current: serverCurrentMonth, active: data === null ? (period ?? serverCurrentMonth) : data.period };
@@ -490,6 +550,14 @@ export function MonthBudgetView({ api, accounts, text, locale, revision, onAcces
               {currencies.map((code) => <option key={code} value={code}>{code}</option>)}
             </select>
           </label>
+          <label>{text.chartHistory}
+            <select name="history" value={String(history)} onChange={(event) => {
+              setHistory(event.currentTarget.value === "12" ? 12 : 6);
+            }}>
+              <option value="6">{text.historyMonths(6)}</option>
+              <option value="12">{text.historyMonths(12)}</option>
+            </select>
+          </label>
         </div>
       </div>
 
@@ -513,7 +581,8 @@ export function MonthBudgetView({ api, accounts, text, locale, revision, onAcces
       {shown.state === "error" ? <p className="budget-notice" role="alert">{text.error}</p> : null}
 
       {data === null ? null : (
-        <ReadyDashboard data={data} categoryMap={categoryMap} text={text} locale={locale} onOpenMonth={onOpenMonth} />
+        <ReadyDashboard data={data} series={series} categoryMap={categoryMap} text={text} locale={locale}
+          onOpenMonth={onOpenMonth} />
       )}
     </section>
   );
@@ -529,8 +598,9 @@ function SummaryMeter({ spent, budget, label }: { spent: string; budget: string;
   );
 }
 
-function ReadyDashboard({ data, categoryMap, text, locale, onOpenMonth }: {
+function ReadyDashboard({ data, series, categoryMap, text, locale, onOpenMonth }: {
   data: AnalyticsMonthlyBudget;
+  series: AnalyticsMonthlyBudgetSeries | null;
   categoryMap: ReadonlyMap<string, string>;
   text: MonthBudgetLabels;
   locale: string;
@@ -700,6 +770,10 @@ function ReadyDashboard({ data, categoryMap, text, locale, onOpenMonth }: {
               </div>
             )}
           </section>
+
+          {series === null ? null : (
+            <MonthBudgetCharts budget={data} series={series} locale={locale} text={text} />
+          )}
         </>
       )}
     </>

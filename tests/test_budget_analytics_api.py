@@ -99,7 +99,8 @@ class BudgetAnalyticsAPITests(unittest.IsolatedAsyncioTestCase):
                   "inbox": api_contract.BudgetAnalyticsInbox,
                   "quarantine": api_contract.BudgetAnalyticsQuarantine,
                   "forecast": api_contract.BudgetAnalyticsForecast,
-                  "monthly-budget": api_contract.BudgetAnalyticsMonthlyBudget}
+                  "monthly-budget": api_contract.BudgetAnalyticsMonthlyBudget,
+                  "monthly-budget/charts": api_contract.BudgetAnalyticsMonthlyBudgetCharts}
         self.assertEqual(set(models), set(analytics_api.READS))
         before = len(self.rows(db.BudgetAcquisition))
         with mock.patch.object(config, "load_config", side_effect=AssertionError("No configuration read")), \
@@ -116,7 +117,7 @@ class BudgetAnalyticsAPITests(unittest.IsolatedAsyncioTestCase):
                     self.assertNotIn(private, serialized)
                 head = await self.client.head(PREFIX + "/" + operation, headers=self.headers())
                 self.assertEqual(head.status, 405)
-            for operation in ("overview", "forecast", "monthly-budget"):
+            for operation in ("overview", "forecast", "monthly-budget", "monthly-budget/charts"):
                 bearer = await self.get(operation, headers=self.headers(bearer=True))
                 self.assertEqual(bearer.status, 200)
         credentials.assert_not_called()
@@ -133,7 +134,7 @@ class BudgetAnalyticsAPITests(unittest.IsolatedAsyncioTestCase):
             for operation, body in self.bodies().items():
                 response = await self.post(operation, body, user=user)
                 self.assertEqual(response.status, expected)
-        for operation in ("overview", "forecast", "monthly-budget"):
+        for operation in ("overview", "forecast", "monthly-budget", "monthly-budget/charts"):
             anonymous = await self.get(operation, headers={})
             self.assertEqual(anonymous.status, 401)
         for environment, expected in (({analytics_api.FLAG: "0"}, 404), ({"HESTIA_BUDGET_HTTP_ENABLED": "0"}, 404),
@@ -141,7 +142,7 @@ class BudgetAnalyticsAPITests(unittest.IsolatedAsyncioTestCase):
             with mock.patch.dict(os.environ, environment):
                 response = await self.get("overview")
                 self.assertEqual(response.status, expected)
-                for other in ("forecast", "monthly-budget"):
+                for other in ("forecast", "monthly-budget", "monthly-budget/charts"):
                     other_response = await self.get(other)
                     self.assertEqual(other_response.status, expected)
                     self.assertEqual(await other_response.json(), await response.json())
@@ -494,6 +495,121 @@ class BudgetAnalyticsAPITests(unittest.IsolatedAsyncioTestCase):
             with mock.patch.object(analytics_api, "MAX_MONTHLY_BUDGET_RESPONSE_BYTES", exact_bytes - 1), \
                  mock.patch.object(analytics_api, "bytearray", CheckedBuffer, create=True):
                 too_big = await self.get("monthly-budget")
+                self.assertEqual(too_big.status, 413)
+                self.assert_private_headers(too_big)
+                self.assertEqual(await too_big.json(), {"ok": False, "error": "budget_analytics_limit"})
+                self.assertEqual(len(buffers), 1)
+                self.assertLessEqual(len(buffers[0]), exact_bytes - 1)
+
+    async def test_monthly_budget_charts_strict_queries_and_error_mapping(self):
+        now = datetime(2026, 11, 22, 12, 0, tzinfo=timezone.utc).timestamp()
+        with mock.patch.object(analytics_views.BudgetAnalyticsViews, "_now", return_value=now):
+            unconfigured = await self.get("monthly-budget/charts")
+            self.assertEqual(unconfigured.status, 200)
+            self.assert_private_headers(unconfigured)
+            payload = await unconfigured.json()
+            api_contract.BudgetAnalyticsMonthlyBudgetCharts.model_validate(payload)
+            self.assertEqual(payload["budget"]["configuration"], {"status": "unconfigured", "source": "none"})
+            self.assertIsNone(payload["series"])
+
+            with mock.patch.object(analytics_api, "_store",
+                                   side_effect=AssertionError("invalid monthly-budget/charts query reached store")):
+                for params in (
+                    {"history": "0"}, {"history": "1"}, {"history": "3"}, {"history": "06"},
+                    {"history": " 6"}, {"history": "13"}, {"history": "6.0"}, {"history": "six"},
+                    {"period": "2026"}, {"currency": "pln"}, {"today": "2026-11-22"},
+                    MultiDict([("history", "6"), ("history", "12")]),
+                    MultiDict([("period", "2026-11"), ("period", "2026-10")]),
+                    MultiDict([("currency", "PLN"), ("currency", "EUR")]),
+                ):
+                    with self.subTest(params=params):
+                        response = await self.get("monthly-budget/charts", params=params)
+                        self.assertEqual(response.status, 400)
+                        self.assertEqual(await response.json(),
+                                         {"ok": False, "error": "budget_analytics_invalid_request"})
+                        self.assert_private_headers(response)
+
+            future = await self.get("monthly-budget/charts", params={"period": "2026-12", "history": "12"})
+            self.assertEqual(future.status, 400)
+            self.assertEqual(await future.json(), {"ok": False, "error": "budget_analytics_invalid_request"})
+
+            salary_cat = (await (await self.post("category-create", {"name": "Wynagrodzenie"})).json())["category"]
+            cfg = json.dumps({"alice": {"income_category_ids": [salary_cat["id"]], "income_window_start_day": 20}})
+            with mock.patch.dict(os.environ, {month_budget.MONTH_CONFIG_ENV: cfg}):
+                ready_6 = await self.get("monthly-budget/charts", params={"period": "2026-11", "currency": "PLN"})
+                self.assertEqual(ready_6.status, 200)
+                body_6 = await ready_6.json()
+                api_contract.BudgetAnalyticsMonthlyBudgetCharts.model_validate(body_6)
+                self.assertEqual([m["period"] for m in body_6["series"]["months"]],
+                                 ["2026-06", "2026-07", "2026-08", "2026-09", "2026-10", "2026-11"])
+
+                ready_12 = await self.get("monthly-budget/charts",
+                                          params={"period": "2026-11", "currency": "PLN", "history": "12"})
+                self.assertEqual(ready_12.status, 200)
+                body_12 = await ready_12.json()
+                api_contract.BudgetAnalyticsMonthlyBudgetCharts.model_validate(body_12)
+                self.assertEqual(len(body_12["series"]["months"]), 12)
+                self.assertEqual(body_12["series"]["months"][0]["period"], "2025-12")
+                self.assertEqual(body_12["series"]["months"][-1]["period"], "2026-11")
+
+            with mock.patch.object(month_budget, "ZoneInfo", side_effect=month_budget.ZoneInfoNotFoundError("Europe/Warsaw")):
+                no_zone = await self.get("monthly-budget/charts")
+                self.assertEqual(no_zone.status, 503)
+                self.assertEqual(await no_zone.json(), {"ok": False, "error": "budget_unavailable"})
+
+            with mock.patch.object(month_budget, "evaluate_monthly_budget_charts", return_value={"bad": "\ud800"}), \
+                 mock.patch.object(analytics_api.api.log, "error") as log:
+                surrogate = await self.get("monthly-budget/charts")
+                self.assertEqual(surrogate.status, 500)
+                self.assertEqual(await surrogate.json(), {"ok": False, "error": "budget_analytics_data_error"})
+                self.assert_private_headers(surrogate)
+            log.assert_not_called()
+
+    async def test_monthly_budget_charts_capacity_and_bounded_utf8_wire_response(self):
+        with mock.patch.object(analytics_views, "MAX_ROWS", 0):
+            over_rows = await self.get("monthly-budget/charts")
+            self.assertEqual(over_rows.status, 413)
+            self.assertEqual(await over_rows.json(), {"ok": False, "error": "budget_analytics_limit"})
+            self.assert_private_headers(over_rows)
+
+        cat_name = "🦉" * 80
+        cat = (await (await self.post("category-create", {"name": cat_name})).json())["category"]
+        await self.post("annotation", self.annotation(category_id=cat["id"], kind="expense"))
+        now = datetime(2026, 11, 22, 12, 0, tzinfo=timezone.utc).timestamp()
+        cfg = json.dumps({"alice": {"income_category_ids": []}})
+        buffers = []
+        test_case = self
+
+        class CheckedBuffer(bytearray):
+            def __init__(self):
+                super().__init__()
+                buffers.append(self)
+
+            def extend(self, chunk):
+                test_case.assertLessEqual(len(self) + len(chunk), analytics_api.MAX_MONTHLY_BUDGET_RESPONSE_BYTES)
+                super().extend(chunk)
+
+        with mock.patch.dict(os.environ, {month_budget.MONTH_CONFIG_ENV: cfg}), \
+             mock.patch.object(analytics_views.BudgetAnalyticsViews, "_now", return_value=now):
+            probe = await self.get("monthly-budget/charts", params={"history": "12"})
+            self.assertEqual(probe.status, 200)
+            exact_bytes = len(await probe.read())
+            self.assertGreater(exact_bytes, len(cat_name.encode("utf-8")))
+
+            with mock.patch.object(analytics_api, "MAX_MONTHLY_BUDGET_RESPONSE_BYTES", exact_bytes), \
+                 mock.patch.object(analytics_api, "bytearray", CheckedBuffer, create=True), \
+                 mock.patch.object(analytics_api.web, "Response", wraps=analytics_api.web.Response) as response_factory:
+                ok_resp = await self.get("monthly-budget/charts", params={"history": "12"})
+                self.assertEqual(ok_resp.status, 200)
+                self.assert_private_headers(ok_resp)
+                wire = await ok_resp.read()
+                self.assertEqual(len(wire), exact_bytes)
+                self.assertIs(response_factory.call_args.kwargs["body"], buffers[0])
+
+            buffers.clear()
+            with mock.patch.object(analytics_api, "MAX_MONTHLY_BUDGET_RESPONSE_BYTES", exact_bytes - 1), \
+                 mock.patch.object(analytics_api, "bytearray", CheckedBuffer, create=True):
+                too_big = await self.get("monthly-budget/charts", params={"history": "12"})
                 self.assertEqual(too_big.status, 413)
                 self.assert_private_headers(too_big)
                 self.assertEqual(await too_big.json(), {"ok": False, "error": "budget_analytics_limit"})

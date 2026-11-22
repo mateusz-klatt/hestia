@@ -12,15 +12,18 @@ from .. import api_contract, store_sql
 from ..db import init_db
 from . import api
 from .analytics_core import AnalyticsError
-from .analytics_views import BudgetAnalyticsViews, _forecast_query, _monthly_budget_query
+from .analytics_views import (BudgetAnalyticsViews, _forecast_query, _monthly_budget_charts_query,
+                              _monthly_budget_query)
 from .views import BudgetUsersBackendRequired
 
 PREFIX = "/api/budget/analytics"
 FLAG = "HESTIA_BUDGET_ANALYTICS_ENABLED"
 MAX_FORECAST_RESPONSE_BYTES = 4 * 1024 * 1024
 MAX_MONTHLY_BUDGET_RESPONSE_BYTES = 4 * 1024 * 1024
+_MONTHLY_BUDGET_OP = "monthly-budget"
+_MONTHLY_BUDGET_CHARTS_OP = "monthly-budget/charts"
 READS = ("overview", "transactions", "categories", "rules", "transfers", "recurring", "spending-limits",
-         "mortgages", "inbox", "quarantine", "forecast", "monthly-budget")
+         "mortgages", "inbox", "quarantine", "forecast", _MONTHLY_BUDGET_OP, _MONTHLY_BUDGET_CHARTS_OP)
 WRITES = {
     "category-create": (api_contract.BudgetAnalyticsCategoryCreateRequest, "create_category", "category"),
     "category-update": (api_contract.BudgetAnalyticsCategoryUpdateRequest, "update_category", "category"),
@@ -40,11 +43,13 @@ _QUERY_FIELDS = {"overview": {"period", "currency"},
                  "spending-limits": {"period", "currency"},
                  "quarantine": {"account_id"},
                  "forecast": {"months", "currency"},
-                 "monthly-budget": {"period", "currency"}}
-_OPTIONAL_PERIOD_READS = frozenset({"monthly-budget"})
+                 _MONTHLY_BUDGET_OP: {"period", "currency"},
+                 _MONTHLY_BUDGET_CHARTS_OP: {"period", "currency", "history"}}
+_OPTIONAL_PERIOD_READS = frozenset({_MONTHLY_BUDGET_OP, _MONTHLY_BUDGET_CHARTS_OP})
 _BOUNDED_READ_CAPS = {
     "forecast": lambda: MAX_FORECAST_RESPONSE_BYTES,
-    "monthly-budget": lambda: MAX_MONTHLY_BUDGET_RESPONSE_BYTES,
+    _MONTHLY_BUDGET_OP: lambda: MAX_MONTHLY_BUDGET_RESPONSE_BYTES,
+    _MONTHLY_BUDGET_CHARTS_OP: lambda: MAX_MONTHLY_BUDGET_RESPONSE_BYTES,
 }
 
 
@@ -72,8 +77,10 @@ def _query(request, operation):
         values["limit"] = int(value)
     if operation == "forecast":
         _forecast_query(**values)
-    elif operation == "monthly-budget":
+    elif operation == _MONTHLY_BUDGET_OP:
         _monthly_budget_query(**values)
+    elif operation == _MONTHLY_BUDGET_CHARTS_OP:
+        _monthly_budget_charts_query(**values)
     return values
 
 
@@ -99,7 +106,7 @@ def _encode_bounded(payload, limit):
 
 
 def _read(owner, operation, query, secret):
-    result = getattr(_store(secret), operation.replace("-", "_"))(owner, **query)
+    result = getattr(_store(secret), operation.replace("-", "_").replace("/", "_"))(owner, **query)
     if operation in _BOUNDED_READ_CAPS:
         return _encode_bounded(result, _BOUNDED_READ_CAPS[operation]())
     return {operation: result} if operation in ("categories", "rules") else result
@@ -127,7 +134,7 @@ def _write(owner, operation, values, secret):
 
 def register(app, read_json_body, *, auth_enabled, session_secret):
     async def handle(request):
-        operation = request.path.rsplit("/", 1)[-1]
+        operation = request.path.removeprefix(PREFIX + "/")
         try:
             owner = api._principal(request, auth_enabled)
             secret = api._secret(session_secret)

@@ -7,11 +7,12 @@ import type { BudgetAccount, BudgetCapabilities, BudgetConnection, BudgetConsent
   BudgetOperation, BudgetTransactions, ConsentIntent } from "./model";
 import { idempotencyKey } from "./model";
 import type { AnalyticsCategory, AnalyticsForecast, AnalyticsInbox, AnalyticsInboxMarkRequest, AnalyticsInboxMarkSaved,
-  AnalyticsMonthlyBudget, AnalyticsMortgages, AnalyticsOverview, AnalyticsQuarantine, AnalyticsRecurring, AnalyticsRule,
-  AnalyticsSpendingLimits, AnalyticsTransactions, AnnotationRequest, AnnotationSaved, CategoryCreateRequest,
-  CategorySaved, CategoryUpdateRequest, MortgagePaymentSaved, MortgagePaymentSetRequest, MortgageSaveRequest,
-  MortgageScheduleSaved, RuleCandidate, RulePreview, RuleSaved, SpendingLimitSaveRequest, SpendingLimitSaved,
-  TransactionFilter, TransferDecisionRequest, TransferDecisionResult, TransferList, TransferQueue } from "./analytics/model";
+  AnalyticsMonthlyBudget, AnalyticsMonthlyBudgetCharts, AnalyticsMortgages, AnalyticsOverview, AnalyticsQuarantine,
+  AnalyticsRecurring, AnalyticsRule, AnalyticsSpendingLimits, AnalyticsTransactions, AnnotationRequest, AnnotationSaved,
+  CategoryCreateRequest, CategorySaved, CategoryUpdateRequest, MortgagePaymentSaved, MortgagePaymentSetRequest,
+  MortgageSaveRequest, MortgageScheduleSaved, RuleCandidate, RulePreview, RuleSaved, SpendingLimitSaveRequest,
+  SpendingLimitSaved, TransactionFilter, TransferDecisionRequest, TransferDecisionResult, TransferList,
+  TransferQueue } from "./analytics/model";
 
 export type BudgetResult<T> =
   | { ok: true; data: T }
@@ -120,6 +121,9 @@ export const budgetApi = {
   /** Read-only owner-private monthly budget dashboard evaluated in Europe/Warsaw from one snapshot. */
   monthlyBudget: (period?: string, currency?: string) =>
     call<AnalyticsMonthlyBudget>(url("analytics/monthly-budget", { period, currency })),
+  /** Read-only owner-private monthly budget dashboard and chart series evaluated from one snapshot. */
+  monthlyBudgetCharts: (period?: string, currency?: string, history?: 6 | 12) =>
+    call<AnalyticsMonthlyBudgetCharts>(url("analytics/monthly-budget/charts", { period, currency, history })),
   /** Creates (schedule_id=null, expected_version=0) or updates one private mortgage schedule. */
   saveMortgage: (request: MortgageSaveRequest) =>
     post<{ schedule: MortgageScheduleSaved }>("analytics/mortgage-save", request),

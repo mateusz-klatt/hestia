@@ -7,8 +7,8 @@ import { Budget } from "./budget";
 import { account, componentLimit, connection, sharedLimit } from "./fixtures";
 import type { BudgetAccount, BudgetBalances, BudgetJob, BudgetTransaction, BudgetTransactions } from "./model";
 import { entriesOf, forecastCurrencyTotal, forecastItem, forecastOf, inboxConsentItem, inboxMarkSaved, inboxOf,
-  monthlyBudgetOf, mortgageReminder, mortgageSchedule, mortgagesOf, overviewOf, quarantineOf, recurringHint,
-  recurringOf, spendingLimit, spendingLimitsOf, spendingLimitStatus, transfersOf } from "./analytics/fixtures";
+  monthlyBudgetChartsOf, monthlyBudgetOf, mortgageReminder, mortgageSchedule, mortgagesOf, overviewOf, quarantineOf,
+  recurringHint, recurringOf, spendingLimit, spendingLimitsOf, spendingLimitStatus, transfersOf } from "./analytics/fixtures";
 
 type Settle<T> = (value: BudgetResult<T>) => void;
 
@@ -87,6 +87,7 @@ function fakeApi(accounts: BudgetAccount[] = [account({ display })]) {
     mortgages: vi.fn<BudgetApi["mortgages"]>(() => ok(mortgagesOf())),
     forecast: vi.fn<BudgetApi["forecast"]>(() => ok(forecastOf())),
     monthlyBudget: vi.fn<BudgetApi["monthlyBudget"]>(() => ok(monthlyBudgetOf())),
+    monthlyBudgetCharts: vi.fn<BudgetApi["monthlyBudgetCharts"]>(() => ok(monthlyBudgetChartsOf())),
     saveMortgage: vi.fn<BudgetApi["saveMortgage"]>(),
     setMortgagePayment: vi.fn<BudgetApi["setMortgagePayment"]>(),
     inbox: vi.fn<BudgetApi["inbox"]>(() => ok(inboxOf())),
@@ -911,7 +912,7 @@ describe("analytics views", () => {
     expect(host.textContent).toContain("Synthetic Current ••0001");
     expect(host.querySelector(".budget-views")).toBeNull();
     expect(api.overview).not.toHaveBeenCalled();
-    expect(api.monthlyBudget).not.toHaveBeenCalled();
+    expect(api.monthlyBudgetCharts).not.toHaveBeenCalled();
   });
 
   it("gates the quarantine tab on analytics, defaults to Monthly budget, and keeps Quarantine after Forecast", async () => {
@@ -920,14 +921,14 @@ describe("analytics views", () => {
     expect([...host.querySelectorAll("button")].some((item) => item.textContent === "Quarantine")).toBe(false);
     expect([...host.querySelectorAll("button")].some((item) => item.textContent === "Monthly budget")).toBe(false);
     expect(api.quarantine).not.toHaveBeenCalled();
-    expect(api.monthlyBudget).not.toHaveBeenCalled();
+    expect(api.monthlyBudgetCharts).not.toHaveBeenCalled();
 
     api.connections.mockImplementation(() => ok({ connections: [connection], capabilities: analysis }));
     await click(button("Reload"));
     const tabs = [...host.querySelectorAll(".budget-views button")].map((item) => item.textContent);
     expect(tabs[0]).toBe("Monthly budget");
     expect(button("Monthly budget").getAttribute("aria-pressed")).toBe("true");
-    expect(api.monthlyBudget).toHaveBeenCalledTimes(1);
+    expect(api.monthlyBudgetCharts).toHaveBeenCalledTimes(1);
     expect(tabs.indexOf("Quarantine")).toBe(tabs.indexOf("Forecast") + 1);
     await click(button("Quarantine"));
     expect(api.quarantine).toHaveBeenCalledWith(undefined);
@@ -944,7 +945,7 @@ describe("analytics views", () => {
   it("defaults to Monthly budget and links directly to Month view for the same month", async () => {
     const api = fakeApi();
     api.connections.mockImplementation(() => ok({ connections: [connection], capabilities: analysis }));
-    api.monthlyBudget.mockImplementation(() => ok(monthlyBudgetOf({
+    api.monthlyBudgetCharts.mockImplementation(() => ok(monthlyBudgetChartsOf({
       period: "2026-11",
       current_month: "2026-11",
       cutoff: "2026-11-22",
@@ -959,7 +960,7 @@ describe("analytics views", () => {
 
     // Malformed server current_month falls back cleanly without breaking Month view navigation.
     await click(button("Monthly budget"));
-    api.monthlyBudget.mockImplementation(() => ok(monthlyBudgetOf({ period: "2026-10", cutoff: "2026-10-31", current_month: "invalid" })));
+    api.monthlyBudgetCharts.mockImplementation(() => ok(monthlyBudgetChartsOf({ period: "2026-10", cutoff: "2026-10-31", current_month: "invalid" })));
     await click(button("Reload"));
     await click(button("View transactions"));
     expect(button("Month").getAttribute("aria-pressed")).toBe("true");
@@ -968,7 +969,7 @@ describe("analytics views", () => {
   it("opens a closed month from Monthly budget with Next month enabled and without the in-progress notice", async () => {
     const api = fakeApi();
     api.connections.mockImplementation(() => ok({ connections: [connection], capabilities: analysis }));
-    api.monthlyBudget.mockImplementation(() => ok(monthlyBudgetOf({
+    api.monthlyBudgetCharts.mockImplementation(() => ok(monthlyBudgetChartsOf({
       period: "2024-01",
       start: "2024-01-01",
       end: "2024-01-31",
@@ -1067,10 +1068,10 @@ describe("analytics views", () => {
     });
 
   it.each([[401, "budget_http_401"], [403, "budget_forbidden"]])(
-    "clears loaded monthly budget data and the whole budget when monthlyBudget reports lost access (%s)", async (status, error) => {
+    "clears loaded monthly budget data and the whole budget when monthlyBudgetCharts reports lost access (%s)", async (status, error) => {
       const api = fakeApi();
       api.connections.mockImplementation(() => ok({ connections: [connection], capabilities: analysis }));
-      api.monthlyBudget.mockImplementationOnce(() => ok(monthlyBudgetOf({
+      api.monthlyBudgetCharts.mockImplementationOnce(() => ok(monthlyBudgetChartsOf({
         summary: { start_budget: "7777", spent: "111", remaining: "7666" },
       }))).mockImplementationOnce(() => fail(status, error));
       await render(api);
