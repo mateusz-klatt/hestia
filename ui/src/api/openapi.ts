@@ -265,6 +265,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/budget/analytics/monthly-budget": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read the owner-private monthly budget dashboard
+         * @description Pure read-only single-snapshot monthly budget dashboard evaluated in Europe/Warsaw from one UTC instant. Computes booked configured start budget, adjusted category spending and limits, rent/mortgage pass-through, unresolved transfer and repayment candidate provisional flags, previous-month expected income estimates (including cross-account salary matching), and spending pace. Card exposure is reported as unavailable in P1. Makes no bank requests and no database writes.
+         */
+        get: operations["getBudgetAnalyticsMonthlyBudget"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/budget/analytics/mortgage-payment-set": {
         parameters: {
             query?: never;
@@ -2176,6 +2196,202 @@ export interface components {
             currencies: components["schemas"]["BudgetAnalyticsCurrency"][];
             /** Month */
             month: string;
+        };
+        /**
+         * BudgetAnalyticsMonthlyBudget
+         * @description Read-only owner-private monthly budget dashboard evaluated in Europe/Warsaw from one snapshot.
+         */
+        BudgetAnalyticsMonthlyBudget: {
+            /** Available Currencies */
+            available_currencies: string[];
+            card_exposure: components["schemas"]["BudgetAnalyticsMonthlyBudgetCardExposure"];
+            /** Category Spend */
+            category_spend: components["schemas"]["BudgetAnalyticsMonthlyBudgetCategorySpend"][];
+            configuration: components["schemas"]["BudgetAnalyticsMonthlyBudgetConfiguration"];
+            coverage: components["schemas"]["BudgetAnalyticsMonthlyBudgetCoverage"];
+            /** Currency */
+            currency: string;
+            /** Current Month */
+            current_month: string;
+            /** Cutoff */
+            cutoff: string;
+            /** End */
+            end: string;
+            /** Evaluated At */
+            evaluated_at: number;
+            /** Evaluation Date */
+            evaluation_date: string;
+            /**
+             * Evaluation Timezone
+             * @constant
+             */
+            evaluation_timezone: "Europe/Warsaw";
+            expected_income: components["schemas"]["BudgetAnalyticsMonthlyBudgetExpectedIncome"] | null;
+            pace: components["schemas"]["BudgetAnalyticsMonthlyBudgetPace"] | null;
+            pass_through: components["schemas"]["BudgetAnalyticsMonthlyBudgetPassThrough"] | null;
+            /** Period */
+            period: string;
+            /** Start */
+            start: string;
+            summary: components["schemas"]["BudgetAnalyticsMonthlyBudgetSummary"] | null;
+        };
+        /** BudgetAnalyticsMonthlyBudgetCardExposure */
+        BudgetAnalyticsMonthlyBudgetCardExposure: {
+            /** Amount */
+            amount: string | null;
+            /** As Of Date */
+            as_of_date: string | null;
+            /**
+             * Status
+             * @constant
+             */
+            status: "unavailable";
+        };
+        /** BudgetAnalyticsMonthlyBudgetCategoryLimit */
+        BudgetAnalyticsMonthlyBudgetCategoryLimit: {
+            /** Monthly Limit */
+            monthly_limit: string;
+            /** Over By */
+            over_by: string;
+            /** Percent Used Floor */
+            percent_used_floor: string;
+            /** Remaining */
+            remaining: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "within" | "approaching" | "at_limit" | "exceeded";
+            /** Warning Percent */
+            warning_percent: number;
+        };
+        /** BudgetAnalyticsMonthlyBudgetCategorySpend */
+        BudgetAnalyticsMonthlyBudgetCategorySpend: {
+            /** Archived */
+            archived: boolean;
+            /** Category Id */
+            category_id: string | null;
+            /** Expenses */
+            expenses: string;
+            limit: components["schemas"]["BudgetAnalyticsMonthlyBudgetCategoryLimit"] | null;
+            /** Name */
+            name: string | null;
+            /** Net Spending */
+            net_spending: string;
+            /** Refunds */
+            refunds: string;
+        };
+        /** BudgetAnalyticsMonthlyBudgetConfiguration */
+        BudgetAnalyticsMonthlyBudgetConfiguration: {
+            /**
+             * Source
+             * @enum {string}
+             */
+            source: "bootstrap" | "saved" | "none";
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "ready" | "unconfigured";
+        };
+        /** BudgetAnalyticsMonthlyBudgetCoverage */
+        BudgetAnalyticsMonthlyBudgetCoverage: {
+            /** Has Activity */
+            has_activity: boolean;
+            /** Ledger As Of */
+            ledger_as_of: number | null;
+            /** Pending Transfer Rows */
+            pending_transfer_rows: number;
+            /** Provisional */
+            provisional: boolean;
+            /** Purchase Date Fallback Count */
+            purchase_date_fallback_count: number;
+            /** Stale Selected Accounts */
+            stale_selected_accounts: number;
+            /** Transfer Scan Limited */
+            transfer_scan_limited: boolean;
+        };
+        /** BudgetAnalyticsMonthlyBudgetExpectedIncome */
+        BudgetAnalyticsMonthlyBudgetExpectedIncome: {
+            /** Items */
+            items: components["schemas"]["BudgetAnalyticsMonthlyBudgetExpectedIncomeItem"][];
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "estimated" | "partial" | "unavailable" | "none" | "historical";
+            /** Total */
+            total: string | null;
+        };
+        /** BudgetAnalyticsMonthlyBudgetExpectedIncomeItem */
+        BudgetAnalyticsMonthlyBudgetExpectedIncomeItem: {
+            /** Amount */
+            amount: string;
+            /** Category Id */
+            category_id: string;
+            /** Expected Date */
+            expected_date: string | null;
+            /**
+             * Source
+             * @constant
+             */
+            source: "previous_month";
+        };
+        /** BudgetAnalyticsMonthlyBudgetPace */
+        BudgetAnalyticsMonthlyBudgetPace: {
+            /**
+             * Basis
+             * @enum {string}
+             */
+            basis: "received" | "received_plus_expected";
+            /** Budget */
+            budget: string;
+            daily_rate: components["schemas"]["BudgetAnalyticsMonthlyBudgetRatio"] | null;
+            /** Exhaustion Day */
+            exhaustion_day: number | null;
+            projected_month_spend: components["schemas"]["BudgetAnalyticsMonthlyBudgetRatio"] | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "historical" | "no_budget" | "already_reached" | "no_positive_pace" | "runs_out" | "within_budget";
+        };
+        /** BudgetAnalyticsMonthlyBudgetPassThrough */
+        BudgetAnalyticsMonthlyBudgetPassThrough: {
+            /** Matched */
+            matched: string;
+            /** Mortgage Category Id */
+            mortgage_category_id: string;
+            /** Mortgage Debits */
+            mortgage_debits: string;
+            /** Mortgage Refunds */
+            mortgage_refunds: string;
+            /** Rent Category Id */
+            rent_category_id: string;
+            /** Rent Received */
+            rent_received: string;
+            /** Unapplied Mortgage Refunds */
+            unapplied_mortgage_refunds: string;
+            /** Unapplied Rent */
+            unapplied_rent: string;
+            /** Uncovered Mortgage */
+            uncovered_mortgage: string;
+        };
+        /** BudgetAnalyticsMonthlyBudgetRatio */
+        BudgetAnalyticsMonthlyBudgetRatio: {
+            /** Denominator */
+            denominator: number;
+            /** Numerator */
+            numerator: string;
+        };
+        /** BudgetAnalyticsMonthlyBudgetSummary */
+        BudgetAnalyticsMonthlyBudgetSummary: {
+            /** Remaining */
+            remaining: string;
+            /** Spent */
+            spent: string;
+            /** Start Budget */
+            start_budget: string;
         };
         /** BudgetAnalyticsMortgagePaymentResult */
         BudgetAnalyticsMortgagePaymentResult: {
@@ -5953,6 +6169,103 @@ export interface operations {
                 };
             };
             /** @description budget configuration unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+        };
+    };
+    getBudgetAnalyticsMonthlyBudget: {
+        parameters: {
+            query?: {
+                /** @description Optional calendar month YYYY-MM, 1900 through the current Europe/Warsaw month; defaults to current month. */
+                period?: string;
+                /** @description Optional uppercase 3-letter ISO currency code; defaults to PLN. */
+                currency?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Owner-private monthly budget dashboard and ledger coverage from one local snapshot. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetAnalyticsMonthlyBudget"];
+                };
+            };
+            /** @description Invalid monthly budget query: period must match ^[0-9]{4}-[0-9]{2}$ through the current Europe/Warsaw month, currency must match ^[A-Z]{3}$, and unknown or duplicate parameters are rejected. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description session required; middleware may return an empty body */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description admin owner or browser-origin requirement failed; middleware may return an empty body */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description unknown, disabled or foreign resource */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description SQLite backend required: monthly-budget requires HESTIA_PERSIST=sqlite. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Monthly budget limit exceeded (>100,000 selected rows, >1,000 category limits, >192-character aggregate decimal output, or >4 MiB UTF-8 JSON payload); no partial totals returned. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Stored ledger, category, limit, metadata, or timestamp integrity check failed (`budget_analytics_data_error`), including stored-data helper errors mapped to 500 after query validation, or unexpected internal failure (`budget_internal_error`). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Analytics storage, Europe/Warsaw time zone, or monthly budget configuration unavailable (`budget_analytics_unavailable` or `budget_unavailable`). */
             503: {
                 headers: {
                     [name: string]: unknown;

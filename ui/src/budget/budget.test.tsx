@@ -7,8 +7,8 @@ import { Budget } from "./budget";
 import { account, componentLimit, connection, sharedLimit } from "./fixtures";
 import type { BudgetAccount, BudgetBalances, BudgetJob, BudgetTransaction, BudgetTransactions } from "./model";
 import { entriesOf, forecastCurrencyTotal, forecastItem, forecastOf, inboxConsentItem, inboxMarkSaved, inboxOf,
-  mortgageReminder, mortgageSchedule, mortgagesOf, overviewOf, quarantineOf, recurringHint, recurringOf, spendingLimit,
-  spendingLimitsOf, spendingLimitStatus, transfersOf } from "./analytics/fixtures";
+  monthlyBudgetOf, mortgageReminder, mortgageSchedule, mortgagesOf, overviewOf, quarantineOf, recurringHint,
+  recurringOf, spendingLimit, spendingLimitsOf, spendingLimitStatus, transfersOf } from "./analytics/fixtures";
 
 type Settle<T> = (value: BudgetResult<T>) => void;
 
@@ -86,6 +86,7 @@ function fakeApi(accounts: BudgetAccount[] = [account({ display })]) {
     saveSpendingLimit: vi.fn<BudgetApi["saveSpendingLimit"]>(),
     mortgages: vi.fn<BudgetApi["mortgages"]>(() => ok(mortgagesOf())),
     forecast: vi.fn<BudgetApi["forecast"]>(() => ok(forecastOf())),
+    monthlyBudget: vi.fn<BudgetApi["monthlyBudget"]>(() => ok(monthlyBudgetOf())),
     saveMortgage: vi.fn<BudgetApi["saveMortgage"]>(),
     setMortgagePayment: vi.fn<BudgetApi["setMortgagePayment"]>(),
     inbox: vi.fn<BudgetApi["inbox"]>(() => ok(inboxOf())),
@@ -97,6 +98,7 @@ let host: HTMLElement;
 let root: Root;
 
 beforeEach(() => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   // jsdom does not implement scrolling; the detail panel scrolls itself into view when opened.
   Element.prototype.scrollIntoView = vi.fn();
   host = document.createElement("div");
@@ -106,6 +108,7 @@ beforeEach(() => {
 afterEach(async () => {
   await act(async () => { root.unmount(); await Promise.resolve(); });
   host.remove();
+  vi.unstubAllGlobals();
 });
 
 async function render(api: ReturnType<typeof fakeApi>, active = true, principal?: string | null): Promise<void> {
@@ -120,7 +123,8 @@ async function settle(ms = 0): Promise<void> {
   await act(async () => { await new Promise((resolve) => setTimeout(resolve, ms)); });
 }
 function button(text: string): HTMLButtonElement {
-  const found = [...host.querySelectorAll("button")].find((item) => item.textContent.includes(text));
+  const buttons = [...host.querySelectorAll("button")];
+  const found = buttons.find((item) => item.textContent === text) ?? buttons.find((item) => item.textContent.includes(text));
   if (found === undefined) throw new Error(`button ${text} missing`);
   return found;
 }
@@ -907,17 +911,23 @@ describe("analytics views", () => {
     expect(host.textContent).toContain("Synthetic Current ••0001");
     expect(host.querySelector(".budget-views")).toBeNull();
     expect(api.overview).not.toHaveBeenCalled();
+    expect(api.monthlyBudget).not.toHaveBeenCalled();
   });
 
-  it("gates the quarantine tab on analytics and places it immediately after Forecast", async () => {
+  it("gates the quarantine tab on analytics, defaults to Monthly budget, and keeps Quarantine after Forecast", async () => {
     const api = fakeApi();
     await render(api);
     expect([...host.querySelectorAll("button")].some((item) => item.textContent === "Quarantine")).toBe(false);
+    expect([...host.querySelectorAll("button")].some((item) => item.textContent === "Monthly budget")).toBe(false);
     expect(api.quarantine).not.toHaveBeenCalled();
+    expect(api.monthlyBudget).not.toHaveBeenCalled();
 
     api.connections.mockImplementation(() => ok({ connections: [connection], capabilities: analysis }));
     await click(button("Reload"));
     const tabs = [...host.querySelectorAll(".budget-views button")].map((item) => item.textContent);
+    expect(tabs[0]).toBe("Monthly budget");
+    expect(button("Monthly budget").getAttribute("aria-pressed")).toBe("true");
+    expect(api.monthlyBudget).toHaveBeenCalledTimes(1);
     expect(tabs.indexOf("Quarantine")).toBe(tabs.indexOf("Forecast") + 1);
     await click(button("Quarantine"));
     expect(api.quarantine).toHaveBeenCalledWith(undefined);
@@ -929,6 +939,57 @@ describe("analytics views", () => {
     expect(host.querySelector(".budget-views")).toBeNull();
     expect(host.textContent).not.toContain("All entries are included in totals.");
     expect(host.textContent).toContain("Synthetic Current ••0001");
+  });
+
+  it("defaults to Monthly budget and links directly to Month view for the same month", async () => {
+    const api = fakeApi();
+    api.connections.mockImplementation(() => ok({ connections: [connection], capabilities: analysis }));
+    api.monthlyBudget.mockImplementation(() => ok(monthlyBudgetOf({
+      period: "2026-11",
+      current_month: "2026-11",
+      cutoff: "2026-11-22",
+      summary: { start_budget: "5000", spent: "320.5", remaining: "4679.5" },
+    })));
+    await render(api);
+    expect(button("Monthly budget").getAttribute("aria-pressed")).toBe("true");
+    expect(host.textContent).toContain("5,000.00 PLN");
+    await click(button("View transactions"));
+    expect(button("Month").getAttribute("aria-pressed")).toBe("true");
+    expect(api.overview).toHaveBeenLastCalledWith("2026-11");
+
+    // Malformed server current_month falls back cleanly without breaking Month view navigation.
+    await click(button("Monthly budget"));
+    api.monthlyBudget.mockImplementation(() => ok(monthlyBudgetOf({ period: "2026-10", cutoff: "2026-10-31", current_month: "invalid" })));
+    await click(button("Reload"));
+    await click(button("View transactions"));
+    expect(button("Month").getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("opens a closed month from Monthly budget with Next month enabled and without the in-progress notice", async () => {
+    const api = fakeApi();
+    api.connections.mockImplementation(() => ok({ connections: [connection], capabilities: analysis }));
+    api.monthlyBudget.mockImplementation(() => ok(monthlyBudgetOf({
+      period: "2024-01",
+      start: "2024-01-01",
+      end: "2024-01-31",
+      cutoff: "2024-01-31",
+      current_month: "2024-02",
+    })));
+    await render(api);
+
+    await click(button("View transactions"));
+    expect(button("Month").getAttribute("aria-pressed")).toBe("true");
+    expect(api.overview).toHaveBeenLastCalledWith("2024-01");
+    expect(host.querySelector(".budget-month-nav h3")?.textContent).toBe("January 2024");
+    const nextMonth = () => host.querySelector<HTMLButtonElement>('button[aria-label="Next month"]');
+    expect(nextMonth()?.disabled).toBe(false);
+    expect(host.textContent).not.toContain("This period is still in progress.");
+
+    await click(nextMonth() as HTMLButtonElement);
+    expect(api.overview).toHaveBeenLastCalledWith("2024-02");
+    expect(host.querySelector(".budget-month-nav h3")?.textContent).toBe("February 2024");
+    expect(nextMonth()?.disabled).toBe(true);
+    expect(host.textContent).toContain("This period is still in progress.");
   });
 
   it("offers Forecast after Mortgages only while analytics is enabled", async () => {
@@ -997,12 +1058,27 @@ describe("analytics views", () => {
       api.connections.mockImplementation(() => ok({ connections: [connection], capabilities: analysis }));
       api.quarantine.mockImplementation(() => fail(status, error));
       await render(api);
-      expect(host.textContent).toContain("Synthetic Current ••0001");
+      expect(button("Monthly budget").getAttribute("aria-pressed")).toBe("true");
       await click(button("Quarantine"));
       expect(host.textContent).toContain("Only the budget's owner");
       expect(host.querySelector(".budget-views")).toBeNull();
       expect(host.querySelector(".budget-entries")).toBeNull();
       expect(host.textContent).not.toContain("Synthetic Current");
+    });
+
+  it.each([[401, "budget_http_401"], [403, "budget_forbidden"]])(
+    "clears loaded monthly budget data and the whole budget when monthlyBudget reports lost access (%s)", async (status, error) => {
+      const api = fakeApi();
+      api.connections.mockImplementation(() => ok({ connections: [connection], capabilities: analysis }));
+      api.monthlyBudget.mockImplementationOnce(() => ok(monthlyBudgetOf({
+        summary: { start_budget: "7777", spent: "111", remaining: "7666" },
+      }))).mockImplementationOnce(() => fail(status, error));
+      await render(api);
+      expect(host.textContent).toContain("7,777.00 PLN");
+      await click(button("Reload"));
+      expect(host.textContent).toContain("Only the budget's owner");
+      expect(host.textContent).not.toContain("7,777.00 PLN");
+      expect(host.querySelector(".budget-views")).toBeNull();
     });
 
   it("clears the whole budget when the inbox read reports lost access", async () => {

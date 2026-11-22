@@ -15,6 +15,7 @@ import { ConsentHealthPanel, consentHealthLabels } from "./consent_health";
 import { ForecastView } from "./analytics/forecast";
 import { InboxView, inboxLabels } from "./analytics/inbox";
 import { MonthView, monthLabels } from "./analytics/month";
+import { MonthBudgetView, monthBudgetLabels } from "./analytics/month_budget";
 import { MortgagesView, mortgagesLabels } from "./analytics/mortgages";
 import { QuarantineView, quarantineLabels } from "./analytics/quarantine";
 import { RecurringView, recurringLabels } from "./analytics/recurring";
@@ -27,7 +28,7 @@ import "./budget.css";
 const labels = {
   en: {
     title: "Budget", subtitle: "Your private household finances.", reload: "Reload", loading: "Loading budget…",
-    views: { accounts: "Accounts", inbox: "Inbox", month: "Month", year: "Year", limits: "Spending limits", recurring: "Recurring", mortgages: "Mortgages", forecast: "Forecast", quarantine: "Quarantine", rules: "Categories and rules" }, viewsLabel: "Budget view",
+    views: { monthly_budget: "Monthly budget", accounts: "Accounts", inbox: "Inbox", month: "Month", year: "Year", limits: "Spending limits", recurring: "Recurring", mortgages: "Mortgages", forecast: "Forecast", quarantine: "Quarantine", rules: "Categories and rules" }, viewsLabel: "Budget view",
     disabled: "The budget is not enabled on this server.", denied: "Only the budget's owner can view it.",
     error: "The budget could not be loaded. Try again.", empty: "No bank connections are configured.",
     account: "Account", refresh: "Refresh from bank", refreshing: "Refresh queued…",
@@ -73,7 +74,7 @@ const labels = {
   },
   pl: {
     title: "Budżet", subtitle: "Prywatne finanse domowe.", reload: "Wczytaj ponownie", loading: "Wczytywanie budżetu…",
-    views: { accounts: "Konta", inbox: "Skrzynka", month: "Miesiąc", year: "Rok", limits: "Limity wydatków", recurring: "Cykliczne", mortgages: "Hipoteka", forecast: "Prognoza", quarantine: "Kwarantanna", rules: "Kategorie i reguły" }, viewsLabel: "Widok budżetu",
+    views: { monthly_budget: "Budżet miesiąca", accounts: "Konta", inbox: "Skrzynka", month: "Miesiąc", year: "Rok", limits: "Limity wydatków", recurring: "Cykliczne", mortgages: "Hipoteka", forecast: "Prognoza", quarantine: "Kwarantanna", rules: "Kategorie i reguły" }, viewsLabel: "Widok budżetu",
     disabled: "Budżet nie jest włączony na tym serwerze.", denied: "Budżet widzi tylko jego właściciel.",
     error: "Nie udało się wczytać budżetu. Spróbuj ponownie.", empty: "Brak skonfigurowanych połączeń z bankiem.",
     account: "Konto", refresh: "Odśwież z banku", refreshing: "Odświeżanie w kolejce…",
@@ -121,13 +122,14 @@ const labels = {
 type Labels = typeof labels.en;
 
 function pick(): { text: Labels; consentHealth: typeof consentHealthLabels.en; inbox: typeof inboxLabels.en;
-  month: typeof monthLabels.en; year: typeof yearLabels.en;
+  monthBudget: typeof monthBudgetLabels.en; month: typeof monthLabels.en; year: typeof yearLabels.en;
   limits: typeof spendingLimitsLabels.en; recurring: typeof recurringLabels.en;
   mortgages: typeof mortgagesLabels.en; quarantine: typeof quarantineLabels.en; rules: typeof rulesLabels.en; locale: string } {
   const locale = currentLocale();
   const pl = locale.startsWith("pl");
   return { text: pl ? labels.pl : labels.en, consentHealth: pl ? consentHealthLabels.pl : consentHealthLabels.en,
     inbox: pl ? inboxLabels.pl : inboxLabels.en,
+    monthBudget: pl ? monthBudgetLabels.pl : monthBudgetLabels.en,
     month: pl ? monthLabels.pl : monthLabels.en, year: pl ? yearLabels.pl : yearLabels.en,
     limits: pl ? spendingLimitsLabels.pl : spendingLimitsLabels.en,
     recurring: pl ? recurringLabels.pl : recurringLabels.en,
@@ -135,7 +137,15 @@ function pick(): { text: Labels; consentHealth: typeof consentHealthLabels.en; i
     quarantine: pl ? quarantineLabels.pl : quarantineLabels.en, rules: pl ? rulesLabels.pl : rulesLabels.en, locale };
 }
 
-type View = "accounts" | "inbox" | "month" | "year" | "limits" | "recurring" | "mortgages" | "forecast" | "quarantine" | "rules";
+type View = "monthly_budget" | "accounts" | "inbox" | "month" | "year" | "limits" | "recurring" | "mortgages" | "forecast" | "quarantine" | "rules";
+
+function serverMonthToToday(month: string): (() => Date) | undefined {
+  const match = /^(\d{4})-(0[1-9]|1[0-2])$/.exec(month);
+  if (match === null) return undefined;
+  const year = Number(match[1]);
+  const monthIndex = Number(match[2]) - 1;
+  return () => new Date(year, monthIndex, 15, 12);
+}
 
 type Load = "loading" | "ready" | "disabled" | "denied" | "error";
 
@@ -172,8 +182,9 @@ export interface BudgetProps {
 
 export function Budget({ active, api = budgetApi, pollMs = 2000, principal,
   navigate = (url) => { window.location.assign(url); }, completeUrl = "/budget/connect/complete" }: BudgetProps) {
-  const { text, consentHealth: consentHealthText, inbox: inboxText, month: monthText, year: yearText, limits: limitsText, recurring: recurringText,
-    mortgages: mortgagesText, quarantine: quarantineText, rules: rulesText, locale } = pick();
+  const { text, consentHealth: consentHealthText, inbox: inboxText, monthBudget: monthBudgetText, month: monthText,
+    year: yearText, limits: limitsText, recurring: recurringText, mortgages: mortgagesText, quarantine: quarantineText,
+    rules: rulesText, locale } = pick();
   const [load, setLoad] = useState<Load>("loading");
   const [connections, setConnections] = useState<BudgetConnection[]>([]);
   const [capabilities, setCapabilities] = useState<BudgetCapabilities | null>(null);
@@ -185,9 +196,10 @@ export function Budget({ active, api = budgetApi, pollMs = 2000, principal,
   const [consents, setConsents] = useState<BudgetConsent[]>([]);
   const [pending, setPending] = useState<BudgetConsentFlow[]>([]);
   const [detail, setDetail] = useState<string | null>(null);
-  const [view, setView] = useState<View>("accounts");
-  // A month chosen in the year view; the month view opens on it.
+  const [view, setView] = useState<View>("monthly_budget");
+  // A month chosen in the monthly budget or year view; the month view opens on it.
   const [focusMonth, setFocusMonth] = useState<string | undefined>(undefined);
+  const [focusToday, setFocusToday] = useState<(() => Date) | undefined>(undefined);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState<ReadonlySet<string>>(new Set());
   const retryKeys = useRef(new Map<string, string>());
@@ -218,7 +230,8 @@ export function Budget({ active, api = budgetApi, pollMs = 2000, principal,
     epoch.current += 1;
     generation.current += 1;
     setConnections([]); setAccounts([]); setJobs([]); setDetail(null); setCapabilities(null); setBusy(new Set());
-    setLimits(null); setShowLimits(false); setShowConsentHealth(false); setConsents([]); setPending([]); setView("accounts");
+    setLimits(null); setShowLimits(false); setShowConsentHealth(false); setConsents([]); setPending([]);
+    setFocusMonth(undefined); setFocusToday(undefined); setView("accounts");
     setLoad(disabled ? "disabled" : "denied");
   }, []);
   const barrier = useCallback((result: { ok: boolean; status?: number; error?: string }): boolean => {
@@ -449,13 +462,20 @@ export function Budget({ active, api = budgetApi, pollMs = 2000, principal,
       )}
       {analysis ? (
         <div className="budget-views" role="group" aria-label={text.viewsLabel}>
-          {(["accounts", "inbox", "month", "year", "limits", "recurring", "mortgages", "forecast", "quarantine", "rules"] as const).map((item) => (
+          {(["monthly_budget", "accounts", "inbox", "month", "year", "limits", "recurring", "mortgages", "forecast", "quarantine", "rules"] as const).map((item) => (
             <button type="button" key={item} aria-pressed={shownView === item}
-              onClick={() => { setView(item); if (item === "month") setFocusMonth(undefined); }}>{text.views[item]}</button>
+              onClick={() => { setView(item); if (item === "month") { setFocusMonth(undefined); setFocusToday(undefined); } }}>{text.views[item]}</button>
           ))}
         </div>
       ) : null}
-      {shownView === "inbox" ? (
+      {shownView === "monthly_budget" ? (
+        <MonthBudgetView api={api} accounts={accounts} text={monthBudgetText} locale={locale} revision={revision}
+          onAccessLoss={barrier} onOpenMonth={(month, serverCurrentMonth) => {
+            setFocusMonth(month);
+            setFocusToday(() => serverMonthToToday(serverCurrentMonth));
+            setView("month");
+          }} />
+      ) : shownView === "inbox" ? (
         <InboxView api={api} connections={connections} consentEnabled={consentEnabled} text={inboxText} locale={locale}
           revision={revision} onAccessLoss={barrier}
           onOpenAccounts={(openConsentHealth) => {
@@ -466,10 +486,10 @@ export function Budget({ active, api = budgetApi, pollMs = 2000, principal,
           onOpenLimits={() => { setView("limits"); }} />
       ) : shownView === "month" ? (
         <MonthView key={focusMonth ?? "current"} api={api} accounts={accounts} connections={connections} text={monthText} locale={locale} revision={revision}
-          onAccessLoss={barrier} initialMonth={focusMonth} />
+          onAccessLoss={barrier} initialMonth={focusMonth} {...(focusToday === undefined ? {} : { today: focusToday })} />
       ) : shownView === "year" ? (
         <YearView api={api} accounts={accounts} connections={connections} text={yearText} locale={locale} revision={revision} onAccessLoss={barrier}
-          onOpenMonth={(month) => { setFocusMonth(month); setView("month"); }} />
+          onOpenMonth={(month) => { setFocusMonth(month); setFocusToday(undefined); setView("month"); }} />
       ) : shownView === "limits" ? (
         <SpendingLimitsView api={api} accounts={accounts} text={limitsText} locale={locale} revision={revision}
           onAccessLoss={barrier} onOpenRules={() => { setView("rules"); }} />

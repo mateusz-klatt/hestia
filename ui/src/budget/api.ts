@@ -7,7 +7,7 @@ import type { BudgetAccount, BudgetCapabilities, BudgetConnection, BudgetConsent
   BudgetOperation, BudgetTransactions, ConsentIntent } from "./model";
 import { idempotencyKey } from "./model";
 import type { AnalyticsCategory, AnalyticsForecast, AnalyticsInbox, AnalyticsInboxMarkRequest, AnalyticsInboxMarkSaved,
-  AnalyticsMortgages, AnalyticsOverview, AnalyticsQuarantine, AnalyticsRecurring, AnalyticsRule,
+  AnalyticsMonthlyBudget, AnalyticsMortgages, AnalyticsOverview, AnalyticsQuarantine, AnalyticsRecurring, AnalyticsRule,
   AnalyticsSpendingLimits, AnalyticsTransactions, AnnotationRequest, AnnotationSaved, CategoryCreateRequest,
   CategorySaved, CategoryUpdateRequest, MortgagePaymentSaved, MortgagePaymentSetRequest, MortgageSaveRequest,
   MortgageScheduleSaved, RuleCandidate, RulePreview, RuleSaved, SpendingLimitSaveRequest, SpendingLimitSaved,
@@ -117,6 +117,9 @@ export const budgetApi = {
   mortgages: () => call<AnalyticsMortgages>(url("analytics/mortgages")),
   /** Read-only estimate of scheduled and recurring commitments, with exact per-currency totals. */
   forecast: (months?: number, currency?: string) => call<AnalyticsForecast>(url("analytics/forecast", { months, currency })),
+  /** Read-only owner-private monthly budget dashboard evaluated in Europe/Warsaw from one snapshot. */
+  monthlyBudget: (period?: string, currency?: string) =>
+    call<AnalyticsMonthlyBudget>(url("analytics/monthly-budget", { period, currency })),
   /** Creates (schedule_id=null, expected_version=0) or updates one private mortgage schedule. */
   saveMortgage: (request: MortgageSaveRequest) =>
     post<{ schedule: MortgageScheduleSaved }>("analytics/mortgage-save", request),
