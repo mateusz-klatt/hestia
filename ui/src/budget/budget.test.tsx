@@ -7,7 +7,7 @@ import { Budget } from "./budget";
 import { account, componentLimit, connection, sharedLimit } from "./fixtures";
 import type { BudgetAccount, BudgetBalances, BudgetJob, BudgetTransaction, BudgetTransactions } from "./model";
 import { entriesOf, inboxConsentItem, inboxMarkSaved, inboxOf, mortgageReminder, mortgageSchedule, mortgagesOf,
-  overviewOf, recurringHint, recurringOf, spendingLimit, spendingLimitsOf, spendingLimitStatus,
+  overviewOf, quarantineOf, recurringHint, recurringOf, spendingLimit, spendingLimitsOf, spendingLimitStatus,
   transfersOf } from "./analytics/fixtures";
 
 type Settle<T> = (value: BudgetResult<T>) => void;
@@ -81,6 +81,7 @@ function fakeApi(accounts: BudgetAccount[] = [account({ display })]) {
     previewRule: vi.fn<BudgetApi["previewRule"]>(),
     saveRule: vi.fn<BudgetApi["saveRule"]>(),
     recurring: vi.fn<BudgetApi["recurring"]>(() => ok(recurringOf([]))),
+    quarantine: vi.fn<BudgetApi["quarantine"]>(() => ok(quarantineOf([]))),
     spendingLimits: vi.fn<BudgetApi["spendingLimits"]>((period) => ok(spendingLimitsOf(period))),
     saveSpendingLimit: vi.fn<BudgetApi["saveSpendingLimit"]>(),
     mortgages: vi.fn<BudgetApi["mortgages"]>(() => ok(mortgagesOf())),
@@ -905,6 +906,28 @@ describe("analytics views", () => {
     expect(host.textContent).toContain("Synthetic Current ••0001");
     expect(host.querySelector(".budget-views")).toBeNull();
     expect(api.overview).not.toHaveBeenCalled();
+  });
+
+  it("gates the quarantine tab on analytics and places it immediately after Mortgages", async () => {
+    const api = fakeApi();
+    await render(api);
+    expect([...host.querySelectorAll("button")].some((item) => item.textContent === "Quarantine")).toBe(false);
+    expect(api.quarantine).not.toHaveBeenCalled();
+
+    api.connections.mockImplementation(() => ok({ connections: [connection], capabilities: analysis }));
+    await click(button("Reload"));
+    const tabs = [...host.querySelectorAll(".budget-views button")].map((item) => item.textContent);
+    expect(tabs.indexOf("Quarantine")).toBe(tabs.indexOf("Mortgages") + 1);
+    await click(button("Quarantine"));
+    expect(api.quarantine).toHaveBeenCalledWith(undefined);
+    expect(host.textContent).toContain("All entries are included in totals.");
+    expect(button("Quarantine").getAttribute("aria-pressed")).toBe("true");
+
+    api.connections.mockImplementation(() => ok({ connections: [connection], capabilities }));
+    await click(button("Reload"));
+    expect(host.querySelector(".budget-views")).toBeNull();
+    expect(host.textContent).not.toContain("All entries are included in totals.");
+    expect(host.textContent).toContain("Synthetic Current ••0001");
   });
 
   it("switches between accounts and the month view", async () => {

@@ -24,6 +24,10 @@ export type AnalyticsRecurring = Schemas["BudgetAnalyticsRecurring"];
 export type AnalyticsRecurringHint = Schemas["BudgetAnalyticsRecurringHint"];
 export type AnalyticsRecurringOccurrence = Schemas["BudgetAnalyticsRecurringOccurrence"];
 
+export type AnalyticsQuarantine = Schemas["BudgetAnalyticsQuarantine"];
+export type AnalyticsQuarantineAccount = Schemas["BudgetAnalyticsQuarantineAccount"];
+export type AnalyticsQuarantineItem = Schemas["BudgetAnalyticsQuarantineItem"];
+
 export type AnalyticsSpendingLimit = Schemas["BudgetAnalyticsSpendingLimit"];
 export type AnalyticsSpendingLimitStatus = Schemas["BudgetAnalyticsSpendingLimitStatus"];
 export type AnalyticsSpendingLimits = Schemas["BudgetAnalyticsSpendingLimits"];
