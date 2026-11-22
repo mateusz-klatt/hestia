@@ -4,9 +4,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { BudgetApi } from "../api";
 import type { BudgetAccount, BudgetConnection } from "../model";
 import { formatAmount, transactionDate, transactionText } from "../model";
-import { ANALYTICS_ERROR, EFFECTIVE_KINDS, NO_FILTER, RELOAD_ERRORS, UNCATEGORISED, annotationRequest, canPair, counterparty,
-  accountName as nameOf, currentChoice, daysBetween, kindChoice, kindChoicesFor, labelOf, manualPairRequest, pairCandidates,
-  pairDate, pairPeriods } from "./model";
+import { ANALYTICS_ERROR, EFFECTIVE_KINDS, NO_FILTER, RELOAD_ERRORS, UNCATEGORISED, annotationRequest, canPair, canonicalAmount,
+  counterparty, accountName as nameOf, currentChoice, daysBetween, kindChoice, kindChoicesFor, labelOf, manualPairRequest,
+  pairCandidates, pairDate, pairPeriods } from "./model";
 import type { AnalyticsCategory, AnalyticsTransaction, CategoryChoice, KindChoice, TransactionFilter } from "./model";
 
 const kindsEn = { auto: "Automatic", expense: "Expense", income: "Income", refund: "Refund", excluded: "Leave out of the budget",
@@ -19,11 +19,13 @@ export const transactionLabels = {
     title: "Transactions", currency: "Currency", category: "Category", kind: "Type", search: "Search", apply: "Apply",
     all: "All", uncategorised: "Uncategorised", automatic: "Automatic (rules)", kinds: kindsEn,
     edit: "Change", save: "Save", cancel: "Cancel", archived: "archived", total: (count: number) => `${String(count)} entries`,
+    date: "Date", amount: "Amount", sort: "Sort",
+    loadingMore: (count: number) => `Loading… ${String(count)}`,
     manual: "set by you", rule: "by rule", stale: "the bank changed this entry; check your choice",
     transfer: { none: "", suggested: "possible own transfer", accepted: "own transfer", review: "own transfer to re-check",
       boundary: "other side on an excluded account", rejected: "", undone: "" },
     ambiguous: "fits several pairs; choose in own transfers",
-    more: "Load more", empty: "No entries match.", loading: "Loading entries…", error: "Entries could not be loaded.",
+    empty: "No entries match.", loading: "Loading entries…", error: "Entries could not be loaded.",
     conflict: "This changed elsewhere; the latest state was loaded.", saveError: "Could not save. Try again.",
     changed: "The bank changed this entry; the latest state was loaded.", account: "Account",
     pair: "Pair as own transfer", pairTitle: "Matching credits within 3 days", pairLoading: "Looking for matching entries…",
@@ -39,11 +41,13 @@ export const transactionLabels = {
     title: "Transakcje", currency: "Waluta", category: "Kategoria", kind: "Rodzaj", search: "Szukaj", apply: "Zastosuj",
     all: "Wszystkie", uncategorised: "Bez kategorii", automatic: "Automatycznie (reguły)", kinds: kindsPl,
     edit: "Zmień", save: "Zapisz", cancel: "Anuluj", archived: "archiwalna", total: (count: number) => `Pozycji: ${String(count)}`,
+    date: "Data", amount: "Kwota", sort: "Sortowanie",
+    loadingMore: (count: number) => `Wczytywanie… ${String(count)}`,
     manual: "ustawione przez Ciebie", rule: "z reguły", stale: "bank zmienił tę pozycję; sprawdź swój wybór",
     transfer: { none: "", suggested: "możliwy przelew własny", accepted: "przelew własny",
       review: "przelew własny do sprawdzenia", boundary: "druga strona na koncie wykluczonym", rejected: "", undone: "" },
     ambiguous: "pasuje do kilku par; wybierz w przelewach własnych",
-    more: "Wczytaj więcej", empty: "Brak pasujących pozycji.", loading: "Wczytywanie pozycji…",
+    empty: "Brak pasujących pozycji.", loading: "Wczytywanie pozycji…",
     error: "Nie udało się wczytać pozycji.", conflict: "Zmieniono to w innym miejscu; wczytano aktualny stan.",
     saveError: "Nie udało się zapisać. Spróbuj ponownie.", changed: "Bank zmienił tę pozycję; wczytano aktualny stan.",
     account: "Konto",
@@ -58,6 +62,80 @@ export const transactionLabels = {
   },
 };
 export type TransactionLabels = typeof transactionLabels.en;
+
+/** Background pagination stops once this many rows are in memory. Sorting then covers that whole set. */
+export const TRANSACTION_ROW_CAP = 5000;
+
+export type TransactionSortKey = "date" | "category" | "amount";
+export type TransactionSortDirection = "asc" | "desc";
+export interface TransactionSort { key: TransactionSortKey; direction: TransactionSortDirection }
+
+const SORT_KEYS: readonly TransactionSortKey[] = ["date", "category", "amount"];
+
+function sortLabel(text: TransactionLabels, key: TransactionSortKey): string {
+  if (key === "date") return text.date;
+  if (key === "category") return text.category;
+  return text.amount;
+}
+
+export function nextSort(current: TransactionSort | null, key: TransactionSortKey): TransactionSort {
+  if (current?.key !== key) return { key, direction: "asc" };
+  return { key, direction: current.direction === "asc" ? "desc" : "asc" };
+}
+
+function absoluteAmount(amount: string): string | null {
+  return canonicalAmount(amount.trim().replace(/^-/, ""));
+}
+
+/** Compare canonical non-negative decimals without converting them to binary floating point. */
+function compareCanonical(a: string, b: string): number {
+  const [aw = "0", af = ""] = a.split(".");
+  const [bw = "0", bf = ""] = b.split(".");
+  if (aw.length !== bw.length) return aw.length < bw.length ? -1 : 1;
+  if (aw !== bw) return aw < bw ? -1 : 1;
+  const length = Math.max(af.length, bf.length);
+  const as = af.padEnd(length, "0");
+  const bs = bf.padEnd(length, "0");
+  if (as === bs) return 0;
+  return as < bs ? -1 : 1;
+}
+
+function directed(diff: number, direction: TransactionSortDirection): number {
+  if (diff === 0) return 0;
+  return direction === "asc" ? diff : -diff;
+}
+
+/** Missing dates and unparseable amounts stay last in both directions. Other ties keep the previous order. */
+export function compareTransactions(a: AnalyticsTransaction, b: AnalyticsTransaction, sort: TransactionSort,
+  categoryName: (id: string | null) => string, locale: string): number {
+  if (sort.key === "date") {
+    const left = transactionDate(a);
+    const right = transactionDate(b);
+    if (left === null && right === null) return 0;
+    if (left === null) return 1;
+    if (right === null) return -1;
+    if (left === right) return 0;
+    return directed(left < right ? -1 : 1, sort.direction);
+  }
+  if (sort.key === "category") {
+    const diff = categoryName(a.effective.category_id).localeCompare(categoryName(b.effective.category_id), locale,
+      { sensitivity: "base", numeric: true });
+    return directed(diff, sort.direction);
+  }
+  const left = absoluteAmount(a.amount);
+  const right = absoluteAmount(b.amount);
+  if (left === null && right === null) return 0;
+  if (left === null) return 1;
+  if (right === null) return -1;
+  return directed(compareCanonical(left, right), sort.direction);
+}
+
+export function sortTransactions(rows: readonly AnalyticsTransaction[], sort: TransactionSort,
+  categoryName: (id: string | null) => string, locale: string): AnalyticsTransaction[] {
+  return rows.map((row, index) => ({ row, index }))
+    .sort((a, b) => compareTransactions(a.row, b.row, sort, categoryName, locale) || a.index - b.index)
+    .map((item) => item.row);
+}
 
 interface Page { rows: AnalyticsTransaction[]; cursor: string | null; total: number; loading: boolean; failed: boolean }
 const LOADING: Page = { rows: [], cursor: null, total: 0, loading: true, failed: false };
@@ -76,12 +154,14 @@ export interface TransactionsProps {
   onAccessLoss: (result: { ok: boolean; status?: number; error?: string }) => boolean;
   /** A saved decision changes totals; the owner of this panel re-reads the period. */
   onChanged: () => void;
+  /** Stops the background page walk. Defaults to {@link TRANSACTION_ROW_CAP}. */
+  rowCap?: number | undefined;
 }
 
 const rowKey = (row: AnalyticsTransaction) => `${row.account_id}/${row.entry_reference}`;
 
 export function TransactionsPanel({ api, period, currencies, accounts, connections = [], text, locale, revision, onAccessLoss,
-  onChanged }: TransactionsProps) {
+  onChanged, rowCap = TRANSACTION_ROW_CAP }: TransactionsProps) {
   const [filter, setFilter] = useState<TransactionFilter>(NO_FILTER);
   const [draft, setDraft] = useState<TransactionFilter>(NO_FILTER);
   const [page, setPage] = useState<Page>(LOADING);
@@ -92,6 +172,7 @@ export function TransactionsPanel({ api, period, currencies, accounts, connectio
   const [busy, setBusy] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [reloads, setReloads] = useState(0);
+  const [sort, setSort] = useState<TransactionSort | null>(null);
   // Every period, filter or reload change takes a new generation; late pages and saves of an older one are dropped.
   const generation = useRef(0);
   const picker = useRef(0);
@@ -107,29 +188,44 @@ export function TransactionsPanel({ api, period, currencies, accounts, connectio
       if (onAccessLoss(result) || token !== generation.current) return;
       if (result.ok) setCategories(result.data.categories);
     });
-    void api.analyticsTransactions(period, filter).then((result) => {
-      if (onAccessLoss(result) || token !== generation.current) return;
-      setPage(result.ok
-        ? { rows: result.data.transactions, cursor: result.data.next_cursor, total: result.data.filtered_total, loading: false, failed: false }
-        : { ...LOADING, loading: false, failed: true });
-    });
-  }, [api, period, filter, revision, reloads, onAccessLoss]);
+    // The first page paints immediately. Later pages follow the cursor until the cap, the period changes,
+    // or the access barrier rejects an answer. A stale cursor restarts from the first page.
+    void (async () => {
+      let cursor: string | undefined;
+      let rows: AnalyticsTransaction[] = [];
+      let total: number;
+      let first = true;
+      while (rows.length < rowCap) {
+        const result = cursor === undefined
+          ? await api.analyticsTransactions(period, filter)
+          : await api.analyticsTransactions(period, filter, cursor);
+        const accessLost = onAccessLoss(result);
+        if (token !== generation.current) return;
+        if (accessLost) {
+          if (!first) setPage((current) => ({ ...current, loading: false }));
+          return;
+        }
+        if (!result.ok) {
+          if (!first && result.error === ANALYTICS_ERROR.staleCursor) { setReloads((current) => current + 1); return; }
+          if (first) setPage({ ...LOADING, loading: false, failed: true });
+          else setPage((current) => ({ ...current, loading: false, failed: true }));
+          return;
+        }
+        const added = result.data.transactions.length;
+        rows = [...rows, ...result.data.transactions];
+        total = result.data.filtered_total;
+        const next = result.data.next_cursor;
+        const capped = rows.length >= rowCap;
+        if (capped) rows = rows.slice(0, rowCap);
+        const done = capped || next === null || added === 0 || next === cursor;
+        setPage({ rows, cursor: done ? null : next, total, loading: !done, failed: false });
+        if (done) return;
+        cursor = next;
+        first = false;
+      }
+    })();
+  }, [api, period, filter, revision, reloads, onAccessLoss, rowCap]);
   useEffect(() => () => { generation.current += 1; picker.current += 1; }, []);
-
-  const more = useCallback(async () => {
-    const token = generation.current;
-    const cursor = page.cursor;
-    if (cursor === null) return;
-    setPage((current) => ({ ...current, loading: true }));
-    const result = await api.analyticsTransactions(period, filter, cursor);
-    if (onAccessLoss(result) || token !== generation.current) return;
-    // The data moved under the cursor: start again from the first page rather than mixing two snapshots.
-    if (!result.ok && result.error === ANALYTICS_ERROR.staleCursor) { setReloads((current) => current + 1); return; }
-    setPage((current) => (result.ok
-      ? { rows: [...current.rows, ...result.data.transactions], cursor: result.data.next_cursor, total: result.data.filtered_total,
-          loading: false, failed: false }
-      : { ...current, loading: false, failed: true }));
-  }, [api, period, filter, page.cursor, onAccessLoss]);
 
   const loadPairs = useCallback(async (debit: AnalyticsTransaction, pickerToken: number, generationToken: number) => {
     const date = pairDate(debit);
@@ -228,6 +324,7 @@ export function TransactionsPanel({ api, period, currencies, accounts, connectio
     : categories.find((item) => item.id === id)?.name ?? text.uncategorised);
   const accountName = (id: string) => nameOf(accounts, connections, id, text.account);
   const kindText = (kind: string) => labelOf(text.kinds, kind);
+  const shownRows = sort === null ? page.rows : sortTransactions(page.rows, sort, categoryName, locale);
 
   return (
     <section className="budget-entries" aria-label={text.title}>
@@ -265,12 +362,29 @@ export function TransactionsPanel({ api, period, currencies, accounts, connectio
       {page.rows.length === 0 ? null : (
         <>
           <p className="budget-muted">{text.total(page.total)}</p>
-          <ul className="budget-entry-list">
-            {page.rows.map((row) => {
+          {page.loading ? <p className="budget-muted" role="status">{text.loadingMore(page.rows.length)}</p> : null}
+          <table className="budget-entries-table" aria-label={text.sort}>
+            <thead>
+              <tr>
+                {SORT_KEYS.map((key) => {
+                  const active = sort?.key === key;
+                  const ariaSort = active ? (sort.direction === "asc" ? "ascending" : "descending") : "none";
+                  return (
+                    <th key={key} scope="col" aria-sort={ariaSort}>
+                      <button type="button" onClick={() => { setSort((current) => nextSort(current, key)); }}>{sortLabel(text, key)}</button>
+                    </th>
+                  );
+                })}
+              </tr>
+            </thead>
+            <tbody>
+            {shownRows.map((row) => {
               const key = rowKey(row);
               const transfer = labelOf(text.transfer, row.transfer.status === "none" ? "" : row.transfer.status);
               return (
-                <li key={key} className="budget-entry">
+                <tr key={key}>
+                  <td colSpan={SORT_KEYS.length}>
+                  <div className="budget-entry">
                   <div className="budget-entry-main">
                     <span className="budget-muted">{transactionDate(row)}</span>
                     <span className="budget-entry-text">{counterparty(row) ?? transactionText(row)}</span>
@@ -303,14 +417,15 @@ export function TransactionsPanel({ api, period, currencies, accounts, connectio
                     <PairPicker debit={row} page={pairPage} accounts={accounts} connections={connections} text={text} locale={locale}
                       disabled={busy !== null} onConfirm={(credit) => { void confirmPair(row, credit); }} onCancel={closePairs} />
                   ) : null}
-                </li>
+                  </div>
+                  </td>
+                </tr>
               );
             })}
-          </ul>
+            </tbody>
+          </table>
         </>
       )}
-      {page.cursor === null ? null
-        : <button type="button" disabled={page.loading} onClick={() => { void more(); }}>{text.more}</button>}
     </section>
   );
 }

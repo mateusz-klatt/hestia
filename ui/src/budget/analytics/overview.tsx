@@ -137,37 +137,57 @@ function OverviewBody({ data, current, name, text, locale }: BodyProps) {
 
 interface CardProps { total: AnalyticsTotals; categories: AnalyticsCategoryTotal[]; partial: boolean; text: OverviewLabels; locale: string }
 
+function Amount({ value }: { value: string }) {
+  return <span className="budget-amount">{value}</span>;
+}
+
+/** Label plus amount, repeated. The amount span never breaks; the line may break between parts. */
+function Compound({ parts }: { parts: readonly (readonly [string, string])[] }) {
+  return parts.map(([label, amount], index) => (
+    <span key={`${label}-${String(index)}`}>
+      {index > 0 ? " · " : null}
+      {label} <Amount value={amount} />
+    </span>
+  ));
+}
+
 function CurrencyCard({ total, categories, partial, text, locale }: CardProps) {
   const money = (amount: string) => formatAmount(amount, total.currency, locale);
   const transfers = !isZero(total.transfer_debits) || !isZero(total.transfer_credits);
   const excluded = !isZero(total.excluded_debits) || !isZero(total.excluded_credits);
   return (
-    <article className="budget-total" aria-label={total.currency}>
+    <article className="budget-total budget-total-currency" aria-label={total.currency}>
       <h4>{total.currency}{partial ? <span className="budget-warn" title={text.partial} aria-label={text.partial}> ⚠</span> : null}</h4>
       <dl>
         <dt>{text.spending}</dt>
-        <dd><strong>{money(total.net_spending)}</strong></dd>
+        <dd><strong><Amount value={money(total.net_spending)} /></strong></dd>
         {isZero(total.refunds) ? null : (
-          <dd className="budget-total-detail">{text.gross} {money(total.expenses)} · {text.refunds} {money(total.refunds)}</dd>
+          <dd className="budget-total-detail budget-total-split">
+            <Compound parts={[[text.gross, money(total.expenses)], [text.refunds, money(total.refunds)]]} />
+          </dd>
         )}
         <dt>{text.income}</dt>
-        <dd>{money(total.income)}</dd>
+        <dd><Amount value={money(total.income)} /></dd>
         {isZero(total.unclassified_credit) ? null : (
           <>
             <dt title={text.unclassifiedHelp}>{text.unclassified}</dt>
-            <dd>{money(total.unclassified_credit)}</dd>
+            <dd><Amount value={money(total.unclassified_credit)} /></dd>
           </>
         )}
         {transfers ? (
           <>
             <dt title={text.transfersHelp}>{text.transfers}</dt>
-            <dd>{text.transferOut} {money(total.transfer_debits)} · {text.transferIn} {money(total.transfer_credits)}</dd>
+            <dd className="budget-total-split">
+              <Compound parts={[[text.transferOut, money(total.transfer_debits)], [text.transferIn, money(total.transfer_credits)]]} />
+            </dd>
           </>
         ) : null}
         {excluded ? (
           <>
             <dt>{text.excluded}</dt>
-            <dd>{text.excludedOut} {money(total.excluded_debits)} · {text.excludedIn} {money(total.excluded_credits)}</dd>
+            <dd className="budget-total-split">
+              <Compound parts={[[text.excludedOut, money(total.excluded_debits)], [text.excludedIn, money(total.excluded_credits)]]} />
+            </dd>
           </>
         ) : null}
       </dl>
