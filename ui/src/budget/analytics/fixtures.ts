@@ -3,6 +3,8 @@ import { component } from "../fixtures";
 import type { AnalyticsCategory, AnalyticsForecast, AnalyticsForecastCurrencyTotal, AnalyticsForecastDeduplication,
   AnalyticsForecastItem, AnalyticsInbox, AnalyticsInboxConsentItem, AnalyticsInboxItem,
   AnalyticsInboxMarkSaved, AnalyticsInboxMortgageItem, AnalyticsInboxSpendingLimitItem,
+  AnalyticsMonthlyBudget, AnalyticsMonthlyBudgetCategoryLimit, AnalyticsMonthlyBudgetCategorySpend,
+  AnalyticsMonthlyBudgetExpectedIncome, AnalyticsMonthlyBudgetPace, AnalyticsMonthlyBudgetPassThrough,
   AnalyticsMortgageReminder, AnalyticsMortgages, AnalyticsMortgageSchedule,
   AnalyticsOverview, AnalyticsQuarantine, AnalyticsQuarantineAccount, AnalyticsQuarantineItem,
   AnalyticsRecurring, AnalyticsRecurringHint, AnalyticsSpendingLimit, AnalyticsSpendingLimitStatus,
@@ -303,6 +305,113 @@ export function inboxMarkSaved(changes: Partial<AnalyticsInboxMarkSaved> = {}): 
     reads_version: "1".repeat(64),
     reads_count: 1,
     reads_cap: 500,
+    ...changes,
+  };
+}
+
+export function monthlyBudgetCategoryLimit(
+  changes: Partial<AnalyticsMonthlyBudgetCategoryLimit> = {},
+): AnalyticsMonthlyBudgetCategoryLimit {
+  return {
+    monthly_limit: "500",
+    remaining: "179.5",
+    over_by: "0",
+    percent_used_floor: "64",
+    warning_percent: 80,
+    status: "within",
+    ...changes,
+  };
+}
+
+export function monthlyBudgetCategorySpend(
+  changes: Partial<AnalyticsMonthlyBudgetCategorySpend> = {},
+): AnalyticsMonthlyBudgetCategorySpend {
+  return {
+    category_id: "cat-food",
+    name: "Synthetic Food",
+    archived: false,
+    expenses: "320.5",
+    refunds: "0",
+    net_spending: "320.5",
+    limit: null,
+    ...changes,
+  };
+}
+
+export function monthlyBudgetPassThrough(
+  changes: Partial<AnalyticsMonthlyBudgetPassThrough> = {},
+): AnalyticsMonthlyBudgetPassThrough {
+  return {
+    rent_category_id: "cat-rent",
+    mortgage_category_id: "cat-mortgage",
+    rent_received: "2000",
+    mortgage_debits: "3200",
+    mortgage_refunds: "0",
+    unapplied_mortgage_refunds: "0",
+    matched: "2000",
+    unapplied_rent: "0",
+    uncovered_mortgage: "1200",
+    ...changes,
+  };
+}
+
+export function monthlyBudgetExpectedIncome(
+  changes: Partial<AnalyticsMonthlyBudgetExpectedIncome> = {},
+): AnalyticsMonthlyBudgetExpectedIncome {
+  return {
+    status: "none",
+    total: "0",
+    items: [],
+    ...changes,
+  };
+}
+
+export function monthlyBudgetPace(
+  changes: Partial<AnalyticsMonthlyBudgetPace> = {},
+): AnalyticsMonthlyBudgetPace {
+  return {
+    basis: "received",
+    budget: "5000",
+    status: "within_budget",
+    daily_rate: { numerator: "320.5", denominator: 22 },
+    projected_month_spend: { numerator: "9615", denominator: 22 },
+    exhaustion_day: null,
+    ...changes,
+  };
+}
+
+export function monthlyBudgetOf(changes: Partial<AnalyticsMonthlyBudget> = {}): AnalyticsMonthlyBudget {
+  return {
+    period: "2026-11",
+    start: "2026-11-01",
+    end: "2026-11-30",
+    cutoff: "2026-11-22",
+    current_month: "2026-11",
+    evaluated_at: 1_795_348_800,
+    evaluation_date: "2026-11-22",
+    evaluation_timezone: "Europe/Warsaw",
+    currency: "PLN",
+    available_currencies: ["PLN"],
+    configuration: { status: "ready", source: "bootstrap" },
+    coverage: {
+      ledger_as_of: 1_795_345_200,
+      stale_selected_accounts: 0,
+      purchase_date_fallback_count: 0,
+      pending_transfer_rows: 0,
+      transfer_scan_limited: false,
+      provisional: false,
+      has_activity: true,
+    },
+    summary: {
+      start_budget: "5000",
+      spent: "320.5",
+      remaining: "4679.5",
+    },
+    expected_income: monthlyBudgetExpectedIncome(),
+    pace: monthlyBudgetPace(),
+    category_spend: [monthlyBudgetCategorySpend()],
+    pass_through: null,
+    card_exposure: { status: "unavailable", amount: null, as_of_date: null },
     ...changes,
   };
 }

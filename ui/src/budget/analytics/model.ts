@@ -2,7 +2,7 @@
 // STRING; the browser never adds, subtracts, converts or mixes amounts. Periods are "YYYY-MM" or "YYYY".
 import type { components } from "../../api/openapi";
 import type { BudgetAccount, BudgetCapabilities, BudgetConnection } from "../model";
-import { accountLabel } from "../model";
+import { accountLabel, formatAmount } from "../model";
 
 type Schemas = components["schemas"];
 
@@ -62,6 +62,19 @@ export type AnalyticsInbox = Schemas["BudgetAnalyticsInbox"];
 export type AnalyticsInboxKey = Schemas["BudgetAnalyticsInboxKeyRequest"];
 export type AnalyticsInboxMarkRequest = Schemas["BudgetAnalyticsInboxMarkRequest"];
 export type AnalyticsInboxMarkSaved = Schemas["BudgetAnalyticsInboxMarkSaved"];
+
+export type AnalyticsMonthlyBudget = Schemas["BudgetAnalyticsMonthlyBudget"];
+export type AnalyticsMonthlyBudgetConfiguration = Schemas["BudgetAnalyticsMonthlyBudgetConfiguration"];
+export type AnalyticsMonthlyBudgetCoverage = Schemas["BudgetAnalyticsMonthlyBudgetCoverage"];
+export type AnalyticsMonthlyBudgetSummary = Schemas["BudgetAnalyticsMonthlyBudgetSummary"];
+export type AnalyticsMonthlyBudgetExpectedIncome = Schemas["BudgetAnalyticsMonthlyBudgetExpectedIncome"];
+export type AnalyticsMonthlyBudgetExpectedIncomeItem = Schemas["BudgetAnalyticsMonthlyBudgetExpectedIncomeItem"];
+export type AnalyticsMonthlyBudgetPace = Schemas["BudgetAnalyticsMonthlyBudgetPace"];
+export type AnalyticsMonthlyBudgetRatio = Schemas["BudgetAnalyticsMonthlyBudgetRatio"];
+export type AnalyticsMonthlyBudgetCategorySpend = Schemas["BudgetAnalyticsMonthlyBudgetCategorySpend"];
+export type AnalyticsMonthlyBudgetCategoryLimit = Schemas["BudgetAnalyticsMonthlyBudgetCategoryLimit"];
+export type AnalyticsMonthlyBudgetPassThrough = Schemas["BudgetAnalyticsMonthlyBudgetPassThrough"];
+export type AnalyticsMonthlyBudgetCardExposure = Schemas["BudgetAnalyticsMonthlyBudgetCardExposure"];
 
 export const INBOX_MARK_BATCH_MAX = 100;
 
@@ -494,4 +507,84 @@ export function pluralPl(count: number, one: string, few: string, many: string):
   const mod100 = n % 100;
   if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return few;
   return many;
+}
+
+function parseScaledInt(value: string): { negative: boolean; coeff: bigint; scale: number } | null {
+  const negative = value.startsWith("-");
+  const body = negative ? value.slice(1) : value;
+  if (!/^\d+(?:\.\d+)?$/.test(body)) return null;
+  const dot = body.indexOf(".");
+  const whole = dot === -1 ? body : body.slice(0, dot);
+  const fraction = dot === -1 ? "" : body.slice(dot + 1);
+  return { negative, coeff: BigInt(`${whole}${fraction}`), scale: fraction.length };
+}
+
+/** True when a valid decimal string represents a strictly positive amount. */
+export function isPositiveDecimal(amount: string): boolean {
+  const parsed = parseScaledInt(amount);
+  return parsed !== null && !parsed.negative && parsed.coeff > 0n;
+}
+
+/** Divide a decimal-string numerator by a positive integer denominator using exact BigInt arithmetic,
+ *  rounded half-even to two decimal places and formatted in the page locale. */
+export function formatRatioHalfEven(ratio: AnalyticsMonthlyBudgetRatio, currency: string, locale: string): string {
+  const parsed = parseScaledInt(ratio.numerator);
+  if (parsed === null || !Number.isInteger(ratio.denominator) || ratio.denominator <= 0) {
+    return `${ratio.numerator} ${currency}`;
+  }
+  const scaledNum = parsed.coeff * 100n;
+  const denom = BigInt(ratio.denominator) * (10n ** BigInt(parsed.scale));
+  const quotient = scaledNum / denom;
+  const twiceRemainder = (scaledNum % denom) * 2n;
+  const roundUp = twiceRemainder > denom || (twiceRemainder === denom && quotient % 2n === 1n);
+  const rounded = roundUp ? quotient + 1n : quotient;
+  if (rounded === 0n) return formatAmount("0.00", currency, locale);
+  const digits = rounded.toString().padStart(3, "0");
+  const decimal = `${parsed.negative ? "-" : ""}${digits.slice(0, -2)}.${digits.slice(-2)}`;
+  return formatAmount(decimal, currency, locale);
+}
+
+/** Exact integer percentage clamped to [0, 100] from two decimal strings, never parsing floats. */
+export function clampedRatioPercent(numerator: string, denominator: string): number {
+  const num = parseScaledInt(numerator);
+  const den = parseScaledInt(denominator);
+  if (num === null || den === null) return 0;
+  const scale = Math.max(num.scale, den.scale);
+  const numAligned = (num.negative ? -num.coeff : num.coeff) * (10n ** BigInt(scale - num.scale));
+  const denAligned = (den.negative ? -den.coeff : den.coeff) * (10n ** BigInt(scale - den.scale));
+  if (denAligned <= 0n || numAligned <= 0n) return 0;
+  if (numAligned >= denAligned) return 100;
+  return Number((numAligned * 100n) / denAligned);
+}
+
+/** Clamp a canonical nonnegative integer percentage string to [0, 100] for visual progress bars. */
+export function clampPercentString(value: string): number {
+  if (!/^\d+$/.test(value)) return 0;
+  const parsed = BigInt(value);
+  return parsed >= 100n ? 100 : Number(parsed);
+}
+
+/** Distinct 3-letter currency codes preserving server ordering, augmented with account currencies. */
+export function monthlyBudgetCurrencies(available: readonly string[], accounts: readonly BudgetAccount[] = []): string[] {
+  const ordered: string[] = [];
+  const seen = new Set<string>();
+  const add = (raw: string) => {
+    const code = raw.trim().toUpperCase();
+    if (validCurrency(code) && !seen.has(code)) {
+      seen.add(code);
+      ordered.push(code);
+    }
+  };
+  for (const code of available) add(code);
+  const extras = new Set<string>();
+  for (const account of accounts) {
+    const declared = account.display?.currency;
+    if (typeof declared === "string" && validCurrency(declared)) extras.add(declared.trim().toUpperCase());
+    for (const observed of account.observed_balance_currencies ?? []) {
+      if (validCurrency(observed)) extras.add(observed.trim().toUpperCase());
+    }
+  }
+  for (const code of [...extras].sort((a, b) => a.localeCompare(b))) add(code);
+  if (ordered.length === 0) ordered.push("PLN");
+  return ordered;
 }

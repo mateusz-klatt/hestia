@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { accountName, annotationRequest, canPair, canonicalAmount, counterparty, currentMonth, daysBetween, kindChoice, kindChoicesFor,
-  legsMatch, hasAnalytics, isMonth, isZero, limitCurrencies, manualPairRequest, monthLabel, mortgageCurrencies,
+import { accountName, annotationRequest, canPair, canonicalAmount, clampPercentString, clampedRatioPercent, counterparty,
+  currentMonth, daysBetween, formatRatioHalfEven, hasAnalytics, isMonth, isPositiveDecimal, isZero, kindChoice,
+  kindChoicesFor, legsMatch, limitCurrencies, manualPairRequest, monthLabel, monthlyBudgetCurrencies, mortgageCurrencies,
   pairCandidates, pairDate, pairPeriods, parseIntInRange, parseWarningPercent, pluralPl, recurringCurrencies,
   shiftMonth, transferActions, transferDecision, validCurrency, validIsoDate, validLimitAmount,
   validMortgageLabel } from "./model";
@@ -314,5 +315,44 @@ describe("analytics decisions", () => {
       [mortgageSchedule({ currency: "EUR" })],
       [account({ display: { product: "Synthetic", currency: "PLN", masked_suffix: "0001", source: "api", observed_at: 1, imported_at: 2 } })],
     )).toEqual(["EUR", "PLN"]);
+  });
+
+  it("evaluates decimal signs, BigInt half-even ratios, clamped percents and monthly budget currencies", () => {
+    expect(isPositiveDecimal("0.01")).toBe(true);
+    expect(isPositiveDecimal("100")).toBe(true);
+    expect(isPositiveDecimal("0")).toBe(false);
+    expect(isPositiveDecimal("0.00")).toBe(false);
+    expect(isPositiveDecimal("-5")).toBe(false);
+    expect(isPositiveDecimal("bad")).toBe(false);
+
+    expect(formatRatioHalfEven({ numerator: "0.05", denominator: 2 }, "PLN", "en-US")).toBe("0.02 PLN");
+    expect(formatRatioHalfEven({ numerator: "0.07", denominator: 2 }, "PLN", "en-US")).toBe("0.04 PLN");
+    expect(formatRatioHalfEven({ numerator: "0.071", denominator: 2 }, "PLN", "en-US")).toBe("0.04 PLN");
+    expect(formatRatioHalfEven({ numerator: "0", denominator: 5 }, "PLN", "en-US")).toBe("0.00 PLN");
+    expect(formatRatioHalfEven({ numerator: "-10.05", denominator: 2 }, "EUR", "en-US")).toBe("−5.02 EUR");
+    expect(formatRatioHalfEven({ numerator: "12345678901234567890.05", denominator: 2 }, "PLN", "en-US"))
+      .toBe("6,172,839,450,617,283,945.02 PLN");
+    expect(formatRatioHalfEven({ numerator: "bad", denominator: 2 }, "PLN", "en-US")).toBe("bad PLN");
+    expect(formatRatioHalfEven({ numerator: "10", denominator: 0 }, "PLN", "en-US")).toBe("10 PLN");
+
+    expect(clampedRatioPercent("250", "1000")).toBe(25);
+    expect(clampedRatioPercent("1500", "1000")).toBe(100);
+    expect(clampedRatioPercent("-10", "1000")).toBe(0);
+    expect(clampedRatioPercent("10", "0")).toBe(0);
+    expect(clampedRatioPercent("10", "-50")).toBe(0);
+    expect(clampedRatioPercent("bad", "100")).toBe(0);
+
+    expect(clampPercentString("0")).toBe(0);
+    expect(clampPercentString("64")).toBe(64);
+    expect(clampPercentString("100")).toBe(100);
+    expect(clampPercentString("99999999999999999999999")).toBe(100);
+    expect(clampPercentString("-5")).toBe(0);
+
+    expect(monthlyBudgetCurrencies(["PLN", "eur", "EURO", "PLN"], [
+      account({ display: { product: "Main", currency: "CHF", masked_suffix: "0001", source: "api", observed_at: 1, imported_at: 2 },
+        observed_balance_currencies: ["USD", "PLN", "123"] }),
+      account({ id: "acc-2", display: null }),
+    ])).toEqual(["PLN", "EUR", "CHF", "USD"]);
+    expect(monthlyBudgetCurrencies([])).toEqual(["PLN"]);
   });
 });
