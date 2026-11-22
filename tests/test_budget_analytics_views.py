@@ -4,6 +4,7 @@ from __future__ import annotations
 import base64
 from datetime import datetime, timezone
 import json
+import os
 import unittest
 from unittest import mock
 import uuid
@@ -12,8 +13,10 @@ from sqlalchemy import delete, event, text
 
 from hestia import api_contract, db
 from hestia.budget import analytics_views as views
+from hestia.budget import month_budget
 from hestia.budget.analytics_core import AnalyticsError
 from hestia.budget.analytics_views import BudgetAnalyticsViews, projection_snapshot
+from hestia.budget.config import BudgetConfigError
 from hestia.budget.views import BudgetAccessDenied
 from tests.test_budget_analytics_core import identity
 from tests.test_budget_analytics_store import AnalyticsCase
@@ -801,6 +804,172 @@ class ForecastProjectionTests(ProjectionCase):
                                  "WHERE account_id = :account_id AND operation = 'transactions'"),
                             {"account_id": self.accounts["a"]})
         self.assert_invalid(lambda: self.store.forecast("owner"), code="budget_analytics_data_error", status=500)
+
+
+class MonthlyBudgetProjectionTests(ProjectionCase):
+    def setUp(self):
+        super().setUp()
+        self.now = datetime(2026, 11, 22, 12, 0, tzinfo=timezone.utc).timestamp()
+
+    def test_monthly_budget_reuses_projection_cache_and_reads_one_sqlite_snapshot(self):
+        salary = self.store.create_category("owner", "Wynagrodzenie")
+        food = self.store.create_category("owner", "Zakupy")
+        self.add_transaction("a", "sal-nov", amount="10000", credit_debit_indicator="CRDT", booking_date="2026-11-01")
+        self.annotation(account="a", reference="sal-nov", category_id=salary["id"], kind="income")
+        self.add_transaction("a", "exp-nov", amount="200", booking_date="2026-11-05", transaction_date="2026-11-05")
+        self.annotation(account="a", reference="exp-nov", category_id=food["id"], kind="expense")
+        cfg = json.dumps({"owner": {"income_category_ids": [salary["id"]]}})
+
+        self.store.overview("owner", "2026-11")
+        statements = []
+
+        def capture(connection, cursor, statement, parameters, context, executemany):
+            statements.append(statement.split()[0].upper())
+
+        def read_clock():
+            self.assertIn("BEGIN", statements)
+            self.assertTrue(views._read_lock.locked())
+            return self.now
+
+        self.store.clock = mock.Mock(side_effect=read_clock)
+        event.listen(self.engine, "before_cursor_execute", capture)
+        try:
+            with mock.patch.dict(os.environ, {month_budget.MONTH_CONFIG_ENV: cfg}), \
+                 mock.patch.object(views, "projection_snapshot", side_effect=AssertionError("projection cache missed")):
+                result = self.store.monthly_budget("owner")
+        finally:
+            event.remove(self.engine, "before_cursor_execute", capture)
+
+        self.store.clock.assert_called_once_with()
+        self.assertEqual(statements.count("BEGIN"), 1)
+        self.assertEqual(set(statements), {"BEGIN", "SELECT"})
+        self.assertEqual(result["summary"], {"start_budget": "10000", "spent": "200", "remaining": "9800"})
+        api_contract.BudgetAnalyticsMonthlyBudget.model_validate(result)
+
+    def test_ledger_as_of_offline_imports_empty_live_sync_and_stale_counts(self):
+        # Empty/unresolved-only offline import leaves ledger_as_of None and all 4 selected accounts stale.
+        with self.sessions.begin() as session:
+            batch = db.BudgetImportBatch(
+                id="b-empty", fingerprint="fp-empty", account_id=self.accounts["a"],
+                fetched_at=self.now - 100, imported_at=self.now, report_json="{}",
+            )
+            session.add(batch)
+            session.flush()
+            session.add(db.BudgetImportUnresolved(batch_id="b-empty", ordinal=0, reason="non_canonical", payload_json="{}"))
+        empty_res = self.store.monthly_budget("owner")
+        self.assertIsNone(empty_res["coverage"]["ledger_as_of"])
+        self.assertEqual(empty_res["coverage"]["stale_selected_accounts"], 4)
+
+        # Usable offline row sets observed_at = fetched_at even when imported_at happened later.
+        fetched_at = self.now - 3600
+        with self.sessions.begin() as session:
+            session.add(db.BudgetImportBatch(
+                id="b-usable", fingerprint="fp-usable", account_id=self.accounts["a"],
+                fetched_at=fetched_at, imported_at=self.now, report_json="{}",
+            ))
+            session.add(db.BudgetTransaction(
+                account_id=self.accounts["a"], entry_reference="off-usable",
+                payload_json=json.dumps({"amount": "12", "currency": "PLN", "credit_debit_indicator": "DBIT",
+                                         "status": "BOOK", "booking_date": "2026-11-15", "value_date": None,
+                                         "transaction_date": None, "remittance_information": ["Offline"]}),
+                observed_at=fetched_at, source="offline_import", uncertain=False, api_observed_at=None,
+            ))
+        offline_res = self.store.monthly_budget("owner", period="2026-01", currency="EUR")
+        self.assertEqual(offline_res["coverage"]["ledger_as_of"], fetched_at)
+        self.assertEqual(offline_res["coverage"]["stale_selected_accounts"], 3)
+
+        # Empty successful live fetch on account b sets component.last_success -> updates ledger_as_of and stale count.
+        with self.sessions.begin() as session:
+            comp = session.get(db.BudgetComponent, (self.accounts["b"], "transactions"))
+            comp.last_success = self.now - 60
+        live_empty = self.store.monthly_budget("owner")
+        self.assertEqual(live_empty["coverage"]["ledger_as_of"], self.now - 60)
+        self.assertEqual(live_empty["coverage"]["stale_selected_accounts"], 2)
+
+    def test_end_to_end_rules_passthrough_moved_salary_category_rename_and_error_mappings(self):
+        salary = self.store.create_category("owner", "Wynagrodzenie")
+        zus = self.store.create_category("owner", "Świadczenia ZUS")
+        rent = self.store.create_category("owner", "Najem")
+        mortgage = self.store.create_category("owner", "Kredyt")
+        groceries = self.store.create_category("owner", "Spożywcze")
+        # Previous month salary on account a; current month moved to account b with changed amount!
+        self.add_transaction("a", "sal-oct", amount="8000", credit_debit_indicator="CRDT", booking_date="2026-10-10")
+        self.annotation(account="a", reference="sal-oct", category_id=salary["id"], kind="income")
+        self.metadata("a", "sal-oct", {"debtor_name": "Pracodawca SA"})
+        self.add_transaction("b", "sal-nov", amount="8500", credit_debit_indicator="CRDT", booking_date="2026-11-10")
+        self.annotation(account="b", reference="sal-nov", category_id=salary["id"], kind="income")
+        self.metadata("b", "sal-nov", {"debtor_name": "Pracodawca SA"})
+        # ZUS last month (still expected on day 28).
+        self.add_transaction("a", "zus-oct", amount="800", credit_debit_indicator="CRDT", booking_date="2026-10-28")
+        self.annotation(account="a", reference="zus-oct", category_id=zus["id"], kind="income")
+        self.metadata("a", "zus-oct", {"debtor_name": "ZUS"})
+        # Mortgage + late rent + krypto excluded + stale excluded manual annotation + category rename/archive.
+        self.add_transaction("a", "mort", amount="2500", booking_date="2026-11-05", transaction_date="2026-11-05")
+        self.annotation(account="a", reference="mort", category_id=mortgage["id"], kind="expense")
+        self.add_transaction("a", "rent", amount="2000", credit_debit_indicator="CRDT", booking_date="2026-11-20")
+        self.annotation(account="a", reference="rent", category_id=rent["id"], kind="income")
+        self.add_transaction("a", "krypto", amount="400", booking_date="2026-11-07", transaction_date="2026-11-07")
+        self.annotation(account="a", reference="krypto", kind="excluded")
+        self.add_transaction("a", "groc", amount="150", booking_date="2026-11-08", transaction_date="2026-11-08")
+        self.annotation(account="a", reference="groc", category_id=groceries["id"], kind="excluded")
+        self.change_transaction("a", "groc", amount="160")  # Stale manual excluded -> falls back to default and warns!
+        self.add_transaction("a", "groc-2", amount="40", booking_date="2026-11-09", transaction_date="2026-11-09")
+        self.annotation(account="a", reference="groc-2", category_id=groceries["id"], kind="expense")
+        self.store.update_category("owner", groceries["id"], name="Jedzenie", archived=True, expected_version=1)
+        self.store.save_spending_limit("owner", category_id=mortgage["id"], currency="PLN",
+                                       monthly_limit="600", warning_percent=80, enabled=True, expected_version=0)
+
+        cfg = json.dumps({
+            "owner": {
+                "income_category_ids": [salary["id"], zus["id"]],
+                "pass_through": {"rent_category_id": rent["id"], "mortgage_category_id": mortgage["id"]},
+            },
+        })
+        with mock.patch.dict(os.environ, {month_budget.MONTH_CONFIG_ENV: cfg}):
+            res = self.store.monthly_budget("owner")
+            api_contract.BudgetAnalyticsMonthlyBudget.model_validate(res)
+            self.assertEqual(res["summary"], {"start_budget": "8500", "spent": "700", "remaining": "7800"})
+            self.assertEqual(res["pass_through"]["uncovered_mortgage"], "500")
+            self.assertEqual(res["expected_income"], {
+                "status": "estimated", "total": "800",
+                "items": [{"category_id": zus["id"], "amount": "800", "expected_date": "2026-11-28", "source": "previous_month"}],
+            })
+            self.assertEqual(res["coverage"]["pending_transfer_rows"], 1)
+            self.assertTrue(res["coverage"]["provisional"])
+            by_cat = {row["category_id"]: row for row in res["category_spend"]}
+            self.assertEqual((by_cat[groceries["id"]]["name"], by_cat[groceries["id"]]["archived"],
+                              by_cat[groceries["id"]]["net_spending"]), ("Jedzenie", True, "40"))
+            self.assertEqual(by_cat[None]["net_spending"], "160")
+            self.assertEqual(by_cat[mortgage["id"]]["limit"]["status"], "approaching")
+
+            # Future period returns 400 even before projection.
+            self.assert_invalid(lambda: self.store.monthly_budget("owner", period="2026-12"))
+
+            # Aggregate bound violation returns 413.
+            with mock.patch.object(month_budget, "MAX_AGGREGATE_CHARS", 2):
+                self.assert_invalid(lambda: self.store.monthly_budget("owner"), code="budget_analytics_limit", status=413)
+
+            # Corrupt limit amount -> 500 budget_analytics_data_error.
+            with self.sessions.begin() as session:
+                session.execute(text("UPDATE budget_category_limits SET monthly_limit = 'bad'"))
+            self.assert_invalid(lambda: self.store.monthly_budget("owner"), code="budget_analytics_data_error", status=500)
+
+            with self.sessions.begin() as session:
+                session.execute(text("UPDATE budget_category_limits SET monthly_limit = '600'"))
+                session.execute(text("UPDATE budget_components SET last_success = 'bad timestamp' "
+                                     "WHERE account_id = :account_id AND operation = 'transactions'"),
+                                {"account_id": self.accounts["a"]})
+            self.assert_invalid(lambda: self.store.monthly_budget("owner"), code="budget_analytics_data_error", status=500)
+
+            with mock.patch.object(self.store, "clock", return_value=float("nan")):
+                self.assert_invalid(lambda: self.store.monthly_budget("owner"),
+                                    code="budget_analytics_unavailable", status=503)
+
+        # Foreign category in HESTIA_BUDGET_MONTH_CONFIG -> BudgetConfigError (503 budget_unavailable).
+        foreign = self.store.create_category("other", "Foreign")
+        with mock.patch.dict(os.environ, {month_budget.MONTH_CONFIG_ENV: json.dumps({"owner": {"income_category_ids": [foreign["id"]]}})}):
+            with self.assertRaises(BudgetConfigError):
+                self.store.monthly_budget("owner")
 
 
 class SpendingLimitsProjectionTests(ProjectionCase):

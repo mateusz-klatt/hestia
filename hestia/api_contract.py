@@ -74,7 +74,8 @@ from pydantic.json_schema import models_json_schema
 # 0.25.0: read-only quarantine inspection (GET /api/budget/analytics/quarantine, zero migration;
 #         exact counts + bounded safe ref/date/status/reason details without descriptions or amounts).
 # 0.26.0: read-only upcoming commitments forecast (GET /api/budget/analytics/forecast, zero migration).
-CONTRACT_VERSION = "0.26.0"
+# 0.27.0: read-only owner-private monthly budget dashboard (GET /api/budget/analytics/monthly-budget, zero migration).
+CONTRACT_VERSION = "0.27.0"
 OPENAPI_PATH = Path(__file__).resolve().parent.parent / "docs" / "api" / "openapi.json"
 
 # De-duplicated string literals (SonarPython S1192): the OpenAPI content-type, the paths reused
@@ -2329,6 +2330,128 @@ class BudgetAnalyticsForecast(BaseModel):
     months: Annotated[list[BudgetAnalyticsForecastMonth], Field(min_length=1, max_length=12)]
 
 
+BudgetAnalyticsMonthlyBudgetMoney = Annotated[str, Field(max_length=192)]
+
+
+class BudgetAnalyticsMonthlyBudgetConfiguration(BaseModel):
+    model_config = _READ
+    status: Literal["ready", "unconfigured"]
+    source: Literal["bootstrap", "saved", "none"]
+
+
+class BudgetAnalyticsMonthlyBudgetCoverage(BaseModel):
+    model_config = _READ
+    ledger_as_of: float | None
+    stale_selected_accounts: int
+    purchase_date_fallback_count: int
+    pending_transfer_rows: int
+    transfer_scan_limited: bool
+    provisional: bool
+    has_activity: bool
+
+
+class BudgetAnalyticsMonthlyBudgetSummary(BaseModel):
+    model_config = _READ
+    start_budget: BudgetAnalyticsMonthlyBudgetMoney
+    spent: BudgetAnalyticsMonthlyBudgetMoney
+    remaining: BudgetAnalyticsMonthlyBudgetMoney
+
+
+class BudgetAnalyticsMonthlyBudgetExpectedIncomeItem(BaseModel):
+    model_config = _READ
+    category_id: str
+    amount: BudgetAnalyticsMonthlyBudgetMoney
+    expected_date: str | None
+    source: Literal["previous_month"]
+
+
+class BudgetAnalyticsMonthlyBudgetExpectedIncome(BaseModel):
+    model_config = _READ
+    status: Literal["estimated", "partial", "unavailable", "none", "historical"]
+    total: BudgetAnalyticsMonthlyBudgetMoney | None
+    items: list[BudgetAnalyticsMonthlyBudgetExpectedIncomeItem]
+
+
+class BudgetAnalyticsMonthlyBudgetRatio(BaseModel):
+    model_config = _READ
+    numerator: BudgetAnalyticsMonthlyBudgetMoney
+    denominator: Annotated[int, Field(ge=1)]
+
+
+class BudgetAnalyticsMonthlyBudgetPace(BaseModel):
+    model_config = _READ
+    basis: Literal["received", "received_plus_expected"]
+    budget: BudgetAnalyticsMonthlyBudgetMoney
+    status: Literal["historical", "no_budget", "already_reached", "no_positive_pace", "runs_out", "within_budget"]
+    daily_rate: BudgetAnalyticsMonthlyBudgetRatio | None
+    projected_month_spend: BudgetAnalyticsMonthlyBudgetRatio | None
+    exhaustion_day: Annotated[int, Field(ge=1, le=31)] | None
+
+
+class BudgetAnalyticsMonthlyBudgetCategoryLimit(BaseModel):
+    model_config = _READ
+    monthly_limit: str
+    remaining: BudgetAnalyticsMonthlyBudgetMoney
+    over_by: BudgetAnalyticsMonthlyBudgetMoney
+    percent_used_floor: BudgetAnalyticsMonthlyBudgetMoney
+    warning_percent: Annotated[int, Field(ge=1, le=99)]
+    status: Literal["within", "approaching", "at_limit", "exceeded"]
+
+
+class BudgetAnalyticsMonthlyBudgetCategorySpend(BaseModel):
+    model_config = _READ
+    category_id: str | None
+    name: str | None
+    archived: bool
+    expenses: BudgetAnalyticsMonthlyBudgetMoney
+    refunds: BudgetAnalyticsMonthlyBudgetMoney
+    net_spending: BudgetAnalyticsMonthlyBudgetMoney
+    limit: BudgetAnalyticsMonthlyBudgetCategoryLimit | None
+
+
+class BudgetAnalyticsMonthlyBudgetPassThrough(BaseModel):
+    model_config = _READ
+    rent_category_id: str
+    mortgage_category_id: str
+    rent_received: BudgetAnalyticsMonthlyBudgetMoney
+    mortgage_debits: BudgetAnalyticsMonthlyBudgetMoney
+    mortgage_refunds: BudgetAnalyticsMonthlyBudgetMoney
+    unapplied_mortgage_refunds: BudgetAnalyticsMonthlyBudgetMoney
+    matched: BudgetAnalyticsMonthlyBudgetMoney
+    unapplied_rent: BudgetAnalyticsMonthlyBudgetMoney
+    uncovered_mortgage: BudgetAnalyticsMonthlyBudgetMoney
+
+
+class BudgetAnalyticsMonthlyBudgetCardExposure(BaseModel):
+    model_config = _READ
+    status: Literal["unavailable"]
+    amount: str | None
+    as_of_date: str | None
+
+
+class BudgetAnalyticsMonthlyBudget(BaseModel):
+    """Read-only owner-private monthly budget dashboard evaluated in Europe/Warsaw from one snapshot."""
+    model_config = _READ
+    period: str
+    start: str
+    end: str
+    cutoff: str
+    current_month: str
+    evaluated_at: float
+    evaluation_date: str
+    evaluation_timezone: Literal["Europe/Warsaw"]
+    currency: str
+    available_currencies: list[str]
+    configuration: BudgetAnalyticsMonthlyBudgetConfiguration
+    coverage: BudgetAnalyticsMonthlyBudgetCoverage
+    summary: BudgetAnalyticsMonthlyBudgetSummary | None
+    expected_income: BudgetAnalyticsMonthlyBudgetExpectedIncome | None
+    pace: BudgetAnalyticsMonthlyBudgetPace | None
+    category_spend: list[BudgetAnalyticsMonthlyBudgetCategorySpend]
+    pass_through: BudgetAnalyticsMonthlyBudgetPassThrough | None
+    card_exposure: BudgetAnalyticsMonthlyBudgetCardExposure
+
+
 _ANALYTICS_MODELS = (BudgetAnalyticsCategoryCreateRequest, BudgetAnalyticsCategoryUpdateRequest,
                      BudgetAnalyticsAnnotationRequest, BudgetAnalyticsRulePreviewRequest,
                      BudgetAnalyticsRuleSaveRequest, BudgetAnalyticsTransferDecisionRequest,
@@ -2341,7 +2464,8 @@ _ANALYTICS_MODELS = (BudgetAnalyticsCategoryCreateRequest, BudgetAnalyticsCatego
                      BudgetAnalyticsSpendingLimits, BudgetAnalyticsSpendingLimitResult,
                      BudgetAnalyticsMortgages, BudgetAnalyticsMortgageScheduleResult,
                      BudgetAnalyticsMortgagePaymentResult, BudgetAnalyticsInbox,
-                     BudgetAnalyticsInboxMarkResult, BudgetAnalyticsQuarantine, BudgetAnalyticsForecast)
+                     BudgetAnalyticsInboxMarkResult, BudgetAnalyticsQuarantine, BudgetAnalyticsForecast,
+                     BudgetAnalyticsMonthlyBudget)
 
 
 _BUDGET_MODELS = (BudgetSelectionRequest, BudgetKindRequest, BudgetConnectionStateRequest,
@@ -2373,6 +2497,7 @@ _PATH_ROLES = {
     ("GET", "/api/budget/analytics/inbox"): "admin",
     ("GET", "/api/budget/analytics/quarantine"): "admin",
     ("GET", "/api/budget/analytics/forecast"): "admin",
+    ("GET", "/api/budget/analytics/monthly-budget"): "admin",
     ("POST", "/api/budget/analytics/category-create"): "admin",
     ("POST", "/api/budget/analytics/category-update"): "admin",
     ("POST", "/api/budget/analytics/annotation"): "admin",
@@ -3003,6 +3128,16 @@ def _analytics_paths():
                           description="Inclusive calendar month YYYY-MM, 1900 through 9999.")
     horizon = _budget_query("months", schema={"type": "string", "pattern": "^[0-9]{1,2}$", "default": "3"},
                             description="Integer 1..12, starting with the current server UTC calendar month.")
+    month_optional = _budget_query(
+        "period",
+        schema={"type": "string", "pattern": r"^[0-9]{4}-[0-9]{2}$"},
+        description="Optional calendar month YYYY-MM, 1900 through the current Europe/Warsaw month; defaults to current month.",
+    )
+    month_currency = _budget_query(
+        "currency",
+        schema={"type": "string", "pattern": "^[A-Z]{3}$", "default": "PLN"},
+        description="Optional uppercase 3-letter ISO currency code; defaults to PLN.",
+    )
     reads = (
         ("overview", "getBudgetAnalyticsOverview", "BudgetAnalyticsOverview", [period, currency]),
         ("transactions", "getBudgetAnalyticsTransactions", "BudgetAnalyticsTransactions",
@@ -3020,6 +3155,8 @@ def _analytics_paths():
         ("quarantine", "getBudgetAnalyticsQuarantine", "BudgetAnalyticsQuarantine",
          [_budget_query("account_id", description="Optional owned local account ID filter.")]),
         ("forecast", "getBudgetAnalyticsForecast", "BudgetAnalyticsForecast", [horizon, currency]),
+        ("monthly-budget", "getBudgetAnalyticsMonthlyBudget", "BudgetAnalyticsMonthlyBudget",
+         [month_optional, month_currency]),
     )
     paths = {prefix + path: {"get": {"operationId": operation, "summary": "Read owner-private local budget analytics",
               "parameters": parameters, "responses": _analytics_responses(model)}}
@@ -3046,6 +3183,13 @@ def _analytics_paths():
             "their summary counts. Snapshot metadata and account freshness cover all selected accounts. "
             "The estimate excludes spending limits and makes no bank requests or stored changes."
         )),
+        "monthly-budget": ("Read the owner-private monthly budget dashboard", (
+            "Pure read-only single-snapshot monthly budget dashboard evaluated in Europe/Warsaw from one UTC instant. "
+            "Computes booked configured start budget, adjusted category spending and limits, rent/mortgage pass-through, "
+            "unresolved transfer and repayment candidate provisional flags, previous-month expected income estimates "
+            "(including cross-account salary matching), and spending pace. Card exposure is reported as unavailable in P1. "
+            "Makes no bank requests and no database writes."
+        )),
     }
     for path, (summary, description) in read_overrides.items():
         paths[prefix + path]["get"].update(summary=summary, description=description)
@@ -3066,6 +3210,22 @@ def _analytics_paths():
     }
     for code, description in forecast_descriptions.items():
         forecast_responses[code]["description"] = description
+    month_responses = paths[prefix + "monthly-budget"]["get"]["responses"]
+    month_descriptions = {
+        "200": "Owner-private monthly budget dashboard and ledger coverage from one local snapshot.",
+        "400": "Invalid monthly budget query: period must match ^[0-9]{4}-[0-9]{2}$ through the current "
+               "Europe/Warsaw month, currency must match ^[A-Z]{3}$, and unknown or duplicate parameters are rejected.",
+        "409": "SQLite backend required: monthly-budget requires HESTIA_PERSIST=sqlite.",
+        "413": "Monthly budget limit exceeded (>100,000 selected rows, >1,000 category limits, "
+               ">192-character aggregate decimal output, or >4 MiB UTF-8 JSON payload); no partial totals returned.",
+        "500": "Stored ledger, category, limit, metadata, or timestamp integrity check failed "
+               "(`budget_analytics_data_error`), including stored-data helper errors mapped to 500 after query "
+               "validation, or unexpected internal failure (`budget_internal_error`).",
+        "503": "Analytics storage, Europe/Warsaw time zone, or monthly budget configuration unavailable "
+               "(`budget_analytics_unavailable` or `budget_unavailable`).",
+    }
+    for code, description in month_descriptions.items():
+        month_responses[code]["description"] = description
     writes = (
         ("category-create", "createBudgetAnalyticsCategory", "BudgetAnalyticsCategoryCreateRequest", "BudgetAnalyticsCategoryResult"),
         ("category-update", "updateBudgetAnalyticsCategory", "BudgetAnalyticsCategoryUpdateRequest", "BudgetAnalyticsCategoryResult"),
