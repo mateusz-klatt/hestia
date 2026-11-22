@@ -283,6 +283,11 @@ type Shown =
   | { state: "loading" | "badRequest" | "limit" | "error" }
   | { state: "ready"; data: AnalyticsMonthlyBudgetCharts };
 
+export interface OpenMonthOptions {
+  currency?: string;
+  provisional?: boolean;
+}
+
 export interface MonthBudgetViewProps {
   api: Pick<BudgetApi, "monthlyBudgetCharts" | "categories">;
   accounts: readonly BudgetAccount[];
@@ -290,7 +295,7 @@ export interface MonthBudgetViewProps {
   locale: string;
   revision: number;
   onAccessLoss: (result: { ok: boolean; status?: number; error?: string }) => boolean;
-  onOpenMonth: (month: string, serverCurrentMonth: string) => void;
+  onOpenMonth: (month: string, serverCurrentMonth: string, options?: OpenMonthOptions) => void;
 }
 
 function incomeWindowLabel(incomeWindow: AnalyticsMonthlyBudgetIncomeWindow, locale: string): string {
@@ -604,7 +609,7 @@ function ReadyDashboard({ data, series, categoryMap, text, locale, onOpenMonth }
   categoryMap: ReadonlyMap<string, string>;
   text: MonthBudgetLabels;
   locale: string;
-  onOpenMonth: (month: string, serverCurrentMonth: string) => void;
+  onOpenMonth: (month: string, serverCurrentMonth: string, options?: OpenMonthOptions) => void;
 }) {
   const money = (amount: string) => formatAmount(amount, data.currency, locale);
   const ledgerStamp = when(data.coverage.ledger_as_of, locale);
@@ -648,7 +653,8 @@ function ReadyDashboard({ data, series, categoryMap, text, locale, onOpenMonth }
             <p className="budget-notice" role="note">
               {text.pendingTransfers(data.coverage.pending_transfer_rows)}
               {" "}
-              <button type="button" className="budget-link" onClick={() => { onOpenMonth(data.period, data.current_month); }}>
+              <button type="button" className="budget-link"
+                onClick={() => { onOpenMonth(data.period, data.current_month, { currency: data.currency, provisional: true }); }}>
                 {text.viewTransactions}
               </button>
             </p>

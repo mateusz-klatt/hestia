@@ -5,9 +5,9 @@ import type { BudgetApi } from "../api";
 import type { BudgetAccount, BudgetConnection } from "../model";
 import { formatAmount, transactionDate, transactionText } from "../model";
 import { ANALYTICS_ERROR, EFFECTIVE_KINDS, NO_FILTER, RELOAD_ERRORS, UNCATEGORISED, annotationRequest, canPair, canonicalAmount,
-  counterparty, accountName as nameOf, currentChoice, daysBetween, kindChoice, kindChoicesFor, labelOf, manualPairRequest,
-  pairCandidates, pairDate, pairPeriods } from "./model";
-import type { AnalyticsCategory, AnalyticsTransaction, CategoryChoice, KindChoice, TransactionFilter } from "./model";
+  confirmedCreditCardAccounts, counterparty, accountName as nameOf, currentChoice, daysBetween, isProvisionalTransaction,
+  kindChoice, kindChoicesFor, labelOf, manualPairRequest, pairCandidates, pairDate, pairPeriods } from "./model";
+import type { AnalyticsCategory, AnalyticsRule, AnalyticsTransaction, CategoryChoice, KindChoice, TransactionFilter } from "./model";
 
 const kindsEn = { auto: "Automatic", expense: "Expense", income: "Income", refund: "Refund", excluded: "Leave out of the budget",
   unclassified_credit: "To classify", transfer: "Own transfer" };
@@ -17,6 +17,7 @@ const kindsPl = { auto: "Automatycznie", expense: "Wydatek", income: "Wpływ", r
 export const transactionLabels = {
   en: {
     title: "Transactions", currency: "Currency", category: "Category", kind: "Type", search: "Search", apply: "Apply",
+    provisionalOnly: "Unconfirmed or provisional only",
     all: "All", uncategorised: "Uncategorised", automatic: "Automatic (rules)", kinds: kindsEn,
     edit: "Change", save: "Save", cancel: "Cancel", archived: "archived", total: (count: number) => `${String(count)} entries`,
     date: "Date", amount: "Amount", sort: "Sort", sortAsc: "ascending", sortDesc: "descending",
@@ -40,6 +41,7 @@ export const transactionLabels = {
   },
   pl: {
     title: "Transakcje", currency: "Waluta", category: "Kategoria", kind: "Rodzaj", search: "Szukaj", apply: "Zastosuj",
+    provisionalOnly: "Tylko niepotwierdzone (wynik wstępny)",
     all: "Wszystkie", uncategorised: "Bez kategorii", automatic: "Automatycznie (reguły)", kinds: kindsPl,
     edit: "Zmień", save: "Zapisz", cancel: "Anuluj", archived: "archiwalna", total: (count: number) => `Pozycji: ${String(count)}`,
     date: "Data", amount: "Kwota", sort: "Sortowanie", sortAsc: "rosnąco", sortDesc: "malejąco",
@@ -146,7 +148,8 @@ interface PairPage { rows: AnalyticsTransaction[]; loading: boolean; failed: boo
 const PAIR_LOADING: PairPage = { rows: [], loading: true, failed: false, limited: false };
 
 export interface TransactionsProps {
-  api: Pick<BudgetApi, "analyticsTransactions" | "categories" | "annotate" | "decideTransfer">;
+  api: Pick<BudgetApi, "analyticsTransactions" | "categories" | "annotate" | "decideTransfer">
+    & Partial<Pick<BudgetApi, "rules">>;
   period: string;
   currencies: readonly string[];
   accounts: readonly BudgetAccount[];
@@ -159,6 +162,12 @@ export interface TransactionsProps {
   onChanged: () => void;
   /** Stops the background page walk. Defaults to {@link TRANSACTION_ROW_CAP}. */
   rowCap?: number | undefined;
+  /** Initial currency filter when opened from another view (e.g. Monthly budget). */
+  initialCurrency?: string | undefined;
+  /** Start with provisional/unconfirmed entries filter enabled. */
+  initialProvisional?: boolean | undefined;
+  /** Scroll this section into view when mounted (e.g. opened from the provisional banner link). */
+  focusOnMount?: boolean | undefined;
 }
 
 const rowKey = (row: AnalyticsTransaction) => `${row.account_id}/${row.entry_reference}`;
@@ -205,11 +214,19 @@ function orderRows(
 }
 
 export function TransactionsPanel({ api, period, currencies, accounts, connections = [], text, locale, revision, onAccessLoss,
-  onChanged, rowCap = TRANSACTION_ROW_CAP }: TransactionsProps) {
-  const [filter, setFilter] = useState<TransactionFilter>(NO_FILTER);
-  const [draft, setDraft] = useState<TransactionFilter>(NO_FILTER);
+  onChanged, rowCap = TRANSACTION_ROW_CAP, initialCurrency, initialProvisional, focusOnMount = false }: TransactionsProps) {
+  const startingFilter: TransactionFilter = initialCurrency === undefined ? NO_FILTER : { ...NO_FILTER, currency: initialCurrency };
+  const [filter, setFilter] = useState<TransactionFilter>(startingFilter);
+  const [draft, setDraft] = useState<TransactionFilter>(startingFilter);
+  const [provisionalOnly, setProvisionalOnly] = useState(initialProvisional === true);
   const [page, setPage] = useState<Page>(LOADING);
   const [categories, setCategories] = useState<AnalyticsCategory[]>([]);
+  const [rulesState, setRulesState] = useState<{
+    api: TransactionsProps["api"];
+    revision: number;
+    reloads: number;
+    rules: readonly AnalyticsRule[] | null;
+  } | null>(null);
   const [editing, setEditing] = useState<string | null>(null);
   const [frozenOrder, setFrozenOrder] = useState<readonly string[] | null>(null);
   const [pairing, setPairing] = useState<string | null>(null);
@@ -218,6 +235,8 @@ export function TransactionsPanel({ api, period, currencies, accounts, connectio
   const [notice, setNotice] = useState<string | null>(null);
   const [reloads, setReloads] = useState(0);
   const [sort, setSort] = useState<TransactionSort | null>(null);
+  const sectionRef = useRef<HTMLElement>(null);
+  const didScrollOnLoad = useRef(false);
   // Every period, filter or reload change takes a new generation; late pages and saves of an older one are dropped.
   const generation = useRef(0);
   const walkToken = useRef(0);
@@ -293,6 +312,15 @@ export function TransactionsPanel({ api, period, currencies, accounts, connectio
     // or the access barrier rejects an answer. A stale cursor restarts from the first page (up to the retry cap).
     void walkPages(token, runToken, undefined, [], false);
   }, [api, period, filter, revision, reloads, onAccessLoss, walkPages]);
+  useEffect(() => {
+    if (!provisionalOnly || api.rules === undefined) return undefined;
+    let cancelled = false;
+    void api.rules().then((result) => {
+      if (onAccessLoss(result) || cancelled) return;
+      setRulesState({ api, revision, reloads, rules: result.ok ? result.data.rules : null });
+    });
+    return () => { cancelled = true; };
+  }, [api, provisionalOnly, revision, reloads, onAccessLoss]);
   useEffect(() => () => { generation.current += 1; walkToken.current += 1; picker.current += 1; }, []);
 
   const more = useCallback(() => {
@@ -420,6 +448,19 @@ export function TransactionsPanel({ api, period, currencies, accounts, connectio
     setPairing(null);
   }, [api, onAccessLoss, onChanged, text]);
 
+  const rulesReady = !provisionalOnly || api.rules === undefined
+    || (rulesState !== null && rulesState.api === api && rulesState.revision === revision && rulesState.reloads === reloads);
+  const rulesById = useMemo(
+    () => (rulesReady && rulesState !== null && rulesState.rules !== null
+      ? new Map(rulesState.rules.map((item) => [item.id, item]))
+      : null),
+    [rulesReady, rulesState],
+  );
+  const confirmedCreditCards = useMemo(() => confirmedCreditCardAccounts(accounts), [accounts]);
+  const currencyOptions = useMemo(() => {
+    const extras = [draft.currency, filter.currency].filter((code) => code !== "" && !currencies.includes(code));
+    return extras.length === 0 ? currencies : [...currencies, ...extras].sort((a, b) => a.localeCompare(b));
+  }, [currencies, draft.currency, filter.currency]);
   const categoryNames = useMemo(() => new Map(categories.map((item) => [item.id, item.name])), [categories]);
   const categoryName = useCallback(
     (id: string | null) => (id === null ? text.uncategorised : (categoryNames.get(id) ?? text.uncategorised)),
@@ -427,10 +468,33 @@ export function TransactionsPanel({ api, period, currencies, accounts, connectio
   );
   const accountName = (id: string) => nameOf(accounts, connections, id, text.account);
   const kindText = (kind: string) => labelOf(text.kinds, kind);
+  const matchingRows = useMemo(() => {
+    if (!provisionalOnly) return page.rows;
+    if (!rulesReady) return [];
+    return page.rows.filter((row) => isProvisionalTransaction(row, {
+      confirmedCreditCardIds: confirmedCreditCards,
+      rulesById,
+    }));
+  }, [provisionalOnly, rulesReady, page.rows, confirmedCreditCards, rulesById]);
   const shownRows = useMemo(
-    () => orderRows(page.rows, sort, frozenOrder, categoryName, locale),
-    [page.rows, sort, frozenOrder, categoryName, locale],
+    () => orderRows(matchingRows, sort, frozenOrder, categoryName, locale),
+    [matchingRows, sort, frozenOrder, categoryName, locale],
   );
+  const isLoading = page.loading || !rulesReady;
+  const shownTotal = provisionalOnly ? matchingRows.length : page.total;
+
+  useEffect(() => {
+    if (!focusOnMount) return;
+    const target: { scrollIntoView?: (options?: ScrollIntoViewOptions) => void } | null = sectionRef.current;
+    target?.scrollIntoView?.({ behavior: "smooth", block: "start" });
+  }, [focusOnMount]);
+
+  useEffect(() => {
+    if (!focusOnMount || didScrollOnLoad.current || isLoading) return;
+    didScrollOnLoad.current = true;
+    const target: { scrollIntoView?: (options?: ScrollIntoViewOptions) => void } | null = sectionRef.current;
+    target?.scrollIntoView?.({ behavior: "smooth", block: "start" });
+  }, [focusOnMount, isLoading]);
 
   const startEditing = (key: string) => {
     closePairs();
@@ -446,20 +510,26 @@ export function TransactionsPanel({ api, period, currencies, accounts, connectio
     const next = nextSort(sort, key);
     setSort(next);
     if (editing !== null) {
-      setFrozenOrder(sortTransactions(page.rows, next, categoryName, locale).map(rowKey));
+      setFrozenOrder(sortTransactions(matchingRows, next, categoryName, locale).map(rowKey));
     } else {
       setFrozenOrder(null);
     }
   };
+  const truncatedNotice = !isLoading && !page.failed && page.cursor !== null ? (
+    <div className="budget-notice budget-entries-action" role="note">
+      <span>{text.truncated(page.rows.length, page.total)}</span>
+      <button type="button" onClick={more}>{text.more}</button>
+    </div>
+  ) : null;
 
   return (
-    <section className="budget-entries" aria-label={text.title}>
+    <section className="budget-entries" aria-label={text.title} ref={sectionRef}>
       <h4>{text.title}</h4>
       <form className="budget-range" onSubmit={(event) => { event.preventDefault(); setFilter(draft); }}>
         <label>{text.currency}
           <select name="currency" value={draft.currency} onChange={(event) => { setDraft({ ...draft, currency: event.currentTarget.value }); }}>
             <option value="">{text.all}</option>
-            {currencies.map((currency) => <option key={currency} value={currency}>{currency}</option>)}
+            {currencyOptions.map((currency) => <option key={currency} value={currency}>{currency}</option>)}
           </select>
         </label>
         <label>{text.category}
@@ -479,6 +549,16 @@ export function TransactionsPanel({ api, period, currencies, accounts, connectio
           <input name="query" type="search" maxLength={100} value={draft.query}
             onChange={(event) => { setDraft({ ...draft, query: event.currentTarget.value }); }} />
         </label>
+        <label className="budget-toggle">
+          <input name="provisional" type="checkbox" checked={provisionalOnly}
+            onChange={(event) => {
+              setProvisionalOnly(event.currentTarget.checked);
+              setEditing(null);
+              setFrozenOrder(null);
+              setPairing(null);
+            }} />
+          {text.provisionalOnly}
+        </label>
         <button type="submit">{text.apply}</button>
       </form>
       {notice === null ? null : <p className="budget-notice" role="alert">{notice}</p>}
@@ -488,18 +568,18 @@ export function TransactionsPanel({ api, period, currencies, accounts, connectio
           <button type="button" onClick={retry}>{text.retry}</button>
         </div>
       ) : null}
-      {page.loading && page.rows.length === 0 ? <p className="budget-muted" role="status">{text.loading}</p> : null}
-      {!page.loading && !page.failed && page.rows.length === 0 ? <p className="budget-muted">{text.empty}</p> : null}
-      {page.rows.length === 0 ? null : (
+      {isLoading && shownRows.length === 0 ? <p className="budget-muted" role="status">{text.loading}</p> : null}
+      {!isLoading && !page.failed && shownRows.length === 0 ? (
         <>
-          <p className="budget-muted">{text.total(page.total)}</p>
-          {page.loading ? <p className="budget-muted" role="status">{text.loadingMore(page.rows.length)}</p> : null}
-          {!page.loading && !page.failed && page.cursor !== null ? (
-            <div className="budget-notice budget-entries-action" role="note">
-              <span>{text.truncated(page.rows.length, page.total)}</span>
-              <button type="button" onClick={more}>{text.more}</button>
-            </div>
-          ) : null}
+          <p className="budget-muted">{text.empty}</p>
+          {truncatedNotice}
+        </>
+      ) : null}
+      {shownRows.length === 0 ? null : (
+        <>
+          <p className="budget-muted">{text.total(shownTotal)}</p>
+          {isLoading ? <p className="budget-muted" role="status">{text.loadingMore(page.rows.length)}</p> : null}
+          {truncatedNotice}
           <div className="budget-views budget-sort" role="group" aria-label={text.sort}>
             {SORT_KEYS.map((key) => {
               const active = sort?.key === key;

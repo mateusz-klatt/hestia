@@ -1006,17 +1006,19 @@ describe("MonthBudgetView", () => {
     expect(replaceState).not.toHaveBeenCalled();
   });
 
-  it("opens Month view from the provisional pending-transfers review link", async () => {
+  it("opens Month view filtered to provisional entries from the provisional pending-transfers review link", async () => {
     const api = fakeApi();
     const onOpenMonth = vi.fn();
     api.monthlyBudgetCharts.mockResolvedValue(ok(monthlyBudgetChartsOf({
-      period: "2026-11",
-      cutoff: "2026-11-22",
+      period: "2026-10",
+      current_month: "2026-11",
+      cutoff: "2026-10-31",
+      currency: "EUR",
       coverage: {
         ledger_as_of: 1_795_345_200,
         stale_selected_accounts: 0,
         purchase_date_fallback_count: 0,
-        pending_transfer_rows: 1,
+        pending_transfer_rows: 4,
         transfer_scan_limited: false,
         provisional: true,
         has_activity: true,
@@ -1025,8 +1027,10 @@ describe("MonthBudgetView", () => {
     await show(api, { onOpenMonth });
     const links = [...host.querySelectorAll("button")].filter((item) => item.textContent === "View transactions");
     expect(links).toHaveLength(2);
+    await click(links[0] as HTMLButtonElement);
+    expect(onOpenMonth).toHaveBeenNthCalledWith(1, "2026-10", "2026-11");
     await click(links[1] as HTMLButtonElement);
-    expect(onOpenMonth).toHaveBeenCalledWith("2026-11", "2026-11");
+    expect(onOpenMonth).toHaveBeenNthCalledWith(2, "2026-10", "2026-11", { currency: "EUR", provisional: true });
   });
 
   it("drops stale responses and refuses mismatched period responses", async () => {

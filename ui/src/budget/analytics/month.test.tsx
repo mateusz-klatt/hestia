@@ -105,4 +105,46 @@ describe("month view", () => {
     expect(api.analyticsTransactions).toHaveBeenCalledTimes(2);
     expect(api.transfers).toHaveBeenCalledTimes(2);
   });
+
+  it("forwards initial currency and provisional filter to Transactions and scrolls it into view", async () => {
+    const scrollIntoView = vi.fn();
+    const prevScroll = (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView;
+    Element.prototype.scrollIntoView = scrollIntoView;
+    try {
+      const api = {
+        ...fakeApi(),
+        rules: vi.fn<BudgetApi["rules"]>(() => ok({ rules: [] })),
+      };
+      api.analyticsTransactions.mockImplementation((period) => ok(entriesOf(period, [
+        entry("pending-1"),
+        entry("explicit-1", {
+          annotation: { version: 1, mode: "manual", category_id: "cat-food", kind: "expense", stale: false },
+          effective: { kind: "expense", category_id: "cat-food", source: "manual", rule_id: null },
+        }),
+      ])));
+      await act(async () => {
+        root.render(<MonthView api={api} accounts={[]} text={monthLabels.en} locale="en" revision={0}
+          onAccessLoss={() => false} initialMonth="2026-03" initialCurrency="EUR" initialProvisional={true}
+          today={() => new Date(2026, 10, 21, 12)} />);
+        await Promise.resolve();
+      });
+      await settle();
+
+      expect(api.analyticsTransactions).toHaveBeenCalledWith("2026-03", { currency: "EUR", category: "", kind: "", query: "" });
+      expect(api.rules).toHaveBeenCalledTimes(1);
+      const provisionalToggle = host.querySelector<HTMLInputElement>('input[name="provisional"]');
+      expect(provisionalToggle?.checked).toBe(true);
+      const currencySelect = [...host.querySelectorAll("label")].find((item) => item.textContent.startsWith("Currency"))?.querySelector("select");
+      expect(currencySelect?.value).toBe("EUR");
+      expect([...host.querySelectorAll(".budget-entry-text")].map((item) => item.textContent)).toEqual(["Synthetic shop pending-1"]);
+      expect(host.textContent).toContain("1 entries");
+      expect(scrollIntoView).toHaveBeenCalled();
+    } finally {
+      if (prevScroll === undefined) {
+        delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView;
+      } else {
+        Element.prototype.scrollIntoView = prevScroll as typeof Element.prototype.scrollIntoView;
+      }
+    }
+  });
 });

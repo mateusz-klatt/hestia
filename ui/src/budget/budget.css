@@ -26,6 +26,7 @@
 .budget-balances li { display: flex; justify-content: space-between; gap: 1rem; }
 .budget-range { display: flex; gap: .6rem; align-items: end; flex-wrap: wrap; margin-bottom: .6rem; }
 .budget-range label { display: grid; gap: .2rem; font-size: .8rem; color: var(--fg-soft); }
+.budget-range .budget-toggle { display: inline-flex; align-items: center; min-height: 2.4rem; }
 .budget-transactions { width: 100%; border-collapse: collapse; font-size: .85rem; }
 .budget-transactions td { padding: .35rem .3rem; border-top: 1px solid var(--border); vertical-align: top; overflow-wrap: anywhere; }
 .budget-transactions td:first-child { white-space: nowrap; color: var(--fg-soft); }

@@ -22,7 +22,8 @@ export interface MonthLabels {
 }
 
 export interface MonthViewProps {
-  api: Pick<BudgetApi, "overview" | "analyticsTransactions" | "categories" | "annotate" | "transfers" | "decideTransfer">;
+  api: Pick<BudgetApi, "overview" | "analyticsTransactions" | "categories" | "annotate" | "transfers" | "decideTransfer">
+    & Partial<Pick<BudgetApi, "rules">>;
   accounts: readonly BudgetAccount[];
   connections?: readonly BudgetConnection[] | undefined;
   text: MonthLabels;
@@ -32,12 +33,16 @@ export interface MonthViewProps {
   onAccessLoss: (result: { ok: boolean; status?: number; error?: string }) => boolean;
   /** The month to open first ("YYYY-MM"); the current month when absent or in the future. */
   initialMonth?: string | undefined;
+  /** Initial currency filter when opened from Monthly budget. */
+  initialCurrency?: string | undefined;
+  /** Start with Transactions filtered to provisional/unconfirmed rows and scrolled into view. */
+  initialProvisional?: boolean | undefined;
   /** Injected clock for tests. */
   today?: () => Date;
 }
 
 export function MonthView({ api, accounts, connections = [], text, locale, revision, onAccessLoss, initialMonth,
-  today = () => new Date() }: MonthViewProps) {
+  initialCurrency, initialProvisional, today = () => new Date() }: MonthViewProps) {
   const latest = currentMonth(today());
   const [month, setMonth] = useState(initialMonth !== undefined && isMonth(initialMonth) && initialMonth < latest ? initialMonth : latest);
   const [changes, setChanges] = useState(0);
@@ -57,7 +62,8 @@ export function MonthView({ api, accounts, connections = [], text, locale, revis
       <TransfersPanel api={api} period={month} accounts={accounts} connections={connections} text={text.transfers} locale={locale}
         revision={revision + changes} onAccessLoss={onAccessLoss} onChanged={changed} />
       <TransactionsPanel api={api} period={month} currencies={currencies} accounts={accounts} connections={connections} text={text.entries}
-        locale={locale} revision={revision + changes} onAccessLoss={onAccessLoss} onChanged={changed} />
+        locale={locale} revision={revision + changes} onAccessLoss={onAccessLoss} onChanged={changed}
+        initialCurrency={initialCurrency} initialProvisional={initialProvisional} focusOnMount={initialProvisional === true} />
     </section>
   );
 }

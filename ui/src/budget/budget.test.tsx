@@ -6,7 +6,7 @@ import type { BudgetApi, BudgetResult } from "./api";
 import { Budget } from "./budget";
 import { account, componentLimit, connection, sharedLimit } from "./fixtures";
 import type { BudgetAccount, BudgetBalances, BudgetJob, BudgetTransaction, BudgetTransactions } from "./model";
-import { entriesOf, forecastCurrencyTotal, forecastItem, forecastOf, inboxConsentItem, inboxMarkSaved, inboxOf,
+import { entriesOf, entry, forecastCurrencyTotal, forecastItem, forecastOf, inboxConsentItem, inboxMarkSaved, inboxOf,
   monthlyBudgetChartsOf, monthlyBudgetOf, mortgageReminder, mortgageSchedule, mortgagesOf, overviewOf, quarantineOf,
   recurringHint, recurringOf, spendingLimit, spendingLimitsOf, spendingLimitStatus, transfersOf } from "./analytics/fixtures";
 
@@ -991,6 +991,71 @@ describe("analytics views", () => {
     expect(host.querySelector(".budget-month-nav h3")?.textContent).toBe("February 2024");
     expect(nextMonth()?.disabled).toBe(true);
     expect(host.textContent).toContain("This period is still in progress.");
+  });
+
+  it("opens Month transactions filtered to the provisional rows when clicking View transactions on the provisional banner", async () => {
+    const api = fakeApi();
+    api.connections.mockImplementation(() => ok({ connections: [connection], capabilities: analysis }));
+    api.monthlyBudgetCharts.mockImplementation(() => ok(monthlyBudgetChartsOf({
+      period: "2026-11",
+      current_month: "2026-11",
+      cutoff: "2026-11-22",
+      currency: "PLN",
+      coverage: {
+        ledger_as_of: 1_795_345_200,
+        stale_selected_accounts: 0,
+        purchase_date_fallback_count: 0,
+        pending_transfer_rows: 4,
+        transfer_scan_limited: false,
+        provisional: true,
+        has_activity: true,
+      },
+    })));
+    api.transfers.mockImplementation((period) => ok(transfersOf(period, [])));
+    api.rules.mockImplementation(() => ok({ rules: [
+      { id: "rule-auto", field: "description", operator: "contains", value: "auto", category_id: "cat-food", kind: "auto", priority: 1, enabled: true, version: 1, created_at: 1, updated_at: 1 },
+      { id: "rule-exp", field: "description", operator: "contains", value: "exp", category_id: "cat-food", kind: "expense", priority: 2, enabled: true, version: 1, created_at: 1, updated_at: 1 },
+    ] }));
+    api.analyticsTransactions.mockImplementation((period) => ok(entriesOf(period, [
+      entry("prov-1"),
+      entry("prov-2", { effective: { kind: "expense", category_id: "cat-food", source: "rule", rule_id: "rule-auto" } }),
+      entry("prov-3", { transfer: { status: "review", decision_id: "d-1", candidate_count: 1, ambiguous: false } }),
+      entry("prov-4", { annotation: { version: 1, mode: "manual", category_id: null, kind: "excluded", stale: true } }),
+      entry("clean-rule", { effective: { kind: "expense", category_id: "cat-food", source: "rule", rule_id: "rule-exp" } }),
+      entry("clean-manual", {
+        annotation: { version: 1, mode: "manual", category_id: "cat-food", kind: "expense", stale: false },
+        effective: { kind: "expense", category_id: "cat-food", source: "manual", rule_id: null },
+      }),
+    ])));
+
+    await render(api);
+    const scrollSpy = vi.spyOn(Element.prototype, "scrollIntoView");
+    const links = [...host.querySelectorAll("button")].filter((item) => item.textContent === "View transactions");
+    expect(links).toHaveLength(2);
+    await click(links[1] as HTMLButtonElement);
+
+    expect(button("Month").getAttribute("aria-pressed")).toBe("true");
+    expect(api.analyticsTransactions).toHaveBeenLastCalledWith("2026-11", { currency: "PLN", category: "", kind: "", query: "" });
+    expect(host.querySelector<HTMLInputElement>('input[name="provisional"]')?.checked).toBe(true);
+    expect(host.querySelector<HTMLSelectElement>('select[name="currency"]')?.value).toBe("PLN");
+    expect(scrollSpy).toHaveBeenCalled();
+    expect(scrollSpy.mock.instances).toContain(host.querySelector(".budget-entries"));
+
+    const visibleTexts = [...host.querySelectorAll(".budget-entries .budget-entry-text")].map((item) => item.textContent);
+    expect(visibleTexts).toEqual([
+      "Synthetic shop prov-1",
+      "Synthetic shop prov-2",
+      "Synthetic shop prov-3",
+      "Synthetic shop prov-4",
+    ]);
+    expect(host.querySelector(".budget-entries")?.textContent).toContain("4 entries");
+
+    // Returning to Monthly budget and opening the general View transactions link clears the provisional filter.
+    await click(button("Monthly budget"));
+    const freshLinks = [...host.querySelectorAll("button")].filter((item) => item.textContent === "View transactions");
+    await click(freshLinks[0] as HTMLButtonElement);
+    expect(host.querySelector<HTMLInputElement>('input[name="provisional"]')?.checked).toBe(false);
+    expect(host.querySelectorAll(".budget-entries .budget-entry")).toHaveLength(6);
   });
 
   it("offers Forecast after Mortgages only while analytics is enabled", async () => {
