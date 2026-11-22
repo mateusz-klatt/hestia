@@ -150,7 +150,13 @@
           Banking's privacy notice</a>.</li>
         <li><strong>Gmail (when enabled):</strong> Google receives authorisation and read requests
           for the planned <a href="#gmail">Gmail receipt import</a>. See the
-          <a href="https://policies.google.com/privacy">Google privacy policy</a>.</li>
+          <a href="https://policies.google.com/privacy">Google privacy policy</a> and the
+          <a href="https://developers.google.com/terms/api-services-user-data-policy">Google API
+          Services User Data Policy</a>.</li>
+        <li id="cloud-ocr"><strong>Cloud AI OCR (planned):</strong> if enabled, the cloud provider
+          will receive a receipt photo for text recognition only after the owner consents for that
+          receipt. This policy will name the provider and describe its retention terms before
+          activation.</li>
         <li><strong>Optional network and weather services:</strong> enabling DNS-over-HTTPS
           resolution can send the queried hostname and server connection information to Google or
           Cloudflare resolvers. Enabling Open-Meteo weather sends configured latitude and longitude
@@ -225,9 +231,13 @@
           successful, explicitly requested check.</li>
       </ul>
       <p>The read-only Monthly budget dashboard uses transactions already stored for the owner's
-        selected accounts and settings configured on the server. Forecast uses stored mortgage
-        schedules and recurring expense patterns to estimate upcoming commitments and may count
-        likely duplicates once. The estimates carry no guarantee of future amounts or dates.</p>
+        selected accounts and settings configured on the server. It shows income received,
+        expected income, spending to date, remaining budget, spending pace and category limits.
+        Expected income and spending pace are estimates. The dashboard includes charts of
+        cumulative daily spending, monthly spending by category and monthly income versus spending.</p>
+      <p>Forecast uses stored mortgage schedules and recurring expense patterns to estimate upcoming
+        commitments and may count likely duplicates once. The estimates carry no guarantee of future
+        amounts or dates.</p>
       <p>Hestia contacts the bank only for selected accounts, within the bank's access limits, when
         a refresh is requested or when the owner has enabled automatic refresh for a connection.
         Budget data are currently available through the Hestia interface only to the budget's
@@ -263,11 +273,11 @@
         drafts and their text after 48 hours, and deletes the redacted raw text 30 days after
         confirmation. Confirmed structured receipts and line items are kept until the owner
         deletes them.</p>
-      <p>Photo uploads and local text recognition are planned for a later release. Draft photos
-        will be deleted with their drafts, and confirmed photos will be deleted 30 days after
-        confirmation. A later optional cloud text recognition (OCR) feature will send a receipt
-        photo to an external provider only when the owner opts in for that receipt. This policy
-        will name the provider and describe its retention terms before cloud OCR is enabled.</p>
+      <p>Photo uploads are planned for a later release. A RapidOCR sidecar on the owner's server
+        will recognise text locally without sending photos off the server. Draft photos will be
+        deleted with their drafts, and confirmed photos will be deleted 30 days after confirmation.
+        The separate <a href="#cloud-ocr">Cloud AI OCR</a> feature will be off by default and will
+        send a photo to its provider only after the owner consents for that receipt.</p>
 
       <h3 id="gmail">Gmail receipt import (when enabled)</h3>
       <p>This planned feature will require the owner to authorise access to their own Google
@@ -276,12 +286,12 @@
         label or a list of approved senders, and read them to extract receipt details.</p>
       <p>From these messages, Hestia will store only the parsed receipt and a keyed hash of the
         Message-ID to avoid duplicate imports. Hestia will never store message bodies or email
-        addresses from the messages. Hestia will use Gmail data only to import receipts for the
-        owner and will not share, sell or use the data for advertising. The owner can revoke access
-        in their <a href="https://myaccount.google.com/linkedapps">Google Account</a>.</p>
-      <p>Hestia's use of information received from the Gmail API will adhere to the
-        <a href="https://developers.google.com/terms/api-services-user-data-policy">Google API
-        Services User Data Policy</a>, including its <strong>Limited Use</strong> requirements.</p>
+        addresses from the messages. The owner can revoke access in their
+        <a href="https://myaccount.google.com/linkedapps">Google Account</a>.</p>
+      <p>Cloudflare and the Apache reverse proxy may process requests and responses that contain
+        imported receipt data to deliver and secure the application, as described in
+        <a href="#recipients">section 3</a>.</p>
+      <p>Hestia will use Gmail data only to provide the owner-facing receipt-import feature. It will not sell Gmail data or use it for advertising. Hestia's use and transfer to any other app of information received from the Gmail API will adhere to the Google API Services User Data Policy, including its Limited Use requirements.</p>
 
       <h2 id="retention">5. Retention, disconnection and deletion</h2>
       <p>Configuration and household records are retained while needed for the requested service,

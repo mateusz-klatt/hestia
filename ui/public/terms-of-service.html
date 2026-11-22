@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="Terms for the private Hestia household installation, its optional integrations and planned read-only banking access.">
+  <meta name="description" content="Terms for the private Hestia household installation, its optional integrations and optional read-only banking access.">
   <meta name="color-scheme" content="light dark">
   <title>Terms of Service · Hestia</title>
   <style>
@@ -117,10 +117,13 @@
         Transfer suggestions require the owner's acceptance. Missing, stale or uncertain records
         and unresolved transfer choices can affect the usefulness of totals.</p>
       <p>The read-only Monthly budget dashboard uses already stored bank transactions and settings
-        configured on the server. Forecast estimates upcoming commitments from stored mortgage
-        schedules and recurring expense patterns, and may count likely duplicates once. Forecast
-        figures are estimates only, with no guarantee of future amounts, due dates or available
-        funds.</p>
+        configured on the server. It shows income received, expected income, spending to date,
+        remaining budget, spending pace and category limits. Expected income and spending pace are
+        estimates. Charts show cumulative daily spending, monthly spending by category and monthly
+        income versus spending.</p>
+      <p>Forecast estimates upcoming commitments from stored mortgage schedules and recurring
+        expense patterns, and may count likely duplicates once. Forecast figures are estimates
+        only, with no guarantee of future amounts, due dates or available funds.</p>
       <p>Hestia does not initiate transfers or payments, hold money or ask you to give it bank login
         passwords, PINs or one-time banking codes. Complete bank authentication only through the
         bank and Enable Banking's authorisation flow. Do not paste banking credentials into Hestia,
@@ -144,10 +147,12 @@
       <h3>Receipts (when enabled)</h3>
       <p>Receipts are planned and will be off by default. When enabled, Hestia parses pasted
         receipt text and suggests matches to stored card transactions. Review the parsed receipt
-        and any suggested match before confirming. A confirmed link is for reference only. Later
-        releases are planned to add photo uploads and optional cloud text recognition. The
-        <a href="privacy-policy.html#receipts">Privacy Policy</a> explains storage, deletion and
-        when a receipt photo may be sent to a cloud provider.</p>
+        and any suggested match before confirming. A confirmed link is for reference only.</p>
+      <p>Photo uploads are planned for a later release. A RapidOCR sidecar on the owner's server
+        will recognise text locally without sending photos off the server. The separate Cloud AI
+        OCR feature will be off by default and will send a photo to its provider only after the
+        owner consents for that receipt. The <a href="privacy-policy.html#receipts">Privacy
+        Policy</a> explains storage, deletion and cloud processing.</p>
 
       <h3>Gmail receipt import (when enabled)</h3>
       <p>This planned feature requires the budget owner to grant read-only access to their own
