@@ -173,20 +173,66 @@ def compatible_kind(kind, payload):
             or (kind in ("income", "refund") and payload.get("credit_debit_indicator") == "CRDT"))
 
 
+def fold_text(text):
+    """NFC-casefold once. Rule needles and transaction texts share this so matching stays exact."""
+    return unicodedata.normalize("NFC", text).casefold()
+
+
+def match_texts(payload, metadata=None):
+    """The three rule fields, folded once per transaction rather than once per rule."""
+    metadata = {} if metadata is None else metadata
+    if payload.get("credit_debit_indicator") == "DBIT":
+        counterparty = metadata.get("creditor_name") or ""
+    else:
+        counterparty = metadata.get("debtor_name") or ""
+    return {"description": fold_text("\n".join(payload.get("remittance_information", []))),
+            "counterparty_name": fold_text(counterparty), "mcc": fold_text(metadata.get("mcc") or "")}
+
+
+def compile_rules(rules):
+    """Fold each enabled needle once. ``safe`` is false when an enabled rule would raise in ``rule_matches``
+    on a compatible transaction, so callers can keep the raising scan."""
+    compiled, safe = [], True
+    for rule in rules:
+        enabled = _value(rule, "enabled")
+        kind, field, operator = _value(rule, "kind"), _value(rule, "field"), _value(rule, "operator")
+        needle = None
+        if enabled and field in _FIELDS and operator in ("equals", "contains"):
+            needle = fold_text(_value(rule, "value"))
+        elif enabled:
+            safe = False
+        compiled.append((enabled, kind, field, operator, needle, rule))
+    return compiled, safe
+
+
+def first_matching_rule(compiled, payload, texts):
+    """First enabled, kind-compatible rule whose folded needle matches, in list order."""
+    indicator = payload.get("credit_debit_indicator")
+    for enabled, kind, field, operator, needle, rule in compiled:
+        if not enabled:
+            continue
+        if kind == "expense":
+            if indicator != "DBIT":
+                continue
+        elif kind in ("income", "refund"):
+            if indicator != "CRDT":
+                continue
+        elif kind not in ("auto", "excluded"):
+            continue
+        if field not in _FIELDS or operator not in ("equals", "contains"):
+            raise AnalyticsError()
+        text = texts[field]
+        if needle == text if operator == "equals" else needle in text:
+            return rule
+    return None
+
+
 def rule_matches(rule, payload, metadata=None):
     if not _value(rule, "enabled") or not compatible_kind(_value(rule, "kind"), payload):
         return False
     field, operator = _value(rule, "field"), _value(rule, "operator")
     if field not in _FIELDS or operator not in ("equals", "contains"):
         raise AnalyticsError()
-    metadata = {} if metadata is None else metadata
-    if field == "description":
-        text = "\n".join(payload.get("remittance_information", []))
-    elif field == "counterparty_name":
-        key = "creditor_name" if payload.get("credit_debit_indicator") == "DBIT" else "debtor_name"
-        text = metadata.get(key) or ""
-    else:
-        text = metadata.get("mcc") or ""
-    text = unicodedata.normalize("NFC", text).casefold()
-    value = unicodedata.normalize("NFC", _value(rule, "value")).casefold()
-    return value == text if operator == "equals" else value in text
+    texts = match_texts(payload, metadata)
+    needle = fold_text(_value(rule, "value"))
+    return needle == texts[field] if operator == "equals" else needle in texts[field]

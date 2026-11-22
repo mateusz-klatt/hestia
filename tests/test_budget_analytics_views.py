@@ -226,6 +226,19 @@ class ClassificationTests(ProjectionCase):
         self.assertEqual(self.store.transactions("owner", "2026", query="")["filtered_total"], 2)
         api_contract.BudgetAnalyticsTransactions.model_validate(self.store.transactions("owner", "2026"))
 
+    def test_effective_helper_compiles_rules_and_folds_texts_when_omitted(self):
+        category = self.store.create_category("owner", "Food")
+        categories = {category["id"]: category}
+        annotation = {"mode": "auto", "stale": False, "kind": "auto", "category_id": None}
+        rules = [{"id": "r1", "enabled": True, "kind": "expense", "field": "description",
+                  "operator": "contains", "value": "shop", "category_id": category["id"], "priority": 1}]
+        tx = {"credit_debit_indicator": "DBIT", "remittance_information": ["Synthetic SHOP"]}
+        self.assertEqual(views._effective(tx, None, annotation, categories, rules),
+                         {"kind": "expense", "category_id": category["id"], "source": "rule", "rule_id": "r1"})
+        miss = views._effective({"credit_debit_indicator": "DBIT", "remittance_information": ["Other"]},
+                                None, annotation, categories, rules)
+        self.assertEqual(miss, {"kind": "expense", "category_id": None, "source": "default", "rule_id": None})
+
 
 class TransferProjectionTests(ProjectionCase):
     def test_manual_and_rule_exclusions_remove_suggestions_and_ambiguity_edges(self):

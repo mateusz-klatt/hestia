@@ -56,7 +56,18 @@ class OpenApiArtifactTests(unittest.TestCase):
 
     def test_monthly_budget_contract_is_strictly_additive_from_0_27_0(self):
         document = api_contract.build_openapi()
-        self.assertEqual(document["info"]["version"], "0.29.0")
+        self.assertEqual(document["info"]["version"], "0.30.0")
+        # Strip this batch addition and compare with the 0.29.0 monthly-budget contract.
+        for path in ("/api/budget/analytics/rule-batch-preview", "/api/budget/analytics/rule-batch-save"):
+            del document["paths"][path]
+        for name in ("BudgetAnalyticsRuleBatchPreviewRequest", "BudgetAnalyticsRuleBatchSaveRequest",
+                     "BudgetAnalyticsBatchPreview", "BudgetAnalyticsBatchPreviewResult",
+                     "BudgetAnalyticsRuleBatch", "BudgetAnalyticsRuleBatchResult"):
+            del document["components"]["schemas"][name]
+        document["info"]["version"] = "0.29.0"
+        canonical_0_29 = json.dumps(document, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        self.assertEqual(hashlib.sha256(canonical_0_29).hexdigest(),
+                         "a4cbedec9290daf19844d81638d2b26aaba3a58b93e74584bf0d29c5f5191b4a")
         del document["paths"]["/api/budget/analytics/monthly-budget/charts"]
         for suffix in ("DailyPoint", "SeriesCategory", "SeriesMonth", "CategoryLabel", "Series", "Charts"):
             del document["components"]["schemas"]["BudgetAnalyticsMonthlyBudget" + suffix]
@@ -495,6 +506,7 @@ class TolerantResponseContractTests(unittest.TestCase):
     REQUEST_ONLY = {
         "BudgetAnalyticsCategoryCreateRequest", "BudgetAnalyticsCategoryUpdateRequest",
         "BudgetAnalyticsAnnotationRequest", "BudgetAnalyticsRulePreviewRequest", "BudgetAnalyticsRuleSaveRequest",
+        "BudgetAnalyticsRuleBatchPreviewRequest", "BudgetAnalyticsRuleBatchSaveRequest",
         "BudgetAnalyticsTransferDecisionRequest", "BudgetAnalyticsLegRequest",
         "BudgetAnalyticsSpendingLimitSaveRequest", "BudgetAnalyticsMortgageSaveRequest",
         "BudgetAnalyticsMortgagePaymentSetRequest", "BudgetAnalyticsInboxKeyRequest",
