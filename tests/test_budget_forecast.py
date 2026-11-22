@@ -399,7 +399,7 @@ def _baseline(**fields):
     baseline = forecast.CategoryBaseline(
         category_id="cat-power", name="Electricity", currency="PLN",
         monthly_amounts=("10", "20", "30", "40", "80", "100"), typical_day=28, current_spend="0",
-        recurring_keys=frozenset(), schedule_ids=frozenset(), last_observed_date="2026-10-12")
+        account_ids=frozenset(), last_observed_date="2026-10-12")
     return replace(baseline, **fields)
 
 
@@ -432,6 +432,11 @@ class CategoryBaselineTests(unittest.TestCase):
         self.assertEqual(forecast._median_money(("40", "10", "30", "20")), "25")
         self.assertEqual(forecast._trimmed_mean_money(("100", "10", "80", "20", "40", "30")), "42.5")
         self.assertEqual(forecast._trimmed_mean_money(("80", "10", "30")), "30")
+        self.assertEqual(forecast._mean_money(("-1",)), "-1")
+        self.assertEqual(forecast._mean_money(("1", "-1")), "0")
+        self.assertEqual(forecast._mean_money(("-1", "-2")), "-1.5")
+        self.assertEqual(forecast._mean_money(("1", "1", "-1")), "0.3333333")
+        self.assertEqual(forecast._mean_money(("-1", "-1", "1")), "-0.3333333")
         self.assertEqual(forecast._sub_money("10", "3"), ("7", "3"))
         self.assertEqual(forecast._sub_money("3", "10"), ("0", "3"))
         self.assertEqual(forecast._sub_money("5", "5"), ("0", "5"))
@@ -439,7 +444,7 @@ class CategoryBaselineTests(unittest.TestCase):
         self.assertEqual(forecast._previous_months(date(2026, 11, 22), 6),
                          ("2026-05", "2026-06", "2026-07", "2026-08", "2026-09", "2026-10"))
         self.assertEqual(forecast._previous_months(date(1900, 3, 1), 6), ("1900-01", "1900-02"))
-        for values in ((), ("-1",), ("1", "-1"), ("nope",)):
+        for values in ((), ("nope",)):
             with self.subTest(values=values), self.assertRaisesRegex(forecast.ForecastDataError, "^Invalid forecast data$"):
                 forecast._mean_money(values)
         for args in (("-1", "1"), ("1", "-1"), ("1", "nope"), ("nope", "1")):
@@ -499,6 +504,9 @@ class CategoryBaselineTests(unittest.TestCase):
             with self.subTest(history=history):
                 reject({"private-owner": {"category_ids": ["secret-cat"], "history_months": history}})
         reject({"private-owner": {"category_ids": ["secret-cat"], "estimator": "mean"}})
+        reject({"private-owner": {"category_ids": ["secret-cat"], "estimator": ["median"]}})
+        reject({"private-owner": {"category_ids": ["secret-cat"], "estimator": {"kind": "median"}}})
+        reject({"private-owner": {"category_ids": ["secret-cat"], "estimator": 1}})
         reject('{"private-owner": {"category_ids": ["secret-cat"]}, "private-owner": {"category_ids": ["other"]}}')
         reject('{"private-owner": {"category_ids": ["secret-cat"], "category_ids": ["other"]}}')
         reject('{"private-owner": {"category_ids": ["secret-cat"], "history_months": NaN}}')
@@ -509,16 +517,16 @@ class CategoryBaselineTests(unittest.TestCase):
         with patch.object(forecast.json, "loads", side_effect=RecursionError):
             reject('{"recurse": 1}')
 
-    def test_fewer_than_three_positive_months_emits_nothing(self):
+    def test_fewer_than_three_covered_months_emits_nothing(self):
         names = {"cat-power": "Electricity"}
         short = [("cat-power", "PLN", "2026-09-02", "10"), ("cat-power", "PLN", "2026-10-03", "20")]
         self.assertEqual(forecast.build_category_baselines(
             category_ids=["cat-power"], category_names=names, history_months=6, evaluation_date="2026-11-22",
-            expenses=short, evidence_categories={}, hints=(), schedules=()), ())
+            expenses=short), ())
         zeros = short + [("cat-power", "PLN", "2026-08-04", "0"), ("cat-power", "PLN", "2026-07-04", "-5")]
         self.assertEqual(forecast.build_category_baselines(
             category_ids=("cat-power",), category_names=names, history_months=6, evaluation_date="2026-11-22",
-            expenses=zeros, evidence_categories={}, hints=(), schedules=()), ())
+            expenses=zeros), ())
         result = _forecast(baselines=[_baseline(monthly_amounts=("10", "20"))], months=1)
         self.assertEqual(result["months"][0]["items"], [])
         self.assertEqual(result["deduplications"], [])
@@ -548,23 +556,23 @@ class CategoryBaselineTests(unittest.TestCase):
             ("cat-power", "PLN", "1900-02-10", "20"),
             ("cat-power", "PLN", "1900-03-10", "30"),
         ]
-        phone = _hint("Orange", amount="25", first_date="2026-08-28", last_date="2026-10-28",
-                      evidence=(_occurrence("orange"),))
-        loan = _schedule("loan", amount="40", due_day=15, start_date="2026-01-01")
         built = forecast.build_category_baselines(
             category_ids=["cat-power"], category_names={"cat-power": "Electricity", "cat-rent": "Rent"},
-            history_months=6, evaluation_date="2026-11-22", expenses=expenses,
-            evidence_categories={("source", "orange"): "cat-power"}, hints=[phone], schedules=[loan])
-        self.assertEqual(len(built), 1)
-        self.assertEqual(built[0].monthly_amounts, ("10", "100", "20", "80", "30", "40"))
-        self.assertEqual(built[0].typical_day, 4)
-        self.assertEqual(built[0].current_spend, "15")
-        self.assertEqual(built[0].last_observed_date, "2026-10-15")
-        self.assertEqual(built[0].recurring_keys, frozenset({forecast._hint_identity(phone)}))
-        self.assertEqual(built[0].schedule_ids, frozenset({"loan"}))
+            history_months=6, evaluation_date="2026-11-22", expenses=expenses)
+        eur, pln = built
+        self.assertEqual(pln.monthly_amounts, ("10", "100", "20", "80", "30", "40"))
+        self.assertEqual(pln.typical_day, 4)
+        self.assertEqual(pln.current_spend, "15")
+        self.assertEqual(pln.last_observed_date, "2026-10-15")
+        self.assertEqual(pln.account_ids, frozenset({""}))
+        # The shared account's first row is April, so the EUR series includes the empty months around it.
+        self.assertEqual(eur.currency, "EUR")
+        self.assertEqual(eur.monthly_amounts, ("0", "0", "0", "1", "1", "0"))
+        self.assertEqual(eur.current_spend, "7")
+        self.assertEqual(eur.typical_day, 1)
         clamped = forecast.build_category_baselines(
             category_ids=["cat-power"], category_names={"cat-power": " Archived power "}, history_months=6,
-            evaluation_date="1900-04-15", expenses=early, evidence_categories={}, hints=(), schedules=())
+            evaluation_date="1900-04-15", expenses=early)
         self.assertEqual(clamped[0].monthly_amounts, ("10", "20", "30"))
         self.assertEqual(clamped[0].name, " Archived power ")
 
@@ -593,10 +601,9 @@ class CategoryBaselineTests(unittest.TestCase):
         other_currency = forecast.build_category_baselines(
             category_ids=["cat-power"], category_names={"cat-power": "Electricity"}, history_months=6,
             evaluation_date="2026-11-22",
-            expenses=[("cat-power", "EUR", f"2026-{month:02d}-10", "10") for month in range(5, 11)],
-            evidence_categories=evidence, hints=[phone], schedules=[loan])
-        self.assertEqual(other_currency[0].recurring_keys, frozenset())
-        self.assertEqual(other_currency[0].schedule_ids, frozenset())
+            expenses=[("cat-power", "EUR", f"2026-{month:02d}-10", "10", "eur") for month in range(5, 11)])
+        self.assertEqual(other_currency[0].account_ids, frozenset({"eur"}))
+        self.assertEqual(other_currency[0].monthly_amounts, ("10", "10", "10", "10", "10", "10"))
 
     def test_expenses_use_the_effective_category(self):
         rows = [
@@ -604,22 +611,27 @@ class CategoryBaselineTests(unittest.TestCase):
             _txn("cat-power", "5", "2026-08-03", kind="transfer", reference="transfer"),
             _txn("cat-power", "5", "2026-08-04", kind="income", indicator="CRDT", reference="income"),
             _txn("cat-power", "5", "2026-08-05", kind="refund", reference="refund"),
+            _txn("cat-power", "4.00", "2026-08-09", kind="refund", indicator="CRDT", reference="credit-refund"),
             _txn(None, "5", "2026-08-06", reference="none"),
             _txn("cat-power", "5", None, reference="undated"),
         ]
-        expenses, evidence = forecast.expenses_from_transactions(rows)
-        self.assertEqual(expenses, (("cat-power", "PLN", "2026-08-02", "10.00"),))
+        expenses, refunds, evidence, first_dates = forecast.expenses_from_transactions(rows)
+        self.assertEqual(expenses, (("cat-power", "PLN", "2026-08-02", "10.00", "source"),))
+        self.assertEqual(refunds, (("cat-power", "PLN", "2026-08-09", "4.00", "source"),))
         self.assertEqual(evidence[("source", "kept")], "cat-power")
         self.assertEqual(evidence[("source", "transfer")], "cat-power")
         self.assertEqual(evidence[("source", "none")], None)
         self.assertIn(("source", "undated"), evidence)
+        self.assertEqual(first_dates["source"], "2026-08-02")
         built = forecast.build_category_baselines(
             category_ids=["cat-power"], category_names={"cat-power": "Electricity"}, history_months=6,
             evaluation_date="2026-11-22",
-            expenses=expenses + (("cat-power", "PLN", "2026-09-02", "0.00"), ("cat-power", "PLN", "2026-10-02", "-1"),
-                                 ("cat-power", "PLN", "2026-09-03", "20"), ("cat-power", "PLN", "2026-10-04", "30")),
-            evidence_categories=evidence, hints=(), schedules=())
-        self.assertEqual(built[0].monthly_amounts, ("10", "20", "30"))
+            expenses=expenses + (("cat-power", "PLN", "2026-09-02", "0.00", "source"),
+                                 ("cat-power", "PLN", "2026-10-02", "-1", "source"),
+                                 ("cat-power", "PLN", "2026-09-03", "20", "source"),
+                                 ("cat-power", "PLN", "2026-10-04", "30", "source")),
+            refunds=refunds)
+        self.assertEqual(built[0].monthly_amounts, ("6", "20", "30"))
 
     def test_snapshot_uses_config_and_skips_other_owners(self):
         env = {forecast.FORECAST_CONFIG_ENV: json.dumps(
@@ -629,7 +641,9 @@ class CategoryBaselineTests(unittest.TestCase):
         rows.append(_txn("cat-power", "12", "2026-11-04", reference="now"))
         snapshot = {"owner": "test-owner", "categories": [{"id": "cat-power", "name": "Electricity"}],
                     "transactions": rows}
-        baselines, estimator = forecast.baselines_for_snapshot(snapshot, "2026-11-22", (), (), environ=env)
+        fresh = {"source": (_stamp("2026-11-22"), None)}
+        baselines, estimator = forecast.baselines_for_snapshot(
+            snapshot, "2026-11-22", (), (), account_timestamps=fresh, environ=env)
         self.assertEqual(estimator, "trimmed_mean")
         self.assertEqual(baselines[0].monthly_amounts, ("10", "100", "20", "80", "30", "40"))
         self.assertEqual(baselines[0].current_spend, "12")
@@ -647,11 +661,15 @@ class CategoryBaselineTests(unittest.TestCase):
         ):
             with self.subTest(corrupt=type(corrupt).__name__), self.assertRaisesRegex(
                     forecast.ForecastDataError, "^Invalid forecast data$"):
-                forecast.baselines_for_snapshot(corrupt, "2026-11-22", (), (), environ=env)
-        with self.assertRaisesRegex(BudgetConfigError, "^Invalid forecast configuration$"):
+                forecast.baselines_for_snapshot(corrupt, "2026-11-22", (), (), account_timestamps=fresh, environ=env)
+        with self.assertRaisesRegex(forecast.ForecastDataError, "^Invalid forecast data$"):
+            forecast.baselines_for_snapshot(snapshot, "2026-11-22", (), (), environ=env)
+        with self.assertRaises(BudgetConfigError) as missing_category:
             forecast.baselines_for_snapshot(
                 {"owner": "test-owner", "categories": [{"id": "other", "name": "Other"}], "transactions": []},
-                "2026-11-22", (), (), environ=env)
+                "2026-11-22", (), (), account_timestamps=fresh, environ=env)
+        self.assertNotIsInstance(missing_category.exception, forecast.ForecastConfigConflict)
+        self.assertNotIn("cat-power", str(missing_category.exception))
 
     def test_projected_baseline_uses_typical_day_estimate_and_masks_labels(self):
         result = _forecast(baselines=[_baseline(), _baseline(currency="EUR", category_id="cat-eur", name="Power EU")],
@@ -683,7 +701,7 @@ class CategoryBaselineTests(unittest.TestCase):
         self.assertIn("Grid PL••3456", labels)
         self.assertIn("é" * 255 + "…", labels)
 
-    def test_subtracts_mortgage_then_recurring_and_keeps_deduped_count(self):
+    def test_unconfigured_forecast_keeps_mortgage_dedup_and_omits_baselines(self):
         unchanged = _forecast(schedules=[_schedule("loan")], hints=[_hint("rent")])
         self.assertEqual(unchanged["rule_version"], forecast.RULE_VERSION)
         self.assertEqual(unchanged["summary"]["deduped_recurring_count"], 1)
@@ -692,63 +710,82 @@ class CategoryBaselineTests(unittest.TestCase):
             "last_observed_date", "day_distance", "account_stale",
         })
         self.assertFalse(any(item["source"] == "category_baseline" for month in unchanged["months"] for item in month["items"]))
-
-        loan = _schedule("loan", amount="40", due_day=28)
-        phone = _hint("Orange", amount="25", first_date="2026-08-28", last_date="2026-10-28")
-        baseline = _baseline(monthly_amounts=("100", "100", "100"), current_spend="10", last_observed_date="2026-10-28",
-                             schedule_ids=frozenset({"loan"}), recurring_keys=frozenset({forecast._hint_identity(phone)}))
-        result = _forecast(schedules=[loan], hints=[phone], baselines=[baseline], months=2,
-                           account_timestamps={"source": (None, None)})
-        self.assertEqual(result["summary"]["deduped_recurring_count"], 0)
-        november, december = result["months"]
-        self.assertEqual([(item["source"], item["amount"], item["past_due"], item["account_stale"])
-                          for item in november["items"]], [
-            ("category_baseline", "25", False, False),
-            ("mortgage", "40", False, False),
-            ("recurring", "25", False, True),
+        alongside = _forecast(schedules=[_schedule("loan", amount="40", due_day=28)],
+                              hints=[_hint("Orange", amount="25", first_date="2026-08-28", last_date="2026-10-28")],
+                              baselines=[_baseline(monthly_amounts=("100", "100", "100"), current_spend="10",
+                                                   account_ids=frozenset({"source"}))],
+                              months=1, account_timestamps={"source": (None, None)})
+        self.assertEqual([(item["source"], item["amount"], item["account_stale"])
+                          for item in alongside["months"][0]["items"]], [
+            ("category_baseline", "90", True),
+            ("mortgage", "40", False),
+            ("recurring", "25", True),
         ])
-        self.assertEqual(december["items"][0]["amount"], "35")
-        self.assertEqual(november["currencies"], [
-            {"currency": "PLN", "total": "90", "scheduled_total": "40", "estimated_total": "50"},
-        ])
-        self.assertEqual([(row["schedule_id"], row["amount"], row["account_stale"], row["baseline_category_id"])
-                          for row in result["deduplications"]], [
-            ("cat-power", "25", True, "cat-power"),
-            ("loan", "40", False, "cat-power"),
-            ("cat-power", "25", True, "cat-power"),
-            ("loan", "40", False, "cat-power"),
-        ])
-        self.assertEqual(result["deduplications"][0]["recurring_label"], "Orange")
-        self.assertEqual(result["deduplications"][1]["recurring_label"], "Electricity")
-        self.assertEqual(result["deduplications"][0]["day_distance"], 0)
+        self.assertEqual(alongside["deduplications"], [])
+        self.assertEqual(alongside["summary"]["deduped_recurring_count"], 0)
 
-        covered = _baseline(monthly_amounts=("50", "50", "50"), schedule_ids=frozenset({"loan"}),
-                            recurring_keys=frozenset({forecast._hint_identity(phone)}))
-        exhausted = _forecast(schedules=[loan], hints=[phone], baselines=[covered], months=1)
-        self.assertEqual([item["source"] for item in exhausted["months"][0]["items"]], ["mortgage", "recurring"])
-        self.assertEqual({(row["schedule_id"], row["amount"]) for row in exhausted["deduplications"]},
-                         {("loan", "40"), ("cat-power", "10")})
-        self.assertEqual(exhausted["summary"]["deduped_recurring_count"], 0)
+    def test_zero_months_inside_coverage_and_refunds_set_the_net(self):
+        expenses = [
+            ("cat-power", "PLN", "2026-05-02", "100", "home"),
+            ("cat-power", "PLN", "2026-07-02", "100", "home"),
+            ("cat-power", "PLN", "2026-09-02", "100", "home"),
+        ]
+        refunds = [("cat-power", "PLN", "2026-09-03", "40", "home")]
+        built = forecast.build_category_baselines(
+            category_ids=["cat-power"], category_names={"cat-power": "Electricity"}, history_months=6,
+            evaluation_date="2026-11-22", expenses=expenses, refunds=refunds,
+            account_first_dates={"home": "2026-05-01"})
+        self.assertEqual(built[0].monthly_amounts, ("100", "0", "100", "0", "60", "0"))
+        self.assertEqual(forecast._median_money(built[0].monthly_amounts), "30")
+        self.assertEqual(built[0].account_ids, frozenset({"home"}))
 
-        full = _forecast(schedules=[loan], baselines=[_baseline(monthly_amounts=("30", "30", "30"),
-                                                                schedule_ids=frozenset({"loan"}))], months=1)
-        self.assertEqual([item["source"] for item in full["months"][0]["items"]], ["mortgage"])
-        self.assertEqual(full["deduplications"][0]["amount"], "30")
-        self.assertEqual(full["summary"]["deduped_recurring_count"], 0)
+    def test_configured_category_conflicts_with_an_active_hint_or_enabled_mortgage(self):
+        env = {forecast.FORECAST_CONFIG_ENV: json.dumps({"test-owner": {"category_ids": ["cat-power"]}})}
+        fresh = {"source": (_stamp("2026-11-22"), None)}
+        rows = [_txn("cat-power", "40", f"2026-{month:02d}-15", reference=f"m{month}") for month in range(5, 11)]
+        snapshot = {"owner": "test-owner", "categories": [{"id": "cat-power", "name": "Electricity"},
+                                                          {"id": "cat-rent", "name": "Rent"}],
+                    "transactions": rows}
 
-        alongside = _forecast(schedules=[_schedule("matched", amount="100"), _schedule("other", amount="40", due_day=28)],
-                              hints=[_hint("rent", amount="100")],
-                              baselines=[_baseline(monthly_amounts=("80", "80", "80"), schedule_ids=frozenset({"other"}))],
-                              months=1)
-        self.assertEqual(alongside["summary"]["deduped_recurring_count"], 1)
-        self.assertEqual(sum("baseline_category_id" in row for row in alongside["deduplications"]), 1)
-        self.assertEqual(sum(row.get("baseline_category_id") == "cat-power" for row in alongside["deduplications"]), 1)
-        missed = _forecast(hints=[_hint("Orange", last_date="2026-10-28")],
-                           schedules=[_schedule("eur", currency="EUR")],
-                           baselines=[_baseline(monthly_amounts=("10", "10", "10"))], months=1)
-        self.assertEqual({item["source"] for month in missed["months"] for item in month["items"]},
-                         {"category_baseline", "recurring", "mortgage"})
-        self.assertEqual(missed["deduplications"], [])
+        def load(extra_rows=(), hints=(), schedules=(), timestamps=None):
+            body = dict(snapshot)
+            body["transactions"] = rows + list(extra_rows)
+            return forecast.baselines_for_snapshot(
+                body, "2026-11-22", hints, schedules, account_timestamps=fresh if timestamps is None else timestamps,
+                environ=env)
+
+        phone = _hint("Orange", amount="25", first_date="2026-08-20", last_date="2026-10-20",
+                      evidence=(_occurrence("orange", "2026-10-20"),))
+        with self.assertRaises(forecast.ForecastConfigConflict) as hinted:
+            load([_txn("cat-power", "25", "2026-10-20", reference="orange")], hints=[phone])
+        self.assertEqual(hinted.exception.code, "budget_forecast_config_conflict")
+        self.assertNotIn("cat-power", str(hinted.exception))
+        self.assertNotIn("Orange", str(hinted.exception))
+        self.assertNotIn("25", str(hinted.exception))
+
+        loan = _schedule("loan", amount="40", due_day=15, start_date="2026-01-01")
+        with self.assertRaises(forecast.ForecastConfigConflict) as scheduled:
+            load(schedules=[loan])
+        self.assertEqual(scheduled.exception.code, "budget_forecast_config_conflict")
+        self.assertNotIn("loan", str(scheduled.exception))
+
+        lapsed = replace(phone, last_date="2026-09-01", first_date="2026-07-01")
+        orange = [_txn("cat-power", "25", "2026-10-20", reference="orange")]
+        self.assertTrue(load(orange, hints=[lapsed]))
+        with self.assertRaises(forecast.ForecastConfigConflict):
+            load(orange, hints=[lapsed], timestamps={"source": (None, None)})
+        mixed = _hint("Orange", evidence=(_occurrence("a"), _occurrence("b")))
+        quiet = load([
+            _txn("cat-power", "25", "2026-10-20", reference="a"),
+            _txn("cat-rent", "25", "2026-10-21", reference="b"),
+        ], hints=[mixed])
+        self.assertEqual(quiet[0][0].category_id, "cat-power")
+        self.assertTrue(load(schedules=[replace(loan, enabled=False)]))
+        self.assertTrue(load(schedules=[loan], extra_rows=[_txn("cat-rent", "40", "2026-10-16", reference="rent")]))
+        self.assertTrue(load(schedules=[replace(loan, currency="EUR")]))
+        # The conflict does not depend on a later currency filter: a PLN mortgage still rejects the category.
+        with self.assertRaises(forecast.ForecastConfigConflict):
+            load(schedules=[loan])
 
     def test_current_month_remaining_floors_at_zero(self):
         for spend, november in (("40", "60"), ("100", None), ("150", None)):
@@ -760,15 +797,22 @@ class CategoryBaselineTests(unittest.TestCase):
                 self.assertEqual(result["months"][1]["items"][0]["amount"], "100")
                 self.assertEqual(result["deduplications"], [])
         zero = _forecast(schedules=[_schedule("loan", amount="40")],
-                         baselines=[_baseline(monthly_amounts=("0", "0", "0"), schedule_ids=frozenset({"loan"}))],
-                         months=1)
+                         baselines=[_baseline(monthly_amounts=("0", "0", "0"))], months=1)
         self.assertEqual([item["source"] for item in zero["months"][0]["items"]], ["mortgage"])
         self.assertEqual(zero["deduplications"], [])
+        negative = _forecast(baselines=[_baseline(monthly_amounts=("100", "100", "100"), current_spend="-5")], months=1)
+        self.assertEqual(negative["months"][0]["items"][0]["amount"], "100")
+        stale = _forecast(baselines=[_baseline(monthly_amounts=("10", "10", "10"), account_ids=frozenset({"source"}))],
+                          account_timestamps={"source": (None, None)}, months=1)
+        self.assertTrue(stale["months"][0]["items"][0]["account_stale"])
+        fresh = _forecast(baselines=[_baseline(monthly_amounts=("10", "10", "10"), account_ids=frozenset({"source"}))],
+                          months=1)
+        self.assertFalse(fresh["months"][0]["items"][0]["account_stale"])
 
     def test_baseline_inputs_and_limits_fail_closed(self):
         names = {"cat-power": "Electricity"}
         base = dict(category_ids=["cat-power"], category_names=names, history_months=6,
-                    evaluation_date="2026-11-22", expenses=[], evidence_categories={}, hints=(), schedules=())
+                    evaluation_date="2026-11-22", expenses=[])
         for overrides in (
             {"category_ids": "cat-power"},
             {"category_names": []},
@@ -789,13 +833,12 @@ class CategoryBaselineTests(unittest.TestCase):
             {"expenses": [("cat-power", "pln", "2026-08-01", "10")]},
             {"expenses": [("cat-power", "PLN", "2026-02-31", "10")]},
             {"expenses": [("cat-power", "PLN", "2026-08-01", "nope")]},
+            {"refunds": "nope"},
+            {"refunds": [("cat-power", "PLN", "2026-08-01")]},
+            {"account_first_dates": []},
+            {"account_first_dates": {1: "2026-08-01"}},
+            {"account_first_dates": {"source": "2026-02-31"}},
             {"evaluation_date": "2026-11-22T00:00:00"},
-            {"hints": "nope"},
-            {"hints": [object()]},
-            {"evidence_categories": []},
-            {"schedules": "nope"},
-            {"schedules": [object()]},
-            {"schedules": [_schedule("loan", amount="nope", due_day=0)]},
         ):
             with self.subTest(overrides=list(overrides)), self.assertRaisesRegex(
                     forecast.ForecastDataError, "^Invalid forecast data$"):
@@ -811,10 +854,34 @@ class CategoryBaselineTests(unittest.TestCase):
         with self.assertRaisesRegex(forecast.ForecastDataError, "^Invalid forecast data$"):
             forecast._schedule_categories([_schedule("loan", due_day=0)], [("cat-power", "PLN", "2026-10-15", "100", 15)],
                                           {"cat-power"})
+        fresh = {"source": (_stamp("2026-11-22"), None)}
+        conflict = dict(category_ids=["cat-power"], hints=(), schedules=(), expenses=[], evidence_categories={},
+                        evaluation_date="2026-11-22", account_timestamps=fresh)
+        for overrides in (
+            {"hints": "nope"},
+            {"hints": [object()]},
+            {"hints": [_hint("Orange", last_date="not-a-date")]},
+            {"hints": [replace(_hint("Orange"), account_ids=None)]},
+            {"evidence_categories": []},
+            {"expenses": "nope"},
+            {"schedules": "nope"},
+            {"schedules": [object()]},
+            {"schedules": [_schedule("loan", amount="nope", due_day=0)]},
+            {"account_timestamps": []},
+            {"account_timestamps": {"source": ("bad", None)}},
+            {"evaluation_date": "bad"},
+        ):
+            with self.subTest(conflict=list(overrides)), self.assertRaisesRegex(
+                    forecast.ForecastDataError, "^Invalid forecast data$"):
+                forecast._reject_baseline_conflicts(**(conflict | overrides))
         three = [("cat-power", "PLN", f"2026-{month:02d}-01", "10") for month in (8, 9, 10)]
-        with patch.object(forecast, "MAX_BASELINE_SERIES", 0), self.assertRaisesRegex(
+        pln = _baseline(monthly_amounts=("10", "10", "10"))
+        eur = _baseline(currency="EUR", category_id="cat-eur", name="Power EU", monthly_amounts=("10", "10", "10"))
+        with patch.object(forecast, "MAX_BASELINE_SERIES", 1), self.assertRaisesRegex(
                 forecast.ForecastLimitError, "^Forecast limit exceeded$"):
-            forecast.build_category_baselines(**(base | {"expenses": three}))
+            _forecast(baselines=[pln, eur], months=1)
+        filtered = _forecast(baselines=[pln, eur], currency="EUR", months=1)
+        self.assertEqual([item["currency"] for item in filtered["months"][0]["items"]], ["EUR"])
         with patch.object(forecast, "MAX_ROWS", 1), self.assertRaisesRegex(
                 forecast.ForecastLimitError, "^Forecast limit exceeded$"):
             forecast.build_category_baselines(**(base | {"expenses": three[:2]}))
@@ -833,24 +900,20 @@ class CategoryBaselineTests(unittest.TestCase):
             {"baselines": "nope"},
             {"baselines": [object()]},
             {"baselines": [_baseline()], "baseline_estimator": "mode"},
+            {"baselines": [_baseline()], "baseline_estimator": ["median"]},
             {"baselines": [_baseline(name=None)]},
             {"baselines": [_baseline(currency="pln")]},
             {"baselines": [_baseline(typical_day=0)]},
             {"baselines": [_baseline(typical_day=True)]},
             {"baselines": [_baseline(typical_day=32)]},
-            {"baselines": [_baseline(current_spend="-1")]},
+            {"baselines": [_baseline(account_ids={"source"})]},
             {"baselines": [_baseline(current_spend="nope")]},
         ):
             with self.subTest(overrides=list(overrides)), self.assertRaisesRegex(
                     forecast.ForecastDataError, "^Invalid forecast data$"):
                 _forecast(**overrides)
         self.assertEqual(_forecast(baseline_estimator="mode")["months"][0]["items"], [])
-        item = {"source": "recurring", "currency": "PLN", "amount": "10", "label": "Orange",
-                "expected_date": "2026-11-28", "schedule_id": None, "account_stale": False}
-        with self.assertRaisesRegex(forecast.ForecastDataError, "^Invalid forecast data$"):
-            forecast._projected_hint_key(item, "bad")
-        with self.assertRaisesRegex(forecast.ForecastDataError, "^Invalid forecast data$"):
-            forecast._apply_category_baselines([[(item, ("only", "three"))]], ["2026-11"], [_baseline()], "median", "2026-11")
+        self.assertEqual(_forecast(baseline_estimator=["median"])["months"][0]["items"], [])
         with patch.object(forecast, "MAX_FORECAST_ITEMS", 1), self.assertRaisesRegex(
                 forecast.ForecastLimitError, "^Forecast limit exceeded$"):
             _forecast(schedules=[_schedule("loan")], baselines=[_baseline(monthly_amounts=("10", "10", "10"))], months=1)

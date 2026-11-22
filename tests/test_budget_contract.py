@@ -249,6 +249,8 @@ class BudgetOpenApiTests(unittest.TestCase):
             "500": "Stored mortgage schedule, ledger, or metadata integrity check failed (`budget_analytics_data_error`), "
                    "including stored-data helper errors mapped to 500 after forecast query validation, or unexpected "
                    "internal failure (`budget_internal_error`).",
+            "503": "Analytics storage or budget configuration unavailable (`budget_analytics_unavailable`, "
+                   "`budget_unavailable`, or `budget_forecast_config_conflict`).",
         }.items():
             with self.subTest(code=code):
                 self.assertEqual(responses[code]["description"], description)

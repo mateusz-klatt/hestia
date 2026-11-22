@@ -473,13 +473,28 @@ inputs return HTTP `500` (`budget_analytics_data_error`). The read writes no dat
 makes no bank requests.
 
 Optional `HESTIA_BUDGET_FORECAST_CONFIG` (server-only JSON, 16 KiB, default empty) names
-categories whose irregular bills should be estimated. For each category the forecast adds
-one `category_baseline` item per month (`confidence: estimated`, label is the category
-name). The amount is the median, or a trimmed mean, of positive expense totals over the
-last `history_months` complete months (default 6, at least 3 months with expenses). The
-current month subtracts expenses already booked. Recurring hints and mortgage schedules
-that belong to the category are subtracted and listed in `deduplications` with
-`baseline_category_id`. Invalid configuration returns HTTP `503` (`budget_unavailable`).
+categories whose irregular bills should be estimated. For each category and currency the
+forecast adds one `category_baseline` item per month (`confidence: estimated`, label is the
+category name). The amount is the median, or a trimmed mean, of net spending (expenses minus
+refunds) over the last `history_months` complete months (default 6, at least 3). `estimator`
+must be a string (`median` or `trimmed_mean`). Months inside an account's coverage window
+count even when nothing was spent, so a bill paid every other month is not treated as a
+monthly bill. Coverage for an account runs from its earliest dated snapshot row through the
+month before evaluation, clipped to that history window. A history month counts for a
+category when any account that posted that category in that currency covers it. Months before
+the account's first dated row are omitted. The current month subtracts net spending already
+booked, floored at zero. An estimate that is not positive is omitted.
+
+Hints and mortgages have no category column. A configured category conflicts when an active
+recurring hint has evidence that all falls in that category, or an enabled mortgage has
+exactly one category among same-currency debits of the instalment amount within five days of
+that month's due date. Stale hints stay active. Lapsed hints and disabled schedules do not
+conflict. Empty, missing, or mixed evidence does not conflict, and a mortgage that matches
+zero or several categories does not conflict. Those ambiguous matches are left in place and
+are not subtracted. The forecast does not subtract mortgage or recurring items from a
+baseline. A conflict returns HTTP `503` (`budget_forecast_config_conflict`) and does not
+depend on the request currency. Other invalid configuration, including a non-string
+estimator, returns HTTP `503` (`budget_unavailable`).
 
 ```json
 {"owner": {"category_ids": ["electricity", "mobile"], "history_months": 6, "estimator": "median"}}

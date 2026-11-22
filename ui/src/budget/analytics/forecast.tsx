@@ -47,6 +47,7 @@ const forecastLabels = {
     accountStale: "Account not up to date",
     merged: "Merged with instalment",
     matchedDue: (date: string) => `Instalment due ${date}`,
+    countedOn: (date: string) => `Counted on ${date}`,
     lastObserved: (date: string) => `Last observed ${date}`,
   },
   pl: {
@@ -87,6 +88,7 @@ const forecastLabels = {
     accountStale: "Konto nieaktualne",
     merged: "Połączono z ratą",
     matchedDue: (date: string) => `Termin raty: ${date}`,
+    countedOn: (date: string) => `Uwzględniono ${date}`,
     lastObserved: (date: string) => `Ostatnia obserwacja: ${date}`,
   },
 };
@@ -362,14 +364,14 @@ export function ForecastView({ api, accounts, connections = [], locale, revision
             <details className="budget-recurring-evidence">
               <summary>{text.estimateAdjustments}</summary>
               <ul className="budget-entry-list">
-                {data.deduplications.filter((item) => baselineCategoryId(item) !== null).map((item) => (
-                  <li key={`${baselineCategoryId(item) ?? ""}/${item.schedule_id}/${item.matched_due_date}/${item.recurring_label}`} className="budget-entry">
+                {data.deduplications.filter((item) => baselineCategoryId(item) !== null).map((item, index) => (
+                  <li key={`${baselineCategoryId(item) ?? ""}/${item.schedule_id}/${item.matched_due_date}/${item.recurring_label}/${item.amount}/${String(index)}`} className="budget-entry">
                     <div className="budget-recurring-main">
-                      <span className="budget-entry-text">{item.recurring_label} → {item.schedule_label}</span>
+                      <span className="budget-entry-text">{item.recurring_label} · {item.schedule_label}</span>
                       <strong className="budget-recurring-amount">{formatAmount(item.amount, item.currency, locale)}</strong>
                     </div>
                     <div className="budget-entry-facts">
-                      <span>{text.matchedDue(item.matched_due_date)}</span>
+                      <span>{text.countedOn(item.matched_due_date)}</span>
                       <span className="budget-chip">{text.confidence.estimated}</span>
                     </div>
                   </li>

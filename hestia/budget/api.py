@@ -204,7 +204,7 @@ def _failure(exc, operation):
     if isinstance(exc, (BudgetStoreError, ValidationError)):
         return _error(400, "budget_invalid_request")
     if isinstance(exc, BudgetConfigError):
-        return _error(503, "budget_unavailable")
+        return _error(503, getattr(exc, "code", "budget_unavailable"))
     log.error("Budget API operation=%s exception=%s", operation, type(exc).__name__)
     return _error(500, "budget_internal_error")
 

@@ -71,6 +71,10 @@ class OpenApiArtifactTests(unittest.TestCase):
             ">200 active currency-filtered hints, >3,600 projected items, or >4 MiB UTF-8 JSON payload); "
             "zero partial totals returned."
         )
+        forecast_get["responses"]["503"]["description"] = (
+            "Analytics storage or budget configuration unavailable (`budget_analytics_unavailable` or "
+            "`budget_unavailable`)."
+        )
         item_properties = document["components"]["schemas"]["BudgetAnalyticsForecastItem"]["properties"]
         item_properties["source"]["enum"] = ["mortgage", "recurring"]
         item_properties["confidence"]["enum"] = ["scheduled", "high", "medium"]

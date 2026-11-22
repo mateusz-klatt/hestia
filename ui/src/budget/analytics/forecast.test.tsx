@@ -215,6 +215,9 @@ describe("ForecastView", () => {
     expect(adjustmentDetails.open).toBe(true);
     expect(adjustmentDetails.textContent).toContain("Orange");
     expect(adjustmentDetails.textContent).toContain("Electricity");
+    expect(adjustmentDetails.textContent).not.toContain("→");
+    expect(adjustmentDetails.textContent).toContain(locale === "pl-PL" ? "Uwzględniono 2026-11-28" : "Counted on 2026-11-28");
+    expect(adjustmentDetails.textContent).not.toContain(locale === "pl-PL" ? "Termin raty" : "Instalment due");
     expect(adjustmentDetails.querySelector(".budget-chip")?.textContent).toBe(badge);
   });
 

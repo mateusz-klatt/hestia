@@ -954,7 +954,7 @@ class BudgetAnalyticsViews(BudgetAnalyticsStore):
                 schedule_models = _mortgage_models(owner, schedules)
                 hints = _snapshot_recurring(snapshot)
                 baselines, estimator = forecast_mod.baselines_for_snapshot(
-                    snapshot, evaluation_date, hints, schedule_models)
+                    snapshot, evaluation_date, hints, schedule_models, account_timestamps=account_timestamps)
                 return forecast_mod.evaluate_forecast(
                     owner=owner, evaluation_date=evaluation_date, months=months, currency=currency,
                     account_timestamps=account_timestamps, excluded_accounts=snapshot["counts"]["excluded_accounts"],

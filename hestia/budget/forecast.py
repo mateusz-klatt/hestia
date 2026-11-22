@@ -73,6 +73,18 @@ class ForecastLimitError(ValueError):
         super().__init__("Forecast limit exceeded")
 
 
+class ForecastConfigConflict(BudgetConfigError):
+    """A configured category is already represented by an active hint or an enabled mortgage.
+
+    The message stays generic. Callers map ``code`` to HTTP 503.
+    """
+
+    code = "budget_forecast_config_conflict"
+
+    def __init__(self):
+        super().__init__(_CONFIG_ERROR)
+
+
 @dataclass(frozen=True, repr=False)
 class ForecastBaselineSettings:
     category_ids: tuple[str, ...]
@@ -82,7 +94,7 @@ class ForecastBaselineSettings:
 
 @dataclass(frozen=True, repr=False)
 class CategoryBaseline:
-    """One category and currency, already limited to complete months that had expenses."""
+    """One category and currency over complete months inside the account coverage window."""
 
     category_id: str
     name: str
@@ -90,8 +102,7 @@ class CategoryBaseline:
     monthly_amounts: tuple[str, ...]
     typical_day: int
     current_spend: str
-    recurring_keys: frozenset[tuple[str, str, str, str, str, str]]
-    schedule_ids: frozenset[str]
+    account_ids: frozenset[str]
     last_observed_date: str
 
 
@@ -143,7 +154,7 @@ def _parse_forecast_config_text(raw: str) -> Mapping[str, ForecastBaselineSettin
         if type(history_months) is not int or not MIN_BASELINE_MONTHS <= history_months <= MAX_BASELINE_HISTORY_MONTHS:
             raise BudgetConfigError(_CONFIG_ERROR)
         estimator = entry.get("estimator", "median")
-        if estimator not in _BASELINE_ESTIMATORS:
+        if not isinstance(estimator, str) or estimator not in _BASELINE_ESTIMATORS:
             raise BudgetConfigError(_CONFIG_ERROR)
         raw_ids = entry["category_ids"]
         if not isinstance(raw_ids, list) or not raw_ids or len(raw_ids) > MAX_BASELINE_CATEGORIES:
@@ -180,26 +191,30 @@ def _parts(value):
 
 
 def _mean_money(values):
-    """Exact mean. Non-terminating quotients round half away from zero after 7 extra digits."""
+    """Exact mean. Non-terminating quotients round half away from zero after 7 extra digits.
+
+    Negative totals use the same division on the absolute value, then restore the sign.
+    """
     if not values:
         raise ForecastDataError()
     total, scale = 0, 0
     for value in values:
         coefficient, current = _parts(value)
-        if coefficient < 0:
-            raise ForecastDataError()
         if current > scale:
             total *= 10 ** (current - scale)
             scale = current
         total += coefficient * 10 ** (scale - current)
     divisor = len(values)
-    coefficient, extra = total, 0
+    negative = total < 0
+    coefficient, extra = abs(total), 0
     while coefficient % divisor and extra < _MEAN_EXTRA_DIGITS:
         coefficient *= 10
         extra += 1
     quotient, remainder = divmod(coefficient, divisor)
     if remainder * 2 >= divisor:
         quotient += 1
+    if negative:
+        quotient = -quotient
     return core._format(quotient, scale + extra)
 
 
@@ -275,12 +290,16 @@ def _evidence_key(item):
 
 
 def expenses_from_transactions(transactions):
-    """Eligible snapshot rows → expense tuples and evidence categories, including rule results."""
+    """Snapshot rows → expense tuples, refund tuples, evidence categories and each account's first date.
+
+    Refunds are credits (``CRDT``), matching analytics net spending. Any dated row sets the account's
+    coverage start, including income and transfers. Evidence is recorded for every row.
+    """
     if not isinstance(transactions, Sequence) or isinstance(transactions, (str, bytes)):
         raise ForecastDataError()
     if len(transactions) > MAX_ROWS:
         raise ForecastLimitError()
-    expenses, evidence = [], {}
+    expenses, refunds, evidence, first_dates = [], [], {}, {}
     for row in transactions:
         if not isinstance(row, Mapping):
             raise ForecastDataError()
@@ -293,22 +312,39 @@ def expenses_from_transactions(transactions):
         if category_id is not None and not isinstance(category_id, str):
             raise ForecastDataError()
         evidence[(account_id, entry_reference)] = category_id
-        if effective.get("kind") != "expense" or payload.get("credit_debit_indicator") != "DBIT" or category_id is None:
-            continue
         try:
             iso = core.effective_date(payload)
         except AnalyticsError:
             raise ForecastDataError() from None
-        if iso is None:
+        if iso is not None:
+            previous = first_dates.get(account_id)
+            if previous is None or iso < previous:
+                first_dates[account_id] = iso
+        if iso is None or category_id is None:
             continue
-        expenses.append((category_id, payload.get("currency"), iso, payload.get("amount")))
-    return tuple(expenses), evidence
+        kind = effective.get("kind")
+        indicator = payload.get("credit_debit_indicator")
+        if kind == "expense" and indicator == "DBIT":
+            expenses.append((category_id, payload.get("currency"), iso, payload.get("amount"), account_id))
+        elif kind == "refund" and indicator == "CRDT":
+            refunds.append((category_id, payload.get("currency"), iso, payload.get("amount"), account_id))
+    return tuple(expenses), tuple(refunds), evidence, first_dates
 
 
-def _normalize_expense(category_id, currency, iso_date, amount):
+def _unpack_flow(item):
+    if not isinstance(item, tuple) or len(item) not in (4, 5):
+        raise ForecastDataError()
+    if len(item) == 4:
+        return (*item, "")
+    return item
+
+
+def _normalize_flow(category_id, currency, iso_date, amount, account_id):
     if not isinstance(category_id, str) or not category_id or len(category_id) > 128 or _CONTROL_RE.search(category_id):
         raise ForecastDataError()
     if not isinstance(currency, str) or not _CURRENCY_RE.fullmatch(currency):
+        raise ForecastDataError()
+    if not isinstance(account_id, str) or len(account_id) > 128 or (account_id and _CONTROL_RE.search(account_id)):
         raise ForecastDataError()
     parsed = _iso_day(iso_date)
     try:
@@ -317,7 +353,14 @@ def _normalize_expense(category_id, currency, iso_date, amount):
         raise ForecastDataError() from None
     if compare_money(canonical, "0") <= 0:
         return None
-    return category_id, currency, iso_date, canonical, parsed.day
+    return category_id, currency, iso_date, canonical, parsed.day, account_id
+
+
+def _net_money(expenses, refunds):
+    total = sum_money(expenses) if expenses else "0"
+    if refunds:
+        total = sum_money((total, negate_money(sum_money(refunds))))
+    return total
 
 
 def _hint_categories(hints, evidence_categories, allowed):
@@ -379,12 +422,39 @@ def _schedule_categories(schedules, expenses, allowed):
     return assigned
 
 
+def _account_start(account_id, flow_first, account_first_dates):
+    candidates = []
+    for source in (flow_first, account_first_dates):
+        value = source.get(account_id)
+        if value is not None:
+            candidates.append(value)
+    return min(candidates) if candidates else None
+
+
+def _covered_months(accounts, flow_first, account_first_dates, history):
+    """History months from each contributing account's first dated row through the month before evaluation."""
+    covered = []
+    for month in history:
+        for account_id in accounts:
+            start = _account_start(account_id, flow_first, account_first_dates)
+            if start is not None and start[:7] <= month:
+                covered.append(month)
+                break
+    return covered
+
+
 def build_category_baselines(*, category_ids: Sequence[str], category_names: Mapping[str, str], history_months: int,
-                             evaluation_date: str, expenses: Sequence[tuple],
-                             evidence_categories: Mapping[tuple[str, str], str | None],
-                             hints: Sequence[RecurringHint], schedules: Sequence[MortgageSchedule],
+                             evaluation_date: str, expenses: Sequence[tuple], refunds: Sequence[tuple] = (),
+                             account_first_dates: Mapping[str, str] | None = None,
                              ) -> tuple[CategoryBaseline, ...]:
-    """Aggregate configured categories over the last ``history_months`` complete months."""
+    """Aggregate configured categories over the last ``history_months`` complete months.
+
+    A month inside an account's coverage window counts as zero when that account posted no net in it.
+    Coverage starts at the account's earliest dated row and runs through the month before evaluation,
+    clipped to the history window. Net spending is expenses minus refunds and may be negative.
+    Months before the account's first dated row are omitted. The series cap is applied later, after
+    the request currency filter.
+    """
     if (not isinstance(category_ids, Sequence) or isinstance(category_ids, (str, bytes))
             or not isinstance(category_names, Mapping)
             or type(history_months) is not int
@@ -403,60 +473,135 @@ def build_category_baselines(*, category_ids: Sequence[str], category_names: Map
             raise ForecastDataError()
         allowed.add(category_id)
         names[category_id] = name
-    if not isinstance(expenses, Sequence) or isinstance(expenses, (str, bytes)):
+    if (not isinstance(expenses, Sequence) or isinstance(expenses, (str, bytes))
+            or not isinstance(refunds, Sequence) or isinstance(refunds, (str, bytes))):
         raise ForecastDataError()
-    if len(expenses) > MAX_ROWS:
+    if len(expenses) > MAX_ROWS or len(refunds) > MAX_ROWS or len(expenses) + len(refunds) > MAX_ROWS:
         raise ForecastLimitError()
-    normalized = []
-    for item in expenses:
-        if not isinstance(item, tuple) or len(item) != 4:
-            raise ForecastDataError()
-        expense = _normalize_expense(*item)
-        if expense is not None:
-            normalized.append(expense)
-    history = set(_previous_months(evaluation, history_months))
+    if account_first_dates is None:
+        explicit_first = {}
+    elif not isinstance(account_first_dates, Mapping):
+        raise ForecastDataError()
+    else:
+        explicit_first = {}
+        for account_id, iso in account_first_dates.items():
+            if not isinstance(account_id, str):
+                raise ForecastDataError()
+            explicit_first[account_id] = _iso_day(iso).isoformat()
+    history = _previous_months(evaluation, history_months)
+    history_set = set(history)
     evaluation_month = evaluation_date[:7]
-    by_month = defaultdict(lambda: defaultdict(list))
-    current = defaultdict(list)
-    for category_id, currency, iso_date, amount, day in normalized:
-        if category_id not in allowed:
-            continue
-        month = iso_date[:7]
-        if month == evaluation_month:
-            current[(category_id, currency)].append(amount)
-        elif month in history:
-            by_month[(category_id, currency)][month].append((amount, day, iso_date))
-    hint_categories = _hint_categories(hints, evidence_categories, allowed)
-    schedule_categories = _schedule_categories(schedules, normalized, allowed)
+    by_month = defaultdict(lambda: defaultdict(lambda: {"expense": [], "refund": [], "days": [], "dates": []}))
+    current = defaultdict(lambda: {"expense": [], "refund": []})
+    series_accounts = defaultdict(set)
+    flow_first = {}
+
+    def _scan(items, kind):
+        for item in items:
+            normalized = _normalize_flow(*_unpack_flow(item))
+            if normalized is None:
+                continue
+            category_id, currency, iso_date, amount, day, account_id = normalized
+            previous = flow_first.get(account_id)
+            if previous is None or iso_date < previous:
+                flow_first[account_id] = iso_date
+            if category_id not in allowed:
+                continue
+            key = (category_id, currency)
+            series_accounts[key].add(account_id)
+            month = iso_date[:7]
+            if month == evaluation_month:
+                current[key][kind].append(amount)
+            elif month in history_set:
+                bucket = by_month[key][month]
+                bucket[kind].append(amount)
+                if kind == "expense":
+                    bucket["days"].append(day)
+                bucket["dates"].append(iso_date)
+
+    _scan(expenses, "expense")
+    _scan(refunds, "refund")
     baselines = []
-    for (category_id, currency), months in sorted(by_month.items()):
-        positive, days, observed = [], [], []
-        for month in sorted(months):
-            rows = months[month]
-            positive.append(sum_money(amount for amount, _day, _iso in rows))
-            days.extend(day for _amount, day, _iso in rows)
-            observed.extend(iso for _amount, _day, iso in rows)
-        if len(positive) < MIN_BASELINE_MONTHS:
+    for category_id, currency in sorted(series_accounts):
+        key = (category_id, currency)
+        covered = _covered_months(series_accounts[key], flow_first, explicit_first, history)
+        if len(covered) < MIN_BASELINE_MONTHS:
             continue
-        recurring_keys = frozenset(key for key, owner_category in hint_categories.items()
-                                   if owner_category == category_id and key[0] == currency)
-        schedule_ids = frozenset(
-            schedule_id for schedule_id, (owner_category, schedule_currency) in schedule_categories.items()
-            if owner_category == category_id and schedule_currency == currency)
+        amounts, days, observed = [], [], []
+        months = by_month[key]
+        for month in covered:
+            bucket = months.get(month)
+            if bucket is None:
+                amounts.append("0")
+                continue
+            amounts.append(_net_money(bucket["expense"], bucket["refund"]))
+            days.extend(bucket["days"])
+            observed.extend(bucket["dates"])
+        if not days:
+            continue
+        spent = current[key]
         baselines.append(CategoryBaseline(
             category_id=category_id, name=names[category_id], currency=currency,
-            monthly_amounts=tuple(positive), typical_day=sorted(days)[(len(days) - 1) // 2],
-            current_spend=sum_money(current[(category_id, currency)]) if current[(category_id, currency)] else "0",
-            recurring_keys=recurring_keys, schedule_ids=schedule_ids,
+            monthly_amounts=tuple(amounts), typical_day=sorted(days)[(len(days) - 1) // 2],
+            current_spend=_net_money(spent["expense"], spent["refund"]),
+            account_ids=frozenset(series_accounts[key]),
             last_observed_date=max(observed),
         ))
-    if len(baselines) > MAX_BASELINE_SERIES:
-        raise ForecastLimitError()
     return tuple(baselines)
 
 
-def baselines_for_snapshot(snapshot, evaluation_date, hints, schedules, *, environ=None):
-    """Return ``(baselines, estimator)``. Missing config yields no baselines."""
+def _reject_baseline_conflicts(*, category_ids, hints, schedules, expenses, evidence_categories,
+                               evaluation_date, account_timestamps):
+    """Reject a configured category that an active hint or an enabled mortgage already represents.
+
+    Hints and mortgages have no category column. A hint conflicts when it is active and every evidence
+    row maps to the same configured category. A mortgage conflicts when it is enabled and exactly one
+    category, among same-currency expenses of the instalment amount within five days of that month's
+    due date, is configured. Empty, missing, or mixed evidence does not conflict. A mortgage that
+    matches zero or several categories does not conflict. Stale hints stay active. Lapsed hints and
+    disabled schedules do not conflict. Ambiguous matches are left in place and are not subtracted.
+    The check ignores the request currency.
+    """
+    if not isinstance(account_timestamps, Mapping):
+        raise ForecastDataError()
+    evaluation = _iso_day(evaluation_date)
+    _latest, stale_accounts = _freshness(account_timestamps, evaluation)
+    if (not isinstance(hints, Sequence) or isinstance(hints, (str, bytes))
+            or not isinstance(evidence_categories, Mapping)):
+        raise ForecastDataError()
+    active = []
+    for hint in hints:
+        if not isinstance(hint, RecurringHint):
+            raise ForecastDataError()
+        try:
+            last_date = date.fromisoformat(hint.last_date)
+            stale = any(account in stale_accounts for account in hint.account_ids)
+        except (ValueError, TypeError):
+            raise ForecastDataError() from None
+        if not stale and (evaluation - last_date).days > LAPSED_AFTER_DAYS:
+            continue
+        active.append(hint)
+    allowed = set(category_ids)
+    if _hint_categories(active, evidence_categories, allowed):
+        raise ForecastConfigConflict()
+    if not isinstance(expenses, Sequence) or isinstance(expenses, (str, bytes)):
+        raise ForecastDataError()
+    normalized = []
+    for item in expenses:
+        flow = _normalize_flow(*_unpack_flow(item))
+        if flow is not None:
+            category_id, currency, iso_date, amount, day, _account_id = flow
+            normalized.append((category_id, currency, iso_date, amount, day))
+    if _schedule_categories(schedules, normalized, allowed):
+        raise ForecastConfigConflict()
+
+
+def baselines_for_snapshot(snapshot, evaluation_date, hints, schedules, *, account_timestamps=None, environ=None):
+    """Return ``(baselines, estimator)``. Missing config yields no baselines and does not read the snapshot.
+
+    A configured owner requires ``account_timestamps`` so lapsed hints can be told from active ones.
+    A category that already has an active hint or an enabled mortgage raises ``ForecastConfigConflict``.
+    """
     settings = load_forecast_config(environ)
     if not settings:
         return (), "median"
@@ -474,79 +619,50 @@ def baselines_for_snapshot(snapshot, evaluation_date, hints, schedules, *, envir
         if not isinstance(row, Mapping) or not isinstance(row.get("id"), str):
             raise ForecastDataError()
         names[row["id"]] = row.get("name")
-    expenses, evidence = expenses_from_transactions(snapshot.get("transactions"))
+    if not isinstance(account_timestamps, Mapping):
+        raise ForecastDataError()
+    expenses, refunds, evidence, first_dates = expenses_from_transactions(snapshot.get("transactions"))
+    _reject_baseline_conflicts(
+        category_ids=owner_settings.category_ids, hints=hints, schedules=schedules, expenses=expenses,
+        evidence_categories=evidence, evaluation_date=evaluation_date, account_timestamps=account_timestamps,
+    )
     return build_category_baselines(
         category_ids=owner_settings.category_ids, category_names=names,
         history_months=owner_settings.history_months, evaluation_date=evaluation_date,
-        expenses=expenses, evidence_categories=evidence, hints=hints, schedules=schedules,
+        expenses=expenses, refunds=refunds, account_first_dates=first_dates,
     ), owner_settings.estimator
 
 
-def _projected_hint_key(item, tie_breaker):
-    if not isinstance(tie_breaker, tuple) or len(tie_breaker) != 4:
-        raise ForecastDataError()
-    return (item["currency"], tie_breaker[0], tie_breaker[1], item["amount"], tie_breaker[2], tie_breaker[3])
-
-
-def _baseline_audit(baseline, *, schedule_id, schedule_label, recurring_label, amount, expected_date, account_stale):
-    return {
-        "schedule_id": schedule_id, "schedule_label": schedule_label, "recurring_label": recurring_label,
-        "amount": amount, "currency": baseline.currency, "matched_due_date": expected_date,
-        "last_observed_date": baseline.last_observed_date, "day_distance": 0, "account_stale": account_stale,
-        "baseline_category_id": baseline.category_id,
-    }
-
-
-def _apply_category_baselines(projected, horizon, baselines, estimator, evaluation_month):
-    audits = []
+def _project_category_baselines(projected, horizon, baselines, estimator, evaluation_month, stale_accounts):
     ordered = sorted(baselines, key=lambda item: (item.currency, item.name, item.category_id))
     for baseline in ordered:
         if (not isinstance(baseline.name, str) or not _CURRENCY_RE.fullmatch(baseline.currency)
-                or type(baseline.typical_day) is not int or not 1 <= baseline.typical_day <= 31):
+                or type(baseline.typical_day) is not int or not 1 <= baseline.typical_day <= 31
+                or not isinstance(baseline.account_ids, frozenset)):
             raise ForecastDataError()
         estimate = _baseline_estimate(baseline.monthly_amounts, estimator)
-        if estimate is None:
+        if estimate is None or compare_money(estimate, "0") <= 0:
             continue
+        try:
+            current_spend = canonical_money(baseline.current_spend)
+        except AnalyticsError:
+            raise ForecastDataError() from None
+        spent = current_spend if compare_money(current_spend, "0") > 0 else "0"
+        account_stale = any(account_id in stale_accounts for account_id in baseline.account_ids)
         for month, month_items in zip(horizon, projected):
             remaining = estimate
-            commitments = []
-            for item, tie_breaker in month_items:
-                if item["currency"] != baseline.currency:
-                    continue
-                if item["source"] == "mortgage" and item["schedule_id"] in baseline.schedule_ids:
-                    commitments.append((0, item["expected_date"], item["schedule_id"] or "", item, tie_breaker))
-                elif item["source"] == "recurring" and _projected_hint_key(item, tie_breaker) in baseline.recurring_keys:
-                    commitments.append((1, item["expected_date"], item["label"], item, tie_breaker))
-            for _order, _expected, _label, item, _tie in sorted(commitments, key=lambda row: row[:3]):
-                remaining, applied = _sub_money(remaining, item["amount"])
-                if compare_money(applied, "0") <= 0:
-                    continue
-                if item["source"] == "mortgage":
-                    audits.append(_baseline_audit(
-                        baseline, schedule_id=item["schedule_id"], schedule_label=item["label"],
-                        recurring_label=baseline.name, amount=applied, expected_date=item["expected_date"],
-                        account_stale=False,
-                    ))
-                else:
-                    audits.append(_baseline_audit(
-                        baseline, schedule_id=baseline.category_id, schedule_label=baseline.name,
-                        recurring_label=item["label"], amount=applied, expected_date=item["expected_date"],
-                        account_stale=item["account_stale"],
-                    ))
-                if remaining == "0":
-                    break
-            if month == evaluation_month and compare_money(remaining, "0") > 0:
-                remaining, _spent = _sub_money(remaining, baseline.current_spend)
+            if month == evaluation_month and compare_money(spent, "0") > 0:
+                remaining, _applied = _sub_money(remaining, spent)
             if compare_money(remaining, "0") <= 0:
                 continue
             year, month_number = int(month[:4]), int(month[5:7])
-            expected = date(year, month_number, min(baseline.typical_day, calendar.monthrange(year, month_number)[1])).isoformat()
+            last_day = calendar.monthrange(year, month_number)[1]
+            expected = date(year, month_number, min(baseline.typical_day, last_day)).isoformat()
             month_items.append(({
                 "source": "category_baseline", "schedule_id": None, "label": baseline.name,
                 "amount": remaining, "currency": baseline.currency, "expected_date": expected,
-                "confidence": "estimated", "past_due": False, "account_stale": False,
+                "confidence": "estimated", "past_due": False, "account_stale": account_stale,
             }, baseline.category_id))
-    return audits
 
 
 @dataclass(frozen=True, repr=False)
@@ -754,14 +870,16 @@ def evaluate_forecast(*, owner: str, evaluation_date: str, months: int, currency
     projected = [_project_month(month, evaluation_date, enabled, remaining) for month in horizon]
     if not isinstance(baselines, Sequence) or isinstance(baselines, (str, bytes)):
         raise ForecastDataError()
-    if baselines and baseline_estimator not in _BASELINE_ESTIMATORS:
+    if baselines and (not isinstance(baseline_estimator, str) or baseline_estimator not in _BASELINE_ESTIMATORS):
         raise ForecastDataError()
     for item in baselines:
         if not isinstance(item, CategoryBaseline):
             raise ForecastDataError()
     selected_baselines = [item for item in baselines if currency is None or item.currency == currency]
-    baseline_audits = _apply_category_baselines(projected, horizon, selected_baselines, baseline_estimator, m0)
-    audits = match_audits + baseline_audits
+    if len(selected_baselines) > MAX_BASELINE_SERIES:
+        raise ForecastLimitError()
+    _project_category_baselines(projected, horizon, selected_baselines, baseline_estimator, m0, stale_accounts)
+    audits = match_audits
     overdue_schedules = sum(reminder.due_date is not None and reminder.due_date[:7] < m0
                             and (currency is None or reminder.currency == currency) for reminder in reminders)
     if sum(map(len, projected)) > MAX_FORECAST_ITEMS:

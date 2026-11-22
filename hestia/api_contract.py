@@ -3299,9 +3299,10 @@ def _analytics_paths():
             "snapshot using the server UTC date. Matches recurring hints to individual scheduled instalments to "
             "suppress duplicate estimates. When HESTIA_BUDGET_FORECAST_CONFIG names categories, each month also "
             "includes a category_baseline estimate (confidence estimated, schedule_id null, label is the category "
-            "name): the median or trimmed mean of prior complete months, minus projected mortgage and recurring "
-            "items in that category and, in the current month, expenses already booked. Those subtractions appear "
-            "in deduplications with baseline_category_id. An optional currency filter scopes commitments, "
+            "name): the median or trimmed mean of net spending over prior complete months inside each account's "
+            "coverage window, including months with no spend. The current month subtracts net spending already "
+            "booked, floored at zero. A configured category already represented by an active recurring hint or an "
+            "enabled mortgage schedule is rejected. An optional currency filter scopes commitments, "
             "deduplications and their summary counts. Snapshot metadata and account freshness cover all selected "
             "accounts. The estimate excludes spending limits and makes no bank requests or stored changes."
         )),
@@ -3333,8 +3334,8 @@ def _analytics_paths():
         "500": "Stored mortgage schedule, ledger, or metadata integrity check failed (`budget_analytics_data_error`), "
                "including stored-data helper errors mapped to 500 after forecast query validation, or unexpected "
                "internal failure (`budget_internal_error`).",
-        "503": "Analytics storage or budget configuration unavailable (`budget_analytics_unavailable` or "
-               "`budget_unavailable`).",
+        "503": "Analytics storage or budget configuration unavailable (`budget_analytics_unavailable`, "
+               "`budget_unavailable`, or `budget_forecast_config_conflict`).",
     }
     for code, description in forecast_descriptions.items():
         forecast_responses[code]["description"] = description
