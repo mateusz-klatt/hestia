@@ -432,15 +432,18 @@ def _normalize_debtor_name(metadata: Mapping | None) -> str:
     return " ".join(_CONTROL_RE.sub(" ", unicodedata.normalize("NFC", raw)).split()).casefold()
 
 
-def _clamp_expected_date(day: int, period: str) -> str:
+def _clamp_expected_date(day: int, period: str, income_start: str, income_end: str) -> str:
     year, month = int(period[:4]), int(period[5:7])
     last_day = calendar.monthrange(year, month)[1]
-    return date(year, month, min(day, last_day)).isoformat()
+    expected = date(year, month, min(day, last_day)).isoformat()
+    return min(max(expected, income_start), income_end)
 
 
 def _expected_income_for_category(
     category_id: str,
     period: str,
+    income_start: str,
+    income_end: str,
     prior_rows: list[_IncomeCredit],
     current_rows: list[_IncomeCredit],
 ) -> tuple[list[dict], bool]:
@@ -454,7 +457,7 @@ def _expected_income_for_category(
                 items.append({
                     "category_id": category_id,
                     "amount": row.amount,
-                    "expected_date": _clamp_expected_date(row.day, period),
+                    "expected_date": _clamp_expected_date(row.day, period, income_start, income_end),
                     "source": "previous_month",
                 })
             else:
@@ -537,7 +540,7 @@ def _expected_income_for_category(
         items.append({
             "category_id": category_id,
             "amount": row.amount,
-            "expected_date": _clamp_expected_date(row.day, period),
+            "expected_date": _clamp_expected_date(row.day, period, income_start, income_end),
             "source": "previous_month",
         })
     return items, partial
@@ -546,6 +549,8 @@ def _expected_income_for_category(
 def _compute_expected_income(
     period: str,
     current_month: str,
+    income_start: str,
+    income_end: str,
     income_category_ids: tuple[str, ...],
     prior_by_cat: Mapping[str, list[_IncomeCredit]],
     current_by_cat: Mapping[str, list[_IncomeCredit]],
@@ -566,7 +571,7 @@ def _compute_expected_income(
             continue
         any_prior = True
         cat_items, cat_partial = _expected_income_for_category(
-            category_id, period, prior_rows, current_by_cat.get(category_id, []),
+            category_id, period, income_start, income_end, prior_rows, current_by_cat.get(category_id, []),
         )
         any_partial = any_partial or cat_partial
         items.extend(cat_items)
@@ -753,8 +758,7 @@ def evaluate_monthly_budget(
         )
 
         if in_calendar or in_income_window:
-            if in_calendar:
-                has_activity = True
+            has_activity = True
             nonzero = core.compare_money(amount, _ZERO) > 0
             unresolved = _has_unresolved_transfer_evidence(
                 row,
@@ -910,7 +914,8 @@ def evaluate_monthly_budget(
     remaining = _sub_money(start_budget, spent)
     summary = {"start_budget": start_budget, "spent": spent, "remaining": remaining}
     expected_income = _compute_expected_income(
-        effective_period, current_month, settings.income_category_ids, prior_income_by_cat, current_income_by_cat,
+        effective_period, current_month, income_start, income_end,
+        settings.income_category_ids, prior_income_by_cat, current_income_by_cat,
     )
     pace = _compute_pace(effective_period, current_month, evaluation_date, start_budget, spent, expected_income)
 

@@ -792,6 +792,90 @@ class MonthlyBudgetIncomeWindowTests(unittest.TestCase):
                     self.assertEqual(result["summary"]["start_budget"], "300")
                     self.assertEqual(result["pace"]["budget"], "300")
 
+    def test_unmatched_expected_income_clamps_to_current_window(self):
+        cfg = month_budget.MonthBudgetSettings(("cat-salary",), income_window_start_day=20)
+        prior = _tx(
+            "acc-a", "prior-late", amount="5000", direction="CRDT", booking_date="2026-09-26",
+            kind="income", category_id="cat-salary", source="manual", metadata={"debtor_name": "Employer A"},
+        )
+        result = _eval(transactions=[prior], settings=cfg)
+        self.assertEqual(result["configuration"]["income_window"], {
+            "start": "2026-10-20", "end": "2026-11-19", "start_day": 20,
+        })
+        self.assertEqual(result["expected_income"], {
+            "status": "estimated", "total": "5000",
+            "items": [{"category_id": "cat-salary", "amount": "5000", "expected_date": "2026-11-19",
+                       "source": "previous_month"}],
+        })
+
+        prior_other = _tx(
+            "acc-a", "prior-other", amount="6000", direction="CRDT", booking_date="2026-10-10",
+            kind="income", category_id="cat-salary", source="manual", metadata={"debtor_name": "Employer B"},
+        )
+        current_other = _tx(
+            "acc-a", "current-other", amount="6500", direction="CRDT", booking_date="2026-11-10",
+            kind="income", category_id="cat-salary", source="manual", metadata={"debtor_name": "Employer B"},
+        )
+        with_current = _eval(transactions=[prior, prior_other, current_other], settings=cfg)
+        self.assertEqual(with_current["expected_income"], result["expected_income"])
+
+    def test_year_boundary_and_february_day_28_windows(self):
+        cases = (
+            ("january", "2027-01", 20, "2026-12-20", "2027-01-19", "2026-12-19", "2027-01-20",
+             "2027-01-20T12:00:00Z", "2026-11-26", "2027-01-19"),
+            ("non_leap_february", "2027-02", 28, "2027-01-28", "2027-02-27", "2027-01-27", "2027-02-28",
+             "2027-02-28T12:00:00Z", "2026-12-28", "2027-02-27"),
+            ("leap_february", "2028-02", 28, "2028-01-28", "2028-02-27", "2028-01-27", "2028-02-28",
+             "2028-02-29T12:00:00Z", "2027-12-28", "2028-02-27"),
+        )
+        for (label, period, start_day, start, end, before, after, instant,
+             prior_booking, expected_date) in cases:
+            with self.subTest(case=label):
+                cfg = month_budget.MonthBudgetSettings(("cat-salary",), income_window_start_day=start_day)
+                transactions = [
+                    _tx("acc-a", f"{label}-{booking}", amount=amount, direction="CRDT", booking_date=booking,
+                        kind="income", category_id="cat-salary", source="manual")
+                    for booking, amount in ((before, "10"), (start, "100"), (end, "200"), (after, "400"))
+                ]
+                result = _eval(
+                    period=period, evaluated_at=_utc_ts(instant), transactions=transactions, settings=cfg,
+                )
+                self.assertEqual(result["configuration"]["income_window"], {
+                    "start": start, "end": end, "start_day": start_day,
+                })
+                self.assertEqual(result["summary"]["start_budget"], "300")
+
+                prior = _tx(
+                    "acc-a", f"{label}-prior", amount="5000.25", direction="CRDT", booking_date=prior_booking,
+                    kind="income", category_id="cat-salary", source="manual", metadata={"debtor_name": "Employer"},
+                )
+                expected = _eval(period=period, evaluated_at=_utc_ts(instant), transactions=[prior], settings=cfg)
+                self.assertEqual(expected["expected_income"], {
+                    "status": "estimated", "total": "5000.25",
+                    "items": [{"category_id": "cat-salary", "amount": "5000.25", "expected_date": expected_date,
+                               "source": "previous_month"}],
+                })
+
+    def test_budget_start_income_before_calendar_month_marks_activity(self):
+        income = _tx(
+            "acc-a", "early-income", amount="5000", direction="CRDT", booking_date="2026-10-26",
+            kind="income", category_id="cat-salary", source="manual", metadata={"debtor_name": "Employer"},
+        )
+        result = _eval(
+            period="2026-11", evaluated_at=_utc_ts("2026-11-05T12:00:00Z"), transactions=[income],
+            settings=month_budget.MonthBudgetSettings(("cat-salary",), income_window_start_day=20),
+        )
+        self.assertEqual(result["summary"], {"start_budget": "5000", "spent": "0", "remaining": "5000"})
+        self.assertEqual(result["category_spend"], [])
+        self.assertTrue(result["coverage"]["has_activity"])
+
+        calendar_month = _eval(
+            period="2026-11", evaluated_at=_utc_ts("2026-11-05T12:00:00Z"), transactions=[income],
+            settings=month_budget.MonthBudgetSettings(("cat-salary",)),
+        )
+        self.assertEqual(calendar_month["summary"]["start_budget"], "0")
+        self.assertFalse(calendar_month["coverage"]["has_activity"])
+
     def test_start_day_one_is_byte_for_byte_calendar_month_regression(self):
         transactions = [
             _tx("acc-a", "oct", amount="5000", direction="CRDT", booking_date="2026-10-26",

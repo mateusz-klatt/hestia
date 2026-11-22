@@ -292,6 +292,35 @@ describe("MonthBudgetView", () => {
     expect(host.textContent).toContain("0.00 PLN");
   });
 
+  it("does not show no stored data when early window income funds a month with no category rows", async () => {
+    const api = fakeApi();
+    api.monthlyBudget.mockResolvedValue(ok(monthlyBudgetOf({
+      configuration: {
+        status: "ready", source: "bootstrap",
+        income_window: { start: "2026-10-20", end: "2026-11-19", start_day: 20 },
+      },
+      coverage: {
+        ledger_as_of: 1_795_345_200,
+        stale_selected_accounts: 0,
+        purchase_date_fallback_count: 0,
+        pending_transfer_rows: 0,
+        transfer_scan_limited: false,
+        provisional: false,
+        has_activity: true,
+      },
+      summary: { start_budget: "5000", spent: "0", remaining: "5000" },
+      pace: monthlyBudgetPace({
+        status: "no_positive_pace", budget: "5000", daily_rate: null, projected_month_spend: null,
+      }),
+      category_spend: [],
+    })));
+    await show(api);
+
+    expect(host.textContent).not.toContain("No stored data");
+    expect(host.textContent).toContain("5,000.00 PLN");
+    expect(host.textContent).toContain("No category spending recorded in this month.");
+  });
+
   it.each([
     { status: 400, error: ANALYTICS_ERROR.invalidRequest, alert: monthBudgetLabels.en.badRequest },
     { status: 404, error: "budget_analytics_disabled", alert: monthBudgetLabels.en.error },
