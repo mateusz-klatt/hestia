@@ -1,6 +1,7 @@
 """Latch confirmed receipt links when their committed bank evidence changes."""
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 
@@ -15,7 +16,7 @@ _CHUNK = 400
 _MAX_CREDITOR_LEN = 256
 _EVIDENCE_KEYS = (
     "owner", "account_id", "entry_reference", "transaction_date", "booking_date", "value_date",
-    "raw_shop_name", "raw_nip", "creditor_name", "remittance_information", "financial_fingerprint",
+    "raw_shop_name", "raw_nip", "creditor_name", "remittance_digest", "financial_fingerprint",
 )
 
 
@@ -99,11 +100,16 @@ def creditor_name(session, owner, account_id, entry_reference, fingerprint):
     return value
 
 
-def _remittance(payload):
+def _remittance_digest(payload):
+    """Sha256 of the canonical remittance text. The raw lines can be 4096 characters each."""
     value = payload.get("remittance_information") if isinstance(payload, dict) else None
     if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
-        return []
-    return list(value)
+        value = None
+    try:
+        raw = json.dumps(value, ensure_ascii=True, separators=(",", ":"), allow_nan=False)
+    except (ValueError, TypeError, OverflowError, RecursionError):
+        raise AnalyticsError() from None
+    return hashlib.sha256(raw.encode("ascii")).hexdigest()
 
 
 def link_evidence(owner, account_id, entry_reference, payload, shop_name, nip, creditor, fingerprint):
@@ -118,7 +124,7 @@ def link_evidence(owner, account_id, entry_reference, payload, shop_name, nip, c
         "booking_date": _bound_date(payload.get("booking_date")),
         "value_date": _bound_date(payload.get("value_date")),
         "raw_shop_name": shop_name, "raw_nip": nip, "creditor_name": creditor,
-        "remittance_information": _remittance(payload), "financial_fingerprint": fingerprint,
+        "remittance_digest": _remittance_digest(payload), "financial_fingerprint": fingerprint,
     }
     if set(evidence) != set(_EVIDENCE_KEYS):
         raise AnalyticsError()

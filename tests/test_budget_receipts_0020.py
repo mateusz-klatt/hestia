@@ -226,14 +226,22 @@ class ReceiptMigration0020Tests(unittest.TestCase):
                 session.add(db.BudgetTransaction(account_id="foreign", entry_reference="entry",
                                                  payload_json=json.dumps(payload), observed_at=1, uncertain=False))
                 session.commit()
-            with self.assertRaises(IntegrityError):
+            link = (
+                "INSERT INTO budget_receipts (id, owner, status, source_kind, receipt_date, total_amount, "
+                "currency, payment_method, linked_account_id, linked_entry_ref, linked_fingerprint, "
+                "linked_evidence, version, created_at, updated_at) VALUES "
+                "(?, ?, 'confirmed', 'live_text', '2026-11-20', '100', 'PLN', 'card', "
+                "'foreign', 'entry', 'fingerprint', '{}', 1, 1, 1)"
+            )
+            with self.assertRaises(IntegrityError) as rejected:
                 with engine.begin() as conn:
-                    conn.exec_driver_sql(
-                        "INSERT INTO budget_receipts (id, owner, status, source_kind, receipt_date, total_amount, "
-                        "currency, payment_method, linked_account_id, linked_entry_ref, linked_fingerprint, "
-                        "version, created_at, updated_at) VALUES "
-                        "(?, 'owner', 'confirmed', 'live_text', '2026-11-20', '100', 'PLN', 'card', "
-                        "'foreign', 'entry', 'fingerprint', 1, 1, 1)", (RECEIPT_A,))
+                    conn.exec_driver_sql(link, (RECEIPT_A, "owner"))
+            self.assertIn("FOREIGN KEY", str(rejected.exception).upper())
+            with engine.begin() as conn:
+                conn.exec_driver_sql(link, (RECEIPT_A, "other"))
+                self.assertEqual(conn.exec_driver_sql(
+                    "SELECT owner FROM budget_receipts WHERE id = ?", (RECEIPT_A,)).scalar(), "other")
+                conn.exec_driver_sql("DELETE FROM budget_receipts WHERE id = ?", (RECEIPT_A,))
             with self.assertRaises(IntegrityError):
                 with engine.begin() as conn:
                     conn.exec_driver_sql(

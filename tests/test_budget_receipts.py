@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timezone
+import hashlib
 import json
 import os
 from unittest import mock
@@ -463,6 +464,10 @@ NR KARTY ****5555
         untouched = "NIP 7791011327\n2026-11-20\n"
         self.assertEqual(redact_pan(untouched), untouched)
         self.assertEqual(redact_pan("4111********1111"), "[REDACTED]")
+        self.assertEqual(redact_pan("4111XXXXXXXX1111"), "[REDACTED]")
+        self.assertEqual(redact_pan("411111******1111"), "[REDACTED]")
+        self.assertEqual(redact_pan("Ref 12345 4111 1111 1111 1111"), "Ref 12345 [REDACTED]")
+        self.assertEqual(redact_pan("123456 4111-1111-1111-1111"), "123456 [REDACTED]")
         beside_mask = redact_pan("4111********1111 998877")
         self.assertNotIn("4111", beside_mask)
         self.assertIn("998877", beside_mask)
@@ -481,6 +486,11 @@ NR KARTY ****5555
         scanned = redact_pan("*" * (32 * 1024 - 1))
         self.assertLess(time.perf_counter() - started, 0.5)
         self.assertNotIn("[REDACTED]", scanned)
+        for sample in ("\n" * 50_000, "\n" * (32 * 1024 - 1)):
+            started = time.perf_counter()
+            with self.assertRaises(ReceiptError):
+                redact_pan(sample)
+            self.assertLess(time.perf_counter() - started, 0.5)
 
     def test_money_magnitude_precision_and_folded_name_length_are_limited(self):
         def text(item):
@@ -573,7 +583,9 @@ NR KARTY ****5555
         saved = self.receipts.confirm("owner", confirm_values(parsed, link=link))["receipt"]
         evidence = json.loads(self.receipt_row(parsed["receipt_id"]).linked_evidence)
         self.assertEqual(evidence["entry_reference"], reference)
-        self.assertEqual(evidence["remittance_information"], ["Synthetic SHOP"])
+        self.assertEqual(evidence["remittance_digest"], hashlib.sha256(
+            json.dumps(["Synthetic SHOP"], ensure_ascii=True, separators=(",", ":")).encode("ascii")).hexdigest())
+        self.assertNotIn("remittance_information", evidence)
         self.assertEqual(len(evidence["financial_fingerprint"]), 64)
         self.assertTrue(saved["linked"])
 
@@ -615,6 +627,23 @@ NR KARTY ****5555
         with self.sessions.begin() as session:
             self.assertEqual(reconcile_receipt_links(session, "owner", self.now + 1), 0)
         self.assert_latched(rebound["receipt_id"], confirmed["version"])
+
+    def test_long_remittance_still_yields_a_candidate_and_confirms(self):
+        remittance = "S" * 4096
+        self.change_transaction(remittance_information=[remittance])
+        parsed = self.draft()
+        candidate = next(item for item in parsed["candidates"] if item["entry_reference"] == "debit")
+        self.assertEqual(candidate["remittance_information"], [remittance])
+        saved = self.receipts.confirm("owner", confirm_values(parsed, link=self.link()))["receipt"]
+        self.assertTrue(saved["linked"])
+        raw = self.receipt_row(parsed["receipt_id"]).linked_evidence
+        self.assertLessEqual(len(raw), 4096)
+        self.assertNotIn(remittance, raw)
+        evidence = json.loads(raw)
+        digest = hashlib.sha256(json.dumps(
+            [remittance], ensure_ascii=True, separators=(",", ":")).encode("ascii")).hexdigest()
+        self.assertEqual(evidence["remittance_digest"], digest)
+        self.assertEqual(len(digest), 64)
 
     def test_creditor_metadata_must_match_the_ledger_fingerprint(self):
         self.metadata("a", "debit", {"creditor_name": "SYNTHETIC GROCER"})
