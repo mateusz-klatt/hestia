@@ -23,7 +23,7 @@ import re
 import threading
 
 from cryptography.exceptions import InvalidTag
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, case, func, or_, select
 
 from .. import db
 from . import analytics_core as core
@@ -1120,16 +1120,68 @@ class BudgetAnalyticsViews(BudgetAnalyticsStore):
         return uncertain, unresolved, imported
 
     @staticmethod
+    def _check_quarantine_integrity(session, account_ids):
+        if not account_ids:
+            return
+        probes = (
+            select(1)
+            .select_from(db.BudgetTransaction)
+            .where(
+                db.BudgetTransaction.account_id.in_(account_ids),
+                db.BudgetTransaction.uncertain.is_(True),
+                or_(
+                    db.BudgetTransaction.source.is_(None),
+                    db.BudgetTransaction.source.not_in(quarantine_mod._VALID_SOURCES),
+                    _invalid_observed_at_expr(db.BudgetTransaction.observed_at),
+                    _invalid_payload_expr(db.BudgetTransaction.payload_json),
+                ),
+            )
+            .limit(1),
+            select(1)
+            .select_from(db.BudgetUnresolved)
+            .where(
+                db.BudgetUnresolved.account_id.in_(account_ids),
+                or_(
+                    _invalid_observed_at_expr(db.BudgetUnresolved.observed_at),
+                    _invalid_payload_expr(db.BudgetUnresolved.payload_json),
+                ),
+            )
+            .limit(1),
+            select(1)
+            .select_from(db.BudgetImportUnresolved)
+            .join(db.BudgetImportBatch, db.BudgetImportUnresolved.batch_id == db.BudgetImportBatch.id)
+            .where(
+                db.BudgetImportBatch.account_id.in_(account_ids),
+                or_(
+                    db.BudgetImportUnresolved.reason.is_(None),
+                    db.BudgetImportUnresolved.reason.not_in(quarantine_mod._IMPORT_REASONS),
+                    _invalid_observed_at_expr(db.BudgetImportBatch.fetched_at),
+                    _invalid_payload_expr(db.BudgetImportUnresolved.payload_json),
+                ),
+            )
+            .limit(1),
+        )
+        for probe in probes:
+            if session.scalar(probe) is not None:
+                raise AnalyticsError(_DATA_ERROR, 500)
+
+    @staticmethod
     def _quarantine_items(session, account_ids, selected_map):
         if not account_ids:
             return []
         cap = quarantine_mod.MAX_QUARANTINE_ITEMS
         raw_items = []
+        uncertain_date = _sql_item_date(db.BudgetTransaction.payload_json)
         uncertain_rows = session.scalars(
             select(db.BudgetTransaction)
             .where(db.BudgetTransaction.account_id.in_(account_ids), db.BudgetTransaction.uncertain.is_(True))
-            .order_by(db.BudgetTransaction.observed_at.desc(), db.BudgetTransaction.account_id,
-                      db.BudgetTransaction.entry_reference)
+            .order_by(
+                uncertain_date.desc().nulls_last(),
+                db.BudgetTransaction.observed_at.desc(),
+                db.BudgetTransaction.account_id,
+                _sql_item_entry_ref(db.BudgetTransaction.payload_json),
+                db.BudgetTransaction.entry_reference,
+            )
             .limit(cap))
         for row in uncertain_rows:
             raw_items.append(quarantine_mod.extract_safe_item(
@@ -1137,11 +1189,20 @@ class BudgetAnalyticsViews(BudgetAnalyticsStore):
                 selected=selected_map[row.account_id], payload_json=row.payload_json,
                 source=row.source, observed_at=row.observed_at,
             ))
+        unresolved_payload = db.BudgetUnresolved.payload_json
+        unresolved_date = _sql_item_date(unresolved_payload)
+        unresolved_ref = func.json_extract(unresolved_payload, "$.entry_reference")
         unresolved_rows = session.scalars(
             select(db.BudgetUnresolved)
             .where(db.BudgetUnresolved.account_id.in_(account_ids))
-            .order_by(db.BudgetUnresolved.observed_at.desc(), db.BudgetUnresolved.account_id,
-                      db.BudgetUnresolved.ordinal)
+            .order_by(
+                unresolved_date.desc().nulls_last(),
+                db.BudgetUnresolved.observed_at.desc(),
+                db.BudgetUnresolved.account_id,
+                func.coalesce(unresolved_ref, ""),
+                _sql_unresolved_reason(unresolved_payload, unresolved_date, unresolved_ref),
+                db.BudgetUnresolved.ordinal,
+            )
             .limit(cap))
         for row in unresolved_rows:
             raw_items.append(quarantine_mod.extract_safe_item(
@@ -1149,12 +1210,21 @@ class BudgetAnalyticsViews(BudgetAnalyticsStore):
                 selected=selected_map[row.account_id], payload_json=row.payload_json,
                 source="api", observed_at=row.observed_at,
             ))
+        import_payload = db.BudgetImportUnresolved.payload_json
+        import_date = _sql_item_date(import_payload)
         import_rows = session.execute(
             select(db.BudgetImportUnresolved, db.BudgetImportBatch.account_id, db.BudgetImportBatch.fetched_at)
             .join(db.BudgetImportBatch, db.BudgetImportUnresolved.batch_id == db.BudgetImportBatch.id)
             .where(db.BudgetImportBatch.account_id.in_(account_ids))
-            .order_by(db.BudgetImportBatch.fetched_at.desc(), db.BudgetImportBatch.account_id,
-                      db.BudgetImportUnresolved.batch_id, db.BudgetImportUnresolved.ordinal)
+            .order_by(
+                import_date.desc().nulls_last(),
+                db.BudgetImportBatch.fetched_at.desc(),
+                db.BudgetImportBatch.account_id,
+                _sql_item_entry_ref(import_payload),
+                db.BudgetImportUnresolved.reason,
+                db.BudgetImportUnresolved.batch_id,
+                db.BudgetImportUnresolved.ordinal,
+            )
             .limit(cap)).all()
         for row, acc_id, fetched_at in import_rows:
             raw_items.append(quarantine_mod.extract_safe_item(
@@ -1180,6 +1250,7 @@ class BudgetAnalyticsViews(BudgetAnalyticsStore):
             account_ids = [row.id for row in accounts]
             selected_map = {row.id: row.enabled for row in accounts}
             uncertain_counts, unresolved_counts, import_counts = self._quarantine_counts(session, account_ids)
+            self._check_quarantine_integrity(session, account_ids)
             try:
                 items = self._quarantine_items(session, account_ids, selected_map)
             except quarantine_mod.QuarantineDataError:
@@ -1214,6 +1285,62 @@ class BudgetAnalyticsViews(BudgetAnalyticsStore):
                 "truncated": total_all > len(items),
                 "items": items,
             }
+
+
+def _invalid_observed_at_expr(col):
+    return or_(func.typeof(col).not_in(("integer", "real")), col < 0, col >= float("inf"))
+
+
+def _invalid_date_field_expr(payload_col, path):
+    field_type = func.json_type(payload_col, path)
+    value = func.json_extract(payload_col, path)
+    return or_(
+        and_(field_type.is_not(None), field_type.not_in(("null", "text"))),
+        and_(
+            field_type == "text",
+            or_(func.length(value) != 10, func.date(value).is_not(value), value < "0001-01-01"),
+        ),
+    )
+
+
+def _invalid_payload_expr(payload_col):
+    ref_type = func.json_type(payload_col, "$.entry_reference")
+    ref_val = func.json_extract(payload_col, "$.entry_reference")
+    status_type = func.json_type(payload_col, "$.status")
+    status_val = func.json_extract(payload_col, "$.status")
+    return case(
+        (func.typeof(payload_col) != "text", 1),
+        (func.json_valid(payload_col) == 0, 1),
+        (func.json_type(payload_col) != "object", 1),
+        (or_(and_(ref_type.is_not(None), ref_type.not_in(("null", "text"))),
+             and_(ref_type == "text", or_(func.length(ref_val) < 1,
+                                          func.length(ref_val) > quarantine_mod._MAX_REFERENCE))), 1),
+        (or_(and_(status_type.is_not(None), status_type.not_in(("null", "text"))),
+             and_(status_type == "text", status_val.not_in(quarantine_mod._VALID_STATUSES))), 1),
+        (_invalid_date_field_expr(payload_col, "$.booking_date"), 1),
+        (_invalid_date_field_expr(payload_col, "$.value_date"), 1),
+        else_=0,
+    ) == 1
+
+
+def _sql_item_date(payload_col):
+    return func.coalesce(
+        func.json_extract(payload_col, "$.booking_date"),
+        func.json_extract(payload_col, "$.value_date"),
+    )
+
+
+def _sql_item_entry_ref(payload_col):
+    return func.coalesce(func.json_extract(payload_col, "$.entry_reference"), "")
+
+
+def _sql_unresolved_reason(payload_col, date_expr, raw_ref):
+    return case(
+        (func.json_extract(payload_col, "$.status").is_not("BOOK"), "non_booked_status"),
+        (raw_ref.is_(None), "missing_reference"),
+        (date_expr.is_(None), "missing_date"),
+        else_="reference_conflict",
+    )
 
 
 def _row_filter(row, category_id, kind, query):

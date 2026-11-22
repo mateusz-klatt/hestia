@@ -61,8 +61,7 @@ def _safe_reference(value):
     return value
 
 
-def _safe_date(payload):
-    raw = payload.get("booking_date") or payload.get("value_date")
+def _validate_iso_date(raw):
     if raw is None:
         return None
     if not isinstance(raw, str):
@@ -73,6 +72,12 @@ def _safe_date(payload):
     except ValueError:
         raise QuarantineDataError() from None
     return raw
+
+
+def _safe_date(payload):
+    booking = _validate_iso_date(payload.get("booking_date"))
+    value = _validate_iso_date(payload.get("value_date"))
+    return booking if booking is not None else value
 
 
 def _safe_status(value):

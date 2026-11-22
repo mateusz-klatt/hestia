@@ -99,6 +99,12 @@ class QuarantinePureTests(unittest.TestCase):
             {**base, "payload_json": json.dumps({"booking_date": "2026-02-30"})},
             {**base, "payload_json": json.dumps({"booking_date": "2026-1-1"})},
             {**base, "payload_json": json.dumps({"booking_date": "20261110"})},
+            {**base, "payload_json": json.dumps({"booking_date": "", "value_date": "2026-11-11"})},
+            {**base, "payload_json": json.dumps({"booking_date": ""})},
+            {**base, "payload_json": json.dumps({"booking_date": False, "value_date": "2026-11-11"})},
+            {**base, "payload_json": json.dumps({"booking_date": "2026-11-10", "value_date": ""})},
+            {**base, "payload_json": json.dumps({"booking_date": "2026-11-10", "value_date": "2026-02-30"})},
+            {**base, "payload_json": json.dumps({"booking_date": "2026-11-10", "value_date": 123})},
             {**base, "payload_json": json.dumps({"status": "BOGUS"})},
             {**base, "bucket": qmod.BUCKET_IMPORT_UNRESOLVED, "source": "offline_import", "stored_reason": None},
             {**base, "bucket": qmod.BUCKET_IMPORT_UNRESOLVED, "source": "offline_import", "stored_reason": "unknown"},
@@ -106,6 +112,21 @@ class QuarantinePureTests(unittest.TestCase):
         for bad in bad_cases:
             with self.subTest(bad=bad), self.assertRaises(qmod.QuarantineDataError):
                 qmod.extract_safe_item(**bad)
+
+        # booking_date takes precedence over value_date; value_date is used only when booking_date is absent or None.
+        both_dates = qmod.extract_safe_item(
+            bucket=qmod.BUCKET_UNRESOLVED, account_id="acc-1", selected=True,
+            payload_json=json.dumps({"entry_reference": "d-1", "booking_date": "2026-11-10",
+                                     "value_date": "2026-11-11", "status": "BOOK"}),
+            source="api", observed_at=100.0,
+        )
+        self.assertEqual(both_dates["date"], "2026-11-10")
+        absent_booking = qmod.extract_safe_item(
+            bucket=qmod.BUCKET_UNRESOLVED, account_id="acc-1", selected=True,
+            payload_json=json.dumps({"entry_reference": "d-2", "value_date": "2026-11-12", "status": "BOOK"}),
+            source="api", observed_at=100.0,
+        )
+        self.assertEqual(absent_booking["date"], "2026-11-12")
 
 
 class QuarantineViewsTests(AnalyticsCase):
@@ -225,14 +246,209 @@ class QuarantineViewsTests(AnalyticsCase):
         self.assertEqual(len(capped["items"]), qmod.MAX_QUARANTINE_ITEMS)
         self.assertTrue(capped["truncated"])
 
-        # Corrupt DB payload fails closed with 500 budget_analytics_data_error.
+        # Corrupt DB payload fails closed with 500 budget_analytics_data_error; duplicate JSON keys fail via extract_safe_item.
         with self.sessions.begin() as session:
+            session.add(db.BudgetAccount(
+                id="acc-dup", connection_id="bank", owner="owner",
+                identification_hash="DUP-HASH", enabled=True, configured=True,
+                control_version=1, kind="current", balances_json="[]",
+            ))
+            session.flush()
             session.add(db.BudgetUnresolved(
                 account_id="acc-excluded", ordinal=99, payload_json="{corrupt", observed_at=9999.0,
+            ))
+            session.add(db.BudgetUnresolved(
+                account_id="acc-dup", ordinal=0,
+                payload_json='{"entry_reference":"dup","booking_date":"2026-11-10","booking_date":"2026-11-11"}',
+                observed_at=9999.0,
             ))
         with self.assertRaises(AnalyticsError) as corrupt:
             self.views.quarantine("owner", account_id="acc-excluded")
         self.assertEqual((corrupt.exception.code, corrupt.exception.status), ("budget_analytics_data_error", 500))
+        with self.assertRaises(AnalyticsError) as dup_keys:
+            self.views.quarantine("owner", account_id="acc-dup")
+        self.assertEqual((dup_keys.exception.code, dup_keys.exception.status), ("budget_analytics_data_error", 500))
+
+    def test_truncation_orders_newest_dates_first_regardless_of_ordinal_within_one_snapshot(self):
+        # 230 rows per bucket sharing one timestamp; dates are NOT in ordinal/reference order.
+        with self.sessions.begin() as session:
+            session.add(db.BudgetAccount(
+                id="acc-imp", connection_id="bank", owner="owner",
+                identification_hash="IMP-SORT-HASH", enabled=True, configured=True,
+                control_version=1, kind="current", balances_json="[]",
+            ))
+            session.add(db.BudgetAccount(
+                id="acc-unc", connection_id="bank", owner="owner",
+                identification_hash="UNC-SORT-HASH", enabled=True, configured=True,
+                control_version=1, kind="current", balances_json="[]",
+            ))
+            session.add(db.BudgetImportBatch(
+                id="batch-sort", fingerprint="fp-sort", account_id="acc-imp",
+                fetched_at=5000.0, imported_at=5010.0, balances_json=None, report_json="{}",
+            ))
+            session.flush()
+            expected_unres_dates = []
+            expected_imp_dates = []
+            expected_unc_dates = []
+            for ordinal in range(230):
+                if ordinal < 20:
+                    booking_date, value_date, eff_date = None, None, None
+                elif ordinal < 130:
+                    day_idx = ordinal - 20
+                    stamp = f"2026-{1 + day_idx // 28:02d}-{1 + day_idx % 28:02d}"
+                    booking_date = None if ordinal % 2 == 0 else stamp
+                    value_date = stamp if ordinal % 2 == 0 else None
+                    eff_date = stamp
+                else:
+                    day_idx = ordinal - 130
+                    stamp = f"2026-{6 + day_idx // 28:02d}-{1 + day_idx % 28:02d}"
+                    booking_date = stamp if ordinal % 3 else None
+                    value_date = None if ordinal % 3 else stamp
+                    eff_date = stamp
+                if eff_date is not None:
+                    expected_unres_dates.append(eff_date)
+                session.add(db.BudgetUnresolved(
+                    account_id=self.account_id, ordinal=ordinal,
+                    payload_json=_tx_json(f"ord-{ordinal:03d}", status="PDNG",
+                                          booking_date=booking_date, value_date=value_date),
+                    observed_at=5000.0,
+                ))
+                imp_idx = (ordinal * 73) % 230
+                imp_date = (None if imp_idx < 20
+                            else f"2025-{1 + (imp_idx - 20) // 28:02d}-{1 + (imp_idx - 20) % 28:02d}")
+                if imp_date is not None:
+                    expected_imp_dates.append(imp_date)
+                session.add(db.BudgetImportUnresolved(
+                    batch_id="batch-sort", ordinal=ordinal, reason="stale_conflict",
+                    payload_json=_tx_json(f"imp-{ordinal:03d}", status="BOOK",
+                                          booking_date=imp_date, value_date=None),
+                ))
+                unc_date = (None if imp_idx < 20
+                            else f"2024-{1 + (imp_idx - 20) // 28:02d}-{1 + (imp_idx - 20) % 28:02d}")
+                if unc_date is not None:
+                    expected_unc_dates.append(unc_date)
+                session.add(db.BudgetTransaction(
+                    account_id="acc-unc", entry_reference=f"unc-{ordinal:03d}",
+                    payload_json=_tx_json(f"unc-{ordinal:03d}", booking_date=unc_date, value_date=None),
+                    observed_at=5000.0, uncertain=True, source="api", api_observed_at=5000.0,
+                ))
+
+        unres_report = self.views.quarantine("owner", account_id=self.account_id)
+        self.assertTrue(unres_report["truncated"])
+        self.assertEqual(len(unres_report["items"]), qmod.MAX_QUARANTINE_ITEMS)
+        self.assertEqual([item["date"] for item in unres_report["items"]],
+                         sorted(expected_unres_dates, reverse=True)[:qmod.MAX_QUARANTINE_ITEMS])
+        self.assertEqual(unres_report["items"][0]["entry_reference"], "ord-229")
+        self.assertEqual(unres_report["items"][-1]["entry_reference"], "ord-030")
+
+        imp_report = self.views.quarantine("owner", account_id="acc-imp")
+        self.assertTrue(imp_report["truncated"])
+        self.assertEqual([item["date"] for item in imp_report["items"]],
+                         sorted(expected_imp_dates, reverse=True)[:qmod.MAX_QUARANTINE_ITEMS])
+
+        unc_report = self.views.quarantine("owner", account_id="acc-unc")
+        self.assertTrue(unc_report["truncated"])
+        self.assertEqual([item["date"] for item in unc_report["items"]],
+                         sorted(expected_unc_dates, reverse=True)[:qmod.MAX_QUARANTINE_ITEMS])
+
+        # Mixed unfiltered snapshot keeps newest 200 overall (all 2026 unresolved items beat 2025/2024 items).
+        mixed = self.views.quarantine("owner")
+        self.assertEqual(mixed["summary"]["total_count"], 690)
+        self.assertEqual([item["date"] for item in mixed["items"]],
+                         sorted(expected_unres_dates, reverse=True)[:qmod.MAX_QUARANTINE_ITEMS])
+
+    def test_whole_scope_integrity_probe_fails_closed_beyond_200_rows(self):
+        # 210 valid newer rows + 1 invalid row ranked beyond item 200 in each bucket -> 500 even unfiltered.
+        with self.sessions.begin() as session:
+            session.add(db.BudgetAccount(
+                id="acc-clean", connection_id="bank", owner="owner",
+                identification_hash="CLEAN-HASH", enabled=True, configured=True,
+                control_version=1, kind="current", balances_json="[]",
+            ))
+            session.add(db.BudgetAccount(
+                id="other-acc", connection_id="other-bank", owner="other",
+                identification_hash="OTHER-HASH", enabled=True, configured=True,
+                control_version=1, kind="current", balances_json="[]",
+            ))
+            session.add(db.BudgetImportBatch(
+                id="batch-many", fingerprint="fp-many", account_id=self.account_id,
+                fetched_at=4000.0, imported_at=4010.0, balances_json=None, report_json="{}",
+            ))
+            # Foreign owner's invalid row must never affect "owner".
+            session.add(db.BudgetImportBatch(
+                id="batch-other", fingerprint="fp-other", account_id="other-acc",
+                fetched_at=4000.0, imported_at=4010.0, balances_json=None, report_json="{}",
+            ))
+            session.flush()
+            session.add(db.BudgetImportUnresolved(
+                batch_id="batch-other", ordinal=0, reason="bogus_foreign_reason",
+                payload_json=_tx_json("foreign-bad", booking_date="2026-11-20"),
+            ))
+            # 210 valid import rows on self.account_id (newer date 2026-11-20).
+            for ordinal in range(210):
+                session.add(db.BudgetImportUnresolved(
+                    batch_id="batch-many", ordinal=ordinal, reason="non_canonical",
+                    payload_json=_tx_json(f"valid-imp-{ordinal}", booking_date="2026-11-20"),
+                ))
+            # Bad row #211 has older date so SQL LIMIT 200 would skip it without the whole-scope probe.
+            session.add(db.BudgetImportUnresolved(
+                batch_id="batch-many", ordinal=210, reason="bogus_reason",
+                payload_json=_tx_json("bad-imp-211", booking_date="2020-01-01"),
+            ))
+            # Clean account has 1 valid row; scoping to acc-clean must succeed (200).
+            session.add(db.BudgetUnresolved(
+                account_id="acc-clean", ordinal=0,
+                payload_json=_tx_json("clean-ref", status="PDNG", booking_date="2026-11-20"),
+                observed_at=100.0,
+            ))
+
+        clean = self.views.quarantine("owner", account_id="acc-clean")
+        self.assertEqual(clean["summary"]["total_count"], 1)
+
+        with self.assertRaises(AnalyticsError) as unfiltered:
+            self.views.quarantine("owner")
+        self.assertEqual((unfiltered.exception.code, unfiltered.exception.status), ("budget_analytics_data_error", 500))
+        with self.assertRaises(AnalyticsError) as filtered:
+            self.views.quarantine("owner", account_id=self.account_id)
+        self.assertEqual((filtered.exception.code, filtered.exception.status), ("budget_analytics_data_error", 500))
+
+        # Repair import reason and verify corrupt payload beyond 200 in unresolved & invalid source in uncertain also 500.
+        with self.sessions.begin() as session:
+            bad_imp = session.get(db.BudgetImportUnresolved, ("batch-many", 210))
+            bad_imp.reason = "non_canonical"
+            for ordinal in range(210):
+                session.add(db.BudgetUnresolved(
+                    account_id=self.account_id, ordinal=ordinal,
+                    payload_json=_tx_json(f"valid-unres-{ordinal}", status="PDNG", booking_date="2026-11-20"),
+                    observed_at=5000.0,
+                ))
+            session.add(db.BudgetUnresolved(
+                account_id=self.account_id, ordinal=210,
+                payload_json=_tx_json("bad-unres-211", status="PDNG", booking_date=""),
+                observed_at=1.0,
+            ))
+        with self.assertRaises(AnalyticsError) as bad_unres:
+            self.views.quarantine("owner")
+        self.assertEqual((bad_unres.exception.code, bad_unres.exception.status), ("budget_analytics_data_error", 500))
+
+        with self.sessions.begin() as session:
+            session.get(db.BudgetUnresolved, (self.account_id, 210)).payload_json = _tx_json(
+                "fixed-unres-211", status="PDNG", booking_date="2020-01-01",
+            )
+            for idx in range(210):
+                session.add(db.BudgetTransaction(
+                    account_id=self.account_id, entry_reference=f"unc-ok-{idx:03d}",
+                    payload_json=_tx_json(f"unc-ok-{idx:03d}", booking_date="2026-11-20"),
+                    observed_at=5000.0, uncertain=True, source="api", api_observed_at=5000.0,
+                ))
+            session.add(db.BudgetTransaction(
+                account_id=self.account_id, entry_reference="unc-bad-source",
+                payload_json=_tx_json("unc-bad-source", booking_date="2020-01-01"),
+                observed_at=1.0, uncertain=True, source="bank_csv", api_observed_at=1.0,
+            ))
+        with self.assertRaises(AnalyticsError) as bad_unc:
+            self.views.quarantine("owner")
+        self.assertEqual((bad_unc.exception.code, bad_unc.exception.status), ("budget_analytics_data_error", 500))
 
 
 class QuarantineHTTPAPITests(unittest.IsolatedAsyncioTestCase):
@@ -286,6 +502,39 @@ class QuarantineHTTPAPITests(unittest.IsolatedAsyncioTestCase):
 
         head = await self.client.head(analytics_fixture.PREFIX + "/quarantine", headers=self.headers())
         self.assertEqual(head.status, 405)
+
+    async def test_quarantine_http_invalid_import_reason_fails_closed_within_and_beyond_200(self):
+        with self.sessions.begin() as session:
+            session.add(db.BudgetImportBatch(
+                id="http-batch", fingerprint="fp-http", account_id=self.alice_id,
+                fetched_at=3000.0, imported_at=3010.0, balances_json=None, report_json="{}",
+            ))
+            session.flush()
+            session.add(db.BudgetImportUnresolved(
+                batch_id="http-batch", ordinal=0, reason="bogus_reason",
+                payload_json=_tx_json("http-bad-0", booking_date="2020-01-01"),
+            ))
+        # Invalid reason within the first 200 rows -> 500 budget_analytics_data_error + private headers.
+        resp_small = await self.get("quarantine")
+        self.assertEqual(resp_small.status, 500)
+        self.assert_private_headers(resp_small)
+        self.assertEqual(await resp_small.json(), {"ok": False, "error": "budget_analytics_data_error"})
+
+        # Add 205 newer valid rows so ordinal 0 sits beyond item 200 -> still 500 + private headers.
+        with self.sessions.begin() as session:
+            for ordinal in range(1, 206):
+                session.add(db.BudgetImportUnresolved(
+                    batch_id="http-batch", ordinal=ordinal, reason="non_canonical",
+                    payload_json=_tx_json(f"http-valid-{ordinal}", booking_date="2026-11-20"),
+                ))
+        resp_beyond = await self.get("quarantine")
+        self.assertEqual(resp_beyond.status, 500)
+        self.assert_private_headers(resp_beyond)
+        self.assertEqual(await resp_beyond.json(), {"ok": False, "error": "budget_analytics_data_error"})
+        resp_scoped = await self.get("quarantine", params={"account_id": self.alice_id})
+        self.assertEqual(resp_scoped.status, 500)
+        self.assert_private_headers(resp_scoped)
+        self.assertEqual(await resp_scoped.json(), {"ok": False, "error": "budget_analytics_data_error"})
 
 
 if __name__ == "__main__":

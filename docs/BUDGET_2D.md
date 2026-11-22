@@ -432,10 +432,16 @@ query strings; any `401`/`403`/`404` access loss clears all budget state immedia
   `import_unresolved_count`, matching `_owner_counts` when unfiltered. Passing an unknown
   or foreign `account_id` returns `404 budget_analytics_not_found`.
 - **Safe non-prose detail allowlist:** returns at most `200` deterministically ordered
-  detail entries (`items_cap: 200`, `truncated` flag) containing exclusively `bucket`,
-  `account_id`, `selected`, `entry_reference`, effective ISO `date`, fixed bank `status`,
-  fixed exclusion `reason` (`non_booked_status`, `missing_reference`, `missing_date`,
-  `reference_conflict`, `non_canonical`, `api_preserved`, `stale_conflict`,
+  detail entries (`items_cap: 200`, `truncated` flag), ordered newest effective `date`
+  first (`NULLS LAST`), then `observed_at` descending, then bucket/account/reference/reason
+  ascending (matched in SQL before per-bucket `200`-row capping so newer dates in a single
+  snapshot or import batch are never dropped behind older-dated rows). Entries contain
+  exclusively `bucket`, `account_id`, `selected`, `entry_reference`, effective ISO `date`,
+  fixed bank `status`, fixed exclusion `reason` (`non_booked_status`, `missing_reference`,
+  `missing_date`, `reference_conflict`, `non_canonical`, `api_preserved`, `stale_conflict`,
   `same_time_conflict`), `source`, and `observed_at` — never transaction descriptions
-  (`remittance_information`), amounts, currencies, or counterparty names. Stored payload
-  integrity errors fail closed with HTTP `500` (`budget_analytics_data_error`).
+  (`remittance_information`), amounts, currencies, or counterparty names. Whole-scope
+  bounded integrity probes fail closed with HTTP `500` (`budget_analytics_data_error`) on
+  invalid `reason`, `source`, `observed_at`/`fetched_at`, or SQL-verifiable `payload_json`
+  fields anywhere in scope (including beyond row `200`); duplicate-key JSON rejection
+  applies to the extracted candidate items.
