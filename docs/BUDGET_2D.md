@@ -1,8 +1,9 @@
 # Budget 2D: spending, categories and own-account transfers
 
-Status: implemented opt-in local analytics, using migration 0015. The canonical
-ledger, explicit account selection and consent implementation remain the source
-of truth. Suggestions require owner review before changing totals.
+Status as of 2026-11-22: implemented and deployed opt-in local analytics using
+migrations `0015`, `0017`, `0018` and `0019` (OpenAPI `0.17.0`–`0.24.0`, PRs `#182`–`#217`).
+The canonical ledger, explicit account selection and consent implementation remain the
+source of truth. Suggestions require owner review before changing totals.
 
 Account kinds and report scope are the owner's explicit choices. Respect selected
 and excluded accounts without changing those choices during classification or
@@ -198,9 +199,12 @@ missing fields. Unknown/invalid optional fields are counted and skipped.
 Own identifiers require actual account fields; transaction frequency, primary
 hashes and session UIDs do not establish account ownership.
 
-Recurring subscription hints, spending limits and mortgage schedules are later
-extensions. This slice does not infer a subscription is unwanted, schedule a
-payment or publish financial details in shared calendars.
+Recurring-charge hints (`0.18.0`), persisted monthly spending limits (`0017` / `0.19.0`),
+evaluation-only mortgage schedules (`0018` / `0.20.0`), read-only consent renewal and
+reconciliation views (`0.21.0`–`0.22.0`), and the live owner inbox (`0019` / `0.23.0`–`0.24.0`)
+are documented in the sections below. Hestia still never infers a subscription is
+unwanted, never initiates bank payments, never copies private financial details to shared
+calendars, and runs no outbound email/push delivery daemon.
 
 
 When a new bank consent is adopted, structured identifiers from POST `/sessions`
@@ -391,3 +395,27 @@ outflow without a known accepted relationship remains spending within that scope
 - **Backup and downgrade (`0019 → 0018`):** back up SQLite before downgrading. Downgrade drops
   `budget_owner_inbox_reads` and `budget_owner_inbox_state` while preserving sanitized
   `budget_analytics_audit` rows.
+
+## Deployed Budget 2D UI tabs (OpenAPI `0.24.0`)
+
+When `connections.capabilities.analytics` is `true`, the owner's **Budget** screen exposes
+eight on-demand tabs in memory only (zero financial persistence in `localStorage` or URL
+query strings; any `401`/`403`/`404` access loss clears all budget state immediately):
+
+- **Accounts (`Konta`):** stored connections, account selection/kind, refresh jobs,
+  on-demand read-only **Download limits**, and (when `capabilities.consent` is `true`)
+  the on-demand read-only **Consent status (`Stan zgód`)** panel.
+- **Inbox (`Skrzynka`):** live active alerts across `consent_renewal`, `mortgage_due` and
+  `spending_limit`, resolving display names locally via `item.ref`, with unread/capacity
+  indicators (`reads_count / reads_cap`), All / Unread filter, single & batch (up to 100)
+  anti-ABA CAS read/unread controls, and deep-links to Consent status, Mortgages and
+  Spending limits.
+- **Month (`Miesiąc`)** and **Year (`Rok`):** exact server-side per-currency totals,
+  category breakdowns, transaction filters/manual annotations, and own-transfer review queue.
+- **Spending limits (`Limity wydatków`):** monthly category spending limits with exact
+  decimal progress bars, strict CAS editing, and direct link to Categories and rules.
+- **Recurring (`Cykliczne`):** read-only evidence-backed monthly recurring-charge hints.
+- **Mortgages (`Hipoteka`):** evaluation-only private mortgage schedules and `YYYY-MM`
+  payment marks evaluated against server UTC today (`evaluation_date`), with zero PII targets.
+- **Categories and rules (`Kategorie i reguły`):** owner categories and mandatory
+  preview-before-save deterministic classification rules.
