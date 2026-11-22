@@ -447,7 +447,7 @@ export interface paths {
         put?: never;
         /**
          * Save a batch rule preview atomically
-         * @description Requires the exact admin owner, browser cookie and configured HTTPS Origin. Applies every rule in the batch preview or none: one digest check, per-rule expected_version checks, and the 500-rule cap are evaluated before any rule row changes. Replaying a saved batch returns changed=false. A single-rule preview id is rejected. No bank request is made.
+         * @description Requires the exact admin owner, browser cookie and configured HTTPS Origin. Applies every rule in the batch preview or none: one digest check, per-rule expected_version checks, and the per-owner rule cap (MAX_RULES = 5000) are evaluated before any rule row changes. Replaying a saved batch returns changed=false. A single-rule preview id is rejected. No bank request is made.
          */
         post: operations["saveBudgetAnalyticsRules"];
         delete?: never;
