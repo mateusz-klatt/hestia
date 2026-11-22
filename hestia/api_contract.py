@@ -77,7 +77,9 @@ from pydantic.json_schema import models_json_schema
 # 0.27.0: read-only owner-private monthly budget dashboard (GET /api/budget/analytics/monthly-budget, zero migration).
 # 0.28.0: additive optional income window on monthly-budget configuration (zero migration).
 # 0.29.0: read-only owner-private monthly budget charts (GET /api/budget/analytics/monthly-budget/charts, zero migration).
-CONTRACT_VERSION = "0.29.0"
+# 0.32.0: batch rule preview and save (POST /api/budget/analytics/rule-batch-preview and rule-batch-save,
+#         zero migration). 0.30.0 and 0.31.0 are reserved by open PRs.
+CONTRACT_VERSION = "0.32.0"
 OPENAPI_PATH = Path(__file__).resolve().parent.parent / "docs" / "api" / "openapi.json"
 
 # De-duplicated string literals (SonarPython S1192): the OpenAPI content-type, the paths reused
@@ -1687,6 +1689,45 @@ class BudgetAnalyticsPreviewResult(BaseModel):
     preview: BudgetAnalyticsPreview
 
 
+class BudgetAnalyticsRuleBatchPreviewRequest(BaseModel):
+    """Preview up to 100 rules against one snapshot. Invalid candidates store nothing."""
+    model_config = _STRICT
+    rules: Annotated[list[BudgetAnalyticsRulePreviewRequest], Field(min_length=1, max_length=100)]
+
+
+class BudgetAnalyticsRuleBatchSaveRequest(BaseModel):
+    """Save the whole batch preview or none of it. A single-rule preview id is rejected."""
+    model_config = _STRICT
+    preview_id: BudgetId
+
+
+class BudgetAnalyticsBatchPreview(BaseModel):
+    model_config = _READ
+    preview_id: str
+    expires_at: float
+    affected_count: int
+    examples: list[BudgetAnalyticsPreviewExample]
+    rule_count: int
+
+
+class BudgetAnalyticsBatchPreviewResult(BaseModel):
+    model_config = _READ
+    ok: Literal[True]
+    preview: BudgetAnalyticsBatchPreview
+
+
+class BudgetAnalyticsRuleBatch(BaseModel):
+    model_config = _READ
+    rules: list[BudgetAnalyticsRuleSaved]
+    changed: bool
+
+
+class BudgetAnalyticsRuleBatchResult(BaseModel):
+    model_config = _READ
+    ok: Literal[True]
+    batch: BudgetAnalyticsRuleBatch
+
+
 class BudgetAnalyticsAnnotation(BaseModel):
     model_config = _READ
     version: int
@@ -2517,6 +2558,9 @@ _ANALYTICS_MODELS = (BudgetAnalyticsCategoryCreateRequest, BudgetAnalyticsCatego
                      BudgetAnalyticsMortgagePaymentSetRequest, BudgetAnalyticsInboxMarkRequest,
                      BudgetAnalyticsCategories, BudgetAnalyticsCategoryResult, BudgetAnalyticsAnnotationResult,
                      BudgetAnalyticsRules, BudgetAnalyticsRuleResult, BudgetAnalyticsPreviewResult,
+                     BudgetAnalyticsRuleBatchPreviewRequest, BudgetAnalyticsRuleBatchSaveRequest,
+                     BudgetAnalyticsBatchPreview, BudgetAnalyticsBatchPreviewResult,
+                     BudgetAnalyticsRuleBatch, BudgetAnalyticsRuleBatchResult,
                      BudgetAnalyticsOverview, BudgetAnalyticsTransactions, BudgetAnalyticsTransfers,
                      BudgetAnalyticsDecisionResult, BudgetAnalyticsRecurring,
                      BudgetAnalyticsSpendingLimits, BudgetAnalyticsSpendingLimitResult,
@@ -2565,6 +2609,8 @@ _PATH_ROLES = {
     ("POST", "/api/budget/analytics/annotation"): "admin",
     ("POST", "/api/budget/analytics/rule-preview"): "admin",
     ("POST", "/api/budget/analytics/rule-save"): "admin",
+    ("POST", "/api/budget/analytics/rule-batch-preview"): "admin",
+    ("POST", "/api/budget/analytics/rule-batch-save"): "admin",
     ("POST", "/api/budget/analytics/transfer-decision"): "admin",
     ("POST", "/api/budget/analytics/spending-limit-save"): "admin",
     ("POST", "/api/budget/analytics/mortgage-save"): "admin",
@@ -3321,6 +3367,8 @@ def _analytics_paths():
         ("annotation", "annotateBudgetAnalyticsTransaction", "BudgetAnalyticsAnnotationRequest", "BudgetAnalyticsAnnotationResult"),
         ("rule-preview", "previewBudgetAnalyticsRule", "BudgetAnalyticsRulePreviewRequest", "BudgetAnalyticsPreviewResult"),
         ("rule-save", "saveBudgetAnalyticsRule", "BudgetAnalyticsRuleSaveRequest", "BudgetAnalyticsRuleResult"),
+        ("rule-batch-preview", "previewBudgetAnalyticsRules", "BudgetAnalyticsRuleBatchPreviewRequest", "BudgetAnalyticsBatchPreviewResult"),
+        ("rule-batch-save", "saveBudgetAnalyticsRules", "BudgetAnalyticsRuleBatchSaveRequest", "BudgetAnalyticsRuleBatchResult"),
         ("transfer-decision", "decideBudgetAnalyticsTransfer", "BudgetAnalyticsTransferDecisionRequest", "BudgetAnalyticsDecisionResult"),
         ("spending-limit-save", "saveBudgetAnalyticsSpendingLimit", "BudgetAnalyticsSpendingLimitSaveRequest", "BudgetAnalyticsSpendingLimitResult"),
         ("mortgage-save", "saveBudgetAnalyticsMortgage", "BudgetAnalyticsMortgageSaveRequest", "BudgetAnalyticsMortgageScheduleResult"),
@@ -3333,6 +3381,20 @@ def _analytics_paths():
                            "Version and source fingerprints prevent stale changes. No bank request is made.",
             "requestBody": {"required": True, "content": {_APP_JSON: {"schema": _ref(request)}}},
             "responses": _analytics_responses(model)}}
+    paths[prefix + "rule-batch-preview"]["post"]["summary"] = "Preview up to 100 owner-private rules against one snapshot"
+    paths[prefix + "rule-batch-preview"]["post"]["description"] = (
+        "Requires the exact admin owner, browser cookie and configured HTTPS Origin. All-or-nothing: "
+        "every candidate is validated before a preview row is stored, and one snapshot digest fences the "
+        "whole batch (1..100 rules). affected_count is the combined change, not a sum of single-rule previews. "
+        "No bank request is made."
+    )
+    paths[prefix + "rule-batch-save"]["post"]["summary"] = "Save a batch rule preview atomically"
+    paths[prefix + "rule-batch-save"]["post"]["description"] = (
+        "Requires the exact admin owner, browser cookie and configured HTTPS Origin. Applies every rule in the "
+        "batch preview or none: one digest check, per-rule expected_version checks, and the 500-rule cap are "
+        "evaluated before any rule row changes. Replaying a saved batch returns changed=false. A single-rule "
+        "preview id is rejected. No bank request is made."
+    )
     paths[prefix + "inbox-mark"]["post"]["summary"] = "Mark or unmark owner-private inbox alerts (atomic anti-ABA CAS)"
     paths[prefix + "inbox-mark"]["post"]["description"] = (
         "Requires the exact admin owner, browser cookie and configured HTTPS Origin. Atomically marks or unmarks "

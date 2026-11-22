@@ -30,6 +30,8 @@ WRITES = {
     "annotation": (api_contract.BudgetAnalyticsAnnotationRequest, "annotate", "annotation"),
     "rule-preview": (api_contract.BudgetAnalyticsRulePreviewRequest, "preview_rule", "preview"),
     "rule-save": (api_contract.BudgetAnalyticsRuleSaveRequest, "save_rule", "rule"),
+    "rule-batch-preview": (api_contract.BudgetAnalyticsRuleBatchPreviewRequest, "preview_rules", "preview"),
+    "rule-batch-save": (api_contract.BudgetAnalyticsRuleBatchSaveRequest, "save_rules", "batch"),
     "transfer-decision": (api_contract.BudgetAnalyticsTransferDecisionRequest, "decide_transfer", "decision"),
     "spending-limit-save": (api_contract.BudgetAnalyticsSpendingLimitSaveRequest, "save_spending_limit", "limit"),
     "mortgage-save": (api_contract.BudgetAnalyticsMortgageSaveRequest, "save_mortgage_schedule", "schedule"),
@@ -127,6 +129,10 @@ def _write(owner, operation, values, secret):
         result = store.preview_rule(owner, values)
     elif operation == "rule-save":
         result = store.save_rule(owner, values["preview_id"])
+    elif operation == "rule-batch-preview":
+        result = store.preview_rules(owner, values["rules"])
+    elif operation == "rule-batch-save":
+        result = store.save_rules(owner, values["preview_id"])
     else:
         result = getattr(store, method)(owner, **values)
     return {"ok": True, response_key: result}
@@ -148,7 +154,7 @@ def register(app, read_json_body, *, auth_enabled, session_secret):
                                         headers=api.PRIVATE_HEADERS)
             else:
                 api._browser(request, owner, secret)
-                max_bytes = 65536 if operation == "inbox-mark" else 16384
+                max_bytes = 65536 if operation == "inbox-mark" else 262144 if operation == "rule-batch-preview" else 16384
                 body, error = await read_json_body(request, max_bytes, reject_duplicates=True)
                 if error:
                     return body

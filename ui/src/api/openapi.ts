@@ -416,6 +416,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/budget/analytics/rule-batch-preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Preview up to 100 owner-private rules against one snapshot
+         * @description Requires the exact admin owner, browser cookie and configured HTTPS Origin. All-or-nothing: every candidate is validated before a preview row is stored, and one snapshot digest fences the whole batch (1..100 rules). affected_count is the combined change, not a sum of single-rule previews. No bank request is made.
+         */
+        post: operations["previewBudgetAnalyticsRules"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/budget/analytics/rule-batch-save": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Save a batch rule preview atomically
+         * @description Requires the exact admin owner, browser cookie and configured HTTPS Origin. Applies every rule in the batch preview or none: one digest check, per-rule expected_version checks, and the 500-rule cap are evaluated before any rule row changes. Replaying a saved batch returns changed=false. A single-rule preview id is rejected. No bank request is made.
+         */
+        post: operations["saveBudgetAnalyticsRules"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/budget/analytics/rule-preview": {
         parameters: {
             query?: never;
@@ -1661,6 +1701,28 @@ export interface components {
             /** Version */
             version: number;
         };
+        /** BudgetAnalyticsBatchPreview */
+        BudgetAnalyticsBatchPreview: {
+            /** Affected Count */
+            affected_count: number;
+            /** Examples */
+            examples: components["schemas"]["BudgetAnalyticsPreviewExample"][];
+            /** Expires At */
+            expires_at: number;
+            /** Preview Id */
+            preview_id: string;
+            /** Rule Count */
+            rule_count: number;
+        };
+        /** BudgetAnalyticsBatchPreviewResult */
+        BudgetAnalyticsBatchPreviewResult: {
+            /**
+             * Ok
+             * @constant
+             */
+            ok: true;
+            preview: components["schemas"]["BudgetAnalyticsBatchPreview"];
+        };
         /** BudgetAnalyticsCategories */
         BudgetAnalyticsCategories: {
             /** Categories */
@@ -2896,6 +2958,38 @@ export interface components {
             value: string;
             /** Version */
             version: number;
+        };
+        /** BudgetAnalyticsRuleBatch */
+        BudgetAnalyticsRuleBatch: {
+            /** Changed */
+            changed: boolean;
+            /** Rules */
+            rules: components["schemas"]["BudgetAnalyticsRuleSaved"][];
+        };
+        /**
+         * BudgetAnalyticsRuleBatchPreviewRequest
+         * @description Preview up to 100 rules against one snapshot. Invalid candidates store nothing.
+         */
+        BudgetAnalyticsRuleBatchPreviewRequest: {
+            /** Rules */
+            rules: components["schemas"]["BudgetAnalyticsRulePreviewRequest"][];
+        };
+        /** BudgetAnalyticsRuleBatchResult */
+        BudgetAnalyticsRuleBatchResult: {
+            batch: components["schemas"]["BudgetAnalyticsRuleBatch"];
+            /**
+             * Ok
+             * @constant
+             */
+            ok: true;
+        };
+        /**
+         * BudgetAnalyticsRuleBatchSaveRequest
+         * @description Save the whole batch preview or none of it. A single-rule preview id is rejected.
+         */
+        BudgetAnalyticsRuleBatchSaveRequest: {
+            /** Preview Id */
+            preview_id: string;
         };
         /** BudgetAnalyticsRulePreviewRequest */
         BudgetAnalyticsRulePreviewRequest: {
@@ -6957,6 +7051,198 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["BudgetAnalyticsRecurring"];
+                };
+            };
+            /** @description invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description session required; middleware may return an empty body */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description admin owner or browser-origin requirement failed; middleware may return an empty body */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description unknown, disabled or foreign resource */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Version, financial source, reserved transfer leg, preview or cursor changed; reload and review. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Explicit analytics processing or owner configuration limit; no partial totals. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description budget configuration unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+        };
+    };
+    previewBudgetAnalyticsRules: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BudgetAnalyticsRuleBatchPreviewRequest"];
+            };
+        };
+        responses: {
+            /** @description owner-scoped stored state; no bank request */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetAnalyticsBatchPreviewResult"];
+                };
+            };
+            /** @description invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description session required; middleware may return an empty body */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description admin owner or browser-origin requirement failed; middleware may return an empty body */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description unknown, disabled or foreign resource */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Version, financial source, reserved transfer leg, preview or cursor changed; reload and review. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Explicit analytics processing or owner configuration limit; no partial totals. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description budget configuration unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+        };
+    };
+    saveBudgetAnalyticsRules: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BudgetAnalyticsRuleBatchSaveRequest"];
+            };
+        };
+        responses: {
+            /** @description owner-scoped stored state; no bank request */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetAnalyticsRuleBatchResult"];
                 };
             };
             /** @description invalid request */

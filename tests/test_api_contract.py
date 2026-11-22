@@ -56,7 +56,15 @@ class OpenApiArtifactTests(unittest.TestCase):
 
     def test_monthly_budget_contract_is_strictly_additive_from_0_27_0(self):
         document = api_contract.build_openapi()
-        self.assertEqual(document["info"]["version"], "0.29.0")
+        self.assertEqual(document["info"]["version"], "0.32.0")
+        # 0.30.0 and 0.31.0 are taken by open PRs. Strip this batch addition before the historical hashes.
+        for path in ("/api/budget/analytics/rule-batch-preview", "/api/budget/analytics/rule-batch-save"):
+            del document["paths"][path]
+        for name in ("BudgetAnalyticsRuleBatchPreviewRequest", "BudgetAnalyticsRuleBatchSaveRequest",
+                     "BudgetAnalyticsBatchPreview", "BudgetAnalyticsBatchPreviewResult",
+                     "BudgetAnalyticsRuleBatch", "BudgetAnalyticsRuleBatchResult"):
+            del document["components"]["schemas"][name]
+        document["info"]["version"] = "0.29.0"
         del document["paths"]["/api/budget/analytics/monthly-budget/charts"]
         for suffix in ("DailyPoint", "SeriesCategory", "SeriesMonth", "CategoryLabel", "Series", "Charts"):
             del document["components"]["schemas"]["BudgetAnalyticsMonthlyBudget" + suffix]
@@ -495,6 +503,7 @@ class TolerantResponseContractTests(unittest.TestCase):
     REQUEST_ONLY = {
         "BudgetAnalyticsCategoryCreateRequest", "BudgetAnalyticsCategoryUpdateRequest",
         "BudgetAnalyticsAnnotationRequest", "BudgetAnalyticsRulePreviewRequest", "BudgetAnalyticsRuleSaveRequest",
+        "BudgetAnalyticsRuleBatchPreviewRequest", "BudgetAnalyticsRuleBatchSaveRequest",
         "BudgetAnalyticsTransferDecisionRequest", "BudgetAnalyticsLegRequest",
         "BudgetAnalyticsSpendingLimitSaveRequest", "BudgetAnalyticsMortgageSaveRequest",
         "BudgetAnalyticsMortgagePaymentSetRequest", "BudgetAnalyticsInboxKeyRequest",

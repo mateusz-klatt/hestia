@@ -202,6 +202,7 @@ class BudgetOpenApiTests(unittest.TestCase):
                            "spending-limits", "mortgages", "inbox", "quarantine", "forecast",
                            "monthly-budget", "monthly-budget/charts"}
         analytics_writes = {"category-create", "category-update", "annotation", "rule-preview", "rule-save",
+                            "rule-batch-preview", "rule-batch-save",
                             "transfer-decision", "spending-limit-save", "mortgage-save", "mortgage-payment-set",
                             "inbox-mark"}
         self.assertEqual(set(analytics), {"/api/budget/analytics/" + name for name in analytics_reads | analytics_writes})
@@ -210,7 +211,10 @@ class BudgetOpenApiTests(unittest.TestCase):
             self.assertEqual(set(methods), {method})
             self.assertEqual(methods[method]["x-required-role"], "admin")
             self.assertIn("413", methods[method]["responses"])
-        self.assertEqual(document["info"]["version"], "0.29.0")
+        self.assertEqual(document["info"]["version"], "0.32.0")
+        batch = analytics["/api/budget/analytics/rule-batch-preview"]["post"]["description"]
+        self.assertIn("1..100", batch)
+        self.assertIn("All-or-nothing", batch)
         mark_desc = analytics["/api/budget/analytics/inbox-mark"]["post"]["description"]
         for phrase in ("reads_version", "1..100", "500"):
             self.assertIn(phrase, mark_desc)
@@ -417,7 +421,8 @@ class BudgetOpenApiTests(unittest.TestCase):
         request_names.add("BudgetConsentFlowRequest")
         request_names.update({"BudgetAnalyticsCategoryCreateRequest", "BudgetAnalyticsCategoryUpdateRequest",
                               "BudgetAnalyticsAnnotationRequest", "BudgetAnalyticsRulePreviewRequest",
-                              "BudgetAnalyticsRuleSaveRequest", "BudgetAnalyticsTransferDecisionRequest",
+                              "BudgetAnalyticsRuleSaveRequest", "BudgetAnalyticsRuleBatchPreviewRequest",
+                              "BudgetAnalyticsRuleBatchSaveRequest", "BudgetAnalyticsTransferDecisionRequest",
                               "BudgetAnalyticsLegRequest", "BudgetAnalyticsSpendingLimitSaveRequest",
                               "BudgetAnalyticsMortgageSaveRequest", "BudgetAnalyticsMortgagePaymentSetRequest",
                               "BudgetAnalyticsInboxKeyRequest", "BudgetAnalyticsInboxMarkRequest"})

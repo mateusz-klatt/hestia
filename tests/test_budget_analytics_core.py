@@ -4,8 +4,8 @@ from types import SimpleNamespace
 import unittest
 
 from hestia.budget.analytics_core import (AnalyticsError, canonical_money, compare_money, compatible_kind,
-    effective_date, financial_fingerprint, negate_money, owned_identities, pair_fingerprint, parse_period,
-    projection_digest, rule_matches, sum_money)
+    compile_rules, effective_date, financial_fingerprint, first_matching_rule, match_texts, negate_money,
+    owned_identities, pair_fingerprint, parse_period, projection_digest, rule_matches, sum_money)
 
 
 def payload(**changes):
@@ -139,3 +139,28 @@ class PeriodAndRuleTests(unittest.TestCase):
                      ("expense", "DBIT", True), ("income", "CRDT", True), ("refund", "CRDT", True),
                      ("income", "DBIT", False), ("expense", "CRDT", False), ("bad", "DBIT", False)):
             self.assertEqual(compatible_kind(kind, payload(credit_debit_indicator=direction)), expected)
+
+    def test_compiled_rules_match_the_same_first_rule_without_refolding(self):
+        rules = [
+            {"id": "later", "enabled": True, "kind": "expense", "field": "description", "operator": "contains",
+             "value": "shop", "priority": 2},
+            {"id": "first", "enabled": True, "kind": "auto", "field": "description", "operator": "equals",
+             "value": "Synthetic SHOP", "priority": 1},
+            {"id": "off", "enabled": False, "kind": "expense", "field": "execute", "operator": "regex",
+             "value": "shop", "priority": 0},
+        ]
+        ordered = sorted(rules, key=lambda row: (row["priority"], row["id"]))
+        compiled, safe = compile_rules(ordered)
+        self.assertTrue(safe)
+        texts = match_texts(payload(), None)
+        found = first_matching_rule(compiled, payload(), texts)
+        self.assertEqual(found["id"], "first")
+        self.assertTrue(rule_matches(ordered[1], payload()))
+        expense, _ = compile_rules([ordered[2]])
+        credit = payload(credit_debit_indicator="CRDT")
+        self.assertIsNone(first_matching_rule(expense, credit, match_texts(credit)))
+        self.assertEqual(first_matching_rule(expense, payload(), texts)["id"], "later")
+        broken, broken_safe = compile_rules([ordered[1] | {"field": "execute"}])
+        self.assertFalse(broken_safe)
+        with self.assertRaises(AnalyticsError):
+            first_matching_rule(broken, payload(), texts)

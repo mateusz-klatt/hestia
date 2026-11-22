@@ -78,6 +78,7 @@ class BudgetAnalyticsAPITests(unittest.IsolatedAsyncioTestCase):
         return {"category-create": {"name": "Synthetic groceries"},
                 "category-update": {"category_id": "unknown", "name": "Synthetic", "archived": False, "expected_version": 0},
                 "annotation": self.annotation(), "rule-preview": self.candidate(), "rule-save": {"preview_id": "unknown"},
+                "rule-batch-preview": {"rules": [self.candidate()]}, "rule-batch-save": {"preview_id": "unknown"},
                 "transfer-decision": {"action": "undo", "decision_id": "unknown", "expected_version": 1},
                 "spending-limit-save": {"category_id": "unknown", "currency": "PLN", "monthly_limit": "100",
                                         "warning_percent": 80, "enabled": True, "expected_version": 0},
@@ -737,6 +738,29 @@ class BudgetAnalyticsAPITests(unittest.IsolatedAsyncioTestCase):
         with self.sessions.begin() as session:
             session.get(db.BudgetAccount, self.credit_id).enabled = False
         self.assertEqual((await self.post("rule-save", {"preview_id": stale["preview_id"]})).status, 409)
+
+    async def test_rule_batch_preview_and_save_are_atomic_and_admin_only(self):
+        created = await self.post("rule-batch-preview", {"rules": [self.candidate(), self.candidate(value="other", priority=11)]})
+        self.assertEqual(created.status, 200, await created.text())
+        self.assert_private_headers(created)
+        preview = (await created.json())["preview"]
+        api_contract.BudgetAnalyticsBatchPreview.model_validate(preview)
+        self.assertEqual(preview["rule_count"], 2)
+        single = (await (await self.post("rule-preview", self.candidate())).json())["preview"]
+        self.assertEqual(preview["affected_count"], single["affected_count"])
+        oversize = await self.post("rule-batch-preview", {"rules": [self.candidate(priority=index) for index in range(101)]})
+        self.assertEqual(oversize.status, 400)
+        saved_response = await self.post("rule-batch-save", {"preview_id": preview["preview_id"]})
+        self.assertEqual(saved_response.status, 200, await saved_response.text())
+        saved = await saved_response.json()
+        api_contract.BudgetAnalyticsRuleBatchResult.model_validate(saved)
+        self.assertEqual(len(saved["batch"]["rules"]), 2)
+        self.assertTrue(saved["batch"]["changed"])
+        replay = await (await self.post("rule-batch-save", {"preview_id": preview["preview_id"]})).json()
+        self.assertFalse(replay["batch"]["changed"])
+        self.assertEqual((await self.post("rule-save", {"preview_id": preview["preview_id"]})).status, 400)
+        self.assertEqual((await self.post("rule-batch-save", {"preview_id": single["preview_id"]})).status, 400)
+        self.assertEqual(len(self.rows(db.BudgetRule)), 2)
 
     async def test_transfer_accept_reject_undo_and_fingerprints_are_atomic(self):
         response = await self.get("transfers")

@@ -190,6 +190,8 @@ _ROUTE_MIN_ROLE = {
     ("POST", "/api/budget/analytics/annotation"): _ADMIN,
     ("POST", "/api/budget/analytics/rule-preview"): _ADMIN,
     ("POST", "/api/budget/analytics/rule-save"): _ADMIN,
+    ("POST", "/api/budget/analytics/rule-batch-preview"): _ADMIN,
+    ("POST", "/api/budget/analytics/rule-batch-save"): _ADMIN,
     ("POST", "/api/budget/analytics/transfer-decision"): _ADMIN,
     ("POST", "/api/budget/analytics/spending-limit-save"): _ADMIN,
     ("POST", "/api/budget/analytics/mortgage-save"): _ADMIN,

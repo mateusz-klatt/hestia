@@ -2,14 +2,33 @@
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import fcntl
 import logging
+import os
 from contextlib import contextmanager
 from pathlib import Path
 
 from .config import ConfigError, load_config, make_providers
 
 log = logging.getLogger("hestia.calendar_sync")
+_EXECUTOR = None
+
+
+def _background_priority():
+    """Keep the restart sync off the default executor and behind other processes."""
+    try:
+        os.nice(10)
+    except OSError:
+        return
+
+
+def _calendar_executor():
+    global _EXECUTOR
+    if _EXECUTOR is None:
+        _EXECUTOR = concurrent.futures.ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="calendar-sync", initializer=_background_priority)
+    return _EXECUTOR
 
 
 class SyncBusyError(RuntimeError):
@@ -46,8 +65,14 @@ def run_once(config, *, path=None):
 
 
 async def _settled_thread(operation):
-    """Cancellation waits for the blocking round to finish before cleanup releases locks."""
-    worker = asyncio.create_task(asyncio.to_thread(operation))
+    """Cancellation waits for the blocking round to finish before cleanup releases locks.
+
+    The round runs on a single low-priority thread so a full calendar pull (every replica,
+    every restart) does not share the default executor with budget analytics or outrank
+    other services on a small host.
+    """
+    loop = asyncio.get_running_loop()
+    worker = asyncio.ensure_future(loop.run_in_executor(_calendar_executor(), operation))
     try:
         return await asyncio.shield(worker)
     except asyncio.CancelledError:

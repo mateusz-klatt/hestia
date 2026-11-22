@@ -157,7 +157,7 @@ def _annotation(row, financial_fp):
             "kind": row.kind, "stale": row.ledger_fingerprint != financial_fp}
 
 
-def _effective(payload, metadata, annotation, categories, rules):
+def _effective(payload, metadata, annotation, categories, rules, *, texts=None, compiled=None):
     default = "expense" if payload["credit_debit_indicator"] == "DBIT" else "unclassified_credit"
     result = {"kind": default, "category_id": None, "source": "default", "rule_id": None}
     if annotation["mode"] == "manual":
@@ -167,31 +167,36 @@ def _effective(payload, metadata, annotation, categories, rules):
             result.update(kind=default if annotation["kind"] == "auto" else annotation["kind"],
                           category_id=_category(annotation["category_id"], categories), source="manual")
         return result
-    for rule in rules:
-        if core.rule_matches(rule, payload, metadata):
-            result.update(kind=default if rule["kind"] == "auto" else rule["kind"],
-                          category_id=_category(rule["category_id"], categories), source="rule", rule_id=rule["id"])
-            break
+    if compiled is None:
+        compiled, _ = core.compile_rules(rules)
+    if texts is None:
+        texts = core.match_texts(payload, metadata)
+    rule = core.first_matching_rule(compiled, payload, texts)
+    if rule is not None:
+        result.update(kind=default if rule["kind"] == "auto" else rule["kind"],
+                      category_id=_category(rule["category_id"], categories), source="rule", rule_id=rule["id"])
     return result
 
 
 def _records(ledger, identities, metadata, annotations, categories, rules):
     result = []
     owned = core.owned_identities(identities) if ledger else None
+    compiled, _ = core.compile_rules(rules)
     for row in ledger:
         payload, financial_fp = _payload(row.payload_json)
         key = (row.account_id, row.entry_reference)
         sidecar = metadata.get(key)
         evidence = _metadata(sidecar.payload_json) if sidecar is not None and sidecar.ledger_fingerprint == financial_fp else None
         annotation = _annotation(annotations.get(key), financial_fp)
-        effective = _effective(payload, evidence, annotation, categories, rules)
+        texts = core.match_texts(payload, evidence)
+        effective = _effective(payload, evidence, annotation, categories, rules, texts=texts, compiled=compiled)
         result.append({"account_id": row.account_id, "entry_reference": row.entry_reference, "payload": payload,
                        "financial_fp": financial_fp,
                        "transfer_fp": core.pair_fingerprint(row.account_id, row.entry_reference, payload, evidence, identities,
                                                             financial=financial_fp, owned_ids=owned),
                        "metadata": evidence, "annotation": annotation, "effective": effective,
-                       "base_effective": dict(effective), "source": row.source, "observed_at": row.observed_at,
-                       "api_observed_at": row.api_observed_at, "uncertain": row.uncertain,
+                       "base_effective": dict(effective), "_match_texts": texts, "source": row.source,
+                       "observed_at": row.observed_at, "api_observed_at": row.api_observed_at, "uncertain": row.uncertain,
                        "eligible": not row.uncertain and payload["status"] == "BOOK" and core.effective_date(payload) is not None,
                        "transfer": {"status": "none", "decision_id": None, "candidate_count": 0, "ambiguous": False}})
     return result
@@ -218,8 +223,13 @@ def _scope_counts(session, owner, accounts):
             "excluded_accounts": sum(not account.enabled for account in accounts), **_owner_counts(session, owner)}
 
 
-def projection_snapshot(session, owner):
-    """Shared read/preview snapshot; caller owns the existing SQLite transaction."""
+def projection_snapshot(session, owner, *, classify=True):
+    """Shared read/preview snapshot; caller owns the existing SQLite transaction.
+
+    ``classify=False`` still parses the ledger and builds the same digest, but skips rule
+    application. Save uses it to fence a preview without a second full categorisation.
+    The digest does not include effective categories, so the two modes hash the same bytes.
+    """
     BudgetHTTPStore._owner(session, owner)
     accounts = list(session.scalars(select(db.BudgetAccount).join(db.BudgetConnection).where(
         db.BudgetAccount.owner == owner, db.BudgetConnection.owner == owner).order_by(db.BudgetAccount.id)))
@@ -235,7 +245,8 @@ def projection_snapshot(session, owner):
     decisions = [_entity(row) for row in session.scalars(select(db.BudgetTransferDecision).where(
         db.BudgetTransferDecision.owner == owner).order_by(db.BudgetTransferDecision.id))]
     identities, identity_state, metadata, annotations = _auxiliary(session, owner, accounts)
-    records = _records(ledger, identities, metadata, annotations, {row["id"]: row for row in categories}, rules)
+    applied = rules if classify else ()
+    records = _records(ledger, identities, metadata, annotations, {row["id"]: row for row in categories}, applied)
     account_state = [{"id": row.id, "connection_id": row.connection_id, "enabled": row.enabled,
                       "configured": row.configured, "control_version": row.control_version, "kind": row.kind,
                       "kind_confirmed_at": row.kind_confirmed_at} for row in accounts]
@@ -252,7 +263,8 @@ def projection_snapshot(session, owner):
                 "categories": [_semantic(row) for row in categories], "rules": [_semantic(row) for row in rules],
                 "decisions": [_semantic(row) for row in decisions]}
     snapshot["digest"] = core.projection_digest(semantic)
-    _accepted_projection(snapshot)
+    if classify:
+        _accepted_projection(snapshot)
     return snapshot
 
 

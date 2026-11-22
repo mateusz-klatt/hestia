@@ -750,6 +750,82 @@ class RuleTests(AnalyticsCase):
         self.assertTrue(self.store.save_rule("owner", preview["preview_id"])["changed"])
 
 
+class RuleBatchTests(AnalyticsCase):
+    def test_one_batch_matches_single_preview_and_one_digest_fences_every_rule(self):
+        from hestia.budget.analytics_views import projection_snapshot
+
+        category = self.store.create_category("owner", "Batch Groceries")
+        single = self.store.preview_rule("owner", self.candidate(category_id=category["id"]))
+        batch = self.store.preview_rules("owner", [self.candidate(category_id=category["id"]),
+                                                   self.candidate(value="missing-literal", priority=4, kind="excluded")])
+        self.assertEqual((batch["affected_count"], batch["examples"], batch["rule_count"]),
+                         (single["affected_count"], single["examples"], 2))
+        self.assertGreater(batch["affected_count"], 0)
+        with self.sessions.begin() as session:
+            full = projection_snapshot(session, "owner")
+            bare = projection_snapshot(session, "owner", classify=False)
+        self.assertEqual(bare["digest"], full["digest"])
+        saved = self.store.save_rules("owner", batch["preview_id"])
+        self.assertEqual(len(saved["rules"]), 2)
+        self.assertTrue(all(row["changed"] for row in saved["rules"]))
+        self.assertTrue(saved["changed"])
+        replay = self.store.save_rules("owner", batch["preview_id"])
+        self.assertFalse(replay["changed"])
+        self.assertEqual([row["id"] for row in replay["rules"]], [row["id"] for row in saved["rules"]])
+        self.assertEqual(len(self.store.rules("owner")), 2)
+        with self.assertRaises(AnalyticsError):
+            self.store.save_rule("owner", batch["preview_id"])
+        with self.assertRaises(AnalyticsError):
+            self.store.save_rules("owner", single["preview_id"])
+
+    def test_batch_is_all_or_nothing_on_validation_version_digest_and_cap(self):
+        first = self.store.save_rule("owner", self.store.preview_rule("owner", self.candidate())["preview_id"])
+        stale = self.store.preview_rules("owner", [self.candidate(value="one", priority=1),
+                                                   self.candidate(value="two", priority=2)])
+        self.add_transaction("a", "extra", remittance_information=["other"])
+        with self.assertRaises(AnalyticsError) as conflict:
+            self.store.save_rules("owner", stale["preview_id"])
+        self.assertEqual(conflict.exception.code, "budget_analytics_stale_preview")
+        self.assertEqual(len(self.store.rules("owner")), 1)
+        with self.assertRaises(AnalyticsError):
+            self.store.preview_rules("owner", [self.candidate(value="ok"), self.candidate(field="execute")])
+        self.assertEqual(len(self.rows(db.BudgetRulePreview)), 2)
+        with self.assertRaises(AnalyticsError) as duplicate:
+            self.store.preview_rules("owner", [
+                self.candidate(rule_id=first["id"], expected_version=1, value="renamed"),
+                self.candidate(rule_id=first["id"], expected_version=1, value="again", priority=3)])
+        self.assertEqual(duplicate.exception.status, 400)
+        self.assertEqual(self.store.rules("owner")[0]["value"], first["value"])
+        preview = self.store.preview_rules("owner", [
+            self.candidate(rule_id=first["id"], expected_version=1, value="renamed"),
+            self.candidate(value="brand-new", priority=9)])
+        with self.sessions.begin() as session:
+            session.get(db.BudgetRule, first["id"]).version = 2
+        with self.assertRaises(AnalyticsError) as mismatch:
+            self.store.save_rules("owner", preview["preview_id"])
+        self.assertEqual(mismatch.exception.status, 409)
+        self.assertEqual(self.store.rules("owner")[0]["value"], first["value"])
+        with self.sessions.begin() as session:
+            for index in range(analytics_store.MAX_RULES - 1):
+                session.add(db.BudgetRule(id=str(uuid.uuid4()), owner="owner", field="description", operator="contains",
+                            value=f"filled-{index}", category_id=None, kind="auto", priority=index % 10001,
+                            enabled=False, version=1, created_at=self.now, updated_at=self.now))
+        capped = self.store.preview_rules("owner", [self.candidate(value="cap-a", priority=1),
+                                                    self.candidate(value="cap-b", priority=2)])
+        with self.assertRaises(AnalyticsError) as cap:
+            self.store.save_rules("owner", capped["preview_id"])
+        self.assertEqual(cap.exception.status, 413)
+        self.assertEqual(len(self.store.rules("owner")), analytics_store.MAX_RULES)
+        self.assertIsNone(next(row for row in self.rows(db.BudgetRulePreview) if row.id == capped["preview_id"]).saved_rule_id)
+
+    def test_batch_rejects_empty_and_oversize_inputs(self):
+        with self.assertRaises(AnalyticsError):
+            self.store.preview_rules("owner", [])
+        with self.assertRaises(AnalyticsError):
+            self.store.preview_rules("owner", [self.candidate() for _ in range(analytics_store.MAX_BATCH_RULES + 1)])
+        self.assertEqual(self.store.rules("owner"), [])
+
+
 class SpendingLimitStoreTests(AnalyticsCase):
     def save(self, category_id, **changes):
         values = {"currency": "PLN", "monthly_limit": "500.00", "warning_percent": 80,
