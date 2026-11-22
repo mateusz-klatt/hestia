@@ -1,7 +1,7 @@
 # Budget Receipts: Research & Design Proposal
 
-Status: **Proposed (design only)** — no code, migrations, or privacy-policy edits are shipped with this document.  
-Target stack: Python 3.14 / `aiohttp` (`Dockerfile:10`, `requirements.txt:24`), SQLite + SQLAlchemy 2.0 + Alembic (`hestia/db.py:10-30`, `requirements.txt:25-26`), React 19 + TypeScript (`ui/package.json:29-31`), Docker (`docker-compose.yml:1-46`).
+> **Status:** Revised design proposal v2 (Grok 4.7 review findings **#1–#9** resolved; **Q1, Q2, Q5, Q6, Q7** and operational rules decided; **Q3–Q4** decided by engineering under the owner's delegation, see §9). No code, migrations, or privacy-policy edits ship with this document.  
+> **Baseline:** `master` at `81a432c` (schema `0019`, OpenAPI `0.25.0`, target stack Python 3.14 / `aiohttp` at `Dockerfile:10`, `requirements.txt:24`; SQLite + SQLAlchemy 2.0 + Alembic at `hestia/db.py:10-30`, `requirements.txt:25-26`; React 19 + TypeScript at `ui/package.json:29-31`; Docker at `docker-compose.yml:1-46`).
 
 ---
 
@@ -11,175 +11,224 @@ Add an owner-private **Receipts (`Paragony`)** module to Hestia Budget so the ho
 
 1. Capture a Polish retail receipt on mobile (photo or pasted iOS Live Text).
 2. Extract the shop (name / NIP), purchase date & time, payment method, `SUMA PLN`, and line items (name, quantity, unit price, discount, PTU letter, line total).
-3. Match and manually confirm a link to an existing canonical bank transaction (`budget_transactions`) using exact amount, currency, booking/value date (`±2` calendar days), and merchant text.
+3. Match and manually confirm an **informational** link to an existing canonical bank transaction (`budget_transactions`) using exact amount, currency, nearest transaction/booking/value date (`±4` calendar days), and merchant text — without modifying `analytics_views.py` spending totals in v1.
 4. *(v2)* Normalize product variants (e.g., `"ML.UHT 3,2% 1L"`, `"MLEKO WYPASIONE 3,2% 1000ML"`) to compare **price per canonical unit** across Warsaw shops (e.g., Carrefour vs. Biedronka vs. Lidl) over time.
 
 ### Non-negotiable Hestia constraints
 
 Every design choice below inherits the existing budget module boundaries:
 
-- **Owner-private & fail-closed auth:** Budget endpoints require `HESTIA_BUDGET_HTTP_ENABLED=1`, `HESTIA_PERSIST=sqlite`, authoritative SQLite users, and an enabled `admin` principal (`hestia/budget/api.py:53-63`). All routes must be classified `_ADMIN` in both `hestia/web.py:167-206` and `hestia/api_contract.py:2283-2315`.
-- **Browser-only mutations & headers:** State-changing POSTs require the `HttpOnly` `hestia_session` cookie, reject any `Authorization` header, and enforce `Origin == HESTIA_BUDGET_PUBLIC_ORIGIN` (`hestia/budget/api.py:73-91`, `hestia/budget/analytics_api.py:109-120`). All budget responses carry `Cache-Control: no-store` and `Referrer-Policy: no-referrer` (`hestia/budget/api.py:38,214-216`).
-- **Browser memory only:** No receipt images, line items, or prices in `localStorage`, `sessionStorage`, or URL query strings (`docs/BUDGET.md:247-252`, `ui/src/budget/budget.tsx:1-2`). Any `401`/`403`/`404` clears budget state immediately.
-- **Exact decimals (no floats):** Monetary values, quantities, discounts, and unit prices must use validated canonical decimal strings (`hestia/budget/normalize.py:98-115`) and scaled-integer arithmetic (`hestia/budget/analytics_core.py:38-87`, `docs/BUDGET_2D.md:26-29`) — never SQLite `REAL`, Python `float`, or JS `Number`.
-- **Zero financial/receipt payloads in logs:** Application logs, error responses, global `/api/audit`, and SSE (`/api/events`) may record only fixed safe error codes or exception class names (`hestia/budget/api.py:208`, `hestia/budget/client.py:77-115`). Private mutations log sanitized metadata only in `budget_analytics_audit` (`hestia/db.py:703-712`, `docs/BUDGET_2D.md:292-295`). Note that Apache/Cloudflare reverse-proxy access logs record request paths and query parameters (`ui/public/privacy-policy.html:226-230`), so receipt/product search strings should travel in `POST` JSON bodies rather than `GET` query parameters.
-- **Read-only bank access & manual confirmation:** Linking a receipt never contacts Enable Banking, consumes acquisition quota, or alters canonical `budget_transactions` payloads (`docs/BUDGET_2D.md:180-181`). Like transfer matching (`hestia/budget/transfer_match.py:1-15`), matching only proposes candidates and requires explicit owner confirmation.
-- **Request-size boundary in `web.py`:** `make_app` currently sets `client_max_size = MAX_RULE_BODY + 4096` (`69,632` bytes in `hestia/web.py:51,1160-1163`), and `_read_json_body` enforces per-route JSON limits (`hestia/web.py:905-935`). Pasted text fits inside `64 KiB`, whereas photo upload requires raising `client_max_size` on `web.Application` (e.g., to `6 MiB`) while keeping strict per-route limits in `_read_json_body` for all existing JSON endpoints.
-- **Privacy policy gate:** Storing receipt photos or adding an opt-in cloud vision processor requires updating `ui/public/privacy-policy.html` before live activation (`docs/BUDGET.md:13-14,660-662`).
+- **Owner-private & fail-closed auth:** Budget endpoints require `HESTIA_BUDGET_HTTP_ENABLED=1`, `HESTIA_PERSIST=sqlite`, authoritative SQLite users, and an enabled `admin` principal (`hestia/budget/api.py:53-63`). Because `hestia/web.py:245-253` resolves `_ROUTE_MIN_ROLE.get((method, path))` by exact path and defaults unclassified `GET` routes to `_VIEWER`, **every** receipt route must use a fixed path (no `{id}` path segments) and be classified `_ADMIN` in `hestia/web.py:167-206` and `"admin"` in `hestia/api_contract.py:2286-2315`, with `allow_head=False` on reads.
+- **Browser-only mutations, multipart CSRF & headers:** Every state-changing POST — including `multipart/form-data` image uploads that bypass `_read_json_body`'s JSON-only guard (`hestia/web.py:918-921`) — must run `api._principal(request, auth_enabled)` and `api._browser(request, owner, secret)` **before reading any request body bytes**, enforcing the `HttpOnly` `hestia_session` cookie, rejecting any `Authorization` header, and checking exact `Origin == HESTIA_BUDGET_PUBLIC_ORIGIN` (`hestia/budget/api.py:73-91,236-241`, `hestia/budget/analytics_api.py:109-120`). All budget responses carry `Cache-Control: no-store` and `Referrer-Policy: no-referrer` (`hestia/budget/api.py:38,214-216`).
+- **Browser memory only:** No receipt images, raw text, line items, or prices in `localStorage`, `sessionStorage`, or URL query strings (`docs/BUDGET.md:247-252`, `ui/src/budget/budget.tsx:1-2`). Any `401`/`403`/`404` clears budget state immediately.
+- **Exact decimals (no floats):** Monetary values, quantities, discounts, and unit prices use validated canonical decimal strings (`hestia/budget/normalize.py:98-115`) and scaled-integer arithmetic (`hestia/budget/analytics_core.py:38-87`, `docs/BUDGET_2D.md:26-29`) — never SQLite `REAL`, Python `float`, or JS `Number`.
+- **Zero financial/receipt payloads in logs:** Application logs, error responses, global `/api/audit`, and SSE (`/api/events`) may record only fixed safe error codes or exception class names (`hestia/budget/api.py:208`, `hestia/budget/client.py:77-115`). Private mutations log sanitized metadata only in `budget_analytics_audit` (`hestia/db.py:703-712`, `hestia/budget/analytics_store.py:127-129`, `docs/BUDGET_2D.md:292-295`) — **never** `raw_ocr_text`, NIPs, PANs, shop names, line items, or amounts. Reverse proxies (Apache/Cloudflare) log paths and query parameters (`ui/public/privacy-policy.html:226-230`), so receipt IDs are opaque UUIDs and text search avoids `GET` query strings.
+- **Read-only bank access & manual confirmation:** Linking a receipt never contacts Enable Banking, consumes acquisition quota, or alters canonical `budget_transactions` payloads (`docs/BUDGET_2D.md:180-181`). Following `hestia/budget/transfer_match.py:1-15`, matching only proposes candidates and requires explicit owner confirmation inside `BEGIN IMMEDIATE`.
+- **Upload framing, body limit & decompression-bomb defense:** `make_app` currently sets `client_max_size = MAX_RULE_BODY + 4096` (`69,632` bytes in `hestia/web.py:51,1160-1163`), and `_read_json_body` enforces per-route caps (`hestia/web.py:905-935`). Photo upload raises `web.Application(client_max_size=6 * 1024 * 1024)` while preserving existing `MAX_BODY`/`MAX_RULE_BODY` caps inside `_read_json_body`, requiring `Content-Length`, refusing chunked uploads, checking header pixel bounds (`<= 2000 px` long side, `<= 4 MP`) before `load()`, and serializing WebP re-encoding under a semaphore of `1` (`§5.2`).
+- **Privacy policy gate:** `ui/public/privacy-policy.html` must be updated **before** enabling `v1a` (to document receipt text/metadata storage and retention) and updated again **before** enabling `v1c` (to name the selected Cloud Vision provider and its retention terms, `docs/BUDGET.md:13-14,660-662`).
 
 ---
 
-## 2. Polish Fiscal Receipt (*Paragon Fiskalny*) Structure & Existing Parsers
+## 2. Owner Decisions & Review Resolution
 
-### 2.1 Anatomy of a Polish thermal receipt
+### 2.1 Decided rules (delegated to engineering)
 
-Under the Polish Ministry of Finance regulation on cash registers (*Rozporządzenie Ministra Finansów w sprawie kas rejestrujących*), a paper or electronic fiscal receipt follows a predictable top-to-bottom layout:
+| ID | Topic | Decided Rule | Resolving Section |
+| --- | --- | --- | --- |
+| **Q1** | Local photo OCR engine (v1b) | **RapidOCR (`rapidocr-onnxruntime`) sidecar** under Docker Compose `profiles: ["receipts-ocr"]`, bound only to `127.0.0.1:8928` on a bridge network with shared-secret `Authorization` header. | [§4.2](#42-hardened-rapidocr-sidecar--client-contract) |
+| **Q2** | Photo retention after confirmation | Images are kept for **30 days after confirmation** (`30d_after_confirm`), then automatically purged. | [§5.2](#52-photo-storage-hardening-dos-bounds-retention--log-hygiene) |
+| **Q5** | Analytics totals & category splits in v1 | Receipts stay **OUT** of `analytics_views.py` totals in v1; transaction links are **informational only** (no `budget_annotations` splitting until v2+). | [§4.4](#44-transaction-matching--ingestion-drift-hook-v1) |
+| **Q6** | Cash receipts (`GOTÓWKA`) | **Yes** — unlinked and cash receipts can be confirmed and stored in v1 for item history and v2 price comparison. | [§4.4](#44-transaction-matching--ingestion-drift-hook-v1) |
+| **Q7** | Whole-basket coupons | Kept as a **single negative line** (`line_kind = 'basket_discount'`), never allocated into item unit prices. | [§4.3](#43-polish-parser--line-total-identity) |
+| **D1** | `raw_ocr_text` lifetime | PAN-redacted before save and **deleted on confirm or on the exact same 30-day deadline as the image** (across all `source_kind`s, including `live_text`/`cloud_ai`). | [§4.3](#43-polish-parser--line-total-identity), [§5.2](#52-photo-storage-hardening-dos-bounds-retention--log-hygiene) |
+| **D2** | Matching window & dates | **`±4` calendar days**, measured as the minimum distance across `transaction_date`, `booking_date`, and `value_date`. | [§4.4](#44-transaction-matching--ingestion-drift-hook-v1) |
+| **D3** | Exact amount linking | Transaction links require an **exact canonical amount and currency match**; mixed/split payments save unlinked. | [§4.4](#44-transaction-matching--ingestion-drift-hook-v1) |
+| **D4** | `/data` disk quota | Dedicated `ReceiptFiles` store enforces a per-owner **byte quota** (`256 MiB`) and **draft-count quota** (`20` active drafts). | [§5.2](#52-photo-storage-hardening-dos-bounds-retention--log-hygiene) |
 
-1. **Seller header:** Legal entity name + branch address (e.g., `JERONIMO MARTINS POLSKA S.A.` / store number, `CARREFOUR POLSKA SP. Z O.O.`), followed by the mandatory **10-digit seller NIP** (e.g., `NIP 779-10-11-327`, `NIP: 9370008168`, `NIP 7811897358`). A mod-11 NIP checksum (`weights = (6,5,7,2,3,4,5,6,7)`, digit 10 == sum mod 11, rejecting remainder 10) filters out phone numbers and card suffixes with near-zero false positives.
-2. **Document marker & metadata:** `PARAGON FISKALNY`, sequential print/receipt number, and timestamp (`YYYY-MM-DD HH:MM` or `DD-MM-YYYY HH:MM`).
-3. **Line items:** Product name (up to ~40 chars, heavily abbreviated) + quantity × unit price + line gross total + **PTU/VAT tax letter `A`–`G`** (`A=23%`, `B=8%`, `C=5%`, `D=0%`, `E=zw.`, `F/G=0%` technical):
-   - *Single-line style:* `CHLEB BALTON.500G    1 x 4,99 = 4,99 C`
-   - *Two-line style (common in Lidl/Biedronka):*
-     ```text
-     MLEKO WYPASIONE 3,2% 1L
-                    2 * 4,49    8,98 C
-     Rabat                     -2,00 C
-     ```
-   - *Weighed produce:* `ZIEMNIAKI JADALNE LUZ  1,420 kg x 3,99  5,67 C`
-   - *Deposit return lines (`Kaucja` — Poland's system kaucyjny):* non-VAT bottle/can deposit additions (e.g., `0,50` PET/can, `1,00` reusable glass) and bottle-machine voucher deductions printed near items or totals.
-4. **Tax summary & grand total:** `SPRZEDAŻ OPODATKOWANA A..G`, `SUMA PTU`, and **`SUMA PLN`** (or `DO ZAPŁATY`) followed by the gross amount.
-5. **Payment & fiscal footer:** `KARTA PŁATNICZA` / `KARTA` / `BLIK` / `GOTÓWKA`, optional masked card PAN (`************1234`), and the fiscal logo `#` + cash register unique ID (e.g., `EAO ...`).
+### 2.2 Review resolution (Grok 4.7 review → revised sections)
 
-### 2.2 Chain quirks vs. existing open-source tools
-
-- **Centralized chain NIPs vs. franchise NIPs:** National chains print one corporate NIP across branches — verified examples: Biedronka (`7791011327`), Carrefour (`9370008168`), Lidl (`7811897358`). Franchise stores (Żabka, Carrefour Express, Lewiatan) print the *local franchisee's NIP*, so shop identification cannot rely solely on a hardcoded NIP table; it needs both a verified chain-NIP lookup and header keyword rules (`ZABKA`, `CARREFOUR EXPRESS`, etc.) backed by owner-editable shop records.
-- **Discounts (`Rabat` / `Opust`):** Biedronka and Lidl frequently print the full shelf price on line `N` and a separate negative `Rabat` / `Promocja` line on `N+1` (or a basket voucher near `SUMA PLN`). Ignoring discount lines breaks both `sum(lines) == SUMA PLN` validation and unit-price accuracy.
-- **Existing open-source ecosystem:**
-  - `filip-rupniewski/receipt_parsing` ([GitHub](https://github.com/filip-rupniewski/receipt_parsing)): OpenCV + Tesseract pipeline tailored to Swiss Lidl/Denner receipts; illustrates preprocessing + regex structure but does not handle Polish fiscal conventions or multi-line `Rabat` blocks.
-  - `KamKubicki/fidl-plus` ([GitHub](https://github.com/KamKubicki/fidl-plus)): Python/Docker scraper and price-history UI for *digital* Lidl Plus HTML/JSON receipts; useful inspiration for price comparison, not applicable to paper photos or other chains.
-  - `bhimrazy/receipt-ocr` ([GitHub](https://github.com/bhimrazy/receipt-ocr)) & `Rutikasri/DocuParse_AI` ([GitHub](https://github.com/Rutikasri/DocuParse_AI)): Python wrappers using Tesseract or EasyOCR + LLM/LayoutLMv3; general prototypes rather than Polish fiscal parsers.
-  - `RysOCR` (`kacperwikiel/RysOCR` / `anon13370/RysOCR`): Polish LoRA fine-tune for `PaddleOCR-VL` (vision-language model), too heavy for a CPU-only home server.
-  - Ministry of Finance **HUB Paragonowy** ([podatki.gov.pl/e-paragony/](https://www.podatki.gov.pl/e-paragony/)): publishes the `eParagonInf.mf.gov.pl_v1-0.json` schema for official e-receipts, though consumer e-paragon retrieval currently runs through the closed mobile app rather than a self-hosted personal export API.
-
-**Conclusion:** There is no maintained drop-in parser for Polish thermal receipts. Hestia should implement a small, deterministic, pure-Python parser (`hestia/budget/receipt_parser.py`) tested against synthetic Biedronka, Lidl, Carrefour, and generic/franchise fixtures, accepting both plain text (Live Text) and geometry-grouped OCR lines (`(text, x0, y0, x1, y1)`).
+| Finding | Summary of Fix | Resolving Section(s) |
+| --- | --- | --- |
+| **#1 CRITICAL** (`network_mode: host` + exposed sidecar) | Place sidecar on a Compose bridge network publishing only `127.0.0.1:8928:8928`; mount no `/data`, Docker socket, or DB; `cap_drop: [ALL]`, non-root user, `mem_limit`, `pids_limit`, `read_only`; shared-secret `Authorization` header; constant loopback URL, no redirects, short timeout, capped response in client; sidecar logs only status and duration. | [§4.2](#42-hardened-rapidocr-sidecar--client-contract) |
+| **#2 HIGH** (Image decode DoS & `ConsentFiles` mismatch) | Require `Content-Length`, refuse chunked uploads, cap multipart at `6 MiB`; sniff magic bytes (JPEG/PNG/WebP only); verify header dimensions (`<= 2000 px` long side, `<= 4 MP`) on every frame before `load()`; treat `DecompressionBombWarning` as error; re-encode to WebP under `Semaphore(1)` in worker thread and pass only re-encoded bytes; enforce `/data` byte + draft quotas; build dedicated `ReceiptFiles` instead of `ConsentFiles` (`1 MiB` JSON limit). | [§1](#1-problem--hestia-fit), [§4.5](#45-v1-api-surface-static-admin-routes), [§5.2](#52-photo-storage-hardening-dos-bounds-retention--log-hygiene) |
+| **#3 HIGH** (Multipart CSRF & `_ROUTE_MIN_ROLE` fallback) | Call `_principal` and `_browser` (`Origin` + `hestia_session`, reject `Authorization`) before reading multipart/JSON bodies; use fixed route paths (no `{id}` segments) registered `_ADMIN` in `_ROUTE_MIN_ROLE` (`hestia/web.py:167-206`) and `_PATH_ROLES` (`hestia/api_contract.py:2286-2315`) with `allow_head=False`. | [§1](#1-problem--hestia-fit), [§4.5](#45-v1-api-surface-static-admin-routes) |
+| **#4 HIGH** (`raw_ocr_text`/audit leak, image fetch & privacy policy) | Redact PAN/card strings before storage; expire `raw_ocr_text` on confirm or 30d deadline; store only `{receipt_id, action, status, version, linked, source_kind}` in `budget_analytics_audit`; update `privacy-policy.html` before `v1a` and again before `v1c`; serve `GET .../image` via `dir_fd` + `O_NOFOLLOW` with `no-store`, `nosniff`, `image/webp`, and verify `cf-cache-status`. | [§1](#1-problem--hestia-fit), [§4.5](#45-v1-api-surface-static-admin-routes), [§5.1](#51-relational-schema--alembic-migrations-0020--0021), [§5.2](#52-photo-storage-hardening-dos-bounds-retention--log-hygiene) |
+| **#5 HIGH** (Matching bugs & stale-link hook) | Use min distance across `transaction_date`, `booking_date`, `value_date` (`<= 4` days); match refunds only to `CRDT` and exclude `budget_transfer_legs`; reload & re-verify inside `BEGIN IMMEDIATE`; store `financial_fingerprint`; save mixed payments unlinked; map `IntegrityError` to `409`; add ingestion hook at `store.py:545-547` & `674-681` (plus `665-671`) latching `needs_review`. | [§4.4](#44-transaction-matching--ingestion-drift-hook-v1), [§4.5](#45-v1-api-surface-static-admin-routes) |
+| **#6 HIGH** (Line-item double-counting) | Enforce single exact identity `sum_money(net_line_total) == total_amount`; item discounts live only in `discount_amount`; basket discounts are single negative `basket_discount` lines; deposits are `deposit` lines; cap lines (`300`) and `raw_name` length (`128`). | [§4.3](#43-polish-parser--line-total-identity) |
+| **#7 HIGH** (Broken `0020`/`0021` migrations & delete order) | Split `0020` (shops/receipts/lines only, no v2 FKs) from `0021` (products/aliases + `batch_alter_table`); make draft receipt fields and `chain_key` nullable with status-gated `CHECK`s; index `uq_budget_receipts_tx_link` only on `status IN ('confirmed', 'needs_review')`; child-first downgrades and delete order (`lines -> receipt -> image file`). | [§5.1](#51-relational-schema--alembic-migrations-0020--0021) |
+| **#8 MEDIUM** (Missing test specification) | Add dedicated `§10` listing all 15 named security, matching, persistence, privacy, and migration tests plus CI coverage gates. | [§10](#10-testing--verification-plan-required-synthetic-cases) |
+| **#9 MEDIUM** (Open questions out of sync) | Move Q1, Q2, Q5, Q6, Q7 and D1–D4 to Decided (`§2.1`); keep only Q3 and Q4 in `§9`. | [§2.1](#21-decided-rules-delegated-to-engineering), [§9](#9-open-questions-remaining) |
 
 ---
 
-## 3. Input & OCR Options Matrix
+## 3. Polish Fiscal Receipt (*Paragon Fiskalny*) & OCR Options
 
-Every candidate below was evaluated against official documentation and repositories for **Polish thermal receipt accuracy**, **home-server CPU/RAM footprint**, **Docker deployment**, **licence**, **maintenance**, **line-item extraction**, and **privacy**.
+### 3.1 Anatomy of a Polish thermal receipt
 
-| Option / Path | Polish accuracy on thermal receipts | Home-server CPU & RAM (no GPU) | Docker availability | Licence | Maintenance | Line-item extraction quality | Privacy |
+Under the Polish Ministry of Finance regulation on cash registers (*Rozporządzenie Ministra Finansów w sprawie kas rejestrujących*), a fiscal receipt follows a predictable structure:
+
+1. **Seller header & NIP:** Legal entity + branch address (e.g., `JERONIMO MARTINS POLSKA S.A.`, `CARREFOUR POLSKA SP. Z O.O.`) and mandatory **10-digit seller NIP** (verified chain examples: Biedronka `7791011327`, Carrefour `9370008168`, Lidl `7811897358`), validated via mod-11 checksum (`weights = (6,5,7,2,3,4,5,6,7)`, digit 10 == sum mod 11, rejecting remainder 10). Franchise chains (Żabka, Carrefour Express) print the franchisee's NIP, so shop detection combines NIP lookup with header rules and owner-editable `budget_shops` rows.
+2. **Marker & timestamp:** `PARAGON FISKALNY`, sequential receipt/print number, date and time (`YYYY-MM-DD HH:MM` or `DD-MM-YYYY HH:MM`).
+3. **Item, discount & deposit lines:** Abbreviated product name + qty × unit price + line total + **PTU letter `A`–`G`** (`A=23%`, `B=8%`, `C=5%`, `D=0%`, `E=zw.`, `F/G=0%` tech.), including two-line items with a `Rabat`/`Opust` line underneath, weighed produce (`1,420 kg x 3,99`), and `Kaucja` bottle/can deposits (`0,50` / `1,00` PLN).
+4. **Totals & payment footer:** `SPRZEDAŻ OPODATKOWANA`, `SUMA PTU`, **`SUMA PLN`** (or `DO ZAPŁATY`), payment method (`KARTA PŁATNICZA` / `BLIK` / `GOTÓWKA`), optional masked card PAN (redacted before persistence), and fiscal logo `#` + cash-register ID.
+
+Existing open-source tools ([`filip-rupniewski/receipt_parsing`](https://github.com/filip-rupniewski/receipt_parsing) for Swiss chains, [`KamKubicki/fidl-plus`](https://github.com/KamKubicki/fidl-plus) for Lidl Plus HTML/JSON, [`bhimrazy/receipt-ocr`](https://github.com/bhimrazy/receipt-ocr), [`Rutikasri/DocuParse_AI`](https://github.com/Rutikasri/DocuParse_AI), [`RysOCR`](https://github.com/PaddlePaddle/PaddleOCR) VL LoRA, and MF [`eParagonInf`](https://www.podatki.gov.pl/e-paragony/)) do not provide a lightweight, self-hosted paper parser for Polish retail receipts. Hestia therefore uses a pure-Python deterministic parser (`hestia/budget/receipt_parser.py`).
+
+### 3.2 Input & OCR options comparison
+
+| Option / Path | Polish accuracy on thermal receipts | Home-server CPU & RAM (no GPU) | Docker availability | Licence | Maintenance | Line-item extraction | Privacy |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| **(c) iOS Live Text (paste text)** | **Medium–High** on sharp photos; Apple Feature Availability lists Polish among >40 Live Text locales, though thermal fonts can still flatten `ł`/`ą`/`ę` (`l`/`t`/`a`/`e`) | **~0 MB RAM, <5 ms CPU** on server (runs on iPhone Neural Engine) | Built into existing Hestia container (zero deps) | Proprietary OS feature on user's iPhone | Active (Apple iOS 15+) | **Medium** — copy-paste sometimes merges/wraps two-column lines (`name` + `price`), requiring line heuristics | **100% local/on-device** until pasted to Hestia |
-| **(a1) Tesseract OCR (`pol` `tessdata_best` + Pillow/OpenCV)** | **Low–Medium** out of the box; **Medium** with upscaling, adaptive thresholding, `--psm 4`/`6`, and `tessdata_best`; weak on creases/skew/shadows | **50–150 MB RAM** (keep <512 MB cap); 1–3 s/receipt on CPU | `apt-get install tesseract-ocr tesseract-ocr-pol` (+60–100 MB layer) | **Apache-2.0** | Active (`tesseract-ocr/tesseract`) | **Low–Medium** unless using `--tsv`/`hOCR` word bounding boxes to pair left labels with right prices | **100% local** |
-| **(a2) OCRmyPDF (CLI / Docker)** | Same as Tesseract (`-l pol --clean --deskew` via `unpaper`) | **300 MB–1.5 GB peak RAM**; 2–5 s/receipt (image→PDF→OCR→sidecar overhead) | Official multi-arch `jbarlow83/ocrmypdf` | **MPL-2.0** core (optional webservice example is **AGPLv3**) | Active (`ocrmypdf/OCRmyPDF`) | **Low–Medium** — PDF archival tool; `--sidecar` drops layout coordinates | **100% local** |
-| **(a3) pdfsandwich** | Same as Tesseract + `unpaper` | ~200–600 MB RAM; slow | Community images only (no official upstream image) | **GPL-2.0** | **Stalled** (last release v0.1.7, Aug 2018) | **Low** — PDF output only | **100% local** |
-| **(d1) Stirling-PDF** | Same as Tesseract (`pol.traineddata` mounted at `/usr/share/tessdata`); requires img→PDF step before `/api/v1/misc/ocr-pdf` | **~500 MB idle, 2–4 GB recommended RAM** (Java/Spring JVM + Tesseract + LibreOffice) | Official `stirlingtools/stirling-pdf` | **Open-core** (MIT core + proprietary enterprise modules) | Very active (`Stirling-Tools/Stirling-PDF`) | **Low** — returns searchable PDF/hOCR, heavy wrapper for receipt photos | **100% local** |
-| **(d2) Paperless-ngx** | Same as OCRmyPDF / Tesseract (`PAPERLESS_OCR_LANGUAGE=pol+eng`) | **300–800 MB idle, 1.5–2+ GB peak RAM/worker** (Django + Redis + Celery + DB) | Official `ghcr.io/paperless-ngx/paperless-ngx` | **GPL-3.0** | Very active (`paperless-ngx/paperless-ngx`) | **Low** — full DMS archive, not a stateless receipt parser | **100% local** |
-| **(d3a) PaddleOCR (`PP-OCRv4`/`v5`)** | **High** text detection (`DBNet`) on crumpled/angled thermal paper; `lang='pl'` / `PP-OCRv5-latin` covers Polish (some diacritic drops in older generic Latin models; `PaddleOCR-VL` fixes more but needs 4–16 GB RAM/VRAM) | **0.5–1.5 GB RAM** (`PP-OCRv4`/`v5` CPU, ~0.3–1 s/receipt); **4–16 GB RAM** for `PaddleOCR-VL` | Official `paddlepaddle/paddle` images are **4–8 GB** (custom slim CPU Dockerfile recommended) | **Apache-2.0** | Very active (`PaddlePaddle/PaddleOCR`) | **High** — returns exact polygon bounding boxes + confidence per text span for geometric row reconstruction | **100% local** |
-| **(d3b) RapidOCR (`rapidocr-onnxruntime`)** | **High** detection + **Medium–High** Polish recognition (runs converted `PP-OCRv4`/`v5` weights via ONNX Runtime; must configure `latin`/`pl` dict for diacritics) | **200–500 MB RAM**, ~0.3–1.2 s/receipt on CPU; no PyTorch/PaddlePaddle bloat | Slim custom sidecar (~350–500 MB image on `python:3.11-slim`) | **Apache-2.0** | Active (`RapidAI/RapidOCR`) | **High** — identical bounding-box output to PaddleOCR in ~1/3 the RAM | **100% local** |
-| **(d4) docTR (`mindee/doctr`)** | **Medium–High** with `VOCABS["polish"]` whitelist; less tuned for narrow thermal receipts than PP-OCR | **1.5–4 GB RAM** (PyTorch CPU); 3–10+ s/receipt on CPU | Official `ghcr.io/mindee/doctr` | **Apache-2.0** | Active (`mindee/doctr`) | **High** — structured page/block/line/word hierarchy | **100% local** |
-| *(Note)* EasyOCR / Surya | EasyOCR (`['pl']`): Medium; Surya: High | EasyOCR: **1–3 GB RAM**; Surya: **4–8+ GB RAM** (GPU-oriented) | Community / custom | EasyOCR: **Apache-2.0**; Surya: **Apache-2.0** code / **OpenRAIL-M** weights (<$5M cap) | Active | High | **100% local** |
-| **(b) Cloud AI Vision (Claude API / Gemini Paid API)** | **Very High** — reads crumpled/faded thermal print, Polish diacritics, multi-line `Rabat`, and weighed items reliably | **~0 MB local OCR RAM** (outbound HTTPS JSON only) | No extra container | Proprietary API | Active (Anthropic / Google) | **Very High** — native Structured Outputs (`output_config.format` / `responseJsonSchema`) emit strict schema JSON directly | **Third-party cloud** (explicit opt-in only; see below) |
+| **(c) iOS Live Text (paste text)** | **Medium–High** on sharp photos; Apple Feature Availability lists Polish among >40 Live Text locales, though thermal fonts can flatten `ł`/`ą`/`ę` | **~0 MB RAM, <5 ms CPU** on server | Built into Hestia (zero deps) | Proprietary OS feature on user's iPhone | Active (Apple iOS 15+) | **Medium** — copy-paste can wrap/merge columns | **100% on-device** until pasted |
+| **(a1) Tesseract OCR (`pol` `tessdata_best`)** | **Low–Medium** default; **Medium** with upscaling, adaptive thresholding, `--psm 4`/`6` | **50–150 MB RAM**; 1–3 s/receipt | `apt-get` (+60–100 MB layer) | **Apache-2.0** | Active (`tesseract-ocr/tesseract`) | **Low–Medium** without TSV bounding-box grouping | **100% local** |
+| **(a2) OCRmyPDF** | Same as Tesseract (`-l pol --clean --deskew`) | **300 MB–1.5 GB peak RAM**; 2–5 s | Official `jbarlow83/ocrmypdf` | **MPL-2.0** (webservice **AGPLv3**) | Active (`ocrmypdf/OCRmyPDF`) | **Low–Medium** — PDF archival focus | **100% local** |
+| **(a3) pdfsandwich** | Same as Tesseract + `unpaper` | ~200–600 MB RAM; slow | Community only | **GPL-2.0** | **Stalled** (v0.1.7, Aug 2018) | **Low** — PDF output only | **100% local** |
+| **(d1) Stirling-PDF** | Same as Tesseract; requires img→PDF before `/api/v1/misc/ocr-pdf` | **~500 MB idle, 2–4 GB recommended** (JVM + Tesseract + LibreOffice) | Official `stirlingtools/stirling-pdf` | **Open-core** (MIT core + proprietary modules) | Very active | **Low** — returns PDF/hOCR, heavy wrapper | **100% local** |
+| **(d2) Paperless-ngx** | Same as OCRmyPDF / Tesseract | **300–800 MB idle, 1.5–2+ GB peak/worker** (Django + Redis + Celery) | Official `ghcr.io/paperless-ngx/paperless-ngx` | **GPL-3.0** | Very active | **Low** — full DMS, not a receipt extractor | **100% local** |
+| **(d3a) PaddleOCR (`PP-OCRv4`/`v5`)** | **High** detection (`DBNet`) on crumpled receipts; `lang='pl'` / `PP-OCRv5-latin` | **0.5–1.5 GB RAM** CPU (`PP-OCRv4`/`v5`); **4–16 GB** (`PaddleOCR-VL`) | Official `paddlepaddle/paddle` (**4–8 GB** images) | **Apache-2.0** | Very active | **High** — polygon bounding boxes + confidence | **100% local** |
+| **(d3b) RapidOCR (`rapidocr-onnxruntime`)** | **High** detection + **Medium–High** Polish recognition (ONNX Runtime `PP-OCR` weights with `latin`/`pl` dict) | **200–500 MB RAM**, ~0.3–1.2 s/receipt on CPU | Slim sidecar (~350–500 MB on `python:3.11-slim`) | **Apache-2.0** | Active (`RapidAI/RapidOCR`) | **High** — same bounding boxes at ~1/3 RAM | **100% local** |
+| **(d4) docTR (`mindee/doctr`)** | **Medium–High** with `VOCABS["polish"]` | **1.5–4 GB RAM** (PyTorch CPU); 3–10+ s | Official `ghcr.io/mindee/doctr` | **Apache-2.0** | Active | **High** — page/block/line/word hierarchy | **100% local** |
+| *(Note)* EasyOCR / Surya | EasyOCR: Medium; Surya: High | EasyOCR **1–3 GB**; Surya **4–8+ GB** | Community / custom | EasyOCR **Apache-2.0**; Surya **Apache-2.0** / **OpenRAIL-M** (<$5M) | Active | High | **100% local** |
+| **(b) Cloud AI Vision (Claude / Gemini Paid)** | **Very High** on crumpled receipts, diacritics, and `Rabat` blocks | **~0 MB local OCR RAM** | None | Proprietary API | Active | **Very High** — native JSON Schema (`output_config.format` / `responseJsonSchema`) | **Third-party cloud** (explicit opt-in only) |
 
 ### Plain-language privacy trade-off for Cloud AI Vision (Path b)
 
-Sending a receipt photo to an external AI API discloses **fine-grained personal consumption data** outside the host: every purchased item (groceries, alcohol, OTC pharmacy items, baby products), exact store branch and timestamp, loyalty card hints, and potentially masked card digits.
+Sending a receipt photo to an external AI API discloses granular household purchasing history (groceries, alcohol, OTC pharmacy items, store branch, timestamp, loyalty/card fragments) outside the host:
+- **Anthropic Claude API (Commercial Terms):** Does **not** train on API inputs/outputs by default; retains inputs/outputs up to **30 days** for abuse/safety enforcement absent a Zero Data Retention agreement ([Commercial Terms](https://www.anthropic.com/legal/commercial-terms), [Vision Docs](https://docs.anthropic.com/en/docs/build-with-claude/vision)).
+- **Google Gemini API:** Paid Tier (Cloud Billing enabled) does **not** use prompts/images for training, but logs them for **55 days** for abuse monitoring; Unpaid/Free Tier allows training and human review outside EEA/UK/CH ([Gemini Terms](https://ai.google.dev/gemini-api/terms), [Structured Output Docs](https://ai.google.dev/gemini-api/docs/structured-output)).
 
-- **Anthropic Claude API (Commercial Terms):** Does **not** train models on commercial API inputs/outputs by default; inputs and outputs are retained up to **30 days** for abuse/safety enforcement unless the organization holds a separate Zero Data Retention (ZDR) agreement, and safety-flagged requests may be retained longer ([Anthropic Commercial Terms](https://www.anthropic.com/legal/commercial-terms), [Claude Vision Docs](https://docs.anthropic.com/en/docs/build-with-claude/vision)).
-- **Google Gemini API:** Under the **Paid Tier** (Cloud Billing enabled), Google does **not** use prompts, images, or responses to train models, but logs them for **55 days** for abuse monitoring; under the **Unpaid/Free Tier**, Google *may* use inputs/outputs to train models and human reviewers may inspect them (with EEA/UK/CH exceptions) ([Gemini API Terms](https://ai.google.dev/gemini-api/terms), [Structured Output Docs](https://ai.google.dev/gemini-api/docs/structured-output)).
-
-**Policy rule for Hestia:** Cloud Vision MUST be **disabled by default**, require a server opt-in flag (`HESTIA_BUDGET_RECEIPTS_AI_ENABLED=1`) plus an **explicit per-receipt action** in the UI with a clear warning banner, use paid/commercial API keys only (never free-tier keys), strip EXIF/GPS metadata before upload, never include bank transactions or account identifiers in the prompt, and be documented in `ui/public/privacy-policy.html` before enabling.
+**Policy rule:** Cloud Vision stays **disabled by default**, requires `HESTIA_BUDGET_RECEIPTS_AI_ENABLED=1` plus an **explicit per-receipt user opt-in** with warning text, uses paid/commercial keys only (never free tier), sends only EXIF-stripped WebP bytes (never bank data), and requires updating `ui/public/privacy-policy.html` first.
 
 ---
 
-## 4. Recommended v1 Architecture (Pragmatic Minimalism)
+## 4. Recommended v1 Architecture
 
-### 4.1 High-level pipeline
+### 4.1 Pipeline overview
 
-Ship v1 in three cleanly decoupled capabilities, all gated behind `HESTIA_BUDGET_RECEIPTS_ENABLED=1` (default off, reusing `HESTIA_BUDGET_HTTP_ENABLED=1` and SQLite admin ownership):
+All routes gate behind `HESTIA_BUDGET_RECEIPTS_ENABLED=1` (default off) + `HESTIA_BUDGET_HTTP_ENABLED=1` + `HESTIA_PERSIST=sqlite` + enabled `admin` owner:
 
 ```text
-  [iOS Live Text / Clipboard] ──(POST /parse, JSON text ≤32 KiB)──────┐
+  [iOS Live Text / Clipboard] ──(POST /parse, JSON ≤32 KiB)────────────┐
                                                                         ▼
-  [Mobile Photo <input>]                                      [Polish Fiscal Parser]
-     └─ Browser <canvas>: resize ≤1800px, WebP/JPEG, strip EXIF         │
-          ├─ Default: Local OCR sidecar (RapidOCR ONNX, 127.0.0.1) ─────┤
-          │           └─ Geometric row reconstructor (y-band + x-sort) ─┘
-          └─ Explicit per-receipt opt-in (if AI flag=1):                │
-                      Claude / Gemini Paid API (JSON Schema) ───────────┘
+  [Mobile Photo (multipart ≤6 MiB)]                            [PAN Redactor + Polish Parser]
+     └─ Browser <canvas> resize → Server magic/4MP/Semaphore(1) WebP    │
+          ├─ Default (Q1): RapidOCR sidecar (127.0.0.1:8928, bridge) ───┤
+          │                └─ Geometric y-band + x-sort row builder ────┘
+          └─ Explicit per-receipt opt-in (AI flag=1):                   │
+                           Cloud Vision Paid API (JSON Schema) ─────────┘
                                                                         ▼
-                                                       [Candidate Transaction Matcher]
-                                                       (BOOK, exact amount+currency, ±2d)
+                                                       [Candidate Matcher (±4d, exact amount)]
                                                                         ▼
-                                                       [Owner Review & Manual Confirm]
-                                                       (POST /confirm, CAS + fingerprint)
+                                                       [Owner Review & BEGIN IMMEDIATE Confirm]
 ```
 
-### 4.2 Why this OCR choice wins for v1
+### 4.2 Hardened RapidOCR sidecar & client contract
 
-1. **Zero-dependency Paste path works immediately:** Pasting iOS Live Text into Hestia requires **zero** new Python packages, **zero** extra RAM, and **zero** Docker image changes — ideal for quick deployment and testing the parser + transaction matching end-to-end first.
-2. **Optional `receipt-ocr` sidecar using RapidOCR (`rapidocr-onnxruntime`):**
-   - Rejects **Stirling-PDF** (2–4 GB JVM + Tesseract-only + PDF-only `/api/v1/misc/ocr-pdf`), **Paperless-ngx** (full DMS stack + GPL-3.0 + 1.5 GB+ worker spikes), **OCRmyPDF / pdfsandwich** (PDF archival wrappers around Tesseract), and **docTR** (1.5–4 GB PyTorch).
-   - Keeps Hestia's main image (`Dockerfile:10-39`, `requirements.txt:22-29`) slim and untouched.
-   - Runs under an optional Docker Compose `profiles: ["receipts-ocr"]`, bound strictly to `127.0.0.1:8928` (matching Hestia's `network_mode: host` in `docker-compose.yml:10`), capped at e.g. `mem_limit: 768m`.
-   - Returns **bounding-box spans** (`text`, `box`, `score`), allowing Hestia to group words on the same horizontal row (`|y_mid_a - y_mid_b| < 0.5 * median_line_height`), sort left-to-right, and accurately separate product descriptions from right-aligned prices and PTU letters even on tilted photos.
-   - *Lightweight fallback:* If the owner prefers zero sidecar containers at the cost of lower accuracy on crumpled receipts, `tesseract-ocr` + `tesseract-ocr-pol` (`tessdata_best`) with `--psm 4` TSV output can sit behind the exact same internal `OcrProvider` Python interface.
+Because `hestia` runs with `network_mode: host` (`docker-compose.yml:10`), Docker Compose ignores `ports:` on `hestia` itself and any sidecar listening on `0.0.0.0:8928` with host networking or unfiltered port publishing would expose an unauthenticated OCR endpoint on every network interface, bypassing Apache, Cloudflare, and `hestia_session`.
 
-### 4.3 Polish parser & sanity checks
+**Mandatory sidecar topology (`docker-compose.yml`):**
+
+```yaml
+networks:
+  receipt_ocr_net:
+    driver: bridge
+
+services:
+  receipt-ocr:
+    profiles: ["receipts-ocr"]
+    build: ./ocr-sidecar
+    container_name: hestia-receipt-ocr
+    networks: [receipt_ocr_net]
+    # Publish ONLY to host loopback; inside the container the HTTP server binds 0.0.0.0:8928
+    # so Docker bridge forwarding delivers host 127.0.0.1:8928 traffic to the container.
+    ports:
+      - "127.0.0.1:8928:8928"
+    user: "1000:1000"
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 768m
+    pids_limit: 64
+    restart: unless-stopped
+    environment:
+      OCR_SHARED_SECRET_FILE: /run/secrets/receipt_ocr_secret
+    # Mount ONLY the shared secret read-only — NEVER /data, NEVER docker.sock, NEVER hestia.db.
+    volumes:
+      - /path/to/secrets/receipt_ocr_secret:/run/secrets/receipt_ocr_secret:ro
+```
+
+**Sidecar & client invariants:**
+
+- **Isolation:** No `/data` mount, no `/var/run/docker.sock`, no SQLite DB access, `cap_drop: [ALL]`, `no-new-privileges:true`, non-root `1000:1000`, `read_only: true`, `mem_limit: 768m`, `pids_limit: 64`.
+- **Shared secret:** Both containers read a server-only random secret (`0400`/`0600` file via `hestia/budget/config.py:171-195`). Hestia sends `Authorization: Bearer <secret>` to the sidecar, which verifies it with `hmac.compare_digest` and rejects missing/invalid headers with `401`.
+- **Hardened client (`hestia/budget/ocr_client.py`):** Uses a constant loopback URL (`http://127.0.0.1:8928/ocr` — never derived from request inputs), disables redirects (`_NoRedirect` + `ProxyHandler({})` per `hestia/budget/client.py:118-120`), enforces a short timeout (`15 s` request deadline), and caps the OCR JSON response body at `2 MiB`.
+- **Zero-content sidecar logging:** Sidecar runs with `access_log=None` (or logs exclusively `status=<int> duration_ms=<int>`) — never image sizes, headers, bounding boxes, or OCR text.
+
+### 4.3 Polish parser & line-total identity
 
 `hestia/budget/receipt_parser.py` (pure Python, zero network/DB):
 
-- Normalizes Unicode (`NFC`) and prepares a diacritic-folded lookup string (`ą→a, ć→c, ę→e, ł→l, ń→n, ó→o, ś→s, ź→z, ż→z`) so degraded Live Text or OCR diacritics still match shop keywords and `SUMA PLN` / `KARTA` / `RABAT`.
-- Extracts **NIP** (`10` digits validated by mod-11 checksum), **shop name**, **date/time** (ISO normalized `YYYY-MM-DD`), **payment method** (`card` / `blik` / `cash` / `unknown`), **`SUMA PLN`**, **PTU breakdown**, and **line items**.
-- Links adjacent `Rabat` / `Opust` lines to the preceding item (`discount_amount`) and marks `Kaucja` lines (`line_kind = 'deposit'`) so they never corrupt product unit prices.
-- Computes an arithmetic check (`sum(line_net_totals) + deposits + unattributed_discounts == receipt_total`) and surfaces any mismatch (`math_delta`) directly on the Review screen — never silently inventing or fudging numbers.
+- **Unicode & PAN redaction:** Normalizes `NFC` and constructs a diacritic-folded lookup key (`ą→a, ć→c, ę→e, ł→l, ń→n, ó→o, ś→s, ź→z, ż→z`). Before persisting `raw_ocr_text` on any path (`live_text`, `local_ocr`, `cloud_ai`), applies a **PAN redactor** masking 12–19 digit sequences, masked card PANs (`****1234`, `5351********1234`), and `NR KARTY` / `AID` terminal blocks.
+- **Bounded inputs:** Caps receipts at **`MAX_RECEIPT_LINES = 300`**, **`MAX_LINE_NAME_LEN = 128`**, **`MAX_SHOP_NAME_LEN = 128`**, and pasted text at **`32 KiB` / `500` lines**.
+- **Disjoint line representation & single arithmetic identity:**
+  - `line_kind = 'item'`: positive shelf `gross_line_total`, item-level `Rabat`/`Opust` stored **only** in that line's `discount_amount` (`>= 0`), `net_line_total = gross_line_total - discount_amount`.
+  - `line_kind = 'deposit'`: bottle/can `Kaucja` additions or return deductions (`discount_amount = '0'`, `net_line_total = gross_line_total`).
+  - `line_kind = 'basket_discount'`: per **Q7**, whole-basket coupons are emitted as **one negative line** (`gross_line_total < 0`, `discount_amount = '0'`, `net_line_total = gross_line_total`).
+  - `line_kind = 'other'`: carrier bags or explicit adjustments.
+  - **Single reconciliation identity (no double counting):**
+    $$\sum_{i} \text{net\_line\_total}_i \equiv \text{receipt.total\_amount}$$
+    Any mismatch (`math_delta`) is surfaced explicitly on the Review screen; totals are never silently adjusted.
 
-### 4.4 Transaction matching (v1)
+### 4.4 Transaction matching & ingestion drift hook (v1)
 
-Following `hestia/budget/transfer_match.py:16-237`:
+Per **Q5**, **Q6**, **D2**, and **D3**, matching creates informational receipt↔transaction links only and **never** alters `analytics_views.py` spending/category totals in v1:
 
-- Candidate pool: owner's **selected** accounts (`BudgetAccount.enabled == True`), canonical `BOOK` entries (`BudgetTransaction.uncertain == False`), matching currency (default `PLN`) and direction (`DBIT` for purchases, `CRDT` for return receipts).
-- Hard filter:
-  1. `canonical_money(tx.amount) == canonical_money(receipt.total_amount)` (exact decimal match; no silent tolerance).
-  2. `abs(effective_date(tx) - receipt.receipt_date) <= 2` calendar days (`booking_date` fallback `value_date` via `analytics_core.effective_date`), covering standard 1–2 day Polish card settlement lag.
-  3. Exclude transactions already linked to another confirmed receipt (1:1 primary link in v1; split payments stay manual).
-- Ranking (for suggestion display only, never auto-linking):
-  - Combine receipt shop name / resolved chain (`BIEDRONKA`, `CARREFOUR`, `LIDL`) with normalized `" ".join(payload["remittance_information"])` + `BudgetTransactionMetadata.creditor_name` (e.g., `"JMP S.A. BIEDRONKA 459"` scores strong token match on `BIEDRONKA` + NIP-mapped alias `JMP`).
-  - Rank `same_day` > `±1 day` > `±2 days`.
-- **Confirmation & drift protection:**
-  - If `payment_method == "cash"`, default suggestion is `"Cash / Do not link"`.
-  - If exactly one candidate passes hard filters with a merchant match, pre-select it for confirmation; if multiple candidates match (e.g., two identical `49.99` purchases on the same day), show all candidates and require manual choice.
-  - Confirmation stores `linked_account_id`, `linked_entry_reference`, and `linked_ledger_fingerprint = financial_fingerprint(tx.payload)` (`hestia/budget/analytics_core.py:115-125`). If a later bank refresh changes the underlying transaction's financial fingerprint, the receipt link latches `needs_review` instead of silently staying valid.
+- **Candidate pool:** Owner's selected accounts (`BudgetAccount.enabled == True`), `BudgetTransaction.uncertain == False`, `payload["status"] == "BOOK"`, **excluding** rows reserved in `budget_transfer_legs` (`hestia/db.py:694-700`) and rows annotated/ruled as `excluded` (`hestia/budget/analytics_views.py:316`), and excluding transactions already linked to a `confirmed` or `needs_review` receipt.
+- **Hard match filters (all mandatory):**
+  1. **Direction by `receipt_kind`:** `'purchase'` receipts match **only** `'DBIT'`; `'refund'` (`ZWROT`) receipts match **only** `'CRDT'`.
+  2. **Exact amount & currency (D3):** `canonical_money(tx.amount) == canonical_money(receipt.total_amount)` and `tx.currency == receipt.currency`. Mixed/split payments where bank charge differs from `receipt.total_amount` save **unlinked** (`linked_* = NULL`).
+  3. **`±4`-day minimum date distance (D2):** Gather all non-null valid ISO dates from `(payload.get("transaction_date"), payload.get("booking_date"), payload.get("value_date"))` (`hestia/budget/normalize.py:132-133`) and require `min(abs((date.fromisoformat(d) - receipt_date).days) for d in tx_dates) <= 4`. A Friday purchase (`2026-11-20`) booked Monday (`2026-11-23`) has distance `3` days (or `0` via `transaction_date`) and matches reliably.
+- **Ranking (suggestion only):** Rank by `(merchant_token_hit DESC, min_date_distance ASC, entry_reference ASC)`, combining NIP-resolved chain (`BIEDRONKA`, `CARREFOUR`, `LIDL`) and header tokens against `" ".join(remittance_information)` + `BudgetTransactionMetadata.creditor_name`. Cash receipts (`GOTÓWKA`) default to `"Cash / No bank link"` (**Q6**).
+- **Atomic server verification inside `BEGIN IMMEDIATE`:** `confirm` ignores client assertions about validity and reloads `BudgetAccount`, `BudgetConnection`, `BudgetTransaction`, and `BudgetTransferLeg` inside `BEGIN IMMEDIATE` (mirroring `hestia/budget/analytics_store.py:109-125,549-606`):
+  - Re-verifies `account.owner == owner`, `connection.owner == owner`, `account.enabled == True`, `tx.uncertain == False`, `BOOK`, not in `budget_transfer_legs`, matching `DBIT`/`CRDT` direction, exact amount/currency, and `<= 4`-day date window.
+  - Persists `linked_fingerprint = financial_fingerprint(payload)` (`hestia/budget/analytics_core.py:115-125`).
+  - Catches SQLite `IntegrityError` on `uq_budget_receipts_tx_link` (concurrent confirms racing on the same bank entry) and returns **`409 budget_receipt_tx_already_linked`**.
+- **Ingestion drift hook (`needs_review`):** Analogous to `reconcile_transfers` (`hestia/budget/store.py:441,576,603`, `hestia/budget/analytics_reconcile.py:85-100`), add `reconcile_receipt_links(session, owner, now)` invoked inside the same SQLite transaction whenever `payload_json` or `uncertain` is updated (`BudgetStore._import_transaction` at `hestia/budget/store.py:545-547` for API sync, and `BudgetStore._update_offline` at `hestia/budget/store.py:674-681` plus `_offline_conflict` at `665-671` for offline imports). If a linked transaction becomes missing, `uncertain`, non-`BOOK`, enters `budget_transfer_legs`, or its recomputed `financial_fingerprint(payload) != receipt.linked_fingerprint`, latch `receipt.status = 'needs_review'` and increment `receipt.version`.
 
-### 4.5 Initial v1 API surface (draft)
+### 4.5 v1 API surface (static `_ADMIN` routes)
 
-All routes under `/api/budget/receipts/...`, gated identically to `hestia/budget/analytics_api.py:97-130`:
+Every route uses a fixed static path registered as `_ADMIN` in `hestia/web.py:167-206` and `"admin"` in `hestia/api_contract.py:2286-2315`, with `allow_head=False` on `GET`:
 
-- `POST /api/budget/receipts/parse`: accepts `{text, source_kind}` (JSON ≤ 32 KiB) **or** `multipart/form-data` image (≤ 5 MiB) + optional `use_cloud_ai: bool` (requires `HESTIA_BUDGET_RECEIPTS_AI_ENABLED=1` and explicit UI consent flag); creates a short-lived `draft` receipt, runs parser + candidate matcher, and returns `{receipt_id, draft, candidates, version}`.
-- `POST /api/budget/receipts/confirm`: browser-only JSON mutation (`{receipt_id, expected_version, shop, receipt_date, total_amount, currency, payment_method, lines, link: {account_id, entry_reference} | null}`); validates exact decimals and arithmetic, locks the transaction link (if chosen) inside `BEGIN IMMEDIATE`, and appends a sanitized row to `budget_analytics_audit`.
-- `GET /api/budget/receipts`: paged owner receipts (keyset cursor, optional `month=YYYY-MM` or `linked=true|false` filter — no item text in URL query!).
-- `GET /api/budget/receipts/{receipt_id}` & `GET /api/budget/receipts/{receipt_id}/image`: owner-scoped detail and private image stream (`no-store`, `nosniff`, `CSP: default-src 'none'`).
-- `POST /api/budget/receipts/delete`: browser-only mutation (`{receipt_id, expected_version}`) to delete a draft/receipt and unlink its stored image file.
+| Route | Auth / CSRF Order | Purpose & Bounds |
+| --- | --- | --- |
+| `POST /api/budget/receipts/parse-text` | `_principal` → `_browser` (`Origin` + cookie, no `Authorization`) **before** `_read_json_body(request, 32768)` | Parses Live Text (`<= 32 KiB`, `<= 500` lines), redacts PANs, creates `draft` (respecting 20-draft quota), returns `{receipt_id, draft, candidates, version}`. |
+| `POST /api/budget/receipts/parse-image` | `_principal` → `_browser` (`Origin` + cookie, no `Authorization`) **before** checking `Content-Length` / rejecting chunked / reading multipart (`<= 6 MiB`) | Sniffs magic bytes, enforces `<= 2000 px` / `<= 4 MP` / single-frame before `load()`, re-encodes WebP under `Semaphore(1)`, saves to `ReceiptFiles` within `256 MiB` quota, runs RapidOCR (or opt-in Cloud AI if `AI_ENABLED=1` and `use_cloud_ai=true`), returns draft + candidates. |
+| `POST /api/budget/receipts/confirm` | `_principal` → `_browser` → `_read_json_body(request, 65536)` | Validates exact decimals, `sum(net_line_total) == total_amount`, `expected_version` CAS, and optional `link` inside `BEGIN IMMEDIATE`; maps `IntegrityError` to `409`; writes sanitized `budget_analytics_audit`. |
+| `POST /api/budget/receipts/list` | `_principal` → `_browser` (or `GET` without search query) | Keyset-paged owner receipts (`month`, `status`, `linked` filters; search query stays in `POST` body if **Q4** chooses server search). |
+| `GET /api/budget/receipts/detail` | `_principal` (`?receipt_id=<uuid>`) | Returns owned receipt + lines + `image_available: bool`; foreign/unknown ID returns `404`. |
+| `GET /api/budget/receipts/image` | `_principal` (`?receipt_id=<uuid>`) | Opens WebP via `ReceiptFiles` (`dir_fd` + `O_NOFOLLOW`), returns `Content-Type: image/webp`, `Cache-Control: no-store`, `Referrer-Policy: no-referrer`, `X-Content-Type-Options: nosniff`, `Content-Security-Policy: default-src 'none'`. Verify `cf-cache-status` is `DYNAMIC`/`BYPASS`. |
+| `POST /api/budget/receipts/delete` | `_principal` → `_browser` → `_read_json_body` | CAS version check; deletes `budget_receipt_lines` → `budget_receipts` → commits → unlinks image file. |
 
 ---
 
 ## 5. Rough v2 & Proposed Data Model
 
-### 5.1 Relational schema sketch (Alembic migration — requires owner review)
+### 5.1 Relational schema & Alembic migrations (`0020` + `0021`)
 
-> **Migration note:** Adding these tables requires a new Alembic migration (`0020` for v1 receipt/shop/line tables, `0021` for v2 normalized products & aliases) reviewed before merge, matching `hestia/db.py` conventions (restrictive `ForeignKeyConstraint` without `CASCADE`, explicit `CheckConstraint`s, string decimals, and strict `owner` scoping).
+New tables require owner-reviewed Alembic migrations matching `hestia/db.py` conventions (`PRAGMA foreign_keys=ON` at `hestia/db.py:757`, no `CASCADE`, strict `owner` FKs, exact decimal strings). **v1 (`0020`) must have zero references to v2 (`0021`) tables.**
+
+#### Migration `0020_budget_receipts` (v1)
 
 ```sql
--- 1. shop (table: budget_shops) — v1 core + v2 chain grouping
+-- 1. shop (table: budget_shops) — v1
 CREATE TABLE budget_shops (
-    id              TEXT PRIMARY KEY,              -- opaque UUID
+    id              TEXT PRIMARY KEY,
     owner           TEXT NOT NULL REFERENCES users(username),
-    name            TEXT NOT NULL,                 -- display name, e.g. "Biedronka #459 (Mokotów)"
-    chain_key       TEXT NOT NULL,                 -- canonical chain slug, e.g. "biedronka", "carrefour", "lidl"
-    nip             TEXT NULL,                     -- 10 ASCII digits (validated mod-11) when known
-    merchant_tokens TEXT NOT NULL DEFAULT '[]',    -- JSON array of bank remittance tokens, e.g. ["JMP S.A.", "BIEDRONKA"]
+    name            TEXT NOT NULL CHECK (length(name) BETWEEN 1 AND 128),
+    chain_key       TEXT NULL CHECK (chain_key IS NULL OR (length(chain_key) BETWEEN 1 AND 64)),
+    nip             TEXT NULL CHECK (nip IS NULL OR (length(nip) = 10 AND nip GLOB '[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]')),
+    merchant_tokens TEXT NOT NULL DEFAULT '[]',
     version         INTEGER NOT NULL CHECK (version >= 1),
     created_at      REAL NOT NULL,
     updated_at      REAL NOT NULL,
@@ -187,44 +236,35 @@ CREATE TABLE budget_shops (
 );
 CREATE INDEX ix_budget_shops_owner_chain ON budget_shops(owner, chain_key);
 
--- 2. normalized_product (table: budget_normalized_products) — v2
-CREATE TABLE budget_normalized_products (
-    id              TEXT PRIMARY KEY,              -- opaque UUID
-    owner           TEXT NOT NULL REFERENCES users(username),
-    canonical_name  TEXT NOT NULL,                 -- e.g. "Mleko 3,2%"
-    name_key        TEXT NOT NULL,                 -- diacritic-folded lowercase key for uniqueness/search
-    base_unit       TEXT NOT NULL CHECK (base_unit IN ('kg', 'l', 'pcs')),
-    category_hint   TEXT NULL,                     -- optional link/tag (e.g. "Nabiał", "Pieczywo", "Warzywa")
-    version         INTEGER NOT NULL CHECK (version >= 1),
-    created_at      REAL NOT NULL,
-    updated_at      REAL NOT NULL,
-    UNIQUE (id, owner),
-    UNIQUE (owner, name_key, base_unit)
-);
-
--- 3. receipt (table: budget_receipts) — v1
+-- 2. receipt (table: budget_receipts) — v1
+-- Draft-tolerant nullability with status-gated CHECK constraints.
 CREATE TABLE budget_receipts (
-    id                    TEXT PRIMARY KEY,        -- opaque UUID
+    id                    TEXT PRIMARY KEY,
     owner                 TEXT NOT NULL REFERENCES users(username),
     shop_id               TEXT NULL,
-    raw_shop_name         TEXT NULL,
+    raw_shop_name         TEXT NULL CHECK (raw_shop_name IS NULL OR length(raw_shop_name) <= 128),
     raw_nip               TEXT NULL,
-    receipt_date          TEXT NOT NULL CHECK (length(receipt_date) = 10 AND receipt_date GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'),
-    receipt_time          TEXT NULL,               -- optional "HH:MM"
-    total_amount          TEXT NOT NULL CHECK (length(total_amount) BETWEEN 1 AND 80),
-    currency              TEXT NOT NULL CHECK (length(currency) = 3 AND currency GLOB '[A-Z][A-Z][A-Z]'),
-    payment_method        TEXT NOT NULL CHECK (payment_method IN ('card', 'blik', 'cash', 'mixed', 'unknown')),
+    receipt_kind          TEXT NOT NULL DEFAULT 'purchase' CHECK (receipt_kind IN ('purchase', 'refund')),
+    receipt_date          TEXT NULL CHECK (receipt_date IS NULL OR (length(receipt_date) = 10 AND receipt_date GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]')),
+    receipt_time          TEXT NULL,
+    total_amount          TEXT NULL CHECK (total_amount IS NULL OR length(total_amount) BETWEEN 1 AND 80),
+    currency              TEXT NULL CHECK (currency IS NULL OR (length(currency) = 3 AND currency GLOB '[A-Z][A-Z][A-Z]')),
+    payment_method        TEXT NULL CHECK (payment_method IS NULL OR payment_method IN ('card', 'blik', 'cash', 'mixed', 'unknown')),
     status                TEXT NOT NULL CHECK (status IN ('draft', 'confirmed', 'needs_review')),
     source_kind           TEXT NOT NULL CHECK (source_kind IN ('live_text', 'local_ocr', 'cloud_ai')),
-    image_relpath         TEXT NULL,               -- opaque "<owner_sha256_prefix>/<receipt_id>.webp" under HESTIA_BUDGET_RECEIPTS_DIR
-    image_expires_at      REAL NULL,               -- scheduled photo purge timestamp (metadata rows stay)
-    raw_ocr_text          TEXT NULL,               -- bounded raw input text for re-parse; never logged
+    image_relpath         TEXT NULL,
+    image_expires_at      REAL NULL,
+    raw_ocr_text          TEXT NULL,               -- PAN-redacted; purged with image or on confirm
+    raw_text_expires_at   REAL NULL,
     linked_account_id     TEXT NULL,
     linked_entry_ref      TEXT NULL,
-    linked_fingerprint    TEXT NULL,               -- financial_fingerprint(tx) at confirmation time
+    linked_fingerprint    TEXT NULL,
     version               INTEGER NOT NULL CHECK (version >= 1),
     created_at            REAL NOT NULL,
     updated_at            REAL NOT NULL,
+    CHECK (status = 'draft' OR (receipt_date IS NOT NULL AND total_amount IS NOT NULL AND currency IS NOT NULL AND payment_method IS NOT NULL)),
+    CHECK ((linked_account_id IS NULL AND linked_entry_ref IS NULL AND linked_fingerprint IS NULL)
+           OR (status != 'draft' AND linked_account_id IS NOT NULL AND linked_entry_ref IS NOT NULL AND linked_fingerprint IS NOT NULL)),
     FOREIGN KEY (shop_id, owner) REFERENCES budget_shops(id, owner),
     FOREIGN KEY (linked_account_id, linked_entry_ref)
         REFERENCES budget_transactions(account_id, entry_reference),
@@ -233,71 +273,92 @@ CREATE TABLE budget_receipts (
 CREATE INDEX ix_budget_receipts_owner_date ON budget_receipts(owner, receipt_date DESC, id);
 CREATE UNIQUE INDEX uq_budget_receipts_tx_link
     ON budget_receipts(linked_account_id, linked_entry_ref)
-    WHERE linked_account_id IS NOT NULL AND linked_entry_ref IS NOT NULL;
+    WHERE status IN ('confirmed', 'needs_review')
+      AND linked_account_id IS NOT NULL
+      AND linked_entry_ref IS NOT NULL;
 
--- 4. receipt_line (table: budget_receipt_lines) — v1 core + v2 product/unit columns
+-- 3. receipt_line (table: budget_receipt_lines) — v1 (no v2 FK here)
 CREATE TABLE budget_receipt_lines (
     receipt_id            TEXT NOT NULL,
-    line_no               INTEGER NOT NULL CHECK (line_no >= 1),
+    line_no               INTEGER NOT NULL CHECK (line_no BETWEEN 1 AND 300),
     owner                 TEXT NOT NULL REFERENCES users(username),
     line_kind             TEXT NOT NULL CHECK (line_kind IN ('item', 'deposit', 'basket_discount', 'other')),
-    raw_name              TEXT NOT NULL,           -- verbatim receipt label, e.g. "ML.UHT 3,2% 1L"
-    raw_name_key          TEXT NOT NULL,           -- folded search key
+    raw_name              TEXT NOT NULL CHECK (length(raw_name) BETWEEN 1 AND 128),
+    raw_name_key          TEXT NOT NULL CHECK (length(raw_name_key) BETWEEN 1 AND 128),
     ptu_code              TEXT NULL CHECK (ptu_code IS NULL OR ptu_code IN ('A','B','C','D','E','F','G')),
-    quantity              TEXT NOT NULL,           -- exact decimal string, e.g. "1.420" or "2"
-    raw_unit              TEXT NULL,               -- e.g. "kg", "szt", "l", "g", "ml"
-    unit_price_raw        TEXT NULL,               -- printed price per receipt unit
-    gross_line_total      TEXT NOT NULL,           -- pre-discount exact decimal string
-    discount_amount       TEXT NOT NULL DEFAULT '0', -- positive decimal string subtracted from gross
-    net_line_total        TEXT NOT NULL,           -- effective paid decimal string (= gross - discount)
-    -- v2 normalization & unit-price fields (nullable until mapped):
-    normalized_product_id TEXT NULL,
-    base_quantity         TEXT NULL,               -- e.g. "1" (for 1000ml -> 1 l) or "0.5" (for 500g -> 0.5 kg)
-    base_unit             TEXT NULL CHECK (base_unit IS NULL OR base_unit IN ('kg', 'l', 'pcs')),
-    unit_price_base       TEXT NULL,               -- exact decimal string: net_line_total / base_quantity (PLN per base_unit)
-    mapping_source        TEXT NULL CHECK (mapping_source IS NULL OR mapping_source IN ('alias', 'manual', 'suggested')),
+    quantity              TEXT NOT NULL,
+    raw_unit              TEXT NULL,
+    unit_price_raw        TEXT NULL,
+    gross_line_total      TEXT NOT NULL,
+    discount_amount       TEXT NOT NULL DEFAULT '0',
+    net_line_total        TEXT NOT NULL,
     PRIMARY KEY (receipt_id, line_no),
-    FOREIGN KEY (receipt_id, owner) REFERENCES budget_receipts(id, owner),
-    FOREIGN KEY (normalized_product_id, owner) REFERENCES budget_normalized_products(id, owner)
+    FOREIGN KEY (receipt_id, owner) REFERENCES budget_receipts(id, owner)
 );
-CREATE INDEX ix_budget_receipt_lines_product ON budget_receipt_lines(owner, normalized_product_id);
+```
 
--- 5. Remembered alias map (table: budget_product_aliases) — v2
+- **`0020` downgrade order (child-first):** drop indexes → `budget_receipt_lines` → `budget_receipts` → `budget_shops`.
+- **Runtime delete order:** inside `BEGIN IMMEDIATE`, `DELETE FROM budget_receipt_lines` → `DELETE FROM budget_receipts` → commit → unlink image file on disk (`ReceiptFiles.delete`).
+
+#### Migration `0021_budget_receipt_products` (v2)
+
+Creates `budget_normalized_products` (`normalized_product`) and `budget_product_aliases`, and adds `normalized_product_id`, `base_quantity`, `base_unit`, `unit_price_base`, `mapping_source` + composite FK `(normalized_product_id, owner) -> budget_normalized_products(id, owner)` onto `budget_receipt_lines` via SQLite `op.batch_alter_table`:
+
+```sql
+CREATE TABLE budget_normalized_products (
+    id              TEXT PRIMARY KEY,
+    owner           TEXT NOT NULL REFERENCES users(username),
+    canonical_name  TEXT NOT NULL,
+    name_key        TEXT NOT NULL,
+    base_unit       TEXT NOT NULL CHECK (base_unit IN ('kg', 'l', 'pcs')),
+    category_hint   TEXT NULL,
+    version         INTEGER NOT NULL CHECK (version >= 1),
+    created_at      REAL NOT NULL,
+    updated_at      REAL NOT NULL,
+    UNIQUE (id, owner),
+    UNIQUE (owner, name_key, base_unit)
+);
+
 CREATE TABLE budget_product_aliases (
     owner                 TEXT NOT NULL REFERENCES users(username),
-    chain_key             TEXT NOT NULL,           -- e.g. "biedronka" or "*" for shop-agnostic
-    raw_name_key          TEXT NOT NULL,           -- normalized line name key without promo suffixes
+    chain_key             TEXT NOT NULL,
+    raw_name_key          TEXT NOT NULL,
     normalized_product_id TEXT NOT NULL,
-    pack_quantity         TEXT NULL,               -- remembered pack size when omitted on short labels
+    pack_quantity         TEXT NULL,
     pack_unit             TEXT NULL CHECK (pack_unit IS NULL OR pack_unit IN ('kg', 'l', 'pcs')),
     created_at            REAL NOT NULL,
     PRIMARY KEY (owner, chain_key, raw_name_key),
     FOREIGN KEY (normalized_product_id, owner) REFERENCES budget_normalized_products(id, owner)
 );
+-- Plus batch_alter_table on budget_receipt_lines adding v2 nullable columns + FK + ix_budget_receipt_lines_product.
 ```
 
-### 5.2 Photo storage, retention, size limits & log hygiene
+- **`0021` downgrade order (child-first):** drop `ix_budget_receipt_lines_product` and v2 columns/FK on `budget_receipt_lines` via `batch_alter_table` → drop `budget_product_aliases` → drop `budget_normalized_products`.
 
-- **Storage location (never SQLite BLOBs):** Store images on the persistent `/data` volume (`docker-compose.yml:44`) under `HESTIA_BUDGET_RECEIPTS_DIR=/data/budget-receipts`, following `hestia/budget/consent_files.py:72-100`: directory mode `0700`, files `0600`, `O_NOFOLLOW`, `st_uid == os.geteuid()`, atomic temp-file + `fsync` + `os.replace`. Keeping binary photos out of `hestia.db` prevents SQLite WAL bloat and keeps DB backups fast. Include the folder alongside `hestia.db` and `budget-consent` in backups (`docs/BUDGET_2B.md:475-478`), and handle missing image files gracefully (`image_available: false`).
-- **Size limits & sanitization:**
-  - Client pre-compresses photos in browser `<canvas>` (`<= 1800 px` long edge, WebP/JPEG quality ~0.82), dropping EXIF/GPS tags before upload.
-  - Server enforces a **5 MiB** decoded image cap (`6 MiB` multipart limit), verifies magic bytes (`JPEG`/`PNG`/`WebP`), caps pixel dimensions (`Image.MAX_IMAGE_PIXELS` equivalent, e.g., `6000 × 12000`) against decompression bombs, and re-encodes via Pillow to strip any remaining EXIF/ICC metadata and discard original phone filenames (`IMG_1234.HEIC`).
-  - Pasted Live Text capped at **32 KiB** UTF-8 / **500 lines**.
-- **Retention:**
-  - `draft` receipts + their temp images auto-purge after **48 hours** if never confirmed.
-  - Confirmed receipt images obey `HESTIA_BUDGET_RECEIPTS_IMAGE_RETENTION`: default **`30d_after_confirm`** (purges image file after 30 days while retaining structured SQLite rows permanently until deleted by owner; options: `discard_after_confirm`, `30d_after_confirm`, `keep`).
-- **Never in logs:**
-  - Photo bytes, base64 payloads, upload filenames, raw OCR text, shop names, NIPs, product descriptions, and totals **must never** enter Python `logging`, exception messages, HTTP error JSON, `/api/audit`, or `/api/events` SSE.
-  - Error JSON returns fixed codes only (e.g. `budget_receipt_too_large`, `budget_receipt_invalid_image`, `budget_receipt_ocr_unavailable`).
-  - Cloud Vision calls log only timing/status/error class, never request/response payloads.
+### 5.2 Photo storage hardening, DoS bounds, retention & log hygiene
+
+- **Dedicated `ReceiptFiles` module (not `ConsentFiles`):** `hestia/budget/consent_files.py:13,30-42` hardcodes `MAX_FILE_BYTES = 1 MiB` and JSON-only payloads. Build a dedicated `hestia/budget/receipt_files.py` storing binary `.webp` files under `HESTIA_BUDGET_RECEIPTS_DIR=/data/budget-receipts` (`docker-compose.yml:44`) while keeping `consent_files.py:72-100,147-159`'s exact OS invariants:
+  - Per-owner subdirectory `<owner_sha256_prefix>` + strict UUID filename `<receipt_id>.webp`; reject `..`, slashes, or symlinks.
+  - Directory mode `0700`, file mode `0600`, opened exclusively via `os.open(..., dir_fd=dir_fd, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)` with `st_uid == os.geteuid()` and `S_ISREG`.
+  - Atomic write: temp file + `flush` + `os.fsync` + `os.replace` + directory `fsync`.
+- **Decompression-bomb & upload DoS defense:**
+  1. Require `Content-Length` (`411` if absent); **refuse `Transfer-Encoding: chunked`**; cap multipart body at **`6 MiB`** (raw image part `<= 5 MiB`).
+  2. Sniff magic bytes (`JPEG`, `PNG`, `WebP` only); reject HEIC/PDF/SVG/other formats with `400 budget_receipt_invalid_image`.
+  3. Set `Image.MAX_IMAGE_PIXELS = 4_000_000` and treat `Image.DecompressionBombWarning` as an error (`warnings.simplefilter("error", Image.DecompressionBombWarning)`).
+  4. Inspect header dimensions **before `img.load()`**: reject if `max(width, height) > 2000` or `width * height > 4_000_000` (`4 MP`), and iterate `ImageSequence.Iterator` / check `getattr(img, "n_frames", 1) == 1` (checking every frame if multi-frame container). Worst-case RGBA buffer stays `<= 16 MB`.
+  5. Re-encode cleanly to WebP (stripping EXIF/GPS/ICC chunks after safe orientation transpose) in `api._settled_thread` (`hestia/budget/api.py:174-188`) under a **`threading.Semaphore(1)`** so concurrent uploads never stack image buffers. Pass **only** the re-encoded WebP bytes to `ReceiptFiles` and OCR; discard uploaded multipart bytes immediately.
+- **Disk quotas on `/data` (D4):** Check before writing new drafts: max **`256 MiB`** total stored image bytes per owner and max **`20` active `draft` receipts** per owner (`413 budget_receipt_quota_exceeded` after sweeping expired drafts).
+- **Retention & `raw_ocr_text` purge (Q2, D1):**
+  - Unconfirmed `draft` rows + temp images auto-purge after **48 hours**.
+  - Confirmed receipts keep images for **30 days (`image_expires_at = confirmed_at + 30d`)**.
+  - `raw_ocr_text` (already PAN-redacted) is **deleted on confirm or on `raw_text_expires_at = confirmed_at + 30d`** (whichever policy or deadline arrives first; applies to all `source_kind`s including `live_text` and `cloud_ai`). The periodic purge sweep (inside existing cleanup or explicit task) unlinks expired WebP files and sets `image_relpath = NULL, image_expires_at = NULL, raw_ocr_text = NULL, raw_text_expires_at = NULL`, retaining structured receipt/line records until owner deletion.
+- **Zero-leakage logging & audit:** Never log image bytes, filenames, `raw_ocr_text`, NIPs, PANs, shop names, line labels, or amounts anywhere in Python `logging`, exception text, `/api/audit`, or SSE. `budget_analytics_audit` stores only `{receipt_id, action, status, version, linked, source_kind}` (`before_json`/`after_json` never copy `raw_ocr_text` or line items).
 
 ---
 
 ## 6. Product Normalization & Price-per-Unit Comparison (v2)
 
 ### 6.1 Normalizing Polish receipt variants
-
-Polish supermarket labels compress brand, fat/type, and pack size into 20–35 uppercase ASCII/Polish chars. Examples for one staple:
 
 | Shop | Raw receipt label | Printed qty × price | Discount line | Base quantity | Effective net | Canonical product & unit price |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -306,112 +367,26 @@ Polish supermarket labels compress brand, fat/type, and pack size into 20–35 u
 | Lidl | `CHLEB BALTON. 500G` | `1 * 4,79 = 4,79` | — | `0.5 kg` | `4.79 PLN` | `Chleb baltonowski` → **`9.58 PLN/kg`** |
 | Biedronka | `ZIEMNIAKI JAD.LUZ` | `1,420 kg x 3,99` | — | `1.42 kg` | `5.67 PLN` | `Ziemniaki jadalne` → **`3.99 PLN/kg`** |
 
-**Deterministic normalization pipeline:**
+1. **Cleanup & folding:** `NFC`, strip PTU suffix (`A`–`G`), fold Polish diacritics into `raw_name_key`, expand retail abbreviations (`ML.` → `MLEKO`, `BALTON.` → `BALTONOWSKI`, `JAD.` → `JADALNE`).
+2. **Exact `Decimal` pack/unit extraction:** Match multipack (`(\d+)\s*[x*]\s*(\d+(?:[.,]\d+)?)\s*(kg|g|dag|l|ml|szt|pak|rol)\b`), then single pack (`(\d+(?:[.,]\d+)?)\s*(kg|g|dag|l|ml|szt|op)\b`), combining with `quantity` when weighed (`kg`). Convert via exact factors (`g → kg ÷ 1000`, `dag → kg ÷ 100`, `ml → l ÷ 1000`, `szt/op → pcs`).
+3. **Unit price from item-net total:** Compute `net_line_total / base_quantity` from post-item-`Rabat` `net_line_total` (whole-basket `basket_discount` lines remain separate per **Q7**), using scaled integers (`grosze` and `mg`/`ml`) and formatting exact decimal strings at serialization.
+4. **Alias memory & candidate match:** Exact `(owner, chain_key, raw_name_key)` lookup in `budget_product_aliases` first, then unit-compatible token overlap suggestions for explicit owner confirmation.
 
-1. **Cleanup & folding:** `NFC` normalize, strip trailing PTU letter (`A`–`G`), fold Polish diacritics into `raw_name_key` (`MŁEKO` OCR glitch → `mleko`), expand common retail abbreviations (`ML.` → `MLEKO`, `BALTON.` → `BALTONOWSKI`, `JAD.` → `JADALNE`, `ŚW.`/`SW.` → `SWIEZE`).
-2. **Pack-size & unit extraction (exact `Decimal`):**
-   - Multipack regex first: `(\d+)\s*[x*]\s*(\d+(?:[.,]\d+)?)\s*(kg|g|dag|l|ml|szt|pak|rol)\b`.
-   - Single pack regex second: `(\d+(?:[.,]\d+)?)\s*(kg|g|dag|l|ml|szt|op)\b`.
-   - When the receipt line already carries a weight/volume quantity (`1,420 kg`), multiply `line_qty * pack_size` (or use `line_qty` directly when `raw_unit == 'kg'`).
-   - Convert strictly with exact factors (`g → kg ÷ 1000`, `dag → kg ÷ 100`, `ml → l ÷ 1000`, `szt/op → pcs`).
-3. **Effective net line price:** Allocate any linked item `Rabat` before dividing (`net_line_total / base_quantity`), keeping exact scaled integers (`grosze` and `milligrams`/`milliliters`) on the server and formatting rounded canonical decimal strings (e.g., 2 decimal places for `PLN/l` or `PLN/kg`, 4 for small items) only at serialization.
-4. **Canonical product resolution:**
-   - First check `budget_product_aliases` for `(owner, chain_key, raw_name_key)` (exact deterministic hit once the user confirms an item the first time).
-   - Fallback: token-set Jaccard / `difflib` (or optional `rapidfuzz`) over existing `budget_normalized_products` matching compatible `base_unit` (`kg`/`l`/`pcs`) and key attributes (e.g., `%` fat numbers like `3,2%` vs `2%`). Unknown items stay `unmapped` until the user clicks a suggested product or creates one inline.
+### 6.2 Chart ideas (inline SVG in React)
 
-### 6.2 Comparison & chart ideas
-
-All charts render locally in React using lightweight inline SVG (zero third-party charting bundles or external CDNs, matching existing `budget.css` / `progress` meters):
-
-1. **Unit-Price Time-Series Line/Step Chart (per product):** X-axis = date, Y-axis = `PLN / base_unit` (`kg` or `l`), one colored line/marker series per shop chain (`Biedronka`, `Carrefour`, `Lidl`), with distinct hollow vs. solid dots for promotional (`discount > 0`) vs. regular shelf prices.
-2. **Cross-Shop Staple Comparison Bars:** Horizontal grouped bar chart for top staple products (`Mleko 3,2%`, `Chleb baltonowski`, `Ziemniaki`, `Masło 82%`) showing **latest price/unit** and **90-day range (min–max whisker)** per shop plus `% delta` against the cheapest shop.
-3. **Personal Basket Cost Sparkline:** Tracks total cost of a user-pinned 5–15 item recurring basket over the last 6–12 months using exact server-side decimal sums (`sum_money`) of each product's monthly average unit price.
+1. **Multi-shop unit-price timeline (SVG line/step chart):** Date on X, `PLN / base_unit` on Y, per-shop colored series with hollow dots for discounted (`discount_amount > 0`) vs. solid dots for regular prices.
+2. **Cross-shop staple comparison bars:** Grouped horizontal bars showing latest `PLN/unit` + 90-day min–max range and `% delta` vs. cheapest shop.
+3. **Recurring basket cost sparkline:** Monthly exact decimal total (`sum_money`) across pinned staples over 6–12 months.
 
 ---
 
 ## 7. UI Sketch (Mobile-First)
 
-Integrates as a new `"Receipts"` / `"Paragony"` tab in `ui/src/budget/budget.tsx:29,75`, using `budget.css` card layouts (`@media (max-width: 640px)` single-column rules at `ui/src/budget/budget.css:34-36,85-88`).
+Adds a `"Receipts"` / `"Paragony"` tab in `ui/src/budget/budget.tsx:29,75`, using `ui/src/budget/budget.css:34-36,85-88` responsive patterns:
 
-### 7.1 Screen A — Capture / Paste (Mobile-first)
-
-```text
-+------------------------------------------+
-| Budżet  [Konta] [Miesiąc] ... [Paragony] |
-+------------------------------------------+
-| Dodaj paragon                            |
-|                                          |
-|  [ 📷 Zrób zdjęcie / Wybierz plik ]      |
-|  (Zmniejszane na telefonie przed wysł.)  |
-|                                          |
-|  lub wklej tekst (iPhone Tekst na żywo): |
-|  +------------------------------------+  |
-|  | BIEDRONKA ...                      |  |
-|  | MLEKO 3,2% 1L   4,49 C             |  |
-|  | SUMA PLN 45,99                     |  |
-|  +------------------------------------+  |
-|  [ 📋 Wklej ze schowka ]                 |
-|                                          |
-|  [ ] Wyślij zdjęcie do Cloud AI (Claude) |  <-- shown only if AI flag=1;
-|      ⚠ Treść paragonu opuści serwer.     |      unchecked by default
-|                                          |
-|           [ Analizuj paragon ]           |
-+------------------------------------------+
-```
-
-### 7.2 Screen B — Review, Transaction Match & Confirm
-
-```text
-+------------------------------------------+
-| Weryfikacja paragonu            [ Anuluj ]|
-+------------------------------------------+
-| Sklep:   [ Biedronka #459     ] NIP: ... |
-| Data:    [ 2026-11-20 ]  Płatność: Karta |
-| Suma:    [ 45,99 ] PLN                   |
-| ✓ Suma pozycji (45,99) zgodna z paragonem|
-+------------------------------------------+
-| Dopasowana transakcja bankowa:           |
-| (*) 2026-11-21 · JMP S.A. BIEDRONKA 459  |
-|     mBank · -45,99 PLN (1 dzień później) |
-| ( ) Inna transakcja / Gotówka / Później  |
-+------------------------------------------+
-| Pozycje (12)              [+ Dodaj linię]|
-| +--------------------------------------+ |
-| | ML.UHT 3,2% 1L MLEKOVITA       [C]   | |
-| | 2 szt × 4,49 · Rabat -2,00  = 6,98   | |
-| | Produkt (v2): [Mleko 3,2% · 3,49/l]  | |
-| +--------------------------------------+ |
-| | ZIEMNIAKI JADALNE LUZ          [C]   | |
-| | 1,420 kg × 3,99             = 5,67   | |
-| +--------------------------------------+ |
-|                                          |
-|            [ Potwierdź i zapisz ]        |
-+------------------------------------------+
-```
-
-*(On viewports `> 860px`, Screen B renders the compressed receipt photo/raw text sticky on the left and the editable form + bank match on the right.)*
-
-### 7.3 Screen C — Shop Price Comparison (v2)
-
-```text
-+------------------------------------------+
-| Porównanie cen w sklepach                |
-| [ Szukaj produktu (np. mleko, chleb)   ] |
-| Okres: [90 dni v]   Kategoria: [Wszyst.] |
-+------------------------------------------+
-| Mleko 3,2% (PLN / 1 l)                   |
-|   Biedronka : 3,49 (promo) · śr. 3,89    |
-|   Lidl      : 3,79         · śr. 3,95    |
-|   Carrefour : 4,29         · śr. 4,19    |
-|   → Biedronka tańsza o 18,6% vs Carrefour|
-|   [ Wykres historii cen (SVG) ▾ ]        |
-+------------------------------------------+
-| Chleb baltonowski (PLN / 1 kg)           |
-|   Carrefour : 8,40 (1,0 kg)              |
-|   Biedronka : 9,58 (500 g)               |
-|   [ Wykres historii cen (SVG) ▾ ]        |
-+------------------------------------------+
-```
+- **Screen A — Capture / Paste:** Large mobile buttons for *Photo upload* (client `<canvas>` resize `<= 1800 px`, EXIF strip) or *Paste Live Text* (`<= 32 KiB`), optional unchecked per-receipt *Cloud Vision* checkbox (only if `AI_ENABLED=1`), and *Analyze* CTA.
+- **Screen B — Review, Link & Confirm:** Editable shop/NIP/date/`SUMA PLN`, reconciliation banner (`sum(net_line_total) == total_amount`), candidate transaction radio list (`±4` days, exact amount, or *Cash / No bank link*), editable line cards (showing item `Rabat`, `Kaucja`, or `basket_discount` badges), and *Confirm & Save*. On desktop (`> 860px`), image/raw text sticks beside the form.
+- **Screen C — Shop Comparison (v2):** Product filter, shop comparison cards (`Biedronka` vs. `Carrefour` vs. `Lidl` per `1 l` / `1 kg`), and inline SVG price history.
 
 ---
 
@@ -419,68 +394,88 @@ Integrates as a new `"Receipts"` / `"Paragony"` tab in `ui/src/budget/budget.tsx
 
 | Risk | Impact | Mitigation |
 | --- | --- | --- |
-| **Faded/crumpled thermal print or missed diacritics** | Wrong prices, `Rabat` dropped, or mangled names | Geometric row grouping from RapidOCR bounding boxes; mandatory `sum(lines) == SUMA PLN` check highlighting discrepancies on Review; optional per-receipt Cloud Vision escape hatch |
-| **Franchise NIPs (Żabka, Carrefour Express)** | Different NIP per branch breaks chain grouping | Store `chain_key` + `nip` separately on `budget_shops`; match via both verified chain NIPs and header regexes + editable shop chain field |
-| **Apache/Cloudflare logs capture query strings (`ui/public/privacy-policy.html:228`)** | Product names or shop searches leak into reverse-proxy logs | Use opaque UUIDs in paths; pass search/filter strings in `POST` JSON bodies or filter the already-loaded in-memory product list client-side |
-| **iOS Safari `.heic` uploads** | Pillow cannot decode HEIC without `pillow-heif` / `libheif` | Browser `<canvas>` converts `<input type="file" accept="image/*">` to WebP/JPEG client-side before upload; reject unsupported raw formats cleanly (`budget_receipt_invalid_image`) |
-| **Large uploads exhaust `aiohttp` body limit or SQLite size** | Uploads fail at `69,632 B` (`hestia/web.py:1161`) or bloat `hestia.db` | Raise `Application(client_max_size=6*1024*1024)` while keeping `_read_json_body` strict limits; store images on `/data/budget-receipts` (mode `0700`/`0600`) with 30-day purge default |
-| **Cloud AI data disclosure / free-tier training** | Shopping habits sent to third-party servers | Default off; server flag + per-receipt explicit opt-in warning; paid API keys only; strip EXIF; update `ui/public/privacy-policy.html` first |
-| **Unit-price distortion (multipacks, deposits, promos)** | `2x1L` or `Kaucja` skews `PLN/l` comparisons | Separate `line_kind='deposit'`; parse multipacks (`NxM unit`); compute `unit_price_base` from post-discount `net_line_total` using exact `Decimal` division |
+| **Exposed sidecar under `network_mode: host`** | Unauthenticated LAN/WAN OCR access | Bridge network + `127.0.0.1:8928` loopback publish, `Authorization` shared secret, `cap_drop: [ALL]`, no `/data`/socket mounts (`§4.2`). |
+| **Image bomb / RAM OOM in main process** | `288 MB+` RGBA spike crashes Hestia | Require `Content-Length`, refuse chunked, `6 MiB` limit, magic-byte check, header `<= 2000 px`/`4 MP`/single-frame check before `load()`, `DecompressionBombWarning` as error, `Semaphore(1)` (`§5.2`). |
+| **Multipart CSRF or `_VIEWER` fallback** | Cross-origin upload or non-admin read | `_principal` + `_browser` (`Origin` + cookie, no `Authorization`) before reading body; static `_ADMIN` routes in `_ROUTE_MIN_ROLE` and `_PATH_ROLES` (`§4.5`). |
+| **`raw_ocr_text` / audit / proxy log leaks** | PAN, NIP, or shopping list leaks | PAN redactor before save; `raw_ocr_text` purged with 30d image deadline; minimal `budget_analytics_audit`; no item names in `GET` queries (`§4.3`, `§5.2`). |
+| **Settlement lag, refunds, transfers, races** | Wrong or stale bank links | `±4`d min across `transaction`/`booking`/`value_date`; direction filter; exclude `budget_transfer_legs`; `BEGIN IMMEDIATE` re-verify; `409` on `IntegrityError`; ingestion hook (`§4.4`). |
+| **Franchise NIPs (Żabka, Carrefour Express)** | Branches have different NIPs | Separate nullable `chain_key` + `nip` on `budget_shops` + header rules + owner edit (`§3.1`, `§5.1`). |
 
 ---
 
-## 9. Open Questions for Owner (with Recommended Defaults)
+## 9. Open Questions (Remaining)
 
-1. **Local photo OCR engine for v1b:** Deploy the optional `RapidOCR` (`rapidocr-onnxruntime`) Compose sidecar (~250–500 MB RAM) or embed `tesseract-ocr-pol` directly in Hestia's container (~60–100 MB image)?  
-   *Recommended default:* **RapidOCR sidecar behind Compose `profiles: ["receipts-ocr"]`**, keeping the main Hestia image untouched and allowing Paste-only v1a to run with zero extra containers.
-2. **Receipt photo retention after confirmation:** Delete immediately (`discard_after_confirm`), keep for a grace window (`30d_after_confirm`), or retain permanently (`keep`)?  
-   *Recommended default:* **`30d_after_confirm`** (with an owner UI button to purge earlier or mark individual receipts to keep).
-3. **Cloud AI Vision opt-in provider (if enabled):** Support Anthropic Claude Messages API, Google Gemini Paid API, or both behind a single config selector?  
-   *Recommended default:* **Optional adapter supporting Gemini Paid (`gemini-2.5-flash`) or Claude Haiku/Sonnet** via an `0400`/`0600` API key file, strictly off by default and manual per-receipt trigger only.
-4. **Search privacy vs. reverse proxy logs:** Keep product/receipt search completely client-side over paged/loaded items, or use `POST /api/budget/receipts/search` so search text never hits Apache/Cloudflare `GET` query logs?  
-   *Recommended default:* **`POST` search body (or client-side filtering for small v1 lists)** — never `GET ?query=...` for product names.
-5. **Line-item category splitting into `budget_annotations`:** Should v1 keep receipt link informational on the single bank transaction, or allow splitting one supermarket receipt across multiple Hestia budget categories (e.g., Food vs. Household Cleaning)?  
-   *Recommended default:* **Defer category splitting to v2+**; v1 keeps `budget_annotations` 1:1 per bank transaction so existing `analytics_views.py` projections remain untouched.
-6. **Card-linked vs. cash receipts:** Should cash receipts (`GOTÓWKA`) be saved for price tracking in v1 without a bank transaction?  
-   *Recommended default:* **Yes** — allow saving unlinked/cash receipts so item-price history covers cash purchases too.
-7. **Basket discount allocation:** When a receipt has a whole-basket coupon (e.g., `-10 zł przy zakupach za 100 zł`) rather than an item-specific `Rabat`, allocate proportionally across items or keep as `line_kind='basket_discount'`?  
-   *Recommended default:* **Keep as `line_kind='basket_discount'`** so individual item shelf/promo prices remain accurate for shop comparison.
+Questions **Q1** (RapidOCR sidecar), **Q2** (30d post-confirm image purge), **Q5** (informational link only in v1), **Q6** (cash receipts allowed), and **Q7** (basket coupon as single negative line) are **decided** in [§2.1](#21-decided-rules-delegated-to-engineering). Only two questions remain open:
+
+1. **Q3 — Cloud AI Vision provider (`v1c`, remains off by default):** When `HESTIA_BUDGET_RECEIPTS_AI_ENABLED=1` is eventually enabled, support Anthropic Claude API, Google Gemini Paid API, or a configurable adapter for either?  
+   *Recommended default:* **Thin configurable adapter supporting either Claude or Gemini Paid** via `0400`/`0600` secret file, remaining off by default and manual per-receipt opt-in only.
+2. **Q4 — Product/receipt search transport (`v1`/`v2`):** Filter loaded receipts/products client-side in browser memory, or add `POST /api/budget/receipts/search` so search strings stay out of Apache/Cloudflare `GET` query logs (`ui/public/privacy-policy.html:228`)?  
+
+**Decided 2026-11-22 (owner delegated decisions to engineering; reviewable next week):**
+- **Q3:** a single configurable adapter, with Anthropic Claude as the first implementation. It stays off by default (`HESTIA_BUDGET_RECEIPTS_AI_ENABLED=0`), runs only after an explicit per-receipt opt-in, and needs the privacy-policy update before it is enabled.
+- **Q4:** `POST /api/budget/receipts/search` with the query in the JSON body. Search text never appears in `GET` query strings or proxy logs; small v1 lists may also filter client-side.
+
+   *Recommended default:* **`POST` search body (or client-side filtering for small lists)** — never `GET ?query=...`.
 
 ---
 
-## 10. Effort Estimate
+## 10. Testing & Verification Plan (Required Synthetic Cases)
+
+Every PR must pass the full Python statement+branch coverage gate, UI `typecheck` / `lint` / `test` / `build`, and OpenAPI / `_ROUTE_MIN_ROLE` / `_PATH_ROLES` drift checks using synthetic fixtures only:
+
+1. **`test_receipt_decompression_bomb_and_oversized_header`:** Rejects `> 2000 px` long side, `> 4 MP` (`4_000_000` pixels), multi-frame animated WebP/PNG, and `DecompressionBombWarning` before `img.load()`, plus chunked / missing `Content-Length` / `> 6 MiB` uploads.
+2. **`test_receipt_rejects_heic_and_non_image_uploads`:** Sniffs magic bytes and rejects HEIC, PDF, SVG, and plain text spoofed as `.jpg` with `400 budget_receipt_invalid_image`.
+3. **`test_receipt_storage_blocks_traversal_and_symlinks`:** Rejects `../`, non-UUID IDs, symlinks inside `HESTIA_BUDGET_RECEIPTS_DIR`, unexpected UID/mode, and enforces `256 MiB` byte + `20`-draft quotas.
+4. **`test_receipt_owner_isolation_foreign_id`:** Second admin gets `404` on detail, image, confirm, and delete; viewer/operator gets `403`; auth-off/JSON users fail closed (`401`/`409`).
+5. **`test_receipt_multipart_csrf_requires_origin_and_cookie`:** Multipart upload without `Origin`, with foreign `Origin`, or carrying `Authorization` header is rejected before reading multipart bytes.
+6. **`test_receipt_cloud_ai_flag_and_explicit_opt_in`:** Cloud AI disabled by default (`503`/`400`); enabled flag without `use_cloud_ai=true` never triggers cloud egress; opt-in strips EXIF and sends zero bank data.
+7. **`test_receipt_match_friday_purchase_booked_monday`:** Friday `2026-11-20` receipt matches Monday `2026-11-23` bank entry (`±4`d rule) and uses minimum distance across `transaction_date`, `booking_date`, `value_date`.
+8. **`test_receipt_refund_matches_only_crdt`:** Refund (`ZWROT`, `receipt_kind='refund'`) never suggests or accepts a `DBIT` transaction and matches `CRDT` only.
+9. **`test_receipt_match_excludes_transfer_legs`:** Entries in `budget_transfer_legs` are omitted from candidates and rejected inside `BEGIN IMMEDIATE` on `confirm`.
+10. **`test_receipt_concurrent_confirm_returns_409`:** Concurrent confirms linking two receipts to one bank entry (or stale `expected_version`) trigger `409 budget_receipt_tx_already_linked` / conflict, never `500`.
+11. **`test_receipt_fingerprint_change_latches_needs_review`:** Replacing `payload_json` or setting `uncertain=True` via both `BudgetStore._import_transaction` (`hestia/budget/store.py:545-547`) and `_update_offline` (`hestia/budget/store.py:674-681`, `_offline_conflict` `:665-671`) latches `status='needs_review'` and bumps `version`.
+12. **`test_receipt_retention_purge_deletes_image_and_raw_ocr_text`:** 30-day post-confirm purge unlinks the WebP file and clears `raw_ocr_text` while keeping structured rows; 48h draft purge removes unconfirmed draft + image.
+13. **`test_receipt_migration_upgrade_downgrade`:** `0019 → 0020 → 0019` and `0020 → 0021 → 0020` succeed under `PRAGMA foreign_keys=ON` (`hestia/db.py:757`) with child-first table/column removal.
+14. **`test_receipt_confirm_leaves_overview_totals_unchanged`:** Confirming, linking, and deleting receipts produces zero change in `GET /api/budget/analytics/overview` totals in v1.
+15. **`test_receipt_logs_contain_no_nip_pan_or_amounts`:** Asserts PAN redaction before persistence and confirms zero NIPs, PANs, shop names, item names, or amounts appear in Python logs, error JSON, `/api/audit`, SSE, or `budget_analytics_audit`.
+
+---
+
+## 11. Effort Estimate
 
 | Phase | Scope | Rough effort |
 | --- | --- | --- |
-| **v1a — Paste + Parser + Match + Review** | Polish fiscal parser (`receipt_parser.py`), transaction candidate matcher, Alembic `0020` (`budget_shops`, `budget_receipts`, `budget_receipt_lines`), `/api/budget/receipts/*` + OpenAPI/TS types, mobile-first Paste + Review UI, synthetic tests + full coverage gate | **4–6 engineering days** |
-| **v1b — Photo upload + RapidOCR sidecar** | Client `<canvas>` resize/EXIF strip, `client_max_size` + Pillow validation, private `/data/budget-receipts` store + 30d purge, `receipt-ocr` Compose sidecar (`rapidocr-onnxruntime`) + geometric row grouping, image viewer UI | **3–4 engineering days** |
-| **v1c — Optional Cloud Vision opt-in** | Default-off provider client (Claude / Gemini Paid JSON Schema), `0400` secret file config, explicit per-receipt UI toggle + privacy policy update | **1.5–2 engineering days** |
-| **v2 — Product normalization & shop charts** | Alembic `0021` (`budget_normalized_products`, `budget_product_aliases`), exact `Decimal` unit extractor + alias/fuzzy matcher, shop comparison view + inline SVG charts | **5–7 engineering days** |
+| **v1a — Paste + Parser + Match + Review** | `receipt_parser.py` (with PAN redactor & `sum(net)==total`), matcher (`±4`d, `CRDT`/`DBIT`, transfer exclusion) + `store.py` drift hook, `0020` migration, static `/api/budget/receipts/*` + `privacy-policy.html` update, mobile Paste + Review UI, tests #4, #7–#11, #13–#15 | **5–7 engineering days** |
+| **v1b — Photo upload + Hardened RapidOCR sidecar** | Browser `<canvas>` resize, `client_max_size` + `Content-Length` + magic/4MP/frame/`Semaphore(1)` WebP pipeline, `ReceiptFiles` (`256 MiB` / `20`-draft quotas) + `30d` image/`raw_ocr_text` purge, hardened `receipt-ocr` Compose sidecar (`127.0.0.1:8928`), `GET .../image` + `cf-cache-status` check, tests #1–#3, #5, #12 | **4–5 engineering days** |
+| **v1c — Optional Cloud Vision opt-in** | Default-off Claude/Gemini Paid adapter, `0400` secret file, per-receipt UI opt-in + `privacy-policy.html` provider terms update, test #6 | **1.5–2 engineering days** |
+| **v2 — Product normalization & shop charts** | `0021` migration (`budget_normalized_products`, `budget_product_aliases`, `batch_alter_table`), exact `Decimal` unit extractor + alias matcher, shop comparison view + inline SVG charts | **5–7 engineering days** |
 
-**Total:** ~**8.5–12 days** for full v1 (a+b+c), or **4–6 days** to ship v1a (Live Text paste + bank transaction matching) immediately; **+5–7 days** for v2 price comparison.
+**Total:** ~**10.5–14 days** for full v1 (`a+b+c`), or **5–7 days** for paste-only v1a; **+5–7 days** for v2 price comparison.
 
 ---
 
-## 11. Sources
+## 12. Sources
 
-### Repository references
+### Repository references (verified against rebased `master` at `81a432c`)
 - `Dockerfile:10-39`, `docker-compose.yml:1-46`, `requirements.txt:22-29`, `ui/package.json:10-32`
-- `hestia/db.py:10-30,182-748,753-816`
-- `hestia/web.py:50-52,167-206,905-935,1157-1167`
+- `hestia/db.py:10-30,182-748,753-816` (`BudgetTransferLeg` `:694-700`, `BudgetAnalyticsAudit` `:703-712`, `PRAGMA foreign_keys=ON` `:757`)
+- `hestia/web.py:50-52,144,167-206,245-253,276-300,905-935,1157-1167,1221`
 - `hestia/api_contract.py:2283-2315`
-- `hestia/budget/api.py:38,53-91,208,214-216`
+- `hestia/budget/api.py:38,53-91,174-188,208,214-216,236-241`
 - `hestia/budget/analytics_api.py:97-130`
-- `hestia/budget/analytics_core.py:38-87,115-125`
+- `hestia/budget/analytics_core.py:38-87,89-98,115-125`
+- `hestia/budget/analytics_store.py:109-129,549-606`
+- `hestia/budget/analytics_views.py:316`
+- `hestia/budget/analytics_reconcile.py:85-100`
+- `hestia/budget/store.py:441,545-547,576,603,665-671,674-681`
 - `hestia/budget/transfer_match.py:1-237`
-- `hestia/budget/normalize.py:98-115`
+- `hestia/budget/normalize.py:98-134`
+- `hestia/budget/views.py:31-32,69-84`
 - `hestia/budget/config.py:171-195`
-- `hestia/budget/consent_files.py:72-100`
-- `hestia/budget/client.py:77-115`
-- `docs/BUDGET.md:13-14,23-24,247-252,660-662`
-- `docs/BUDGET_2B.md:370-374,475-478`
-- `docs/BUDGET_2D.md:26-29,180-182,292-295`
-- `ui/src/budget/budget.tsx:1-2,29,75`, `ui/src/budget/budget.css:34-36,85-88`
-- `ui/public/privacy-policy.html:161-266`
+- `hestia/budget/consent_files.py:13,30-42,72-100,147-159`
+- `hestia/budget/client.py:77-120`
+- `docs/BUDGET.md:13-14,23-24,247-252,660-662`, `docs/BUDGET_2B.md:370-374,475-478`, `docs/BUDGET_2D.md:26-29,180-182,292-295`, `docs/BUDGET_FORECAST.md:1-80`
+- `ui/src/budget/budget.tsx:1-2,29,75`, `ui/src/budget/budget.css:34-36,85-88`, `ui/public/privacy-policy.html:161-266`
 
 ### Public documentation & external references
 - Enable Banking API reference: https://enablebanking.com/docs/api/reference/
@@ -491,10 +486,8 @@ Integrates as a new `"Receipts"` / `"Paragony"` tab in `ui/src/budget/budget.tsx
 - pdfsandwich: https://www.tobias-elze.de/pdfsandwich/ , https://sourceforge.net/projects/pdfsandwich/
 - Stirling-PDF: https://github.com/Stirling-Tools/Stirling-PDF
 - Paperless-ngx & GPL-3.0 licence: https://github.com/paperless-ngx/paperless-ngx , https://github.com/paperless-ngx/paperless-ngx/blob/main/LICENSE , https://docs.paperless-ngx.com
-- PaddleOCR: https://github.com/PaddlePaddle/PaddleOCR
-- RapidOCR: https://github.com/RapidAI/RapidOCR
-- docTR: https://github.com/mindee/doctr
-- EasyOCR & Surya (comparison notes): https://github.com/JaidedAI/EasyOCR , https://github.com/datalab-to/surya
+- PaddleOCR & RapidOCR: https://github.com/PaddlePaddle/PaddleOCR , https://github.com/RapidAI/RapidOCR
+- docTR, EasyOCR & Surya: https://github.com/mindee/doctr , https://github.com/JaidedAI/EasyOCR , https://github.com/datalab-to/surya
 - Anthropic Claude Vision & Commercial Terms: https://docs.anthropic.com/en/docs/build-with-claude/vision , https://www.anthropic.com/legal/commercial-terms
 - Google Gemini API Terms & Structured Outputs: https://ai.google.dev/gemini-api/terms , https://ai.google.dev/gemini-api/docs/structured-output
 - Open-source receipt parser references: https://github.com/filip-rupniewski/receipt_parsing , https://github.com/KamKubicki/fidl-plus , https://github.com/bhimrazy/receipt-ocr , https://github.com/Rutikasri/DocuParse_AI , https://github.com/YanzhongSu/lidl
