@@ -1,0 +1,81 @@
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /ui
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 2
+    groups:
+      npm-minor-patch:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
+    ignore:
+      # typescript 7.0.2 is published. typescript-eslint 8.73.0, the latest
+      # release, still peers typescript >=4.8.4 <6.1.0, so 7.x cannot land
+      # without abandoning the linter. Stay on 6.0.3.
+      - dependency-name: typescript
+        update-types:
+          - version-update:semver-major
+
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 2
+    groups:
+      pip-minor-patch:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
+    ignore:
+      # No 51.x release. The <51 ceiling stays: hestia uses only the hazmat
+      # cipher surface, and cryptography majors are not taken automatically.
+      - dependency-name: cryptography
+        update-types:
+          - version-update:semver-major
+      # No 4.x release. The web stack targets aiohttp 3. 3.14.5 already warns
+      # about web.RequestKey; a future 4.x rewrite is out of scope here.
+      - dependency-name: aiohttp
+        update-types:
+          - version-update:semver-major
+      # 2.1.9 is published and our pin is <2.1. 2.1 is a semver-minor feature
+      # line, so a semver-major ignore would not suppress it. 2.0.x patches
+      # still open. 3.x is a major and is ignored as well.
+      - dependency-name: SQLAlchemy
+        update-types:
+          - version-update:semver-minor
+          - version-update:semver-major
+      # No 4.x release. pyserial 3.5 is the current line (<4).
+      - dependency-name: pyserial
+        update-types:
+          - version-update:semver-major
+      # No 2.x release. Migrations stay on alembic 1.x.
+      - dependency-name: alembic
+        update-types:
+          - version-update:semver-major
+      # No 3.x release. The public DTO contract stays on pydantic 2.
+      - dependency-name: pydantic
+        update-types:
+          - version-update:semver-major
+      # 8.0.0a1 is the only 8.x release, and it is a prerelease. Stay on 7.x.
+      - dependency-name: icalendar
+        update-types:
+          - version-update:semver-major
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 2
+    groups:
+      actions-minor-patch:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch

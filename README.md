@@ -108,9 +108,9 @@ python3 -m unittest discover -s tests
 
 100 % line + branch coverage (stdlib `unittest`; `.coveragerc` `fail_under=100`).
 
-The dashboard tools require Node.js 22.13 or later in the 22.x line, or Node.js
-24 or later. CI and the container build use Node.js 22. Run the UI checks from
-`ui/`:
+The dashboard tools require Node.js 22.22.2 or later in the 22.x line, Node.js
+24.15 or later in the 24.x line, or Node.js 26 or later. CI and the container
+build use Node.js 22. Run the UI checks from `ui/`:
 
 ```sh
 npm ci
