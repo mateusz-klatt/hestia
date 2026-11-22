@@ -205,6 +205,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/budget/analytics/forecast": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read the owner-private upcoming commitments estimate
+         * @description Read-only evaluation of unmarked mortgage instalments and active recurring charges from one local snapshot using the server UTC date. Matches recurring hints to individual scheduled instalments to suppress duplicate estimates. An optional currency filter scopes commitments, deduplications and their summary counts. Snapshot metadata and account freshness cover all selected accounts. The estimate excludes spending limits and makes no bank requests or stored changes.
+         */
+        get: operations["getBudgetAnalyticsForecast"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/budget/analytics/inbox": {
         parameters: {
             query?: never;
@@ -1760,6 +1780,134 @@ export interface components {
             rule_id: string | null;
             /** Source */
             source: string;
+        };
+        /**
+         * BudgetAnalyticsForecast
+         * @description Read-only estimate of scheduled and recurring commitments by UTC calendar month.
+         */
+        BudgetAnalyticsForecast: {
+            /** Deduplications */
+            deduplications: components["schemas"]["BudgetAnalyticsForecastDeduplication"][];
+            /** End Month */
+            end_month: string;
+            /** Evaluation Date */
+            evaluation_date: string;
+            /**
+             * Evaluation Timezone
+             * @constant
+             */
+            evaluation_timezone: "UTC";
+            /** Freshness Stale */
+            freshness_stale: boolean;
+            /** Horizon Months */
+            horizon_months: number;
+            /** Ledger As Of */
+            ledger_as_of: string | null;
+            /** Months */
+            months: components["schemas"]["BudgetAnalyticsForecastMonth"][];
+            /** Rule Version */
+            rule_version: number;
+            /** Schedules Version */
+            schedules_version: string;
+            /** Snapshot Digest */
+            snapshot_digest: string;
+            /** Stale Account Ids */
+            stale_account_ids: string[];
+            /** Stale Account Ids Truncated */
+            stale_account_ids_truncated: boolean;
+            /** Start Month */
+            start_month: string;
+            summary: components["schemas"]["BudgetAnalyticsForecastSummary"];
+            /** Totals */
+            totals: components["schemas"]["BudgetAnalyticsForecastCurrencyTotal"][];
+        };
+        /**
+         * BudgetAnalyticsForecastCurrencyTotal
+         * @description Exact decimal commitment totals in one currency.
+         */
+        BudgetAnalyticsForecastCurrencyTotal: {
+            /** Currency */
+            currency: string;
+            /** Estimated Total */
+            estimated_total: string;
+            /** Scheduled Total */
+            scheduled_total: string;
+            /** Total */
+            total: string;
+        };
+        /** BudgetAnalyticsForecastDeduplication */
+        BudgetAnalyticsForecastDeduplication: {
+            /** Account Stale */
+            account_stale: boolean;
+            /** Amount */
+            amount: string;
+            /** Currency */
+            currency: string;
+            /** Day Distance */
+            day_distance: number;
+            /** Last Observed Date */
+            last_observed_date: string;
+            /** Matched Due Date */
+            matched_due_date: string;
+            /** Recurring Label */
+            recurring_label: string;
+            /** Schedule Id */
+            schedule_id: string;
+            /** Schedule Label */
+            schedule_label: string;
+        };
+        /** BudgetAnalyticsForecastItem */
+        BudgetAnalyticsForecastItem: {
+            /** Account Stale */
+            account_stale: boolean;
+            /** Amount */
+            amount: string;
+            /**
+             * Confidence
+             * @enum {string}
+             */
+            confidence: "scheduled" | "high" | "medium";
+            /** Currency */
+            currency: string;
+            /** Expected Date */
+            expected_date: string;
+            /** Label */
+            label: string;
+            /** Past Due */
+            past_due: boolean;
+            /** Schedule Id */
+            schedule_id: string | null;
+            /**
+             * Source
+             * @enum {string}
+             */
+            source: "mortgage" | "recurring";
+        };
+        /** BudgetAnalyticsForecastMonth */
+        BudgetAnalyticsForecastMonth: {
+            /** Currencies */
+            currencies: components["schemas"]["BudgetAnalyticsForecastCurrencyTotal"][];
+            /** Items */
+            items: components["schemas"]["BudgetAnalyticsForecastItem"][];
+            /** Month */
+            month: string;
+        };
+        /** BudgetAnalyticsForecastSummary */
+        BudgetAnalyticsForecastSummary: {
+            /** Deduped Recurring Count */
+            deduped_recurring_count: number;
+            /** Excluded Accounts */
+            excluded_accounts: number;
+            /** Lapsed Recurring Count */
+            lapsed_recurring_count: number;
+            /** Overdue Mortgage Schedule Count */
+            overdue_mortgage_schedule_count: number;
+            /** Selected Accounts */
+            selected_accounts: number;
+            /** Stale Accounts */
+            stale_accounts: number;
+            /** Stale Recurring Count */
+            stale_recurring_count: number;
         };
         /** BudgetAnalyticsFreshness */
         BudgetAnalyticsFreshness: {
@@ -5521,6 +5669,102 @@ export interface operations {
                 };
             };
             /** @description budget configuration unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+        };
+    };
+    getBudgetAnalyticsForecast: {
+        parameters: {
+            query?: {
+                /** @description Integer 1..12, starting with the current server UTC calendar month. */
+                months?: string;
+                currency?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Owner-private upcoming commitments estimate and freshness from one local snapshot. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetAnalyticsForecast"];
+                };
+            };
+            /** @description Invalid forecast query: months must be an integer 1..12, currency must match ^[A-Z]{3}$, and unknown or duplicate parameters (including today) are rejected. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description session required; middleware may return an empty body */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description admin owner or browser-origin requirement failed; middleware may return an empty body */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description unknown, disabled or foreign resource */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description SQLite backend required: forecast requires HESTIA_PERSIST=sqlite. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Forecast limit exceeded (>100,000 selected rows, >100 schedules, >1,200 paid marks per schedule, >200 active currency-filtered hints, >3,600 projected items, or >4 MiB UTF-8 JSON payload); zero partial totals returned. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Stored mortgage schedule, ledger, or metadata integrity check failed (`budget_analytics_data_error`), including stored-data helper errors mapped to 500 after forecast query validation, or unexpected internal failure (`budget_internal_error`). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Analytics storage or budget configuration unavailable (`budget_analytics_unavailable` or `budget_unavailable`). */
             503: {
                 headers: {
                     [name: string]: unknown;

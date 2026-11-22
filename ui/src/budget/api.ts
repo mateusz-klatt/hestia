@@ -6,7 +6,7 @@ import type { BudgetAccount, BudgetCapabilities, BudgetConnection, BudgetConsent
   BudgetConsentReconcile, BudgetConsentRenewalReminders, BudgetJob, BudgetKind, BudgetBalances, BudgetLimit,
   BudgetOperation, BudgetTransactions, ConsentIntent } from "./model";
 import { idempotencyKey } from "./model";
-import type { AnalyticsCategory, AnalyticsInbox, AnalyticsInboxMarkRequest, AnalyticsInboxMarkSaved,
+import type { AnalyticsCategory, AnalyticsForecast, AnalyticsInbox, AnalyticsInboxMarkRequest, AnalyticsInboxMarkSaved,
   AnalyticsMortgages, AnalyticsOverview, AnalyticsQuarantine, AnalyticsRecurring, AnalyticsRule,
   AnalyticsSpendingLimits, AnalyticsTransactions, AnnotationRequest, AnnotationSaved, CategoryCreateRequest,
   CategorySaved, CategoryUpdateRequest, MortgagePaymentSaved, MortgagePaymentSetRequest, MortgageSaveRequest,
@@ -115,6 +115,8 @@ export const budgetApi = {
     post<{ limit: SpendingLimitSaved }>("analytics/spending-limit-save", request),
   /** Owner-private mortgage schedules evaluated against server UTC today (evaluation-only). */
   mortgages: () => call<AnalyticsMortgages>(url("analytics/mortgages")),
+  /** Read-only estimate of scheduled and recurring commitments, with exact per-currency totals. */
+  forecast: (months?: number, currency?: string) => call<AnalyticsForecast>(url("analytics/forecast", { months, currency })),
   /** Creates (schedule_id=null, expected_version=0) or updates one private mortgage schedule. */
   saveMortgage: (request: MortgageSaveRequest) =>
     post<{ schedule: MortgageScheduleSaved }>("analytics/mortgage-save", request),

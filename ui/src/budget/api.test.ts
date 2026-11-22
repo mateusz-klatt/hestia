@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { forecastOf } from "./analytics/fixtures";
 import { budgetApi } from "./api";
 import { account, connection } from "./fixtures";
 
@@ -112,6 +113,23 @@ describe("budget api", () => {
       account_id: "local-a", operation: "balances" });
     await budgetApi.refresh(connection);
     expect(JSON.parse(sent(fetchMock, 1).init.body as string)).toEqual({ connection_id: "bank", expected_version: 4 });
+  });
+
+  it("reads the forecast with optional horizon and currency query parameters", async () => {
+    const data = forecastOf();
+    const fetchMock = respond(200, data);
+    expect(await budgetApi.forecast()).toEqual({ ok: true, data });
+    const { url, init } = sent(fetchMock);
+    expect(url.pathname).toMatch(/\/api\/budget\/analytics\/forecast$/);
+    expect(url.search).toBe("");
+    expect(init).toEqual({ credentials: "same-origin", cache: "no-store" });
+
+    await budgetApi.forecast(6, "EUR");
+    expect(Object.fromEntries(sent(fetchMock, 1).url.searchParams)).toEqual({ months: "6", currency: "EUR" });
+    await budgetApi.forecast(12, "");
+    expect(Object.fromEntries(sent(fetchMock, 2).url.searchParams)).toEqual({ months: "12" });
+    await budgetApi.forecast(undefined, "PLN");
+    expect(Object.fromEntries(sent(fetchMock, 3).url.searchParams)).toEqual({ currency: "PLN" });
   });
 
   it("sends every control with the entity's current version", async () => {
