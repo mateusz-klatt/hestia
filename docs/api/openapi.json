@@ -1383,6 +1383,9 @@
             ],
             "title": "Read At"
           },
+          "ref": {
+            "$ref": "#/components/schemas/BudgetAnalyticsInboxConsentRef"
+          },
           "subject_id": {
             "title": "Subject Id",
             "type": "string"
@@ -1394,6 +1397,7 @@
           "read",
           "read_at",
           "kind",
+          "ref",
           "params"
         ],
         "title": "BudgetAnalyticsInboxConsentItem",
@@ -1457,6 +1461,20 @@
           "paused"
         ],
         "title": "BudgetAnalyticsInboxConsentParams",
+        "type": "object"
+      },
+      "BudgetAnalyticsInboxConsentRef": {
+        "description": "Owner-known local connection ID for UI lookup (computed live, never stored or logged).",
+        "properties": {
+          "connection_id": {
+            "title": "Connection Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "connection_id"
+        ],
+        "title": "BudgetAnalyticsInboxConsentRef",
         "type": "object"
       },
       "BudgetAnalyticsInboxKeyRequest": {
@@ -1614,6 +1632,9 @@
             ],
             "title": "Read At"
           },
+          "ref": {
+            "$ref": "#/components/schemas/BudgetAnalyticsInboxMortgageRef"
+          },
           "subject_id": {
             "title": "Subject Id",
             "type": "string"
@@ -1625,6 +1646,7 @@
           "read",
           "read_at",
           "kind",
+          "ref",
           "params"
         ],
         "title": "BudgetAnalyticsInboxMortgageItem",
@@ -1669,6 +1691,20 @@
         "title": "BudgetAnalyticsInboxMortgageParams",
         "type": "object"
       },
+      "BudgetAnalyticsInboxMortgageRef": {
+        "description": "Owner-known local mortgage schedule ID for UI lookup (computed live, never stored or logged).",
+        "properties": {
+          "schedule_id": {
+            "title": "Schedule Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "schedule_id"
+        ],
+        "title": "BudgetAnalyticsInboxMortgageRef",
+        "type": "object"
+      },
       "BudgetAnalyticsInboxSpendingLimitItem": {
         "properties": {
           "kind": {
@@ -1698,6 +1734,9 @@
             ],
             "title": "Read At"
           },
+          "ref": {
+            "$ref": "#/components/schemas/BudgetAnalyticsInboxSpendingLimitRef"
+          },
           "subject_id": {
             "title": "Subject Id",
             "type": "string"
@@ -1709,6 +1748,7 @@
           "read",
           "read_at",
           "kind",
+          "ref",
           "params"
         ],
         "title": "BudgetAnalyticsInboxSpendingLimitItem",
@@ -1751,6 +1791,25 @@
           "percent_used_floor"
         ],
         "title": "BudgetAnalyticsInboxSpendingLimitParams",
+        "type": "object"
+      },
+      "BudgetAnalyticsInboxSpendingLimitRef": {
+        "description": "Owner-known local category ID and currency for UI lookup (computed live, never stored or logged).",
+        "properties": {
+          "category_id": {
+            "title": "Category Id",
+            "type": "string"
+          },
+          "currency": {
+            "title": "Currency",
+            "type": "string"
+          }
+        },
+        "required": [
+          "category_id",
+          "currency"
+        ],
+        "title": "BudgetAnalyticsInboxSpendingLimitRef",
         "type": "object"
       },
       "BudgetAnalyticsLeg": {
@@ -9135,7 +9194,7 @@
   "info": {
     "description": "Local cloud-free smart-home control API. Generated from hestia/api_contract.py \u2014 do not edit by hand; run `python -m hestia.api_contract`.",
     "title": "hestia API",
-    "version": "0.23.0"
+    "version": "0.24.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -10136,7 +10195,7 @@
     },
     "/api/budget/analytics/inbox-mark": {
       "post": {
-        "description": "Requires the exact admin owner, browser cookie and configured HTTPS Origin. Version and source fingerprints prevent stale changes. No bank request is made.",
+        "description": "Requires the exact admin owner, browser cookie and configured HTTPS Origin. Atomically marks or unmarks 1..100 deduplicated alert keys under anti-ABA reads_version CAS (409 budget_analytics_conflict if stale; 409 budget_analytics_source_changed if any unmarked key is inactive on read=true; 413 budget_analytics_limit at the 500-marker cap on create only). No bank request is made.",
         "operationId": "markBudgetAnalyticsInbox",
         "requestBody": {
           "content": {
@@ -10240,7 +10299,7 @@
             "description": "budget configuration unavailable"
           }
         },
-        "summary": "Save an owner-private local classification",
+        "summary": "Mark or unmark owner-private inbox alerts (atomic anti-ABA CAS)",
         "x-required-role": "admin"
       }
     },

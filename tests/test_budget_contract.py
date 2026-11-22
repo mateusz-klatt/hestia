@@ -209,7 +209,10 @@ class BudgetOpenApiTests(unittest.TestCase):
             self.assertEqual(set(methods), {method})
             self.assertEqual(methods[method]["x-required-role"], "admin")
             self.assertIn("413", methods[method]["responses"])
-        self.assertEqual(document["info"]["version"], "0.23.0")
+        self.assertEqual(document["info"]["version"], "0.24.0")
+        mark_desc = analytics["/api/budget/analytics/inbox-mark"]["post"]["description"]
+        for phrase in ("reads_version", "1..100", "500"):
+            self.assertIn(phrase, mark_desc)
         refresh = budget["/api/budget/refresh"]["post"]
         self.assertEqual(refresh["parameters"][0]["name"], "Idempotency-Key")
         self.assertTrue(refresh["parameters"][0]["required"])
@@ -261,6 +264,9 @@ class BudgetOpenApiTests(unittest.TestCase):
             for forbidden in ("destination_target", "bank_name", "label", "amount", "session_id", "connection_id",
                               "schedule_id", "category_id", "account_id", "error", "name"):
                 self.assertNotIn(forbidden, props)
+        self.assertEqual(set(schemas["BudgetAnalyticsInboxConsentRef"]["properties"]), {"connection_id"})
+        self.assertEqual(set(schemas["BudgetAnalyticsInboxMortgageRef"]["properties"]), {"schedule_id"})
+        self.assertEqual(set(schemas["BudgetAnalyticsInboxSpendingLimitRef"]["properties"]), {"category_id", "currency"})
         self.assertEqual(schemas["BudgetAnalyticsSpendingLimit"]["properties"]["monthly_limit"]["type"], "string")
         for field in ("monthly_limit", "expenses", "refunds", "net_spending", "remaining", "over_by"):
             self.assertEqual(schemas["BudgetAnalyticsSpendingLimitStatus"]["properties"][field]["type"], "string")

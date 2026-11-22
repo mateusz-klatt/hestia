@@ -34,6 +34,8 @@ _DATE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}\Z", re.ASCII)
 _PERIOD = re.compile(r"[0-9]{4}-[0-9]{2}\Z", re.ASCII)
 _CURRENCY = re.compile(r"[A-Z]{3}\Z", re.ASCII)
 _ATTENTION = re.compile(r"[a-z][a-z0-9_]{0,63}\Z", re.ASCII)
+_CONTROL = re.compile(r"[\x00-\x1f\x7f]")
+_MAX_LOCAL_ID = 128
 _SUBJECT_DOMAIN = "hestia/budget/inbox/subject/v1"
 _KEY_TOKEN_DOMAIN = "hestia/budget/inbox/key-token/v1"
 _READS_DIGEST_VERSION = "owner-inbox-reads-v1"
@@ -57,6 +59,30 @@ def _check_milestone(value):
     if not isinstance(value, str) or not _MILESTONE.fullmatch(value):
         raise OwnerInboxDataError()
     return value
+
+
+def _local_id(value):
+    if not isinstance(value, str) or len(value) > _MAX_LOCAL_ID or not value.strip() or _CONTROL.search(value):
+        raise OwnerInboxDataError()
+    return value
+
+
+def consent_ref(*, connection_id: str) -> dict:
+    """Owner-known local connection ID for UI lookup (computed live, never stored or logged)."""
+    return {"connection_id": _local_id(connection_id)}
+
+
+def mortgage_ref(*, schedule_id: str) -> dict:
+    """Owner-known local mortgage schedule ID for UI lookup (computed live, never stored or logged)."""
+    return {"schedule_id": _local_id(schedule_id)}
+
+
+def spending_limit_ref(*, category_id: str, currency: str) -> dict:
+    """Owner-known local category ID and currency for UI lookup (computed live, never stored or logged)."""
+    clean_id = _local_id(category_id)
+    if clean_id == "uncategorised" or not isinstance(currency, str) or not _CURRENCY.fullmatch(currency):
+        raise OwnerInboxDataError()
+    return {"category_id": clean_id, "currency": currency}
 
 
 def opaque_subject_id(owner: str, kind: str, local_id: str) -> str:
@@ -204,6 +230,7 @@ def build_inbox_items(active_entries: Iterable[dict],
             "kind": kind,
             "subject_id": subject_id,
             "milestone": milestone,
+            "ref": entry["ref"],
             "read": read_at is not None,
             "read_at": read_at,
             "params": params,

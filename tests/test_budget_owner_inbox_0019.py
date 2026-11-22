@@ -154,16 +154,34 @@ class OwnerInboxPureTests(unittest.TestCase):
             with self.subTest(bad_rd=bad_rd), self.assertRaises(inbox_mod.OwnerInboxDataError):
                 inbox_mod.reads_version_digest(*bad_rd)
 
+        # Live ref builders (local owner-known IDs only).
+        self.assertEqual(inbox_mod.consent_ref(connection_id="bank-1"), {"connection_id": "bank-1"})
+        self.assertEqual(inbox_mod.mortgage_ref(schedule_id="sched-1"), {"schedule_id": "sched-1"})
+        self.assertEqual(inbox_mod.spending_limit_ref(category_id="cat-1", currency="PLN"),
+                         {"category_id": "cat-1", "currency": "PLN"})
+        for bad_id in ("", " ", "x" * 129, "bad\x00id", "bad\nid", 123):
+            with self.subTest(bad_ref_id=bad_id):
+                with self.assertRaises(inbox_mod.OwnerInboxDataError):
+                    inbox_mod.consent_ref(connection_id=bad_id)
+                with self.assertRaises(inbox_mod.OwnerInboxDataError):
+                    inbox_mod.mortgage_ref(schedule_id=bad_id)
+                with self.assertRaises(inbox_mod.OwnerInboxDataError):
+                    inbox_mod.spending_limit_ref(category_id=bad_id, currency="PLN")
+        for bad_sl_ref in (("uncategorised", "PLN"), ("cat-1", "pln"), ("cat-1", "PL"), ("cat-1", 123)):
+            with self.subTest(bad_sl_ref=bad_sl_ref), self.assertRaises(inbox_mod.OwnerInboxDataError):
+                inbox_mod.spending_limit_ref(category_id=bad_sl_ref[0], currency=bad_sl_ref[1])
+
         # Deterministic sorting without created_at: unread first -> kind -> severity -> subject_id -> milestone.
         entries = [
             {"kind": inbox_mod.KIND_SPENDING, "subject_id": HEX_A, "milestone": "2026-11:approaching",
-             "params": sp},
+             "ref": {"category_id": "cat-1", "currency": "EUR"}, "params": sp},
             {"kind": inbox_mod.KIND_CONSENT, "subject_id": HEX_B, "milestone": "g0:exp1:expired",
+             "ref": {"connection_id": "bank-2"},
              "params": inbox_mod.consent_params(status="expired", valid_until=1, days_remaining=-1, attention=None, paused=False)},
             {"kind": inbox_mod.KIND_CONSENT, "subject_id": HEX_A, "milestone": "g0:exp1:attention:invalid_session",
-             "params": cp},
+             "ref": {"connection_id": "bank-1"}, "params": cp},
             {"kind": inbox_mod.KIND_MORTGAGE, "subject_id": HEX_A, "milestone": "2026-11:due_today",
-             "params": mp},
+             "ref": {"schedule_id": "sched-1"}, "params": mp},
         ]
         built = inbox_mod.build_inbox_items(entries, {(inbox_mod.KIND_CONSENT, HEX_A, "g0:exp1:attention:invalid_session"): 50})
         self.assertEqual(
@@ -379,11 +397,14 @@ class OwnerInboxViewsAndCAS0019Tests(AnalyticsCase):
                          [inbox_mod.KIND_CONSENT, inbox_mod.KIND_MORTGAGE, inbox_mod.KIND_SPENDING])
         serialized = json.dumps(snap)
         for private in ("PRIVATE-MORTGAGE-LABEL", "3210.99", "SECRET-GROCERIES", "Foreign Secret Bank",
-                        "Synthetic Bank", sched["id"], cat_over["id"], "bank", "other-bank-expiring"):
+                        "Synthetic Bank", "other-bank-expiring"):
             self.assertNotIn(private, serialized)
         self.assertEqual(self.rows(db.BudgetOwnerInboxState), [])  # pure read-only!
 
         consent_item, mortgage_item, spending_item = snap["items"]
+        self.assertEqual(consent_item["ref"], {"connection_id": "bank"})
+        self.assertEqual(mortgage_item["ref"], {"schedule_id": sched["id"]})
+        self.assertEqual(spending_item["ref"], {"category_id": cat_over["id"], "currency": "PLN"})
         self.assertTrue(consent_item["milestone"].startswith("g2:exp"))
         self.assertTrue(consent_item["milestone"].endswith(":lead:7"))
         self.assertEqual(mortgage_item["milestone"], "2026-11:overdue")
@@ -446,7 +467,8 @@ class OwnerInboxViewsAndCAS0019Tests(AnalyticsCase):
             self.assertRegex(row.subject_id, r"^[0-9a-f]{64}$")
             combined = row.before_json + row.after_json
             self.assertEqual(set(json.loads(row.after_json)), {"key_token", "kind", "reads_revision", "read"})
-            for secret in ("PRIVATE-MORTGAGE-LABEL", "3210.99", "SECRET-GROCERIES", "2026-11:overdue", "g2:exp"):
+            for secret in ("PRIVATE-MORTGAGE-LABEL", "3210.99", "SECRET-GROCERIES", "2026-11:overdue", "g2:exp",
+                           sched["id"], cat_over["id"]):
                 self.assertNotIn(secret, combined)
 
         # Live semantics + NO pruning in v1:

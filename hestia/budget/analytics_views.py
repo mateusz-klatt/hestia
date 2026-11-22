@@ -896,6 +896,7 @@ class BudgetAnalyticsViews(BudgetAnalyticsStore):
                     generations[item.connection_id], item.valid_until, item.status,
                     item.active_milestone, item.attention,
                 ),
+                "ref": inbox_mod.consent_ref(connection_id=item.connection_id),
                 "params": inbox_mod.consent_params(
                     status=item.status, valid_until=item.valid_until, days_remaining=item.days_remaining,
                     attention=item.attention, paused=item.paused,
@@ -910,6 +911,7 @@ class BudgetAnalyticsViews(BudgetAnalyticsStore):
                 "kind": inbox_mod.KIND_MORTGAGE,
                 "subject_id": inbox_mod.opaque_subject_id(owner, inbox_mod.KIND_MORTGAGE, item.schedule_id),
                 "milestone": inbox_mod.mortgage_milestone(item.due_date, item.status),
+                "ref": inbox_mod.mortgage_ref(schedule_id=item.schedule_id),
                 "params": inbox_mod.mortgage_params(
                     status=item.status, due_date=item.due_date, days_until_due=item.days_until_due,
                     currency=item.currency, freshness_stale=item.freshness_stale,
@@ -961,6 +963,7 @@ class BudgetAnalyticsViews(BudgetAnalyticsStore):
                 "subject_id": inbox_mod.opaque_subject_id(
                     owner, inbox_mod.KIND_SPENDING, f"{item.category_id}\0{item.currency}"),
                 "milestone": inbox_mod.spending_limit_milestone(item.period, item.status),
+                "ref": inbox_mod.spending_limit_ref(category_id=item.category_id, currency=item.currency),
                 "params": inbox_mod.spending_limit_params(
                     status=item.status, period=item.period, currency=item.currency,
                     warning_percent=item.warning_percent, percent_used_floor=item.percent_used_floor,
