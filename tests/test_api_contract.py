@@ -56,7 +56,14 @@ class OpenApiArtifactTests(unittest.TestCase):
 
     def test_monthly_budget_contract_is_strictly_additive_from_0_27_0(self):
         document = api_contract.build_openapi()
-        self.assertEqual(document["info"]["version"], "0.28.0")
+        self.assertEqual(document["info"]["version"], "0.31.0")
+        # 0.29.0 and 0.30.0 belong to other branches. Strip this branch's household
+        # additions, then the 0.28.0 document must reduce to the pinned 0.27.0 hash.
+        for path in [key for key in document["paths"] if key.startswith("/api/budget/household/")]:
+            del document["paths"][path]
+        for name in [key for key in document["components"]["schemas"] if key.startswith("BudgetHousehold")]:
+            del document["components"]["schemas"][name]
+        document["info"]["version"] = "0.28.0"
         del document["components"]["schemas"]["BudgetAnalyticsMonthlyBudgetConfiguration"]["properties"]["income_window"]
         del document["components"]["schemas"]["BudgetAnalyticsMonthlyBudgetIncomeWindow"]
         document["info"]["version"] = "0.27.0"

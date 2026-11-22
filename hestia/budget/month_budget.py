@@ -246,6 +246,33 @@ def _sum_money_checked(values) -> str:
     return _check_aggregate(total)
 
 
+def _series_daily_points(start: str, cutoff: str, expense_by_date, refund_by_date,
+                         mortgage_expenses, mortgage_refunds) -> list[dict]:
+    """Zero-filled cumulative adjusted spend from ``start`` through ``cutoff`` inclusive.
+
+    At most 31 points. Mortgage maps are the post-allocation amounts; ordinary maps
+    exclude pass-through mortgage legs. The caller compares the final point with
+    ``summary.spent`` when a summary exists.
+    """
+    day = date.fromisoformat(start)
+    last = date.fromisoformat(cutoff)
+    if last < day or (last - day).days > 30:
+        raise MonthDataError()
+    cumulative = _ZERO
+    points = []
+    while day <= last:
+        iso = day.isoformat()
+        terms = [cumulative]
+        terms.extend(expense_by_date.get(iso, ()))
+        terms.extend(core.negate_money(amount) for amount in refund_by_date.get(iso, ()))
+        terms.extend(mortgage_expenses.get(iso, ()))
+        terms.extend(core.negate_money(amount) for amount in mortgage_refunds.get(iso, ()))
+        cumulative = _sum_money_checked(terms)
+        points.append({"date": iso, "cumulative_spent": cumulative})
+        day += timedelta(days=1)
+    return points
+
+
 def _min_money(first: str, second: str) -> str:
     return first if core.compare_money(first, second) <= 0 else second
 
@@ -665,8 +692,13 @@ def evaluate_monthly_budget(
     account_component_timestamps: Mapping[str, int | float | None],
     account_kinds: Mapping[str, str],
     settings: MonthBudgetSettings | None,
+    include_series: bool = False,
 ) -> dict:
-    """Pure single-snapshot evaluation for ``GET /api/budget/analytics/monthly-budget``."""
+    """Pure single-snapshot evaluation for ``GET /api/budget/analytics/monthly-budget``.
+
+    ``include_series`` attaches a private ``_series_daily`` list for the household
+    serializer. The owner response omits it. The flag does not change any public field.
+    """
     requested_period, target_currency = validate_monthly_budget_query(period, currency)
     evaluation_date, current_month = warsaw_date(evaluated_at)
     effective_period = current_month if requested_period is None else requested_period
@@ -718,6 +750,8 @@ def evaluate_monthly_budget(
     mortgage_refund_legs: list[_MortgageLeg] = []
     ordinary_expenses: dict[str | None, list[str]] = defaultdict(list)
     ordinary_refunds: dict[str | None, list[str]] = defaultdict(list)
+    expense_by_date: dict[str, list[str]] | None = defaultdict(list) if include_series else None
+    refund_by_date: dict[str, list[str]] | None = defaultdict(list) if include_series else None
     observed_spend_categories: set[str | None] = set()
     prior_income_by_cat: dict[str, list[_IncomeCredit]] = defaultdict(list)
     current_income_by_cat: dict[str, list[_IncomeCredit]] = defaultdict(list)
@@ -778,6 +812,8 @@ def evaluate_monthly_budget(
                     mortgage_debits_legs.append(_MortgageLeg(report_date, acct_id, row["entry_reference"], amount))
                 else:
                     ordinary_expenses[cat_id].append(amount)
+                    if expense_by_date is not None:
+                        expense_by_date[report_date].append(amount)
             elif direction == "CRDT":
                 if kind == "refund":
                     if nonzero:
@@ -789,6 +825,8 @@ def evaluate_monthly_budget(
                         mortgage_refund_legs.append(_MortgageLeg(report_date, acct_id, row["entry_reference"], amount))
                     else:
                         ordinary_refunds[cat_id].append(amount)
+                        if refund_by_date is not None:
+                            refund_by_date[report_date].append(amount)
                 elif kind == "income":
                     if in_income_window:
                         if nonzero:
@@ -848,7 +886,7 @@ def evaluate_monthly_budget(
     }
 
     if not configured:
-        return {
+        result = {
             **envelope,
             "configuration": {"status": "unconfigured", "source": "none"},
             "summary": None,
@@ -857,8 +895,15 @@ def evaluate_monthly_budget(
             "category_spend": [],
             "pass_through": None,
         }
+        if include_series:
+            # The withheld summary is null. Daily points stay zero so the series does not
+            # publish a spent total the dashboard itself omits.
+            result["_series_daily"] = _series_daily_points(start, cutoff, {}, {}, {}, {})
+        return result
 
     pass_through_wire: dict | None = None
+    adj_mortgage_expenses_by_date: dict = {}
+    adj_mortgage_refunds_by_date: dict = {}
     category_nets: dict[str | None, tuple[str, str, str]] = {}
     if pass_through_cfg is not None:
         r_total = _sum_money_checked(rent_amounts)
@@ -927,7 +972,7 @@ def evaluate_monthly_budget(
             "start_day": income_window_start_day,
         }
 
-    return {
+    result = {
         **envelope,
         "configuration": configuration,
         "summary": summary,
@@ -936,3 +981,11 @@ def evaluate_monthly_budget(
         "category_spend": category_spend,
         "pass_through": pass_through_wire,
     }
+    if include_series:
+        points = _series_daily_points(
+            start, cutoff, expense_by_date or {}, refund_by_date or {},
+            adj_mortgage_expenses_by_date, adj_mortgage_refunds_by_date)
+        if points[-1]["cumulative_spent"] != spent:
+            raise MonthDataError()
+        result["_series_daily"] = points
+    return result

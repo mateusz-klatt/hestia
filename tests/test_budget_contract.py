@@ -184,7 +184,9 @@ class BudgetOpenApiTests(unittest.TestCase):
         posts = ("account-selection", "account-kind", "connection-state", "background-selection", "refresh")
         consent = {path: methods for path, methods in budget.items() if "/consent/" in path or "/enable-banking/" in path}
         analytics = {path: methods for path, methods in budget.items() if "/analytics/" in path}
-        stored = {path: methods for path, methods in budget.items() if path not in consent and path not in analytics}
+        household = {path: methods for path, methods in budget.items() if "/household/" in path}
+        stored = {path: methods for path, methods in budget.items()
+                  if path not in consent and path not in analytics and path not in household}
         self.assertEqual({path.rsplit("/", 1)[1] for path in stored},
                          {"connections", "accounts", "status", "transactions", "balances", "limits", "jobs", *posts})
         for path, methods in stored.items():
@@ -209,7 +211,21 @@ class BudgetOpenApiTests(unittest.TestCase):
             self.assertEqual(set(methods), {method})
             self.assertEqual(methods[method]["x-required-role"], "admin")
             self.assertIn("413", methods[method]["responses"])
-        self.assertEqual(document["info"]["version"], "0.28.0")
+        household_reads = {"access", "report-accounts", "monthly-budget", "overview", "transactions", "categories",
+                           "rules", "transfers", "spending-limits", "recurring", "mortgages", "inbox", "quarantine",
+                           "monthly-budget-settings"}
+        self.assertEqual(set(household), {"/api/budget/household/" + name for name in household_reads})
+        for path, methods in household.items():
+            self.assertEqual(set(methods), {"get"})
+            self.assertEqual(methods["get"]["x-required-role"], "viewer")
+            self.assertIn("413", methods["get"]["responses"])
+            names = [param["name"] for param in methods["get"].get("parameters", [])]
+            if path.endswith("/access"):
+                self.assertNotIn("X-Budget-Grant", names)
+            else:
+                self.assertEqual(names[0], "X-Budget-Grant")
+                self.assertTrue(methods["get"]["parameters"][0]["required"])
+        self.assertEqual(document["info"]["version"], "0.31.0")
         mark_desc = analytics["/api/budget/analytics/inbox-mark"]["post"]["description"]
         for phrase in ("reads_version", "1..100", "500"):
             self.assertIn(phrase, mark_desc)
