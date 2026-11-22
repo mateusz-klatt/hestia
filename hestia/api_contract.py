@@ -69,7 +69,9 @@ from pydantic.json_schema import models_json_schema
 # 0.22.0: read-only bank consent reconciliation classification (GET /api/budget/consent/reconcile, zero migration).
 # 0.23.0: owner-private live active alerts inbox and durable anti-ABA read markers (migration 0019,
 #         GET /api/budget/analytics/inbox, POST /api/budget/analytics/inbox-mark).
-CONTRACT_VERSION = "0.23.0"
+# 0.24.0: additive live owner-known `ref` on GET /api/budget/analytics/inbox items (zero migration;
+#         subject_id remains the durable read-marker key).
+CONTRACT_VERSION = "0.24.0"
 OPENAPI_PATH = Path(__file__).resolve().parent.parent / "docs" / "api" / "openapi.json"
 
 # De-duplicated string literals (SonarPython S1192): the OpenAPI content-type, the paths reused
@@ -2106,6 +2108,25 @@ class BudgetAnalyticsInboxSpendingLimitParams(BaseModel):
     percent_used_floor: int
 
 
+class BudgetAnalyticsInboxConsentRef(BaseModel):
+    """Owner-known local connection ID for UI lookup (computed live, never stored or logged)."""
+    model_config = _READ
+    connection_id: str
+
+
+class BudgetAnalyticsInboxMortgageRef(BaseModel):
+    """Owner-known local mortgage schedule ID for UI lookup (computed live, never stored or logged)."""
+    model_config = _READ
+    schedule_id: str
+
+
+class BudgetAnalyticsInboxSpendingLimitRef(BaseModel):
+    """Owner-known local category ID and currency for UI lookup (computed live, never stored or logged)."""
+    model_config = _READ
+    category_id: str
+    currency: str
+
+
 class BudgetAnalyticsInboxItemBase(BaseModel):
     model_config = _READ
     subject_id: str
@@ -2116,16 +2137,19 @@ class BudgetAnalyticsInboxItemBase(BaseModel):
 
 class BudgetAnalyticsInboxConsentItem(BudgetAnalyticsInboxItemBase):
     kind: Literal["consent_renewal"]
+    ref: BudgetAnalyticsInboxConsentRef
     params: BudgetAnalyticsInboxConsentParams
 
 
 class BudgetAnalyticsInboxMortgageItem(BudgetAnalyticsInboxItemBase):
     kind: Literal["mortgage_due"]
+    ref: BudgetAnalyticsInboxMortgageRef
     params: BudgetAnalyticsInboxMortgageParams
 
 
 class BudgetAnalyticsInboxSpendingLimitItem(BudgetAnalyticsInboxItemBase):
     kind: Literal["spending_limit"]
+    ref: BudgetAnalyticsInboxSpendingLimitRef
     params: BudgetAnalyticsInboxSpendingLimitParams
 
 
@@ -2881,6 +2905,13 @@ def _analytics_paths():
                            "Version and source fingerprints prevent stale changes. No bank request is made.",
             "requestBody": {"required": True, "content": {_APP_JSON: {"schema": _ref(request)}}},
             "responses": _analytics_responses(model)}}
+    paths[prefix + "inbox-mark"]["post"]["summary"] = "Mark or unmark owner-private inbox alerts (atomic anti-ABA CAS)"
+    paths[prefix + "inbox-mark"]["post"]["description"] = (
+        "Requires the exact admin owner, browser cookie and configured HTTPS Origin. Atomically marks or unmarks "
+        "1..100 deduplicated alert keys under anti-ABA reads_version CAS (409 budget_analytics_conflict if stale; "
+        "409 budget_analytics_source_changed if any unmarked key is inactive on read=true; 413 budget_analytics_limit "
+        "at the 500-marker cap on create only). No bank request is made."
+    )
     return paths
 
 

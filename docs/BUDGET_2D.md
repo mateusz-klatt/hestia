@@ -332,11 +332,15 @@ outflow without a known accepted relationship remains spending within that scope
 - **Live active alerts semantics (`GET /api/budget/analytics/inbox`):**
   - Strictly **pure read-only** (zero SQLite writes, zero bank I/O, zero query parameters,
     gated by `HESTIA_BUDGET_ANALYTICS_ENABLED=1`, exact SQLite admin owner, `allow_head=False`,
-    `Cache-Control: no-store`).
+    `Cache-Control: no-store`). Consistent with all other `/api/budget/analytics/*` reads,
+    authenticated owner bearer tokens and browser sessions are both accepted on `GET /inbox`,
+    while `POST /inbox-mark` strictly requires a signed browser session cookie and HTTPS Origin.
   - Represents **currently active alerts only**: once an underlying condition resolves (for
     example a mortgage installment is marked paid, a consent is renewed or attention clears,
     or spending drops below the warning threshold), that alert disappears automatically from
-    `GET /inbox` even if it was still unread.
+    `GET /inbox` even if it was still unread. Active mortgage reminders are surfaced regardless
+    of configured `destination_kind` (`owner_inbox`, `owner_push`, `owner_email`) until a
+    separate outbound delivery slice is introduced.
   - Evaluates all three live sources (`consent_renewal`, `mortgage_due`, `spending_limit` for
     the current server UTC month) and persisted read markers inside **one single SQLite read
     snapshot** against one server UTC clock reading (`evaluation_date`, `evaluation_timezone: "UTC"`,
@@ -369,9 +373,14 @@ outflow without a known accepted relationship remains spending within that scope
     strict CAS BEFORE no-op (`409 budget_analytics_conflict`), re-evaluates live activity for any
     unmarked keys when `read=true`, and rejects the **entire batch** (`409 budget_analytics_source_changed`)
     if any unmarked key is no longer currently active (already-marked keys are no-ops).
-- **Privacy, milestones and sanitized audit:**
-  - `subject_id` is a stable domain-separated local SHA-256 digest (`owner + kind + local_id`),
-    never exposing provider IDs or raw DB UUIDs.
+- **Privacy, live `ref`, milestones and sanitized audit:**
+  - `subject_id` is a stable domain-separated local SHA-256 digest (`owner + kind + local_id`)
+    and remains the durable read-marker key in `budget_owner_inbox_reads`.
+  - Each live item also carries an additive `ref` object with the owner-known local ID
+    (`consent_renewal` -> `{connection_id}`, `mortgage_due` -> `{schedule_id}`,
+    `spending_limit` -> `{category_id, currency}`), computed live from existing owner endpoints
+    so the UI can resolve display names locally without storing or logging `ref` in SQLite or
+    audit (never provider/session IDs, bank names, labels, amounts or PII).
   - `consent_renewal` milestones include both `consent_generation` and `valid_until` expiry tag;
     `mortgage_due` and `spending_limit` milestones key once per `(YYYY-MM, status)`.
   - Live `params` are strictly allowlisted per kind (zero bank names, labels, amounts, account
