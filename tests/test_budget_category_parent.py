@@ -75,8 +75,12 @@ class CategoryParentStoreTests(AnalyticsCase):
         car = self.store.create_category("owner", "Car", transport["id"])
         fuel = self.store.create_category("owner", "Fuel", car["id"])
         self.assertEqual((car["parent_id"], fuel["parent_id"], fuel["changed"]), (transport["id"], car["id"], True))
-        retry = self.store.create_category("owner", "Fuel", None)
+        retry = self.store.create_category("owner", "Fuel", car["id"])
         self.assertEqual((retry["changed"], retry["parent_id"], retry["id"]), (False, car["id"], fuel["id"]))
+        with self.assertRaises(AnalyticsError) as conflict:
+            self.store.create_category("owner", "Fuel", None)
+        self.assertEqual((conflict.exception.code, conflict.exception.status), ("budget_analytics_conflict", 409))
+        self.assertEqual(next(row for row in self.store.categories("owner") if row["id"] == fuel["id"])["parent_id"], car["id"])
         self.assertIsNone(transport["parent_id"])
         listed = {row["name"]: row["parent_id"] for row in self.store.categories("owner")}
         self.assertEqual(listed, {"Car": transport["id"], "Fuel": car["id"], "Transport": None})

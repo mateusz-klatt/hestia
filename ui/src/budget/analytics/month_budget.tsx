@@ -24,7 +24,9 @@ export const monthBudgetLabels = {
     currencyCode: "Currency code (ISO 4217)",
     applyCurrency: "Apply currency",
     loading: "Loading monthly budget…",
+    categoriesLoading: "Loading categories before spending and charts…",
     error: "Monthly budget could not be loaded. Try again.",
+    categoriesError: "Categories could not be loaded, so spending and charts are not shown.",
     badRequest: "Invalid month or currency selection. Choose another month or currency.",
     limit: "Monthly budget data exceed the response size limit. Choose another currency or month.",
     unconfigured: "Monthly budget is not configured yet on this server. Income categories must be configured before monthly totals can be shown.",
@@ -157,7 +159,9 @@ export const monthBudgetLabels = {
     currencyCode: "Kod waluty (ISO 4217)",
     applyCurrency: "Zastosuj walutę",
     loading: "Wczytywanie budżetu miesiąca…",
+    categoriesLoading: "Wczytywanie kategorii przed wydatkami i wykresami…",
     error: "Nie udało się wczytać budżetu miesiąca. Spróbuj ponownie.",
+    categoriesError: "Nie udało się wczytać kategorii, więc wydatki i wykresy nie są pokazane.",
     badRequest: "Nieprawidłowy wybór miesiąca lub waluty. Wybierz inny miesiąc lub walutę.",
     limit: "Dane budżetu miesiąca przekraczają limit rozmiaru odpowiedzi. Wybierz inną walutę lub miesiąc.",
     unconfigured: "Budżet miesiąca nie jest jeszcze skonfigurowany na tym serwerze. Najpierw trzeba skonfigurować kategorie wpływów.",
@@ -468,6 +472,11 @@ function PassThroughCard({ passThrough, currency, categoryMap, text, locale }: {
 }
 
 type CategorySpend = AnalyticsMonthlyBudget["category_spend"][number];
+type LoadedCategories = "pending" | "error" | readonly AnalyticsCategory[];
+
+function isCategoryList(value: LoadedCategories): value is readonly AnalyticsCategory[] {
+  return Array.isArray(value);
+}
 
 function shownCategorySpend(
   rows: readonly CategorySpend[],
@@ -503,11 +512,12 @@ export function MonthBudgetView({ api, accounts, text, locale, revision, onAcces
   const [serverCurrentMonth, setServerCurrentMonth] = useState<string | null>(null);
   const [manualCode, setManualCode] = useState("");
   const [shown, setShown] = useState<Shown>({ state: "loading" });
-  const [categories, setCategories] = useState<AnalyticsCategory[]>([]);
+  const [categories, setCategories] = useState<LoadedCategories>("pending");
   const mounted = useRef(true);
   const generation = useRef(0);
   const revisionRef = useRef(revision);
   const categoriesLoadedRev = useRef(-1);
+  const categoriesRequest = useRef(0);
 
   useEffect(() => {
     mounted.current = true;
@@ -518,7 +528,10 @@ export function MonthBudgetView({ api, accounts, text, locale, revision, onAcces
     const token = ++generation.current;
     const prevRevision = revisionRef.current;
     revisionRef.current = revision;
-    if (prevRevision !== revision) setCategories([]);
+    if (prevRevision !== revision) {
+      categoriesLoadedRev.current = -1;
+      setCategories("pending");
+    }
     setShown({ state: "loading" });
     void api.monthlyBudgetCharts(period, currency, history).then((result) => {
       // Run the access barrier before dropping superseded answers so a 401/403/disabled always clears the view.
@@ -536,13 +549,20 @@ export function MonthBudgetView({ api, accounts, text, locale, revision, onAcces
       setServerCurrentMonth(budget.current_month);
       setDiscoveredCurrencies((previous) => monthlyBudgetCurrencies([...budget.available_currencies, ...previous]));
       setShown({ state: "ready", data: result.data });
+      // Parent limits already include the subtree. Drawing the table or the charts before the
+      // category list arrives would pair that rolled limit with direct spend, or plot leaves as roots.
       if (budget.configuration.status === "ready" && categoriesLoadedRev.current !== revision) {
+        const request = ++categoriesRequest.current;
+        setCategories("pending");
         void api.categories().then((catResult) => {
           if (onAccessLoss(catResult) || !mounted.current || revision !== revisionRef.current) return;
-          if (catResult.ok) {
-            categoriesLoadedRev.current = revision;
-            setCategories(catResult.data.categories);
+          if (request !== categoriesRequest.current) return;
+          if (!catResult.ok) {
+            setCategories("error");
+            return;
           }
+          categoriesLoadedRev.current = revision;
+          setCategories(catResult.data.categories);
         });
       }
     });
@@ -559,7 +579,7 @@ export function MonthBudgetView({ api, accounts, text, locale, revision, onAcces
     [...(data?.available_currencies ?? []), ...discoveredCurrencies, currency],
     accounts,
   );
-  const categoryMap = new Map(categories.map((item) => [item.id, item.name]));
+  const categoryMap = new Map(isCategoryList(categories) ? categories.map((item) => [item.id, item.name]) : []);
 
   return (
     <section className="budget-month budget-month-dashboard" aria-label={text.title}>
@@ -635,7 +655,7 @@ function ReadyDashboard({ data, series, categoryMap, categories, text, locale, o
   data: AnalyticsMonthlyBudget;
   series: AnalyticsMonthlyBudgetSeries | null;
   categoryMap: ReadonlyMap<string, string>;
-  categories: readonly AnalyticsCategory[];
+  categories: LoadedCategories;
   text: MonthBudgetLabels;
   locale: string;
   onOpenMonth: (month: string, serverCurrentMonth: string) => void;
@@ -755,9 +775,12 @@ function ReadyDashboard({ data, series, categoryMap, categories, text, locale, o
 
           <section className="budget-entries" aria-label={text.spendingAndLimits}>
             <h4>{text.spendingAndLimits}</h4>
-            {data.category_spend.length === 0 ? (
+            {categories === "pending" ? <p className="budget-muted" role="status">{text.categoriesLoading}</p> : null}
+            {categories === "error" ? <p className="budget-notice" role="alert">{text.categoriesError}</p> : null}
+            {isCategoryList(categories) && data.category_spend.length === 0 ? (
               <p className="budget-muted">{text.noExpenses}</p>
-            ) : (
+            ) : null}
+            {isCategoryList(categories) && data.category_spend.length > 0 ? (
               <div className="budget-table-wrap" role="region" aria-label={text.spendingAndLimits} tabIndex={0}>
                 <table className="budget-month-dashboard-table">
                   <thead>
@@ -820,10 +843,10 @@ function ReadyDashboard({ data, series, categoryMap, categories, text, locale, o
                   </tbody>
                 </table>
               </div>
-            )}
+            ) : null}
           </section>
 
-          {series === null ? null : (
+          {series === null || !isCategoryList(categories) ? null : (
             <MonthBudgetCharts budget={data} series={series} categories={categories} locale={locale} text={text} />
           )}
         </>

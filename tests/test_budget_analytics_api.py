@@ -725,6 +725,12 @@ class BudgetAnalyticsAPITests(unittest.IsolatedAsyncioTestCase):
         fuel = (await (await self.post("category-create",
                 {"name": "Fuel", "parent_id": car["id"]})).json())["category"]
         self.assertEqual((car["parent_id"], fuel["parent_id"]), (transport["id"], car["id"]))
+        same_parent = await self.post("category-create", {"name": "Fuel", "parent_id": car["id"]})
+        self.assertEqual(same_parent.status, 200, await same_parent.text())
+        self.assertFalse((await same_parent.json())["category"]["changed"])
+        other_parent = await self.post("category-create", {"name": "Fuel", "parent_id": None})
+        self.assertEqual(other_parent.status, 409)
+        self.assertEqual((await other_parent.json())["error"], "budget_analytics_conflict")
         renamed = await self.post("category-update", {"category_id": fuel["id"], "name": "Fuel renamed",
                                 "archived": False, "expected_version": fuel["version"]})
         self.assertEqual(renamed.status, 200, await renamed.text())
@@ -907,6 +913,44 @@ class BudgetAnalyticsAPITests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((len(after["limits"]), after["statuses"]), (1, []))
         self.assertNotEqual(after["limits_version"], view["limits_version"])
         self.assertEqual(after["snapshot_digest"], view["snapshot_digest"])
+
+    async def test_child_transaction_pushes_parent_limit_from_within_to_exceeded(self):
+        parent = (await (await self.post("category-create", {"name": "Transport"})).json())["category"]
+        child = (await (await self.post("category-create", {"name": "Taxi", "parent_id": parent["id"]})).json())["category"]
+        saved = await self.post("spending-limit-save", {
+            "category_id": parent["id"], "currency": "PLN", "monthly_limit": "5",
+            "warning_percent": 80, "enabled": True, "expected_version": 0,
+        })
+        self.assertEqual(saved.status, 200, await saved.text())
+        before = await (await self.get("spending-limits", params={"period": "2026-11"})).json()
+        quiet = next(item for item in before["statuses"] if item["category_id"] == parent["id"])
+        self.assertEqual((quiet["status"], quiet["net_spending"], quiet["expenses"]), ("within", "0", "0"))
+        before_inbox = await (await self.get("inbox")).json()
+        self.assertFalse(any(
+            item["kind"] == "spending_limit" and item["ref"]["category_id"] == parent["id"]
+            for item in before_inbox["items"]))
+        annotated = await self.post("annotation", self.annotation(category_id=child["id"]))
+        self.assertEqual(annotated.status, 200, await annotated.text())
+        after_resp = await self.get("spending-limits", params={"period": "2026-11"})
+        self.assertEqual(after_resp.status, 200, await after_resp.text())
+        after = await after_resp.json()
+        api_contract.BudgetAnalyticsSpendingLimits.model_validate(after)
+        pushed = next(item for item in after["statuses"] if item["category_id"] == parent["id"])
+        self.assertEqual((pushed["status"], pushed["expenses"], pushed["net_spending"], pushed["over_by"]),
+                         ("exceeded", "10", "10", "5"))
+        self.assertTrue(all(item["category_id"] != child["id"] for item in after["statuses"]))
+        fixed = datetime(2026, 11, 21, 12, tzinfo=timezone.utc).timestamp()
+        with mock.patch.object(analytics_views.BudgetAnalyticsStore, "_now", return_value=fixed):
+            inbox_resp = await self.get("inbox")
+        self.assertEqual(inbox_resp.status, 200, await inbox_resp.text())
+        inbox = await inbox_resp.json()
+        api_contract.BudgetAnalyticsInbox.model_validate(inbox)
+        alerts = [item for item in inbox["items"]
+                  if item["kind"] == "spending_limit" and item["ref"]["category_id"] == parent["id"]]
+        self.assertEqual(len(alerts), 1)
+        self.assertEqual((alerts[0]["milestone"], alerts[0]["params"]["status"], alerts[0]["ref"]["currency"]),
+                         ("2026-11:exceeded", "exceeded", "PLN"))
+        self.assertEqual(inbox["evaluation_date"][:7], "2026-11")
 
 
 if __name__ == "__main__":

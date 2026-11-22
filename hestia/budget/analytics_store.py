@@ -198,7 +198,9 @@ class BudgetAnalyticsStore(BudgetHTTPStore):
             self._owner(session, owner)
             prior = session.scalar(select(Category).where(Category.owner == owner, Category.name_key == key))
             if prior is not None:
-                if prior.name != name:
+                # The same name and parent is an idempotent retry. A different parent must not
+                # look like success: the existing row would keep its parent and the form would clear.
+                if prior.name != name or prior.parent_id != parent_id:
                     raise AnalyticsError("budget_analytics_conflict", 409)
                 return {**_dict(prior, _CATEGORY_FIELDS), "changed": False}
             if session.scalar(select(func.count()).select_from(Category).where(Category.owner == owner)) >= 100:

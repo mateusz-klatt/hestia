@@ -178,6 +178,7 @@ describe("categories", () => {
     const panel = section("Kategorie");
     expect(panel.textContent).toContain("Kategoria nadrzędna");
     expect(panel.textContent).toContain("Najwyższy poziom");
+    expect(rulesLabels.pl.archiveBlocked).toBe("Najpierw przenieś jej podkategorie. Zarchiwizowane też trzeba przenieść.");
   });
 });
 
