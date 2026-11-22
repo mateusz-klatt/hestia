@@ -237,7 +237,8 @@ def projection_snapshot(session, owner):
     identities, identity_state, metadata, annotations = _auxiliary(session, owner, accounts)
     records = _records(ledger, identities, metadata, annotations, {row["id"]: row for row in categories}, rules)
     account_state = [{"id": row.id, "connection_id": row.connection_id, "enabled": row.enabled,
-                      "configured": row.configured, "control_version": row.control_version, "kind": row.kind} for row in accounts]
+                      "configured": row.configured, "control_version": row.control_version, "kind": row.kind,
+                      "kind_confirmed_at": row.kind_confirmed_at} for row in accounts]
     snapshot = {"owner": owner, "accounts": account_state, "categories": categories, "rules": rules,
                 "decisions": decisions, "identities": identities, "transactions": [row for row in records if row["eligible"]],
                 "counts": _scope_counts(session, owner, accounts), "_records": records, "_accounts": accounts}
@@ -973,12 +974,14 @@ class BudgetAnalyticsViews(BudgetAnalyticsStore):
                     .order_by(db.BudgetCategoryLimit.currency, db.BudgetCategoryLimit.category_id,
                               db.BudgetCategoryLimit.id))]
                 account_timestamps = self._selected_transaction_component_timestamps(session, owner)
+                account_kinds = {row["id"]: row["kind"] for row in snapshot["accounts"]
+                                 if row["enabled"] and row["kind_confirmed_at"] is not None}
                 return month_budget_mod.evaluate_monthly_budget(
                     owner=owner, period=period, currency=currency, evaluated_at=evaluated_at,
                     transactions=snapshot["transactions"], transfers=snapshot["_transfers"],
                     scan_limited=snapshot["_scan_limited"], categories=snapshot["categories"],
                     rules=snapshot["rules"], identities=snapshot["identities"], limits=all_limits,
-                    account_component_timestamps=account_timestamps, settings=settings,
+                    account_component_timestamps=account_timestamps, account_kinds=account_kinds, settings=settings,
                 )
         except month_budget_mod.MonthInputError:
             raise AnalyticsError() from None

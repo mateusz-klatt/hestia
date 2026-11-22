@@ -89,6 +89,7 @@ def _eval(
     identities: dict | None = None,
     limits: list[dict] | tuple[dict, ...] = (),
     account_component_timestamps: dict | None = None,
+    account_kinds: dict | None = None,
     settings: month_budget.MonthBudgetSettings | None = None,
 ) -> dict:
     if evaluated_at is None:
@@ -119,6 +120,7 @@ def _eval(
         identities=identities,
         limits=limits,
         account_component_timestamps=account_component_timestamps,
+        account_kinds={} if account_kinds is None else account_kinds,
         settings=settings,
     )
 
@@ -268,6 +270,11 @@ class MonthlyBudgetTransferAndProvisionalTests(unittest.TestCase):
             {"id": "rule-auto", "kind": "auto", "category_id": "cat-food"},
             {"id": "rule-explicit", "kind": "expense", "category_id": "cat-food"},
         ]
+        stale_unrelated_tx = _tx(
+            "acc-a", "stale-excl-unrelated", amount="60", booking_date="2026-11-08", transaction_date="2026-11-08",
+            kind="expense", category_id="cat-food", source="rule", rule_id="rule-explicit",
+            annotation={"version": 1, "mode": "manual", "category_id": "cat-other-inc", "kind": "excluded", "stale": True},
+        )
         raw_txs = [
             _tx("acc-a", "one-sided", amount="1000", booking_date="2026-11-02", transaction_date="2026-11-02"),
             _tx("acc-a", "split-1", amount="600", booking_date="2026-11-03", transaction_date="2026-11-03"),
@@ -287,6 +294,7 @@ class MonthlyBudgetTransferAndProvisionalTests(unittest.TestCase):
             _tx("acc-a", "stale-excl", amount="80", booking_date="2026-11-08", transaction_date="2026-11-08",
                 kind="expense", category_id="cat-food", source="rule", rule_id="rule-explicit",
                 annotation={"version": 1, "mode": "manual", "category_id": None, "kind": "excluded", "stale": True}),
+            stale_unrelated_tx,
             # Manual auto annotation with category -> implicit expense, warns!
             _tx("acc-a", "manual-auto", amount="20", booking_date="2026-11-09", transaction_date="2026-11-09",
                 kind="expense", category_id="cat-food", source="manual",
@@ -305,9 +313,13 @@ class MonthlyBudgetTransferAndProvisionalTests(unittest.TestCase):
             identities={"acc-a": [], "acc-b": [], "acc-deselected": deselected_id},
             settings=DEFAULT_SETTINGS,
         )
-        self.assertEqual(before["summary"]["spent"], "3690")
-        self.assertEqual(before["coverage"]["pending_transfer_rows"], 9)
+        self.assertEqual(before["summary"]["spent"], "3750")
+        self.assertEqual(before["coverage"]["pending_transfer_rows"], 10)
         self.assertTrue(before["coverage"]["provisional"])
+        stale_unrelated_res = _eval(transactions=[stale_unrelated_tx], rules=rules, settings=DEFAULT_SETTINGS)
+        self.assertEqual(stale_unrelated_res["summary"]["spent"], "60")
+        self.assertEqual(stale_unrelated_res["coverage"]["pending_transfer_rows"], 1)
+        self.assertTrue(stale_unrelated_res["coverage"]["provisional"])
 
         # After verified independent exclusions on all repayment legs + making auto/stale explicit clean:
         verified_txs = [
@@ -331,6 +343,9 @@ class MonthlyBudgetTransferAndProvisionalTests(unittest.TestCase):
             identities={"acc-a": [], "acc-b": [], "acc-deselected": deselected_id},
             settings=DEFAULT_SETTINGS,
         )
+        self.assertEqual(after["summary"]["spent"], "40")
+        self.assertEqual(after["coverage"]["pending_transfer_rows"], 0)
+        self.assertFalse(after["coverage"]["provisional"])
         # Also verify non-matching counterparty identity, non-accepted transfer view,
         # zero-amount expense/refund/income/rent rows, and descending observed_at ordering.
         unrelated_id = [{"scheme": "IBAN", "identification": "PL99999999999999999999999999"}]
@@ -368,6 +383,64 @@ class MonthlyBudgetTransferAndProvisionalTests(unittest.TestCase):
         self.assertEqual(clean_extra["summary"]["spent"], "10")
         self.assertFalse(clean_extra["coverage"]["provisional"])
         self.assertEqual(clean_extra["coverage"]["ledger_as_of"], now_ts)
+
+    def test_implicit_purchase_fallback_by_account_kind(self):
+        purchase = _tx("acc-a", "purchase", amount="125.25", booking_date="2026-11-10", transaction_date="2026-11-10")
+        for kind in ("credit_card", "current", "savings", "other", "unknown"):
+            with self.subTest(kind=kind):
+                result = _eval(
+                    transactions=[purchase], account_kinds={"acc-a": kind}, settings=DEFAULT_SETTINGS,
+                )
+                self.assertEqual(result["summary"]["spent"], "125.25")
+                self.assertEqual(result["coverage"]["pending_transfer_rows"], 0 if kind == "credit_card" else 1)
+                self.assertEqual(result["coverage"]["provisional"], kind != "credit_card")
+
+    def test_card_debits_with_unresolved_transfer_evidence_remain_pending(self):
+        account_kinds = {"acc-a": "credit_card", "acc-b": "current"}
+
+        def assert_pending(result, spent):
+            self.assertEqual(result["summary"]["spent"], spent)
+            self.assertEqual(result["coverage"]["pending_transfer_rows"], 1)
+            self.assertTrue(result["coverage"]["provisional"])
+
+        for status in ("suggested", "review", "boundary"):
+            with self.subTest(status=status):
+                row = _tx("acc-a", f"card-{status}", amount="20", transaction_date="2026-11-10",
+                          transfer_status=status)
+                assert_pending(_eval(transactions=[row], account_kinds=account_kinds, settings=DEFAULT_SETTINGS), "20")
+
+        own_b_id = [{"scheme": "IBAN", "identification": "PL22222222222222222222222222"}]
+        identified = _tx("acc-a", "card-owned-identity", amount="30", transaction_date="2026-11-10",
+                         metadata={"creditor_accounts": own_b_id})
+        assert_pending(_eval(
+            transactions=[identified], account_kinds=account_kinds,
+            identities={"acc-a": [], "acc-b": own_b_id}, settings=DEFAULT_SETTINGS,
+        ), "30")
+
+        stale = _tx("acc-a", "card-stale-excluded", amount="40", transaction_date="2026-11-10",
+                    kind="expense", category_id="cat-food", source="rule", rule_id="rule-explicit",
+                    annotation={"version": 1, "mode": "manual", "category_id": "cat-other-inc",
+                                "kind": "excluded", "stale": True})
+        assert_pending(_eval(
+            transactions=[stale], account_kinds=account_kinds,
+            rules=[{"id": "rule-explicit", "kind": "expense", "category_id": "cat-food"}],
+            settings=DEFAULT_SETTINGS,
+        ), "40")
+
+        card_debit = _tx("acc-a", "card-outside", amount="50", booking_date="2026-11-30",
+                         transaction_date="2026-11-30", kind="transfer", source="transfer", transfer_status="accepted")
+        card_debit["base_effective"] = {"kind": "expense", "category_id": None, "source": "default", "rule_id": None}
+        card_credit = _tx("acc-b", "card-outside-credit", amount="50", direction="CRDT", booking_date="2026-12-01",
+                          kind="transfer", source="transfer", transfer_status="accepted")
+        accepted = {
+            "status": "accepted",
+            "debit": {"account_id": "acc-a", "entry_reference": "card-outside", "date": "2026-11-30"},
+            "credit": {"account_id": "acc-b", "entry_reference": "card-outside-credit", "date": "2026-12-01"},
+        }
+        assert_pending(_eval(
+            evaluated_at=_utc_ts("2026-11-30T12:00:00Z"), transactions=[card_debit, card_credit], transfers=[accepted],
+            account_kinds=account_kinds, settings=DEFAULT_SETTINGS,
+        ), "50")
 
     def test_cross_month_accepted_pair_horizon_purchase_date_warnings_and_credit_warnings(self):
         rules = [{"id": "rule-exp", "kind": "expense", "category_id": "cat-food"}]
