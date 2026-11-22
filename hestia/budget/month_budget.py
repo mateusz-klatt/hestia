@@ -14,7 +14,7 @@ import calendar
 from collections import Counter, defaultdict
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from functools import lru_cache
 import json
 import math
@@ -76,6 +76,7 @@ class PassThroughSettings:
 class MonthBudgetSettings:
     income_category_ids: tuple[str, ...]
     pass_through: PassThroughSettings | None = None
+    income_window_start_day: int = 1
 
 
 @dataclass(frozen=True, repr=False)
@@ -121,7 +122,10 @@ def _parse_month_config_text(raw: str) -> Mapping[str, MonthBudgetSettings]:
     for owner_key, entry in parsed.items():
         owner = _valid_config_text(owner_key)
         if (not isinstance(entry, dict) or "income_category_ids" not in entry
-                or set(entry) - {"income_category_ids", "pass_through"}):
+                or set(entry) - {"income_category_ids", "pass_through", "income_window_start_day"}):
+            raise BudgetConfigError("Invalid monthly budget configuration")
+        income_window_start_day = entry.get("income_window_start_day", 1)
+        if type(income_window_start_day) is not int or not 1 <= income_window_start_day <= 28:
             raise BudgetConfigError("Invalid monthly budget configuration")
         raw_income = entry["income_category_ids"]
         if not isinstance(raw_income, list) or len(raw_income) > MAX_INCOME_CATEGORIES:
@@ -144,7 +148,10 @@ def _parse_month_config_text(raw: str) -> Mapping[str, MonthBudgetSettings]:
             if rent_id == mortgage_id or rent_id in income_seen or mortgage_id in income_seen:
                 raise BudgetConfigError("Invalid monthly budget configuration")
             pair = PassThroughSettings(rent_category_id=rent_id, mortgage_category_id=mortgage_id)
-        result[owner] = MonthBudgetSettings(income_category_ids=tuple(income_ids), pass_through=pair)
+        result[owner] = MonthBudgetSettings(
+            income_category_ids=tuple(income_ids), pass_through=pair,
+            income_window_start_day=income_window_start_day,
+        )
     return MappingProxyType(result)
 
 
@@ -189,11 +196,18 @@ def warsaw_date(evaluated_at: int | float) -> tuple[str, str]:
     return evaluation_date, evaluation_date[:7]
 
 
-def _previous_month(period: str) -> tuple[str, str]:
+def _shift_period(period: str, offset: int) -> str:
     year, month = int(period[:4]), int(period[5:7])
-    prev_year, prev_month = (year - 1, 12) if month == 1 else (year, month - 1)
-    last_day = calendar.monthrange(prev_year, prev_month)[1]
-    return f"{prev_year:04d}-{prev_month:02d}-01", f"{prev_year:04d}-{prev_month:02d}-{last_day:02d}"
+    shifted_year, shifted_month = divmod(year * 12 + month - 1 + offset, 12)
+    return f"{shifted_year:04d}-{shifted_month + 1:02d}"
+
+
+def _income_window(period: str, start_day: int) -> tuple[str, str]:
+    if start_day == 1:
+        return core.parse_period(period)
+    start = f"{_shift_period(period, -1)}-{start_day:02d}"
+    end = (date.fromisoformat(f"{period}-{start_day:02d}") - timedelta(days=1)).isoformat()
+    return start, end
 
 
 def _check_aggregate(value: str) -> str:
@@ -656,7 +670,10 @@ def evaluate_monthly_budget(
 
     start, end = core.parse_period(effective_period)
     cutoff = evaluation_date if effective_period == current_month else end
-    prev_start, prev_end = _previous_month(effective_period)
+    income_window_start_day = settings.income_window_start_day if settings is not None else 1
+    income_start, income_end = _income_window(effective_period, income_window_start_day)
+    income_cutoff = min(income_end, evaluation_date)
+    prev_start, prev_end = _income_window(_shift_period(effective_period, -1), income_window_start_day)
 
     categories_by_id = {row["id"]: row for row in categories}
     if settings is not None:
@@ -729,9 +746,15 @@ def evaluate_monthly_budget(
         report_date = (tx_date or posting_date) if direction == "DBIT" else posting_date
         kind = eff["kind"]
         cat_id = eff["category_id"]
+        in_calendar = start <= report_date <= cutoff
+        in_income_window = (
+            configured and direction == "CRDT" and kind == "income" and cat_id in income_set
+            and income_start <= posting_date <= income_cutoff
+        )
 
-        if start <= report_date <= cutoff:
-            has_activity = True
+        if in_calendar or in_income_window:
+            if in_calendar:
+                has_activity = True
             nonzero = core.compare_money(amount, _ZERO) > 0
             unresolved = _has_unresolved_transfer_evidence(
                 row,
@@ -763,7 +786,7 @@ def evaluate_monthly_budget(
                     else:
                         ordinary_refunds[cat_id].append(amount)
                 elif kind == "income":
-                    if configured and cat_id in income_set:
+                    if in_income_window:
                         if nonzero:
                             has_affecting_unexcluded = True
                             if unresolved:
@@ -891,9 +914,17 @@ def evaluate_monthly_budget(
     )
     pace = _compute_pace(effective_period, current_month, evaluation_date, start_budget, spent, expected_income)
 
+    configuration = {"status": "ready", "source": "bootstrap"}
+    if income_window_start_day > 1:
+        configuration["income_window"] = {
+            "start": income_start,
+            "end": income_end,
+            "start_day": income_window_start_day,
+        }
+
     return {
         **envelope,
-        "configuration": {"status": "ready", "source": "bootstrap"},
+        "configuration": configuration,
         "summary": summary,
         "expected_income": expected_income,
         "pace": pace,

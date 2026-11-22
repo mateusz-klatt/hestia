@@ -65,6 +65,7 @@ export type AnalyticsInboxMarkSaved = Schemas["BudgetAnalyticsInboxMarkSaved"];
 
 export type AnalyticsMonthlyBudget = Schemas["BudgetAnalyticsMonthlyBudget"];
 export type AnalyticsMonthlyBudgetConfiguration = Schemas["BudgetAnalyticsMonthlyBudgetConfiguration"];
+export type AnalyticsMonthlyBudgetIncomeWindow = Schemas["BudgetAnalyticsMonthlyBudgetIncomeWindow"];
 export type AnalyticsMonthlyBudgetCoverage = Schemas["BudgetAnalyticsMonthlyBudgetCoverage"];
 export type AnalyticsMonthlyBudgetSummary = Schemas["BudgetAnalyticsMonthlyBudgetSummary"];
 export type AnalyticsMonthlyBudgetExpectedIncome = Schemas["BudgetAnalyticsMonthlyBudgetExpectedIncome"];

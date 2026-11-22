@@ -2594,6 +2594,9 @@
       },
       "BudgetAnalyticsMonthlyBudgetConfiguration": {
         "properties": {
+          "income_window": {
+            "$ref": "#/components/schemas/BudgetAnalyticsMonthlyBudgetIncomeWindow"
+          },
           "source": {
             "enum": [
               "bootstrap",
@@ -2745,6 +2748,31 @@
           "source"
         ],
         "title": "BudgetAnalyticsMonthlyBudgetExpectedIncomeItem",
+        "type": "object"
+      },
+      "BudgetAnalyticsMonthlyBudgetIncomeWindow": {
+        "properties": {
+          "end": {
+            "title": "End",
+            "type": "string"
+          },
+          "start": {
+            "title": "Start",
+            "type": "string"
+          },
+          "start_day": {
+            "maximum": 28,
+            "minimum": 1,
+            "title": "Start Day",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "start",
+          "end",
+          "start_day"
+        ],
+        "title": "BudgetAnalyticsMonthlyBudgetIncomeWindow",
         "type": "object"
       },
       "BudgetAnalyticsMonthlyBudgetPace": {
@@ -10348,7 +10376,7 @@
   "info": {
     "description": "Local cloud-free smart-home control API. Generated from hestia/api_contract.py \u2014 do not edit by hand; run `python -m hestia.api_contract`.",
     "title": "hestia API",
-    "version": "0.27.0"
+    "version": "0.28.0"
   },
   "openapi": "3.1.0",
   "paths": {

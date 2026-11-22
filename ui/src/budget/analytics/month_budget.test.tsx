@@ -147,6 +147,32 @@ describe("MonthBudgetView", () => {
     expect(monthBudgetLabels.pl.purchaseDateFallback(2)).toContain("2 wydatków");
   });
 
+  it.each([
+    { locale: "pl-PL", label: "Budżet z wpływów", window: "20 paź – 19 lis" },
+    { locale: "en-US", label: "Budget received", window: "20 Oct – 19 Nov" },
+  ])("shows the configured income window in the $locale budget label", async ({ locale, label, window }) => {
+    const api = fakeApi();
+    api.monthlyBudget.mockResolvedValue(ok(monthlyBudgetOf({
+      configuration: {
+        status: "ready", source: "bootstrap",
+        income_window: { start: "2026-10-20", end: "2026-11-19", start_day: 20 },
+      },
+    })));
+    await show(api, { locale });
+
+    const term = [...host.querySelectorAll("dt")].find((item) => item.textContent.startsWith(label));
+    expect(term?.textContent).toBe(`${label} (${window})`);
+  });
+
+  it("omits the income window from the budget label when it is not configured", async () => {
+    const api = fakeApi();
+    await show(api, { locale: "pl-PL" });
+
+    const term = [...host.querySelectorAll("dt")].find((item) => item.textContent.startsWith("Budżet z wpływów"));
+    expect(term?.textContent).toBe("Budżet z wpływów");
+    expect(term?.querySelector("small")).toBeNull();
+  });
+
   it("shows loading state initially and hides month navigation until server current_month arrives", async () => {
     const pending = deferred<AnalyticsMonthlyBudget>();
     const api = fakeApi();

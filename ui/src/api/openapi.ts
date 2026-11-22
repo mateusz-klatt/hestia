@@ -2283,6 +2283,7 @@ export interface components {
         };
         /** BudgetAnalyticsMonthlyBudgetConfiguration */
         BudgetAnalyticsMonthlyBudgetConfiguration: {
+            income_window?: components["schemas"]["BudgetAnalyticsMonthlyBudgetIncomeWindow"];
             /**
              * Source
              * @enum {string}
@@ -2336,6 +2337,15 @@ export interface components {
              * @constant
              */
             source: "previous_month";
+        };
+        /** BudgetAnalyticsMonthlyBudgetIncomeWindow */
+        BudgetAnalyticsMonthlyBudgetIncomeWindow: {
+            /** End */
+            end: string;
+            /** Start */
+            start: string;
+            /** Start Day */
+            start_day: number;
         };
         /** BudgetAnalyticsMonthlyBudgetPace */
         BudgetAnalyticsMonthlyBudgetPace: {

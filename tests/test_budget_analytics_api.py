@@ -409,12 +409,16 @@ class BudgetAnalyticsAPITests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(await missing_cat.json(), {"ok": False, "error": "budget_unavailable"})
 
             salary_cat = (await (await self.post("category-create", {"name": "Wynagrodzenie"})).json())["category"]
-            with mock.patch.dict(os.environ, {month_budget.MONTH_CONFIG_ENV: json.dumps({"alice": {"income_category_ids": [salary_cat["id"]]}})}):
+            with mock.patch.dict(os.environ, {month_budget.MONTH_CONFIG_ENV: json.dumps({"alice": {
+                    "income_category_ids": [salary_cat["id"]], "income_window_start_day": 20}})}):
                 ready = await self.get("monthly-budget", params={"period": "2026-11", "currency": "PLN"})
                 self.assertEqual(ready.status, 200)
                 ready_body = await ready.json()
                 api_contract.BudgetAnalyticsMonthlyBudget.model_validate(ready_body)
-                self.assertEqual(ready_body["configuration"], {"status": "ready", "source": "bootstrap"})
+                self.assertEqual(ready_body["configuration"], {
+                    "status": "ready", "source": "bootstrap",
+                    "income_window": {"start": "2026-10-20", "end": "2026-11-19", "start_day": 20},
+                })
 
             with mock.patch.object(month_budget, "ZoneInfo", side_effect=month_budget.ZoneInfoNotFoundError("Europe/Warsaw")):
                 no_zone = await self.get("monthly-budget")
