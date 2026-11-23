@@ -301,11 +301,9 @@ def cutover_users(engine, users: dict) -> None:
 
 
 def set_user_db(username: str, password_hash: str, role: str = DEFAULT_NEW_ROLE, *, path=None) -> None:
-    """Upsert one user (username, hash, role) into the DB (auth CLI / change-password). Own short
-    session; WAL lets this run concurrently with the daemon. The caller passes the role explicitly so
-    a forgotten role can never silently become admin (the CLI preserves an existing user's role on a
-    bare password reset and defaults a brand-new account to viewer)."""
-    engine, _ = init_db(path)
+    """Upsert one user and revoke their receipts credentials in one write-locked transaction.
+    The CLI passes the existing role on a password reset. New accounts default to viewer."""
+    engine = _immediate_engine(path)
     try:
         with Session(engine) as session, session.begin():
             _upsert(session, User, "username", username, {"password_hash": password_hash, "role": role})
@@ -470,8 +468,8 @@ def add_user(username: str, password_hash: str, role: str, *, path=None) -> str:
 def set_user_password(username: str, password_hash: str, *, path=None) -> bool:
     """Replace an existing account's password hash (self change-password + admin reset). Returns
     ``False`` (changes nothing) when the user doesn't exist — never creates an account. Role + disabled
-    are untouched."""
-    engine, _ = init_db(path)
+    are untouched. The password change and receipts revocation share a write-locked transaction."""
+    engine = _immediate_engine(path)
     try:
         with Session(engine) as session, session.begin():
             row = session.get(User, username)

@@ -869,6 +869,41 @@ class RolesTests(unittest.TestCase):
             self.assertEqual(row.password_hash, "new-hash")
             self.assertEqual(row.role, "admin")                            # role preserved
 
+    def test_password_writes_roll_back_device_revocation_and_preserve_cached_pool(self):
+        engine, sessions = db.init_db(self.db)
+        store_sql.cutover_users(engine, {"owner": "original"})
+        with sessions.begin() as session:
+            session.add(db.BudgetReceiptDeviceToken(
+                id="device", owner="owner", device_name="Vesta", token_hmac="1" * 64,
+                created_at=1, sliding_written_at=1, expires_at=2, hard_expires_at=3,
+            ))
+            session.add(db.BudgetReceiptPairCode(
+                id="pair", owner="owner", code_hmac="2" * 64, created_at=1, expires_at=2,
+            ))
+
+        revoke = store_sql._revoke_receipt_devices
+
+        def fail_after_revocation(session, owner):
+            revoke(session, owner)
+            session.flush()
+            self.assertEqual(session.get(db.User, owner).password_hash, "replacement")
+            self.assertIsNotNone(session.get(db.BudgetReceiptDeviceToken, "device").revoked_at)
+            self.assertIsNotNone(session.get(db.BudgetReceiptPairCode, "pair").consumed_at)
+            raise RuntimeError("abort account change")
+
+        for write in (store_sql.set_user_password, store_sql.set_user_db):
+            with self.subTest(write=write.__name__):
+                with mock.patch.object(engine, "dispose") as dispose, mock.patch.object(
+                    store_sql, "_revoke_receipt_devices", side_effect=fail_after_revocation,
+                ):
+                    with self.assertRaisesRegex(RuntimeError, "abort account change"):
+                        write("owner", "replacement", path=self.db)
+                dispose.assert_not_called()
+                with sessions() as session:
+                    self.assertEqual(session.get(db.User, "owner").password_hash, "original")
+                    self.assertIsNone(session.get(db.BudgetReceiptDeviceToken, "device").revoked_at)
+                    self.assertIsNone(session.get(db.BudgetReceiptPairCode, "pair").consumed_at)
+
     def test_cli_reset_and_disable_invalidate_only_affected_receipt_credentials(self):
         engine, sessions = db.init_db(self.db)
         owners = ("cli_reset", "disabled", "unchanged")
