@@ -456,8 +456,11 @@ function CumulativeDailyChart({ budget, daily, paceProjection, schedulePending, 
 }
 
 // ---------------------------------------------------------------------------
-// Chart 2: Category spending by month (stacked around zero, top 5 + Other)
+// Chart 2: Category spending by month (stacked around zero, top 8 + Other)
 // ---------------------------------------------------------------------------
+
+/** Roots drawn on the stacked chart. Everything past this rank is hatched "Pozostałe". */
+export const TOP_CATEGORY_ROOTS = 8;
 
 export interface RankedCategory {
   id: string | null;
@@ -612,12 +615,14 @@ export function buildCategoryChartModel(
 
   const colorInputs: CategoryColorInput[] = [...(categories ?? [])];
   const knownColorIds = new Set(colorInputs.map((item) => item.id));
-  const rememberColorId = (id: string | null) => {
+  const rememberColorId = (id: string | null, name?: string) => {
     if (id === null || knownColorIds.has(id)) return;
     knownColorIds.add(id);
-    colorInputs.push({ id, parent_id: null });
+    colorInputs.push(name === undefined || name === ""
+      ? { id, parent_id: null }
+      : { id, parent_id: null, name });
   };
-  for (const item of prepared.labels) rememberColorId(item.category_id);
+  for (const item of prepared.labels) rememberColorId(item.category_id, item.name);
   for (const seriesKey of absTotals.keys()) rememberColorId(categoryIdFromSeriesKey(seriesKey));
   for (const meta of oneOffNames.values()) rememberColorId(meta.id);
   const categoryColors = buildCategoryColors(colorInputs, overrides === undefined ? undefined : { overrides });
@@ -670,8 +675,8 @@ export function buildCategoryChartModel(
   oneOffs.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : a.seriesKey < b.seriesKey ? -1 : 1));
 
   const nonzeroCategories = allCategories.filter((item) => item.absTotal > 0n);
-  const displayed = nonzeroCategories.slice(0, 5);
-  const restKeys = new Set(nonzeroCategories.slice(5).map((item) => item.seriesKey));
+  const displayed = nonzeroCategories.slice(0, TOP_CATEGORY_ROOTS);
+  const restKeys = new Set(nonzeroCategories.slice(TOP_CATEGORY_ROOTS).map((item) => item.seriesKey));
 
   let hasOtherPositive = false;
   let hasOtherNegative = false;

@@ -946,7 +946,7 @@ describe("MonthBudgetView", () => {
     expect(host.querySelector(".budget-chart-exhaustion")).toBeNull();
   });
 
-  it("ranks top-5 categories with stable ID ties, separates positive and negative Other slices, and marks provisional/current/gap buckets across 12 months", async () => {
+  it("ranks top-8 categories with stable ID ties, separates positive and negative Other slices, and marks provisional/current/gap buckets across 12 months", async () => {
     const series12 = monthlyBudgetSeriesOf({
       daily: [{ date: "2026-11-01", cumulative_spent: "99999999999999999999" }],
       months: [
@@ -978,9 +978,10 @@ describe("MonthBudgetView", () => {
           categories: [
             { category_id: "cat-tie-b", net_spending: "200" }, // tie 200 with cat-tie-a & cat-signed
             { category_id: "cat-tie-a", net_spending: "200" }, // tie 200, ID a < b
-            { category_id: "cat-5th", net_spending: "150" },   // rank 5 (150)
+            { category_id: "cat-5th", net_spending: "150" },   // rank 6 (150)
             { category_id: "cat-other-pos", net_spending: "80" },
-            { category_id: "cat-other-neg", net_spending: "-50" }, // separate negative Other slice!
+            { category_id: "cat-other-neg", net_spending: "-50" }, // abs 100, still inside the top 8
+            { category_id: "cat-ninth", net_spending: "40" }, // rank 9 -> Pozostałe
             { category_id: null, net_spending: "250" }, // uncategorised = 250 -> ranks #2!
           ],
         },
@@ -998,6 +999,7 @@ describe("MonthBudgetView", () => {
         { category_id: "cat-5th", name: "Fifth Rank", archived: false },
         { category_id: "cat-other-pos", name: "Other Pos", archived: false },
         { category_id: "cat-other-neg", name: "Other Neg", archived: false },
+        { category_id: "cat-ninth", name: "Ninth Rank", archived: false },
       ],
     });
     const huge = "9".repeat(80);
@@ -1022,25 +1024,28 @@ describe("MonthBudgetView", () => {
     // cat-signed: 100 + 100 = 200 (#3, "cat-signed" < "cat-tie-a")
     // cat-tie-a: 200 (#4, "cat-tie-a" < "cat-tie-b")
     // cat-tie-b: 200 (#5)
-    // cat-5th: 150 -> Other!
-    // cat-other-neg: |-50| + |-50| = 100 -> Other!
-    // cat-other-pos: 80 -> Other!
+    // cat-5th: 150 (#6)
+    // cat-other-neg: |-50| + |-50| = 100 (#7)
+    // cat-other-pos: 80 (#8)
+    // cat-ninth: 40 -> Pozostałe
     const catLegendText = catChart?.querySelector(".budget-chart-legend")?.textContent ?? "";
     expect(catLegendText).toContain("Top One");
     expect(catLegendText).toContain("Bez kategorii");
     expect(catLegendText).toContain("Signed Swings");
     expect(catLegendText).toContain("Tie Alpha (archiwalna)");
     expect(catLegendText).toContain("Tie Beta");
+    expect(catLegendText).toContain("Fifth Rank");
+    expect(catLegendText).toContain("Other Pos");
+    expect(catLegendText).toContain("Other Neg");
     expect(catLegendText).toContain("Pozostałe");
-    expect(catLegendText).not.toContain("Fifth Rank");
-    expect(catLegendText).not.toContain("Other Pos");
-    expect(catLegendText).not.toContain("Other Neg");
+    expect(catLegendText).not.toContain("Ninth Rank");
 
     // Exact HTML table in Chart 2 includes ALL categories + current/provisional bucket markers!
     const catTable = catChart?.querySelector("table");
     expect(catTable?.textContent).toContain("Fifth Rank");
     expect(catTable?.textContent).toContain("Other Pos");
     expect(catTable?.textContent).toContain("Other Neg");
+    expect(catTable?.textContent).toContain("Ninth Rank");
     expect(catTable?.textContent).toContain("Bieżący miesiąc");
     expect(catTable?.textContent).toContain("Wynik wstępny");
     expect(catTable?.textContent).toContain("100,00 PLN");
@@ -1077,8 +1082,11 @@ describe("MonthBudgetView", () => {
             { category_id: "c3", net_spending: "100" },
             { category_id: "c4", net_spending: "100" },
             { category_id: "c5", net_spending: "100" },
+            { category_id: "c8", net_spending: "90" },
             { category_id: "c6", net_spending: "50" },
             { category_id: "c7", net_spending: "-70" },
+            { category_id: "c9", net_spending: "40" },
+            { category_id: "c10", net_spending: "-15" },
             { category_id: "c0-zero", net_spending: "0" },
           ],
         },
@@ -1089,11 +1097,11 @@ describe("MonthBudgetView", () => {
       ],
       { uncategorised: "Uncategorised", unknownCategory: "Category", otherCategory: "Other" },
     );
-    expect(catModel.displayed.map((c) => c.id)).toEqual(["c1", "c2", "c3", "c4", "c5"]);
+    expect(catModel.displayed.map((c) => c.id)).toEqual(["c1", "c2", "c3", "c4", "c5", "c8", "c7", "c6"]);
     expect(catModel.hasOtherPositive).toBe(true);
     expect(catModel.hasOtherNegative).toBe(true);
-    expect(catModel.stacks[0]?.posTotal).toBe(550n);
-    expect(catModel.stacks[0]?.negTotal).toBe(-70n);
+    expect(catModel.stacks[0]?.posTotal).toBe(680n);
+    expect(catModel.stacks[0]?.negTotal).toBe(-85n);
     expect(catModel.allCategories.map((c) => c.id)).toContain("c0-zero");
 
     const tied = buildCategoryChartModel(
