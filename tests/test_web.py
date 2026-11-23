@@ -2052,6 +2052,7 @@ SPOUSE_ROUTE_STATUS = {
     ("POST", "/api/budget/analytics/category-create"): 403,
     ("POST", "/api/budget/analytics/category-update"): 403,
     ("POST", "/api/budget/analytics/category-colors-spread"): 403,
+    ("POST", "/api/budget/analytics/category-colors-spread"): 403,
     ("POST", "/api/budget/analytics/inbox-mark"): 403,
     ("POST", "/api/budget/analytics/mortgage-payment-set"): 403,
     ("POST", "/api/budget/analytics/mortgage-save"): 403,
