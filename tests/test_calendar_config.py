@@ -221,6 +221,9 @@ class CalendarRuntimeTests(unittest.TestCase):
 
 
 class CalendarPollerTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        self.addCleanup(runtime.close_executor)
+
     async def test_disabled_and_invalid_config_do_not_touch_database(self):
         with mock.patch.object(runtime, "load_config", return_value=None), \
              mock.patch.object(runtime, "run_once") as run:
@@ -268,6 +271,52 @@ class CalendarPollerTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(asyncio.CancelledError):
             await task
         self.assertTrue(finished.is_set())
+
+    def test_background_priority_is_absolute_and_per_thread(self):
+        with mock.patch.object(runtime.os, "getpriority", return_value=0) as get, \
+             mock.patch.object(runtime.os, "setpriority") as set_priority, \
+             mock.patch.object(runtime.threading, "get_native_id", return_value=42):
+            runtime._background_priority()
+        get.assert_called_once_with(os.PRIO_PROCESS, 42)
+        set_priority.assert_called_once_with(os.PRIO_PROCESS, 42, 10)
+        with mock.patch.object(runtime.os, "getpriority", return_value=15), \
+             mock.patch.object(runtime.os, "setpriority") as set_priority, \
+             mock.patch.object(runtime.threading, "get_native_id", return_value=7):
+            runtime._background_priority()
+        set_priority.assert_called_once_with(os.PRIO_PROCESS, 7, 15)
+        with mock.patch.object(runtime.os, "getpriority", side_effect=OSError), \
+             mock.patch.object(runtime.os, "setpriority") as set_priority, \
+             mock.patch.object(runtime.threading, "get_native_id", return_value=1):
+            runtime._background_priority()
+        set_priority.assert_not_called()
+
+        class _NoPriority:
+            pass
+
+        with mock.patch.object(runtime, "os", _NoPriority()):
+            runtime._background_priority()
+
+    def test_executor_is_created_once_under_the_lock_and_close_resets_it(self):
+        runtime.close_executor()
+        barrier = threading.Barrier(8)
+        found = []
+
+        def grab():
+            barrier.wait()
+            found.append(runtime._calendar_executor())
+
+        threads = [threading.Thread(target=grab) for _ in range(8)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        self.assertEqual(len({id(item) for item in found}), 1)
+        first = found[0]
+        runtime.close_executor()
+        self.assertIsNone(runtime._EXECUTOR)
+        second = runtime._calendar_executor()
+        self.assertIsNot(first, second)
+        runtime.close_executor()
 
 
 class CalendarCliTests(unittest.TestCase):

@@ -434,11 +434,25 @@ class BudgetStore:
                 row.failures += 1
                 row.last_error = "partial_data" if completed else "account_errors"
                 set_diagnostic(row)  # The component rows carry the per-request diagnostics.
-            elif completed == len(accounts) * len(OPERATIONS):
-                row.last_success = now
-                row.failures, row.last_error = 0, None
-                set_diagnostic(row)
+            elif completed:
+                succeeded = self._components_succeeded_at(session, (account.id for account in accounts.values()))
+                if succeeded is not None:
+                    row.last_success = succeeded if row.last_success is None else max(row.last_success, succeeded)
+                    row.failures, row.last_error = 0, None
+                    set_diagnostic(row)
             reconcile_transfers(session, row.owner, now)
+
+    @staticmethod
+    def _components_succeeded_at(session, account_ids):
+        stamps = []
+        for account_id in account_ids:
+            for operation in OPERATIONS:
+                component = session.get(Component, (account_id, operation))
+                if (component is None or component.last_success is None
+                        or component.last_error is not None or component.attempt_id is not None):
+                    return None
+                stamps.append(component.last_success)
+        return min(stamps)
 
     @staticmethod
     def _component_error(component, code, diagnostic=None):
@@ -486,8 +500,10 @@ class BudgetStore:
             failures = [(op, code) for op, code in failures if code is not None]
             account.last_error = ("component_errors" if len(failures) == 2 else
                                   failures[0][0] + "_" + failures[0][1] if failures else None)
-        if completed == len(OPERATIONS):
-            account.observed_at = now
+        if completed and not errors:
+            observed = self._components_succeeded_at(session, (account.id,))
+            if observed is not None:
+                account.observed_at = observed if account.observed_at is None else max(account.observed_at, observed)
         return completed, errors
 
     def _import_transactions(self, session, account, transactions, now, window=None):

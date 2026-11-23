@@ -44,6 +44,8 @@ MAX_RECURRING_HINTS = 200
 MAX_RECURRING_EVIDENCE = 24
 CURSOR_TTL = 900
 MAX_CURSOR = 8192
+MAX_ROW_KEYS = 500
+MAX_ROW_KEY_LENGTH = 1153
 _DATA_ERROR = "budget_analytics_data_error"
 _LIMIT_ERROR = "budget_analytics_limit"
 _DOMAIN = b"hestia/budget/analytics/cursor/v1"
@@ -150,14 +152,15 @@ def _category(category_id, categories):
 
 def _annotation(row, financial_fp):
     if row is None:
-        return {"version": 0, "mode": "auto", "category_id": None, "kind": "auto", "stale": False}
+        return {"version": 0, "mode": "auto", "category_id": None, "kind": "auto", "stale": False, "label": None}
     if row.mode not in ("auto", "manual") or row.kind not in core.KINDS:
         raise AnalyticsError()
     return {"version": row.version, "mode": row.mode, "category_id": row.category_id,
-            "kind": row.kind, "stale": row.ledger_fingerprint != financial_fp}
+            "kind": row.kind, "stale": row.ledger_fingerprint != financial_fp,
+            "label": core.stored_one_off_label(row.label)}
 
 
-def _effective(payload, metadata, annotation, categories, rules):
+def _effective(payload, metadata, annotation, categories, rules, *, texts=None, compiled=None):
     default = "expense" if payload["credit_debit_indicator"] == "DBIT" else "unclassified_credit"
     result = {"kind": default, "category_id": None, "source": "default", "rule_id": None}
     if annotation["mode"] == "manual":
@@ -167,31 +170,36 @@ def _effective(payload, metadata, annotation, categories, rules):
             result.update(kind=default if annotation["kind"] == "auto" else annotation["kind"],
                           category_id=_category(annotation["category_id"], categories), source="manual")
         return result
-    for rule in rules:
-        if core.rule_matches(rule, payload, metadata):
-            result.update(kind=default if rule["kind"] == "auto" else rule["kind"],
-                          category_id=_category(rule["category_id"], categories), source="rule", rule_id=rule["id"])
-            break
+    if compiled is None:
+        compiled, _ = core.compile_rules(rules)
+    if texts is None:
+        texts = core.match_texts(payload, metadata)
+    rule = core.first_matching_rule(compiled, payload, texts)
+    if rule is not None:
+        result.update(kind=default if rule["kind"] == "auto" else rule["kind"],
+                      category_id=_category(rule["category_id"], categories), source="rule", rule_id=rule["id"])
     return result
 
 
 def _records(ledger, identities, metadata, annotations, categories, rules):
     result = []
     owned = core.owned_identities(identities) if ledger else None
+    compiled, _ = core.compile_rules(rules)
     for row in ledger:
         payload, financial_fp = _payload(row.payload_json)
         key = (row.account_id, row.entry_reference)
         sidecar = metadata.get(key)
         evidence = _metadata(sidecar.payload_json) if sidecar is not None and sidecar.ledger_fingerprint == financial_fp else None
         annotation = _annotation(annotations.get(key), financial_fp)
-        effective = _effective(payload, evidence, annotation, categories, rules)
+        texts = core.match_texts(payload, evidence)
+        effective = _effective(payload, evidence, annotation, categories, rules, texts=texts, compiled=compiled)
         result.append({"account_id": row.account_id, "entry_reference": row.entry_reference, "payload": payload,
                        "financial_fp": financial_fp,
                        "transfer_fp": core.pair_fingerprint(row.account_id, row.entry_reference, payload, evidence, identities,
                                                             financial=financial_fp, owned_ids=owned),
                        "metadata": evidence, "annotation": annotation, "effective": effective,
-                       "base_effective": dict(effective), "source": row.source, "observed_at": row.observed_at,
-                       "api_observed_at": row.api_observed_at, "uncertain": row.uncertain,
+                       "base_effective": dict(effective), "_match_texts": texts, "source": row.source,
+                       "observed_at": row.observed_at, "api_observed_at": row.api_observed_at, "uncertain": row.uncertain,
                        "eligible": not row.uncertain and payload["status"] == "BOOK" and core.effective_date(payload) is not None,
                        "transfer": {"status": "none", "decision_id": None, "candidate_count": 0, "ambiguous": False}})
     return result
@@ -218,8 +226,13 @@ def _scope_counts(session, owner, accounts):
             "excluded_accounts": sum(not account.enabled for account in accounts), **_owner_counts(session, owner)}
 
 
-def projection_snapshot(session, owner):
-    """Shared read/preview snapshot; caller owns the existing SQLite transaction."""
+def projection_snapshot(session, owner, *, classify=True):
+    """Shared read/preview snapshot; caller owns the existing SQLite transaction.
+
+    ``classify=False`` still parses the ledger and builds the same digest, but skips rule
+    application. Save uses it to fence a preview without a second full categorisation.
+    The digest does not include effective categories, so the two modes hash the same bytes.
+    """
     BudgetHTTPStore._owner(session, owner)
     accounts = list(session.scalars(select(db.BudgetAccount).join(db.BudgetConnection).where(
         db.BudgetAccount.owner == owner, db.BudgetConnection.owner == owner).order_by(db.BudgetAccount.id)))
@@ -235,7 +248,8 @@ def projection_snapshot(session, owner):
     decisions = [_entity(row) for row in session.scalars(select(db.BudgetTransferDecision).where(
         db.BudgetTransferDecision.owner == owner).order_by(db.BudgetTransferDecision.id))]
     identities, identity_state, metadata, annotations = _auxiliary(session, owner, accounts)
-    records = _records(ledger, identities, metadata, annotations, {row["id"]: row for row in categories}, rules)
+    applied = rules if classify else ()
+    records = _records(ledger, identities, metadata, annotations, {row["id"]: row for row in categories}, applied)
     account_state = [{"id": row.id, "connection_id": row.connection_id, "enabled": row.enabled,
                       "configured": row.configured, "control_version": row.control_version, "kind": row.kind,
                       "kind_confirmed_at": row.kind_confirmed_at} for row in accounts]
@@ -252,7 +266,8 @@ def projection_snapshot(session, owner):
                 "categories": [_semantic(row) for row in categories], "rules": [_semantic(row) for row in rules],
                 "decisions": [_semantic(row) for row in decisions]}
     snapshot["digest"] = core.projection_digest(semantic)
-    _accepted_projection(snapshot)
+    if classify:
+        _accepted_projection(snapshot)
     return snapshot
 
 
@@ -335,6 +350,9 @@ def _recurring_hints(snapshot):
     entries = []
     for row in snapshot["transactions"]:
         payload, metadata = row["payload"], row["metadata"] or {}
+        # A one-off label is real spending and not a commitment, so it cannot seed a hint.
+        if core.active_one_off_label(row["annotation"], payload["amount"]) is not None:
+            continue
         entries.append(RecurringEntry(
             owner=snapshot["owner"],
             account_id=row["account_id"],
@@ -434,6 +452,11 @@ def _wire_mortgage_reminder(item):
     }
 
 
+def _category_parents(categories):
+    """Category id to parent id. A missing parent is a root; limits then count that subtree."""
+    return {row["id"]: row.get("parent_id") or None for row in categories.values()}
+
+
 def _spending_limit_statuses(owner, period, limit_rows, category_totals, categories):
     from .spending_limits import (CategoryLimit, CategorySpending, SpendingLimitInputError,
                                   evaluate_spending_limits)
@@ -450,7 +473,7 @@ def _spending_limit_statuses(owner, period, limit_rows, category_totals, categor
         for row in category_totals
     ]
     try:
-        evaluated = evaluate_spending_limits(owner, period, limits, spending)
+        evaluated = evaluate_spending_limits(owner, period, limits, spending, parents=_category_parents(categories))
     except SpendingLimitInputError:
         raise AnalyticsError() from None
     return [
@@ -552,19 +575,57 @@ def _totals(rows):
     return result
 
 
-def _category_totals(rows, categories):
+def _mortgage_pass_through_category(owner):
+    """Mortgage category whose legs stay put when labelled, or ``None`` when pass-through is off."""
+    configs = month_budget_mod.load_month_config()
+    settings = None if configs is None else configs.get(owner)
+    pair = None if settings is None else settings.pass_through
+    return None if pair is None else pair.mortgage_category_id
+
+
+def _category_totals(rows, categories, *, split_one_offs=False, pass_through_category_id=None,
+                     one_off_secret=None):
+    """Expense and refund nets by category.
+
+    ``split_one_offs`` moves a labelled row into its own entry (``one_off`` true, ``name`` is the label,
+    ``category_id`` stays the underlying category, ``one_off_key`` identifies the member transactions).
+    A pass-through mortgage leg stays in its category so rent matching does not drift. Spending limits
+    keep the default and still count the amount in that category. An empty category bucket is omitted
+    once every row has moved out.
+    """
     names = {row["id"]: row for row in categories}
     grouped = defaultdict(list)
     for row in rows:
-        if row["effective"]["kind"] in ("expense", "refund"):
-            grouped[(row["effective"]["category_id"], row["payload"]["currency"])].append(row)
+        if row["effective"]["kind"] not in ("expense", "refund"):
+            continue
+        identifier = row["effective"]["category_id"]
+        currency = row["payload"]["currency"]
+        label = None
+        # None is the uncategorised bucket, not a pass-through category. Compare only a real id.
+        protected = pass_through_category_id is not None and identifier == pass_through_category_id
+        if split_one_offs and not protected:
+            label = core.active_one_off_label(row["annotation"], row["payload"]["amount"])
+        grouped[(label is not None, label, identifier, currency)].append(row)
+
+    def ordering(item):
+        one_off, label, identifier, currency = item[0]
+        if split_one_offs:
+            return (one_off, identifier or "", label or "", currency)
+        return (identifier or "", currency)
+
     result = []
-    for (identifier, currency), values in sorted(grouped.items(), key=lambda item: (item[0][0] or "", item[0][1])):
+    for (one_off, label, identifier, currency), values in sorted(grouped.items(), key=ordering):
         total = _totals(values)[0]
         category = names.get(identifier)
-        result.append({"category_id": identifier, "name": None if category is None else category["name"],
-                       "archived": False if category is None else category["archived"], "currency": currency,
-                       **{field: total[field] for field in ("expenses", "refunds", "net_spending")}})
+        entry = {"category_id": identifier, "name": label if one_off else (None if category is None else category["name"]),
+                 "archived": False if category is None else category["archived"], "currency": currency,
+                 **{field: total[field] for field in ("expenses", "refunds", "net_spending")}}
+        if split_one_offs:
+            entry["one_off"] = one_off
+            entry["one_off_key"] = core.one_off_key(
+                ((row["account_id"], row["entry_reference"]) for row in values), one_off_secret,
+            ) if one_off else None
+        result.append(entry)
     return result
 
 
@@ -584,6 +645,24 @@ def _currency(value):
     return value
 
 
+def _validate_row_keys(row_keys):
+    if row_keys is None:
+        return None
+    if not isinstance(row_keys, (list, tuple)) or not row_keys or len(row_keys) > MAX_ROW_KEYS:
+        raise AnalyticsError()
+    parsed = []
+    for item in row_keys:
+        if not isinstance(item, str) or len(item) < 3 or len(item) > MAX_ROW_KEY_LENGTH:
+            raise AnalyticsError()
+        if any(ord(ch) < 32 or ord(ch) == 127 for ch in item):
+            raise AnalyticsError()
+        acct_id, sep, entry_ref = item.partition("/")
+        if not sep or not acct_id or not entry_ref or len(acct_id) > 128 or len(entry_ref) > 1024:
+            raise AnalyticsError()
+        parsed.append((acct_id, entry_ref))
+    return tuple(sorted(set(parsed)))
+
+
 def _forecast_query(months=None, currency=None):
     try:
         return forecast_mod.validate_forecast_query(months, currency)
@@ -594,6 +673,13 @@ def _forecast_query(months=None, currency=None):
 def _monthly_budget_query(period=None, currency=None):
     try:
         return month_budget_mod.validate_monthly_budget_query(period, currency)
+    except month_budget_mod.MonthInputError:
+        raise AnalyticsError() from None
+
+
+def _monthly_budget_charts_query(period=None, currency=None, history=None):
+    try:
+        return month_budget_mod.validate_monthly_budget_charts_query(period, currency, history)
     except month_budget_mod.MonthInputError:
         raise AnalyticsError() from None
 
@@ -715,7 +801,11 @@ class BudgetAnalyticsViews(BudgetAnalyticsStore):
                     "scope": {**snapshot["counts"], "freshness": self._freshness(session, snapshot, self._now())},
                     "currencies": _totals(rows), "months": [{"month": month, "currencies": _totals(values)}
                         for month, values in sorted(months.items())],
-                    "categories": _category_totals(rows, snapshot["categories"]), "transfer_summary": summary}
+                    "categories": _category_totals(
+                        rows, snapshot["categories"], split_one_offs=True,
+                        pass_through_category_id=_mortgage_pass_through_category(owner),
+                        one_off_secret=self._cursor_secret),
+                    "transfer_summary": summary}
 
     def _cursor_encode(self, context, snapshot, index, now):
         payload = {"context": context, "snapshot": snapshot, "index": index, "issued": now, "expires": now + CURSOR_TTL}
@@ -757,28 +847,59 @@ class BudgetAnalyticsViews(BudgetAnalyticsStore):
         next_cursor = self._cursor_encode(context, snapshot, end, now) if end < len(rows) else None
         return rows[index:end], next_cursor
 
-    def transactions(self, owner, period, *, currency=None, category_id=None, kind=None, query=None, limit=50, cursor=None):
-        start, end = core.parse_period(period)
-        currency = _currency(currency)
+    def _validate_transaction_filters(self, category_id, kind, query):
         if kind is not None and (not isinstance(kind, str) or kind not in _KINDS):
             raise AnalyticsError()
         if category_id is not None and (not isinstance(category_id, str) or not category_id or len(category_id) > 128):
             raise AnalyticsError()
         if query is not None and (not isinstance(query, str) or len(query) > 256):
             raise AnalyticsError()
-        query = None if query is None else query.casefold().strip()
-        filters = {"owner": owner, "operation": "transactions", "period": period, "currency": currency,
-                   "category_id": category_id, "kind": kind, "query": query, "limit": limit}
+        return None if query is None else query.casefold().strip()
+
+    def _transactions_response(self, owner, period, start, end, cursor, filters, select_rows):
+        category_id, kind, query = filters["category_id"], filters["kind"], filters["query"]
         with _read_lock, self._read(owner) as session:
             snapshot = self._projection(session, owner)
-            if category_id not in (None, "uncategorised") and category_id not in {row["id"] for row in snapshot["categories"]}:
+            if (category_id not in (None, "uncategorised")
+                    and category_id not in {row["id"] for row in snapshot["categories"]}):
                 raise AnalyticsError("budget_analytics_not_found", 404)
-            rows = [row for row in _period_rows(snapshot, start, end, currency) if _row_filter(row, category_id, kind, query)]
-            rows.sort(key=lambda row: (core.effective_date(row["payload"]), row["account_id"], row["entry_reference"]), reverse=True)
+            rows = [row for row in select_rows(snapshot) if _row_filter(row, category_id, kind, query)]
+            rows.sort(key=lambda row: (core.effective_date(row["payload"]), row["account_id"], row["entry_reference"]),
+                      reverse=True)
             page, next_cursor = self._page(rows, cursor, filters, snapshot["digest"])
             return {"period": period, "start": start, "end": end, "snapshot_digest": snapshot["digest"],
                     "transactions": deepcopy([_wire_transaction(row) for row in page]), "filtered_total": len(rows),
                     "next_cursor": next_cursor}
+
+    def transactions(self, owner, period, *, currency=None, category_id=None, kind=None, query=None, limit=50,
+                     cursor=None):
+        start, end = core.parse_period(period)
+        currency = _currency(currency)
+        query = self._validate_transaction_filters(category_id, kind, query)
+        filters = {"owner": owner, "operation": "transactions", "period": period, "currency": currency,
+                   "category_id": category_id, "kind": kind, "query": query, "limit": limit}
+        return self._transactions_response(
+            owner, period, start, end, cursor, filters,
+            lambda snapshot: _period_rows(snapshot, start, end, currency),
+        )
+
+    def transactions_by_keys(self, owner, *, row_keys, currency=None, category_id=None, kind=None, query=None,
+                             limit=50, cursor=None):
+        if row_keys is None:
+            raise AnalyticsError()
+        parsed_keys = _validate_row_keys(row_keys)
+        currency = _currency(currency)
+        query = self._validate_transaction_filters(category_id, kind, query)
+        filters = {"owner": owner, "operation": "transactions-by-keys",
+                   "row_keys": [list(item) for item in parsed_keys], "currency": currency,
+                   "category_id": category_id, "kind": kind, "query": query, "limit": limit}
+        key_set = set(parsed_keys)
+        return self._transactions_response(
+            owner, "", "", "", cursor, filters,
+            lambda snapshot: [row for row in snapshot["transactions"]
+                              if (row["account_id"], row["entry_reference"]) in key_set
+                              and (currency is None or row["payload"]["currency"] == currency)],
+        )
 
     def transfers(self, owner, period, *, currency=None, status="suggested", limit=50, cursor=None):
         start, end = core.parse_period(period)
@@ -932,11 +1053,16 @@ class BudgetAnalyticsViews(BudgetAnalyticsStore):
                 schedules = self._forecast_schedules(session, owner)
                 schedules_version = _schedules_version(owner, schedules)
                 account_timestamps = self._forecast_account_timestamps(session, owner)
+                schedule_models = _mortgage_models(owner, schedules)
+                hints = _snapshot_recurring(snapshot)
+                baselines, estimator, conflicts = forecast_mod.baselines_for_snapshot(
+                    snapshot, evaluation_date, hints, schedule_models, account_timestamps=account_timestamps)
                 return forecast_mod.evaluate_forecast(
                     owner=owner, evaluation_date=evaluation_date, months=months, currency=currency,
                     account_timestamps=account_timestamps, excluded_accounts=snapshot["counts"]["excluded_accounts"],
-                    schedules=_mortgage_models(owner, schedules), hints=_snapshot_recurring(snapshot),
+                    schedules=schedule_models, hints=hints,
                     snapshot_digest=snapshot["digest"], schedules_version=schedules_version,
+                    baselines=baselines, baseline_estimator=estimator, baseline_conflicts=conflicts,
                 )
         except forecast_mod.ForecastLimitError:
             raise AnalyticsError(_LIMIT_ERROR, 413) from None
@@ -957,9 +1083,7 @@ class BudgetAnalyticsViews(BudgetAnalyticsStore):
             account.owner == owner, db.BudgetConnection.owner == owner, account.enabled))
         return {account_id: stamp for account_id, stamp in rows}
 
-    def monthly_budget(self, owner, *, period=None, currency=None):
-        """Evaluate owner-private monthly budget dashboard in one read-only SQLite snapshot."""
-        period, currency = _monthly_budget_query(period, currency)
+    def _evaluate_monthly_budget_snapshot(self, owner, *, period, currency, evaluator):
         try:
             with _read_lock, self._read(owner) as session:
                 evaluated_at = float(self._now())
@@ -976,12 +1100,13 @@ class BudgetAnalyticsViews(BudgetAnalyticsStore):
                 account_timestamps = self._selected_transaction_component_timestamps(session, owner)
                 account_kinds = {row["id"]: row["kind"] for row in snapshot["accounts"]
                                  if row["enabled"] and row["kind_confirmed_at"] is not None}
-                return month_budget_mod.evaluate_monthly_budget(
+                return evaluator(
                     owner=owner, period=period, currency=currency, evaluated_at=evaluated_at,
                     transactions=snapshot["transactions"], transfers=snapshot["_transfers"],
                     scan_limited=snapshot["_scan_limited"], categories=snapshot["categories"],
                     rules=snapshot["rules"], identities=snapshot["identities"], limits=all_limits,
                     account_component_timestamps=account_timestamps, account_kinds=account_kinds, settings=settings,
+                    one_off_secret=self._cursor_secret,
                 )
         except month_budget_mod.MonthInputError:
             raise AnalyticsError() from None
@@ -993,6 +1118,23 @@ class BudgetAnalyticsViews(BudgetAnalyticsStore):
             if exc.status == 400:
                 raise AnalyticsError(_DATA_ERROR, 500) from None
             raise
+
+    def monthly_budget(self, owner, *, period=None, currency=None):
+        """Evaluate owner-private monthly budget dashboard in one read-only SQLite snapshot."""
+        period, currency = _monthly_budget_query(period, currency)
+        return self._evaluate_monthly_budget_snapshot(
+            owner, period=period, currency=currency, evaluator=month_budget_mod.evaluate_monthly_budget,
+        )
+
+    def monthly_budget_charts(self, owner, *, period=None, currency=None, history=None):
+        """Evaluate owner-private monthly budget dashboard and chart series in one read-only SQLite snapshot."""
+        period, currency, history_months = _monthly_budget_charts_query(period, currency, history)
+        return self._evaluate_monthly_budget_snapshot(
+            owner,
+            period=period,
+            currency=currency,
+            evaluator=lambda **kwargs: month_budget_mod.evaluate_monthly_budget_charts(**kwargs, history=history_months),
+        )
 
     @staticmethod
     def _inbox_consent_entries(session, owner, evaluated_at):
@@ -1084,7 +1226,7 @@ class BudgetAnalyticsViews(BudgetAnalyticsStore):
             for row in totals
         ]
         try:
-            evaluated = evaluate_spending_limits(owner, period, limits, spending)
+            evaluated = evaluate_spending_limits(owner, period, limits, spending, parents=_category_parents(categories))
         except SpendingLimitCapError:
             raise AnalyticsError(_LIMIT_ERROR, 413) from None
         except SpendingLimitInputError:

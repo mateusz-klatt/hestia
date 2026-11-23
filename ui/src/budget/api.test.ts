@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { forecastOf, monthlyBudgetOf } from "./analytics/fixtures";
+import { forecastOf, monthlyBudgetChartsOf, monthlyBudgetOf } from "./analytics/fixtures";
 import { budgetApi } from "./api";
 import { account, connection } from "./fixtures";
 
@@ -88,6 +88,17 @@ describe("budget api", () => {
     });
   });
 
+  it("sends row_keys via JSON POST without Authorization header for transactions-by-keys", async () => {
+    const fetchMock = respond(200, { period: "", start: "", end: "", snapshot_digest: "d", transactions: [], filtered_total: 0, next_cursor: null });
+    await budgetApi.analyticsTransactionsByKeys({ row_keys: ["acc-1/r1", "acc-2/r2"], currency: "PLN" });
+    const { url, init } = sent(fetchMock);
+    expect(url.pathname).toMatch(/\/api\/budget\/analytics\/transactions-by-keys$/);
+    expect(url.search).toBe("");
+    expect(init.method).toBe("POST");
+    expect(Object.keys(init.headers as Record<string, string>)).not.toContain("Authorization");
+    expect(JSON.parse(init.body as string)).toEqual({ row_keys: ["acc-1/r1", "acc-2/r2"], currency: "PLN" });
+  });
+
   it("builds quarantine reads with and without an account filter", async () => {
     const fetchMock = respond(200, {});
     await budgetApi.quarantine();
@@ -147,6 +158,23 @@ describe("budget api", () => {
     expect(Object.fromEntries(sent(fetchMock, 2).url.searchParams)).toEqual({ period: "2026-10" });
     await budgetApi.monthlyBudget(undefined, "PLN");
     expect(Object.fromEntries(sent(fetchMock, 3).url.searchParams)).toEqual({ currency: "PLN" });
+  });
+
+  it("reads monthly budget charts with optional period, currency, and history query parameters", async () => {
+    const data = monthlyBudgetChartsOf();
+    const fetchMock = respond(200, data);
+    expect(await budgetApi.monthlyBudgetCharts()).toEqual({ ok: true, data });
+    const { url, init } = sent(fetchMock);
+    expect(url.pathname).toMatch(/\/api\/budget\/analytics\/monthly-budget\/charts$/);
+    expect(url.search).toBe("");
+    expect(init).toEqual({ credentials: "same-origin", cache: "no-store" });
+
+    await budgetApi.monthlyBudgetCharts("2026-10", "EUR", 12);
+    expect(Object.fromEntries(sent(fetchMock, 1).url.searchParams)).toEqual({
+      period: "2026-10", currency: "EUR", history: "12",
+    });
+    await budgetApi.monthlyBudgetCharts(undefined, "PLN", 6);
+    expect(Object.fromEntries(sent(fetchMock, 2).url.searchParams)).toEqual({ currency: "PLN", history: "6" });
   });
 
   it("sends every control with the entity's current version", async () => {

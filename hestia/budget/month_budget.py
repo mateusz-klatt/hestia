@@ -1,10 +1,11 @@
-"""Pure owner-private monthly budget dashboard evaluation (Budget Month P1).
+"""Pure owner-private monthly budget dashboard evaluation (Budget Month P1 & P2).
 
-Evaluates one selected month and currency from an immutable analytics snapshot
-using exact scaled integer arithmetic (never floats for money), Europe/Warsaw
-calendar cutoffs from a single UTC instant, verified per-leg transfer exclusions,
-provisional warning signals, rent/mortgage pass-through allocation, expected
-income matching across accounts, and bounded UTF-8/decimal outputs.
+Evaluates one selected month and currency (plus optional chart series) from an
+immutable analytics snapshot using exact scaled integer arithmetic (never floats
+for money), Europe/Warsaw calendar cutoffs from a single UTC instant, verified
+per-leg transfer exclusions, provisional warning signals, rent/mortgage
+pass-through allocation, expected income matching across accounts, and bounded
+UTF-8/decimal outputs.
 
 Errors carry fixed diagnostic messages without amounts, labels or owners.
 """
@@ -13,7 +14,7 @@ from __future__ import annotations
 import calendar
 from collections import Counter, defaultdict
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from functools import lru_cache
 import json
@@ -37,6 +38,10 @@ MAX_AGGREGATE_CHARS = 192
 MAX_INCOME_CATEGORIES = 100
 WARSAW_TIMEZONE = "Europe/Warsaw"
 STALE_AFTER_SECONDS = STALE_AFTER["transactions"]
+EARLIEST_PERIOD = "1900-01"
+DEFAULT_HISTORY_MONTHS = 6
+ALLOWED_HISTORY_MONTHS = frozenset({6, 12})
+MAX_PENDING_ROW_KEYS = 500
 
 _ZERO = "0"
 _PERIOD_RE = re.compile(r"([0-9]{4})-([0-9]{2})\Z", re.ASCII)
@@ -179,6 +184,22 @@ def validate_monthly_budget_query(period: str | None, currency: str | None) -> t
     return period, target_currency
 
 
+def validate_monthly_budget_charts_query(
+    period: str | None,
+    currency: str | None,
+    history: str | None = None,
+) -> tuple[str | None, str, int]:
+    """Validate optional ``period``, ``currency``, and ``history`` (``\"6\"`` or ``\"12\"``, default 6)."""
+    validated_period, target_currency = validate_monthly_budget_query(period, currency)
+    if history is None:
+        history_months = DEFAULT_HISTORY_MONTHS
+    elif isinstance(history, str) and history in ("6", "12"):
+        history_months = int(history)
+    else:
+        raise MonthInputError()
+    return validated_period, target_currency, history_months
+
+
 def warsaw_date(evaluated_at: int | float) -> tuple[str, str]:
     """Derive ``(evaluation_date, current_month)`` in ``Europe/Warsaw`` from one UTC epoch instant."""
     try:
@@ -244,33 +265,6 @@ def _sum_money_checked(values) -> str:
     except core.AnalyticsError:
         raise MonthLimitError() from None
     return _check_aggregate(total)
-
-
-def _series_daily_points(start: str, cutoff: str, expense_by_date, refund_by_date,
-                         mortgage_expenses, mortgage_refunds) -> list[dict]:
-    """Zero-filled cumulative adjusted spend from ``start`` through ``cutoff`` inclusive.
-
-    At most 31 points. Mortgage maps are the post-allocation amounts; ordinary maps
-    exclude pass-through mortgage legs. The caller compares the final point with
-    ``summary.spent`` when a summary exists.
-    """
-    day = date.fromisoformat(start)
-    last = date.fromisoformat(cutoff)
-    if last < day or (last - day).days > 30:
-        raise MonthDataError()
-    cumulative = _ZERO
-    points = []
-    while day <= last:
-        iso = day.isoformat()
-        terms = [cumulative]
-        terms.extend(expense_by_date.get(iso, ()))
-        terms.extend(core.negate_money(amount) for amount in refund_by_date.get(iso, ()))
-        terms.extend(mortgage_expenses.get(iso, ()))
-        terms.extend(core.negate_money(amount) for amount in mortgage_refunds.get(iso, ()))
-        cumulative = _sum_money_checked(terms)
-        points.append({"date": iso, "cumulative_spent": cumulative})
-        day += timedelta(days=1)
-    return points
 
 
 def _min_money(first: str, second: str) -> str:
@@ -422,6 +416,44 @@ def _validate_limits(
         if enabled and limit_currency == currency:
             active_for_currency[category_id] = (canonical_limit, warning_percent)
     return active_for_currency
+
+
+def _category_children(categories_by_id: Mapping[str, Mapping]) -> dict[str, list[str]]:
+    children: dict[str, list[str]] = defaultdict(list)
+    for identifier, row in categories_by_id.items():
+        parent = row.get("parent_id")
+        if isinstance(parent, str) and parent:
+            children[parent].append(identifier)
+    return children
+
+
+def _subtree_limit_amounts(
+    category_id: str,
+    direct: Mapping[str | None, tuple[str, str]],
+    children: Mapping[str, Sequence[str]],
+) -> tuple[str, str] | None:
+    """Own expenses and refunds plus descendants. None when descendants add no amount."""
+    extras_exp: list[str] = []
+    extras_ref: list[str] = []
+    stack = list(children.get(category_id, ()))
+    seen = {category_id}
+    while stack:
+        child = stack.pop()
+        if child in seen:
+            raise MonthDataError()
+        seen.add(child)
+        amounts = direct.get(child)
+        if amounts is not None and (core.compare_money(amounts[0], _ZERO) != 0 or core.compare_money(amounts[1], _ZERO) != 0):
+            extras_exp.append(amounts[0])
+            extras_ref.append(amounts[1])
+        stack.extend(children.get(child, ()))
+    if not extras_exp:
+        return None
+    own = direct.get(category_id)
+    if own is not None:
+        extras_exp.append(own[0])
+        extras_ref.append(own[1])
+    return _sum_money_checked(extras_exp), _sum_money_checked(extras_ref)
 
 
 def _evaluate_category_limit(expenses: str, refunds: str, limit_info: tuple[str, int] | None) -> dict | None:
@@ -676,9 +708,215 @@ def _compute_pace(
     }
 
 
-def evaluate_monthly_budget(
+@dataclass
+class _BucketAccum:
+    period: str
+    start: str
+    cutoff: str
+    has_activity: bool = False
+    pending_transfer_rows: int = 0
+    pending_row_keys: list[str] = field(default_factory=list)
+    has_affecting_unexcluded: bool = False
+    start_budget_amounts: list[str] = field(default_factory=list)
+    rent_amounts: list[str] = field(default_factory=list)
+    mortgage_debits_legs: list[_MortgageLeg] = field(default_factory=list)
+    mortgage_refund_legs: list[_MortgageLeg] = field(default_factory=list)
+    ordinary_expenses: dict[str | None, list[str]] = field(default_factory=lambda: defaultdict(list))
+    ordinary_refunds: dict[str | None, list[str]] = field(default_factory=lambda: defaultdict(list))
+    # (label, category_id) amounts that also sit in the ordinary maps.
+    # Mortgage pass-through legs are not recorded here. ``members`` are (account_id, entry_reference).
+    one_offs: dict[tuple[str, str | None], dict[str, list]] = field(default_factory=dict)
+    observed_spend_categories: set[str | None] = field(default_factory=set)
+
+    def record_pending(self, row_key: str) -> None:
+        self.pending_transfer_rows += 1
+        if len(self.pending_row_keys) < MAX_PENDING_ROW_KEYS:
+            self.pending_row_keys.append(row_key)
+
+
+def _chart_periods(effective_period: str, history: int) -> list[str]:
+    periods = []
+    for offset in range(-(history - 1), 1):
+        candidate = _shift_period(effective_period, offset)
+        if candidate >= EARLIEST_PERIOD:
+            periods.append(candidate)
+    return periods
+
+
+def _income_period_for_posting_date(posting_date: str, start_day: int) -> str:
+    period = posting_date[:7]
+    if start_day > 1 and int(posting_date[8:10]) >= start_day:
+        return _shift_period(period, 1)
+    return period
+
+
+def _finalize_pass_through(
+    bucket: _BucketAccum,
+    pass_through_cfg: PassThroughSettings | None,
+) -> tuple[dict | None, tuple[str, str, str] | None, dict[str, list[str]], dict[str, list[str]]]:
+    if pass_through_cfg is None:
+        return None, None, {}, {}
+    r_total = _sum_money_checked(bucket.rent_amounts)
+    m_total = _sum_money_checked(leg.amount for leg in bucket.mortgage_debits_legs)
+    f_total = _sum_money_checked(leg.amount for leg in bucket.mortgage_refund_legs)
+    m_minus_f = _max_money(_sub_money(m_total, f_total), _ZERO)
+    matched = _min_money(r_total, m_minus_f)
+    adj_expenses_by_date = _allocate_dated_adjustments(bucket.mortgage_debits_legs, matched)
+    adj_expenses = _sum_money_checked(val for vals in adj_expenses_by_date.values() for val in vals)
+    recognized_refunds = _min_money(f_total, _sub_money(m_total, matched))
+    adj_refunds_by_date = _recognize_dated_refunds(bucket.mortgage_refund_legs, recognized_refunds)
+    adj_refunds = _sum_money_checked(val for vals in adj_refunds_by_date.values() for val in vals)
+    uncovered_mortgage = _sub_money(adj_expenses, adj_refunds)
+    wire = {
+        "rent_category_id": pass_through_cfg.rent_category_id,
+        "mortgage_category_id": pass_through_cfg.mortgage_category_id,
+        "rent_received": r_total,
+        "mortgage_debits": m_total,
+        "mortgage_refunds": f_total,
+        "unapplied_mortgage_refunds": _sub_money(f_total, adj_refunds),
+        "matched": matched,
+        "unapplied_rent": _sub_money(r_total, matched),
+        "uncovered_mortgage": uncovered_mortgage,
+    }
+    return wire, (adj_expenses, adj_refunds, uncovered_mortgage), adj_expenses_by_date, adj_refunds_by_date
+
+
+def _bucket_category_totals(
+    bucket: _BucketAccum,
+    pass_through_cfg: PassThroughSettings | None,
     *,
-    owner: str,
+    extra_categories: set[str] | frozenset[str] = frozenset(),
+) -> tuple[dict | None, dict[str, list[str]], dict[str, list[str]], list[tuple[str | None, str, str, str]], str, str]:
+    pass_through_wire, mortgage_net, adj_exp_dates, adj_ref_dates = _finalize_pass_through(bucket, pass_through_cfg)
+    mortgage_cat_id = None if pass_through_cfg is None else pass_through_cfg.mortgage_category_id
+    category_rows: list[tuple[str | None, str, str, str]] = []
+    spent_terms: list[str] = []
+    for cat_id in sorted(bucket.observed_spend_categories | set(extra_categories), key=lambda cid: (cid is None, cid or "")):
+        if mortgage_net is not None and cat_id == mortgage_cat_id:
+            exp_total, ref_total, net_total = mortgage_net
+        else:
+            exp_total = _sum_money_checked(bucket.ordinary_expenses.get(cat_id, ()))
+            ref_total = _sum_money_checked(bucket.ordinary_refunds.get(cat_id, ()))
+            net_total = _sub_money(exp_total, ref_total)
+        spent_terms.append(net_total)
+        category_rows.append((cat_id, exp_total, ref_total, net_total))
+    start_budget = _sum_money_checked(bucket.start_budget_amounts)
+    spent = _sum_money_checked(spent_terms)
+    return pass_through_wire, adj_exp_dates, adj_ref_dates, category_rows, start_budget, spent
+
+
+def _note_one_off(bucket: _BucketAccum, annotation: Mapping, cat_id: str | None, amount: str, *,
+                  refund: bool, account_id: str, entry_reference: str) -> None:
+    """Remember a labelled ordinary expense or refund. The amount stays in the ordinary map too."""
+    label = core.active_one_off_label(annotation, amount)
+    if not isinstance(label, str):
+        return
+    slot = bucket.one_offs.setdefault((label, cat_id), {"expenses": [], "refunds": [], "members": []})
+    slot["refunds" if refund else "expenses"].append(amount)
+    slot["members"].append((account_id, entry_reference))
+
+
+def _zero_money(value: str) -> bool:
+    return core.compare_money(value, _ZERO) == 0
+
+
+def _one_off_identity(members, secret: bytes | None) -> str:
+    """HMAC row key. A missing secret is stored-data failure, not a reversible hash."""
+    try:
+        return core.one_off_key(members, secret)
+    except core.AnalyticsError:
+        raise MonthDataError() from None
+
+
+def _split_labelled(
+    category_rows: Sequence[tuple[str | None, str, str, str]],
+    one_offs: Mapping[tuple[str, str | None], Mapping[str, Sequence]],
+    *,
+    observed: set[str | None] | None = None,
+    keep_ids: set[str | None] | frozenset[str | None] = frozenset(),
+    one_off_secret: bytes | None = None,
+) -> list[dict]:
+    """Move labelled nets out of their category. The sum of nets stays equal to the category rows.
+
+    A category row disappears only when a label took every remaining expense and refund and the
+    category is not in ``keep_ids`` (an active limit still shows a zero row). A genuine zero stays.
+    Mortgage pass-through rows are untouched because those legs are never recorded in ``one_offs``.
+    """
+    taken_exp: dict[str | None, str] = {}
+    taken_ref: dict[str | None, str] = {}
+    prepared: list[tuple] = []
+    for (label, cat_id), slot in one_offs.items():
+        exp = _sum_money_checked(slot.get("expenses", ()))
+        ref = _sum_money_checked(slot.get("refunds", ()))
+        taken_exp[cat_id] = _sum_money_checked((taken_exp.get(cat_id, _ZERO), exp))
+        taken_ref[cat_id] = _sum_money_checked((taken_ref.get(cat_id, _ZERO), ref))
+        prepared.append((label, cat_id, exp, ref, tuple(slot.get("members", ()))))
+    result: list[dict] = []
+    for cat_id, exp_total, ref_total, _net_total in category_rows:
+        if observed is not None and cat_id not in observed:
+            continue
+        if cat_id in taken_exp:
+            exp_total = _sub_money(exp_total, taken_exp.get(cat_id, _ZERO))
+            ref_total = _sub_money(ref_total, taken_ref.get(cat_id, _ZERO))
+            if _zero_money(exp_total) and _zero_money(ref_total) and cat_id not in keep_ids:
+                continue
+        result.append({
+            "category_id": cat_id, "name": None, "one_off": False, "one_off_key": None,
+            "expenses": exp_total, "refunds": ref_total, "net_spending": _sub_money(exp_total, ref_total),
+        })
+    for label, cat_id, exp, ref, members in sorted(prepared, key=lambda item: (item[0], item[1] is None, item[1] or "")):
+        if observed is not None and cat_id not in observed:
+            continue
+        if _zero_money(exp) and _zero_money(ref):
+            continue
+        result.append({
+            "category_id": cat_id, "name": label, "one_off": True,
+            "one_off_key": _one_off_identity(members, one_off_secret),
+            "expenses": exp, "refunds": ref, "net_spending": _sub_money(exp, ref),
+        })
+    return result
+
+
+def _series_categories(
+    category_rows: Sequence[tuple[str | None, str, str, str]],
+    one_offs: Mapping[tuple[str, str | None], Mapping[str, Sequence]],
+    *,
+    observed: set[str | None] | None = None,
+    one_off_secret: bytes | None = None,
+) -> list[dict]:
+    """Chart rows for ``_split_labelled``. Names of ordinary categories stay on ``category_labels``."""
+    return [
+        {"category_id": row["category_id"], "name": row["name"], "one_off": row["one_off"],
+         "one_off_key": row["one_off_key"], "net_spending": row["net_spending"]}
+        for row in _split_labelled(category_rows, one_offs, observed=observed, one_off_secret=one_off_secret)
+    ]
+
+
+def _build_daily_series(
+    start: str,
+    cutoff: str,
+    ordinary_by_date: Mapping[str, list[str]],
+    adj_expenses_by_date: Mapping[str, list[str]],
+    adj_refunds_by_date: Mapping[str, list[str]],
+) -> list[dict]:
+    start_d = date.fromisoformat(start)
+    end_d = date.fromisoformat(cutoff)
+    running = _ZERO
+    daily: list[dict] = []
+    for offset in range((end_d - start_d).days + 1):
+        day_iso = (start_d + timedelta(days=offset)).isoformat()
+        day_terms = list(ordinary_by_date.get(day_iso, ()))
+        day_terms.extend(adj_expenses_by_date.get(day_iso, ()))
+        for ref_amt in adj_refunds_by_date.get(day_iso, ()):
+            day_terms.append(core.negate_money(ref_amt))
+        day_delta = _sum_money_checked(day_terms) if day_terms else _ZERO
+        running = _add_money(running, day_delta)
+        daily.append({"date": day_iso, "cumulative_spent": running})
+    return daily
+
+
+def _evaluate_monthly_budget_core(
+    *,
     period: str | None,
     currency: str | None,
     evaluated_at: int | float,
@@ -692,13 +930,10 @@ def evaluate_monthly_budget(
     account_component_timestamps: Mapping[str, int | float | None],
     account_kinds: Mapping[str, str],
     settings: MonthBudgetSettings | None,
-    include_series: bool = False,
-) -> dict:
-    """Pure single-snapshot evaluation for ``GET /api/budget/analytics/monthly-budget``.
-
-    ``include_series`` attaches a private ``_series_daily`` list for the household
-    serializer. The owner response omits it. The flag does not change any public field.
-    """
+    history: int | None,
+    one_off_secret: bytes | None = None,
+    household_daily: bool = False,
+) -> tuple[dict, dict | None]:
     requested_period, target_currency = validate_monthly_budget_query(period, currency)
     evaluation_date, current_month = warsaw_date(evaluated_at)
     effective_period = current_month if requested_period is None else requested_period
@@ -709,8 +944,7 @@ def evaluate_monthly_budget(
     cutoff = evaluation_date if effective_period == current_month else end
     income_window_start_day = settings.income_window_start_day if settings is not None else 1
     income_start, income_end = _income_window(effective_period, income_window_start_day)
-    income_cutoff = min(income_end, evaluation_date)
-    prev_start, prev_end = _income_window(_shift_period(effective_period, -1), income_window_start_day)
+    prev_period = _shift_period(effective_period, -1)
 
     categories_by_id = {row["id"]: row for row in categories}
     if settings is not None:
@@ -733,6 +967,17 @@ def evaluate_monthly_budget(
     future_accepted = _future_accepted_keys(transfers, evaluation_date)
 
     configured = settings is not None
+    include_series = configured and history is not None
+    # Household reads ask for the selected month's daily totals without the chart window.
+    # Unconfigured months stay zero-filled so the series does not publish a withheld summary.
+    track_selected_daily = include_series or (household_daily and configured)
+    window_periods = _chart_periods(effective_period, history) if include_series else [effective_period]
+    buckets: dict[str, _BucketAccum] = {}
+    for p in window_periods:
+        p_start, p_end = core.parse_period(p)
+        p_cutoff = evaluation_date if p == current_month else p_end
+        buckets[p] = _BucketAccum(p, p_start, p_cutoff)
+
     income_set = frozenset(settings.income_category_ids) if settings is not None else frozenset()
     pass_through_cfg = settings.pass_through if settings is not None else None
     rent_cat_id = pass_through_cfg.rent_category_id if pass_through_cfg is not None else None
@@ -740,19 +985,7 @@ def evaluate_monthly_budget(
 
     tx_latest_by_account: dict[str, float] = {}
     purchase_date_fallback_count = 0
-    pending_transfer_rows = 0
-    has_affecting_unexcluded = False
-    has_activity = False
-
-    start_budget_amounts: list[str] = []
-    rent_amounts: list[str] = []
-    mortgage_debits_legs: list[_MortgageLeg] = []
-    mortgage_refund_legs: list[_MortgageLeg] = []
-    ordinary_expenses: dict[str | None, list[str]] = defaultdict(list)
-    ordinary_refunds: dict[str | None, list[str]] = defaultdict(list)
-    expense_by_date: dict[str, list[str]] | None = defaultdict(list) if include_series else None
-    refund_by_date: dict[str, list[str]] | None = defaultdict(list) if include_series else None
-    observed_spend_categories: set[str | None] = set()
+    ordinary_by_date: dict[str, list[str]] = defaultdict(list)
     prior_income_by_cat: dict[str, list[_IncomeCredit]] = defaultdict(list)
     current_income_by_cat: dict[str, list[_IncomeCredit]] = defaultdict(list)
 
@@ -785,89 +1018,107 @@ def evaluate_monthly_budget(
         report_date = (tx_date or posting_date) if direction == "DBIT" else posting_date
         kind = eff["kind"]
         cat_id = eff["category_id"]
-        in_calendar = start <= report_date <= cutoff
-        in_income_window = (
-            configured and direction == "CRDT" and kind == "income" and cat_id in income_set
-            and income_start <= posting_date <= income_cutoff
-        )
 
-        if in_calendar or in_income_window:
-            has_activity = True
+        cal_period = report_date[:7]
+        cal_bucket = buckets.get(cal_period)
+        in_calendar = cal_bucket is not None and cal_bucket.start <= report_date <= cal_bucket.cutoff
+        inc_period = (
+            _income_period_for_posting_date(posting_date, income_window_start_day)
+            if configured and direction == "CRDT" and kind == "income" and cat_id in income_set
+            else None
+        )
+        inc_bucket = None if inc_period is None else buckets.get(inc_period)
+
+        if in_calendar or inc_bucket is not None:
             nonzero = core.compare_money(amount, _ZERO) > 0
             unresolved = _has_unresolved_transfer_evidence(
                 row,
                 counterpart_outside_horizon=counterpart_outside,
                 other_identities=other_owned.get(acct_id, frozenset()),
             )
-            if direction == "DBIT" and kind == "expense":
-                if tx_date is None:
-                    purchase_date_fallback_count += 1
-                if nonzero:
-                    has_affecting_unexcluded = True
-                    if unresolved or (account_kinds.get(acct_id) != "credit_card"
-                                      and not _is_explicit_expense(eff, row["annotation"], rules_by_id)):
-                        pending_transfer_rows += 1
-                observed_spend_categories.add(cat_id)
-                if mortgage_cat_id is not None and cat_id == mortgage_cat_id:
-                    mortgage_debits_legs.append(_MortgageLeg(report_date, acct_id, row["entry_reference"], amount))
-                else:
-                    ordinary_expenses[cat_id].append(amount)
-                    if expense_by_date is not None:
-                        expense_by_date[report_date].append(amount)
-            elif direction == "CRDT":
-                if kind == "refund":
+            row_key = f"{acct_id}/{row['entry_reference']}"
+            if in_calendar:
+                cal_bucket.has_activity = True
+                if direction == "DBIT" and kind == "expense":
+                    if cal_period == effective_period and tx_date is None:
+                        purchase_date_fallback_count += 1
                     if nonzero:
-                        has_affecting_unexcluded = True
-                        if unresolved:
-                            pending_transfer_rows += 1
-                    observed_spend_categories.add(cat_id)
+                        cal_bucket.has_affecting_unexcluded = True
+                        if unresolved or (account_kinds.get(acct_id) != "credit_card"
+                                          and not _is_explicit_expense(eff, row["annotation"], rules_by_id)):
+                            cal_bucket.record_pending(row_key)
+                    cal_bucket.observed_spend_categories.add(cat_id)
                     if mortgage_cat_id is not None and cat_id == mortgage_cat_id:
-                        mortgage_refund_legs.append(_MortgageLeg(report_date, acct_id, row["entry_reference"], amount))
+                        cal_bucket.mortgage_debits_legs.append(
+                            _MortgageLeg(report_date, acct_id, row["entry_reference"], amount),
+                        )
                     else:
-                        ordinary_refunds[cat_id].append(amount)
-                        if refund_by_date is not None:
-                            refund_by_date[report_date].append(amount)
-                elif kind == "income":
-                    if in_income_window:
+                        cal_bucket.ordinary_expenses[cat_id].append(amount)
+                        _note_one_off(cal_bucket, row["annotation"], cat_id, amount, refund=False,
+                                      account_id=acct_id, entry_reference=row["entry_reference"])
+                        if track_selected_daily and cal_period == effective_period:
+                            ordinary_by_date[report_date].append(amount)
+                elif direction == "CRDT":
+                    if kind == "refund":
                         if nonzero:
-                            has_affecting_unexcluded = True
+                            cal_bucket.has_affecting_unexcluded = True
                             if unresolved:
-                                pending_transfer_rows += 1
-                            if effective_period == current_month:
-                                current_income_by_cat[cat_id].append(_IncomeCredit(
-                                    acct_id, row["entry_reference"], amount,
-                                    date.fromisoformat(posting_date).day, _normalize_debtor_name(row["metadata"]),
-                                ))
-                        start_budget_amounts.append(amount)
-                    elif rent_cat_id is not None and cat_id == rent_cat_id:
+                                cal_bucket.record_pending(row_key)
+                        cal_bucket.observed_spend_categories.add(cat_id)
+                        if mortgage_cat_id is not None and cat_id == mortgage_cat_id:
+                            cal_bucket.mortgage_refund_legs.append(
+                                _MortgageLeg(report_date, acct_id, row["entry_reference"], amount),
+                            )
+                        else:
+                            cal_bucket.ordinary_refunds[cat_id].append(amount)
+                            _note_one_off(cal_bucket, row["annotation"], cat_id, amount, refund=True,
+                                          account_id=acct_id, entry_reference=row["entry_reference"])
+                            if track_selected_daily and cal_period == effective_period:
+                                ordinary_by_date[report_date].append(core.negate_money(amount))
+                    elif kind == "income" and rent_cat_id is not None and cat_id == rent_cat_id:
                         if nonzero:
-                            has_affecting_unexcluded = True
+                            cal_bucket.has_affecting_unexcluded = True
                             if unresolved:
-                                pending_transfer_rows += 1
-                        rent_amounts.append(amount)
-        elif (configured and effective_period == current_month and settings.income_category_ids
-              and direction == "CRDT" and kind == "income" and cat_id in income_set
-              and prev_start <= posting_date <= prev_end and core.compare_money(amount, _ZERO) > 0):
+                                cal_bucket.record_pending(row_key)
+                        cal_bucket.rent_amounts.append(amount)
+            if inc_bucket is not None:
+                inc_bucket.has_activity = True
+                if nonzero:
+                    inc_bucket.has_affecting_unexcluded = True
+                    if unresolved:
+                        inc_bucket.record_pending(row_key)
+                    if inc_period == effective_period == current_month:
+                        current_income_by_cat[cat_id].append(_IncomeCredit(
+                            acct_id, row["entry_reference"], amount,
+                            date.fromisoformat(posting_date).day, _normalize_debtor_name(row["metadata"]),
+                        ))
+                inc_bucket.start_budget_amounts.append(amount)
+
+        if (inc_period == prev_period and effective_period == current_month
+                and settings.income_category_ids and core.compare_money(amount, _ZERO) > 0):
             prior_income_by_cat[cat_id].append(_IncomeCredit(
                 acct_id, row["entry_reference"], amount,
                 date.fromisoformat(posting_date).day, _normalize_debtor_name(row["metadata"]),
             ))
 
+    selected_bucket = buckets[effective_period]
     ledger_as_of, stale_selected_accounts = _compute_ledger_freshness(
         account_component_timestamps, tx_latest_by_account, float(evaluated_at),
     )
-    transfer_scan_limited = bool(scan_limited and has_affecting_unexcluded)
-    provisional = pending_transfer_rows > 0 or transfer_scan_limited
+    transfer_scan_limited = bool(scan_limited and selected_bucket.has_affecting_unexcluded)
+    provisional = selected_bucket.pending_transfer_rows > 0 or transfer_scan_limited
     available_currencies = sorted(observed_currencies, key=lambda code: (code != "PLN", code != "EUR", code))
 
     coverage = {
         "ledger_as_of": ledger_as_of,
         "stale_selected_accounts": stale_selected_accounts,
         "purchase_date_fallback_count": purchase_date_fallback_count,
-        "pending_transfer_rows": pending_transfer_rows,
+        "pending_transfer_rows": selected_bucket.pending_transfer_rows,
+        "pending_row_keys": selected_bucket.pending_row_keys,
+        "pending_row_keys_truncated": selected_bucket.pending_transfer_rows > len(selected_bucket.pending_row_keys),
         "transfer_scan_limited": transfer_scan_limited,
         "provisional": provisional,
-        "has_activity": has_activity,
+        "has_activity": selected_bucket.has_activity,
     }
     card_exposure = {"status": "unavailable", "amount": None, "as_of_date": None}
     envelope = {
@@ -886,7 +1137,7 @@ def evaluate_monthly_budget(
     }
 
     if not configured:
-        result = {
+        unconfigured = {
             **envelope,
             "configuration": {"status": "unconfigured", "source": "none"},
             "summary": None,
@@ -895,67 +1146,46 @@ def evaluate_monthly_budget(
             "category_spend": [],
             "pass_through": None,
         }
-        if include_series:
-            # The withheld summary is null. Daily points stay zero so the series does not
-            # publish a spent total the dashboard itself omits.
-            result["_series_daily"] = _series_daily_points(start, cutoff, {}, {}, {}, {})
-        return result
+        if household_daily:
+            unconfigured["_series_daily"] = _build_daily_series(start, cutoff, {}, {}, {})
+        return unconfigured, None
 
-    pass_through_wire: dict | None = None
-    adj_mortgage_expenses_by_date: dict = {}
-    adj_mortgage_refunds_by_date: dict = {}
-    category_nets: dict[str | None, tuple[str, str, str]] = {}
-    if pass_through_cfg is not None:
-        r_total = _sum_money_checked(rent_amounts)
-        m_total = _sum_money_checked(leg.amount for leg in mortgage_debits_legs)
-        f_total = _sum_money_checked(leg.amount for leg in mortgage_refund_legs)
-        m_minus_f = _max_money(_sub_money(m_total, f_total), _ZERO)
-        matched = _min_money(r_total, m_minus_f)
-        adj_mortgage_expenses_by_date = _allocate_dated_adjustments(mortgage_debits_legs, matched)
-        adj_expenses = _sum_money_checked(val for vals in adj_mortgage_expenses_by_date.values() for val in vals)
-        max_refund_cap = _sub_money(m_total, matched)
-        recognized_refunds = _min_money(f_total, max_refund_cap)
-        adj_mortgage_refunds_by_date = _recognize_dated_refunds(mortgage_refund_legs, recognized_refunds)
-        adj_refunds = _sum_money_checked(val for vals in adj_mortgage_refunds_by_date.values() for val in vals)
-        uncovered_mortgage = _sub_money(adj_expenses, adj_refunds)
-        pass_through_wire = {
-            "rent_category_id": pass_through_cfg.rent_category_id,
-            "mortgage_category_id": pass_through_cfg.mortgage_category_id,
-            "rent_received": r_total,
-            "mortgage_debits": m_total,
-            "mortgage_refunds": f_total,
-            "unapplied_mortgage_refunds": _sub_money(f_total, adj_refunds),
-            "matched": matched,
-            "unapplied_rent": _sub_money(r_total, matched),
-            "uncovered_mortgage": uncovered_mortgage,
-        }
-        if mortgage_cat_id in observed_spend_categories or mortgage_cat_id in active_limits:
-            category_nets[mortgage_cat_id] = (adj_expenses, adj_refunds, uncovered_mortgage)
-
-    all_spend_categories = observed_spend_categories | set(active_limits)
+    pass_through_wire, adj_exp_dates, adj_ref_dates, selected_rows, start_budget, spent = _bucket_category_totals(
+        selected_bucket, pass_through_cfg, extra_categories=set(active_limits),
+    )
+    # The split row shows only the remainder. The badge counts the full category total,
+    # and a parent limit adds descendant totals the same way. Those are the amounts an
+    # unlabelled month would use: a one-off label is not a budget exemption. One-off rows
+    # carry no limit, so the badge is not shown twice.
+    full_by_category = {cat_id: (exp, ref) for cat_id, exp, ref, _net in selected_rows}
+    child_map = _category_children(categories_by_id)
     category_spend: list[dict] = []
-    spent_terms: list[str] = []
-    for cat_id in sorted(all_spend_categories, key=lambda cid: (cid is None, cid or "")):
-        if cat_id in category_nets:
-            exp_total, ref_total, net_total = category_nets[cat_id]
-        else:
-            exp_total = _sum_money_checked(ordinary_expenses.get(cat_id, ()))
-            ref_total = _sum_money_checked(ordinary_refunds.get(cat_id, ()))
-            net_total = _sub_money(exp_total, ref_total)
-        spent_terms.append(net_total)
+    for item in _split_labelled(
+        selected_rows, selected_bucket.one_offs, keep_ids=set(active_limits), one_off_secret=one_off_secret,
+    ):
+        cat_id = item["category_id"]
         category_meta = None if cat_id is None else categories_by_id[cat_id]
+        if item["one_off"] or cat_id is None:
+            limit = None
+        else:
+            full_expenses, full_refunds = full_by_category[cat_id]
+            if cat_id in active_limits:
+                rolled = _subtree_limit_amounts(cat_id, full_by_category, child_map)
+                if rolled is not None:
+                    full_expenses, full_refunds = rolled
+            limit = _evaluate_category_limit(full_expenses, full_refunds, active_limits.get(cat_id))
         category_spend.append({
             "category_id": cat_id,
-            "name": None if category_meta is None else category_meta["name"],
+            "name": item["name"] if item["one_off"] else (None if category_meta is None else category_meta["name"]),
             "archived": False if category_meta is None else category_meta["archived"],
-            "expenses": exp_total,
-            "refunds": ref_total,
-            "net_spending": net_total,
-            "limit": None if cat_id is None else _evaluate_category_limit(exp_total, ref_total, active_limits.get(cat_id)),
+            "expenses": item["expenses"],
+            "refunds": item["refunds"],
+            "net_spending": item["net_spending"],
+            "limit": limit,
+            "one_off": item["one_off"],
+            "one_off_key": item["one_off_key"],
         })
 
-    start_budget = _sum_money_checked(start_budget_amounts)
-    spent = _sum_money_checked(spent_terms)
     remaining = _sub_money(start_budget, spent)
     summary = {"start_budget": start_budget, "spent": spent, "remaining": remaining}
     expected_income = _compute_expected_income(
@@ -972,7 +1202,7 @@ def evaluate_monthly_budget(
             "start_day": income_window_start_day,
         }
 
-    result = {
+    budget_wire = {
         **envelope,
         "configuration": configuration,
         "summary": summary,
@@ -981,11 +1211,112 @@ def evaluate_monthly_budget(
         "category_spend": category_spend,
         "pass_through": pass_through_wire,
     }
-    if include_series:
-        points = _series_daily_points(
-            start, cutoff, expense_by_date or {}, refund_by_date or {},
-            adj_mortgage_expenses_by_date, adj_mortgage_refunds_by_date)
+    if household_daily:
+        points = _build_daily_series(start, cutoff, ordinary_by_date, adj_exp_dates, adj_ref_dates)
         if points[-1]["cumulative_spent"] != spent:
             raise MonthDataError()
-        result["_series_daily"] = points
-    return result
+        budget_wire["_series_daily"] = points
+    if not include_series:
+        return budget_wire, None
+
+    daily = _build_daily_series(start, cutoff, ordinary_by_date, adj_exp_dates, adj_ref_dates)
+    months_wire: list[dict] = []
+    seen_label_ids: set[str] = set()
+    for p in window_periods:
+        bucket = buckets[p]
+        if p == effective_period:
+            b_start_budget, b_spent = start_budget, spent
+            b_categories = _series_categories(
+                selected_rows, bucket.one_offs, observed=bucket.observed_spend_categories,
+                one_off_secret=one_off_secret,
+            )
+            b_provisional = provisional
+            b_partial = expected_income["status"] == "partial"
+        else:
+            _, _, _, b_rows, b_start_budget, b_spent = _bucket_category_totals(bucket, pass_through_cfg)
+            b_categories = _series_categories(b_rows, bucket.one_offs, one_off_secret=one_off_secret)
+            b_provisional = bucket.pending_transfer_rows > 0 or bool(scan_limited and bucket.has_affecting_unexcluded)
+            b_partial = False
+        for item in b_categories:
+            if item["category_id"] is not None:
+                seen_label_ids.add(item["category_id"])
+        months_wire.append({
+            "period": p,
+            "has_activity": bucket.has_activity,
+            "is_current_month": p == current_month,
+            "income_estimate_partial": b_partial,
+            "provisional": b_provisional,
+            "start_budget": b_start_budget,
+            "spent": b_spent,
+            "categories": b_categories,
+        })
+    category_labels = [
+        {"category_id": cid, "name": categories_by_id[cid]["name"], "archived": categories_by_id[cid]["archived"]}
+        for cid in sorted(seen_label_ids)
+    ]
+    return budget_wire, {"daily": daily, "months": months_wire, "category_labels": category_labels}
+
+
+def evaluate_monthly_budget(
+    *,
+    owner: str,
+    period: str | None,
+    currency: str | None,
+    evaluated_at: int | float,
+    transactions: Sequence[Mapping],
+    transfers: Sequence[Mapping],
+    scan_limited: bool,
+    categories: Sequence[Mapping],
+    rules: Sequence[Mapping],
+    identities: Mapping[str, Sequence[Mapping]],
+    limits: Sequence[Mapping],
+    account_component_timestamps: Mapping[str, int | float | None],
+    account_kinds: Mapping[str, str],
+    settings: MonthBudgetSettings | None,
+    one_off_secret: bytes | None = None,
+    include_series: bool = False,
+) -> dict:
+    """Pure single-snapshot evaluation for ``GET /api/budget/analytics/monthly-budget``.
+
+    ``include_series`` attaches a private ``_series_daily`` list for the household
+    serializer. The owner response omits it. The flag does not change any public field.
+    """
+    budget, _ = _evaluate_monthly_budget_core(
+        period=period, currency=currency, evaluated_at=evaluated_at, transactions=transactions,
+        transfers=transfers, scan_limited=scan_limited, categories=categories, rules=rules,
+        identities=identities, limits=limits, account_component_timestamps=account_component_timestamps,
+        account_kinds=account_kinds, settings=settings, history=None, one_off_secret=one_off_secret,
+        household_daily=include_series,
+    )
+    return budget
+
+
+def evaluate_monthly_budget_charts(
+    *,
+    owner: str,
+    period: str | None,
+    currency: str | None,
+    history: int = DEFAULT_HISTORY_MONTHS,
+    evaluated_at: int | float,
+    transactions: Sequence[Mapping],
+    transfers: Sequence[Mapping],
+    scan_limited: bool,
+    categories: Sequence[Mapping],
+    rules: Sequence[Mapping],
+    identities: Mapping[str, Sequence[Mapping]],
+    limits: Sequence[Mapping],
+    account_component_timestamps: Mapping[str, int | float | None],
+    account_kinds: Mapping[str, str],
+    settings: MonthBudgetSettings | None,
+    one_off_secret: bytes | None = None,
+) -> dict:
+    """Pure single-snapshot evaluation for ``GET /api/budget/analytics/monthly-budget/charts``."""
+    if type(history) is not int or history not in ALLOWED_HISTORY_MONTHS:
+        raise MonthInputError()
+    budget, series = _evaluate_monthly_budget_core(
+        period=period, currency=currency, evaluated_at=evaluated_at, transactions=transactions,
+        transfers=transfers, scan_limited=scan_limited, categories=categories, rules=rules,
+        identities=identities, limits=limits, account_component_timestamps=account_component_timestamps,
+        account_kinds=account_kinds, settings=settings, history=history, one_off_secret=one_off_secret,
+    )
+    return {"budget": budget, "series": series}

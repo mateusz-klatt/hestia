@@ -18,6 +18,8 @@ from alembic import command
 from alembic.autogenerate import compare_metadata
 from alembic.runtime.migration import MigrationContext
 from sqlalchemy import inspect
+from sqlalchemy.dialects.sqlite.pysqlite import SQLiteDialect_pysqlite
+from sqlalchemy.exc import IntegrityError, OperationalError
 
 from hestia import db
 
@@ -82,6 +84,25 @@ class DbSchemaTests(unittest.TestCase):
             self.assertEqual(c.exec_driver_sql("PRAGMA foreign_keys").scalar(), 1)
             self.assertEqual(c.exec_driver_sql("PRAGMA busy_timeout").scalar(), 5000)
 
+    def test_foreign_keys_pragma_is_rejected_inside_a_transaction(self):
+        # Production connections enable foreign keys on connect. SQLite ignores
+        # PRAGMA foreign_keys inside an open transaction, which is why turning it
+        # off around engine.begin() never let a batch DROP of a referenced table through.
+        engine = db.make_engine(self.path)
+        try:
+            with engine.connect() as connection:
+                raw = connection.connection.dbapi_connection
+                raw.execute("BEGIN")
+                try:
+                    with self.assertRaises(RuntimeError) as caught:
+                        db._set_sqlite_foreign_keys(connection, False)
+                    self.assertIn("did not apply", str(caught.exception))
+                    self.assertEqual(raw.execute("PRAGMA foreign_keys").fetchone()[0], 1)
+                finally:
+                    raw.rollback()
+        finally:
+            engine.dispose()
+
     def test_make_engine_creates_parent_dir(self):
         nested = self.dir / "a" / "b" / "hestia.db"
         db.make_engine(nested)
@@ -122,6 +143,112 @@ class DbSchemaTests(unittest.TestCase):
             command.downgrade(db._alembic_config(conn), "base")
         names = set(inspect(engine).get_table_names())
         self.assertEqual(ALL_TABLES & names, set(), names)
+
+    def test_downgrade_db_rejects_none_empty_and_invalid_revisions(self):
+        db.init_db(self.path)
+        for bad_revision in (None, "", "   ", 123):
+            with self.subTest(revision=bad_revision), self.assertRaises(ValueError):
+                db.downgrade_db(self.path, bad_revision)
+        self.assertIn(str(self.path.resolve()), db._ENGINE_CACHE)
+        for bad_revision in ("nonexistent", "+1"):
+            with self.subTest(revision=bad_revision), self.assertRaises(ValueError):
+                db.downgrade_db(self.path, bad_revision)
+        db.downgrade_db(self.path, "0019")
+        with self.assertRaises(ValueError):
+            db.downgrade_db(self.path, "0020")
+
+    def test_downgrade_db_normalizes_path_key_with_init_db(self):
+        subdir = self.dir / "sub"
+        subdir.mkdir()
+        unnormalized = subdir / ".." / "hestia.db"
+        first_engine, _ = db.init_db(unnormalized)
+        db.downgrade_db(str(self.path), "0019")
+        self.assertEqual(db._ENGINE_CACHE, {})
+        fresh_engine, _ = db.init_db(self.path)
+        self.assertIsNot(fresh_engine, first_engine)
+
+        db.reset_engine_cache()
+        env_target = self.dir / "env_target.db"
+        with mock.patch.dict(os.environ, {"HESTIA_DB": str(env_target)}):
+            env_engine, _ = db.init_db(None)
+            db.downgrade_db(None, "0019")
+            self.assertEqual(db._ENGINE_CACHE, {})
+            reopened, _ = db.init_db(None)
+            self.assertIsNot(reopened, env_engine)
+
+    def test_commit_failure_rolls_back_and_restores_foreign_keys(self):
+        setup_engine = db.make_engine(self.path)
+        try:
+            with setup_engine.begin() as conn:
+                command.upgrade(db._alembic_config(conn), "0019")
+                conn.exec_driver_sql(
+                    "INSERT INTO users (username, password_hash, role) VALUES ('alice', 'h', 'admin')"
+                )
+                conn.exec_driver_sql(
+                    "INSERT INTO budget_categories "
+                    "(id, owner, name, name_key, archived, version, created_at, updated_at) "
+                    "VALUES ('cat', 'alice', 'Food', 'food', 0, 1, 1, 1)"
+                )
+        finally:
+            setup_engine.dispose()
+
+        fk_calls = []
+        real_set_fk = db._set_sqlite_foreign_keys
+
+        def spy_set_fk(connection, enabled):
+            fk_calls.append(enabled)
+            return real_set_fk(connection, enabled)
+
+        with (
+            mock.patch.object(db, "_set_sqlite_foreign_keys", spy_set_fk),
+            mock.patch.object(
+                SQLiteDialect_pysqlite,
+                "do_commit",
+                side_effect=sqlite3.OperationalError("simulated commit failure"),
+            ),
+        ):
+            with self.assertRaisesRegex(OperationalError, "simulated commit failure"):
+                db.init_db(self.path)
+
+        self.assertEqual(fk_calls, [False, True])
+        self.assertEqual(db._ENGINE_CACHE, {})
+
+        fresh_engine = db.make_engine(self.path)
+        try:
+            with fresh_engine.connect() as conn:
+                self.assertEqual(conn.exec_driver_sql("PRAGMA foreign_keys").scalar(), 1)
+                self.assertEqual(
+                    conn.exec_driver_sql("SELECT version_num FROM alembic_version").fetchall(),
+                    [("0019",)],
+                )
+                columns = [row[1] for row in conn.exec_driver_sql("PRAGMA table_info(budget_categories)")]
+                self.assertNotIn("parent_id", columns)
+                temp_tables = conn.exec_driver_sql(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE '%alembic_tmp%'"
+                ).fetchall()
+                self.assertEqual(temp_tables, [])
+            with self.assertRaises(IntegrityError):
+                with fresh_engine.begin() as conn:
+                    conn.exec_driver_sql(
+                        "INSERT INTO budget_rules "
+                        "(id, owner, field, operator, value, category_id, kind, priority, enabled, "
+                        "version, created_at, updated_at) "
+                        "VALUES ('r1', 'alice', 'memo', 'contains', 'x', 'missing', 'expense', 1, 1, 1, 1, 1)"
+                    )
+        finally:
+            fresh_engine.dispose()
+
+        rebuilt, _ = db.init_db(self.path)
+        with rebuilt.connect() as conn:
+            self.assertEqual(conn.exec_driver_sql("PRAGMA foreign_keys").scalar(), 1)
+            self.assertEqual(
+                conn.exec_driver_sql("SELECT version_num FROM alembic_version").fetchall(),
+                [("0022",)],
+            )
+            annotation_columns = [row[1] for row in conn.exec_driver_sql("PRAGMA table_info(budget_annotations)")]
+            category_columns = [row[1] for row in conn.exec_driver_sql("PRAGMA table_info(budget_categories)")]
+            self.assertIn("label", annotation_columns)
+            self.assertIn("parent_id", category_columns)
 
     def test_migration_0002_backfills_existing_users_to_admin(self):
         # The #73 guarantee: accounts that existed before roles must come out of the migration as admin

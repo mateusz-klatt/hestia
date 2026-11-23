@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from datetime import date
 import hashlib
+import hmac
 import json
 import re
 import unicodedata
@@ -84,6 +85,101 @@ def compare_money(first, second):
     scale = max(ls, rs)
     difference = left * 10 ** (scale - ls) - right * 10 ** (scale - rs)
     return (difference > 0) - (difference < 0)
+
+
+# None: every non-empty label is its own summary entry. A canonical decimal string
+# is a minimum absolute amount; smaller labelled rows stay in their category.
+ONE_OFF_LABEL_LIMIT = 80
+ONE_OFF_MIN_ABS = None
+_ONE_OFF_HIDDEN = frozenset({"Cc", "Cf", "Cs"})
+
+
+def _one_off_hidden(value):
+    return any(unicodedata.category(char) in _ONE_OFF_HIDDEN for char in value)
+
+
+def clean_one_off_label(value):
+    """Normalize a one-off label. ``None`` and blank text clear it.
+
+    The stored value is NFC, trimmed, at most 80 characters, and free of control
+    characters. This never echoes the text: failures use the fixed analytics code.
+    """
+    if value is None:
+        return None
+    if not isinstance(value, str) or _one_off_hidden(value):
+        raise AnalyticsError()
+    normalized = unicodedata.normalize("NFC", value.strip())
+    if _one_off_hidden(normalized):
+        raise AnalyticsError()
+    if not normalized:
+        return None
+    if len(normalized) > ONE_OFF_LABEL_LIMIT:
+        raise AnalyticsError()
+    return normalized
+
+
+def stored_one_off_label(value):
+    """Accept only a label that was already stored in canonical form."""
+    if value is None:
+        return None
+    if not isinstance(value, str) or value != clean_one_off_label(value):
+        raise AnalyticsError()
+    return value
+
+
+def _magnitude_below(amount, minimum):
+    try:
+        canonical = canonical_money(amount)
+        floor = canonical_money(minimum)
+    except AnalyticsError:
+        return True
+    if canonical.startswith("-"):
+        canonical = canonical[1:]
+    return compare_money(canonical, floor) < 0
+
+
+def active_one_off_label(annotation, amount, *, minimum=ONE_OFF_MIN_ABS):
+    """Label to split out of a category, or ``None`` when the row stays put.
+
+    A stale annotation does not apply. ``minimum`` is an absolute decimal amount;
+    ``None`` (the default) splits every labelled row.
+    """
+    if type(annotation) is not dict or annotation.get("stale") is True:
+        return None
+    label = annotation.get("label")
+    if not isinstance(label, str) or not label:
+        return None
+    if minimum is not None and _magnitude_below(amount, minimum):
+        return None
+    return label
+
+
+# Same construction as consent reconcile aliases: domain-separated SHA-256 of the
+# session secret, then HMAC-SHA256. A distinct domain keeps the digests from
+# matching a consent id. The digest is not stable across secret rotations.
+_ONE_OFF_KEY_DOMAIN = b"hestia/budget/one-off-key/key/v1\0"
+_ONE_OFF_PAYLOAD_PREFIX = b"hestia/budget/one-off-key/v1\n"
+
+
+def one_off_key(members, secret):
+    """Row identity for a labelled group. The label text is never part of the key.
+
+    ``members`` are ``(account_id, entry_reference)`` pairs. Order does not matter.
+    ``secret`` is the server session secret (the cursor secret). A missing or empty
+    secret fails closed: the key is HMAC-SHA256, so a short entry reference cannot
+    be reversed offline.
+    """
+    if not isinstance(secret, bytes) or not secret:
+        raise AnalyticsError("budget_analytics_data_error", 500)
+    pairs = []
+    for account_id, entry_reference in members:
+        if not isinstance(account_id, str) or not isinstance(entry_reference, str):
+            raise AnalyticsError()
+        pairs.append((account_id, entry_reference))
+    pairs.sort()
+    raw = json.dumps(pairs, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    key = hashlib.sha256(_ONE_OFF_KEY_DOMAIN + secret).digest()
+    return hmac.new(key, _ONE_OFF_PAYLOAD_PREFIX + raw, hashlib.sha256).hexdigest()
 
 
 def effective_date(payload):
@@ -173,20 +269,66 @@ def compatible_kind(kind, payload):
             or (kind in ("income", "refund") and payload.get("credit_debit_indicator") == "CRDT"))
 
 
+def fold_text(text):
+    """NFC-casefold once. Rule needles and transaction texts share this so matching stays exact."""
+    return unicodedata.normalize("NFC", text).casefold()
+
+
+def match_texts(payload, metadata=None):
+    """The three rule fields, folded once per transaction rather than once per rule."""
+    metadata = {} if metadata is None else metadata
+    if payload.get("credit_debit_indicator") == "DBIT":
+        counterparty = metadata.get("creditor_name") or ""
+    else:
+        counterparty = metadata.get("debtor_name") or ""
+    return {"description": fold_text("\n".join(payload.get("remittance_information", []))),
+            "counterparty_name": fold_text(counterparty), "mcc": fold_text(metadata.get("mcc") or "")}
+
+
+def compile_rules(rules):
+    """Fold each enabled needle once. ``safe`` is false when an enabled rule would raise in ``rule_matches``
+    on a compatible transaction, so callers can keep the raising scan."""
+    compiled, safe = [], True
+    for rule in rules:
+        enabled = _value(rule, "enabled")
+        kind, field, operator = _value(rule, "kind"), _value(rule, "field"), _value(rule, "operator")
+        needle = None
+        if enabled and field in _FIELDS and operator in ("equals", "contains"):
+            needle = fold_text(_value(rule, "value"))
+        elif enabled:
+            safe = False
+        compiled.append((enabled, kind, field, operator, needle, rule))
+    return compiled, safe
+
+
+def first_matching_rule(compiled, payload, texts):
+    """First enabled, kind-compatible rule whose folded needle matches, in list order."""
+    indicator = payload.get("credit_debit_indicator")
+    for enabled, kind, field, operator, needle, rule in compiled:
+        if not enabled:
+            continue
+        if kind == "expense":
+            if indicator != "DBIT":
+                continue
+        elif kind in ("income", "refund"):
+            if indicator != "CRDT":
+                continue
+        elif kind not in ("auto", "excluded"):
+            continue
+        if field not in _FIELDS or operator not in ("equals", "contains"):
+            raise AnalyticsError()
+        text = texts[field]
+        if needle == text if operator == "equals" else needle in text:
+            return rule
+    return None
+
+
 def rule_matches(rule, payload, metadata=None):
     if not _value(rule, "enabled") or not compatible_kind(_value(rule, "kind"), payload):
         return False
     field, operator = _value(rule, "field"), _value(rule, "operator")
     if field not in _FIELDS or operator not in ("equals", "contains"):
         raise AnalyticsError()
-    metadata = {} if metadata is None else metadata
-    if field == "description":
-        text = "\n".join(payload.get("remittance_information", []))
-    elif field == "counterparty_name":
-        key = "creditor_name" if payload.get("credit_debit_indicator") == "DBIT" else "debtor_name"
-        text = metadata.get(key) or ""
-    else:
-        text = metadata.get("mcc") or ""
-    text = unicodedata.normalize("NFC", text).casefold()
-    value = unicodedata.normalize("NFC", _value(rule, "value")).casefold()
-    return value == text if operator == "equals" else value in text
+    texts = match_texts(payload, metadata)
+    needle = fold_text(_value(rule, "value"))
+    return needle == texts[field] if operator == "equals" else needle in texts[field]

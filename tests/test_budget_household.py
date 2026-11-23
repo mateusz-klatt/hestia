@@ -172,21 +172,34 @@ class HouseholdCommandTests(unittest.TestCase):
         db.init_db(self.path)
         code, _out, err, _logged = self._run("grant", "viewer", "alice")
         self.assertEqual((code, err.strip()), (2, "household_users_required"))
-        self.assertEqual(_versions(self.path), ["0021"])
+        self.assertEqual(_versions(self.path), ["0022"])
         with sqlite3.connect(self.path) as conn:
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM budget_household_members").fetchone()[0], 0)
 
+    def _assert_migration_clean(self):
+        with sqlite3.connect(self.path) as raw:
+            self.assertEqual([row[0] for row in raw.execute("PRAGMA integrity_check")], ["ok"])
+            self.assertEqual(raw.execute("PRAGMA foreign_key_check").fetchall(), [])
+            leftovers = [row[0] for row in raw.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table' "
+                "AND name LIKE '!_alembic!_tmp!_%' ESCAPE '!'")]
+            self.assertEqual(leftovers, [])
+
     def test_downgrade_roundtrip_keeps_owner_rows_and_empties_grants(self):
+        """0021 → init_db (0022) → downgrade_db (0021) → init_db (0022).
+
+        Each step goes through the production runner. Category parents, the one-off
+        label column, and owner rows survive. Grants do not survive the downgrade.
+        """
         engine = db.make_engine(self.path)
         try:
-            with engine.begin() as conn:
-                command.upgrade(db._alembic_config(conn), "0019")
+            db._run_sqlite_migration(
+                engine, lambda connection: command.upgrade(db._alembic_config(connection), "0021"))
             with Session(engine) as session, session.begin():
                 session.add_all([
                     db.User(username="alice", password_hash="unused", role="admin"),
                     db.User(username="viewer", password_hash="unused", role="viewer"),
                 ])
-                # Foreign keys are on. Flush the users before rows that reference them.
                 session.flush()
                 session.add_all([
                     db.BudgetCategory(id="cat-salary", owner="alice", name=SALARY_NAME, name_key="wynagrodzenie",
@@ -194,34 +207,39 @@ class HouseholdCommandTests(unittest.TestCase):
                     db.BudgetOwnerInboxRead(owner="alice", kind="mortgage_due", subject_id="ab" * 32,
                                             milestone="due", read_at=1),
                 ])
-            with engine.begin() as conn:
-                command.upgrade(db._alembic_config(conn), "0021")
-            with Session(engine) as session, session.begin():
-                session.add(db.BudgetHouseholdMember(member_username="viewer", owner="alice", grant_id="cd" * 32))
-            with engine.connect() as conn:
-                before = {row[0] for row in conn.exec_driver_sql(
-                    "SELECT name FROM sqlite_master WHERE type='table'")}
-            with engine.begin() as conn:
-                command.downgrade(db._alembic_config(conn), "0019")
-            with engine.connect() as conn:
-                after = {row[0] for row in conn.exec_driver_sql(
-                    "SELECT name FROM sqlite_master WHERE type='table'")}
-                self.assertEqual(conn.exec_driver_sql("SELECT version_num FROM alembic_version").scalar(), "0019")
-                self.assertEqual(conn.exec_driver_sql(
-                    "SELECT name FROM budget_categories WHERE id='cat-salary'").scalar(), SALARY_NAME)
-                self.assertEqual(conn.exec_driver_sql(
-                    "SELECT milestone FROM budget_owner_inbox_reads").scalar(), "due")
-            self.assertEqual(before - after, {"budget_household_members"})
-            with engine.begin() as conn:
-                command.upgrade(db._alembic_config(conn), "0021")
-            with engine.connect() as conn:
-                self.assertEqual(conn.exec_driver_sql("SELECT version_num FROM alembic_version").scalar(), "0021")
-                self.assertEqual(conn.exec_driver_sql("SELECT COUNT(*) FROM budget_household_members").scalar(), 0)
-                self.assertEqual(conn.exec_driver_sql(
-                    "SELECT name FROM budget_categories WHERE id='cat-salary'").scalar(), SALARY_NAME)
-                self.assertEqual(conn.exec_driver_sql("SELECT COUNT(*) FROM budget_owner_inbox_reads").scalar(), 1)
         finally:
             engine.dispose()
+
+        upgraded, sessions = db.init_db(self.path)
+        self._assert_migration_clean()
+        with upgraded.connect() as conn:
+            self.assertEqual(conn.exec_driver_sql("SELECT version_num FROM alembic_version").scalar(), "0022")
+        with sessions.begin() as session:
+            session.add(db.BudgetHouseholdMember(member_username="viewer", owner="alice", grant_id="cd" * 32))
+        self._assert_migration_clean()
+
+        db.downgrade_db(self.path, "0021")
+        self._assert_migration_clean()
+        with sqlite3.connect(self.path) as raw:
+            self.assertEqual(raw.execute("SELECT version_num FROM alembic_version").fetchone()[0], "0021")
+            self.assertNotIn("budget_household_members",
+                             {row[0] for row in raw.execute("SELECT name FROM sqlite_master")})
+            self.assertEqual(raw.execute("SELECT name FROM budget_categories WHERE id='cat-salary'").fetchone()[0],
+                             SALARY_NAME)
+            self.assertEqual(raw.execute("SELECT milestone FROM budget_owner_inbox_reads").fetchone()[0], "due")
+            category_columns = {row[1] for row in raw.execute("PRAGMA table_info(budget_categories)")}
+            annotation_columns = {row[1] for row in raw.execute("PRAGMA table_info(budget_annotations)")}
+            self.assertIn("parent_id", category_columns)
+            self.assertIn("label", annotation_columns)
+
+        again, _sessions = db.init_db(self.path)
+        self._assert_migration_clean()
+        with again.connect() as conn:
+            self.assertEqual(conn.exec_driver_sql("SELECT version_num FROM alembic_version").scalar(), "0022")
+            self.assertEqual(conn.exec_driver_sql("SELECT COUNT(*) FROM budget_household_members").scalar(), 0)
+            self.assertEqual(conn.exec_driver_sql(
+                "SELECT name FROM budget_categories WHERE id='cat-salary'").scalar(), SALARY_NAME)
+            self.assertEqual(conn.exec_driver_sql("SELECT COUNT(*) FROM budget_owner_inbox_reads").scalar(), 1)
 
     def test_unexpected_failure_logs_the_class_only(self):
         self._ready()
@@ -612,3 +630,15 @@ class HouseholdAPITests(unittest.IsolatedAsyncioTestCase):
         body = await response.json()
         self.assertNotIn("_series_daily", body)
         self.assertNotIn("series", body)
+
+    async def test_recheck_exception_and_oversized_body_stay_fixed(self):
+        with mock.patch.object(household_api, "_recheck", side_effect=RuntimeError("boom")):
+            failed = await self.fetch("access")
+        self.assertEqual(failed.status, 500)
+        self.assertEqual((await failed.json())["error"], "budget_internal_error")
+        self.assert_private_headers(failed)
+        with mock.patch.object(household_api, "MAX_RESPONSE_BYTES", 0):
+            limited = await self.fetch("access")
+        self.assertEqual(limited.status, 413)
+        self.assertEqual((await limited.json())["error"], "budget_analytics_limit")
+        self.assert_private_headers(limited)

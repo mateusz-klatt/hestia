@@ -10,6 +10,7 @@ services:
     network_mode: host
     init: true                # tini as PID1: reap zombies + forward SIGTERM
     restart: unless-stopped   # = systemd Restart=on-failure (auto-restart, survives daemon restart)
+    cpus: 1.0                 # guard: never starve snapper/iris on the shared 4-core host (2026-11-22 rule-preview incident)
     environment:
       # State lives on the /data volume — NEVER in the ephemeral container cwd, or
       # a Phase-3 graduation (registry.mode=standalone) silently reverts to proxy

@@ -7,7 +7,7 @@ import type { BudgetApi, BudgetResult } from "../api";
 import { account } from "../fixtures";
 import { annotationOf, categoryList, decisionOf, entriesOf, entry } from "./fixtures";
 import type { AnalyticsTransaction, AnalyticsTransactions, AnnotationSaved, TransferDecisionResult } from "./model";
-import { TransactionsPanel, transactionLabels } from "./transactions";
+import { TRANSACTION_ROW_CAP, TransactionsPanel, transactionLabels } from "./transactions";
 
 function ok<T>(data: T): Promise<BudgetResult<T>> { return Promise.resolve({ ok: true, data }); }
 function fail<T>(status: number, error: string): Promise<BudgetResult<T>> { return Promise.resolve({ ok: false, status, error }); }
@@ -32,10 +32,12 @@ function mockPairSearch(api: ReturnType<typeof fakeApi>, debit: AnalyticsTransac
 function fakeApi(rows: AnalyticsTransaction[] = [entry("e1")]) {
   return {
     analyticsTransactions: vi.fn<BudgetApi["analyticsTransactions"]>(() => ok(pageOf(rows))),
+    analyticsTransactionsByKeys: vi.fn<BudgetApi["analyticsTransactionsByKeys"]>(() => ok(entriesOf("", rows))),
     categories: vi.fn<BudgetApi["categories"]>(() => ok({ categories: categoryList })),
     annotate: vi.fn<BudgetApi["annotate"]>(() => ok({ annotation: annotationOf() })),
     decideTransfer: vi.fn<BudgetApi["decideTransfer"]>(() => ok({ decision: decisionOf() })),
-  } satisfies Pick<BudgetApi, "analyticsTransactions" | "categories" | "annotate" | "decideTransfer">;
+  } satisfies Pick<BudgetApi,
+    "analyticsTransactions" | "analyticsTransactionsByKeys" | "categories" | "annotate" | "decideTransfer">;
 }
 
 const accounts = [
@@ -61,18 +63,22 @@ async function settle(): Promise<void> {
   await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
 }
 
-interface Options { period?: string; revision?: number; lost?: boolean }
+interface Options { period?: string; revision?: number; lost?: boolean; rowCap?: number; text?: typeof transactionLabels.en; locale?: string }
 async function show(api: ReturnType<typeof fakeApi>, options: Options = {}) {
   const onAccessLoss = vi.fn((result: { ok: boolean }) => options.lost === true && !result.ok);
   const onChanged = vi.fn();
   await act(async () => {
     root.render(<TransactionsPanel api={api} period={options.period ?? "2026-11"} currencies={["EUR", "PLN"]}
-      accounts={accounts} text={transactionLabels.en} locale="en" revision={options.revision ?? 0}
-      onAccessLoss={onAccessLoss} onChanged={onChanged} />);
+      accounts={accounts} text={options.text ?? transactionLabels.en} locale={options.locale ?? "en"} revision={options.revision ?? 0}
+      onAccessLoss={onAccessLoss} onChanged={onChanged} rowCap={options.rowCap} />);
     await Promise.resolve();
   });
   await settle();
   return { onAccessLoss, onChanged };
+}
+
+async function drain(times = 12): Promise<void> {
+  for (let i = 0; i < times; i += 1) await settle();
 }
 
 function button(text: string, scope: ParentNode = host): HTMLButtonElement {
@@ -88,6 +94,13 @@ function select(label: string, scope: ParentNode = host): HTMLSelectElement {
   const found = [...scope.querySelectorAll("label")].find((item) => item.textContent.startsWith(label))?.querySelector("select");
   if (found === null || found === undefined) throw new Error(`select ${label} missing`);
   return found;
+}
+async function typeInto(input: HTMLInputElement, value: string): Promise<void> {
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(input, value);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    await Promise.resolve();
+  });
 }
 async function choose(element: HTMLSelectElement, value: string): Promise<void> {
   await act(async () => {
@@ -165,10 +178,10 @@ describe("period entries", () => {
     api.analyticsTransactions.mockImplementationOnce(() => ok(pageOf([entry("e1")], "cursor-1")))
       .mockImplementationOnce(() => ok(pageOf([entry("e2")])));
     await show(api);
-    await click(button("Load more"));
+    await drain();
     expect(api.analyticsTransactions).toHaveBeenLastCalledWith("2026-11", { currency: "", category: "", kind: "", query: "" }, "cursor-1");
     expect(host.querySelectorAll(".budget-entry")).toHaveLength(2);
-    expect(host.textContent).not.toContain("Load more");
+    expect(host.textContent).not.toContain("Loading…");
   });
 
   it("saves a first manual category with version 0 and tells the view to re-read", async () => {
@@ -182,9 +195,46 @@ describe("period entries", () => {
     await choose(select("Type", editor), "expense");
     await submit(host.querySelector(".budget-entry-editor"));
     expect(api.annotate).toHaveBeenCalledWith({ account_id: "acc-1", entry_reference: "e1", mode: "manual",
-      category_id: "cat-food", kind: "expense", expected_fingerprint: "fp-e1", expected_version: 0 });
+      category_id: "cat-food", kind: "expense", expected_fingerprint: "fp-e1", expected_version: 0, label: null });
     expect(onChanged).toHaveBeenCalledTimes(1);
     expect(host.querySelector(".budget-entry-editor")).toBeNull();
+  });
+
+  it("shows a one-off label on the row and saves a trimmed label from the editor", async () => {
+    const phrase = "Remont łazienki";
+    const annotated = entry("e1", {
+      annotation: {
+        version: 3, mode: "manual", category_id: "cat-food", kind: "expense", stale: true, label: phrase,
+      },
+    });
+    const api = fakeApi([annotated]);
+    await show(api);
+    expect(host.querySelector(".budget-one-off")?.textContent).toBe(phrase);
+    expect(host.textContent).toContain(transactionLabels.en.stale);
+    await click(button("Change"));
+    const editor = host.querySelector(".budget-entry-editor");
+    const input = editor?.querySelector<HTMLInputElement>('input[name="one_off_label"]');
+    if (editor === null || input === undefined || input === null) throw new Error("label field missing");
+    expect(input.value).toBe(phrase);
+    expect(editor.textContent).toContain("One-off label");
+    expect(editor.textContent).toContain("instead of Other");
+    await typeInto(input, "  Fachowiec  ");
+    await submit(editor instanceof HTMLFormElement ? editor : null);
+    expect(api.annotate).toHaveBeenCalledWith(expect.objectContaining({ label: "Fachowiec", expected_version: 3 }));
+  });
+
+  it("uses the Polish one-off label and clears it when the field is blank", async () => {
+    const api = fakeApi();
+    await show(api, { text: transactionLabels.pl, locale: "pl" });
+    await click(button("Zmień"));
+    const editor = host.querySelector(".budget-entry-editor");
+    const input = editor?.querySelector<HTMLInputElement>('input[name="one_off_label"]');
+    if (editor === null || input === undefined || input === null) throw new Error("label field missing");
+    expect(editor.textContent).toContain("Etykieta jednorazowa");
+    expect(editor.textContent).toContain("zamiast w Pozostałe");
+    await typeInto(input, "   ");
+    await submit(editor instanceof HTMLFormElement ? editor : null);
+    expect(api.annotate).toHaveBeenCalledWith(expect.objectContaining({ label: null }));
   });
 
   it("distinguishes explicit uncategorised from a reset to automatic, with the seen version", async () => {
@@ -303,7 +353,7 @@ describe("period entries", () => {
     api.analyticsTransactions.mockImplementationOnce(() => ok(pageOf([entry("e1")], "cursor-1")))
       .mockImplementationOnce(() => fail(409, "budget_analytics_stale_cursor"));
     await show(api, { revision: 1 });
-    await click(button("Load more"));
+    await drain();
     expect(api.analyticsTransactions).toHaveBeenLastCalledWith("2026-11", { currency: "", category: "", kind: "", query: "" });
   });
 
@@ -381,6 +431,476 @@ describe("period entries", () => {
     await show(api, { revision: 1 });
     expect(host.textContent).toContain("Entries could not be loaded.");
     expect(host.textContent).not.toContain("No entries match.");
+  });
+
+  function names(): string[] {
+    return [...host.querySelectorAll(".budget-entry-text")].map((item) => item.textContent);
+  }
+  function sortButton(label: string): HTMLButtonElement {
+    const group = host.querySelector('.budget-sort[role="group"]');
+    if (group === null) throw new Error("sort group missing");
+    return button(label, group);
+  }
+  function classified(reference: string, changes: Partial<AnalyticsTransaction>): AnalyticsTransaction {
+    return entry(reference, changes);
+  }
+
+  it("sorts by date, category and absolute amount with a sort button bar above the transaction list", async () => {
+    const rows = [
+      classified("mid", { booking_date: "2026-11-02", amount: "10.00",
+        effective: { kind: "expense", category_id: "cat-food", source: "default", rule_id: null } }),
+      classified("early", { booking_date: "2026-11-01", amount: "-30.00",
+        effective: { kind: "expense", category_id: null, source: "default", rule_id: null } }),
+      classified("late", { booking_date: null, value_date: "2026-11-03", amount: "2.50", credit_debit_indicator: "CRDT",
+        effective: { kind: "income", category_id: "cat-old", source: "default", rule_id: null } }),
+    ];
+    const api = fakeApi(rows);
+    await show(api);
+    expect(host.querySelector(".budget-entries-table")).toBeNull();
+    expect(host.querySelector(".budget-entry-list")?.getAttribute("aria-label")).toBe("Transactions");
+    expect(host.querySelector('.budget-sort[role="group"]')?.getAttribute("aria-label")).toBe("Sort");
+    expect(names()).toEqual(["Synthetic shop mid", "Synthetic shop early", "Synthetic shop late"]);
+    expect(sortButton("Date").getAttribute("aria-pressed")).toBe("false");
+    expect(sortButton("Category").getAttribute("aria-pressed")).toBe("false");
+    expect(sortButton("Amount").getAttribute("aria-pressed")).toBe("false");
+
+    await click(sortButton("Date"));
+    expect(sortButton("Date").getAttribute("aria-pressed")).toBe("true");
+    expect(sortButton("Date").getAttribute("data-sort")).toBe("asc");
+    expect(sortButton("Date").getAttribute("aria-label")).toBe("Date, ascending");
+    expect(names()).toEqual(["Synthetic shop early", "Synthetic shop mid", "Synthetic shop late"]);
+    await click(sortButton("Date"));
+    expect(sortButton("Date").getAttribute("data-sort")).toBe("desc");
+    expect(sortButton("Date").getAttribute("aria-label")).toBe("Date, descending");
+    expect(names()).toEqual(["Synthetic shop late", "Synthetic shop mid", "Synthetic shop early"]);
+
+    await click(sortButton("Category"));
+    expect(sortButton("Date").getAttribute("aria-pressed")).toBe("false");
+    expect(sortButton("Date").getAttribute("data-sort")).toBeNull();
+    expect(sortButton("Category").getAttribute("aria-pressed")).toBe("true");
+    expect(sortButton("Category").getAttribute("data-sort")).toBe("asc");
+    expect(names()).toEqual(["Synthetic shop mid", "Synthetic shop late", "Synthetic shop early"]);
+    await click(sortButton("Category"));
+    expect(sortButton("Category").getAttribute("data-sort")).toBe("desc");
+    expect(names()).toEqual(["Synthetic shop early", "Synthetic shop late", "Synthetic shop mid"]);
+
+    await click(sortButton("Amount"));
+    expect(sortButton("Amount").getAttribute("aria-pressed")).toBe("true");
+    expect(sortButton("Amount").getAttribute("data-sort")).toBe("asc");
+    expect(sortButton("Category").getAttribute("aria-pressed")).toBe("false");
+    // Absolute values: 2.50, 10.00, 30.00. The negative amount is not treated as smaller.
+    expect(names()).toEqual(["Synthetic shop late", "Synthetic shop mid", "Synthetic shop early"]);
+    await click(sortButton("Amount"));
+    expect(sortButton("Amount").getAttribute("data-sort")).toBe("desc");
+    expect(names()).toEqual(["Synthetic shop early", "Synthetic shop mid", "Synthetic shop late"]);
+  });
+
+  it("orders equal absolute amounts by their previous order and keeps a missing date last", async () => {
+    const rows = [
+      classified("debit", { booking_date: "2026-11-04", amount: "40.00", credit_debit_indicator: "DBIT" }),
+      classified("none", { booking_date: null, value_date: null, transaction_date: null, amount: "1.00" }),
+      classified("credit", { booking_date: "2026-11-02", amount: "-40.00", credit_debit_indicator: "CRDT" }),
+    ];
+    const api = fakeApi(rows);
+    await show(api);
+    await click(sortButton("Amount"));
+    expect(names()).toEqual(["Synthetic shop none", "Synthetic shop debit", "Synthetic shop credit"]);
+    await click(sortButton("Date"));
+    expect(names()).toEqual(["Synthetic shop credit", "Synthetic shop debit", "Synthetic shop none"]);
+    await click(sortButton("Date"));
+    expect(names()).toEqual(["Synthetic shop debit", "Synthetic shop credit", "Synthetic shop none"]);
+  });
+
+  it("sorts amounts above 2^53 and mixed scales exactly without float rounding", async () => {
+    const rows = [
+      classified("huge-hi-neg", { amount: "-9007199254740993.25" }),
+      classified("ten-half", { amount: "10.500" }),
+      classified("huge-mid", { amount: "9007199254740993" }),
+      classified("ten-int", { amount: "10" }),
+      classified("huge-lo", { amount: "9007199254740992.5" }),
+      classified("ten-frac-pad", { amount: "0010.05" }),
+      classified("ten-fortyfive", { amount: "10.45" }),
+    ];
+    const api = fakeApi(rows);
+    await show(api);
+    await click(sortButton("Amount"));
+    expect(names()).toEqual([
+      "Synthetic shop ten-int",
+      "Synthetic shop ten-frac-pad",
+      "Synthetic shop ten-fortyfive",
+      "Synthetic shop ten-half",
+      "Synthetic shop huge-lo",
+      "Synthetic shop huge-mid",
+      "Synthetic shop huge-hi-neg",
+    ]);
+    await click(sortButton("Amount"));
+    expect(names()).toEqual([
+      "Synthetic shop huge-hi-neg",
+      "Synthetic shop huge-mid",
+      "Synthetic shop huge-lo",
+      "Synthetic shop ten-half",
+      "Synthetic shop ten-fortyfive",
+      "Synthetic shop ten-frac-pad",
+      "Synthetic shop ten-int",
+    ]);
+  });
+
+  it("keeps unparsable amounts last in both sort directions", async () => {
+    const rows = [
+      classified("bad-text", { amount: "abc" }),
+      classified("high", { amount: "-100.00" }),
+      classified("bad-empty", { amount: "" }),
+      classified("low", { amount: "5.00" }),
+      classified("bad-dots", { amount: "1.2.3" }),
+    ];
+    const api = fakeApi(rows);
+    await show(api);
+    await click(sortButton("Amount"));
+    expect(names()).toEqual([
+      "Synthetic shop low",
+      "Synthetic shop high",
+      "Synthetic shop bad-text",
+      "Synthetic shop bad-empty",
+      "Synthetic shop bad-dots",
+    ]);
+    await click(sortButton("Amount"));
+    expect(names()).toEqual([
+      "Synthetic shop high",
+      "Synthetic shop low",
+      "Synthetic shop bad-text",
+      "Synthetic shop bad-empty",
+      "Synthetic shop bad-dots",
+    ]);
+  });
+
+  it("sorts Polish category names using Polish collation and labels the list Transakcje", async () => {
+    const plCategories = [
+      { id: "c-zolw", name: "Żółw", archived: false, version: 1, created_at: 1, updated_at: 1, parent_id: null },
+      { id: "c-zebra", name: "Zebra", archived: false, version: 1, created_at: 1, updated_at: 1, parent_id: null },
+      { id: "c-zrebak", name: "Źrebak", archived: false, version: 1, created_at: 1, updated_at: 1, parent_id: null },
+      { id: "c-lodz", name: "Łódź", archived: false, version: 1, created_at: 1, updated_at: 1, parent_id: null },
+      { id: "c-lod", name: "Lód", archived: false, version: 1, created_at: 1, updated_at: 1, parent_id: null },
+      { id: "c-cma", name: "Ćma", archived: false, version: 1, created_at: 1, updated_at: 1, parent_id: null },
+      { id: "c-cebula", name: "Cebula", archived: false, version: 1, created_at: 1, updated_at: 1, parent_id: null },
+    ];
+    const rows = [
+      classified("zolw", { effective: { kind: "expense", category_id: "c-zolw", source: "default", rule_id: null } }),
+      classified("lodz", { effective: { kind: "expense", category_id: "c-lodz", source: "default", rule_id: null } }),
+      classified("cma", { effective: { kind: "expense", category_id: "c-cma", source: "default", rule_id: null } }),
+      classified("zebra", { effective: { kind: "expense", category_id: "c-zebra", source: "default", rule_id: null } }),
+      classified("lod", { effective: { kind: "expense", category_id: "c-lod", source: "default", rule_id: null } }),
+      classified("zrebak", { effective: { kind: "expense", category_id: "c-zrebak", source: "default", rule_id: null } }),
+      classified("cebula", { effective: { kind: "expense", category_id: "c-cebula", source: "default", rule_id: null } }),
+    ];
+    const api = fakeApi(rows);
+    api.categories.mockImplementation(() => ok({ categories: plCategories }));
+    await show(api, { text: transactionLabels.pl, locale: "pl" });
+    expect(host.querySelector(".budget-entry-list")?.getAttribute("aria-label")).toBe("Transakcje");
+    expect(host.querySelector('.budget-sort[role="group"]')?.getAttribute("aria-label")).toBe("Sortowanie");
+    await click(sortButton(transactionLabels.pl.category));
+    expect(names()).toEqual([
+      "Synthetic shop cebula",
+      "Synthetic shop cma",
+      "Synthetic shop lod",
+      "Synthetic shop lodz",
+      "Synthetic shop zebra",
+      "Synthetic shop zrebak",
+      "Synthetic shop zolw",
+    ]);
+    await click(sortButton(transactionLabels.pl.category));
+    expect(names()).toEqual([
+      "Synthetic shop zolw",
+      "Synthetic shop zrebak",
+      "Synthetic shop zebra",
+      "Synthetic shop lodz",
+      "Synthetic shop lod",
+      "Synthetic shop cma",
+      "Synthetic shop cebula",
+    ]);
+  });
+
+  it("keeps fetching pages in the background and shows how many rows are in", async () => {
+    const cursors: Array<string | undefined> = [];
+    let release: (value: BudgetResult<AnalyticsTransactions>) => void = () => undefined;
+    const api = fakeApi();
+    api.analyticsTransactions.mockImplementation((_period, _filter, cursor) => {
+      cursors.push(cursor);
+      if (cursor === undefined) return ok(pageOf([entry("p1")], "c1"));
+      if (cursor === "c1") return new Promise((resolve) => { release = resolve; });
+      return ok(pageOf([entry("p3")]));
+    });
+    await show(api);
+    expect(host.textContent).toContain("Synthetic shop p1");
+    expect(host.textContent).toContain(transactionLabels.en.loadingMore(1));
+    expect(transactionLabels.pl.loadingMore(4)).toBe("Wczytywanie… 4");
+    await act(async () => { release({ ok: true, data: pageOf([entry("p2")], "c2") }); await Promise.resolve(); });
+    await drain();
+    expect(cursors).toEqual([undefined, "c1", "c2"]);
+    expect(names()).toEqual(["Synthetic shop p1", "Synthetic shop p2", "Synthetic shop p3"]);
+    expect(host.textContent).not.toContain("Loading…");
+  });
+
+  it("drops a background page that resolves after the period changes", async () => {
+    let late: (value: BudgetResult<AnalyticsTransactions>) => void = () => undefined;
+    const api = fakeApi();
+    api.analyticsTransactions.mockImplementation((period, _filter, cursor) => {
+      if (period === "2026-11" && cursor === undefined) return ok(pageOf([entry("first")], "c1"));
+      if (period === "2026-11") return new Promise((resolve) => { late = resolve; });
+      return ok(pageOf([entry("october")]));
+    });
+    await show(api);
+    expect(host.textContent).toContain(transactionLabels.en.loadingMore(1));
+    await show(api, { period: "2026-10" });
+    expect(names()).toEqual(["Synthetic shop october"]);
+    await act(async () => { late({ ok: true, data: pageOf([entry("late")]) }); await Promise.resolve(); });
+    await drain();
+    expect(names()).toEqual(["Synthetic shop october"]);
+    expect(host.textContent).not.toContain("late");
+  });
+
+  it("ignores a stale background page arriving after a filter change", async () => {
+    let late: (value: BudgetResult<AnalyticsTransactions>) => void = () => undefined;
+    const api = fakeApi();
+    api.analyticsTransactions.mockImplementation((_period, filter, cursor) => {
+      if (filter.currency === "EUR") return ok(pageOf([entry("eur-only")]));
+      if (cursor === undefined) return ok(pageOf([entry("all-first")], "c1"));
+      return new Promise((resolve) => { late = resolve; });
+    });
+    await show(api);
+    expect(names()).toEqual(["Synthetic shop all-first"]);
+    await applyCurrencyFilter();
+    expect(names()).toEqual(["Synthetic shop eur-only"]);
+    await act(async () => { late({ ok: true, data: pageOf([entry("stale-after-filter")]) }); await Promise.resolve(); });
+    await drain();
+    expect(names()).toEqual(["Synthetic shop eur-only"]);
+    expect(host.textContent).not.toContain("stale-after-filter");
+  });
+
+  it("stops the background walk when access is lost", async () => {
+    const calls: Array<string | undefined> = [];
+    const api = fakeApi();
+    api.analyticsTransactions.mockImplementation((_period, _filter, cursor) => {
+      calls.push(cursor);
+      if (cursor === undefined) return ok(pageOf([entry("kept")], "c1"));
+      return fail(401, "budget_http_401");
+    });
+    const { onAccessLoss } = await show(api, { lost: true });
+    await drain();
+    expect(calls).toEqual([undefined, "c1"]);
+    expect(onAccessLoss).toHaveBeenCalledWith({ ok: false, status: 401, error: "budget_http_401" });
+    expect(names()).toEqual(["Synthetic shop kept"]);
+    expect(host.textContent).not.toContain("could not be loaded");
+    expect(host.textContent).not.toContain("Loading…");
+  });
+
+  it("recovers from an error mid-walk by retrying from the failed cursor", async () => {
+    const calls: Array<string | undefined> = [];
+    let failSecond = true;
+    const api = fakeApi();
+    api.analyticsTransactions.mockImplementation((_period, _filter, cursor) => {
+      calls.push(cursor);
+      if (cursor === undefined) return ok(pageOf([entry("p1")], "c1"));
+      if (cursor === "c1" && failSecond) return fail(500, "budget_internal_error");
+      if (cursor === "c1") return ok(pageOf([entry("p2")], "c2"));
+      return ok(pageOf([entry("p3")]));
+    });
+    await show(api);
+    await drain();
+    expect(calls).toEqual([undefined, "c1"]);
+    expect(names()).toEqual(["Synthetic shop p1"]);
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain(transactionLabels.en.error);
+    expect(transactionLabels.pl.retry).toBe("Ponów");
+
+    failSecond = false;
+    await click(button(transactionLabels.en.retry));
+    await drain();
+    expect(calls).toEqual([undefined, "c1", "c1", "c2"]);
+    expect(names()).toEqual(["Synthetic shop p1", "Synthetic shop p2", "Synthetic shop p3"]);
+    expect(host.querySelector('[role="alert"]')).toBeNull();
+  });
+
+  it("stops background loading at the row cap, shows a truncation notice, and continues via load more", async () => {
+    expect(TRANSACTION_ROW_CAP).toBe(5000);
+    expect(transactionLabels.pl.more).toBe("Wczytaj więcej");
+    const calls: Array<string | undefined> = [];
+    const api = fakeApi();
+    api.analyticsTransactions.mockImplementation((_period, _filter, cursor) => {
+      calls.push(cursor);
+      const page = calls.length;
+      if (page === 3) return ok({ ...pageOf([entry("p3a"), entry("p3b")]), filtered_total: 6 });
+      return ok({ ...pageOf([entry(`p${String(page)}a`), entry(`p${String(page)}b`)], `c${String(page)}`), filtered_total: 6 });
+    });
+    await show(api, { rowCap: 3 });
+    await drain();
+    expect(calls).toEqual([undefined, "c1"]);
+    expect(names()).toEqual(["Synthetic shop p1a", "Synthetic shop p1b", "Synthetic shop p2a", "Synthetic shop p2b"]);
+    expect(host.textContent).not.toContain("Loading…");
+    expect(host.querySelector('[role="note"]')?.textContent).toContain(transactionLabels.en.truncated(4, 6));
+
+    await click(button(transactionLabels.en.more));
+    await drain();
+    expect(calls).toEqual([undefined, "c1", "c2"]);
+    expect(names()).toEqual([
+      "Synthetic shop p1a", "Synthetic shop p1b", "Synthetic shop p2a", "Synthetic shop p2b", "Synthetic shop p3a", "Synthetic shop p3b",
+    ]);
+    expect(host.querySelector('[role="note"]')).toBeNull();
+  });
+
+  it("caps automatic reloads on staleCursor at two and deduplicates rows by rowKey", async () => {
+    const calls: Array<string | undefined> = [];
+    let staleRemaining = 3;
+    const api = fakeApi();
+    api.analyticsTransactions.mockImplementation((_period, _filter, cursor) => {
+      calls.push(cursor);
+      if (cursor === undefined) return ok(pageOf([entry("p1"), entry("dup")], "c1"));
+      if (staleRemaining > 0) {
+        staleRemaining -= 1;
+        return fail(409, "budget_analytics_stale_cursor");
+      }
+      return ok(pageOf([entry("dup"), entry("p2")]));
+    });
+    await show(api);
+    await drain();
+    // Initial attempt + at most 2 automatic reloads = 3 pairs of (undefined, c1).
+    expect(calls).toEqual([undefined, "c1", undefined, "c1", undefined, "c1"]);
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain(transactionLabels.en.error);
+
+    await click(button(transactionLabels.en.retry));
+    await drain();
+    expect(names()).toEqual(["Synthetic shop p1", "Synthetic shop dup", "Synthetic shop p2"]);
+    expect(host.querySelector('[role="alert"]')).toBeNull();
+  });
+
+  it("keeps row order stable while the editor is open and re-sorts when closed or re-sorted", async () => {
+    let releasePage2: (value: BudgetResult<AnalyticsTransactions>) => void = () => undefined;
+    let releasePage3: (value: BudgetResult<AnalyticsTransactions>) => void = () => undefined;
+    const api = fakeApi();
+    api.analyticsTransactions.mockImplementation((_period, _filter, cursor) => {
+      if (cursor === undefined) {
+        return ok(pageOf([entry("high", { amount: "50.00" }), entry("mid", { amount: "20.00" })], "c1"));
+      }
+      if (cursor === "c1") return new Promise((resolve) => { releasePage2 = resolve; });
+      return new Promise((resolve) => { releasePage3 = resolve; });
+    });
+    await show(api);
+    await click(sortButton("Amount"));
+    expect(names()).toEqual(["Synthetic shop mid", "Synthetic shop high"]);
+
+    await click(button(transactionLabels.en.edit, host.querySelectorAll(".budget-entry")[0]));
+    expect(host.querySelector(".budget-entry-editor")).not.toBeNull();
+
+    // Background page arrives with a smaller amount while editor is open: existing rows must not jump.
+    await act(async () => {
+      releasePage2({ ok: true, data: pageOf([entry("low", { amount: "5.00" })], "c2") });
+      await Promise.resolve();
+    });
+    await settle();
+    expect(names()).toEqual(["Synthetic shop mid", "Synthetic shop high", "Synthetic shop low"]);
+    expect(host.querySelectorAll(".budget-entry")[0]?.querySelector(".budget-entry-editor")).not.toBeNull();
+
+    // User explicitly re-sorts while editor is still open: order updates immediately.
+    await click(sortButton("Amount"));
+    expect(names()).toEqual(["Synthetic shop high", "Synthetic shop mid", "Synthetic shop low"]);
+
+    // Another background page arrives while editor remains open: newly sorted order stays stable.
+    await act(async () => {
+      releasePage3({ ok: true, data: pageOf([entry("huge", { amount: "100.00" })]) });
+      await Promise.resolve();
+    });
+    await settle();
+    expect(names()).toEqual(["Synthetic shop high", "Synthetic shop mid", "Synthetic shop low", "Synthetic shop huge"]);
+
+    // Closing the editor restores live sorting across all loaded rows.
+    await click(button(transactionLabels.en.cancel));
+    expect(names()).toEqual(["Synthetic shop huge", "Synthetic shop high", "Synthetic shop mid", "Synthetic shop low"]);
+  });
+
+  it("stops background loading when a page adds no unique rows after deduplication", async () => {
+    const calls: Array<string | undefined> = [];
+    const api = fakeApi();
+    api.analyticsTransactions.mockImplementation((_period, _filter, cursor) => {
+      calls.push(cursor);
+      if (cursor === undefined) return ok(pageOf([entry("p1")], "c1"));
+      if (cursor === "c1") return ok(pageOf([entry("p1")], "c2"));
+      return ok(pageOf([entry("unreachable")]));
+    });
+    await show(api);
+    await drain();
+    expect(calls).toEqual([undefined, "c1"]);
+    expect(names()).toEqual(["Synthetic shop p1"]);
+    expect(host.textContent).not.toContain("Loading…");
+    expect(host.querySelector('[role="note"]')).toBeNull();
+  });
+
+  it("keeps row order stable while the pair picker is open and restores live sorting when closed or confirmed", async () => {
+    const listNames = () => [...host.querySelectorAll('ul[aria-label="Transactions"] > li > .budget-entry-main .budget-entry-text')]
+      .map((item) => item.textContent);
+    let releasePage2: (value: BudgetResult<AnalyticsTransactions>) => void = () => undefined;
+    let releasePage3: (value: BudgetResult<AnalyticsTransactions>) => void = () => undefined;
+    const api = fakeApi();
+    api.analyticsTransactions.mockImplementation((period, ...args) => {
+      const [, cursor, limit] = args;
+      if (limit === 200) return ok(entriesOf(period, [pairCredit("in", { amount: "20.00" })]));
+      if (cursor === undefined) {
+        return ok(pageOf([pairDebit("high", { amount: "50.00" }), pairDebit("mid", { amount: "20.00" })], "c1"));
+      }
+      if (cursor === "c1") return new Promise((resolve) => { releasePage2 = resolve; });
+      return new Promise((resolve) => { releasePage3 = resolve; });
+    });
+    await show(api);
+    await click(sortButton("Amount"));
+    expect(listNames()).toEqual(["Synthetic shop mid", "Synthetic shop high"]);
+
+    await click(button(transactionLabels.en.pair, host.querySelectorAll(".budget-entry")[0]));
+    expect(host.querySelector(".budget-pair-picker")).not.toBeNull();
+
+    // Background page arrives with a smaller amount while picker is open: existing rows must not jump.
+    await act(async () => {
+      releasePage2({ ok: true, data: pageOf([pairDebit("low", { amount: "5.00" })], "c2") });
+      await Promise.resolve();
+    });
+    await settle();
+    expect(listNames()).toEqual(["Synthetic shop mid", "Synthetic shop high", "Synthetic shop low"]);
+    expect(host.querySelectorAll(".budget-entry")[0]?.querySelector(".budget-pair-picker")).not.toBeNull();
+
+    // User explicitly re-sorts while picker is still open: order updates immediately.
+    await click(sortButton("Amount"));
+    expect(listNames()).toEqual(["Synthetic shop high", "Synthetic shop mid", "Synthetic shop low"]);
+
+    // Another background page arrives while picker remains open: newly sorted order stays stable.
+    await act(async () => {
+      releasePage3({ ok: true, data: pageOf([pairDebit("huge", { amount: "100.00" })]) });
+      await Promise.resolve();
+    });
+    await settle();
+    expect(listNames()).toEqual(["Synthetic shop high", "Synthetic shop mid", "Synthetic shop low", "Synthetic shop huge"]);
+
+    // Closing the picker restores live sorting across all loaded rows.
+    await click(button(transactionLabels.en.cancel));
+    expect(listNames()).toEqual(["Synthetic shop huge", "Synthetic shop high", "Synthetic shop mid", "Synthetic shop low"]);
+
+    // Confirming a pair also releases the frozen order.
+    let releaseConfirmPage2: (value: BudgetResult<AnalyticsTransactions>) => void = () => undefined;
+    api.analyticsTransactions.mockImplementation((period, ...args) => {
+      const [, cursor, limit] = args;
+      if (limit === 200) return ok(entriesOf(period, [pairCredit("in", { amount: "20.00" })]));
+      if (cursor === undefined) {
+        return ok(pageOf([pairDebit("high", { amount: "50.00" }), pairDebit("mid", { amount: "20.00" })], "c1"));
+      }
+      return new Promise((resolve) => { releaseConfirmPage2 = resolve; });
+    });
+    await show(api, { revision: 1 });
+    await click(sortButton("Amount"));
+    await click(button(transactionLabels.en.pair, host.querySelectorAll(".budget-entry")[0]));
+    await act(async () => {
+      releaseConfirmPage2({ ok: true, data: pageOf([pairDebit("low", { amount: "5.00" })]) });
+      await Promise.resolve();
+    });
+    await settle();
+    expect(listNames()).toEqual(["Synthetic shop mid", "Synthetic shop high", "Synthetic shop low"]);
+    await click(button(transactionLabels.en.pairConfirm));
+    expect(host.querySelector(".budget-pair-picker")).toBeNull();
+    expect(listNames()).toEqual(["Synthetic shop low", "Synthetic shop mid", "Synthetic shop high"]);
   });
 });
 
@@ -704,5 +1224,127 @@ describe("manual own-transfer pairing", () => {
     expect(rendered[0]?.querySelector(".budget-pair-picker")).toBeNull();
     expect(rendered[1]?.textContent).toContain("Synthetic Card Repayment");
     expect(rendered[1]?.textContent).not.toContain("Synthetic shop late");
+  });
+
+  it("fetches server-provided row keys across adjacent periods, shows truncation note without leaking keys, and toggles cleanly", async () => {
+    const scrollIntoView = vi.fn();
+    const prevScroll = (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView;
+    Element.prototype.scrollIntoView = scrollIntoView;
+    try {
+      const confirmedCard = account({ id: "acc-card-secret", kind: "credit_card", kind_confirmed_at: 10 });
+      const provisionalRows = [
+        entry("ref-secret-1", { account_id: "acc-secret-1", booking_date: "2026-11-10", remittance_information: ["Synthetic Grocery"] }),
+        entry("ref-secret-dec", { account_id: "acc-secret-1", booking_date: "2026-12-02", transaction_date: "2026-11-29", remittance_information: ["Synthetic Dec Booked"] }),
+        entry("ref-secret-oct", { account_id: "acc-card-secret", booking_date: "2026-10-28", remittance_information: ["Synthetic Window Salary"] }),
+        entry("ref-secret-stale", {
+          account_id: "acc-secret-1",
+          remittance_information: ["Synthetic Stale Exclusion"],
+          annotation: { version: 1, mode: "manual", category_id: null, kind: "excluded", stale: true },
+          effective: { kind: "expense", category_id: "cat-food", source: "rule", rule_id: "rule-exp" },
+        }),
+      ];
+      const novemberRows = [
+        provisionalRows[0] as AnalyticsTransaction,
+        provisionalRows[3] as AnalyticsTransaction,
+        entry("nov-clean-1", { booking_date: "2026-11-11", remittance_information: ["Synthetic November Clean A"] }),
+        entry("nov-clean-2", { booking_date: "2026-11-12", remittance_information: ["Synthetic November Clean B"] }),
+        entry("nov-clean-3", { booking_date: "2026-11-13", remittance_information: ["Synthetic November Clean C"] }),
+        entry("nov-clean-4", { booking_date: "2026-11-14", remittance_information: ["Synthetic November Clean D"] }),
+      ];
+      const keys = [
+        "acc-secret-1/ref-secret-1",
+        "acc-secret-1/ref-secret-dec",
+        "acc-card-secret/ref-secret-oct",
+        "acc-secret-1/ref-secret-stale",
+      ];
+      const api = fakeApi(novemberRows);
+      api.analyticsTransactions.mockImplementation((period) => ok(entriesOf(period, novemberRows)));
+      api.analyticsTransactionsByKeys.mockImplementation(() => ok(entriesOf("", provisionalRows)));
+
+      await act(async () => {
+        root.render(
+          <TransactionsPanel api={api} period="2026-11" currencies={["EUR", "PLN"]}
+            accounts={[...accounts, confirmedCard]} text={transactionLabels.en} locale="en" revision={0}
+            onAccessLoss={() => false} onChanged={() => undefined}
+            initialCurrency="PLN"
+            initialProvisionalKeys={keys}
+            initialProvisionalTotal={505}
+            initialProvisionalTruncated={true}
+            focusOnMount={true} />,
+        );
+        await Promise.resolve();
+      });
+      await settle();
+
+      expect(api.analyticsTransactionsByKeys).toHaveBeenCalledWith({ row_keys: keys, currency: "PLN" });
+      expect(api.analyticsTransactions).not.toHaveBeenCalled();
+      expect(scrollIntoView).toHaveBeenCalled();
+      expect(select("Currency").value).toBe("PLN");
+      const checkbox = host.querySelector<HTMLInputElement>('input[name="provisional"]');
+      expect(checkbox?.checked).toBe(true);
+      const entryNames = () => [...host.querySelectorAll(".budget-entry-text")].map((item) => item.textContent);
+      expect(entryNames()).toEqual([
+        "Synthetic Grocery",
+        "Synthetic Dec Booked",
+        "Synthetic Window Salary",
+        "Synthetic Stale Exclusion",
+      ]);
+      expect(host.textContent).toContain("4 entries");
+      expect(host.textContent).toContain("Showing first 4 of 505.");
+      for (const secret of ["acc-secret-1", "acc-card-secret", "ref-secret-1", "ref-secret-dec", "ref-secret-oct", "ref-secret-stale"]) {
+        expect(host.textContent).not.toContain(secret);
+      }
+
+      // Unchecking loads full month entries via GET and hides the truncation note; re-checking uses POST transactions-by-keys.
+      await act(async () => { checkbox?.click(); await Promise.resolve(); });
+      await settle();
+      expect(api.analyticsTransactions).toHaveBeenLastCalledWith("2026-11", { currency: "PLN", category: "", kind: "", query: "" });
+      expect(entryNames()).toHaveLength(6);
+      expect(host.textContent).toContain("6 entries");
+      expect(host.textContent).not.toContain("Showing first");
+
+      await act(async () => { host.querySelector<HTMLInputElement>('input[name="provisional"]')?.click(); await Promise.resolve(); });
+      await settle();
+      expect(api.analyticsTransactionsByKeys).toHaveBeenCalledTimes(2);
+      expect(api.analyticsTransactionsByKeys).toHaveBeenLastCalledWith({ row_keys: keys, currency: "PLN" });
+      expect(entryNames()).toHaveLength(4);
+    } finally {
+      if (prevScroll === undefined) {
+        delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView;
+      } else {
+        Element.prototype.scrollIntoView = prevScroll as typeof Element.prototype.scrollIntoView;
+      }
+    }
+  });
+
+  it("handles empty initialProvisionalKeys without querying empty row_keys", async () => {
+    const api = fakeApi([entry("e1")]);
+    await act(async () => {
+      root.render(
+        <TransactionsPanel api={api} period="2026-11" currencies={["PLN"]} accounts={accounts}
+          text={transactionLabels.en} locale="en" revision={0} onAccessLoss={() => false}
+          onChanged={() => undefined} initialProvisionalKeys={[]} />,
+      );
+      await Promise.resolve();
+    });
+    await settle();
+    expect(api.analyticsTransactions).not.toHaveBeenCalled();
+    expect(api.analyticsTransactionsByKeys).not.toHaveBeenCalled();
+    expect(host.textContent).toContain("No entries match.");
+  });
+
+  it("hides the provisional toggle when opened without initialProvisionalKeys", async () => {
+    const api = fakeApi([entry("e1")]);
+    await act(async () => {
+      root.render(
+        <TransactionsPanel api={api} period="2026-11" currencies={["PLN"]} accounts={accounts}
+          text={transactionLabels.en} locale="en" revision={0} onAccessLoss={() => false}
+          onChanged={() => undefined} />,
+      );
+      await Promise.resolve();
+    });
+    await settle();
+    expect(host.querySelector('input[name="provisional"]')).toBeNull();
+    expect(host.querySelectorAll(".budget-entry")).toHaveLength(1);
   });
 });

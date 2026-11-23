@@ -242,7 +242,7 @@ class HouseholdReader:
                 scan_limited=snapshot["_scan_limited"], categories=snapshot["categories"],
                 rules=snapshot["rules"], identities=snapshot["identities"], limits=limits,
                 account_component_timestamps=timestamps, account_kinds=kinds, settings=settings,
-                include_series=include_series,
+                one_off_secret=self.secret, include_series=include_series,
             )
         except month_budget_mod.MonthInputError:
             raise AnalyticsError() from None
@@ -679,6 +679,10 @@ def _limit_dict(row):
 
 def _sanitize_budget(budget, book):
     safe = {key: budget[key] for key in _BUDGET_KEYS}
+    # Row keys are owner account ids. The spouse keeps the counts and the provisional flag.
+    coverage = dict(budget["coverage"])
+    coverage["pending_row_keys"] = []
+    safe["coverage"] = coverage
     safe["category_spend"] = [_sanitize_spend(row, book) for row in budget["category_spend"]]
     expected = budget["expected_income"]
     if expected is not None:
@@ -699,6 +703,7 @@ def _sanitize_spend(row, book):
     identifier = row["category_id"]
     return {
         "category_id": book.category(identifier),
+        # Category code or ordinal. A one-off label is owner-private and is not copied.
         "name": book.label(identifier) if identifier is not None else None,
         "archived": row["archived"],
         "expenses": row["expenses"],

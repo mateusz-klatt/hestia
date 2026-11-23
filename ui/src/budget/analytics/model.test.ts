@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { accountName, annotationRequest, canPair, canonicalAmount, clampPercentString, counterparty,
-  currentMonth, daysBetween, formatRatioHalfEven, hasAnalytics, isMonth, isPositiveDecimal, isZero, kindChoice,
+import { accountName, annotationRequest, canPair, canonicalAmount, clampPercentString, counterparty, currentMonth,
+  daysBetween, formatRatioHalfEven, formatScaledBigInt, hasAnalytics, isMonth, isPositiveDecimal, isZero, kindChoice,
   kindChoicesFor, legsMatch, limitCurrencies, manualPairRequest, monthLabel, monthlyBudgetCurrencies, mortgageCurrencies,
-  pairCandidates, pairDate, pairPeriods, parseIntInRange, parseWarningPercent, pluralPl, ratioPercentFloor,
-  recurringCurrencies, shiftMonth, transferActions, transferDecision, validCurrency, validIsoDate, validLimitAmount,
-  validMortgageLabel } from "./model";
+  pairCandidates, pairDate, pairPeriods, parseIntInRange, parseScaledInt, parseWarningPercent, pluralPl, ratioPercentFloor,
+  recurringCurrencies, shiftMonth, transactionRowKey, transferActions, transferDecision, validCurrency, validIsoDate,
+  validLimitAmount, validMortgageLabel } from "./model";
 import type { AnalyticsTransaction } from "./model";
 import { entry, leg, mortgageSchedule, pair, recurringHint, spendingLimit } from "./fixtures";
 import { account, connection } from "../fixtures";
@@ -355,5 +355,17 @@ describe("analytics decisions", () => {
       account({ id: "acc-2", display: null }),
     ])).toEqual(["PLN", "EUR", "CHF", "USD"]);
     expect(monthlyBudgetCurrencies([])).toEqual(["PLN"]);
+
+    expect(parseScaledInt("0")).toEqual({ negative: false, coeff: 0n, scale: 0 });
+    expect(parseScaledInt("-123.450")).toEqual({ negative: true, coeff: 123450n, scale: 3 });
+    expect(parseScaledInt("bad")).toBeNull();
+    expect(formatScaledBigInt(0n, 2)).toBe("0");
+    expect(formatScaledBigInt(-123450n, 3)).toBe("-123.45");
+    expect(formatScaledBigInt(42n, 0)).toBe("42");
+  });
+
+  it("builds stable account/reference keys for transactions", () => {
+    expect(transactionRowKey(entry("e-42"))).toBe("acc-1/e-42");
+    expect(transactionRowKey(entry("ref-9", { account_id: "card-2" }))).toBe("card-2/ref-9");
   });
 });

@@ -12,21 +12,28 @@ from .. import api_contract, store_sql
 from ..db import init_db
 from . import api
 from .analytics_core import AnalyticsError
-from .analytics_views import BudgetAnalyticsViews, _forecast_query, _monthly_budget_query
+from .analytics_views import (BudgetAnalyticsViews, _forecast_query, _monthly_budget_charts_query,
+                              _monthly_budget_query)
 from .views import BudgetUsersBackendRequired
 
 PREFIX = "/api/budget/analytics"
 FLAG = "HESTIA_BUDGET_ANALYTICS_ENABLED"
 MAX_FORECAST_RESPONSE_BYTES = 4 * 1024 * 1024
 MAX_MONTHLY_BUDGET_RESPONSE_BYTES = 4 * 1024 * 1024
+MAX_TRANSACTIONS_BY_KEYS_BYTES = 1048576
+_MONTHLY_BUDGET_OP = "monthly-budget"
+_MONTHLY_BUDGET_CHARTS_OP = "monthly-budget/charts"
+_TRANSACTIONS_BY_KEYS_OP = "transactions-by-keys"
 READS = ("overview", "transactions", "categories", "rules", "transfers", "recurring", "spending-limits",
-         "mortgages", "inbox", "quarantine", "forecast", "monthly-budget")
+         "mortgages", "inbox", "quarantine", "forecast", _MONTHLY_BUDGET_OP, _MONTHLY_BUDGET_CHARTS_OP)
 WRITES = {
     "category-create": (api_contract.BudgetAnalyticsCategoryCreateRequest, "create_category", "category"),
     "category-update": (api_contract.BudgetAnalyticsCategoryUpdateRequest, "update_category", "category"),
     "annotation": (api_contract.BudgetAnalyticsAnnotationRequest, "annotate", "annotation"),
     "rule-preview": (api_contract.BudgetAnalyticsRulePreviewRequest, "preview_rule", "preview"),
     "rule-save": (api_contract.BudgetAnalyticsRuleSaveRequest, "save_rule", "rule"),
+    "rule-batch-preview": (api_contract.BudgetAnalyticsRuleBatchPreviewRequest, "preview_rules", "preview"),
+    "rule-batch-save": (api_contract.BudgetAnalyticsRuleBatchSaveRequest, "save_rules", "batch"),
     "transfer-decision": (api_contract.BudgetAnalyticsTransferDecisionRequest, "decide_transfer", "decision"),
     "spending-limit-save": (api_contract.BudgetAnalyticsSpendingLimitSaveRequest, "save_spending_limit", "limit"),
     "mortgage-save": (api_contract.BudgetAnalyticsMortgageSaveRequest, "save_mortgage_schedule", "schedule"),
@@ -40,11 +47,13 @@ _QUERY_FIELDS = {"overview": {"period", "currency"},
                  "spending-limits": {"period", "currency"},
                  "quarantine": {"account_id"},
                  "forecast": {"months", "currency"},
-                 "monthly-budget": {"period", "currency"}}
-_OPTIONAL_PERIOD_READS = frozenset({"monthly-budget"})
+                 _MONTHLY_BUDGET_OP: {"period", "currency"},
+                 _MONTHLY_BUDGET_CHARTS_OP: {"period", "currency", "history"}}
+_OPTIONAL_PERIOD_READS = frozenset({_MONTHLY_BUDGET_OP, _MONTHLY_BUDGET_CHARTS_OP})
 _BOUNDED_READ_CAPS = {
     "forecast": lambda: MAX_FORECAST_RESPONSE_BYTES,
-    "monthly-budget": lambda: MAX_MONTHLY_BUDGET_RESPONSE_BYTES,
+    _MONTHLY_BUDGET_OP: lambda: MAX_MONTHLY_BUDGET_RESPONSE_BYTES,
+    _MONTHLY_BUDGET_CHARTS_OP: lambda: MAX_MONTHLY_BUDGET_RESPONSE_BYTES,
 }
 
 
@@ -72,8 +81,10 @@ def _query(request, operation):
         values["limit"] = int(value)
     if operation == "forecast":
         _forecast_query(**values)
-    elif operation == "monthly-budget":
+    elif operation == _MONTHLY_BUDGET_OP:
         _monthly_budget_query(**values)
+    elif operation == _MONTHLY_BUDGET_CHARTS_OP:
+        _monthly_budget_charts_query(**values)
     return values
 
 
@@ -99,7 +110,7 @@ def _encode_bounded(payload, limit):
 
 
 def _read(owner, operation, query, secret):
-    result = getattr(_store(secret), operation.replace("-", "_"))(owner, **query)
+    result = getattr(_store(secret), operation.replace("-", "_").replace("/", "_"))(owner, **query)
     if operation in _BOUNDED_READ_CAPS:
         return _encode_bounded(result, _BOUNDED_READ_CAPS[operation]())
     return {operation: result} if operation in ("categories", "rules") else result
@@ -109,7 +120,7 @@ def _write(owner, operation, values, secret):
     store = _store(secret)
     _, method, response_key = WRITES[operation]
     if operation == "category-create":
-        result = store.create_category(owner, values["name"])
+        result = store.create_category(owner, values["name"], parent_id=values.get("parent_id"))
     elif operation == "category-update":
         identifier = values.pop("category_id")
         result = store.update_category(owner, identifier, **values)
@@ -120,6 +131,10 @@ def _write(owner, operation, values, secret):
         result = store.preview_rule(owner, values)
     elif operation == "rule-save":
         result = store.save_rule(owner, values["preview_id"])
+    elif operation == "rule-batch-preview":
+        result = store.preview_rules(owner, values["rules"])
+    elif operation == "rule-batch-save":
+        result = store.save_rules(owner, values["preview_id"])
     else:
         result = getattr(store, method)(owner, **values)
     return {"ok": True, response_key: result}
@@ -127,7 +142,7 @@ def _write(owner, operation, values, secret):
 
 def register(app, read_json_body, *, auth_enabled, session_secret):
     async def handle(request):
-        operation = request.path.rsplit("/", 1)[-1]
+        operation = request.path.removeprefix(PREFIX + "/")
         try:
             owner = api._principal(request, auth_enabled)
             secret = api._secret(session_secret)
@@ -141,17 +156,27 @@ def register(app, read_json_body, *, auth_enabled, session_secret):
                                         headers=api.PRIVATE_HEADERS)
             else:
                 api._browser(request, owner, secret)
-                max_bytes = 65536 if operation == "inbox-mark" else 16384
+                max_bytes = (MAX_TRANSACTIONS_BY_KEYS_BYTES if operation == _TRANSACTIONS_BY_KEYS_OP
+                             else 65536 if operation == "inbox-mark"
+                             else 262144 if operation == "rule-batch-preview" else 16384)
                 body, error = await read_json_body(request, max_bytes, reject_duplicates=True)
                 if error:
                     return body
-                values = WRITES[operation][0].model_validate(body).model_dump()
+                model = (api_contract.BudgetAnalyticsTransactionsByKeysRequest
+                         if operation == _TRANSACTIONS_BY_KEYS_OP else WRITES[operation][0])
+                parsed = model.model_validate(body)
+                # Annotation: an omitted label stays, and null or "" clears it. Category update: an omitted
+                # parent_id stays, and null detaches. Other writes keep their defaults.
+                values = parsed.model_dump(exclude_unset=operation in ("annotation", "category-update"))
                 owner = api._principal(request, auth_enabled)
                 secret = api._secret(session_secret)
                 api._browser(request, owner, secret)
                 if not enabled():
                     raise api._Rejected(404, "budget_analytics_disabled")
-                result = await api._settled_thread(lambda: _write(owner, operation, values, secret))
+                if operation == _TRANSACTIONS_BY_KEYS_OP:
+                    result = await asyncio.to_thread(_read, owner, operation, values, secret)
+                else:
+                    result = await api._settled_thread(lambda: _write(owner, operation, values, secret))
             return web.json_response(result, headers=api.PRIVATE_HEADERS)
         except AnalyticsError as exc:
             return api._error(exc.status, exc.code)
@@ -160,5 +185,5 @@ def register(app, read_json_body, *, auth_enabled, session_secret):
 
     for operation in READS:
         app.router.add_get(PREFIX + "/" + operation, handle, allow_head=False)
-    for operation in WRITES:
+    for operation in (*WRITES, _TRANSACTIONS_BY_KEYS_OP):
         app.router.add_post(PREFIX + "/" + operation, handle)

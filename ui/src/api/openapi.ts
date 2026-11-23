@@ -214,7 +214,7 @@ export interface paths {
         };
         /**
          * Read the owner-private upcoming commitments estimate
-         * @description Read-only evaluation of unmarked mortgage instalments and active recurring charges from one local snapshot using the server UTC date. Matches recurring hints to individual scheduled instalments to suppress duplicate estimates. An optional currency filter scopes commitments, deduplications and their summary counts. Snapshot metadata and account freshness cover all selected accounts. The estimate excludes spending limits and makes no bank requests or stored changes.
+         * @description Read-only evaluation of unmarked mortgage instalments and active recurring charges from one local snapshot using the server UTC date. Matches recurring hints to individual scheduled instalments to suppress duplicate estimates. When HESTIA_BUDGET_FORECAST_CONFIG names categories, each month also includes a category_baseline estimate (confidence estimated, schedule_id null, label is the category name): the median or trimmed mean of net spending over prior complete months inside each account's coverage window, including months with no spend. The current month subtracts net spending already booked, floored at zero. A configured category already represented by an active recurring hint or an enabled mortgage schedule is omitted from the baselines and listed in summary.baseline_conflicts (category id and reason only, no amounts). Every other baseline, mortgage and recurring item is still computed. An optional currency filter scopes commitments, deduplications and their summary counts. Snapshot metadata and account freshness cover all selected accounts. The estimate excludes spending limits and makes no bank requests or stored changes.
          */
         get: operations["getBudgetAnalyticsForecast"];
         put?: never;
@@ -277,6 +277,26 @@ export interface paths {
          * @description Pure read-only single-snapshot monthly budget dashboard evaluated in Europe/Warsaw from one UTC instant. Computes booked configured start budget, adjusted category spending and limits, rent/mortgage pass-through, unresolved transfer and repayment candidate provisional flags, previous-month expected income estimates (including cross-account salary matching), and spending pace. Card exposure is reported as unavailable in P1. Makes no bank requests and no database writes.
          */
         get: operations["getBudgetAnalyticsMonthlyBudget"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/budget/analytics/monthly-budget/charts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read the owner-private monthly budget dashboard and chart series
+         * @description Pure read-only single-snapshot monthly budget dashboard and chart series evaluated in Europe/Warsaw from one UTC instant. Returns the MonthlyBudget dashboard alongside cumulative daily spending through cutoff and 6 or 12 historical monthly category/income buckets computed with each month's configured income window. Returns series=null when unconfigured. Makes no bank requests and no database writes.
+         */
+        get: operations["getBudgetAnalyticsMonthlyBudgetCharts"];
         put?: never;
         post?: never;
         delete?: never;
@@ -396,6 +416,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/budget/analytics/rule-batch-preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Preview up to 100 owner-private rules against one snapshot
+         * @description Requires the exact admin owner, browser cookie and configured HTTPS Origin. All-or-nothing: every candidate is validated before a preview row is stored, and one snapshot digest fences the whole batch (1..100 rules). affected_count is the combined change, not a sum of single-rule previews. No bank request is made.
+         */
+        post: operations["previewBudgetAnalyticsRules"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/budget/analytics/rule-batch-save": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Save a batch rule preview atomically
+         * @description Requires the exact admin owner, browser cookie and configured HTTPS Origin. Applies every rule in the batch preview or none: one digest check, per-rule expected_version checks, and the per-owner rule cap (MAX_RULES = 5000) are evaluated before any rule row changes. Replaying a saved batch returns changed=false. A single-rule preview id is rejected. No bank request is made.
+         */
+        post: operations["saveBudgetAnalyticsRules"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/budget/analytics/rule-preview": {
         parameters: {
             query?: never;
@@ -501,6 +561,26 @@ export interface paths {
         get: operations["getBudgetAnalyticsTransactions"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/budget/analytics/transactions-by-keys": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Read owner-private transactions matching exact row keys (pure read-only)
+         * @description Requires the exact admin owner, browser cookie and configured HTTPS Origin. Returns the same paginated BudgetAnalyticsTransactions shape as GET transactions for 1..500 exact <account_id>/<entry_reference> keys in the JSON body (<= 1 MiB) regardless of period, preventing oversized GET query strings and key leakage in access logs. Makes no bank requests and no database writes.
+         */
+        post: operations["listBudgetAnalyticsTransactionsByKeys"];
         delete?: never;
         options?: never;
         head?: never;
@@ -776,6 +856,286 @@ export interface paths {
          * @description Public exact GET only; state plus the matching per-flow HttpOnly cookie are mandatory. No provider request, adoption or account selection occurs. The code is kept in a private short-lived file. The fixed clean completion page restores the Strict Hestia session for an owner-only POST.
          */
         get: operations["stageBudgetConsentCallback"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/budget/household/access": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Discover the caller's household grant id
+         * @description Requires an authenticated active viewer, both budget flags, SQLite users and a grant whose owner is an active admin. Reads the same owner projection through a separate allowlist. Makes no bank request and no database write. GET /monthly-budget-settings reads the P1 bootstrap config only.
+         */
+        get: operations["getBudgetHouseholdAccess"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/budget/household/categories": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Household category aliases and safe labels
+         * @description Requires an authenticated active viewer, both budget flags, SQLite users and a grant whose owner is an active admin. Reads the same owner projection through a separate allowlist. Makes no bank request and no database write. GET /monthly-budget-settings reads the P1 bootstrap config only.
+         */
+        get: operations["getBudgetHouseholdCategories"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/budget/household/inbox": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Household mortgage and spending-limit inbox
+         * @description Requires an authenticated active viewer, both budget flags, SQLite users and a grant whose owner is an active admin. Reads the same owner projection through a separate allowlist. Makes no bank request and no database write. GET /monthly-budget-settings reads the P1 bootstrap config only.
+         */
+        get: operations["getBudgetHouseholdInbox"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/budget/household/monthly-budget": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Household monthly budget and series
+         * @description Requires an authenticated active viewer, both budget flags, SQLite users and a grant whose owner is an active admin. Reads the same owner projection through a separate allowlist. Makes no bank request and no database write. GET /monthly-budget-settings reads the P1 bootstrap config only.
+         */
+        get: operations["getBudgetHouseholdMonthlyBudget"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/budget/household/monthly-budget-settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Bootstrap monthly-budget settings with grant-scoped category ids
+         * @description Requires an authenticated active viewer, both budget flags, SQLite users and a grant whose owner is an active admin. Reads the same owner projection through a separate allowlist. Makes no bank request and no database write. GET /monthly-budget-settings reads the P1 bootstrap config only.
+         */
+        get: operations["getBudgetHouseholdMonthlyBudgetSettings"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/budget/household/mortgages": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Household mortgage schedules without labels
+         * @description Requires an authenticated active viewer, both budget flags, SQLite users and a grant whose owner is an active admin. Reads the same owner projection through a separate allowlist. Makes no bank request and no database write. GET /monthly-budget-settings reads the P1 bootstrap config only.
+         */
+        get: operations["getBudgetHouseholdMortgages"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/budget/household/overview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Household selected-account totals
+         * @description Requires an authenticated active viewer, both budget flags, SQLite users and a grant whose owner is an active admin. Reads the same owner projection through a separate allowlist. Makes no bank request and no database write. GET /monthly-budget-settings reads the P1 bootstrap config only.
+         */
+        get: operations["getBudgetHouseholdOverview"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/budget/household/quarantine": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Household quarantine counts over selected accounts
+         * @description Requires an authenticated active viewer, both budget flags, SQLite users and a grant whose owner is an active admin. Reads the same owner projection through a separate allowlist. Makes no bank request and no database write. GET /monthly-budget-settings reads the P1 bootstrap config only.
+         */
+        get: operations["getBudgetHouseholdQuarantine"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/budget/household/recurring": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Household recurring hints with generic ordinals
+         * @description Requires an authenticated active viewer, both budget flags, SQLite users and a grant whose owner is an active admin. Reads the same owner projection through a separate allowlist. Makes no bank request and no database write. GET /monthly-budget-settings reads the P1 bootstrap config only.
+         */
+        get: operations["getBudgetHouseholdRecurring"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/budget/household/report-accounts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Selected accounts as grant-scoped aliases and ordinals
+         * @description Requires an authenticated active viewer, both budget flags, SQLite users and a grant whose owner is an active admin. Reads the same owner projection through a separate allowlist. Makes no bank request and no database write. GET /monthly-budget-settings reads the P1 bootstrap config only.
+         */
+        get: operations["getBudgetHouseholdReportAccounts"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/budget/household/rules": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Household rules without literal operands
+         * @description Requires an authenticated active viewer, both budget flags, SQLite users and a grant whose owner is an active admin. Reads the same owner projection through a separate allowlist. Makes no bank request and no database write. GET /monthly-budget-settings reads the P1 bootstrap config only.
+         */
+        get: operations["getBudgetHouseholdRules"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/budget/household/spending-limits": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Enabled household spending limits
+         * @description Requires an authenticated active viewer, both budget flags, SQLite users and a grant whose owner is an active admin. Reads the same owner projection through a separate allowlist. Makes no bank request and no database write. GET /monthly-budget-settings reads the P1 bootstrap config only.
+         */
+        get: operations["getBudgetHouseholdSpendingLimits"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/budget/household/transactions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Household transactions without bank text
+         * @description Requires an authenticated active viewer, both budget flags, SQLite users and a grant whose owner is an active admin. Reads the same owner projection through a separate allowlist. Makes no bank request and no database write. GET /monthly-budget-settings reads the P1 bootstrap config only.
+         */
+        get: operations["getBudgetHouseholdTransactions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/budget/household/transfers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Household transfer pairs whose both legs are selected
+         * @description Requires an authenticated active viewer, both budget flags, SQLite users and a grant whose owner is an active admin. Reads the same owner projection through a separate allowlist. Makes no bank request and no database write. GET /monthly-budget-settings reads the P1 bootstrap config only.
+         */
+        get: operations["getBudgetHouseholdTransfers"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1581,6 +1941,8 @@ export interface components {
             category_id: string | null;
             /** Kind */
             kind: string;
+            /** Label */
+            label?: string | null;
             /** Mode */
             mode: string;
             /** Stale */
@@ -1605,6 +1967,8 @@ export interface components {
              * @enum {string}
              */
             kind: "auto" | "expense" | "income" | "refund" | "excluded";
+            /** Label */
+            label?: string | null;
             /**
              * Mode
              * @enum {string}
@@ -1632,6 +1996,8 @@ export interface components {
             entry_reference: string;
             /** Kind */
             kind: string;
+            /** Label */
+            label?: string | null;
             /** Ledger Fingerprint */
             ledger_fingerprint: string;
             /** Mode */
@@ -1640,6 +2006,28 @@ export interface components {
             updated_at: number | null;
             /** Version */
             version: number;
+        };
+        /** BudgetAnalyticsBatchPreview */
+        BudgetAnalyticsBatchPreview: {
+            /** Affected Count */
+            affected_count: number;
+            /** Examples */
+            examples: components["schemas"]["BudgetAnalyticsPreviewExample"][];
+            /** Expires At */
+            expires_at: number;
+            /** Preview Id */
+            preview_id: string;
+            /** Rule Count */
+            rule_count: number;
+        };
+        /** BudgetAnalyticsBatchPreviewResult */
+        BudgetAnalyticsBatchPreviewResult: {
+            /**
+             * Ok
+             * @constant
+             */
+            ok: true;
+            preview: components["schemas"]["BudgetAnalyticsBatchPreview"];
         };
         /** BudgetAnalyticsCategories */
         BudgetAnalyticsCategories: {
@@ -1656,6 +2044,8 @@ export interface components {
             id: string;
             /** Name */
             name: string;
+            /** Parent Id */
+            parent_id: string | null;
             /** Updated At */
             updated_at: number;
             /** Version */
@@ -1665,6 +2055,12 @@ export interface components {
         BudgetAnalyticsCategoryCreateRequest: {
             /** Name */
             name: string;
+            /**
+             * Parent Id
+             * @description Parent category owned by the same user. Null is a top-level category. On update, omit this field to leave the parent unchanged and send null to detach.
+             * @default null
+             */
+            parent_id: string | null;
         };
         /** BudgetAnalyticsCategoryResult */
         BudgetAnalyticsCategoryResult: {
@@ -1687,6 +2083,8 @@ export interface components {
             id: string;
             /** Name */
             name: string;
+            /** Parent Id */
+            parent_id: string | null;
             /** Updated At */
             updated_at: number;
             /** Version */
@@ -1706,6 +2104,10 @@ export interface components {
             name: string | null;
             /** Net Spending */
             net_spending: string;
+            /** One Off */
+            one_off?: boolean;
+            /** One Off Key */
+            one_off_key?: string | null;
             /** Refunds */
             refunds: string;
         };
@@ -1719,6 +2121,12 @@ export interface components {
             expected_version: number;
             /** Name */
             name: string;
+            /**
+             * Parent Id
+             * @description Parent category owned by the same user. Null is a top-level category. On update, omit this field to leave the parent unchanged and send null to detach.
+             * @default null
+             */
+            parent_id: string | null;
         };
         /**
          * BudgetAnalyticsCurrency
@@ -1842,6 +2250,21 @@ export interface components {
             totals: components["schemas"]["BudgetAnalyticsForecastCurrencyTotal"][];
         };
         /**
+         * BudgetAnalyticsForecastBaselineConflict
+         * @description A configured category omitted because an active hint or an enabled mortgage already represents it.
+         *
+         *     No amounts. A category may appear twice when both reasons apply.
+         */
+        BudgetAnalyticsForecastBaselineConflict: {
+            /** Category Id */
+            category_id: string;
+            /**
+             * Reason
+             * @enum {string}
+             */
+            reason: "recurring" | "mortgage";
+        };
+        /**
          * BudgetAnalyticsForecastCurrencyTotal
          * @description Exact decimal commitment totals in one currency.
          */
@@ -1886,7 +2309,7 @@ export interface components {
              * Confidence
              * @enum {string}
              */
-            confidence: "scheduled" | "high" | "medium";
+            confidence: "scheduled" | "high" | "medium" | "estimated";
             /** Currency */
             currency: string;
             /** Expected Date */
@@ -1901,7 +2324,7 @@ export interface components {
              * Source
              * @enum {string}
              */
-            source: "mortgage" | "recurring";
+            source: "mortgage" | "recurring" | "category_baseline";
         };
         /** BudgetAnalyticsForecastMonth */
         BudgetAnalyticsForecastMonth: {
@@ -1914,6 +2337,8 @@ export interface components {
         };
         /** BudgetAnalyticsForecastSummary */
         BudgetAnalyticsForecastSummary: {
+            /** Baseline Conflicts */
+            baseline_conflicts?: components["schemas"]["BudgetAnalyticsForecastBaselineConflict"][];
             /** Deduped Recurring Count */
             deduped_recurring_count: number;
             /** Excluded Accounts */
@@ -2247,6 +2672,15 @@ export interface components {
              */
             status: "unavailable";
         };
+        /** BudgetAnalyticsMonthlyBudgetCategoryLabel */
+        BudgetAnalyticsMonthlyBudgetCategoryLabel: {
+            /** Archived */
+            archived: boolean;
+            /** Category Id */
+            category_id: string;
+            /** Name */
+            name: string;
+        };
         /** BudgetAnalyticsMonthlyBudgetCategoryLimit */
         BudgetAnalyticsMonthlyBudgetCategoryLimit: {
             /** Monthly Limit */
@@ -2278,8 +2712,20 @@ export interface components {
             name: string | null;
             /** Net Spending */
             net_spending: string;
+            /** One Off */
+            one_off?: boolean;
+            /** One Off Key */
+            one_off_key?: string | null;
             /** Refunds */
             refunds: string;
+        };
+        /**
+         * BudgetAnalyticsMonthlyBudgetCharts
+         * @description Read-only owner-private monthly budget dashboard and chart series evaluated from one snapshot.
+         */
+        BudgetAnalyticsMonthlyBudgetCharts: {
+            budget: components["schemas"]["BudgetAnalyticsMonthlyBudget"];
+            series: components["schemas"]["BudgetAnalyticsMonthlyBudgetSeries"] | null;
         };
         /** BudgetAnalyticsMonthlyBudgetConfiguration */
         BudgetAnalyticsMonthlyBudgetConfiguration: {
@@ -2301,6 +2747,10 @@ export interface components {
             has_activity: boolean;
             /** Ledger As Of */
             ledger_as_of: number | null;
+            /** Pending Row Keys */
+            pending_row_keys?: string[];
+            /** Pending Row Keys Truncated */
+            pending_row_keys_truncated?: boolean;
             /** Pending Transfer Rows */
             pending_transfer_rows: number;
             /** Provisional */
@@ -2311,6 +2761,13 @@ export interface components {
             stale_selected_accounts: number;
             /** Transfer Scan Limited */
             transfer_scan_limited: boolean;
+        };
+        /** BudgetAnalyticsMonthlyBudgetDailyPoint */
+        BudgetAnalyticsMonthlyBudgetDailyPoint: {
+            /** Cumulative Spent */
+            cumulative_spent: string;
+            /** Date */
+            date: string;
         };
         /** BudgetAnalyticsMonthlyBudgetExpectedIncome */
         BudgetAnalyticsMonthlyBudgetExpectedIncome: {
@@ -2393,6 +2850,47 @@ export interface components {
             denominator: number;
             /** Numerator */
             numerator: string;
+        };
+        /** BudgetAnalyticsMonthlyBudgetSeries */
+        BudgetAnalyticsMonthlyBudgetSeries: {
+            /** Category Labels */
+            category_labels: components["schemas"]["BudgetAnalyticsMonthlyBudgetCategoryLabel"][];
+            /** Daily */
+            daily: components["schemas"]["BudgetAnalyticsMonthlyBudgetDailyPoint"][];
+            /** Months */
+            months: components["schemas"]["BudgetAnalyticsMonthlyBudgetSeriesMonth"][];
+        };
+        /** BudgetAnalyticsMonthlyBudgetSeriesCategory */
+        BudgetAnalyticsMonthlyBudgetSeriesCategory: {
+            /** Category Id */
+            category_id: string | null;
+            /** Name */
+            name?: string | null;
+            /** Net Spending */
+            net_spending: string;
+            /** One Off */
+            one_off?: boolean;
+            /** One Off Key */
+            one_off_key?: string | null;
+        };
+        /** BudgetAnalyticsMonthlyBudgetSeriesMonth */
+        BudgetAnalyticsMonthlyBudgetSeriesMonth: {
+            /** Categories */
+            categories: components["schemas"]["BudgetAnalyticsMonthlyBudgetSeriesCategory"][];
+            /** Has Activity */
+            has_activity: boolean;
+            /** Income Estimate Partial */
+            income_estimate_partial: boolean;
+            /** Is Current Month */
+            is_current_month: boolean;
+            /** Period */
+            period: string;
+            /** Provisional */
+            provisional: boolean;
+            /** Spent */
+            spent: string;
+            /** Start Budget */
+            start_budget: string;
         };
         /** BudgetAnalyticsMonthlyBudgetSummary */
         BudgetAnalyticsMonthlyBudgetSummary: {
@@ -2818,6 +3316,38 @@ export interface components {
             /** Version */
             version: number;
         };
+        /** BudgetAnalyticsRuleBatch */
+        BudgetAnalyticsRuleBatch: {
+            /** Changed */
+            changed: boolean;
+            /** Rules */
+            rules: components["schemas"]["BudgetAnalyticsRuleSaved"][];
+        };
+        /**
+         * BudgetAnalyticsRuleBatchPreviewRequest
+         * @description Preview up to 100 rules against one snapshot. Invalid candidates store nothing.
+         */
+        BudgetAnalyticsRuleBatchPreviewRequest: {
+            /** Rules */
+            rules: components["schemas"]["BudgetAnalyticsRulePreviewRequest"][];
+        };
+        /** BudgetAnalyticsRuleBatchResult */
+        BudgetAnalyticsRuleBatchResult: {
+            batch: components["schemas"]["BudgetAnalyticsRuleBatch"];
+            /**
+             * Ok
+             * @constant
+             */
+            ok: true;
+        };
+        /**
+         * BudgetAnalyticsRuleBatchSaveRequest
+         * @description Save the whole batch preview or none of it. A single-rule preview id is rejected.
+         */
+        BudgetAnalyticsRuleBatchSaveRequest: {
+            /** Preview Id */
+            preview_id: string;
+        };
         /** BudgetAnalyticsRulePreviewRequest */
         BudgetAnalyticsRulePreviewRequest: {
             /** Category Id */
@@ -3107,6 +3637,41 @@ export interface components {
             start: string;
             /** Transactions */
             transactions: components["schemas"]["BudgetAnalyticsTransaction"][];
+        };
+        /** BudgetAnalyticsTransactionsByKeysRequest */
+        BudgetAnalyticsTransactionsByKeysRequest: {
+            /**
+             * Category Id
+             * @default null
+             */
+            category_id: string | null;
+            /**
+             * Currency
+             * @default null
+             */
+            currency: string | null;
+            /**
+             * Cursor
+             * @default null
+             */
+            cursor: string | null;
+            /**
+             * Kind
+             * @default null
+             */
+            kind: ("expense" | "income" | "refund" | "excluded" | "unclassified_credit" | "transfer") | null;
+            /**
+             * Limit
+             * @default 50
+             */
+            limit: number;
+            /**
+             * Query
+             * @default null
+             */
+            query: string | null;
+            /** Row Keys */
+            row_keys: string[];
         };
         /** BudgetAnalyticsTransfer */
         BudgetAnalyticsTransfer: {
@@ -3765,6 +4330,432 @@ export interface components {
              * @constant
              */
             ok: false;
+        };
+        /**
+         * BudgetHouseholdAccess
+         * @description Discovery. The only household read that does not take X-Budget-Grant.
+         */
+        BudgetHouseholdAccess: {
+            /** Grant Id */
+            grant_id: string;
+        };
+        /** BudgetHouseholdAccount */
+        BudgetHouseholdAccount: {
+            /** Account Id */
+            account_id: string;
+            /** Ordinal */
+            ordinal: number;
+        };
+        /** BudgetHouseholdAccounts */
+        BudgetHouseholdAccounts: {
+            /** Accounts */
+            accounts: components["schemas"]["BudgetHouseholdAccount"][];
+            /** Grant Id */
+            grant_id: string;
+        };
+        /** BudgetHouseholdCategories */
+        BudgetHouseholdCategories: {
+            /** Categories */
+            categories: components["schemas"]["BudgetHouseholdCategory"][];
+            /** Grant Id */
+            grant_id: string;
+        };
+        /** BudgetHouseholdCategory */
+        BudgetHouseholdCategory: {
+            /** Archived */
+            archived: boolean;
+            /** Id */
+            id: string;
+            /** Label */
+            label: string;
+        };
+        /** BudgetHouseholdCategoryLabel */
+        BudgetHouseholdCategoryLabel: {
+            /** Archived */
+            archived: boolean;
+            /** Category Id */
+            category_id: string;
+            /** Name */
+            name: string;
+        };
+        /** BudgetHouseholdInbox */
+        BudgetHouseholdInbox: {
+            /** Evaluation Date */
+            evaluation_date: string;
+            /** Grant Id */
+            grant_id: string;
+            /** Items */
+            items: components["schemas"]["BudgetHouseholdInboxItem"][];
+            /** Unread Count */
+            unread_count: number;
+        };
+        /** BudgetHouseholdInboxItem */
+        BudgetHouseholdInboxItem: {
+            /**
+             * Category Id
+             * @default null
+             */
+            category_id: string | null;
+            /**
+             * Currency
+             * @default null
+             */
+            currency: string | null;
+            /**
+             * Due Date
+             * @default null
+             */
+            due_date: string | null;
+            /** Id */
+            id: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "mortgage_due" | "spending_limit";
+            /**
+             * Period
+             * @default null
+             */
+            period: string | null;
+            /** Read */
+            read: boolean;
+            /**
+             * Schedule Id
+             * @default null
+             */
+            schedule_id: string | null;
+            /** Status */
+            status: string;
+        };
+        /** BudgetHouseholdMoney */
+        BudgetHouseholdMoney: {
+            /** Currency */
+            currency: string;
+            /** Expenses */
+            expenses: string;
+            /** Income */
+            income: string;
+            /** Net Spending */
+            net_spending: string;
+            /** Refunds */
+            refunds: string;
+        };
+        /**
+         * BudgetHouseholdMonthlyBudget
+         * @description Same calculations as the owner dashboard, with grant-scoped aliases and safe labels.
+         */
+        BudgetHouseholdMonthlyBudget: {
+            budget: components["schemas"]["BudgetAnalyticsMonthlyBudget"];
+            /** Grant Id */
+            grant_id: string;
+            series: components["schemas"]["BudgetHouseholdSeries"];
+        };
+        /** BudgetHouseholdMortgageReminder */
+        BudgetHouseholdMortgageReminder: {
+            /** Due Date */
+            due_date: string | null;
+            /** Schedule Id */
+            schedule_id: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "overdue" | "due_today" | "due_soon" | "upcoming" | "completed";
+        };
+        /** BudgetHouseholdMortgageSchedule */
+        BudgetHouseholdMortgageSchedule: {
+            /** Amount */
+            amount: string;
+            /** Currency */
+            currency: string;
+            /** Due Day */
+            due_day: number;
+            /** Enabled */
+            enabled: boolean;
+            /** End Date */
+            end_date: string | null;
+            /** Id */
+            id: string;
+            /** Ordinal */
+            ordinal: number;
+            /** Paid Months */
+            paid_months: string[];
+            /** Start Date */
+            start_date: string;
+        };
+        /** BudgetHouseholdMortgages */
+        BudgetHouseholdMortgages: {
+            /** Evaluation Date */
+            evaluation_date: string;
+            /** Grant Id */
+            grant_id: string;
+            /** Reminders */
+            reminders: components["schemas"]["BudgetHouseholdMortgageReminder"][];
+            /** Schedules */
+            schedules: components["schemas"]["BudgetHouseholdMortgageSchedule"][];
+        };
+        /** BudgetHouseholdOverview */
+        BudgetHouseholdOverview: {
+            /** Categories */
+            categories: components["schemas"]["BudgetHouseholdOverviewCategory"][];
+            /** Currencies */
+            currencies: components["schemas"]["BudgetHouseholdMoney"][];
+            /** Grant Id */
+            grant_id: string;
+            /** Months */
+            months: components["schemas"]["BudgetHouseholdOverviewMonth"][];
+            /** Period */
+            period: string;
+        };
+        /** BudgetHouseholdOverviewCategory */
+        BudgetHouseholdOverviewCategory: {
+            /** Archived */
+            archived: boolean;
+            /** Category Id */
+            category_id: string | null;
+            /** Currency */
+            currency: string;
+            /** Expenses */
+            expenses: string;
+            /** Income */
+            income: string;
+            /** Label */
+            label: string | null;
+            /** Net Spending */
+            net_spending: string;
+            /** Refunds */
+            refunds: string;
+        };
+        /** BudgetHouseholdOverviewMonth */
+        BudgetHouseholdOverviewMonth: {
+            /** Currencies */
+            currencies: components["schemas"]["BudgetHouseholdMoney"][];
+            /** Month */
+            month: string;
+        };
+        /** BudgetHouseholdPassThrough */
+        BudgetHouseholdPassThrough: {
+            /** Mortgage Category Id */
+            mortgage_category_id: string;
+            /** Rent Category Id */
+            rent_category_id: string;
+        };
+        /** BudgetHouseholdQuarantine */
+        BudgetHouseholdQuarantine: {
+            /** Grant Id */
+            grant_id: string;
+            /** Import Unresolved Count */
+            import_unresolved_count: number;
+            /** Uncertain Count */
+            uncertain_count: number;
+            /** Unresolved Count */
+            unresolved_count: number;
+        };
+        /** BudgetHouseholdRecurring */
+        BudgetHouseholdRecurring: {
+            /** Grant Id */
+            grant_id: string;
+            /** Hints */
+            hints: components["schemas"]["BudgetHouseholdRecurringHint"][];
+        };
+        /** BudgetHouseholdRecurringHint */
+        BudgetHouseholdRecurringHint: {
+            /** Amount */
+            amount: string;
+            /** Cadence */
+            cadence: string;
+            /** Currency */
+            currency: string;
+            /** First Date */
+            first_date: string;
+            /** Last Date */
+            last_date: string;
+            /** Occurrence Count */
+            occurrence_count: number;
+            /** Ordinal */
+            ordinal: number;
+        };
+        /** BudgetHouseholdRule */
+        BudgetHouseholdRule: {
+            /** Category Id */
+            category_id: string | null;
+            /** Enabled */
+            enabled: boolean;
+            /**
+             * Field
+             * @enum {string}
+             */
+            field: "description" | "counterparty_name" | "mcc";
+            /** Id */
+            id: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "auto" | "expense" | "income" | "refund" | "excluded";
+            /**
+             * Operator
+             * @enum {string}
+             */
+            operator: "contains" | "equals";
+            /** Priority */
+            priority: number;
+        };
+        /** BudgetHouseholdRules */
+        BudgetHouseholdRules: {
+            /** Grant Id */
+            grant_id: string;
+            /** Rules */
+            rules: components["schemas"]["BudgetHouseholdRule"][];
+        };
+        /** BudgetHouseholdSeries */
+        BudgetHouseholdSeries: {
+            /** Category Labels */
+            category_labels: components["schemas"]["BudgetHouseholdCategoryLabel"][];
+            /** Daily */
+            daily: components["schemas"]["BudgetHouseholdSeriesDay"][];
+            /** Months */
+            months: components["schemas"]["BudgetHouseholdSeriesMonth"][];
+        };
+        /** BudgetHouseholdSeriesCategory */
+        BudgetHouseholdSeriesCategory: {
+            /** Category Id */
+            category_id: string | null;
+            /** Net Spending */
+            net_spending: string;
+        };
+        /** BudgetHouseholdSeriesDay */
+        BudgetHouseholdSeriesDay: {
+            /** Cumulative Spent */
+            cumulative_spent: string;
+            /** Date */
+            date: string;
+        };
+        /** BudgetHouseholdSeriesMonth */
+        BudgetHouseholdSeriesMonth: {
+            /** Categories */
+            categories: components["schemas"]["BudgetHouseholdSeriesCategory"][];
+            /** Has Activity */
+            has_activity: boolean;
+            /** Income Estimate Partial */
+            income_estimate_partial: boolean;
+            /** Is Current Month */
+            is_current_month: boolean;
+            /** Period */
+            period: string;
+            /** Provisional */
+            provisional: boolean;
+            /** Spent */
+            spent: string;
+            /** Start Budget */
+            start_budget: string;
+        };
+        /**
+         * BudgetHouseholdSettings
+         * @description Bootstrap month config only. An absent owner entry is an empty income list and null pass-through.
+         */
+        BudgetHouseholdSettings: {
+            /** Grant Id */
+            grant_id: string;
+            /** Income Category Ids */
+            income_category_ids: string[];
+            pass_through: components["schemas"]["BudgetHouseholdPassThrough"] | null;
+        };
+        /** BudgetHouseholdSpendingLimit */
+        BudgetHouseholdSpendingLimit: {
+            /** Category Id */
+            category_id: string;
+            /** Currency */
+            currency: string;
+            /** Monthly Limit */
+            monthly_limit: string;
+            /** Net Spending */
+            net_spending: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "within" | "approaching" | "at_limit" | "exceeded";
+            /** Warning Percent */
+            warning_percent: number;
+        };
+        /** BudgetHouseholdSpendingLimits */
+        BudgetHouseholdSpendingLimits: {
+            /** Grant Id */
+            grant_id: string;
+            /** Limits */
+            limits: components["schemas"]["BudgetHouseholdSpendingLimit"][];
+        };
+        /** BudgetHouseholdTransaction */
+        BudgetHouseholdTransaction: {
+            /** Account Id */
+            account_id: string;
+            /** Amount */
+            amount: string;
+            /** Category Id */
+            category_id: string | null;
+            /** Currency */
+            currency: string;
+            /** Date */
+            date: string;
+            /**
+             * Direction
+             * @enum {string}
+             */
+            direction: "DBIT" | "CRDT";
+            /** Id */
+            id: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "expense" | "income" | "refund" | "excluded" | "unclassified_credit" | "transfer";
+        };
+        /** BudgetHouseholdTransactions */
+        BudgetHouseholdTransactions: {
+            /** Filtered Total */
+            filtered_total: number;
+            /** Grant Id */
+            grant_id: string;
+            /** Next Cursor */
+            next_cursor: string | null;
+            /** Transactions */
+            transactions: components["schemas"]["BudgetHouseholdTransaction"][];
+        };
+        /** BudgetHouseholdTransfer */
+        BudgetHouseholdTransfer: {
+            credit: components["schemas"]["BudgetHouseholdTransferLeg"];
+            debit: components["schemas"]["BudgetHouseholdTransferLeg"];
+            /** Id */
+            id: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "suggested" | "accepted" | "review" | "boundary" | "rejected" | "undone";
+        };
+        /** BudgetHouseholdTransferLeg */
+        BudgetHouseholdTransferLeg: {
+            /** Account Id */
+            account_id: string;
+            /** Amount */
+            amount: string;
+            /** Currency */
+            currency: string;
+            /** Date */
+            date: string;
+        };
+        /** BudgetHouseholdTransfers */
+        BudgetHouseholdTransfers: {
+            /** Filtered Total */
+            filtered_total: number;
+            /** Grant Id */
+            grant_id: string;
+            /** Next Cursor */
+            next_cursor: string | null;
+            /** Transfers */
+            transfers: components["schemas"]["BudgetHouseholdTransfer"][];
         };
         /**
          * BudgetJob
@@ -5972,7 +6963,7 @@ export interface operations {
                     "application/json": components["schemas"]["BudgetError"];
                 };
             };
-            /** @description Forecast limit exceeded (>100,000 selected rows, >100 schedules, >1,200 paid marks per schedule, >200 active currency-filtered hints, >3,600 projected items, or >4 MiB UTF-8 JSON payload); zero partial totals returned. */
+            /** @description Forecast limit exceeded (>100,000 selected rows, >100 schedules, >1,200 paid marks per schedule, >200 active currency-filtered hints, >64 category baselines, >4,368 projected items, or >4 MiB UTF-8 JSON payload); zero partial totals returned. */
             413: {
                 headers: {
                     [name: string]: unknown;
@@ -5990,7 +6981,7 @@ export interface operations {
                     "application/json": components["schemas"]["BudgetError"];
                 };
             };
-            /** @description Analytics storage or budget configuration unavailable (`budget_analytics_unavailable` or `budget_unavailable`). */
+            /** @description Analytics storage or budget configuration unavailable (`budget_analytics_unavailable` or `budget_unavailable`). budget_forecast_config_conflict (0.31–0.32) wycofany w 0.33; konflikt to teraz 200 + summary.baseline_conflicts. */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -6258,6 +7249,105 @@ export interface operations {
                 };
             };
             /** @description Monthly budget limit exceeded (>100,000 selected rows, >1,000 category limits, >192-character aggregate decimal output, or >4 MiB UTF-8 JSON payload); no partial totals returned. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Stored ledger, category, limit, metadata, or timestamp integrity check failed (`budget_analytics_data_error`), including stored-data helper errors mapped to 500 after query validation, or unexpected internal failure (`budget_internal_error`). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Analytics storage, Europe/Warsaw time zone, or monthly budget configuration unavailable (`budget_analytics_unavailable` or `budget_unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+        };
+    };
+    getBudgetAnalyticsMonthlyBudgetCharts: {
+        parameters: {
+            query?: {
+                /** @description Optional calendar month YYYY-MM, 1900 through the current Europe/Warsaw month; defaults to current month. */
+                period?: string;
+                /** @description Optional uppercase 3-letter ISO currency code; defaults to PLN. */
+                currency?: string;
+                /** @description Optional monthly history window (6 or 12 months); defaults to 6. */
+                history?: "6" | "12";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Owner-private monthly budget dashboard and chart series from one local snapshot. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetAnalyticsMonthlyBudgetCharts"];
+                };
+            };
+            /** @description Invalid monthly budget charts query: period must match ^[0-9]{4}-[0-9]{2}$ through the current Europe/Warsaw month, currency must match ^[A-Z]{3}$, history must be 6 or 12, and unknown or duplicate parameters are rejected. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description session required; middleware may return an empty body */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description admin owner or browser-origin requirement failed; middleware may return an empty body */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description unknown, disabled or foreign resource */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description SQLite backend required: monthly-budget/charts requires HESTIA_PERSIST=sqlite. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Monthly budget charts limit exceeded (>100,000 selected rows, >1,000 category limits, >192-character aggregate decimal output, or >4 MiB UTF-8 JSON payload); no partial totals returned. */
             413: {
                 headers: {
                     [name: string]: unknown;
@@ -6855,6 +7945,198 @@ export interface operations {
             };
         };
     };
+    previewBudgetAnalyticsRules: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BudgetAnalyticsRuleBatchPreviewRequest"];
+            };
+        };
+        responses: {
+            /** @description owner-scoped stored state; no bank request */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetAnalyticsBatchPreviewResult"];
+                };
+            };
+            /** @description invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description session required; middleware may return an empty body */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description admin owner or browser-origin requirement failed; middleware may return an empty body */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description unknown, disabled or foreign resource */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Version, financial source, reserved transfer leg, preview or cursor changed; reload and review. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Explicit analytics processing or owner configuration limit; no partial totals. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description budget configuration unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+        };
+    };
+    saveBudgetAnalyticsRules: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BudgetAnalyticsRuleBatchSaveRequest"];
+            };
+        };
+        responses: {
+            /** @description owner-scoped stored state; no bank request */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetAnalyticsRuleBatchResult"];
+                };
+            };
+            /** @description invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description session required; middleware may return an empty body */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description admin owner or browser-origin requirement failed; middleware may return an empty body */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description unknown, disabled or foreign resource */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Version, financial source, reserved transfer leg, preview or cursor changed; reload and review. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Explicit analytics processing or owner configuration limit; no partial totals. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description budget configuration unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+        };
+    };
     previewBudgetAnalyticsRule: {
         parameters: {
             query?: never;
@@ -7350,6 +8632,102 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            /** @description owner-scoped stored state; no bank request */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetAnalyticsTransactions"];
+                };
+            };
+            /** @description invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description session required; middleware may return an empty body */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description admin owner or browser-origin requirement failed; middleware may return an empty body */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description unknown, disabled or foreign resource */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Version, financial source, reserved transfer leg, preview or cursor changed; reload and review. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Explicit analytics processing or owner configuration limit; no partial totals. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description budget configuration unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+        };
+    };
+    listBudgetAnalyticsTransactionsByKeys: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BudgetAnalyticsTransactionsByKeysRequest"];
+            };
+        };
         responses: {
             /** @description owner-scoped stored state; no bank request */
             200: {
@@ -8676,6 +10054,1368 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    getBudgetHouseholdAccess: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Read-only household view. No bank request and no database write. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetHouseholdAccess"];
+                };
+            };
+            /** @description invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description session required; middleware may return an empty body */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Stored role must be exactly an active viewer with a grant whose owner is an active admin. Data reads also require exactly one matching X-Budget-Grant. The viewer route floor admits higher roles; those roles are rejected here. Middleware may return an empty body. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description unknown, disabled or foreign resource */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Version, financial source, reserved transfer leg, preview or cursor changed; reload and review. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Household response exceeded 4 MiB of UTF-8 JSON, or a monthly-budget processing cap was hit. No partial body is returned. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description budget configuration unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+        };
+    };
+    getBudgetHouseholdCategories: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Exactly one household grant id, as returned by discovery. A missing, duplicate or different value is rejected. */
+                "X-Budget-Grant": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Read-only household view. No bank request and no database write. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetHouseholdCategories"];
+                };
+            };
+            /** @description invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description session required; middleware may return an empty body */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Stored role must be exactly an active viewer with a grant whose owner is an active admin. Data reads also require exactly one matching X-Budget-Grant. The viewer route floor admits higher roles; those roles are rejected here. Middleware may return an empty body. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description unknown, disabled or foreign resource */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Version, financial source, reserved transfer leg, preview or cursor changed; reload and review. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Household response exceeded 4 MiB of UTF-8 JSON, or a monthly-budget processing cap was hit. No partial body is returned. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description budget configuration unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+        };
+    };
+    getBudgetHouseholdInbox: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Exactly one household grant id, as returned by discovery. A missing, duplicate or different value is rejected. */
+                "X-Budget-Grant": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Read-only household view. No bank request and no database write. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetHouseholdInbox"];
+                };
+            };
+            /** @description invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description session required; middleware may return an empty body */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Stored role must be exactly an active viewer with a grant whose owner is an active admin. Data reads also require exactly one matching X-Budget-Grant. The viewer route floor admits higher roles; those roles are rejected here. Middleware may return an empty body. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description unknown, disabled or foreign resource */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Version, financial source, reserved transfer leg, preview or cursor changed; reload and review. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Household response exceeded 4 MiB of UTF-8 JSON, or a monthly-budget processing cap was hit. No partial body is returned. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description budget configuration unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+        };
+    };
+    getBudgetHouseholdMonthlyBudget: {
+        parameters: {
+            query?: {
+                /** @description Optional calendar month YYYY-MM through the current Europe/Warsaw month. Defaults to that month. */
+                period?: string;
+                /** @description Optional uppercase 3-letter ISO currency code. Defaults to PLN. */
+                currency?: string;
+            };
+            header: {
+                /** @description Exactly one household grant id, as returned by discovery. A missing, duplicate or different value is rejected. */
+                "X-Budget-Grant": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Read-only household view. No bank request and no database write. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetHouseholdMonthlyBudget"];
+                };
+            };
+            /** @description invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description session required; middleware may return an empty body */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Stored role must be exactly an active viewer with a grant whose owner is an active admin. Data reads also require exactly one matching X-Budget-Grant. The viewer route floor admits higher roles; those roles are rejected here. Middleware may return an empty body. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description unknown, disabled or foreign resource */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Version, financial source, reserved transfer leg, preview or cursor changed; reload and review. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Household response exceeded 4 MiB of UTF-8 JSON, or a monthly-budget processing cap was hit. No partial body is returned. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description budget configuration unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+        };
+    };
+    getBudgetHouseholdMonthlyBudgetSettings: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Exactly one household grant id, as returned by discovery. A missing, duplicate or different value is rejected. */
+                "X-Budget-Grant": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Read-only household view. No bank request and no database write. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetHouseholdSettings"];
+                };
+            };
+            /** @description invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description session required; middleware may return an empty body */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Stored role must be exactly an active viewer with a grant whose owner is an active admin. Data reads also require exactly one matching X-Budget-Grant. The viewer route floor admits higher roles; those roles are rejected here. Middleware may return an empty body. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description unknown, disabled or foreign resource */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Version, financial source, reserved transfer leg, preview or cursor changed; reload and review. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Household response exceeded 4 MiB of UTF-8 JSON, or a monthly-budget processing cap was hit. No partial body is returned. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description budget configuration unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+        };
+    };
+    getBudgetHouseholdMortgages: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Exactly one household grant id, as returned by discovery. A missing, duplicate or different value is rejected. */
+                "X-Budget-Grant": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Read-only household view. No bank request and no database write. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetHouseholdMortgages"];
+                };
+            };
+            /** @description invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description session required; middleware may return an empty body */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Stored role must be exactly an active viewer with a grant whose owner is an active admin. Data reads also require exactly one matching X-Budget-Grant. The viewer route floor admits higher roles; those roles are rejected here. Middleware may return an empty body. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description unknown, disabled or foreign resource */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Version, financial source, reserved transfer leg, preview or cursor changed; reload and review. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Household response exceeded 4 MiB of UTF-8 JSON, or a monthly-budget processing cap was hit. No partial body is returned. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description budget configuration unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+        };
+    };
+    getBudgetHouseholdOverview: {
+        parameters: {
+            query: {
+                /** @description Inclusive calendar month or year, 1900 through 9999. */
+                period: string;
+                currency?: string;
+            };
+            header: {
+                /** @description Exactly one household grant id, as returned by discovery. A missing, duplicate or different value is rejected. */
+                "X-Budget-Grant": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Read-only household view. No bank request and no database write. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetHouseholdOverview"];
+                };
+            };
+            /** @description invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description session required; middleware may return an empty body */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Stored role must be exactly an active viewer with a grant whose owner is an active admin. Data reads also require exactly one matching X-Budget-Grant. The viewer route floor admits higher roles; those roles are rejected here. Middleware may return an empty body. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description unknown, disabled or foreign resource */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Version, financial source, reserved transfer leg, preview or cursor changed; reload and review. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Household response exceeded 4 MiB of UTF-8 JSON, or a monthly-budget processing cap was hit. No partial body is returned. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description budget configuration unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+        };
+    };
+    getBudgetHouseholdQuarantine: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Exactly one household grant id, as returned by discovery. A missing, duplicate or different value is rejected. */
+                "X-Budget-Grant": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Read-only household view. No bank request and no database write. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetHouseholdQuarantine"];
+                };
+            };
+            /** @description invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description session required; middleware may return an empty body */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Stored role must be exactly an active viewer with a grant whose owner is an active admin. Data reads also require exactly one matching X-Budget-Grant. The viewer route floor admits higher roles; those roles are rejected here. Middleware may return an empty body. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description unknown, disabled or foreign resource */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Version, financial source, reserved transfer leg, preview or cursor changed; reload and review. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Household response exceeded 4 MiB of UTF-8 JSON, or a monthly-budget processing cap was hit. No partial body is returned. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description budget configuration unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+        };
+    };
+    getBudgetHouseholdRecurring: {
+        parameters: {
+            query?: {
+                currency?: string;
+            };
+            header: {
+                /** @description Exactly one household grant id, as returned by discovery. A missing, duplicate or different value is rejected. */
+                "X-Budget-Grant": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Read-only household view. No bank request and no database write. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetHouseholdRecurring"];
+                };
+            };
+            /** @description invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description session required; middleware may return an empty body */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Stored role must be exactly an active viewer with a grant whose owner is an active admin. Data reads also require exactly one matching X-Budget-Grant. The viewer route floor admits higher roles; those roles are rejected here. Middleware may return an empty body. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description unknown, disabled or foreign resource */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Version, financial source, reserved transfer leg, preview or cursor changed; reload and review. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Household response exceeded 4 MiB of UTF-8 JSON, or a monthly-budget processing cap was hit. No partial body is returned. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description budget configuration unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+        };
+    };
+    getBudgetHouseholdReportAccounts: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Exactly one household grant id, as returned by discovery. A missing, duplicate or different value is rejected. */
+                "X-Budget-Grant": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Read-only household view. No bank request and no database write. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetHouseholdAccounts"];
+                };
+            };
+            /** @description invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description session required; middleware may return an empty body */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Stored role must be exactly an active viewer with a grant whose owner is an active admin. Data reads also require exactly one matching X-Budget-Grant. The viewer route floor admits higher roles; those roles are rejected here. Middleware may return an empty body. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description unknown, disabled or foreign resource */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Version, financial source, reserved transfer leg, preview or cursor changed; reload and review. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Household response exceeded 4 MiB of UTF-8 JSON, or a monthly-budget processing cap was hit. No partial body is returned. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description budget configuration unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+        };
+    };
+    getBudgetHouseholdRules: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Exactly one household grant id, as returned by discovery. A missing, duplicate or different value is rejected. */
+                "X-Budget-Grant": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Read-only household view. No bank request and no database write. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetHouseholdRules"];
+                };
+            };
+            /** @description invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description session required; middleware may return an empty body */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Stored role must be exactly an active viewer with a grant whose owner is an active admin. Data reads also require exactly one matching X-Budget-Grant. The viewer route floor admits higher roles; those roles are rejected here. Middleware may return an empty body. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description unknown, disabled or foreign resource */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Version, financial source, reserved transfer leg, preview or cursor changed; reload and review. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Household response exceeded 4 MiB of UTF-8 JSON, or a monthly-budget processing cap was hit. No partial body is returned. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description budget configuration unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+        };
+    };
+    getBudgetHouseholdSpendingLimits: {
+        parameters: {
+            query: {
+                /** @description Inclusive calendar month YYYY-MM. */
+                period: string;
+                currency?: string;
+            };
+            header: {
+                /** @description Exactly one household grant id, as returned by discovery. A missing, duplicate or different value is rejected. */
+                "X-Budget-Grant": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Read-only household view. No bank request and no database write. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetHouseholdSpendingLimits"];
+                };
+            };
+            /** @description invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description session required; middleware may return an empty body */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Stored role must be exactly an active viewer with a grant whose owner is an active admin. Data reads also require exactly one matching X-Budget-Grant. The viewer route floor admits higher roles; those roles are rejected here. Middleware may return an empty body. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description unknown, disabled or foreign resource */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Version, financial source, reserved transfer leg, preview or cursor changed; reload and review. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Household response exceeded 4 MiB of UTF-8 JSON, or a monthly-budget processing cap was hit. No partial body is returned. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description budget configuration unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+        };
+    };
+    getBudgetHouseholdTransactions: {
+        parameters: {
+            query: {
+                /** @description Inclusive calendar month or year, 1900 through 9999. */
+                period: string;
+                currency?: string;
+                kind?: "expense" | "income" | "refund" | "excluded" | "unclassified_credit" | "transfer";
+                /** @description Grant-scoped alias of a selected account. */
+                account_id?: string;
+                /** @description Grant-scoped category alias. The owner token uncategorised is rejected. */
+                category_id?: string;
+                limit?: number;
+                /** @description Opaque cursor bound to the viewer, owner, grant, route and safe rows. */
+                cursor?: string;
+            };
+            header: {
+                /** @description Exactly one household grant id, as returned by discovery. A missing, duplicate or different value is rejected. */
+                "X-Budget-Grant": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Read-only household view. No bank request and no database write. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetHouseholdTransactions"];
+                };
+            };
+            /** @description invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description session required; middleware may return an empty body */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Stored role must be exactly an active viewer with a grant whose owner is an active admin. Data reads also require exactly one matching X-Budget-Grant. The viewer route floor admits higher roles; those roles are rejected here. Middleware may return an empty body. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description unknown, disabled or foreign resource */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Version, financial source, reserved transfer leg, preview or cursor changed; reload and review. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Household response exceeded 4 MiB of UTF-8 JSON, or a monthly-budget processing cap was hit. No partial body is returned. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description budget configuration unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+        };
+    };
+    getBudgetHouseholdTransfers: {
+        parameters: {
+            query: {
+                /** @description Inclusive calendar month or year, 1900 through 9999. */
+                period: string;
+                currency?: string;
+                status?: "suggested" | "accepted" | "review" | "boundary" | "rejected" | "undone";
+                limit?: number;
+                /** @description Opaque cursor bound to the viewer, owner, grant, route and safe rows. */
+                cursor?: string;
+            };
+            header: {
+                /** @description Exactly one household grant id, as returned by discovery. A missing, duplicate or different value is rejected. */
+                "X-Budget-Grant": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Read-only household view. No bank request and no database write. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetHouseholdTransfers"];
+                };
+            };
+            /** @description invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description session required; middleware may return an empty body */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Stored role must be exactly an active viewer with a grant whose owner is an active admin. Data reads also require exactly one matching X-Budget-Grant. The viewer route floor admits higher roles; those roles are rejected here. Middleware may return an empty body. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description unknown, disabled or foreign resource */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Version, financial source, reserved transfer leg, preview or cursor changed; reload and review. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Household response exceeded 4 MiB of UTF-8 JSON, or a monthly-budget processing cap was hit. No partial body is returned. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description budget configuration unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
             };
         };
     };

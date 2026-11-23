@@ -23,6 +23,9 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
+from aiohttp.test_utils import TestClient, TestServer
+from aiohttp.web_middlewares import middleware
+
 from hestia import auth, db, proxy, store_sql, web
 from hestia.automations import AutomationEngine, AutomationStore, rule_vocab
 from hestia.protocol import Frame, build_frame, tlv
@@ -1953,6 +1956,116 @@ class RoleHelpersTests(unittest.TestCase):
         self.assertFalse(web._role_allows(None, "viewer"))
 
 
+# Spouse (stored role viewer) status for every registered method and path.
+# Household GETs are the only budget reads the spouse may reach. With the budget HTTP
+# flag off they answer 404 budget_disabled, which means the role gate admitted the viewer.
+# POST /api/budget/analytics/transactions-by-keys is a pure read of owner rows and is 403.
+# Owner analytics, consent, refresh, connections, rules, category writes, annotations,
+# the one-off label, forecast config, spending limits, mortgage config and exports stay 403.
+SPOUSE_ROUTE_STATUS = {
+    ("GET", "/"): 404,
+    ("GET", "/api/audit"): 200,
+    ("GET", "/api/automations"): 403,
+    ("GET", "/api/budget/accounts"): 403,
+    ("GET", "/api/budget/analytics/categories"): 403,
+    ("GET", "/api/budget/analytics/forecast"): 403,
+    ("GET", "/api/budget/analytics/inbox"): 403,
+    ("GET", "/api/budget/analytics/monthly-budget"): 403,
+    ("GET", "/api/budget/analytics/monthly-budget/charts"): 403,
+    ("GET", "/api/budget/analytics/mortgages"): 403,
+    ("GET", "/api/budget/analytics/overview"): 403,
+    ("GET", "/api/budget/analytics/quarantine"): 403,
+    ("GET", "/api/budget/analytics/recurring"): 403,
+    ("GET", "/api/budget/analytics/rules"): 403,
+    ("GET", "/api/budget/analytics/spending-limits"): 403,
+    ("GET", "/api/budget/analytics/transactions"): 403,
+    ("GET", "/api/budget/analytics/transfers"): 403,
+    ("GET", "/api/budget/balances"): 403,
+    ("GET", "/api/budget/connections"): 403,
+    ("GET", "/api/budget/consent/pending"): 403,
+    ("GET", "/api/budget/consent/reconcile"): 403,
+    ("GET", "/api/budget/consent/renewal-reminders"): 403,
+    ("GET", "/api/budget/consent/status"): 403,
+    ("GET", "/api/budget/enable-banking/callback"): 303,
+    ("GET", "/api/budget/household/access"): 404,
+    ("GET", "/api/budget/household/categories"): 404,
+    ("GET", "/api/budget/household/inbox"): 404,
+    ("GET", "/api/budget/household/monthly-budget"): 404,
+    ("GET", "/api/budget/household/monthly-budget-settings"): 404,
+    ("GET", "/api/budget/household/mortgages"): 404,
+    ("GET", "/api/budget/household/overview"): 404,
+    ("GET", "/api/budget/household/quarantine"): 404,
+    ("GET", "/api/budget/household/recurring"): 404,
+    ("GET", "/api/budget/household/report-accounts"): 404,
+    ("GET", "/api/budget/household/rules"): 404,
+    ("GET", "/api/budget/household/spending-limits"): 404,
+    ("GET", "/api/budget/household/transactions"): 404,
+    ("GET", "/api/budget/household/transfers"): 404,
+    ("GET", "/api/budget/jobs"): 403,
+    ("GET", "/api/budget/limits"): 403,
+    ("GET", "/api/budget/status"): 403,
+    ("GET", "/api/budget/transactions"): 403,
+    ("GET", "/api/calendars"): 200,
+    ("GET", "/api/db/stats"): 403,
+    ("GET", "/api/discovery"): 200,
+    ("GET", "/api/events"): 200,
+    ("GET", "/api/rf433"): 403,
+    ("GET", "/api/rooms/icons"): 200,
+    ("GET", "/api/settings"): 200,
+    ("GET", "/api/users"): 403,
+    ("GET", "/api/whoami"): 200,
+    ("GET", "/api/whole-home"): 403,
+    ("GET", "/assets/asset.js"): 404,
+    ("GET", "/budget/connect/complete"): 200,
+    ("GET", "/budget/connect/complete.js"): 200,
+    ("GET", "/privacy-policy.html"): 404,
+    ("GET", "/terms-of-service.html"): 404,
+    ("GET", "/ui/"): 302,
+    ("HEAD", "/privacy-policy.html"): 404,
+    ("HEAD", "/terms-of-service.html"): 404,
+    ("POST", "/api/automations"): 403,
+    ("POST", "/api/automations/delete"): 403,
+    ("POST", "/api/budget/account-kind"): 403,
+    ("POST", "/api/budget/account-selection"): 403,
+    ("POST", "/api/budget/analytics/annotation"): 403,
+    ("POST", "/api/budget/analytics/category-create"): 403,
+    ("POST", "/api/budget/analytics/category-update"): 403,
+    ("POST", "/api/budget/analytics/inbox-mark"): 403,
+    ("POST", "/api/budget/analytics/mortgage-payment-set"): 403,
+    ("POST", "/api/budget/analytics/mortgage-save"): 403,
+    ("POST", "/api/budget/analytics/rule-batch-preview"): 403,
+    ("POST", "/api/budget/analytics/rule-batch-save"): 403,
+    ("POST", "/api/budget/analytics/rule-preview"): 403,
+    ("POST", "/api/budget/analytics/rule-save"): 403,
+    ("POST", "/api/budget/analytics/spending-limit-save"): 403,
+    ("POST", "/api/budget/analytics/transactions-by-keys"): 403,
+    ("POST", "/api/budget/analytics/transfer-decision"): 403,
+    ("POST", "/api/budget/background-selection"): 403,
+    ("POST", "/api/budget/connection-state"): 403,
+    ("POST", "/api/budget/consent/cancel"): 403,
+    ("POST", "/api/budget/consent/complete"): 403,
+    ("POST", "/api/budget/consent/start"): 403,
+    ("POST", "/api/budget/refresh"): 403,
+    ("POST", "/api/calendars/events"): 403,
+    ("POST", "/api/calendars/events/delete"): 403,
+    ("POST", "/api/control"): 403,
+    ("POST", "/api/graduate"): 403,
+    ("POST", "/api/ir"): 403,
+    ("POST", "/api/login"): 401,
+    ("POST", "/api/logout"): 200,
+    ("POST", "/api/me/password"): 400,
+    ("POST", "/api/name"): 403,
+    ("POST", "/api/rooms/icons"): 403,
+    ("POST", "/api/scene"): 403,
+    ("POST", "/api/settings"): 200,
+    ("POST", "/api/users"): 403,
+    ("POST", "/api/users/disabled"): 403,
+    ("POST", "/api/users/reset-password"): 403,
+    ("POST", "/api/users/role"): 403,
+    ("POST", "/api/whole-home"): 403,
+}
+
+
 class RoutePolicyTests(unittest.TestCase):
     """Completeness guard: every route make_app registers must be either public or have a role floor, so
     the policy map can't silently drift from the route table (a new route fails this until classified)."""
@@ -2039,6 +2152,56 @@ class AuthzTests(_WebTestBase):
 
     def test_unclassified_read_route_is_viewer(self):
         self.assertEqual(self._get("/api/does-not-exist", "viewer"), 404)   # viewer floor → routing → 404
+
+    def test_spouse_status_is_classified_for_every_route(self):
+        """A new route fails until ``SPOUSE_ROUTE_STATUS`` names the viewer's status.
+
+        Budget owner routes stay 403, including ``POST .../transactions-by-keys``.
+        That POST is a pure read of owner rows; the spouse still does not receive it.
+        Household GETs are the spouse read API.
+        """
+        self.role = "viewer"
+        with mock.patch.dict(os.environ, {"HESTIA_BUDGET_HTTP_ENABLED": "", "HESTIA_BUDGET_ANALYTICS_ENABLED": ""}):
+            app = web.make_app(SimpleNamespace())
+            actual = {}
+            for route in app.router.routes():
+                path = route.resource.canonical
+                if "{path}" in path:
+                    path = path.replace("{path}", "asset.js")
+                self.assertNotIn("{", path, path)
+                status, body = self._spouse_status(route.method, path)
+                actual[(route.method, path)] = status
+                if path.startswith("/api/budget/household/"):
+                    self.assertEqual(json.loads(body)["error"], "budget_disabled", path)
+                elif path.startswith("/api/budget/") and not path.endswith("/callback"):
+                    self.assertEqual(status, 403, path)
+                    self.assertEqual(body, b"", path)
+        missing = set(actual) - set(SPOUSE_ROUTE_STATUS)
+        extra = set(SPOUSE_ROUTE_STATUS) - set(actual)
+        mismatched = {key: (SPOUSE_ROUTE_STATUS[key], actual[key])
+                      for key in set(actual) & set(SPOUSE_ROUTE_STATUS)
+                      if SPOUSE_ROUTE_STATUS[key] != actual[key]}
+        self.assertEqual(
+            (missing, extra, mismatched),
+            (set(), set(), {}),
+            "\n".join(f"{method} {path} {status}" for (method, path), status in sorted(actual.items())),
+        )
+
+    def _spouse_status(self, method, path):
+        conn = http.client.HTTPConnection(*self.web.address, timeout=5)
+        try:
+            headers = {"Cookie": self.cookie}
+            body = None
+            if method in web._MUTATING_METHODS:
+                headers["Content-Type"] = "application/json"
+                body = b"{}"
+            conn.request(method, path, body=body, headers=headers)
+            response = conn.getresponse()
+            status = response.status
+            body = b"" if path == "/api/events" else response.read()
+            return status, body
+        finally:
+            conn.close()
 
 
 class UserMgmtValidatorTests(unittest.TestCase):
@@ -2229,6 +2392,246 @@ class UserMgmtTests(_WebTestBase):
             status, _, _ = _post(self.web.address, path, "x",
                                  headers={"Cookie": self.cookie, "Content-Type": "text/plain"})
             self.assertEqual(status, 415, path)
+
+
+def _declared_post(path, length):
+    return (
+        f"POST {path} HTTP/1.1\r\nHost: localhost\r\n"
+        f"Content-Type: application/json\r\nContent-Length: {length}\r\n"
+        f"Connection: close\r\n\r\n"
+    ).encode("ascii")
+
+
+async def _read_http_response(reader, *, allow_close=False, timeout=2.0):
+    """Read one response. Stop at Content-Length; do not wait for the server to close.
+
+    With ``allow_close``, a peer that drops the connection before a status line
+    returns ``(None, leftover)`` instead of parsing an empty buffer."""
+    buf = b""
+    while b"\r\n\r\n" not in buf:
+        chunk = await asyncio.wait_for(reader.read(4096), timeout=timeout)
+        if not chunk:
+            if allow_close:
+                return None, buf
+            break
+        buf += chunk
+    if allow_close and b"\r\n\r\n" not in buf:
+        return None, buf
+    head, _, rest = buf.partition(b"\r\n\r\n")
+    status = int(head.split(b"\r\n", 1)[0].split()[1])
+    length = 0
+    for line in head.split(b"\r\n")[1:]:
+        name, _, value = line.partition(b":")
+        if name.lower() == b"content-length":
+            length = int(value.strip())
+    while len(rest) < length:
+        chunk = await asyncio.wait_for(reader.read(length - len(rest)), timeout=timeout)
+        if not chunk:
+            break
+        rest += chunk
+    return status, rest[:length]
+
+
+async def _exchange(port, payload, *, shutdown_write=False, allow_close=False, timeout=2.0):
+    reader, writer = await asyncio.open_connection("127.0.0.1", port)
+    try:
+        writer.write(payload)
+        await writer.drain()
+        if shutdown_write:
+            writer.write_eof()
+        return await _read_http_response(reader, allow_close=allow_close, timeout=timeout)
+    finally:
+        writer.close()
+        try:
+            await writer.wait_closed()
+        except ConnectionError:
+            pass
+
+
+class _ProdLikeServer(TestServer):
+    """Production ``AppRunner`` does not cancel the handler when the peer drops."""
+
+    async def _make_runner(self, **kwargs):
+        kwargs["handler_cancellation"] = False
+        return await super()._make_runner(**kwargs)
+
+
+class JsonBodyFramingTests(unittest.IsolatedAsyncioTestCase):
+    """The shared reader bounds a stall, rejects a short body on an open socket,
+    and still accepts a full one. A half-close only has to finish cleanly."""
+
+    # Real BODY_READ_TIMEOUT stays 10s. A handler that waits it out misses this.
+    _FINISH_BOUND = 2.0
+
+    async def asyncSetUp(self):
+        self._auth = mock.patch.object(web, "_AUTH_ENABLED", False)
+        self._auth.start()
+        self._started = []
+        self._finished = []
+        app = web.make_app(SimpleNamespace())
+
+        @middleware
+        async def _watch(request, handler):
+            watched = request.path in ("/api/settings", "/api/login")
+            if watched:
+                self._started.append(request)
+            started = time.monotonic()
+            try:
+                response = await handler(request)
+            except asyncio.CancelledError:
+                if watched:
+                    self._finished.append((request.path, "cancelled", time.monotonic() - started))
+                raise
+            except Exception as exc:
+                if watched:
+                    self._finished.append((request.path, exc, time.monotonic() - started))
+                raise
+            else:
+                if watched:
+                    self._finished.append((request.path, response.status, time.monotonic() - started))
+                return response
+
+        app.middlewares.append(_watch)
+
+        async def _probe(request):
+            body, err = await web._read_json_body(request, 1024 * 1024)
+            if err:
+                return body
+            return web._json(200, {"ok": True, "n": len(body["pad"]), "tail": body["tail"]})
+
+        app.router.add_post("/api/body-chunk-probe", _probe)
+        self.client = TestClient(_ProdLikeServer(app))
+        await self.client.start_server()
+
+    async def asyncTearDown(self):
+        await self.client.close()
+        self._auth.stop()
+
+    async def _wait_started(self, path, prior):
+        deadline = time.monotonic() + self._FINISH_BOUND
+        while time.monotonic() < deadline:
+            for request in self._started[prior:]:
+                if request.path == path:
+                    return request
+            await asyncio.sleep(0.01)
+        self.fail(f"{path} handler did not start within {self._FINISH_BOUND}s")
+
+    async def _wait_finished(self, path, prior):
+        deadline = time.monotonic() + self._FINISH_BOUND
+        while time.monotonic() < deadline:
+            for item in self._finished[prior:]:
+                if item[0] == path:
+                    return item
+            await asyncio.sleep(0.01)
+        self.fail(f"{path} handler did not finish within {self._FINISH_BOUND}s")
+
+    def _exact_settings(self):
+        prefix, suffix = b'{"locale":null', b"}"
+        return prefix + b" " * (web.MAX_BODY - len(prefix) - len(suffix)) + suffix
+
+    async def _stall(self, path):
+        with mock.patch.object(web, "BODY_READ_TIMEOUT", 0.2):
+            status, body = await _exchange(self.client.port, _declared_post(path, 32) + b"{")
+        self.assertEqual(status, 408)
+        self.assertEqual(json.loads(body), {"ok": False, "error": "body read timed out"})
+
+    async def _half_close(self, path):
+        # The peer write-shuts down after a short body. It is already gone, so a
+        # status is not required. The handler must not 500 and must not sit in
+        # the 10s body read. BODY_READ_TIMEOUT is left at 10s so a stall fails.
+        prior = len(self._finished)
+        status, body = None, b""
+        try:
+            status, body = await _exchange(
+                self.client.port, _declared_post(path, 32) + b"{}",
+                shutdown_write=True, allow_close=True, timeout=self._FINISH_BOUND)
+        except TimeoutError:
+            self.fail(f"{path} half-close hung with the socket still open")
+        except ConnectionError:
+            pass
+        _path, outcome, elapsed = await self._wait_finished(path, prior)
+        self.assertLess(elapsed, self._FINISH_BOUND)
+        self.assertNotIsInstance(outcome, Exception)
+        self.assertNotEqual(outcome, 500)
+        if status is not None:
+            self.assertNotEqual(status, 500)
+            self.assertNotIn(b"Internal Server Error", body)
+
+    async def _truncate(self, path):
+        # "{}" is valid JSON and shorter than Content-Length. End the payload
+        # while the TCP socket is still open: that is a 400, not a parsed body
+        # (settings would otherwise 200, login would otherwise 401).
+        prior = len(self._started)
+
+        async def _send():
+            return await _exchange(self.client.port, _declared_post(path, 32) + b"{}")
+
+        task = asyncio.create_task(_send())
+        request = await self._wait_started(path, prior)
+        transport = request.transport
+        self.assertIsNotNone(transport)
+        self.assertFalse(transport.is_closing())
+        request.content.feed_eof()
+        status, body = await asyncio.wait_for(task, timeout=self._FINISH_BOUND)
+        self.assertEqual(status, 400)
+        self.assertEqual(json.loads(body), {"ok": False, "error": "incomplete body"})
+
+    async def test_slow_client_is_408(self):
+        await self._stall("/api/settings")
+
+    async def test_truncated_body_is_400(self):
+        await self._truncate("/api/settings")
+
+    async def test_half_close_finishes_cleanly(self):
+        await self._half_close("/api/settings")
+
+    async def test_login_slow_client_is_408(self):
+        await self._stall("/api/login")
+
+    async def test_login_truncated_body_is_400(self):
+        await self._truncate("/api/login")
+
+    async def test_login_half_close_finishes_cleanly(self):
+        await self._half_close("/api/login")
+
+    async def test_body_exactly_at_the_cap_passes(self):
+        body = self._exact_settings()
+        self.assertEqual(len(body), web.MAX_BODY)
+        response = await self.client.post(
+            "/api/settings", data=body, headers={"Content-Type": "application/json"})
+        self.assertEqual(response.status, 200, await response.text())
+        self.assertEqual(await response.json(), {"ok": True})
+
+    async def test_body_over_the_cap_is_413(self):
+        body = self._exact_settings() + b" "
+        self.assertEqual(len(body), web.MAX_BODY + 1)
+        response = await self.client.post(
+            "/api/settings", data=body, headers={"Content-Type": "application/json"})
+        self.assertEqual(response.status, 413)
+        self.assertEqual(await response.json(),
+                         {"ok": False, "error": f"body must be ≤ {web.MAX_BODY} bytes"})
+
+    async def test_multi_chunk_large_body_is_read_fully(self):
+        pad = "a" * (600 * 1024)
+        raw = json.dumps({"pad": pad, "tail": "END"}).encode()
+        self.assertGreaterEqual(len(raw), 600 * 1024)
+        head = _declared_post("/api/body-chunk-probe", len(raw))
+        reader, writer = await asyncio.open_connection("127.0.0.1", self.client.port)
+        try:
+            writer.write(head)
+            await writer.drain()
+            for offset in range(0, len(raw), 8192):
+                writer.write(raw[offset:offset + 8192])
+                await writer.drain()
+            status, body = await _read_http_response(reader)
+        finally:
+            writer.close()
+            try:
+                await writer.wait_closed()
+            except ConnectionError:
+                pass
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body), {"ok": True, "n": len(pad), "tail": "END"})
 
 
 if __name__ == "__main__":

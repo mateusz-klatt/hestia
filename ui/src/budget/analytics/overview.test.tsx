@@ -5,9 +5,16 @@ import type { Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BudgetResult } from "../api";
 import { account, connection } from "../fixtures";
+import { NEUTRAL_CATEGORY_COLOR, buildCategoryColors, parseHexColor, relativeLuminance } from "./category_colors";
 import { overviewOf, staleFreshness, totals } from "./fixtures";
-import type { AnalyticsOverview, AnalyticsScope } from "./model";
+import { oneOffRowKey } from "./model";
+import type { AnalyticsCategory, AnalyticsOverview, AnalyticsScope } from "./model";
 import { OverviewPanel, overviewLabels } from "./overview";
+
+const fsModule = "node:fs";
+const { readFileSync } = (await import(/* @vite-ignore */ fsModule)) as {
+  readFileSync: (path: string, encoding: "utf8") => string;
+};
 
 type Answer = BudgetResult<AnalyticsOverview>;
 
@@ -55,12 +62,15 @@ async function settle(): Promise<void> {
 }
 
 async function show(overview: (period: string) => Promise<Answer>,
-  options: { period?: string; current?: boolean; revision?: number; lost?: boolean; onCurrencies?: (currencies: string[]) => void } = {}) {
+  options: { period?: string; current?: boolean; revision?: number; lost?: boolean; text?: typeof overviewLabels.en;
+    locale?: string; onCurrencies?: (currencies: string[]) => void;
+    loadCategories?: () => Promise<BudgetResult<{ categories: AnalyticsCategory[] }>> } = {}) {
   const onAccessLoss = vi.fn(() => options.lost === true);
+  const categories = options.loadCategories === undefined ? {} : { loadCategories: options.loadCategories };
   await act(async () => {
     root.render(<OverviewPanel overview={overview} period={options.period ?? "2026-11"} current={options.current ?? true}
-      accounts={accounts} text={overviewLabels.en} locale="en" revision={options.revision ?? 0} onAccessLoss={onAccessLoss}
-      onCurrencies={options.onCurrencies} />);
+      accounts={accounts} text={options.text ?? overviewLabels.en} locale={options.locale ?? "en"} revision={options.revision ?? 0}
+      onAccessLoss={onAccessLoss} onCurrencies={options.onCurrencies} {...categories} />);
     await Promise.resolve();
   });
   await settle();
@@ -92,15 +102,141 @@ describe("period overview", () => {
     expect(host.querySelector('[aria-label="Incomplete data"]')).toBeNull();
   });
 
+  it("wraps each amount of a compound total so the line can break between them", async () => {
+    await show((period) => Promise.resolve<Answer>({ ok: true, data: rich(period) }), { text: overviewLabels.pl, locale: "pl" });
+    const card = host.querySelector('.budget-total[aria-label="PLN"]');
+    const ddAfter = (label: string) => [...card?.querySelectorAll("dt") ?? []].find((item) => item.textContent === label)?.nextElementSibling;
+    const transfer = ddAfter("Przelewy własne");
+    const excluded = ddAfter("Pominięte przez Ciebie");
+    const spending = ddAfter("Wydatki");
+    expect(transfer?.classList.contains("budget-total-split")).toBe(true);
+    expect(excluded?.classList.contains("budget-total-split")).toBe(true);
+    expect(spending?.classList.contains("budget-total-split")).toBe(false);
+    expect([...(transfer?.querySelectorAll(".budget-amount") ?? [])].map((item) => item.textContent.replace(/\s/g, " "))).toEqual([
+      "1 200,00 PLN", "1 200,00 PLN",
+    ]);
+    expect([...(excluded?.querySelectorAll(".budget-amount") ?? [])].map((item) => item.textContent.replace(/\s/g, " "))).toEqual([
+      "5,00 PLN", "0,00 PLN",
+    ]);
+    expect(transfer?.textContent.replace(/\s/g, " ")).toBe("wyszło 1 200,00 PLN · weszło 1 200,00 PLN");
+    expect([...(transfer?.querySelectorAll(".budget-total-part") ?? [])].map((item) => item.textContent.replace(/\s/g, " "))).toEqual([
+      "wyszło 1 200,00 PLN", "weszło 1 200,00 PLN",
+    ]);
+    expect(excluded?.textContent.replace(/\s/g, " ")).toBe("wyszło 5,00 PLN · weszło 0,00 PLN");
+    expect([...(excluded?.querySelectorAll(".budget-total-part") ?? [])].map((item) => item.textContent.replace(/\s/g, " "))).toEqual([
+      "wyszło 5,00 PLN", "weszło 0,00 PLN",
+    ]);
+    expect(spending?.querySelector(".budget-amount")?.textContent).toContain("PLN");
+    const detail = card?.querySelector(".budget-total-detail");
+    expect(detail?.classList.contains("budget-total-split")).toBe(true);
+    expect(detail?.querySelectorAll(".budget-amount")).toHaveLength(2);
+    expect(detail?.querySelectorAll(".budget-total-part")).toHaveLength(2);
+    for (const part of card?.querySelectorAll(".budget-total-part") ?? []) {
+      expect(part.textContent).not.toContain(" · ");
+      expect(part.querySelectorAll(".budget-amount")).toHaveLength(1);
+    }
+  });
+
+  it("keeps label+amount pairs atomic and category table captions full-width on narrow screens in budget.css", () => {
+    const css = readFileSync("src/budget/budget.css", "utf8");
+    expect(css).toMatch(/\.budget-total-part\s*\{[^}]*display:\s*inline-block/);
+    const mobileBlock = css.slice(css.indexOf("@media (max-width: 640px)"));
+    expect(mobileBlock).toMatch(/\.budget-categories\s*\{\s*display:\s*table;\s*width:\s*100%;\s*\}/);
+    expect(mobileBlock).toMatch(/\.budget-categories caption\s*\{\s*display:\s*table-caption;\s*\}/);
+    expect(mobileBlock).toMatch(/\.budget-categories tbody\s*\{\s*display:\s*table-row-group;\s*\}/);
+    expect(mobileBlock).toMatch(/\.budget-categories tbody tr\s*\{[^}]*display:\s*table-row;/);
+    expect(mobileBlock).toMatch(/\.budget-categories tbody td\s*\{[^}]*display:\s*table-cell;/);
+  });
+
   it("lists categories under their own currency, marking archived ones and the uncategorised row", async () => {
     await show((period) => Promise.resolve<Answer>({ ok: true, data: rich(period) }));
     const pln = host.querySelector('[aria-label="Spending by category PLN"]');
     expect([...pln?.querySelectorAll("tr") ?? []].map((row) => row.textContent)).toEqual([
       "Synthetic Food300.00 PLN", "Synthetic Old (archived)7.00 PLN", "Uncategorised50.00 PLN"]);
     expect(pln?.querySelector(".is-uncategorised")).not.toBeNull();
+    const uncatSwatch = pln?.querySelector<HTMLElement>(".is-uncategorised .budget-cat-swatch");
+    expect(uncatSwatch).not.toBeNull();
+    const toHex = (css: string) => {
+      const m = /^rgb\(\s*(\d+),\s*(\d+),\s*(\d+)\s*\)$/i.exec(css.trim());
+      if (m !== null) return `#${[m[1], m[2], m[3]].map((n) => Number(n).toString(16).padStart(2, "0")).join("")}`;
+      return parseHexColor(css)?.hex ?? css;
+    };
+    expect(toHex(uncatSwatch?.style.backgroundColor ?? "")).toBe(NEUTRAL_CATEGORY_COLOR.background);
     const eur = host.querySelector('[aria-label="Spending by category EUR"]');
     expect(eur?.textContent).toContain("Synthetic Travel");
     expect(eur?.textContent).not.toContain("Synthetic Food");
+  });
+
+  it("keys a one-off row by one_off_key and keeps the label out of the key", () => {
+    const key = "cd".repeat(32);
+    const labelled = { category_id: "cat-food", one_off: true, one_off_key: key };
+    expect(oneOffRowKey(labelled, 0)).toBe(key);
+    expect(oneOffRowKey(labelled, 0).includes("Remont")).toBe(false);
+    expect(oneOffRowKey({ category_id: "cat-food", one_off: false, one_off_key: null }, 1)).toBe("cat-food");
+    expect(oneOffRowKey({ category_id: null, one_off: false, one_off_key: null }, 2)).toBe("uncategorised-2");
+    expect(oneOffRowKey({ category_id: "cat-food", one_off: true, one_off_key: null }, 3)).toBe("one-off:cat-food:3");
+  });
+
+  it("shows a labelled amount on its own row with a one-off tag", async () => {
+    const data = rich("2026-11");
+    data.categories = [...data.categories, {
+      currency: "PLN", category_id: null, name: "Remont łazienki", archived: false,
+      expenses: "2000", refunds: "0", net_spending: "2000", one_off: true,
+      one_off_key: "ab".repeat(32),
+    }];
+    await show((period) => Promise.resolve<Answer>({ ok: true, data: { ...data, period } }));
+    const row = host.querySelector(".budget-one-off");
+    expect(row?.textContent).toContain("Remont łazienki");
+    expect(row?.textContent).toContain("one-off");
+    expect(row?.textContent).toContain("2,000.00 PLN");
+    expect(row?.classList.contains("is-uncategorised")).toBe(false);
+    await show((period) => Promise.resolve<Answer>({ ok: true, data: { ...data, period } }), { text: overviewLabels.pl, locale: "pl" });
+    expect(host.querySelector(".budget-one-off")?.textContent).toContain("jednorazowe");
+  });
+
+  it("rolls a parent up from its children and collapses the subtree", async () => {
+    const links: AnalyticsCategory[] = [
+      { id: "cat-transport", name: "Synthetic Transport", archived: false, version: 1, created_at: 1, updated_at: 1, parent_id: null },
+      { id: "cat-fuel", name: "Synthetic Fuel", archived: false, version: 1, created_at: 1, updated_at: 1, parent_id: "cat-transport" },
+    ];
+    const data = rich("2026-11", {
+      categories: [
+        { currency: "PLN", category_id: "cat-transport", name: "Synthetic Transport", archived: false, expenses: "10", refunds: "0", net_spending: "10" },
+        { currency: "PLN", category_id: "cat-fuel", name: "Synthetic Fuel", archived: false, expenses: "40", refunds: "0", net_spending: "40" },
+        { currency: "PLN", category_id: null, name: null, archived: false, expenses: "5", refunds: "0", net_spending: "5" },
+      ],
+    });
+    await show(() => Promise.resolve<Answer>({ ok: true, data }), {
+      loadCategories: () => Promise.resolve({ ok: true, data: { categories: links } }),
+    });
+    const table = host.querySelector('[aria-label="Spending by category PLN"]');
+    const rows = [...table?.querySelectorAll("tbody tr") ?? []];
+    expect(rows.map((row) => row.getAttribute("data-depth"))).toEqual(["0", "1", "0"]);
+    const swatches = rows.map((row) => row.querySelector<HTMLElement>(".budget-cat-swatch")?.style.backgroundColor ?? "");
+    const expectedColors = buildCategoryColors(links);
+    const toHex = (css: string) => {
+      const m = /^rgb\(\s*(\d+),\s*(\d+),\s*(\d+)\s*\)$/i.exec(css.trim());
+      if (m !== null) return `#${[m[1], m[2], m[3]].map((n) => Number(n).toString(16).padStart(2, "0")).join("")}`;
+      return parseHexColor(css)?.hex ?? css;
+    };
+    expect(toHex(swatches[0] ?? "")).toBe(expectedColors.get("cat-transport").background);
+    expect(toHex(swatches[1] ?? "")).toBe(expectedColors.get("cat-fuel").background);
+    expect(toHex(swatches[2] ?? "")).toBe(NEUTRAL_CATEGORY_COLOR.background);
+    expect(relativeLuminance(toHex(swatches[1] ?? ""))).toBeGreaterThan(relativeLuminance(toHex(swatches[0] ?? "")));
+    expect(rows[0]?.textContent).toContain("Synthetic Transport");
+    expect(rows[0]?.textContent).toContain("50.00 PLN");
+    expect(rows[1]?.textContent).toContain("Synthetic Fuel");
+    expect(rows[1]?.textContent).toContain("40.00 PLN");
+    expect(rows[2]?.textContent).toContain("Uncategorised");
+    const toggle = rows[0]?.querySelector("button");
+    if (toggle === null || toggle === undefined) throw new Error("collapse missing");
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    await act(async () => { toggle.click(); await Promise.resolve(); });
+    const after = [...host.querySelectorAll('[aria-label="Spending by category PLN"] tbody tr')];
+    expect(after).toHaveLength(2);
+    expect(after[0]?.textContent).toContain("50.00 PLN");
+    expect(after.map((row) => row.textContent).join(" ")).not.toContain("Synthetic Fuel");
+    expect(after[0]?.querySelector("button")?.getAttribute("aria-expanded")).toBe("false");
   });
 
   it("explains transfers to review, re-check, boundary cases and a limited scan", async () => {

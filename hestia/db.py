@@ -19,12 +19,13 @@ time, and real (non-stringised) PEP 604 unions are the most robust on Python 3.1
 """
 import os
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from pathlib import Path
 from threading import RLock
 
 from alembic import command
 from alembic.config import Config
+from alembic.util import CommandError
 from sqlalchemy import CheckConstraint, URL, Engine, ForeignKey, ForeignKeyConstraint, Index, Text, UniqueConstraint, create_engine, event, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
@@ -477,8 +478,14 @@ class BudgetTransactionMetadata(Base):
 
 
 class BudgetCategory(Base):
+    """Owner category. ``parent_id`` is an optional same-table parent (depth is enforced in the store)."""
+
     __tablename__ = "budget_categories"
-    __table_args__ = (UniqueConstraint("owner", "name_key"),)
+    __table_args__ = (
+        UniqueConstraint("owner", "name_key"),
+        CheckConstraint("parent_id IS NULL OR parent_id != id", name="ck_budget_categories_parent_not_self"),
+        Index("ix_budget_categories_parent_id", "parent_id"),
+    )
     id: Mapped[str] = mapped_column(primary_key=True)
     owner: Mapped[str] = mapped_column(ForeignKey("users.username"))
     name: Mapped[str]
@@ -487,6 +494,7 @@ class BudgetCategory(Base):
     version: Mapped[int]
     created_at: Mapped[float]
     updated_at: Mapped[float]
+    parent_id: Mapped[str | None] = mapped_column(ForeignKey("budget_categories.id", name="fk_budget_categories_parent_id"))
 
 
 class BudgetCategoryLimit(Base):
@@ -625,13 +633,26 @@ class BudgetOwnerInboxRead(Base):
     read_at: Mapped[float]
 
 
+def annotation_label_check_sql() -> str:
+    """Nullable trimmed label of at most 80 characters, with no C0 controls or DEL.
+
+    ``char(0)`` is included: SQLite ``instr`` treats it as absent, so a normal label
+    still passes, and a stored NUL cannot sneak through as text.
+    """
+    banned = " AND ".join(f"instr(label, char({code})) = 0" for code in (*range(32), 127))
+    return (
+        "label IS NULL OR (length(label) >= 1 AND length(label) <= 80 AND label = trim(label) AND "
+        + banned + ")"
+    )
+
+
 class BudgetHouseholdMember(Base):
     """One viewer granted read-only access to exactly one admin owner's budget.
 
     ``grant_id`` is a server-generated immutable 64-hex scope id. An identical
-    member/owner pair keeps it; any regrant allocates a new one. Migration 0021
-    (0020 is reserved for receipts v1a). Restrictive user foreign keys refuse
-    deleting a user who still participates in a grant.
+    member/owner pair keeps it; any regrant allocates a new one. Migration 0022
+    revises 0021. Restrictive user foreign keys refuse deleting a user who still
+    participates in a grant.
     """
 
     __tablename__ = "budget_household_members"
@@ -654,8 +675,11 @@ class BudgetHouseholdMember(Base):
 
 class BudgetAnnotation(Base):
     __tablename__ = "budget_annotations"
-    __table_args__ = (ForeignKeyConstraint(["account_id", "entry_reference"],
-                                           ["budget_transactions.account_id", "budget_transactions.entry_reference"]),)
+    __table_args__ = (
+        ForeignKeyConstraint(["account_id", "entry_reference"],
+                             ["budget_transactions.account_id", "budget_transactions.entry_reference"]),
+        CheckConstraint(annotation_label_check_sql(), name="ck_budget_annotations_label"),
+    )
     account_id: Mapped[str] = mapped_column(primary_key=True)
     entry_reference: Mapped[str] = mapped_column(primary_key=True)
     owner: Mapped[str] = mapped_column(ForeignKey("users.username"))
@@ -665,6 +689,7 @@ class BudgetAnnotation(Base):
     ledger_fingerprint: Mapped[str]
     version: Mapped[int]
     updated_at: Mapped[float]
+    label: Mapped[str | None] = mapped_column(Text())
 
 
 class BudgetRule(Base):
@@ -821,23 +846,135 @@ def init_db(path=None) -> tuple[Engine, sessionmaker[Session]]:
     """Engine + session factory for the DB at ``path`` (default ``HESTIA_DB``), upgraded to the latest
     schema via Alembic. **Cached per resolved path**: the engine is built and the migration run ONCE per
     DB file for the process lifetime; later calls return the same pair (call ``reset_engine_cache`` to
-    rebuild). Migrations run programmatically — never runtime autogenerate."""
+    rebuild). Migrations run programmatically — never runtime autogenerate. The upgrade uses one
+    dedicated connection: foreign keys off, a real ``BEGIN IMMEDIATE``, then ``PRAGMA foreign_key_check``
+    before commit. Every other connection still opens with ``PRAGMA foreign_keys=ON``."""
     with _ENGINE_CACHE_LOCK:
         return _init_db_locked(path)
 
 
+def downgrade_db(path, revision: str) -> None:
+    """Downgrade the database at ``path`` to ``revision`` on the dedicated migration connection.
+
+    Shares ``_run_sqlite_migration`` with ``init_db``: ``PRAGMA foreign_keys=OFF`` (read back
+    and required to be 0), an explicit ``BEGIN IMMEDIATE``, the Alembic downgrade, ``PRAGMA
+    foreign_key_check``, then commit or roll back and raise. Foreign keys are turned back on
+    before that connection is discarded. Every other connection still opens with
+    ``PRAGMA foreign_keys=ON``.
+
+    Reuses the cached engine for ``path`` when ``init_db`` already opened it (normalising the
+    cache key the same way ``init_db`` does). The cache entry is dropped and the engine disposed
+    before this returns, including when the downgrade rolls back, so the next ``init_db`` on this
+    path runs migrations again. Raises ``ValueError`` for ``None``, empty, or invalid revisions.
+    """
+    if not isinstance(revision, str) or not revision.strip():
+        raise ValueError(f"Invalid downgrade revision: {revision!r}")
+    target, key = _resolve_db_target(path)
+    with _ENGINE_CACHE_LOCK:
+        cached = _ENGINE_CACHE.pop(key, None)
+        engine = cached[0] if cached is not None else make_engine(target)
+        try:
+            _run_sqlite_migration(
+                engine,
+                lambda connection: command.downgrade(_alembic_config(connection), revision),
+            )
+        except CommandError as exc:
+            raise ValueError(str(exc)) from exc
+        finally:
+            engine.dispose()
+
+
+def _set_sqlite_foreign_keys(connection, enabled: bool) -> None:
+    """Set ``PRAGMA foreign_keys`` and require the new value to read back.
+
+    SQLite ignores this pragma while a transaction is open and leaves the previous
+    value in place. Callers must already be in autocommit, with no transaction open.
+    """
+    statement = "PRAGMA foreign_keys=ON" if enabled else "PRAGMA foreign_keys=OFF"
+    cursor = connection.connection.dbapi_connection.cursor()
+    try:
+        cursor.execute(statement)
+        cursor.execute("PRAGMA foreign_keys")
+        observed = cursor.fetchone()[0]
+    finally:
+        cursor.close()
+    if int(observed) != int(enabled):
+        raise RuntimeError(
+            f"{statement} did not apply (read back {observed!r}). "
+            "SQLite ignores this pragma inside a transaction."
+        )
+
+
+def _run_sqlite_migration(engine: Engine, apply) -> None:
+    """Run one Alembic operation in the SQLite batch transaction Alembic recommends.
+
+    ``batch_alter_table`` rebuilds a table by copying it and dropping the original.
+    Child foreign keys reject that DROP while ``PRAGMA foreign_keys`` is ON, and the
+    pragma cannot be changed inside a transaction. sqlite3's legacy transaction mode
+    also autocommits DDL unless a real ``BEGIN`` is already open, which is how a
+    failed rebuild leaves ``_alembic_tmp_*`` behind.
+
+    On this connection only: turn foreign keys off in autocommit and read the pragma
+    back, ``BEGIN IMMEDIATE`` (acquiring the write lock up front), run ``apply``, then
+    ``PRAGMA foreign_key_check``. Any violation rolls the whole migration back (no
+    partial DDL). Commit (rolling back ``raw`` explicitly if commit raises), turn
+    foreign keys back on, and invalidate the connection so the pool never reuses
+    autocommit or foreign_keys=OFF. Other connections keep the usual pragmas.
+    """
+    connection = engine.connect()
+    try:
+        raw = connection.connection.dbapi_connection
+        # sqlite3 must not emit its own BEGIN; SQLAlchemy's begin() does not either.
+        # An explicit BEGIN IMMEDIATE then keeps DDL inside the transaction we commit or
+        # roll back and acquires the write lock up front.
+        raw.isolation_level = None
+        _set_sqlite_foreign_keys(connection, False)
+        transaction = connection.begin()
+        try:
+            connection.exec_driver_sql("BEGIN IMMEDIATE")
+            apply(connection)
+            violations = connection.exec_driver_sql("PRAGMA foreign_key_check").all()
+            if violations:
+                detail = ", ".join(repr(tuple(row)) for row in violations)
+                raise RuntimeError(f"PRAGMA foreign_key_check failed after migration: {detail}")
+            transaction.commit()
+        except Exception:
+            try:
+                transaction.rollback()
+            finally:
+                # RootTransaction._do_commit deactivates the transaction before commit failure
+                # escapes, so transaction.rollback() becomes a no-op while sqlite3 stays open.
+                with suppress(Exception):
+                    if raw.in_transaction:
+                        raw.rollback()
+                with suppress(Exception):
+                    _set_sqlite_foreign_keys(connection, True)
+            raise
+        _set_sqlite_foreign_keys(connection, True)
+    finally:
+        connection.invalidate()
+        connection.close()
+
+
+def _resolve_db_target(path) -> tuple[Path, str]:
+    """Return the raw target ``Path`` and its resolved string used as the ``_ENGINE_CACHE`` key."""
+    target = db_path() if path is None else Path(path)
+    return target, str(target.resolve())
+
+
 def _init_db_locked(path) -> tuple[Engine, sessionmaker[Session]]:
-    key = str(db_path() if path is None else path)
+    target, key = _resolve_db_target(path)
     cached = _ENGINE_CACHE.get(key)
     if cached is not None:
         return cached
-    engine = make_engine(key)
-    # The outer engine.begin() owns this connection and its commit. Alembic's env.py calls
-    # context.begin_transaction() on the same connection, but for SQLite (non-transactional
-    # DDL) that's a no-op context — there is no nested/second BEGIN, and the migration's DDL
-    # commits with the outer transaction.
-    with engine.begin() as connection:
-        command.upgrade(_alembic_config(connection), "head")
+    engine = make_engine(target)
+    try:
+        _run_sqlite_migration(
+            engine, lambda connection: command.upgrade(_alembic_config(connection), "head")
+        )
+    except Exception:
+        engine.dispose()
+        raise
     result = (engine, sessionmaker(bind=engine))
     _ENGINE_CACHE[key] = result
     return result

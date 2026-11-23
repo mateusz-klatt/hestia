@@ -1,5 +1,6 @@
-// Spending analytics (2D) helpers. Every total is computed by the server per currency and arrives as a decimal
-// STRING; the browser never adds, subtracts, converts or mixes amounts. Periods are "YYYY-MM" or "YYYY".
+// Spending analytics (2D) helpers. Server totals arrive as decimal STRINGs. UI projections use exact BigInt
+// arithmetic. A category tree adds a parent's own amount to its descendants. Nothing is converted or mixed
+// across currencies. Periods are "YYYY-MM" or "YYYY".
 import type { components } from "../../api/openapi";
 import type { BudgetAccount, BudgetCapabilities, BudgetConnection } from "../model";
 import { accountLabel, formatAmount } from "../model";
@@ -76,6 +77,12 @@ export type AnalyticsMonthlyBudgetCategorySpend = Schemas["BudgetAnalyticsMonthl
 export type AnalyticsMonthlyBudgetCategoryLimit = Schemas["BudgetAnalyticsMonthlyBudgetCategoryLimit"];
 export type AnalyticsMonthlyBudgetPassThrough = Schemas["BudgetAnalyticsMonthlyBudgetPassThrough"];
 export type AnalyticsMonthlyBudgetCardExposure = Schemas["BudgetAnalyticsMonthlyBudgetCardExposure"];
+export type AnalyticsMonthlyBudgetCharts = Schemas["BudgetAnalyticsMonthlyBudgetCharts"];
+export type AnalyticsMonthlyBudgetSeries = Schemas["BudgetAnalyticsMonthlyBudgetSeries"];
+export type AnalyticsMonthlyBudgetDailyPoint = Schemas["BudgetAnalyticsMonthlyBudgetDailyPoint"];
+export type AnalyticsMonthlyBudgetSeriesMonth = Schemas["BudgetAnalyticsMonthlyBudgetSeriesMonth"];
+export type AnalyticsMonthlyBudgetSeriesCategory = Schemas["BudgetAnalyticsMonthlyBudgetSeriesCategory"];
+export type AnalyticsMonthlyBudgetCategoryLabel = Schemas["BudgetAnalyticsMonthlyBudgetCategoryLabel"];
 
 export const INBOX_MARK_BATCH_MAX = 100;
 
@@ -103,6 +110,9 @@ export type TransferStatus = "suggested" | "accepted" | "review" | "boundary" | 
 export type AnalyticsTransaction = Schemas["BudgetAnalyticsTransaction"];
 
 export type AnalyticsTransactions = Schemas["BudgetAnalyticsTransactions"];
+type RawTransactionsByKeysRequest = Schemas["BudgetAnalyticsTransactionsByKeysRequest"];
+export type AnalyticsTransactionsByKeysRequest =
+  Pick<RawTransactionsByKeysRequest, "row_keys"> & Partial<Omit<RawTransactionsByKeysRequest, "row_keys">>;
 
 export type AnalyticsCategory = Schemas["BudgetAnalyticsCategory"];
 export type CategorySaved = Schemas["BudgetAnalyticsCategorySaved"];
@@ -114,15 +124,31 @@ export const UNCATEGORISED = "uncategorised";
 
 export type AnnotationRequest = Schemas["BudgetAnalyticsAnnotationRequest"];
 
+/** React key for one category row. A one-off uses one_off_key. The label text is never part of the key. */
+export function oneOffRowKey(
+  row: { one_off?: boolean; one_off_key?: string | null; category_id: string | null },
+  index: number,
+): string {
+  if (row.one_off === true) {
+    return row.one_off_key != null && row.one_off_key !== ""
+      ? row.one_off_key
+      : `one-off:${row.category_id ?? ""}:${String(index)}`;
+  }
+  return row.category_id ?? `uncategorised-${String(index)}`;
+}
+
 /** The owner's category choice in the editor: automatic (rules), explicitly none, or a category id. */
 export type CategoryChoice = { mode: "auto" } | { mode: "manual"; category_id: string | null };
 
 /** "auto" resets both category and type to rules and defaults; any explicit type is part of a manual decision. */
-export function annotationRequest(row: AnalyticsTransaction, category: CategoryChoice, kind: KindChoice): AnnotationRequest {
+export function annotationRequest(row: AnalyticsTransaction, category: CategoryChoice, kind: KindChoice,
+  label?: string | null): AnnotationRequest {
+  const trimmed = typeof label === "string" ? label.trim() : "";
   return {
     account_id: row.account_id, entry_reference: row.entry_reference, mode: category.mode,
     category_id: category.mode === "manual" ? category.category_id : null, kind: category.mode === "manual" ? kind : "auto",
     expected_fingerprint: row.fingerprint, expected_version: row.annotation.version,
+    label: trimmed === "" ? null : trimmed,
   };
 }
 
@@ -510,7 +536,9 @@ export function pluralPl(count: number, one: string, few: string, many: string):
   return many;
 }
 
-function parseScaledInt(value: string): { negative: boolean; coeff: bigint; scale: number } | null {
+export interface ScaledInt { negative: boolean; coeff: bigint; scale: number }
+
+export function parseScaledInt(value: string): ScaledInt | null {
   const negative = value.startsWith("-");
   const body = negative ? value.slice(1) : value;
   if (!/^\d+(?:\.\d+)?$/.test(body)) return null;
@@ -518,6 +546,18 @@ function parseScaledInt(value: string): { negative: boolean; coeff: bigint; scal
   const whole = dot === -1 ? body : body.slice(0, dot);
   const fraction = dot === -1 ? "" : body.slice(dot + 1);
   return { negative, coeff: BigInt(`${whole}${fraction}`), scale: fraction.length };
+}
+
+/** Format a signed BigInt scaled by 10^(-scale) as a canonical decimal string. */
+export function formatScaledBigInt(value: bigint, scale: number): string {
+  if (value === 0n) return "0";
+  const neg = value < 0n;
+  const digits = (neg ? -value : value).toString();
+  if (scale === 0) return `${neg ? "-" : ""}${digits}`;
+  const padded = digits.padStart(scale + 1, "0");
+  const whole = padded.slice(0, -scale);
+  const fraction = padded.slice(-scale).replace(/0+$/, "");
+  return `${neg ? "-" : ""}${whole}${fraction === "" ? "" : `.${fraction}`}`;
 }
 
 /** True when a valid decimal string represents a strictly positive amount. */
@@ -587,4 +627,9 @@ export function monthlyBudgetCurrencies(available: readonly string[], accounts: 
   for (const code of [...extras].sort((a, b) => a.localeCompare(b))) add(code);
   if (ordered.length === 0) ordered.push("PLN");
   return ordered;
+}
+
+/** Stable identifier for an analytics transaction row, matching server `coverage.pending_row_keys`. */
+export function transactionRowKey(row: Pick<AnalyticsTransaction, "account_id" | "entry_reference">): string {
+  return `${row.account_id}/${row.entry_reference}`;
 }

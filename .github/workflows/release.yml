@@ -12,10 +12,10 @@ jobs:
     name: build & push image → klattm/hestia
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       # Re-run the gate so a tag can never publish an image that doesn't pass tests.
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.14"
       - name: Unit tests + 100% coverage gate

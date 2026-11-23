@@ -76,9 +76,23 @@ from pydantic.json_schema import models_json_schema
 # 0.26.0: read-only upcoming commitments forecast (GET /api/budget/analytics/forecast, zero migration).
 # 0.27.0: read-only owner-private monthly budget dashboard (GET /api/budget/analytics/monthly-budget, zero migration).
 # 0.28.0: additive optional income window on monthly-budget configuration (zero migration).
-# 0.29.0 and 0.30.0 are reserved by the other in-flight branches. This branch takes 0.31.0.
-# 0.31.0: household read API (GET /api/budget/household/*, migration 0021; 0020 is reserved).
-CONTRACT_VERSION = "0.31.0"
+# 0.29.0: read-only owner-private monthly budget charts (GET /api/budget/analytics/monthly-budget/charts, zero migration).
+# 0.30.0: batch rule preview and save (POST /api/budget/analytics/rule-batch-preview and rule-batch-save,
+#         zero migration).
+# 0.31.0: additive forecast source category_baseline and confidence estimated
+#         (HESTIA_BUDGET_FORECAST_CONFIG, zero migration).
+# 0.32.0: additive coverage.pending_row_keys / pending_row_keys_truncated and POST
+#         transactions-by-keys endpoint (zero migration).
+# 0.33.0: a category-baseline conflict skips only that category and lists it on
+#         summary.baseline_conflicts (optional, zero migration). Not strictly additive:
+#         budget_forecast_config_conflict (0.31–0.32) is withdrawn; a conflict is HTTP 200.
+# 0.34.0: additive category parent_id (migration 0020). List rows include parent_id. Create and update
+#         accept an optional parent_id: omit it on update to leave the parent, send null to detach.
+# 0.35.0: additive one-off label on a budget annotation (migration 0021, down_revision 0020).
+#         Charts and category summaries can report that label as its own entry.
+# 0.36.0: additive household read API (GET /api/budget/household/*, migration 0022,
+#         down_revision 0021). Owner routes stay admin. The one-off label is not on this API.
+CONTRACT_VERSION = "0.36.0"
 OPENAPI_PATH = Path(__file__).resolve().parent.parent / "docs" / "api" / "openapi.json"
 
 # De-duplicated string literals (SonarPython S1192): the OpenAPI content-type, the paths reused
@@ -1533,12 +1547,30 @@ class BudgetConflict(BudgetError):
 BudgetAnalyticsVersion = Annotated[int, Field(ge=0)]
 BudgetAnalyticsFingerprint = Annotated[str, Field(pattern=r"^[a-f0-9]{64}$")]
 BudgetAnalyticsReference = Annotated[str, Field(min_length=1, max_length=1024)]
+_ROW_KEY_PATTERN = r"^[^/\x00-\x1f\x7f]{1,128}/[^\x00-\x1f\x7f]{1,1024}$"
+BudgetAnalyticsRowKey = Annotated[str, Field(min_length=3, max_length=1153, pattern=_ROW_KEY_PATTERN)]
 BudgetAnalyticsKind = Literal["auto", "expense", "income", "refund", "excluded"]
+
+
+class BudgetAnalyticsTransactionsByKeysRequest(BaseModel):
+    model_config = _STRICT
+    row_keys: Annotated[list[BudgetAnalyticsRowKey], Field(min_length=1, max_length=500)]
+    cursor: Annotated[str, Field(min_length=1, max_length=8192)] | None = None
+    limit: Annotated[int, Field(ge=1, le=200)] = 50
+    currency: Annotated[str, Field(pattern=r"^[A-Z]{3}$")] | None = None
+    category_id: BudgetId | None = None
+    kind: Literal["expense", "income", "refund", "excluded", "unclassified_credit", "transfer"] | None = None
+    query: Annotated[str, Field(min_length=1, max_length=256)] | None = None
 
 
 class BudgetAnalyticsCategoryCreateRequest(BaseModel):
     model_config = _STRICT
     name: Annotated[str, Field(min_length=1, max_length=80)]
+    parent_id: BudgetId | None = Field(
+        default=None,
+        description="Parent category owned by the same user. Null is a top-level category. "
+                    "On update, omit this field to leave the parent unchanged and send null to detach.",
+    )
 
 
 class BudgetAnalyticsCategoryUpdateRequest(BudgetAnalyticsCategoryCreateRequest):
@@ -1556,6 +1588,9 @@ class BudgetAnalyticsAnnotationRequest(BaseModel):
     kind: BudgetAnalyticsKind
     expected_version: BudgetAnalyticsVersion
     expected_fingerprint: BudgetAnalyticsFingerprint
+    # Omitted leaves the stored label unchanged. Null or blank clears it. The default stays out of the
+    # schema so generated clients treat the field as optional.
+    label: Annotated[str | None, Field(max_length=80, json_schema_extra=_OMIT)] = None
 
 
 class BudgetAnalyticsRulePreviewRequest(BaseModel):
@@ -1602,6 +1637,7 @@ class BudgetAnalyticsCategory(BaseModel):
     version: int
     created_at: float
     updated_at: float
+    parent_id: str | None
 
 
 class BudgetAnalyticsCategorySaved(BudgetAnalyticsCategory):
@@ -1629,6 +1665,7 @@ class BudgetAnalyticsAnnotationSaved(BaseModel):
     ledger_fingerprint: str
     version: int
     updated_at: float | None
+    label: Annotated[str | None, Field(json_schema_extra=_OMIT)] = None
     changed: bool
 
 
@@ -1688,6 +1725,45 @@ class BudgetAnalyticsPreviewResult(BaseModel):
     preview: BudgetAnalyticsPreview
 
 
+class BudgetAnalyticsRuleBatchPreviewRequest(BaseModel):
+    """Preview up to 100 rules against one snapshot. Invalid candidates store nothing."""
+    model_config = _STRICT
+    rules: Annotated[list[BudgetAnalyticsRulePreviewRequest], Field(min_length=1, max_length=100)]
+
+
+class BudgetAnalyticsRuleBatchSaveRequest(BaseModel):
+    """Save the whole batch preview or none of it. A single-rule preview id is rejected."""
+    model_config = _STRICT
+    preview_id: BudgetId
+
+
+class BudgetAnalyticsBatchPreview(BaseModel):
+    model_config = _READ
+    preview_id: str
+    expires_at: float
+    affected_count: int
+    examples: list[BudgetAnalyticsPreviewExample]
+    rule_count: int
+
+
+class BudgetAnalyticsBatchPreviewResult(BaseModel):
+    model_config = _READ
+    ok: Literal[True]
+    preview: BudgetAnalyticsBatchPreview
+
+
+class BudgetAnalyticsRuleBatch(BaseModel):
+    model_config = _READ
+    rules: list[BudgetAnalyticsRuleSaved]
+    changed: bool
+
+
+class BudgetAnalyticsRuleBatchResult(BaseModel):
+    model_config = _READ
+    ok: Literal[True]
+    batch: BudgetAnalyticsRuleBatch
+
+
 class BudgetAnalyticsAnnotation(BaseModel):
     model_config = _READ
     version: int
@@ -1695,6 +1771,7 @@ class BudgetAnalyticsAnnotation(BaseModel):
     category_id: str | None
     kind: str
     stale: bool
+    label: Annotated[str | None, Field(json_schema_extra=_OMIT)] = None
 
 
 class BudgetAnalyticsEffective(BaseModel):
@@ -1776,6 +1853,9 @@ class BudgetAnalyticsCategoryTotal(BaseModel):
     expenses: str
     refunds: str
     net_spending: str
+    one_off: Annotated[bool, Field(json_schema_extra=_OMIT)] = False
+    # Distinct from category_id. A short hash of the account and entry reference, never the label text.
+    one_off_key: Annotated[str | None, Field(pattern=r"^[0-9a-f]{64}$", json_schema_extra=_OMIT)] = None
 
 
 class BudgetAnalyticsFreshness(BaseModel):
@@ -2256,6 +2336,16 @@ class BudgetAnalyticsQuarantine(BaseModel):
     items: list[BudgetAnalyticsQuarantineItem]
 
 
+class BudgetAnalyticsForecastBaselineConflict(BaseModel):
+    """A configured category omitted because an active hint or an enabled mortgage already represents it.
+
+    No amounts. A category may appear twice when both reasons apply.
+    """
+    model_config = _READ
+    category_id: Annotated[str, Field(min_length=1, max_length=128)]
+    reason: Literal["recurring", "mortgage"]
+
+
 class BudgetAnalyticsForecastSummary(BaseModel):
     model_config = _READ
     selected_accounts: int
@@ -2265,6 +2355,8 @@ class BudgetAnalyticsForecastSummary(BaseModel):
     lapsed_recurring_count: int
     deduped_recurring_count: int
     stale_recurring_count: int
+    baseline_conflicts: Annotated[
+        list[BudgetAnalyticsForecastBaselineConflict], Field(default_factory=list, max_length=64)]
 
 
 class BudgetAnalyticsForecastCurrencyTotal(BaseModel):
@@ -2294,13 +2386,13 @@ class BudgetAnalyticsForecastDeduplication(BaseModel):
 
 class BudgetAnalyticsForecastItem(BaseModel):
     model_config = _READ
-    source: Literal["mortgage", "recurring"]
+    source: Literal["mortgage", "recurring", "category_baseline"]
     schedule_id: str | None
     label: BudgetAnalyticsForecastLabel
     amount: str
     currency: str
     expected_date: str
-    confidence: Literal["scheduled", "high", "medium"]
+    confidence: Literal["scheduled", "high", "medium", "estimated"]
     past_due: bool
     account_stale: bool
 
@@ -2359,6 +2451,8 @@ class BudgetAnalyticsMonthlyBudgetCoverage(BaseModel):
     stale_selected_accounts: int
     purchase_date_fallback_count: int
     pending_transfer_rows: int
+    pending_row_keys: Annotated[list[BudgetAnalyticsRowKey], Field(default_factory=list, max_length=500)]
+    pending_row_keys_truncated: bool = Field(default_factory=lambda: False)
     transfer_scan_limited: bool
     provisional: bool
     has_activity: bool
@@ -2421,6 +2515,8 @@ class BudgetAnalyticsMonthlyBudgetCategorySpend(BaseModel):
     refunds: BudgetAnalyticsMonthlyBudgetMoney
     net_spending: BudgetAnalyticsMonthlyBudgetMoney
     limit: BudgetAnalyticsMonthlyBudgetCategoryLimit | None
+    one_off: Annotated[bool, Field(json_schema_extra=_OMIT)] = False
+    one_off_key: Annotated[str | None, Field(pattern=r"^[0-9a-f]{64}$", json_schema_extra=_OMIT)] = None
 
 
 class BudgetAnalyticsMonthlyBudgetPassThrough(BaseModel):
@@ -2464,6 +2560,55 @@ class BudgetAnalyticsMonthlyBudget(BaseModel):
     category_spend: list[BudgetAnalyticsMonthlyBudgetCategorySpend]
     pass_through: BudgetAnalyticsMonthlyBudgetPassThrough | None
     card_exposure: BudgetAnalyticsMonthlyBudgetCardExposure
+
+
+class BudgetAnalyticsMonthlyBudgetDailyPoint(BaseModel):
+    model_config = _READ
+    date: str
+    cumulative_spent: BudgetAnalyticsMonthlyBudgetMoney
+
+
+class BudgetAnalyticsMonthlyBudgetSeriesCategory(BaseModel):
+    model_config = _READ
+    category_id: str | None
+    name: Annotated[str | None, Field(json_schema_extra=_OMIT)] = None
+    one_off: Annotated[bool, Field(json_schema_extra=_OMIT)] = False
+    one_off_key: Annotated[str | None, Field(pattern=r"^[0-9a-f]{64}$", json_schema_extra=_OMIT)] = None
+    net_spending: BudgetAnalyticsMonthlyBudgetMoney
+
+
+class BudgetAnalyticsMonthlyBudgetSeriesMonth(BaseModel):
+    model_config = _READ
+    period: str
+    has_activity: bool
+    is_current_month: bool
+    income_estimate_partial: bool
+    provisional: bool
+    start_budget: BudgetAnalyticsMonthlyBudgetMoney
+    spent: BudgetAnalyticsMonthlyBudgetMoney
+    categories: list[BudgetAnalyticsMonthlyBudgetSeriesCategory]
+
+
+class BudgetAnalyticsMonthlyBudgetCategoryLabel(BaseModel):
+    model_config = _READ
+    category_id: str
+    name: str
+    archived: bool
+
+
+class BudgetAnalyticsMonthlyBudgetSeries(BaseModel):
+    model_config = _READ
+    daily: Annotated[list[BudgetAnalyticsMonthlyBudgetDailyPoint], Field(min_length=1, max_length=31)]
+    months: Annotated[list[BudgetAnalyticsMonthlyBudgetSeriesMonth], Field(min_length=1, max_length=12)]
+    category_labels: list[BudgetAnalyticsMonthlyBudgetCategoryLabel]
+
+
+class BudgetAnalyticsMonthlyBudgetCharts(BaseModel):
+    """Read-only owner-private monthly budget dashboard and chart series evaluated from one snapshot."""
+    model_config = _READ
+    budget: BudgetAnalyticsMonthlyBudget
+    series: BudgetAnalyticsMonthlyBudgetSeries | None
+
 
 
 _HouseholdGrantId = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$", min_length=64, max_length=64)]
@@ -2755,21 +2900,27 @@ _HOUSEHOLD_MODELS = (BudgetHouseholdAccess, BudgetHouseholdAccounts, BudgetHouse
                      BudgetHouseholdRecurring, BudgetHouseholdMortgages, BudgetHouseholdInbox,
                      BudgetHouseholdQuarantine, BudgetHouseholdSettings)
 
-
 _ANALYTICS_MODELS = (BudgetAnalyticsCategoryCreateRequest, BudgetAnalyticsCategoryUpdateRequest,
-                     BudgetAnalyticsAnnotationRequest, BudgetAnalyticsRulePreviewRequest,
-                     BudgetAnalyticsRuleSaveRequest, BudgetAnalyticsTransferDecisionRequest,
-                     BudgetAnalyticsSpendingLimitSaveRequest, BudgetAnalyticsMortgageSaveRequest,
-                     BudgetAnalyticsMortgagePaymentSetRequest, BudgetAnalyticsInboxMarkRequest,
-                     BudgetAnalyticsCategories, BudgetAnalyticsCategoryResult, BudgetAnalyticsAnnotationResult,
+                     BudgetAnalyticsAnnotationRequest, BudgetAnalyticsTransactionsByKeysRequest,
+                     BudgetAnalyticsRulePreviewRequest, BudgetAnalyticsRuleSaveRequest,
+                     BudgetAnalyticsTransferDecisionRequest, BudgetAnalyticsSpendingLimitSaveRequest,
+                     BudgetAnalyticsMortgageSaveRequest, BudgetAnalyticsMortgagePaymentSetRequest,
+                     BudgetAnalyticsInboxMarkRequest, BudgetAnalyticsCategories,
+                     BudgetAnalyticsCategoryResult, BudgetAnalyticsAnnotationResult,
                      BudgetAnalyticsRules, BudgetAnalyticsRuleResult, BudgetAnalyticsPreviewResult,
+                     BudgetAnalyticsRuleBatchPreviewRequest, BudgetAnalyticsRuleBatchSaveRequest,
+                     BudgetAnalyticsBatchPreview, BudgetAnalyticsBatchPreviewResult,
+                     BudgetAnalyticsRuleBatch, BudgetAnalyticsRuleBatchResult,
                      BudgetAnalyticsOverview, BudgetAnalyticsTransactions, BudgetAnalyticsTransfers,
                      BudgetAnalyticsDecisionResult, BudgetAnalyticsRecurring,
                      BudgetAnalyticsSpendingLimits, BudgetAnalyticsSpendingLimitResult,
                      BudgetAnalyticsMortgages, BudgetAnalyticsMortgageScheduleResult,
                      BudgetAnalyticsMortgagePaymentResult, BudgetAnalyticsInbox,
                      BudgetAnalyticsInboxMarkResult, BudgetAnalyticsQuarantine, BudgetAnalyticsForecast,
-                     BudgetAnalyticsMonthlyBudget)
+                     BudgetAnalyticsMonthlyBudget, BudgetAnalyticsMonthlyBudgetDailyPoint,
+                     BudgetAnalyticsMonthlyBudgetSeriesCategory, BudgetAnalyticsMonthlyBudgetSeriesMonth,
+                     BudgetAnalyticsMonthlyBudgetCategoryLabel, BudgetAnalyticsMonthlyBudgetSeries,
+                     BudgetAnalyticsMonthlyBudgetCharts)
 
 
 _BUDGET_MODELS = (BudgetSelectionRequest, BudgetKindRequest, BudgetConnectionStateRequest,
@@ -2792,6 +2943,7 @@ def _ref(name: str) -> dict:
 _PATH_ROLES = {
     ("GET", "/api/budget/analytics/overview"): "admin",
     ("GET", "/api/budget/analytics/transactions"): "admin",
+    ("POST", "/api/budget/analytics/transactions-by-keys"): "admin",
     ("GET", "/api/budget/analytics/categories"): "admin",
     ("GET", "/api/budget/analytics/rules"): "admin",
     ("GET", "/api/budget/analytics/transfers"): "admin",
@@ -2802,6 +2954,7 @@ _PATH_ROLES = {
     ("GET", "/api/budget/analytics/quarantine"): "admin",
     ("GET", "/api/budget/analytics/forecast"): "admin",
     ("GET", "/api/budget/analytics/monthly-budget"): "admin",
+    ("GET", "/api/budget/analytics/monthly-budget/charts"): "admin",
     ("GET", "/api/budget/household/access"): "viewer",
     ("GET", "/api/budget/household/report-accounts"): "viewer",
     ("GET", "/api/budget/household/monthly-budget"): "viewer",
@@ -2821,6 +2974,8 @@ _PATH_ROLES = {
     ("POST", "/api/budget/analytics/annotation"): "admin",
     ("POST", "/api/budget/analytics/rule-preview"): "admin",
     ("POST", "/api/budget/analytics/rule-save"): "admin",
+    ("POST", "/api/budget/analytics/rule-batch-preview"): "admin",
+    ("POST", "/api/budget/analytics/rule-batch-save"): "admin",
     ("POST", "/api/budget/analytics/transfer-decision"): "admin",
     ("POST", "/api/budget/analytics/spending-limit-save"): "admin",
     ("POST", "/api/budget/analytics/mortgage-save"): "admin",
@@ -3436,6 +3591,7 @@ def _budget_paths():
     return paths
 
 
+
 def _household_grant_header():
     return {"name": "X-Budget-Grant", "in": "header", "required": True,
             "schema": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
@@ -3520,7 +3676,6 @@ def _household_paths():
         paths[prefix + name] = {"get": entry}
     return paths
 
-
 def _analytics_paths():
     prefix = "/api/budget/analytics/"
     period = _budget_query("period", required=True, schema={"type": "string", "pattern": r"^[0-9]{4}(?:-[0-9]{2})?$"},
@@ -3543,11 +3698,17 @@ def _analytics_paths():
         schema={"type": "string", "pattern": "^[A-Z]{3}$", "default": "PLN"},
         description="Optional uppercase 3-letter ISO currency code; defaults to PLN.",
     )
+    month_history = _budget_query(
+        "history",
+        schema={"type": "string", "enum": ["6", "12"], "default": "6"},
+        description="Optional monthly history window (6 or 12 months); defaults to 6.",
+    )
     reads = (
         ("overview", "getBudgetAnalyticsOverview", "BudgetAnalyticsOverview", [period, currency]),
         ("transactions", "getBudgetAnalyticsTransactions", "BudgetAnalyticsTransactions",
          [period, currency, _budget_query("category_id", description="Category ID, or uncategorised for no category."),
-          _budget_query("kind"), _budget_query("query", schema={"type": "string", "minLength": 1, "maxLength": 256}), *page]),
+          _budget_query("kind"), _budget_query("query", schema={"type": "string", "minLength": 1, "maxLength": 256}),
+          *page]),
         ("categories", "getBudgetAnalyticsCategories", "BudgetAnalyticsCategories", []),
         ("rules", "getBudgetAnalyticsRules", "BudgetAnalyticsRules", []),
         ("transfers", "getBudgetAnalyticsTransfers", "BudgetAnalyticsTransfers",
@@ -3562,6 +3723,8 @@ def _analytics_paths():
         ("forecast", "getBudgetAnalyticsForecast", "BudgetAnalyticsForecast", [horizon, currency]),
         ("monthly-budget", "getBudgetAnalyticsMonthlyBudget", "BudgetAnalyticsMonthlyBudget",
          [month_optional, month_currency]),
+        ("monthly-budget/charts", "getBudgetAnalyticsMonthlyBudgetCharts", "BudgetAnalyticsMonthlyBudgetCharts",
+         [month_optional, month_currency, month_history]),
     )
     paths = {prefix + path: {"get": {"operationId": operation, "summary": "Read owner-private local budget analytics",
               "parameters": parameters, "responses": _analytics_responses(model)}}
@@ -3584,9 +3747,16 @@ def _analytics_paths():
         "forecast": ("Read the owner-private upcoming commitments estimate", (
             "Read-only evaluation of unmarked mortgage instalments and active recurring charges from one local "
             "snapshot using the server UTC date. Matches recurring hints to individual scheduled instalments to "
-            "suppress duplicate estimates. An optional currency filter scopes commitments, deduplications and "
-            "their summary counts. Snapshot metadata and account freshness cover all selected accounts. "
-            "The estimate excludes spending limits and makes no bank requests or stored changes."
+            "suppress duplicate estimates. When HESTIA_BUDGET_FORECAST_CONFIG names categories, each month also "
+            "includes a category_baseline estimate (confidence estimated, schedule_id null, label is the category "
+            "name): the median or trimmed mean of net spending over prior complete months inside each account's "
+            "coverage window, including months with no spend. The current month subtracts net spending already "
+            "booked, floored at zero. A configured category already represented by an active recurring hint or an "
+            "enabled mortgage schedule is omitted from the baselines and listed in summary.baseline_conflicts "
+            "(category id and reason only, no amounts). Every other baseline, mortgage and recurring item is still "
+            "computed. An optional currency filter scopes commitments, deduplications and their summary counts. "
+            "Snapshot metadata and account freshness cover all selected accounts. The estimate excludes spending "
+            "limits and makes no bank requests or stored changes."
         )),
         "monthly-budget": ("Read the owner-private monthly budget dashboard", (
             "Pure read-only single-snapshot monthly budget dashboard evaluated in Europe/Warsaw from one UTC instant. "
@@ -3594,6 +3764,12 @@ def _analytics_paths():
             "unresolved transfer and repayment candidate provisional flags, previous-month expected income estimates "
             "(including cross-account salary matching), and spending pace. Card exposure is reported as unavailable in P1. "
             "Makes no bank requests and no database writes."
+        )),
+        "monthly-budget/charts": ("Read the owner-private monthly budget dashboard and chart series", (
+            "Pure read-only single-snapshot monthly budget dashboard and chart series evaluated in Europe/Warsaw "
+            "from one UTC instant. Returns the MonthlyBudget dashboard alongside cumulative daily spending through "
+            "cutoff and 6 or 12 historical monthly category/income buckets computed with each month's configured income "
+            "window. Returns series=null when unconfigured. Makes no bank requests and no database writes."
         )),
     }
     for path, (summary, description) in read_overrides.items():
@@ -3605,13 +3781,14 @@ def _analytics_paths():
                "and unknown or duplicate parameters (including today) are rejected.",
         "409": "SQLite backend required: forecast requires HESTIA_PERSIST=sqlite.",
         "413": "Forecast limit exceeded (>100,000 selected rows, >100 schedules, >1,200 paid marks per schedule, "
-               ">200 active currency-filtered hints, >3,600 projected items, or >4 MiB UTF-8 JSON payload); "
-               "zero partial totals returned.",
+               ">200 active currency-filtered hints, >64 category baselines, >4,368 projected items, or >4 MiB UTF-8 "
+               "JSON payload); zero partial totals returned.",
         "500": "Stored mortgage schedule, ledger, or metadata integrity check failed (`budget_analytics_data_error`), "
                "including stored-data helper errors mapped to 500 after forecast query validation, or unexpected "
                "internal failure (`budget_internal_error`).",
         "503": "Analytics storage or budget configuration unavailable (`budget_analytics_unavailable` or "
-               "`budget_unavailable`).",
+               "`budget_unavailable`). budget_forecast_config_conflict (0.31–0.32) wycofany w 0.33; "
+               "konflikt to teraz 200 + summary.baseline_conflicts.",
     }
     for code, description in forecast_descriptions.items():
         forecast_responses[code]["description"] = description
@@ -3631,12 +3808,28 @@ def _analytics_paths():
     }
     for code, description in month_descriptions.items():
         month_responses[code]["description"] = description
+    charts_responses = paths[prefix + "monthly-budget/charts"]["get"]["responses"]
+    charts_descriptions = {
+        "200": "Owner-private monthly budget dashboard and chart series from one local snapshot.",
+        "400": "Invalid monthly budget charts query: period must match ^[0-9]{4}-[0-9]{2}$ through the current "
+               "Europe/Warsaw month, currency must match ^[A-Z]{3}$, history must be 6 or 12, and unknown or "
+               "duplicate parameters are rejected.",
+        "409": "SQLite backend required: monthly-budget/charts requires HESTIA_PERSIST=sqlite.",
+        "413": "Monthly budget charts limit exceeded (>100,000 selected rows, >1,000 category limits, "
+               ">192-character aggregate decimal output, or >4 MiB UTF-8 JSON payload); no partial totals returned.",
+        "500": month_descriptions["500"],
+        "503": month_descriptions["503"],
+    }
+    for code, description in charts_descriptions.items():
+        charts_responses[code]["description"] = description
     writes = (
         ("category-create", "createBudgetAnalyticsCategory", "BudgetAnalyticsCategoryCreateRequest", "BudgetAnalyticsCategoryResult"),
         ("category-update", "updateBudgetAnalyticsCategory", "BudgetAnalyticsCategoryUpdateRequest", "BudgetAnalyticsCategoryResult"),
         ("annotation", "annotateBudgetAnalyticsTransaction", "BudgetAnalyticsAnnotationRequest", "BudgetAnalyticsAnnotationResult"),
         ("rule-preview", "previewBudgetAnalyticsRule", "BudgetAnalyticsRulePreviewRequest", "BudgetAnalyticsPreviewResult"),
         ("rule-save", "saveBudgetAnalyticsRule", "BudgetAnalyticsRuleSaveRequest", "BudgetAnalyticsRuleResult"),
+        ("rule-batch-preview", "previewBudgetAnalyticsRules", "BudgetAnalyticsRuleBatchPreviewRequest", "BudgetAnalyticsBatchPreviewResult"),
+        ("rule-batch-save", "saveBudgetAnalyticsRules", "BudgetAnalyticsRuleBatchSaveRequest", "BudgetAnalyticsRuleBatchResult"),
         ("transfer-decision", "decideBudgetAnalyticsTransfer", "BudgetAnalyticsTransferDecisionRequest", "BudgetAnalyticsDecisionResult"),
         ("spending-limit-save", "saveBudgetAnalyticsSpendingLimit", "BudgetAnalyticsSpendingLimitSaveRequest", "BudgetAnalyticsSpendingLimitResult"),
         ("mortgage-save", "saveBudgetAnalyticsMortgage", "BudgetAnalyticsMortgageSaveRequest", "BudgetAnalyticsMortgageScheduleResult"),
@@ -3649,6 +3842,24 @@ def _analytics_paths():
                            "Version and source fingerprints prevent stale changes. No bank request is made.",
             "requestBody": {"required": True, "content": {_APP_JSON: {"schema": _ref(request)}}},
             "responses": _analytics_responses(model)}}
+    batch_overrides = {
+        "rule-batch-preview": (
+            "Preview up to 100 owner-private rules against one snapshot",
+            "Requires the exact admin owner, browser cookie and configured HTTPS Origin. All-or-nothing: "
+            "every candidate is validated before a preview row is stored, and one snapshot digest fences the "
+            "whole batch (1..100 rules). affected_count is the combined change, not a sum of single-rule previews. "
+            "No bank request is made.",
+        ),
+        "rule-batch-save": (
+            "Save a batch rule preview atomically",
+            "Requires the exact admin owner, browser cookie and configured HTTPS Origin. Applies every rule in the "
+            "batch preview or none: one digest check, per-rule expected_version checks, and the per-owner rule cap (MAX_RULES = 5000) are "
+            "evaluated before any rule row changes. Replaying a saved batch returns changed=false. A single-rule "
+            "preview id is rejected. No bank request is made.",
+        ),
+    }
+    for path, (summary, description) in batch_overrides.items():
+        paths[prefix + path]["post"].update(summary=summary, description=description)
     paths[prefix + "inbox-mark"]["post"]["summary"] = "Mark or unmark owner-private inbox alerts (atomic anti-ABA CAS)"
     paths[prefix + "inbox-mark"]["post"]["description"] = (
         "Requires the exact admin owner, browser cookie and configured HTTPS Origin. Atomically marks or unmarks "
@@ -3656,6 +3867,17 @@ def _analytics_paths():
         "409 budget_analytics_source_changed if any unmarked key is inactive on read=true; 413 budget_analytics_limit "
         "at the 500-marker cap on create only). No bank request is made."
     )
+    paths[prefix + "transactions-by-keys"] = {"post": {
+        "operationId": "listBudgetAnalyticsTransactionsByKeys",
+        "summary": "Read owner-private transactions matching exact row keys (pure read-only)",
+        "description": "Requires the exact admin owner, browser cookie and configured HTTPS Origin. "
+                       "Returns the same paginated BudgetAnalyticsTransactions shape as GET transactions for "
+                       "1..500 exact <account_id>/<entry_reference> keys in the JSON body (<= 1 MiB) regardless of "
+                       "period, preventing oversized GET query strings and key leakage in access logs. "
+                       "Makes no bank requests and no database writes.",
+        "requestBody": {"required": True, "content": {_APP_JSON: {"schema": _ref("BudgetAnalyticsTransactionsByKeysRequest")}}},
+        "responses": _analytics_responses("BudgetAnalyticsTransactions"),
+    }}
     return paths
 
 

@@ -4,13 +4,13 @@ import type { AnalyticsCategory, AnalyticsForecast, AnalyticsForecastCurrencyTot
   AnalyticsForecastItem, AnalyticsInbox, AnalyticsInboxConsentItem, AnalyticsInboxItem,
   AnalyticsInboxMarkSaved, AnalyticsInboxMortgageItem, AnalyticsInboxSpendingLimitItem,
   AnalyticsMonthlyBudget, AnalyticsMonthlyBudgetCategoryLimit, AnalyticsMonthlyBudgetCategorySpend,
-  AnalyticsMonthlyBudgetExpectedIncome, AnalyticsMonthlyBudgetPace, AnalyticsMonthlyBudgetPassThrough,
-  AnalyticsMortgageReminder, AnalyticsMortgages, AnalyticsMortgageSchedule,
-  AnalyticsOverview, AnalyticsQuarantine, AnalyticsQuarantineAccount, AnalyticsQuarantineItem,
-  AnalyticsRecurring, AnalyticsRecurringHint, AnalyticsSpendingLimit, AnalyticsSpendingLimitStatus,
-  AnalyticsSpendingLimits, AnnotationSaved, MortgagePaymentSaved, MortgageScheduleSaved, SpendingLimitSaved,
-  TransferDecisionResult, AnalyticsTotals, AnalyticsTransaction, AnalyticsTransactions, TransferLeg, TransferList,
-  TransferPair } from "./model";
+  AnalyticsMonthlyBudgetCharts, AnalyticsMonthlyBudgetExpectedIncome, AnalyticsMonthlyBudgetPace,
+  AnalyticsMonthlyBudgetPassThrough, AnalyticsMonthlyBudgetSeries, AnalyticsMortgageReminder, AnalyticsMortgages,
+  AnalyticsMortgageSchedule, AnalyticsOverview, AnalyticsQuarantine, AnalyticsQuarantineAccount,
+  AnalyticsQuarantineItem, AnalyticsRecurring, AnalyticsRecurringHint, AnalyticsSpendingLimit,
+  AnalyticsSpendingLimitStatus, AnalyticsSpendingLimits, AnnotationSaved, MortgagePaymentSaved,
+  MortgageScheduleSaved, SpendingLimitSaved, TransferDecisionResult, AnalyticsTotals, AnalyticsTransaction,
+  AnalyticsTransactions, TransferLeg, TransferList, TransferPair } from "./model";
 
 export function totals(currency: string, changes: Partial<AnalyticsTotals> = {}): AnalyticsTotals {
   return {
@@ -48,8 +48,8 @@ export function entry(reference: string, changes: Partial<AnalyticsTransaction> 
 }
 
 export const categoryList: AnalyticsCategory[] = [
-  { id: "cat-food", name: "Synthetic Food", archived: false, version: 1, created_at: 1, updated_at: 1 },
-  { id: "cat-old", name: "Synthetic Old", archived: true, version: 3, created_at: 1, updated_at: 2 },
+  { id: "cat-food", name: "Synthetic Food", archived: false, version: 1, created_at: 1, updated_at: 1, parent_id: null },
+  { id: "cat-old", name: "Synthetic Old", archived: true, version: 3, created_at: 1, updated_at: 2, parent_id: null },
 ];
 
 export function leg(account: string, reference: string, changes: Partial<TransferLeg> = {}): TransferLeg {
@@ -210,7 +210,7 @@ export function forecastOf(changes: Partial<AnalyticsForecast> = {}): AnalyticsF
     schedules_version: "synthetic-schedules-v1", rule_version: 1,
     summary: {
       selected_accounts: 1, excluded_accounts: 0, stale_accounts: 0, overdue_mortgage_schedule_count: 0,
-      lapsed_recurring_count: 0, deduped_recurring_count: 0, stale_recurring_count: 0,
+      lapsed_recurring_count: 0, deduped_recurring_count: 0, stale_recurring_count: 0, baseline_conflicts: [],
     },
     totals: [], deduplications: [],
     months: ["2026-11", "2026-12", "2027-01"].map((month) => ({ month, currencies: [], items: [] })),
@@ -398,6 +398,8 @@ export function monthlyBudgetOf(changes: Partial<AnalyticsMonthlyBudget> = {}): 
       stale_selected_accounts: 0,
       purchase_date_fallback_count: 0,
       pending_transfer_rows: 0,
+      pending_row_keys: [],
+      pending_row_keys_truncated: false,
       transfer_scan_limited: false,
       provisional: false,
       has_activity: true,
@@ -414,4 +416,60 @@ export function monthlyBudgetOf(changes: Partial<AnalyticsMonthlyBudget> = {}): 
     card_exposure: { status: "unavailable", amount: null, as_of_date: null },
     ...changes,
   };
+}
+
+export function monthlyBudgetSeriesOf(
+  changes: Partial<AnalyticsMonthlyBudgetSeries> = {},
+): AnalyticsMonthlyBudgetSeries {
+  return {
+    daily: [
+      { date: "2026-11-01", cumulative_spent: "0" },
+      { date: "2026-11-05", cumulative_spent: "120.5" },
+      { date: "2026-11-10", cumulative_spent: "320.5" },
+    ],
+    months: [
+      {
+        period: "2026-06", has_activity: false, is_current_month: false, income_estimate_partial: false,
+        provisional: false, start_budget: "0", spent: "0", categories: [],
+      },
+      {
+        period: "2026-07", has_activity: true, is_current_month: false, income_estimate_partial: false,
+        provisional: false, start_budget: "4500", spent: "2100",
+        categories: [{ category_id: "cat-food", net_spending: "2100" }],
+      },
+      {
+        period: "2026-08", has_activity: true, is_current_month: false, income_estimate_partial: false,
+        provisional: false, start_budget: "4800", spent: "2500",
+        categories: [{ category_id: "cat-food", net_spending: "2500" }],
+      },
+      {
+        period: "2026-09", has_activity: true, is_current_month: false, income_estimate_partial: false,
+        provisional: false, start_budget: "4900", spent: "2600",
+        categories: [{ category_id: "cat-food", net_spending: "2600" }],
+      },
+      {
+        period: "2026-10", has_activity: true, is_current_month: false, income_estimate_partial: false,
+        provisional: false, start_budget: "5000", spent: "2400",
+        categories: [{ category_id: "cat-food", net_spending: "2400" }],
+      },
+      {
+        period: "2026-11", has_activity: true, is_current_month: true, income_estimate_partial: false,
+        provisional: false, start_budget: "5000", spent: "320.5",
+        categories: [{ category_id: "cat-food", net_spending: "320.5" }],
+      },
+    ],
+    category_labels: [{ category_id: "cat-food", name: "Synthetic Food", archived: false }],
+    ...changes,
+  };
+}
+
+export function monthlyBudgetChartsOf(
+  budgetChanges: Partial<AnalyticsMonthlyBudget> = {},
+  seriesChanges?: Partial<AnalyticsMonthlyBudgetSeries> | null,
+): AnalyticsMonthlyBudgetCharts {
+  const budget = monthlyBudgetOf(budgetChanges);
+  if (seriesChanges === null || budget.configuration.status === "unconfigured") {
+    return { budget, series: null };
+  }
+  return { budget, series: monthlyBudgetSeriesOf(seriesChanges) };
 }
