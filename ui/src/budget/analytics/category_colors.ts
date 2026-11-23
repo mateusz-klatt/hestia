@@ -5,6 +5,11 @@ import { categoryParentId } from "./category_tree";
 export interface CategoryColorInput {
   id: string;
   parent_id?: string | null;
+  /**
+   * Display name. Hashing ignores it. It is read only to recognise the technical
+   * cash root, because the API category has no system flag and does not expose `name_key`.
+   */
+  name?: string | undefined;
 }
 
 export interface OklchColor {
@@ -245,6 +250,42 @@ export const OTHER_CATEGORY_COLOR: CategoryColor = {
   hatched: true,
 };
 
+/**
+ * Server `budget_categories.name_key` is `" ".join(_text(name).split()).casefold()`
+ * (`analytics_store._text` NFC-strips, then `create_category` collapses whitespace and casefolds).
+ * `BudgetAnalyticsCategory` has no system flag and the wire type does not include `name_key`,
+ * so this root cannot be pinned by a production UUID. Python `str.casefold()` of
+ * "Gotówka (bankomat)" keeps ó, giving exactly `gotówka (bankomat)`. `String#toLowerCase()`
+ * matches casefold for that Polish label.
+ */
+export const CASH_ATM_NAME_KEY = "gotówka (bankomat)";
+
+/** Slate blue-grey, fixed so this root does not hash onto the red/carmine family or the uncategorised grey. */
+const CASH_ATM_OKLCH: OklchColor = { l: 0.46, c: 0.045, h: 250 };
+export const CASH_ATM_COLOR = oklchToHex(CASH_ATM_OKLCH.l, CASH_ATM_OKLCH.c, CASH_ATM_OKLCH.h);
+
+/** Same key the server stores: NFC, collapsed whitespace, casefold. */
+export function categoryNameKey(name: string): string {
+  return name.normalize("NFC").split(/\s+/u).filter((part) => part !== "").join(" ").toLowerCase();
+}
+
+function isColorRoot(item: CategoryColorInput, ids: ReadonlySet<string>): boolean {
+  const parent = categoryParentId(item);
+  return parent === null || !ids.has(parent) || parent === item.id;
+}
+
+/** Fixed override for the cash root only. Descendants shade from it through the existing override hook. */
+function technicalCashOverrides(categories: readonly CategoryColorInput[]): CategoryColorOverrides | undefined {
+  const ids = new Set(categories.map((item) => item.id));
+  const overrides: Record<string, string> = {};
+  for (const item of categories) {
+    if (item.name === undefined || !isColorRoot(item, ids)) continue;
+    if (categoryNameKey(item.name) !== CASH_ATM_NAME_KEY) continue;
+    overrides[item.id] = CASH_ATM_COLOR;
+  }
+  return Object.keys(overrides).length === 0 ? undefined : overrides;
+}
+
 function fnv1a32(value: string): number {
   let hash = 0x811c9dc5;
   for (let index = 0; index < value.length; index += 1) {
@@ -320,8 +361,14 @@ function shadeForDescendant(
   return { oklch, background: oklchToHex(l, c, h), hueOffset };
 }
 
-function rootBaseColor(id: string, overrides?: CategoryColorOverrides): { oklch: OklchColor; background: string } {
-  const override = parseOverrideColor(lookupOverride(overrides, id));
+function rootBaseColor(
+  id: string,
+  overrides?: CategoryColorOverrides,
+  technical?: CategoryColorOverrides,
+): { oklch: OklchColor; background: string } {
+  // An explicit caller override wins. An invalid one falls through to the technical cash colour, then the hash.
+  const override = parseOverrideColor(lookupOverride(overrides, id))
+    ?? parseOverrideColor(lookupOverride(technical, id));
   if (override !== null) return override;
   const slot = fnv1a32(id) % CATEGORY_PALETTE.length;
   const swatch = CATEGORY_PALETTE[slot] ?? CATEGORY_PALETTE[0];
@@ -354,7 +401,9 @@ interface WalkFrame {
  * Assign deterministic colours to a category tree:
  * - Each root independently takes a curated hue via `fnv1a(root.id) % paletteSize` (stable across root additions/removals).
  * - Descendants shade their parent's hue monotonically through level 3 and wrap alternation deeper down.
+ * - The technical cash root (`CASH_ATM_NAME_KEY`) takes a fixed slate. That override is by name_key, not by which roots are on screen.
  * - Valid optional overrides replace only their own root's base colour and propagate shades to its descendants.
+ *   An explicit override wins over the cash default.
  */
 export function buildCategoryColorMap(
   categories: readonly CategoryColorInput[],
@@ -381,10 +430,11 @@ export function buildCategoryColorMap(
   for (const list of children.values()) list.sort(compareIds);
 
   const resolved = new Map<string, CategoryColor>();
+  const technical = technicalCashOverrides([...byId.values()]);
 
   const walkComponent = (seedId: string) => {
     if (resolved.has(seedId)) return;
-    const { oklch: rootOklch, background: rootBackground } = rootBaseColor(seedId, options?.overrides);
+    const { oklch: rootOklch, background: rootBackground } = rootBaseColor(seedId, options?.overrides, technical);
     const stack: WalkFrame[] = [{ id: seedId, depth: 0, hueBias: 0, siblingIndex: 0, siblingCount: 1 }];
     while (stack.length > 0) {
       const frame = stack.pop();

@@ -27,17 +27,18 @@ describe("one-off chart entries", () => {
     const categories = [
       category("c1", "10"), category("c2", "10"), category("c3", "10"),
       category("c4", "10"), category("c5", "10"), category("c6", "10"),
+      category("c7", "10"), category("c8", "10"), category("c9", "10"),
       oneOff("Remont łazienki", "5000"),
     ];
     const model = buildCategoryChartModel(
       [{
         period: "2026-11", has_activity: true, is_current_month: true, income_estimate_partial: false,
-        provisional: false, start_budget: "0", spent: "5060", categories,
+        provisional: false, start_budget: "0", spent: "5090", categories,
       }],
       [],
       options,
     );
-    expect(model.displayed.map((item) => item.id)).toEqual(["c1", "c2", "c3", "c4", "c5"]);
+    expect(model.displayed.map((item) => item.id)).toEqual(["c1", "c2", "c3", "c4", "c5", "c6", "c7", "c8"]);
     expect(model.oneOffs.map((item) => item.name)).toEqual(["Remont łazienki"]);
     expect(model.displayed.some((item) => item.oneOff)).toBe(false);
     const slices = model.stacks[0]?.slices ?? [];
@@ -46,7 +47,7 @@ describe("one-off chart entries", () => {
       label: "Remont łazienki", value: 5000n,
     });
     expect(slices.some((slice) => slice.key.includes("Remont"))).toBe(false);
-    expect(model.stacks[0]?.posTotal).toBe(5060n);
+    expect(model.stacks[0]?.posTotal).toBe(5090n);
   });
 
   it("keeps a categorised one-off beside its category and falls back when the hash is missing", () => {
@@ -104,6 +105,7 @@ describe("one-off chart entries", () => {
         categories: [
           category("c1", "10"), category("c2", "10"), category("c3", "10"),
           category("c4", "10"), category("c5", "10"), category("c6", "10"),
+          category("c7", "10"), category("c8", "10"), category("c9", "10"),
           oneOff("Remont łazienki", "1"),
         ],
       }],

@@ -6,12 +6,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { account } from "../fixtures";
 import { CategoryBadge, CategorySwatch } from "./category_badge";
 import {
+  CASH_ATM_COLOR,
+  CASH_ATM_NAME_KEY,
   CATEGORY_PALETTE,
   NEUTRAL_CATEGORY_COLOR,
   OTHER_CATEGORY_COLOR,
   accessibleBadgeText,
   buildCategoryColorMap,
   buildCategoryColors,
+  categoryNameKey,
   contrastRatio,
   hatchedBadgeGradient,
   hexToOklch,
@@ -40,7 +43,7 @@ import {
 } from "./fixtures";
 import type { AnalyticsCategory } from "./model";
 import { MonthBudgetView, monthBudgetLabels } from "./month_budget";
-import { MonthBudgetCharts } from "./month_budget_charts";
+import { MonthBudgetCharts, buildCategoryChartModel } from "./month_budget_charts";
 import { TransactionsPanel, transactionLabels } from "./transactions";
 import { YearView, yearLabels } from "./year";
 
@@ -279,6 +282,86 @@ describe("category_colors", () => {
       if (item.id === "transport" || item.id === "fuel" || item.id === "light-root" || item.id === "light-child") continue;
       expect(colors.get(item.id)).toEqual(withoutOverrides.get(item.id));
     }
+  });
+
+  it("pins Gotówka (bankomat) to a fixed slate for the root and its descendants only", () => {
+    expect(categoryNameKey("Gotówka (bankomat)")).toBe(CASH_ATM_NAME_KEY);
+    expect(categoryNameKey("  GOTÓWKA   (bankomat) ")).toBe(CASH_ATM_NAME_KEY);
+    expect(categoryNameKey("Goto\u0301wka (bankomat)")).toBe(CASH_ATM_NAME_KEY);
+    expect(categoryNameKey("Gotowka (bankomat)")).not.toBe(CASH_ATM_NAME_KEY);
+
+    const dom = { id: "dom", parent_id: null, name: "Dom" };
+    const food = { id: "food", parent_id: null, name: "Jedzenie" };
+    const cash = { id: "cash-atm", parent_id: null, name: "Gotówka (bankomat)" };
+    const child = { id: "cash-child", parent_id: "cash-atm", name: "Wypłata" };
+    const plain = buildCategoryColors([
+      dom,
+      food,
+      { ...cash, name: "Gotowka (bankomat)" },
+      child,
+    ]);
+    const colored = buildCategoryColors([dom, food, cash, child]);
+
+    expect(colored.get("cash-atm").background).toBe(CASH_ATM_COLOR);
+    expect(colored.get("cash-atm").background).not.toBe(plain.get("cash-atm").background);
+    expect(colored.get("cash-atm").background).not.toBe(NEUTRAL_CATEGORY_COLOR.background);
+    expect(CATEGORY_PALETTE.some((swatch) => swatch.background === CASH_ATM_COLOR)).toBe(false);
+    expect(colored.get("cash-atm").oklch.c).toBeGreaterThan(0.02);
+    expect(colored.get("cash-atm").oklch.c).toBeLessThan(0.08);
+    for (const name of ["crimson", "terracotta", "magenta"] as const) {
+      const swatch = CATEGORY_PALETTE.find((item) => item.name === name);
+      expect(swatch).toBeDefined();
+      expect(hueDistance(colored.get("cash-atm").oklch.h, swatch?.oklch.h ?? 0)).toBeGreaterThan(40);
+    }
+    expect(contrastRatio(colored.get("cash-atm").background, colored.get("cash-atm").text)).toBeGreaterThanOrEqual(4.5);
+
+    expect(colored.get("cash-child").rootId).toBe("cash-atm");
+    expect(colored.get("cash-child").background).not.toBe(plain.get("cash-child").background);
+    expect(colored.get("cash-child").background).not.toBe(CASH_ATM_COLOR);
+    expect(hueDistance(colored.get("cash-child").oklch.h, colored.get("cash-atm").oklch.h)).toBeLessThanOrEqual(15);
+    expect(contrastRatio(colored.get("cash-child").background, colored.get("cash-child").text)).toBeGreaterThanOrEqual(4.5);
+
+    // Other roots keep the id hash. A nested category with the cash name does not recolour its parent.
+    expect(colored.get("dom")).toEqual(plain.get("dom"));
+    expect(colored.get("food")).toEqual(plain.get("food"));
+    const nested = { id: "nested-cash", parent_id: "dom", name: "Gotówka (bankomat)" };
+    const nestedBase = buildCategoryColors([dom, { ...nested, name: "Inne" }]);
+    const nestedNamed = buildCategoryColors([dom, nested]);
+    expect(nestedNamed.get("dom")).toEqual(nestedBase.get("dom"));
+    expect(nestedNamed.get("nested-cash")).toEqual(nestedBase.get("nested-cash"));
+
+    // The existing override hook still wins, and still shades only that root's descendants.
+    const hooked = buildCategoryColors([dom, food, cash, child], { overrides: { "cash-atm": "#1e88e5" } });
+    expect(hooked.get("cash-atm").background).toBe("#1e88e5");
+    expect(hooked.get("dom")).toEqual(colored.get("dom"));
+    expect(hooked.get("food")).toEqual(colored.get("food"));
+    expect(hueDistance(hooked.get("cash-child").oklch.h, hexToOklch("#1e88e5")?.h ?? 0)).toBeLessThanOrEqual(15);
+
+    const chartOptions = { uncategorised: "Uncategorised", unknownCategory: "Category", otherCategory: "Other" };
+    const month = {
+      period: "2026-10", has_activity: true, is_current_month: false, income_estimate_partial: false,
+      provisional: false, start_budget: "0", spent: "50",
+      categories: [
+        { category_id: "cash-atm", net_spending: "40" },
+        { category_id: "dom", net_spending: "10" },
+      ],
+    };
+    const labels = [
+      { category_id: "cash-atm", name: "Gotówka (bankomat)", archived: false },
+      { category_id: "dom", name: "Dom", archived: false },
+    ];
+    const fromLabels = buildCategoryChartModel([month], labels, chartOptions);
+    expect(fromLabels.displayed.find((item) => item.id === "cash-atm")?.color).toBe(CASH_ATM_COLOR);
+    expect(fromLabels.displayed.find((item) => item.id === "dom")?.color).toBe(colored.get("dom").background);
+
+    const fromTree = buildCategoryChartModel([month], labels, chartOptions, [
+      { id: "cash-atm", name: "Gotówka (bankomat)", archived: false, parent_id: null },
+      { id: "cash-child", name: "Wypłata", archived: false, parent_id: "cash-atm" },
+      { id: "dom", name: "Dom", archived: false, parent_id: null },
+    ]);
+    expect(fromTree.displayed.map((item) => item.id)).toEqual(["cash-atm", "dom"]);
+    expect(fromTree.displayed.find((item) => item.id === "cash-atm")?.color).toBe(CASH_ATM_COLOR);
+    expect(fromTree.displayed.find((item) => item.id === "dom")?.color).toBe(colored.get("dom").background);
   });
 
   it("handles OKLCH anchors and clamps out-of-gamut inputs accurately", () => {
@@ -649,6 +732,9 @@ describe("CategorySwatch and CategoryBadge render", () => {
       { id: "cat-5", name: "Home", archived: false, version: 1, created_at: 1, updated_at: 1, parent_id: null },
       { id: "cat-6", name: "Leisure", archived: false, version: 1, created_at: 1, updated_at: 1, parent_id: null },
       { id: "cat-7", name: "Misc", archived: false, version: 1, created_at: 1, updated_at: 1, parent_id: null },
+      { id: "cat-8", name: "Gifts", archived: false, version: 1, created_at: 1, updated_at: 1, parent_id: null },
+      { id: "cat-9", name: "Pets", archived: false, version: 1, created_at: 1, updated_at: 1, parent_id: null },
+      { id: "cat-10", name: "Travel", archived: false, version: 1, created_at: 1, updated_at: 1, parent_id: null },
     ];
     const expected = buildCategoryColors(categories);
     const charts = monthlyBudgetChartsOf(
@@ -670,6 +756,9 @@ describe("CategorySwatch and CategoryBadge render", () => {
               { category_id: "cat-5", net_spending: "30" },
               { category_id: "cat-6", net_spending: "20" },
               { category_id: "cat-7", net_spending: "10" },
+              { category_id: "cat-8", net_spending: "8" },
+              { category_id: "cat-9", net_spending: "6" },
+              { category_id: "cat-10", net_spending: "4" },
             ],
           },
         ],
