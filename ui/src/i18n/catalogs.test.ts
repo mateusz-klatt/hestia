@@ -81,17 +81,17 @@ const identicalStrings: Partial<Record<MessageKey, IdenticalString>> = {
   "rule.errGeneric": { value: "error", locales: ["es", "fil"] },
 
   // PHASE-2: add other locales once budget.* is translated if legitimately identical in those languages.
-  "budget.main.scopeWithState": { value: "{scope}: {state}", locales: ["pl"] },
-  "budget.year.noData": { value: "—", locales: ["pl"] },
-  "budget.export.xlsx": { value: "XLSX", locales: ["pl"] },
-  "budget.export.csv": { value: "CSV", locales: ["pl"] },
+  "budget.main.scopeWithState": { value: "{scope}: {state}", locales: ["pl", "ja"] },
+  "budget.year.noData": { value: "—", locales: ["pl", "ja"] },
+  "budget.export.xlsx": { value: "XLSX", locales: ["pl", "ja"] },
+  "budget.export.csv": { value: "CSV", locales: ["pl", "ja"] },
   "budget.export.colStatus": { value: "Status", locales: ["pl"] },
-  "budget.rules.conditionSummary": { value: "{field} {operator} „{value}”", locales: ["pl"] },
-  "budget.mortgages.windowRange": { value: "{start} – {end}", locales: ["pl"] },
+  "budget.rules.conditionSummary": { value: "{field} {operator} „{value}”", locales: ["pl", "ja"] },
+  "budget.mortgages.windowRange": { value: "{start} – {end}", locales: ["pl", "ja"] },
   "budget.monthBudget.limitColumn": { value: "Limit", locales: ["pl"] },
-  "budget.monthBudget.noLimit": { value: "—", locales: ["pl"] },
+  "budget.monthBudget.noLimit": { value: "—", locales: ["pl", "ja"] },
   "budget.monthBudget.statusColumn": { value: "Status", locales: ["pl"] },
-  "budget.monthBudget.noValue": { value: "—", locales: ["pl"] },
+  "budget.monthBudget.noValue": { value: "—", locales: ["pl", "ja"] },
 };
 
 // PHASE-2: budget.* translations pending
