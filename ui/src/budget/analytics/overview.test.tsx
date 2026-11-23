@@ -9,6 +9,11 @@ import { overviewOf, staleFreshness, totals } from "./fixtures";
 import type { AnalyticsCategory, AnalyticsOverview, AnalyticsScope } from "./model";
 import { OverviewPanel, overviewLabels } from "./overview";
 
+const fsModule = "node:fs";
+const { readFileSync } = (await import(/* @vite-ignore */ fsModule)) as {
+  readFileSync: (path: string, encoding: "utf8") => string;
+};
+
 type Answer = BudgetResult<AnalyticsOverview>;
 
 const baseScope = overviewOf("2026-11").scope;
@@ -112,11 +117,33 @@ describe("period overview", () => {
       "5,00 PLN", "0,00 PLN",
     ]);
     expect(transfer?.textContent.replace(/\s/g, " ")).toBe("wyszło 1 200,00 PLN · weszło 1 200,00 PLN");
+    expect([...(transfer?.querySelectorAll(".budget-total-part") ?? [])].map((item) => item.textContent.replace(/\s/g, " "))).toEqual([
+      "wyszło 1 200,00 PLN", "weszło 1 200,00 PLN",
+    ]);
     expect(excluded?.textContent.replace(/\s/g, " ")).toBe("wyszło 5,00 PLN · weszło 0,00 PLN");
+    expect([...(excluded?.querySelectorAll(".budget-total-part") ?? [])].map((item) => item.textContent.replace(/\s/g, " "))).toEqual([
+      "wyszło 5,00 PLN", "weszło 0,00 PLN",
+    ]);
     expect(spending?.querySelector(".budget-amount")?.textContent).toContain("PLN");
     const detail = card?.querySelector(".budget-total-detail");
     expect(detail?.classList.contains("budget-total-split")).toBe(true);
     expect(detail?.querySelectorAll(".budget-amount")).toHaveLength(2);
+    expect(detail?.querySelectorAll(".budget-total-part")).toHaveLength(2);
+    for (const part of card?.querySelectorAll(".budget-total-part") ?? []) {
+      expect(part.textContent).not.toContain(" · ");
+      expect(part.querySelectorAll(".budget-amount")).toHaveLength(1);
+    }
+  });
+
+  it("keeps label+amount pairs atomic and category table captions full-width on narrow screens in budget.css", () => {
+    const css = readFileSync("src/budget/budget.css", "utf8");
+    expect(css).toMatch(/\.budget-total-part\s*\{[^}]*display:\s*inline-block/);
+    const mobileBlock = css.slice(css.indexOf("@media (max-width: 640px)"));
+    expect(mobileBlock).toMatch(/\.budget-categories\s*\{\s*display:\s*table;\s*width:\s*100%;\s*\}/);
+    expect(mobileBlock).toMatch(/\.budget-categories caption\s*\{\s*display:\s*table-caption;\s*\}/);
+    expect(mobileBlock).toMatch(/\.budget-categories tbody\s*\{\s*display:\s*table-row-group;\s*\}/);
+    expect(mobileBlock).toMatch(/\.budget-categories tbody tr\s*\{[^}]*display:\s*table-row;/);
+    expect(mobileBlock).toMatch(/\.budget-categories tbody td\s*\{[^}]*display:\s*table-cell;/);
   });
 
   it("lists categories under their own currency, marking archived ones and the uncategorised row", async () => {

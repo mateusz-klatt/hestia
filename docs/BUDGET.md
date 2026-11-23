@@ -331,8 +331,13 @@ remain absent. A completed fetch does not prove the bank returned its full histo
 lease. `never` has no complete API observation, `deferred` is waiting for its
 deadline, `blocked` cannot currently acquire, `ok` is fresh and `ready` is stale
 and eligible for a later refresh. Errors and their deadlines remain visible.
-Account/connection `last_success` still means both components completed for the
-entire selected scope. Partial success does not advance this combined timestamp.
+Account `observed_at` and connection `last_success` require every selected
+component in scope to have a `last_success` with no `last_error` or active
+`attempt_id` marker. A partial run with errors never advances the combined
+timestamp, while a later partial job that completes the selected set advances
+`connection.last_success` (and account `observed_at` once both operations are
+clean) to the minimum of those component `last_success` timestamps, and never
+moves it backwards.
 
 All calls in this stage are unattended and omit **all** PSU headers. Do not forge
 IP/User-Agent values or assume an interactive request has unlimited quota.
