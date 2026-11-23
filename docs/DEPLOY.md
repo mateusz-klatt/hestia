@@ -68,13 +68,18 @@ Follow-ups only. This PR does not change those migrations. The dedicated-connect
 
 Before deploying counterparty-account rules, **holzera must create the dedicated rule key on the host**, as the same user that runs Hestia. Do not reuse `HESTIA_SESSION_SECRET`: session rotation must not change persisted rule matching.
 
+The container runs as UID/GID `1000:1000` (`Dockerfile` `USER 1000:1000`) and `docker-compose.yml` already mounts the host `./data` directory at `/data` read-write, so the key lives inside that existing mount and needs no new volume. On the host, from the compose directory, as the deploy user (no sudo needed when that user is UID 1000; otherwise `chown 1000:1000` afterwards):
+
 ```sh
-install -d -m 0700 /var/lib/hestia/secrets
+install -d -m 0700 ./data/secrets
 umask 077
-head -c32 /dev/urandom > /var/lib/hestia/secrets/budget-rule.key
-chmod 0400 /var/lib/hestia/secrets/budget-rule.key
+python3 -c 'import os,sys; sys.stdout.buffer.write(os.urandom(32))' > ./data/secrets/budget-rule.key
+chmod 0400 ./data/secrets/budget-rule.key
+stat -c '%u:%g %a %s' ./data/secrets/budget-rule.key   # expect 1000:1000 400 32
 ```
 
-Set `HESTIA_BUDGET_RULE_KEY_FILE=/var/lib/hestia/secrets/budget-rule.key` in Hestia's deployment environment and mount the file read-only at that path. Back up the key securely with the database. The file must remain owned by the Hestia user with mode `0400` or `0600`; missing, short, symlinked, or otherwise unsafe files make account-rule creation and matching fail with `budget_analytics_rule_key_unavailable` while other rule types remain available.
+Then add `HESTIA_BUDGET_RULE_KEY_FILE=/data/secrets/budget-rule.key` (the **container** path) to the deployment `.env` and recreate the container. Never print, copy into chat/Iris/logs, or commit the key; back it up only together with the encrypted database backups.
 
-Keep this key stable. Changing it changes the stored key-ID context, rejects previews created under the previous key, and prevents older counterparty-account rules from matching until they are deliberately recreated.
+**Missing or unsafe key:** startup is not affected. The key is loaded lazily; a missing, short (< 32 bytes), symlinked, group/world-readable or wrongly owned file makes only counterparty-account rules unavailable — creating one returns `400 budget_analytics_rule_key_unavailable` and existing ones do not match — while every other rule type keeps working. So the key can be created after the deploy, but account rules only start working once it exists.
+
+**Rotation:** keep the key stable. Stored values carry a key id (`cpacct:v2:<kid>:…`), so after a rotation old account rules stop matching (fail-closed, never mismatch) and previews created under the old key are rejected. Procedure: (1) list the owner's counterparty-account rules in the Rules UI and note their category/priority; (2) replace the file (same steps as above) and recreate the container; (3) recreate each rule via "Utwórz regułę z konta odbiorcy" on a matching transaction; (4) delete the old (now inert) rules. Rotate only on suspected key exposure.
