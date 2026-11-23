@@ -76,6 +76,9 @@ def _tx(
     }
 
 
+ONE_OFF_TEST_SECRET = b"synthetic-one-off-secret"
+
+
 def _eval(
     *,
     period: str | None = "2026-11",
@@ -91,6 +94,7 @@ def _eval(
     account_component_timestamps: dict | None = None,
     account_kinds: dict | None = None,
     settings: month_budget.MonthBudgetSettings | None = None,
+    one_off_secret: bytes | None = ONE_OFF_TEST_SECRET,
 ) -> dict:
     if evaluated_at is None:
         evaluated_at = _utc_ts("2026-11-22T12:00:00Z")
@@ -122,10 +126,11 @@ def _eval(
         account_component_timestamps=account_component_timestamps,
         account_kinds={} if account_kinds is None else account_kinds,
         settings=settings,
+        one_off_secret=one_off_secret,
     )
 
 
-def _eval_charts(*, history: int = 6, **kwargs) -> dict:
+def _eval_charts(*, history: int = 6, one_off_secret: bytes | None = ONE_OFF_TEST_SECRET, **kwargs) -> dict:
     evaluated_at = kwargs.get("evaluated_at") or _utc_ts("2026-11-22T12:00:00Z")
     categories = kwargs.get("categories") or [
         _cat("cat-salary", "Wynagrodzenie"),
@@ -153,6 +158,7 @@ def _eval_charts(*, history: int = 6, **kwargs) -> dict:
         account_component_timestamps=timestamps,
         account_kinds=kwargs.get("account_kinds") or {},
         settings=kwargs.get("settings"),
+        one_off_secret=one_off_secret,
     )
 
 

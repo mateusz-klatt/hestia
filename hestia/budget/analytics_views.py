@@ -576,7 +576,8 @@ def _mortgage_pass_through_category(owner):
     return None if pair is None else pair.mortgage_category_id
 
 
-def _category_totals(rows, categories, *, split_one_offs=False, pass_through_category_id=None):
+def _category_totals(rows, categories, *, split_one_offs=False, pass_through_category_id=None,
+                     one_off_secret=None):
     """Expense and refund nets by category.
 
     ``split_one_offs`` moves a labelled row into its own entry (``one_off`` true, ``name`` is the label,
@@ -615,7 +616,8 @@ def _category_totals(rows, categories, *, split_one_offs=False, pass_through_cat
         if split_one_offs:
             entry["one_off"] = one_off
             entry["one_off_key"] = core.one_off_key(
-                (row["account_id"], row["entry_reference"]) for row in values) if one_off else None
+                ((row["account_id"], row["entry_reference"]) for row in values), one_off_secret,
+            ) if one_off else None
         result.append(entry)
     return result
 
@@ -776,7 +778,8 @@ class BudgetAnalyticsViews(BudgetAnalyticsStore):
                         for month, values in sorted(months.items())],
                     "categories": _category_totals(
                         rows, snapshot["categories"], split_one_offs=True,
-                        pass_through_category_id=_mortgage_pass_through_category(owner)),
+                        pass_through_category_id=_mortgage_pass_through_category(owner),
+                        one_off_secret=self._cursor_secret),
                     "transfer_summary": summary}
 
     def _cursor_encode(self, context, snapshot, index, now):
@@ -1042,6 +1045,7 @@ class BudgetAnalyticsViews(BudgetAnalyticsStore):
                     scan_limited=snapshot["_scan_limited"], categories=snapshot["categories"],
                     rules=snapshot["rules"], identities=snapshot["identities"], limits=all_limits,
                     account_component_timestamps=account_timestamps, account_kinds=account_kinds, settings=settings,
+                    one_off_secret=self._cursor_secret,
                 )
         except month_budget_mod.MonthInputError:
             raise AnalyticsError() from None

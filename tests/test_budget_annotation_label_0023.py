@@ -6,6 +6,7 @@ The label text is owner-private: these tests use synthetic phrases and never log
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -27,7 +28,7 @@ from hestia.budget.analytics_core import (
 from tests import test_budget_analytics_api as analytics_api_tests
 from tests.test_budget_analytics_store import AnalyticsCase
 from tests.test_budget_analytics_views import ProjectionCase
-from tests.test_budget_month import DEFAULT_SETTINGS, _eval_charts, _tx
+from tests.test_budget_month import DEFAULT_SETTINGS, ONE_OFF_TEST_SECRET, _eval_charts, _tx
 
 # One scenario for the overview and the chart series. A labelled mortgage leg stays in its category.
 _FOOD_LABEL = "Remont lazienki"
@@ -196,13 +197,25 @@ class OneOffLabelCoreTests(unittest.TestCase):
         self.assertIsNone(active_one_off_label(fresh, "10", minimum="not-money"))
 
     def test_one_off_key_is_a_label_free_hash_of_the_member_transactions(self):
-        first = one_off_key([("acc-a", "cash"), ("acc-a", "same")])
-        self.assertEqual(first, one_off_key([("acc-a", "same"), ("acc-a", "cash")]))
+        secret = b"synthetic-one-off-secret"
+        members = [("acc-a", "cash"), ("acc-a", "same")]
+        first = one_off_key(members, secret)
+        self.assertEqual(first, one_off_key([("acc-a", "same"), ("acc-a", "cash")], secret))
         self.assertEqual(len(first), 64)
         self.assertNotIn(_FOOD_LABEL, first)
-        self.assertNotEqual(first, one_off_key([("acc-a", "food-big")]))
+        raw = json.dumps(sorted(members), separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+        plain = hashlib.sha256(b"hestia/budget/one-off-key/v1\n" + raw).hexdigest()
+        self.assertNotEqual(first, plain)
+        self.assertNotEqual(first, hashlib.sha256(raw).hexdigest())
+        self.assertNotEqual(first, one_off_key([("acc-a", "food-big")], secret))
+        self.assertNotEqual(first, one_off_key(members, b"other-server-secret"))
         with self.assertRaises(AnalyticsError):
-            one_off_key([("acc-a", None)])
+            one_off_key([("acc-a", None)], secret)
+        for bad in (b"", None, "secret", 1):
+            with self.subTest(bad=type(bad).__name__), self.assertRaises(AnalyticsError) as error:
+                one_off_key(members, bad)
+            self.assertEqual(error.exception.code, "budget_analytics_data_error")
+            self.assertNotIn("secret", str(error.exception))
 
 
 class AnnotationLabelStoreTests(AnalyticsCase):
@@ -294,7 +307,9 @@ class OneOffSeriesTests(unittest.TestCase):
         self.assertTrue(all(_FOOD_LABEL not in row["one_off_key"] and _MORTGAGE_LABEL not in row["one_off_key"]
                             for row in labelled))
         grouped = next(row for row in labelled if row["name"] == _FOOD_LABEL and row["category_id"] is None)
-        self.assertEqual(grouped["one_off_key"], one_off_key([("acc-a", "cash"), ("acc-a", "same")]))
+        self.assertEqual(
+            grouped["one_off_key"], one_off_key([("acc-a", "cash"), ("acc-a", "same")], ONE_OFF_TEST_SECRET),
+        )
         self.assertIsNone(next(row["one_off_key"] for row in series
                                if row["category_id"] == "cat-mortgage" and not row["one_off"]))
         keys = [row["one_off_key"] or row["category_id"] for row in budget["category_spend"]]
@@ -358,7 +373,8 @@ class OneOffOverviewTests(ProjectionCase):
                             for row in categories for phrase in (_FOOD_LABEL, _MORTGAGE_LABEL, _HIDDEN_LABEL)))
         grouped = next(row for row in labelled if row["name"] == _FOOD_LABEL and row["category_id"] is None)
         account_id = self.accounts["a"]
-        self.assertEqual(grouped["one_off_key"], one_off_key([(account_id, "cash"), (account_id, "same")]))
+        self.assertEqual(grouped["one_off_key"], one_off_key(
+            [(account_id, "cash"), (account_id, "same")], self.store._cursor_secret))
         mortgage_row = next(row for row in categories if row["category_id"] == mortgage["id"] and not row["one_off"])
         self.assertIsNone(mortgage_row["one_off_key"])
         keys = [row["one_off_key"] if row["one_off"] else f"cat:{row['category_id']}" for row in categories]
@@ -370,8 +386,17 @@ class OneOffOverviewTests(ProjectionCase):
         self.assertEqual((shown["annotation"]["stale"], shown["annotation"]["label"]), (True, _HIDDEN_LABEL))
         limits = self.store.spending_limits("owner", "2026-11")
         status = next(row for row in limits["statuses"] if row["category_id"] == food["id"])
-        # The limit still counts the labelled food amount. The overview and the table do not.
+        # A label is not a budget exemption. The spending-limits endpoint and the month-table
+        # badge both count the full food amount (10 unlabelled + 40 labelled). The split row
+        # still shows the remainder, 10. 9000 - 50 = 8950; a remainder-only badge would be 8990.
         self.assertEqual((status["expenses"], status["refunds"]), ("50", "0"))
+        food_row = next(row for row in budget["category_spend"]
+                        if row["category_id"] == food["id"] and not row["one_off"])
+        self.assertEqual(food_row["expenses"], "10")
+        self.assertEqual((food_row["limit"]["monthly_limit"], food_row["limit"]["remaining"]), ("9000", "8950"))
+        one_off_food = next(row for row in budget["category_spend"]
+                            if row["category_id"] == food["id"] and row["one_off"])
+        self.assertIsNone(one_off_food["limit"])
         self.assertEqual(pln["net_spending"], "2570")
 
     def test_a_stored_format_character_is_a_fixed_error(self):

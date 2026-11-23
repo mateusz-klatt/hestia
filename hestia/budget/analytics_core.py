@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from datetime import date
 import hashlib
+import hmac
 import json
 import re
 import unicodedata
@@ -153,19 +154,32 @@ def active_one_off_label(annotation, amount, *, minimum=ONE_OFF_MIN_ABS):
     return label
 
 
-def one_off_key(members):
+# Same construction as consent reconcile aliases: domain-separated SHA-256 of the
+# session secret, then HMAC-SHA256. A distinct domain keeps the digests from
+# matching a consent id. The digest is not stable across secret rotations.
+_ONE_OFF_KEY_DOMAIN = b"hestia/budget/one-off-key/key/v1\0"
+_ONE_OFF_PAYLOAD_PREFIX = b"hestia/budget/one-off-key/v1\n"
+
+
+def one_off_key(members, secret):
     """Row identity for a labelled group. The label text is never part of the key.
 
     ``members`` are ``(account_id, entry_reference)`` pairs. Order does not matter.
+    ``secret`` is the server session secret (the cursor secret). A missing or empty
+    secret fails closed: the key is HMAC-SHA256, so a short entry reference cannot
+    be reversed offline.
     """
+    if not isinstance(secret, bytes) or not secret:
+        raise AnalyticsError("budget_analytics_data_error", 500)
     pairs = []
     for account_id, entry_reference in members:
         if not isinstance(account_id, str) or not isinstance(entry_reference, str):
             raise AnalyticsError()
         pairs.append((account_id, entry_reference))
     pairs.sort()
-    raw = json.dumps(pairs, separators=(",", ":"), ensure_ascii=False)
-    return hashlib.sha256(b"hestia/budget/one-off-key/v1\n" + raw.encode("utf-8")).hexdigest()
+    raw = json.dumps(pairs, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    key = hashlib.sha256(_ONE_OFF_KEY_DOMAIN + secret).digest()
+    return hmac.new(key, _ONE_OFF_PAYLOAD_PREFIX + raw, hashlib.sha256).hexdigest()
 
 
 def effective_date(payload):

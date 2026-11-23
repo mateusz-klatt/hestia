@@ -775,12 +775,21 @@ def _zero_money(value: str) -> bool:
     return core.compare_money(value, _ZERO) == 0
 
 
+def _one_off_identity(members, secret: bytes | None) -> str:
+    """HMAC row key. A missing secret is stored-data failure, not a reversible hash."""
+    try:
+        return core.one_off_key(members, secret)
+    except core.AnalyticsError:
+        raise MonthDataError() from None
+
+
 def _split_labelled(
     category_rows: Sequence[tuple[str | None, str, str, str]],
     one_offs: Mapping[tuple[str, str | None], Mapping[str, Sequence]],
     *,
     observed: set[str | None] | None = None,
     keep_ids: set[str | None] | frozenset[str | None] = frozenset(),
+    one_off_secret: bytes | None = None,
 ) -> list[dict]:
     """Move labelled nets out of their category. The sum of nets stays equal to the category rows.
 
@@ -816,7 +825,8 @@ def _split_labelled(
         if _zero_money(exp) and _zero_money(ref):
             continue
         result.append({
-            "category_id": cat_id, "name": label, "one_off": True, "one_off_key": core.one_off_key(members),
+            "category_id": cat_id, "name": label, "one_off": True,
+            "one_off_key": _one_off_identity(members, one_off_secret),
             "expenses": exp, "refunds": ref, "net_spending": _sub_money(exp, ref),
         })
     return result
@@ -827,12 +837,13 @@ def _series_categories(
     one_offs: Mapping[tuple[str, str | None], Mapping[str, Sequence]],
     *,
     observed: set[str | None] | None = None,
+    one_off_secret: bytes | None = None,
 ) -> list[dict]:
     """Chart rows for ``_split_labelled``. Names of ordinary categories stay on ``category_labels``."""
     return [
         {"category_id": row["category_id"], "name": row["name"], "one_off": row["one_off"],
          "one_off_key": row["one_off_key"], "net_spending": row["net_spending"]}
-        for row in _split_labelled(category_rows, one_offs, observed=observed)
+        for row in _split_labelled(category_rows, one_offs, observed=observed, one_off_secret=one_off_secret)
     ]
 
 
@@ -875,6 +886,7 @@ def _evaluate_monthly_budget_core(
     account_kinds: Mapping[str, str],
     settings: MonthBudgetSettings | None,
     history: int | None,
+    one_off_secret: bytes | None = None,
 ) -> tuple[dict, dict | None]:
     requested_period, target_currency = validate_monthly_budget_query(period, currency)
     evaluation_date, current_month = warsaw_date(evaluated_at)
@@ -1086,10 +1098,22 @@ def _evaluate_monthly_budget_core(
     pass_through_wire, adj_exp_dates, adj_ref_dates, selected_rows, start_budget, spent = _bucket_category_totals(
         selected_bucket, pass_through_cfg, extra_categories=set(active_limits),
     )
+    # The split row shows only the remainder. The badge counts the full category total
+    # from ``selected_rows``, the same amount the spending-limits endpoint counts for an
+    # ordinary category. A one-off label is not a budget exemption, so it does not shrink
+    # the limit. One-off rows themselves carry no limit, and the badge is not shown twice.
+    full_by_category = {cat_id: (exp, ref) for cat_id, exp, ref, _net in selected_rows}
     category_spend: list[dict] = []
-    for item in _split_labelled(selected_rows, selected_bucket.one_offs, keep_ids=set(active_limits)):
+    for item in _split_labelled(
+        selected_rows, selected_bucket.one_offs, keep_ids=set(active_limits), one_off_secret=one_off_secret,
+    ):
         cat_id = item["category_id"]
         category_meta = None if cat_id is None else categories_by_id[cat_id]
+        if item["one_off"] or cat_id is None:
+            limit = None
+        else:
+            full_expenses, full_refunds = full_by_category[cat_id]
+            limit = _evaluate_category_limit(full_expenses, full_refunds, active_limits.get(cat_id))
         category_spend.append({
             "category_id": cat_id,
             "name": item["name"] if item["one_off"] else (None if category_meta is None else category_meta["name"]),
@@ -1097,8 +1121,7 @@ def _evaluate_monthly_budget_core(
             "expenses": item["expenses"],
             "refunds": item["refunds"],
             "net_spending": item["net_spending"],
-            "limit": None if item["one_off"] or cat_id is None else _evaluate_category_limit(
-                item["expenses"], item["refunds"], active_limits.get(cat_id)),
+            "limit": limit,
             "one_off": item["one_off"],
             "one_off_key": item["one_off_key"],
         })
@@ -1140,12 +1163,13 @@ def _evaluate_monthly_budget_core(
             b_start_budget, b_spent = start_budget, spent
             b_categories = _series_categories(
                 selected_rows, bucket.one_offs, observed=bucket.observed_spend_categories,
+                one_off_secret=one_off_secret,
             )
             b_provisional = provisional
             b_partial = expected_income["status"] == "partial"
         else:
             _, _, _, b_rows, b_start_budget, b_spent = _bucket_category_totals(bucket, pass_through_cfg)
-            b_categories = _series_categories(b_rows, bucket.one_offs)
+            b_categories = _series_categories(b_rows, bucket.one_offs, one_off_secret=one_off_secret)
             b_provisional = bucket.pending_transfer_rows > 0 or bool(scan_limited and bucket.has_affecting_unexcluded)
             b_partial = False
         for item in b_categories:
@@ -1184,13 +1208,14 @@ def evaluate_monthly_budget(
     account_component_timestamps: Mapping[str, int | float | None],
     account_kinds: Mapping[str, str],
     settings: MonthBudgetSettings | None,
+    one_off_secret: bytes | None = None,
 ) -> dict:
     """Pure single-snapshot evaluation for ``GET /api/budget/analytics/monthly-budget``."""
     budget, _ = _evaluate_monthly_budget_core(
         period=period, currency=currency, evaluated_at=evaluated_at, transactions=transactions,
         transfers=transfers, scan_limited=scan_limited, categories=categories, rules=rules,
         identities=identities, limits=limits, account_component_timestamps=account_component_timestamps,
-        account_kinds=account_kinds, settings=settings, history=None,
+        account_kinds=account_kinds, settings=settings, history=None, one_off_secret=one_off_secret,
     )
     return budget
 
@@ -1212,6 +1237,7 @@ def evaluate_monthly_budget_charts(
     account_component_timestamps: Mapping[str, int | float | None],
     account_kinds: Mapping[str, str],
     settings: MonthBudgetSettings | None,
+    one_off_secret: bytes | None = None,
 ) -> dict:
     """Pure single-snapshot evaluation for ``GET /api/budget/analytics/monthly-budget/charts``."""
     if type(history) is not int or history not in ALLOWED_HISTORY_MONTHS:
@@ -1220,6 +1246,6 @@ def evaluate_monthly_budget_charts(
         period=period, currency=currency, evaluated_at=evaluated_at, transactions=transactions,
         transfers=transfers, scan_limited=scan_limited, categories=categories, rules=rules,
         identities=identities, limits=limits, account_component_timestamps=account_component_timestamps,
-        account_kinds=account_kinds, settings=settings, history=history,
+        account_kinds=account_kinds, settings=settings, history=history, one_off_secret=one_off_secret,
     )
     return {"budget": budget, "series": series}
