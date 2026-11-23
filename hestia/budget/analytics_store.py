@@ -586,7 +586,7 @@ class BudgetAnalyticsStore(BudgetHTTPStore):
         return self._account_projection(session, owner)
 
     @staticmethod
-    def _proposed(rows, rules, *, watch=None):
+    def _proposed(rows, rules, *, watch=None, account_secret=None, account_key_id=None, owner=None):
         """Count rows whose rule result changes. ``watch`` is the candidate subset: only rows that
         already use one of those rules, or whose text can match one, are evaluated."""
         compiled, safe = compile_rules(rules)
@@ -603,7 +603,8 @@ class BudgetAnalyticsStore(BudgetHTTPStore):
                 continue
             texts = row.get("_match_texts")
             if texts is None:
-                texts = match_texts(row["payload"], row["metadata"])
+                texts = match_texts(row["payload"], row["metadata"], account_secret=account_secret,
+                                    account_key_id=account_key_id, owner=owner)
             if watch_compiled is not None:
                 current_id = row.get("base_effective", row["effective"]).get("rule_id")
                 if current_id not in replaced and first_matching_rule(watch_compiled, row["payload"], texts) is None:
@@ -661,7 +662,10 @@ class BudgetAnalyticsStore(BudgetHTTPStore):
         snapshot = self._snapshot(session, owner)
         proposed = [{**candidate, "id": candidate["_proposed_id"]} for candidate in staged]
         rules = self._merged_rules(snapshot["rules"], proposed)
-        affected, examples = self._proposed(snapshot["transactions"], rules, watch=proposed)
+        context = self._rule_key_context(required=False)
+        secret, key_id = context if context is not None else (None, None)
+        affected, examples = self._proposed(snapshot["transactions"], rules, watch=proposed,
+                                            account_secret=secret, account_key_id=key_id, owner=owner)
         return snapshot, affected, examples, now
 
     def preview_rule(self, owner, candidate):

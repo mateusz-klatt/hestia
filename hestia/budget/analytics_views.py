@@ -161,7 +161,8 @@ def _annotation(row, financial_fp):
             "label": core.stored_one_off_label(row.label)}
 
 
-def _effective(payload, metadata, annotation, categories, rules, *, texts=None, compiled=None):
+def _effective(payload, metadata, annotation, categories, rules, *, texts=None, compiled=None,
+               account_secret=None, account_key_id=None, owner=None):
     default = "expense" if payload["credit_debit_indicator"] == "DBIT" else "unclassified_credit"
     result = {"kind": default, "category_id": None, "source": "default", "rule_id": None}
     if annotation["mode"] == "manual":
@@ -174,7 +175,7 @@ def _effective(payload, metadata, annotation, categories, rules, *, texts=None, 
     if compiled is None:
         compiled, _ = core.compile_rules(rules)
     if texts is None:
-        texts = core.match_texts(payload, metadata)
+        texts = core.match_texts(payload, metadata, account_secret=account_secret, account_key_id=account_key_id, owner=owner)
     rule = core.first_matching_rule(compiled, payload, texts)
     if rule is not None:
         result.update(kind=default if rule["kind"] == "auto" else rule["kind"],
@@ -196,7 +197,8 @@ def _records(ledger, identities, metadata, annotations, categories, rules, *, ac
                             core.counterparty_account_evidence(payload, evidence, account_secret, owner=owner))
         texts = core.match_texts(payload, evidence, account_secret=account_secret, account_key_id=account_key_id,
                                  account_evidence=account_evidence, owner=owner)
-        effective = _effective(payload, evidence, annotation, categories, rules, texts=texts, compiled=compiled)
+        effective = _effective(payload, evidence, annotation, categories, rules, texts=texts, compiled=compiled,
+                               account_secret=account_secret, account_key_id=account_key_id, owner=owner)
         result.append({"account_id": row.account_id, "entry_reference": row.entry_reference, "payload": payload,
                        "financial_fp": financial_fp,
                        "transfer_fp": core.pair_fingerprint(row.account_id, row.entry_reference, payload, evidence, identities,
@@ -255,7 +257,7 @@ def projection_snapshot(session, owner, *, classify=True, account_secret=None, a
     identities, identity_state, metadata, annotations = _auxiliary(session, owner, accounts)
     applied = rules if classify else ()
     records = _records(ledger, identities, metadata, annotations, {row["id"]: row for row in categories}, applied,
-                       account_secret=account_secret, account_key_id=account_key_id, owner=owner)
+                       account_secret=account_secret if classify else None, account_key_id=account_key_id, owner=owner)
     account_state = [{"id": row.id, "connection_id": row.connection_id, "enabled": row.enabled,
                       "configured": row.configured, "control_version": row.control_version, "kind": row.kind,
                       "kind_confirmed_at": row.kind_confirmed_at} for row in accounts]

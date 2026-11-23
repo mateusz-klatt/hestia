@@ -272,6 +272,34 @@ class CounterpartyAccountProjectionTests(ProjectionCase):
                          ("budget_analytics_rule_key_unavailable", 400))
         self.assertEqual(saved["value"], "PL** … 1234")
 
+    def test_classify_false_skips_evidence_and_fallbacks_use_dedicated_context(self):
+        self.add_transaction("a", "debit")
+        self.metadata_for("a", "debit", "creditor_accounts", SYNTHETIC_IBAN)
+        candidate = self.candidate(field="counterparty_account", operator="equals", value=SYNTHETIC_IBAN)
+        saved = self.store.save_rule("owner", self.store.preview_rule("owner", candidate)["preview_id"])
+        key_id = counterparty_key_id(SECRET)
+        with mock.patch.object(analytics_views.core, "counterparty_account_evidence",
+                               side_effect=AssertionError("classify=False computed account evidence")):
+            with self.sessions() as session:
+                bare = analytics_views.projection_snapshot(session, "owner", classify=False, account_secret=SECRET,
+                                                           account_key_id=key_id)
+        with self.sessions() as session:
+            full = analytics_views.projection_snapshot(session, "owner", account_secret=SECRET,
+                                                       account_key_id=key_id)
+        self.assertEqual(bare["digest"], full["digest"])
+        self.assertTrue(all(not row["_counterparty_accounts"] for row in bare["transactions"]))
+        stripped = [{key: value for key, value in row.items() if key != "_match_texts"}
+                    for row in full["transactions"]]
+        proposed = candidate | {"id": "proposed", "kind": "excluded", "value": self.rows(db.BudgetRule)[0].value}
+        affected, _ = self.store._proposed(stripped, [proposed], account_secret=SECRET,
+                                           account_key_id=key_id, owner="owner")
+        self.assertEqual(affected, 1)
+        row = full["transactions"][0]
+        stored_rule = saved | {"value": self.rows(db.BudgetRule)[0].value}
+        effective = analytics_views._effective(row["payload"], row["metadata"], row["annotation"], {}, [stored_rule],
+                                               account_secret=SECRET, account_key_id=key_id, owner="owner")
+        self.assertEqual((effective["source"], effective["rule_id"]), ("rule", saved["id"]))
+
     def test_validation_and_malformed_storage_fail_closed(self):
         invalid = (
             self.candidate(field="counterparty_account", operator="contains", value=SYNTHETIC_IBAN),
