@@ -397,7 +397,7 @@ describe("buildMonthPaceProjection", () => {
     expect(projection?.dailyRate).toEqual({ numerator: "500", denominator: 10 });
     expect(projection?.projectedMonthSpend).toEqual({ numerator: "45000", denominator: 10 });
 
-    // Negative uncovered_mortgage is clamped at 0.
+    // Negative uncovered_mortgage and over-large mortgage_debits stay clamped in [0, paidMortgageUnits].
     const clamped = budget({
       cutoff: "2026-11-10",
       evaluation_date: "2026-11-10",
@@ -405,17 +405,52 @@ describe("buildMonthPaceProjection", () => {
       pass_through: {
         rent_category_id: "cat-rent",
         mortgage_category_id: "cat-mortgage",
-        rent_received: "2000",
-        mortgage_debits: "2000",
+        rent_received: "6000",
+        mortgage_debits: "6000",
         mortgage_refunds: "0",
         unapplied_mortgage_refunds: "0",
-        matched: "2000",
+        matched: "6000",
         unapplied_rent: "0",
         uncovered_mortgage: "-100",
       },
     });
     const clampedProj = buildMonthPaceProjection(clamped, data);
     expect(clampedProj?.dailyRate).toEqual({ numerator: "500", denominator: 10 });
+  });
+
+  it("keeps non-pass-through paid schedules subtracted when another paid schedule is in pass-through", () => {
+    const current = budget({
+      cutoff: "2026-11-10",
+      evaluation_date: "2026-11-10",
+      summary: { start_budget: "20000", spent: "6787", remaining: "13213" },
+      pass_through: {
+        rent_category_id: "cat-rent",
+        mortgage_category_id: "cat-mortgage",
+        rent_received: "2427",
+        mortgage_debits: "2427",
+        mortgage_refunds: "0",
+        unapplied_mortgage_refunds: "0",
+        matched: "2427",
+        unapplied_rent: "0",
+        uncovered_mortgage: "0",
+      },
+    });
+    const data = scheduleData({
+      schedules: [
+        mortgageSchedule({
+          id: "mtg-czerniakowska", label: "Czerniakowska", amount: "2427", due_day: 5, paid_months: ["2026-11"],
+        }),
+        mortgageSchedule({
+          id: "mtg-home", label: "Home", amount: "6287", due_day: 6, paid_months: ["2026-11"],
+        }),
+      ],
+    });
+    const projection = buildMonthPaceProjection(current, data);
+
+    // paidMortgageUnits = 2427 + 6287 = 8714; pass_through subtraction = 8714 - 2427 + 0 = 6287.
+    // spent = 6287 (Home) + 0 (Czerniakowska covered) + 500 (discretionary) -> discretionary = 500.
+    expect(projection?.dailyRate).toEqual({ numerator: "500", denominator: 10 });
+    expect(projection?.projectedMonthSpend).toEqual({ numerator: "77870", denominator: 10 });
   });
 
   it("does not double-subtract a paid mortgage booked more than 5 days from its due date", () => {

@@ -171,6 +171,10 @@ function ratio(units: bigint, scale: number, denominator: number): AnalyticsMont
   return { numerator: formatScaledBigInt(units, scale), denominator };
 }
 
+function clampBigInt(value: bigint, min: bigint, max: bigint): bigint {
+  return value < min ? min : value > max ? max : value;
+}
+
 export function buildMonthPaceProjection(
   budget: AnalyticsMonthlyBudget,
   data?: MonthPaceScheduleData,
@@ -183,22 +187,27 @@ export function buildMonthPaceProjection(
   const daysInMonth = Number(budget.end.slice(8, 10));
   const paid = paidScheduledAmounts(budget, data);
   const scheduled = scheduledItems(budget, data, paid.paidScheduleIds);
-  const uncoveredPassThrough = budget.pass_through?.uncovered_mortgage ?? null;
+  const passThrough = budget.pass_through;
   const scale = decimalScale([
-    summary.spent, pace.budget, ...(uncoveredPassThrough === null ? [] : [uncoveredPassThrough]),
-    ...paid.mortgageAmounts, ...paid.recurringAmounts, ...scheduled.map((item) => item.amount),
+    summary.spent,
+    pace.budget,
+    ...(passThrough === null ? [] : [passThrough.mortgage_debits, passThrough.uncovered_mortgage]),
+    ...paid.mortgageAmounts,
+    ...paid.recurringAmounts,
+    ...scheduled.map((item) => item.amount),
   ]);
   const spentUnits = decimalUnits(summary.spent, scale);
   const budgetUnits = decimalUnits(pace.budget, scale);
   const paidMortgageUnits = paid.mortgageAmounts.reduce((total, amount) => total + decimalUnits(amount, scale), 0n);
-  let uncoveredPaidMortgageUnits = paidMortgageUnits;
-  if (uncoveredPassThrough !== null) {
-    // summary.spent includes pass_through.uncovered_mortgage (installment - matched - recognized refunds).
-    const passThroughUnits = decimalUnits(uncoveredPassThrough, scale);
-    uncoveredPaidMortgageUnits = paidMortgageUnits > 0n && passThroughUnits > 0n ? passThroughUnits : 0n;
+  let paidScheduledSubtraction = paidMortgageUnits;
+  if (passThrough !== null) {
+    // mortgage_debits stands in for the pass-through schedule's share; uncovered_mortgage is the part in spent.
+    const debitsUnits = clampBigInt(decimalUnits(passThrough.mortgage_debits, scale), 0n, paidMortgageUnits);
+    const uncoveredUnits = clampBigInt(decimalUnits(passThrough.uncovered_mortgage, scale), 0n, paidMortgageUnits);
+    paidScheduledSubtraction = clampBigInt(paidMortgageUnits - debitsUnits + uncoveredUnits, 0n, paidMortgageUnits);
   }
   const paidRecurringUnits = paid.recurringAmounts.reduce((total, amount) => total + decimalUnits(amount, scale), 0n);
-  const paidUnits = uncoveredPaidMortgageUnits + paidRecurringUnits;
+  const paidUnits = paidScheduledSubtraction + paidRecurringUnits;
   const discretionaryUnits = spentUnits > paidUnits ? spentUnits - paidUnits : 0n;
   const denominator = BigInt(cutoffDay);
   const itemsByDay = new Map<number, ScheduledPaceItem[]>();
