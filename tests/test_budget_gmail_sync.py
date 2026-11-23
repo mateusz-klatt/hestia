@@ -377,14 +377,15 @@ class GmailSyncTests(TestCase):
         self.assertEqual((state.history_id, state.pending_history_id, state.resume_page_token),
                          (None, "100", "backfill-two"))
         self.assertEqual((state.backoff_until, state.next_sync_at, state.failures, state.last_http_status),
-                         (NOW + 180, NOW + 180, 1, 429))
+                         (NOW + 180, NOW + SETTINGS.sync_interval_seconds, 1, 429))
         self.assertIsNone(self.sync(poll=True))
         with self.assertRaisesRegex(GmailError, "backoff"):
             self.sync()
         self.tick(180)
         self.transport.profile["historyId"] = "110"
         self.transport.routes[("/messages", "backfill-two")] = response(page("mail-one", "mail-two"))
-        self.assertEqual(self.sync(poll=True)["imported_count"], 1)
+        self.assertIsNone(self.sync(poll=True))
+        self.assertEqual(self.sync()["imported_count"], 1)
         state = self.store.state(OWNER)
         self.assertEqual((state.history_id, state.pending_history_id, state.resume_page_token), ("100", None, None))
         self.assertEqual(state.failures, 0)

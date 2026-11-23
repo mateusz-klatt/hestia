@@ -22,6 +22,7 @@ _MAX_FORWARD_DEPTH = 2
 _MAX_FORWARD_BYTES = 1024 * 1024
 _MAX_FORWARD_HEADER_LINES = 32
 _MAX_FORWARD_HEADER_CHARS = 4096
+_RFC822_TRANSFER_ENCODINGS = frozenset({"7bit", "8bit", "binary"})
 _FORWARD_MARKERS = frozenset({"forwarded message", "begin forwarded message", "przekazana wiadomość"})
 _FORWARD_HEADERS = frozenset({
     "from", "od", "date", "data", "sent", "wysłano", "subject", "temat", "to", "do", "cc", "dw",
@@ -287,12 +288,21 @@ def mime_parts(message):
 
 
 def _forwarded_original(message, render_html):
-    forwarded = []
-    for part in mime_parts(message):
-        if part.get_content_type() == "message/rfc822":
-            forwarded.extend(part.iter_parts())
-    if forwarded:
-        return forwarded[0] if len(forwarded) == 1 else None
+    wrappers = [part for part in mime_parts(message) if part.get_content_type() == "message/rfc822"]
+    if wrappers:
+        if len(wrappers) != 1:
+            return None
+        wrapper = wrappers[0]
+        encodings = [value.strip().lower() for name, value in wrapper.raw_items()
+                     if name.lower() == "content-transfer-encoding"]
+        # RFC 2046 §5.2.1 applies these encodings to the wrapper. The
+        # embedded message can still transfer-encode its own body parts.
+        if len(encodings) > 1 or (encodings and encodings[0] not in _RFC822_TRANSFER_ENCODINGS):
+            return None
+        originals = list(wrapper.iter_parts())
+        if len(originals) != 1 or originals[0].defects:
+            return None
+        return originals[0]
     text = _inline_body(message, render_html)
     return _inline_forward(text) if text else None
 

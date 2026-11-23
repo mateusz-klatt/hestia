@@ -17,6 +17,8 @@ from hestia.budget.gmail_message import GmailMessageProcessor
 from hestia.budget.gmail_store import GMAIL_MESSAGE_DOMAIN, GmailStore, digest
 from hestia.budget.gmail_sync import GmailSync
 from hestia.budget.gmail_worker import ReceiptParserWorker
+from hestia.budget.receipt_parser import ReceiptError
+from hestia.budget.receipt_store import BudgetReceiptStore
 from tests.test_budget_gmail_sync import FakeClock, FakeGmailTransport, OWNER, SETTINGS, page, response
 
 
@@ -83,6 +85,14 @@ class GmailPipelineTests(TestCase):
                                  {"imported", "skipped_duplicate", "skipped_untrusted_sender"})
             for denied in ("mock-spoof", "mock-untrusted-forward"):
                 self.assertEqual([item["format"] for item in transport.requests("/messages/" + denied)], [["metadata"]])
+            receipts = BudgetReceiptStore(sessions, clock=clock.wall, cursor_secret=b"synthetic-session")
+            summary, = receipts.list(OWNER, {"document_kind": "invoice", "status": "imported"})["receipts"]
+            self.assertEqual((summary["invoice_number"], summary["due_date"], summary["document_kind"]),
+                             ("FV/2026/10/12345", "2026-10-19", "invoice"))
+            self.assertIsNone(summary["math_delta"])
+            self.assertEqual(receipts.list(OWNER, {"document_kind": "receipt"})["receipts"], [])
+            with self.assertRaises(ReceiptError):
+                receipts.list(OWNER, {"document_kind": "unknown"})
             with engine.connect() as connection:
                 connection.exec_driver_sql("PRAGMA wal_checkpoint(TRUNCATE)")
             stored = path.read_bytes()

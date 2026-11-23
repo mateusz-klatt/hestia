@@ -1,7 +1,9 @@
 """Synthetic Gmail authentication and spouse-forward fixtures."""
+import base64
 from email import policy
 from email.message import EmailMessage
 from email.parser import BytesParser
+import quopri
 import unittest
 from unittest.mock import Mock
 
@@ -185,6 +187,37 @@ class GmailTrustTests(unittest.TestCase):
             self.assertEqual(selected.get_body().get_content(), INVOICE)
         self.assertIsNone(unwrap_forward(_forward(SPOUSE, _forward(
             "relay@relay.example", _forward("relay2@relay.example", original))), KNOWN))
+
+    def test_rfc822_wrapper_and_inner_body_have_independent_transfer_encodings(self):
+        prefix = b"From: spouse@gmail.com\r\nContent-Type: message/rfc822\r\n"
+        for wrapper_cte in (b"", b"Content-Transfer-Encoding: 7bit\r\n",
+                            b"Content-Transfer-Encoding: 8BIT\r\n", b"Content-Transfer-Encoding: binary\r\n"):
+            for body_cte in ("base64", "quoted-printable"):
+                with self.subTest(wrapper_cte=wrapper_cte, body_cte=body_cte):
+                    original = _message()
+                    original.set_content(INVOICE, cte=body_cte)
+                    outer = BytesParser(policy=policy.default).parsebytes(prefix + wrapper_cte + b"\r\n"
+                                                                           + original.as_bytes())
+                    self.assertEqual(unwrap_forward(outer, KNOWN).get_content(), INVOICE)
+
+    def test_malformed_rfc822_wrappers_fail_closed(self):
+        prefix = b"From: spouse@gmail.com\r\nContent-Type: message/rfc822\r\n"
+        original = _message().as_bytes(policy=policy.SMTP)
+        for cte, data in (
+            (b"Content-Transfer-Encoding: base64\r\n", base64.encodebytes(original)),
+            (b"Content-Transfer-Encoding: quoted-printable\r\n", quopri.encodestring(original)),
+            (b"Content-Transfer-Encoding: 8bit\r\nContent-Transfer-Encoding: 8bit\r\n", original),
+            (b"Content-Transfer-Encoding: 8bit\r\n", b"missing original headers\r\n"),
+        ):
+            with self.subTest(cte=cte):
+                outer = BytesParser(policy=policy.default).parsebytes(prefix + cte + b"\r\n" + data)
+                self.assertIsNone(unwrap_forward(outer, KNOWN))
+        empty = EmailMessage()
+        empty["Content-Type"] = "message/rfc822"
+        outer = _message(SPOUSE, _inline())
+        outer.make_mixed()
+        outer.attach(empty)
+        self.assertIsNone(unwrap_forward(outer, KNOWN))
 
     def test_ambiguous_and_unknown_originals(self):
         outer = _forward(SPOUSE, _message())

@@ -964,6 +964,86 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/budget/receipts/gmail-grant": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Enable or disable the local Gmail grant
+         * @description Default-off with HESTIA_BUDGET_GMAIL_IMPORT_ENABLED. Requires an authenticated SQLite admin and a same-origin browser session. Send exact Origin and a JSON body of at most 4 KiB.
+         */
+        post: operations["setBudgetReceiptGmailGrant"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/budget/receipts/gmail-revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Revoke the local grant and purge unconfirmed imports
+         * @description Default-off with HESTIA_BUDGET_GMAIL_IMPORT_ENABLED. Requires an authenticated SQLite admin and a same-origin browser session. Send exact Origin and a JSON body of at most 4 KiB.
+         */
+        post: operations["revokeBudgetReceiptGmailGrant"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/budget/receipts/gmail-status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read safe Gmail import state
+         * @description Default-off with HESTIA_BUDGET_GMAIL_IMPORT_ENABLED. Requires an authenticated SQLite admin and a same-origin browser session. Use the returned version for grant changes. Manual Google revocation can affect Calendar Sync.
+         */
+        get: operations["getBudgetReceiptGmailStatus"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/budget/receipts/gmail-sync": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Run one bounded Gmail import batch
+         * @description Default-off with HESTIA_BUDGET_GMAIL_IMPORT_ENABLED. Requires an authenticated SQLite admin and a same-origin browser session. Send exact Origin and a JSON body of at most 4 KiB.
+         */
+        post: operations["syncBudgetReceiptGmail"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/budget/receipts/image": {
         parameters: {
             query?: never;
@@ -4390,10 +4470,30 @@ export interface components {
             created_at: number;
             /** Currency */
             currency: string | null;
+            /**
+             * Document Kind
+             * @default null
+             */
+            document_kind: ("receipt" | "invoice" | "payment_confirmation") | null;
+            /**
+             * Due Date
+             * @default null
+             */
+            due_date: string | null;
             /** Image Available */
             image_available: boolean;
             /** Image Expires At */
             image_expires_at: number | null;
+            /**
+             * Import Expires At
+             * @default null
+             */
+            import_expires_at: number | null;
+            /**
+             * Invoice Number
+             * @default null
+             */
+            invoice_number: string | null;
             /** Lines */
             lines: components["schemas"]["BudgetReceiptLine"][];
             /** Linked */
@@ -4429,12 +4529,12 @@ export interface components {
              * Source Kind
              * @enum {string}
              */
-            source_kind: "live_text" | "local_ocr" | "cloud_ai";
+            source_kind: "live_text" | "local_ocr" | "cloud_ai" | "paste" | "photo" | "email" | "attachment";
             /**
              * Status
              * @enum {string}
              */
-            status: "draft" | "confirmed" | "needs_review";
+            status: "draft" | "confirmed" | "needs_review" | "imported";
             /** Total Amount */
             total_amount: string | null;
             /** Updated At */
@@ -4447,6 +4547,116 @@ export interface components {
             /** Candidates */
             candidates?: components["schemas"]["BudgetReceiptCandidate"][] | null;
             receipt: components["schemas"]["BudgetReceiptDetail"];
+        };
+        /** BudgetReceiptGmailGrantRequest */
+        BudgetReceiptGmailGrantRequest: {
+            /**
+             * Action
+             * @enum {string}
+             */
+            action: "enable" | "disable";
+            /** Expected Version */
+            expected_version: number;
+        };
+        /** BudgetReceiptGmailGrantResult */
+        BudgetReceiptGmailGrantResult: {
+            /** Grant Generation */
+            grant_generation: number;
+            /**
+             * Grant Status
+             * @enum {string}
+             */
+            grant_status: "disabled" | "active" | "revoked";
+            /**
+             * Ok
+             * @constant
+             */
+            ok: true;
+            /** Version */
+            version: number;
+        };
+        /** BudgetReceiptGmailRevokeRequest */
+        BudgetReceiptGmailRevokeRequest: {
+            /** Expected Version */
+            expected_version: number;
+        };
+        /** BudgetReceiptGmailStatus */
+        BudgetReceiptGmailStatus: {
+            /** Attention */
+            attention: ("authorization" | "configuration" | "identity_mismatch" | "quota") | null;
+            /** Backoff Until */
+            backoff_until: number;
+            /** Configured */
+            configured: boolean;
+            /** Enabled */
+            enabled: boolean;
+            /** Failures */
+            failures: number;
+            /**
+             * Google Revoke Affects Calendar Sync
+             * @constant
+             */
+            google_revoke_affects_calendar_sync: true;
+            /**
+             * Google Revoke Url
+             * @constant
+             */
+            google_revoke_url: "https://myaccount.google.com/linkedapps";
+            /** Grant Generation */
+            grant_generation: number;
+            /**
+             * Grant Status
+             * @enum {string}
+             */
+            grant_status: "disabled" | "active" | "revoked";
+            /** Last Error */
+            last_error: string | null;
+            /** Last Http Status */
+            last_http_status: number | null;
+            /** Last Sync At */
+            last_sync_at: number | null;
+            /** Next Sync At */
+            next_sync_at: number;
+            /** Pending Imported Count */
+            pending_imported_count: number;
+            /**
+             * Sync Phase
+             * @enum {string}
+             */
+            sync_phase: "idle" | "backfill" | "incremental" | "full_resync";
+            /** Version */
+            version: number;
+        };
+        /** BudgetReceiptGmailSyncRequest */
+        BudgetReceiptGmailSyncRequest: {
+            /**
+             * Force Full Resync
+             * @default false
+             */
+            force_full_resync: boolean;
+        };
+        /** BudgetReceiptGmailSyncResult */
+        BudgetReceiptGmailSyncResult: {
+            /** Attention */
+            attention: ("authorization" | "configuration" | "identity_mismatch" | "quota") | null;
+            /** Has More */
+            has_more: boolean;
+            /** Imported Count */
+            imported_count: number;
+            /** Next Sync At */
+            next_sync_at: number;
+            /**
+             * Ok
+             * @constant
+             */
+            ok: true;
+            /** Skipped Count */
+            skipped_count: number;
+            /**
+             * Sync Phase
+             * @enum {string}
+             */
+            sync_phase: "idle" | "backfill" | "incremental" | "full_resync";
         };
         /** BudgetReceiptLine */
         BudgetReceiptLine: {
@@ -4520,6 +4730,11 @@ export interface components {
              */
             cursor: string | null;
             /**
+             * Document Kind
+             * @default null
+             */
+            document_kind: ("receipt" | "invoice" | "payment_confirmation") | null;
+            /**
              * Limit
              * @default 50
              */
@@ -4538,7 +4753,7 @@ export interface components {
              * Status
              * @default null
              */
-            status: ("draft" | "confirmed" | "needs_review") | null;
+            status: ("draft" | "confirmed" | "needs_review" | "imported") | null;
         };
         /** BudgetReceiptListResult */
         BudgetReceiptListResult: {
@@ -4588,10 +4803,30 @@ export interface components {
             created_at: number;
             /** Currency */
             currency: string | null;
+            /**
+             * Document Kind
+             * @default null
+             */
+            document_kind: ("receipt" | "invoice" | "payment_confirmation") | null;
+            /**
+             * Due Date
+             * @default null
+             */
+            due_date: string | null;
             /** Image Available */
             image_available: boolean;
             /** Image Expires At */
             image_expires_at: number | null;
+            /**
+             * Import Expires At
+             * @default null
+             */
+            import_expires_at: number | null;
+            /**
+             * Invoice Number
+             * @default null
+             */
+            invoice_number: string | null;
             /** Linked */
             linked: boolean;
             /** Linked Account Id */
@@ -4625,12 +4860,12 @@ export interface components {
              * Source Kind
              * @enum {string}
              */
-            source_kind: "live_text" | "local_ocr" | "cloud_ai";
+            source_kind: "live_text" | "local_ocr" | "cloud_ai" | "paste" | "photo" | "email" | "attachment";
             /**
              * Status
              * @enum {string}
              */
-            status: "draft" | "confirmed" | "needs_review";
+            status: "draft" | "confirmed" | "needs_review" | "imported";
             /** Total Amount */
             total_amount: string | null;
             /** Updated At */
@@ -10011,7 +10246,10 @@ export interface operations {
     confirmBudgetReceipt: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Request native Gmail receipt values starting at 0.40.0. Earlier versions or an omitted header receive legacy receipt statuses and source kinds. */
+                "X-Hestia-Contract-Version"?: string;
+            };
             path?: never;
             cookie?: never;
         };
@@ -10242,7 +10480,10 @@ export interface operations {
                 /** @description Opaque owned receipt UUID. */
                 receipt_id: string;
             };
-            header?: never;
+            header?: {
+                /** @description Request native Gmail receipt values starting at 0.40.0. Earlier versions or an omitted header receive legacy receipt statuses and source kinds. */
+                "X-Hestia-Contract-Version"?: string;
+            };
             path?: never;
             cookie?: never;
         };
@@ -10295,6 +10536,449 @@ export interface operations {
             };
             /** @description SQLite users backend is required (budget_requires_sqlite_users). This read does not accept a JSON body. */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description budget configuration unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+        };
+    };
+    setBudgetReceiptGmailGrant: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BudgetReceiptGmailGrantRequest"];
+            };
+        };
+        responses: {
+            /** @description Enable or disable the local Gmail grant */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetReceiptGmailGrantResult"];
+                };
+            };
+            /** @description invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description session required; middleware may return an empty body */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description admin owner or browser-origin requirement failed; middleware may return an empty body */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description unknown, disabled or foreign resource */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Version conflict or a missing authoritative SQLite users backend. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Content-Length is required. */
+            411: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description JSON body exceeds 4096 bytes. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Content-Type must be application/json. */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Gmail quota, persisted backoff, or the sync cooldown applies. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description budget configuration unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+        };
+    };
+    revokeBudgetReceiptGmailGrant: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BudgetReceiptGmailRevokeRequest"];
+            };
+        };
+        responses: {
+            /** @description Revoke the local grant and purge unconfirmed imports */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetReceiptGmailGrantResult"];
+                };
+            };
+            /** @description invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description session required; middleware may return an empty body */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description admin owner or browser-origin requirement failed; middleware may return an empty body */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description unknown, disabled or foreign resource */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Version conflict or a missing authoritative SQLite users backend. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Content-Length is required. */
+            411: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description JSON body exceeds 4096 bytes. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Content-Type must be application/json. */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description budget configuration unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+        };
+    };
+    getBudgetReceiptGmailStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description owner-scoped stored state; no bank request */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetReceiptGmailStatus"];
+                };
+            };
+            /** @description invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description session required; middleware may return an empty body */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description admin owner or browser-origin requirement failed; middleware may return an empty body */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description unknown, disabled or foreign resource */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description SQLite users backend is required (budget_requires_sqlite_users). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description budget configuration unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+        };
+    };
+    syncBudgetReceiptGmail: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BudgetReceiptGmailSyncRequest"];
+            };
+        };
+        responses: {
+            /** @description Run one bounded Gmail import batch */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetReceiptGmailSyncResult"];
+                };
+            };
+            /** @description invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description session required; middleware may return an empty body */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description admin owner or browser-origin requirement failed; middleware may return an empty body */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description unknown, disabled or foreign resource */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Grant is inactive, the sync is already running, or authoritative SQLite users are unavailable. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Content-Length is required. */
+            411: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description JSON body exceeds 4096 bytes. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Content-Type must be application/json. */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Gmail quota, persisted backoff, or the sync cooldown applies. */
+            429: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -10411,7 +11095,10 @@ export interface operations {
     listBudgetReceipts: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Request native Gmail receipt values starting at 0.40.0. Earlier versions or an omitted header receive legacy receipt statuses and source kinds. */
+                "X-Hestia-Contract-Version"?: string;
+            };
             path?: never;
             cookie?: never;
         };
@@ -10525,7 +11212,10 @@ export interface operations {
     parseBudgetReceiptText: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Request native Gmail receipt values starting at 0.40.0. Earlier versions or an omitted header receive legacy receipt statuses and source kinds. */
+                "X-Hestia-Contract-Version"?: string;
+            };
             path?: never;
             cookie?: never;
         };
@@ -10639,7 +11329,10 @@ export interface operations {
     searchBudgetReceipts: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Request native Gmail receipt values starting at 0.40.0. Earlier versions or an omitted header receive legacy receipt statuses and source kinds. */
+                "X-Hestia-Contract-Version"?: string;
+            };
             path?: never;
             cookie?: never;
         };

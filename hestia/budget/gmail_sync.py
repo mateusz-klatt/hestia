@@ -339,7 +339,8 @@ class GmailSync:
         attention = error.attention
         if error.code == "daily_quota" or hint.suspended:
             attention = "quota"
-        self._commit(owner, progress, {"failures": failures, "backoff_until": deadline, "next_sync_at": deadline,
+        self._commit(owner, progress, {"failures": failures, "backoff_until": deadline,
+                                      "next_sync_at": max(deadline, now + self.settings.sync_interval_seconds),
                                       "attention": attention, "last_http_status": error.http_status,
                                       "last_error": error.code})
 

@@ -50,7 +50,8 @@ _SUMMARY_FIELDS = (
     "receipt_id", "shop_id", "chain_key", "raw_shop_name", "raw_nip", "receipt_kind", "receipt_date",
     "receipt_time", "total_amount", "currency", "payment_method", "status", "source_kind", "linked",
     "linked_account_id", "linked_entry_ref", "version", "created_at", "updated_at", "image_available",
-    "image_expires_at", "raw_text_expires_at", "math_delta",
+    "image_expires_at", "raw_text_expires_at", "math_delta", "document_kind", "invoice_number", "due_date",
+    "import_expires_at",
 )
 
 
@@ -143,7 +144,7 @@ class BudgetReceiptStore(BudgetHTTPStore):
 
     @staticmethod
     def _math_delta(session, row):
-        if row.total_amount is None:
+        if row.total_amount is None or row.status == "imported":
             return None
         net = sum_money(session.scalars(select(Line.net_line_total).where(
             Line.receipt_id == row.id, Line.owner == row.owner)))
@@ -163,6 +164,8 @@ class BudgetReceiptStore(BudgetHTTPStore):
             "version": row.version, "created_at": row.created_at, "updated_at": row.updated_at,
             "image_available": row.image_relpath is not None, "image_expires_at": row.image_expires_at,
             "raw_text_expires_at": row.raw_text_expires_at, "math_delta": self._math_delta(session, row),
+            "document_kind": row.document_kind, "invoice_number": redact_digit_field(row.invoice_number),
+            "due_date": row.due_date, "import_expires_at": row.import_expires_at,
         }
         return {key: values[key] for key in _SUMMARY_FIELDS}
 
@@ -485,6 +488,7 @@ class BudgetReceiptStore(BudgetHTTPStore):
                 row.linked_entry_ref = link["entry_reference"]
                 row.linked_fingerprint, row.linked_evidence = fingerprint
             row.status, row.version, row.updated_at = "confirmed", row.version + 1, now
+            row.import_expires_at = None
             if row_was_draft:
                 row.image_expires_at = now + CONFIRMED_TEXT_TTL_SECONDS
             try:
@@ -550,7 +554,8 @@ class BudgetReceiptStore(BudgetHTTPStore):
 
     @staticmethod
     def _filters(values, *, search):
-        allowed = {"query", "limit", "cursor"} if search else {"month", "status", "linked", "limit", "cursor"}
+        allowed = ({"query", "limit", "cursor"} if search
+                   else {"month", "status", "linked", "document_kind", "limit", "cursor"})
         if not isinstance(values, dict) or set(values) - allowed:
             raise ReceiptError()
         limit = values.get("limit", 50)
@@ -564,7 +569,10 @@ class BudgetReceiptStore(BudgetHTTPStore):
             except ValueError:
                 raise ReceiptError() from None
         status = values.get("status")
-        if status is not None and status not in ("draft", "confirmed", "needs_review"):
+        if status is not None and status not in ("draft", "confirmed", "needs_review", "imported"):
+            raise ReceiptError()
+        kind = values.get("document_kind")
+        if kind is not None and kind not in ("receipt", "invoice", "payment_confirmation"):
             raise ReceiptError()
         linked = values.get("linked")
         if linked is not None and type(linked) is not bool:
@@ -575,12 +583,14 @@ class BudgetReceiptStore(BudgetHTTPStore):
         context_values = {"query": fold_for_match(query.strip())} if search else {
             "month": month, "status": status, "linked": linked,
         }
+        if kind is not None:
+            context_values["document_kind"] = kind
         context = hashlib.sha256(json.dumps(context_values, sort_keys=True, ensure_ascii=True,
                                             separators=(",", ":")).encode("ascii")).hexdigest()
-        return limit, month, status, linked, query, context
+        return limit, month, status, linked, query, kind, context
 
     def _list(self, owner, values, *, search):
-        limit, month, status, linked, query, context = self._filters(values, search=search)
+        limit, month, status, linked, query, kind, context = self._filters(values, search=search)
         with self.transaction() as session:
             self._owner(session, owner)
             now = self._now()
@@ -591,6 +601,8 @@ class BudgetReceiptStore(BudgetHTTPStore):
                 query_obj = query_obj.where(Receipt.receipt_date >= month + "-01", Receipt.receipt_date <= month + "-31")
             if status is not None:
                 query_obj = query_obj.where(Receipt.status == status)
+            if kind is not None:
+                query_obj = query_obj.where(Receipt.document_kind == kind)
             if linked is not None:
                 query_obj = query_obj.where(Receipt.linked_account_id.is_not(None) if linked
                                             else Receipt.linked_account_id.is_(None))
