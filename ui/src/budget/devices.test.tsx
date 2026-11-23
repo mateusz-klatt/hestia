@@ -2,6 +2,7 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import type { Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { loadLocale } from "../i18n";
 import type { BudgetApi, BudgetResult, ReceiptDevice, ReceiptPair } from "./api";
 import { ReceiptDevices } from "./devices";
 import { isAccessLoss } from "./model";
@@ -47,11 +48,13 @@ beforeEach(() => {
 afterEach(async () => {
   await act(async () => { root.unmount(); await Promise.resolve(); });
   host.remove();
+  await loadLocale("en");
   vi.unstubAllGlobals();
   vi.useRealTimers();
 });
 
 async function render(client: DeviceApi, locale = "en"): Promise<void> {
+  await loadLocale(locale.startsWith("pl") ? "pl" : "en");
   await act(async () => {
     root.render(<ReceiptDevices api={client} locale={locale} revision={0} onAccessLoss={onAccessLoss} />);
     await Promise.resolve();

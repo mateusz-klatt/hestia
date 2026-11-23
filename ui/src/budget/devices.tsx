@@ -1,25 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { t } from "../i18n";
 import type { BudgetApi, BudgetResult, ReceiptDevice, ReceiptPair } from "./api";
 import { qrMatrix } from "./qr";
 
 type DeviceApi = Pick<BudgetApi, "receiptDevices" | "pairReceiptDevice" | "cancelReceiptPairCode" | "revokeReceiptDevice">;
 type AccessBarrier = (result: { ok: boolean; status?: number; error?: string }) => boolean;
-
-const copyFor = (locale: string) => locale.startsWith("pl")
-  ? {
-      title: "Urządzenia", add: "Dodaj urządzenie", revoke: "Odwołaj", empty: "Brak urządzeń.",
-      code: "Kod parowania", qr: "Kod QR parowania", unavailable: "Kod QR jest niedostępny. Wpisz kod w aplikacji.",
-      expires: "Ważny do", remaining: "Pozostało", listError: "Nie udało się wczytać urządzeń.", close: "Zamknij",
-      cancel: "Anuluj kod", cancelError: "Nie udało się anulować kodu parowania.",
-      pairError: "Nie udało się utworzyć kodu parowania.", revokeError: "Nie udało się odwołać urządzenia.",
-    }
-  : {
-      title: "Devices", add: "Add device", revoke: "Revoke", empty: "No devices yet.",
-      code: "Pairing code", qr: "Pairing QR code", unavailable: "A QR code is unavailable. Enter the code in the app.",
-      expires: "Expires", remaining: "Remaining", listError: "Devices could not be loaded.", close: "Close",
-      cancel: "Cancel code", cancelError: "The pairing code could not be cancelled.",
-      pairError: "The pairing code could not be created.", revokeError: "The device could not be revoked.",
-    };
 
 function formatExpiry(expiresAt: number, now: number, locale: string): string {
   const expiry = new Date(expiresAt);
@@ -54,7 +39,6 @@ function PairingCode({ payload, label, unavailable }: { payload: string; label: 
 export function ReceiptDevices({ api, locale, revision, onAccessLoss, focusRevision = 0 }: {
   api: DeviceApi; locale: string; revision: number; onAccessLoss: AccessBarrier; focusRevision?: number;
 }) {
-  const text = copyFor(locale);
   const [hidden, setHidden] = useState(true);
   const [devices, setDevices] = useState<ReceiptDevice[]>([]);
   const [error, setError] = useState("");
@@ -84,11 +68,11 @@ export function ReceiptDevices({ api, locale, revision, onAccessLoss, focusRevis
         return;
       }
       setHidden(false);
-      setError(result.ok ? "" : text.listError);
+      setError(result.ok ? "" : t("budget.devices.listError"));
       setDevices(result.ok && Array.isArray(result.data) ? result.data : []);
     });
     return () => { listGeneration.current += 1; };
-  }, [api, revision, listRevision, text.listError, onAccessLoss, hide]);
+  }, [api, revision, listRevision, onAccessLoss, hide]);
 
   useEffect(() => () => { actionGeneration.current += 1; }, [api]);
 
@@ -128,31 +112,32 @@ export function ReceiptDevices({ api, locale, revision, onAccessLoss, focusRevis
   };
 
   if (hidden) return null;
+  const title = t("budget.devices.title");
   return (
-    <section className="budget-devices" aria-label={text.title} ref={sectionRef}>
+    <section className="budget-devices" aria-label={title} ref={sectionRef}>
       <header>
-        <h3>{text.title}</h3>
+        <h3>{title}</h3>
         <button type="button" className="budget-primary" disabled={busy}
-          onClick={() => { void run(api.pairReceiptDevice, setPairing, text.pairError); }}>{text.add}</button>
+          onClick={() => { void run(api.pairReceiptDevice, setPairing, t("budget.devices.pairError")); }}>{t("budget.devices.add")}</button>
       </header>
       {error === "" ? null : <p className="budget-notice" role="alert">{error}</p>}
       {pairing === null ? null : (
         <div className="budget-pair">
-          <p className="budget-muted">{text.code}</p>
+          <p className="budget-muted">{t("budget.devices.code")}</p>
           <p className="budget-pair-code">{pairing.code}</p>
-          <PairingCode payload={pairing.qr_payload} label={text.qr} unavailable={text.unavailable} />
+          <PairingCode payload={pairing.qr_payload} label={t("budget.devices.qr")} unavailable={t("budget.devices.unavailable")} />
           <p className="budget-muted">
-            {text.expires}: {formatExpiry(pairing.expires_at * 1000, now, locale)} · {text.remaining}: <span role="timer">{formatCountdown(pairing.expires_at * 1000, now)}</span>
+            {t("budget.devices.expires", { time: formatExpiry(pairing.expires_at * 1000, now, locale) })} · {t("budget.devices.remainingLabel")} <span role="timer">{formatCountdown(pairing.expires_at * 1000, now)}</span>
           </p>
           <div className="budget-actions">
-            <button type="button" onClick={closePairing}>{text.close}</button>
+            <button type="button" onClick={closePairing}>{t("budget.devices.close")}</button>
             <button type="button" disabled={busy} onClick={() => {
-              void run(() => api.cancelReceiptPairCode(pairing.code_id), closePairing, text.cancelError);
-            }}>{text.cancel}</button>
+              void run(() => api.cancelReceiptPairCode(pairing.code_id), closePairing, t("budget.devices.cancelError"));
+            }}>{t("budget.devices.cancel")}</button>
           </div>
         </div>
       )}
-      {devices.length === 0 ? <p className="budget-muted">{text.empty}</p> : (
+      {devices.length === 0 ? <p className="budget-muted">{t("budget.devices.empty")}</p> : (
         <ul className="budget-facts">
           {devices.map((device) => (
             <li key={device.token_id}>
@@ -161,8 +146,8 @@ export function ReceiptDevices({ api, locale, revision, onAccessLoss, focusRevis
                 void run(() => api.revokeReceiptDevice(device.token_id), () => {
                   listGeneration.current += 1;
                   setDevices((current) => current.filter((item) => item.token_id !== device.token_id));
-                }, text.revokeError);
-              }}>{text.revoke}</button>
+                }, t("budget.devices.revokeError"));
+              }}>{t("budget.devices.revoke")}</button>
             </li>
           ))}
         </ul>
