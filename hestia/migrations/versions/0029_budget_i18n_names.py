@@ -51,6 +51,10 @@ _CATEGORY_NAME_TRIGGERS = (
             SELECT 1 FROM budget_categories AS category
             WHERE category.owner = NEW.owner AND category.name_key = NEW.name_key
               AND category.id <> NEW.category_id
+        ) OR EXISTS (
+            SELECT 1 FROM budget_category_translations AS translated
+            WHERE translated.owner = NEW.owner AND translated.name_key = NEW.name_key
+              AND translated.category_id <> NEW.category_id
         )
         BEGIN
             SELECT RAISE(ABORT, 'budget_analytics_conflict');
@@ -63,6 +67,10 @@ _CATEGORY_NAME_TRIGGERS = (
             SELECT 1 FROM budget_categories AS category
             WHERE category.owner = NEW.owner AND category.name_key = NEW.name_key
               AND category.id <> NEW.category_id
+        ) OR EXISTS (
+            SELECT 1 FROM budget_category_translations AS translated
+            WHERE translated.owner = NEW.owner AND translated.name_key = NEW.name_key
+              AND translated.category_id <> NEW.category_id
         )
         BEGIN
             SELECT RAISE(ABORT, 'budget_analytics_conflict');
@@ -85,7 +93,6 @@ def upgrade():
             ["category_id", "owner"], ["budget_categories.id", "budget_categories.owner"],
             name="fk_budget_category_translations_category_owner", ondelete="CASCADE",
         ),
-        sa.UniqueConstraint("owner", "lang", "name_key", name="uq_budget_category_translations_name"),
     )
     op.create_table(
         _LABEL_TRANSLATIONS,

@@ -515,7 +515,6 @@ class BudgetCategoryTranslation(Base):
             ["category_id", "owner"], ["budget_categories.id", "budget_categories.owner"],
             name="fk_budget_category_translations_category_owner", ondelete="CASCADE",
         ),
-        UniqueConstraint("owner", "lang", "name_key", name="uq_budget_category_translations_name"),
     )
     category_id: Mapped[str] = mapped_column(primary_key=True)
     lang: Mapped[str] = mapped_column(primary_key=True)

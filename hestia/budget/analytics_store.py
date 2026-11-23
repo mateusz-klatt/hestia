@@ -415,8 +415,8 @@ class BudgetAnalyticsStore(BudgetHTTPStore):
         if canonical is not None:
             raise AnalyticsError("budget_analytics_conflict", 409)
         other = session.scalar(select(CategoryTranslation).where(
-            CategoryTranslation.owner == owner, CategoryTranslation.lang == lang,
-            CategoryTranslation.name_key == key, CategoryTranslation.category_id != category_id,
+            CategoryTranslation.owner == owner, CategoryTranslation.name_key == key,
+            CategoryTranslation.category_id != category_id,
         ))
         if other is not None:
             raise AnalyticsError("budget_analytics_conflict", 409)

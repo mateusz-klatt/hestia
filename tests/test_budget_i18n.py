@@ -97,7 +97,7 @@ class TranslationMigrationTests(unittest.TestCase):
                                                      name="Anderes", name_key="anderes"))
             session.add(db.BudgetCategoryTranslation(category_id="food", owner="owner", lang="en",
                                                      name="Food", name_key="food"))
-            session.add(db.BudgetCategoryTranslation(category_id="other", owner="owner", lang="fr",
+            session.add(db.BudgetCategoryTranslation(category_id="food", owner="owner", lang="fr",
                                                      name="Essen", name_key="essen"))
         with self.assertRaises(IntegrityError):
             with sessions.begin() as session:
@@ -117,7 +117,7 @@ class TranslationMigrationTests(unittest.TestCase):
                 translation.name, translation.name_key = "Food", "food"
         with self.assertRaises(IntegrityError):
             with sessions.begin() as session:
-                session.add(db.BudgetCategoryTranslation(category_id="other", owner="owner", lang="de",
+                session.add(db.BudgetCategoryTranslation(category_id="other", owner="owner", lang="fr",
                                                          name="ESSEN", name_key="essen"))
         with self.assertRaises(IntegrityError):
             with sessions.begin() as session:
@@ -201,7 +201,7 @@ class TranslationStoreTests(AnalyticsCase):
         self.store.set_category_translation("owner", category_id=self.food["id"], lang="de", name="Essen")
         with self.assertRaises(AnalyticsError) as canonical_collision:
             self.store.set_category_translation(
-                "owner", category_id=self.other["id"], lang="de", name="Synthetic Food")
+                "owner", category_id=self.other["id"], lang="fr", name="Synthetic Food")
         self.assertEqual(canonical_collision.exception.status, 409)
         with self.assertRaises(AnalyticsError) as create_collision:
             self.store.create_category("owner", " essen ")
@@ -210,18 +210,23 @@ class TranslationStoreTests(AnalyticsCase):
             self.store.update_category(
                 "owner", self.other["id"], name="Essen", archived=False, expected_version=1)
         self.assertEqual(rename_collision.exception.status, 409)
+        with self.assertRaises(AnalyticsError) as cross_language_collision:
+            self.store.set_category_translation("owner", category_id=self.other["id"], lang="fr", name="Essen")
+        self.assertEqual(cross_language_collision.exception.status, 409)
         self.assertTrue(self.store.set_category_translation(
             "owner", category_id=self.food["id"], lang="en", name="Synthetic Food")["changed"])
         self.assertTrue(self.store.set_category_translation(
-            "owner", category_id=self.other["id"], lang="fr", name="Essen")["changed"])
+            "owner", category_id=self.food["id"], lang="fr", name="Essen")["changed"])
         self.assertTrue(self.store.create_category("other", "Essen")["changed"])
 
         results = self.store.import_translations("owner", entries=[
             {"kind": "category", "category_id": self.other["id"], "lang": "it", "name": "Altro"},
+            {"kind": "category", "category_id": self.other["id"], "lang": "fr", "name": "Essen"},
             {"kind": "category", "category_id": self.other["id"], "lang": "es", "name": "Synthetic Food"},
         ])
-        self.assertEqual([row["ok"] for row in results], [True, False])
-        self.assertEqual(results[1]["error"], "budget_analytics_conflict")
+        self.assertEqual([row["index"] for row in results], [0, 1, 2])
+        self.assertEqual([row["ok"] for row in results], [True, False, False])
+        self.assertEqual([row["error"] for row in results[1:]], ["budget_analytics_conflict"] * 2)
 
     def test_integrity_race_is_reported_as_a_collision(self):
         real_flush = Session.flush
@@ -342,6 +347,8 @@ class TranslationAPITests(unittest.IsolatedAsyncioTestCase):
         collision = await self.post("category-translation-set", {"category_id": empty["id"], "lang": "de", "name": "essen"})
         self.assertEqual(collision.status, 409)
         responses = [
+            await self.post("category-translation-set", {
+                "category_id": empty["id"], "lang": "fr", "name": "Essen"}),
             await self.post("category-translation-set", {
                 "category_id": empty["id"], "lang": "fr", "name": "Canonical Food"}),
             await self.post("category-create", {"name": "Essen"}),
