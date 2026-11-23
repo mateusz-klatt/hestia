@@ -633,6 +633,22 @@ NR KARTY ****5555
         )
         self.assertNotRegex(parse_receipt(labelled)["raw_ocr_text"], r"[0-9]")
 
+    def test_short_mask_run_split_by_a_newline_is_redacted(self):
+        cases = {
+            "****\n1234": "[REDACTED]\n[REDACTED]",
+            "1234\n****": "[REDACTED]\n[REDACTED]",
+            "**** **** ****\n1234": "[REDACTED]\n[REDACTED]",
+            "XXXX\n1234": "[REDACTED]\n[REDACTED]",
+            "****": "[REDACTED]",
+            "2 * 3,50": "2 * 3,50",
+        }
+        for raw, expected in cases.items():
+            with self.subTest(raw=raw):
+                self.assertEqual(redact_pan(raw), expected)
+                stored = parse_receipt(raw)["raw_ocr_text"]
+                self.assertEqual(stored, expected)
+        self.assertNotRegex(parse_receipt("****\n1234")["raw_ocr_text"], r"[0-9*X]")
+
     def test_item_three_lines_after_card_label_keeps_prices(self):
         text = (
             "BIEDRONKA\nNIP 7791011327\n2026-11-30 12:34\n"

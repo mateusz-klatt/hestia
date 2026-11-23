@@ -58,11 +58,13 @@ _NIP = re.compile(r"\bNIP\s*:?\s*([0-9][0-9 -]{8,16}[0-9])\b", re.IGNORECASE | r
 # one digit stream, so a PAN wrapped across them is removed with every fragment
 # that contributed a digit or a mask.
 # Everywhere, each window of up to three lines joins digit runs that are
-# separated only by spaces, hyphens or the newline. Windows of 13–19 symbols
-# on that stream are tested for Luhn and for a mask beside digits. A price
-# token breaks the stream. A date breaks it only when it is a real calendar
-# day in 2000–2099 written with one canonical separator. Beside a card label
-# a date does not break the stream.
+# separated only by spaces, hyphens or the newline. A mask is tested before
+# the 13-symbol filter: two or more mask characters beside two or more digits
+# redact the whole joined run, and a mask run of 4–19 characters is card data
+# on its own. A longer line of only masks is not a PAN. Luhn still uses
+# windows of 13–19. A price token breaks the stream. A date breaks it only
+# when it is a real calendar day in 2000–2099 written with one canonical
+# separator. Beside a card label a date does not break the stream.
 _PAN_NEWLINES = frozenset("\n\r\u2028\u2029")
 _PAN_DASHES = frozenset("-‐‑‒–—―")
 _PAN_MASKS = frozenset("*Xx•●#")
@@ -255,22 +257,39 @@ def _line_candidates(line):
     return symbols, candidates
 
 
-def _mask_next_to_digits(symbols):
-    """A mask sequence of two or more sits beside two or more digits."""
+def _mask_decision(kinds):
+    """Classify a symbol stream before any 13-symbol length filter.
+
+    ``all`` means a mask sequence of two or more sits beside two or more
+    digits, so the whole joined run is card data. ``masks`` means a run of
+    4–19 mask characters stands alone. A longer pure mask line is left out:
+    it is not a PAN, and the 13–19 windows stay skipped.
+    """
     runs = []
-    for _, kind, _ in symbols:
+    for kind in kinds:
         if runs and runs[-1][0] == kind:
             runs[-1][1] += 1
         else:
             runs.append([kind, 1])
+    beside = False
+    standalone = False
     for index, (kind, length) in enumerate(runs):
-        if kind != "m" or length < 2:
+        if kind != "m":
             continue
-        if index and runs[index - 1][0] == "d" and runs[index - 1][1] >= 2:
-            return True
-        if index + 1 < len(runs) and runs[index + 1][0] == "d" and runs[index + 1][1] >= 2:
-            return True
-    return False
+        if 4 <= length <= 19:
+            standalone = True
+        if length < 2:
+            continue
+        left = index and runs[index - 1][0] == "d" and runs[index - 1][1] >= 2
+        right = (index + 1 < len(runs) and runs[index + 1][0] == "d"
+                 and runs[index + 1][1] >= 2)
+        if left or right:
+            beside = True
+    if beside:
+        return "all", runs
+    if standalone:
+        return "masks", runs
+    return None, runs
 
 
 def _window_is_plain(line, symbols):
@@ -299,19 +318,21 @@ def _digits_are_prices(symbols, cover):
 
 
 def _flag_candidate(line, symbols, cover, label_context):
-    """Mark PAN symbols. Lengths 13–19 only, so the scan stays linear.
+    """Mark PAN symbols. The mask check comes before the 13-symbol filter.
 
-    A mask sequence beside digits always flags the candidate. A Luhn window
-    does too. Away from a card label the window may contain only spaces and
-    hyphens: a decimal inside ``\\d{1,6}[,.]\\d{2,4}`` means the window is a
-    price. Beside a card label that exemption is off, so price-shaped groups
-    are still a PAN. The whole candidate is the secret, which keeps a ``.00``
-    suffix from leaving the last group visible.
+    A mask sequence beside digits flags the whole candidate, as does a mask
+    run of 4–19 characters. A Luhn window of 13–19 does too. Away from a card
+    label the window may contain only spaces and hyphens: a decimal inside
+    ``\\d{1,6}[,.]\\d{2,4}`` means the window is a price. Beside a card label
+    that exemption is off, so price-shaped groups are still a PAN. The whole
+    candidate is the secret, which keeps a ``.00`` suffix from leaving the
+    last group visible.
     """
     count = len(symbols)
     if not count:
         return bytearray()
-    if _mask_next_to_digits(symbols):
+    decision, _ = _mask_decision(kind for _, kind, _ in symbols)
+    if decision is not None:
         return bytearray(b"\x01" * count)
     if count < 13 or not any(kind == "d" for _, kind, _ in symbols):
         return bytearray(count)
@@ -664,36 +685,39 @@ def _plain_line_tokens(line, *, break_dates=True):
 
 
 def _plain_window_flags(symbols):
-    """Flag symbols inside 13–19 windows that pass Luhn or sit beside a mask."""
+    """Flag a mask run first, then 13–19 Luhn windows.
+
+    Two or more mask characters beside two or more digits flag the whole
+    joined run, even when it is shorter than 13 symbols. A mask run of 4–19
+    characters is card data with no digits. A longer mask line has no digit
+    and skips the window loop.
+    """
     count = len(symbols)
     flagged = bytearray(count)
-    # A mask run with no digits is not a PAN. Skip the 13–19 windows.
-    if count < 13 or not any(kind == "d" for kind, _ in symbols):
+    if not count:
+        return flagged
+    decision, runs = _mask_decision(kind for kind, _ in symbols)
+    if decision == "all":
+        return bytearray(b"\x01" * count)
+    has_digit = False
+    if decision == "masks":
+        cursor = 0
+        for kind, length in runs:
+            if kind == "d":
+                has_digit = True
+            elif 4 <= length <= 19:
+                flagged[cursor:cursor + length] = b"\x01" * length
+            cursor += length
+    else:
+        has_digit = any(kind == "d" for kind, _ in runs)
+    if not has_digit or count < 13:
         return flagged
     for length in range(13, min(19, count) + 1):
         last = count - length + 1
         for start in range(last):
             window = symbols[start:start + length]
-            runs = []
-            for kind, _ in window:
-                if runs and runs[-1][0] == kind:
-                    runs[-1][1] += 1
-                else:
-                    runs.append([kind, 1])
-            hit = False
-            for index, (kind, run) in enumerate(runs):
-                if kind != "m" or run < 2:
-                    continue
-                left = index and runs[index - 1][0] == "d" and runs[index - 1][1] >= 2
-                right = (index + 1 < len(runs) and runs[index + 1][0] == "d"
-                         and runs[index + 1][1] >= 2)
-                if left or right:
-                    hit = True
-                    break
-            if not hit:
-                digits = "".join(value for kind, value in window if kind == "d")
-                hit = _luhn(digits)
-            if not hit:
+            digits = "".join(value for kind, value in window if kind == "d")
+            if not _luhn(digits):
                 continue
             flagged[start:start + length] = b"\x01" * length
     return flagged
