@@ -498,10 +498,28 @@ NR KARTY ****5555
             "4111-1111-1111-1111": "[REDACTED]",
             "****1234": "[REDACTED]",
             "1234****": "[REDACTED]",
+            "4111 1111 1111 1111.00": "[REDACTED]",
+            "4111 1111 1111 1111,00": "[REDACTED]",
+            "NR\nKARTY ,41\n,111 ,1111": "NR\nKARTY ,[REDACTED]\n,[REDACTED] ,[REDACTED]",
+            "KARTA\n1000 szt 3,49": "KARTA\n1000 szt 3,49",
+            "1,2345 2,3456": "1,2345 2,3456",
         }
         for raw, expected in cases.items():
             with self.subTest(raw=raw):
                 self.assertEqual(redact_pan(raw), expected)
+
+    def test_quantity_after_card_label_keeps_every_digit(self):
+        text = (
+            "BIEDRONKA\nNIP 7791011327\n2026-11-30 12:34\n"
+            "KARTA\nMLEKO 1000 szt 3,49 A\nSUMA PLN 3,49\n"
+        )
+        parsed = parse_receipt(text)
+        self.assertIn("1000", parsed["raw_ocr_text"])
+        self.assertEqual(parsed["lines"][0]["raw_name"], "MLEKO")
+        self.assertEqual(parsed["lines"][0]["quantity"], "1000")
+        self.assertEqual(parsed["lines"][0]["raw_unit"], "szt")
+        self.assertEqual(parsed["lines"][0]["gross_line_total"], "3.49")
+        self.assertEqual(parsed["math_delta"], "0")
 
     def test_pan_scan_is_bounded_before_a_long_mask_run(self):
         import time

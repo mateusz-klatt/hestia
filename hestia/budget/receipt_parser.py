@@ -37,18 +37,33 @@ _DATE_ISO = re.compile(r"(?<![0-9])([0-9]{4})-([0-9]{2})-([0-9]{2})(?![0-9])", r
 _DATE_PL = re.compile(r"(?<![0-9])([0-9]{2})[-.]([0-9]{2})[-.]([0-9]{4})(?![0-9])", re.ASCII)
 _TIME = re.compile(r"(?<![0-9])((?:[01][0-9]|2[0-3]):[0-5][0-9])(?![0-9])", re.ASCII)
 _NIP = re.compile(r"\bNIP\s*:?\s*([0-9][0-9 -]{8,16}[0-9])\b", re.IGNORECASE | re.ASCII)
-# Inside a card run the only separators are spaces (including the Unicode spaces
-# Live Text inserts) and hyphens. A dot or comma ends the run. A short money
-# token is never part of a card run, so a price is not split in half.
+# A candidate is digits and mask symbols on one line. Spaces, hyphens, dots and
+# commas stay inside it. A letter breaks it, as does a gap of two or more
+# characters that are not symbols or those separators. Detection does not skip
+# prices: a ``.00`` glued to a PAN stays in the digit stream. A window is left
+# alone only when every digit in it already belongs to a short price.
 _PAN_NEWLINES = frozenset("\n\r\u2028\u2029")
 _PAN_DASHES = frozenset("-‐‑‒–—―")
 _PAN_MASKS = frozenset("*Xx•●#")
+_QTY_UNITS = ("szt", "dag", "kg", "ml", "op", "g", "l")
 _CARD_LABEL = re.compile(
     r"(?i)(?:\bNR\s+KARTY\b|\bNUMER\s+KARTY\b|\bAID\b|\bPAN\b|\bCARD(?:\s+(?:NO|NUMBER))?\b|\bKARTA\b)"
 )
 _ITEM = re.compile(
     rf"^(?P<name>.+?)\s+(?:(?P<quantity>{_NUMBER})\s*(?P<unit>kg|g|dag|l|ml|szt|op)?"
     rf"\s*[x×*]\s*(?P<unit_price>{_NUMBER})\s*(?:=\s*)?)?"
+    rf"(?P<gross>{_NUMBER})\s*(?:PLN\s*)?(?P<ptu>[A-G])?$",
+    re.IGNORECASE | re.ASCII,
+)
+# ``1000 szt 3,49`` has no multiplication sign. The quantity is still multi-digit.
+_NAMED_UNIT = re.compile(
+    rf"^(?P<name>.+?)\s+(?P<quantity>{_NUMBER})\s*(?P<unit>kg|g|dag|l|ml|szt|op)"
+    rf"(?:\s*[x×*]\s*(?P<unit_price>{_NUMBER})\s*(?:=\s*)?)?"
+    rf"\s+(?P<gross>{_NUMBER})\s*(?:PLN\s*)?(?P<ptu>[A-G])?$",
+    re.IGNORECASE | re.ASCII,
+)
+_BARE_UNIT = re.compile(
+    rf"^(?P<name>)(?P<quantity>{_NUMBER})\s*(?P<unit>kg|g|dag|l|ml|szt|op)\s+(?P<unit_price>)"
     rf"(?P<gross>{_NUMBER})\s*(?:PLN\s*)?(?P<ptu>[A-G])?$",
     re.IGNORECASE | re.ASCII,
 )
@@ -95,10 +110,10 @@ def fold_text(value):
 
 
 def _pan_separator(char):
-    """Space or hyphen. A dot, a comma and a line break end the run."""
-    if char in _PAN_NEWLINES or char in ".,":
+    """Space, hyphen, dot or comma. Letters and other gaps are not separators."""
+    if char in _PAN_NEWLINES:
         return False
-    return char in _PAN_DASHES or char.isspace()
+    return char in ".," or char in _PAN_DASHES or char.isspace()
 
 
 def _pan_digit(char):
@@ -112,25 +127,31 @@ def _pan_digit(char):
     return None
 
 
-def _mask_length(text, index):
-    length = len(text)
-    end = index
-    while end < length and text[end] in _PAN_MASKS:
-        end += 1
-    return end - index
+def _is_letter(char):
+    return unicodedata.category(char).startswith("L")
 
 
-def _digit_length(text, index):
-    length = len(text)
-    end = index
-    while end < length and _pan_digit(text[end]) is not None:
-        end += 1
-    return end - index
+def _luhn(digits):
+    """True when ``digits`` is 13–19 characters and passes the Luhn check."""
+    length = len(digits)
+    if length < 13 or length > 19:
+        return False
+    total = 0
+    double = False
+    for char in reversed(digits):
+        value = ord(char) - 48
+        if double:
+            value *= 2
+            if value > 9:
+                value -= 9
+        total += value
+        double = not double
+    return total % 10 == 0
 
 
-def _money_cover(text):
-    """Mark ``\\d{1,6}[,.]\\d{2}`` so neither side can join a card run."""
-    cover = bytearray(len(text))
+def _money_ranges(text):
+    """ASCII ``\\d{1,6}[,.]\\d{2}`` spans. Neighbouring digits stay visible."""
+    found = []
     length = len(text)
     index = 0
     while index < length:
@@ -149,73 +170,213 @@ def _money_cover(text):
                 frac_digits += 1
                 fraction += 1
             if frac_digits == 2 and (fraction == length or not ("0" <= text[fraction] <= "9")):
-                cover[index:fraction] = b"\x01" * (fraction - index)
+                found.append((index, fraction))
                 index = fraction
                 continue
         index = cursor if cursor > index else index + 1
-    return cover
+    return found
 
 
-def _symbol_runs(text):
-    """Maximal digit, mask and separator runs. One forward pass.
+def _line_candidates(line):
+    """Digit and mask symbols grouped into candidates. One forward pass.
 
-    A solitary mask stays an operator (``2 x 3,50``). Two or more mask
-    characters form a mask sequence. Punctuation before a run does not hide it.
-    The whole run is a secret when it holds 13 or more digit and mask symbols
-    and at least one digit, or when a mask sequence sits next to two or more
-    digits (``****1234``). Four or more digits, or any mask sequence, is
-    card-shaped and can be removed after a card label.
+    Each symbol is ``(index, kind, value)`` with kind ``d`` or ``m``. A dot,
+    a comma, a space or a hyphen does not break the candidate. A letter does,
+    and so does a run of two or more other non-symbol characters.
     """
-    money = _money_cover(text)
-    found = []
-    length = len(text)
+    symbols = []
+    candidates = []
+    length = len(line)
     index = 0
+    start = None
     while index < length:
-        if money[index]:
+        digit = _pan_digit(line[index])
+        if digit is not None or line[index] in _PAN_MASKS:
+            if start is None:
+                start = len(symbols)
+            symbols.append((index, "d" if digit is not None else "m", digit if digit is not None else line[index]))
             index += 1
             continue
-        masks = _mask_length(text, index)
-        if masks == 1 or (masks == 0 and _digit_length(text, index) == 0):
+        if start is None:
+            index += 1
+            continue
+        if _is_letter(line[index]):
+            candidates.append((start, len(symbols)))
+            start = None
+            index += 1
+            continue
+        gap = index
+        while (gap < length and _pan_digit(line[gap]) is None and line[gap] not in _PAN_MASKS
+                and not _is_letter(line[gap])):
+            gap += 1
+        other = sum(1 for cursor in range(index, gap) if not _pan_separator(line[cursor]))
+        if other >= 2:
+            candidates.append((start, len(symbols)))
+            start = None
+        index = gap
+    if start is not None:
+        candidates.append((start, len(symbols)))
+    return symbols, candidates
+
+
+def _mask_next_to_digits(symbols):
+    """A mask sequence of two or more sits beside two or more digits."""
+    runs = []
+    for _, kind, _ in symbols:
+        if runs and runs[-1][0] == kind:
+            runs[-1][1] += 1
+        else:
+            runs.append([kind, 1])
+    for index, (kind, length) in enumerate(runs):
+        if kind != "m" or length < 2:
+            continue
+        if index and runs[index - 1][0] == "d" and runs[index - 1][1] >= 2:
+            return True
+        if index + 1 < len(runs) and runs[index + 1][0] == "d" and runs[index + 1][1] >= 2:
+            return True
+    return False
+
+
+def _flag_candidate(symbols, cover):
+    """Mark PAN symbols. Lengths 13–19 only, so the scan stays linear.
+
+    A mask sequence beside digits flags the whole candidate. Otherwise a
+    window is a PAN when its digits pass Luhn. A window whose digits all sit
+    inside short prices is not a PAN, which keeps ``12,99`` runs intact. A
+    price suffix on a real PAN does not cover the groups in front of it.
+    """
+    count = len(symbols)
+    if not count:
+        return bytearray()
+    if _mask_next_to_digits(symbols):
+        return bytearray(b"\x01" * count)
+    has_digit = False
+    priced = True
+    for index, kind, _ in symbols:
+        if kind != "d":
+            continue
+        has_digit = True
+        if not cover[index]:
+            priced = False
+    if not has_digit or priced or count < 13:
+        return bytearray(count)
+    flagged = bytearray(count)
+    for length in range(13, min(19, count) + 1):
+        last = count - length
+        for start in range(last + 1):
+            window = symbols[start:start + length]
+            if all(cover[index] for index, kind, _ in window if kind == "d") and any(
+                    kind == "d" for _, kind, _ in window):
+                continue
+            digits = "".join(value for _, kind, value in window if kind == "d")
+            if _luhn(digits):
+                # The whole candidate is the secret. A shorter Luhn hit must not
+                # leave the tail of the same card run in the clear.
+                return bytearray(b"\x01" * count)
+    return flagged
+
+
+def _candidate_spans(symbols, flagged, money_ranges):
+    spans = []
+    index = 0
+    count = len(symbols)
+    while index < count:
+        if not flagged[index]:
+            index += 1
+            continue
+        end = index + 1
+        while end < count and flagged[end]:
+            end += 1
+        start_at = symbols[index][0]
+        end_at = symbols[end - 1][0] + 1
+        for money_start, money_end in money_ranges:
+            if money_start < end_at and money_end > start_at:
+                start_at = min(start_at, money_start)
+                end_at = max(end_at, money_end)
+        spans.append((start_at, end_at))
+        index = end
+    return spans
+
+
+def _unit_at(line, index):
+    """Quantity marker ``szt``, ``kg``, ``x`` and the other receipt units."""
+    if index >= len(line):
+        return False
+    folded = line.casefold()
+    for word in _QTY_UNITS:
+        end = index + len(word)
+        if end <= len(line) and folded.startswith(word, index) and (
+                end == len(line) or not (line[end].isalnum() or line[end] == "_")):
+            return True
+    if line[index] in "xX×*" and (index + 1 == len(line) or line[index + 1] not in _PAN_MASKS):
+        end = index + 1
+        return end == len(line) or not (line[end].isalnum() or line[end] == "_")
+    return False
+
+
+def _quantity_spans(line):
+    """Digit spans of a quantity that is followed by a unit or by ``x``."""
+    spans = []
+    length = len(line)
+    index = 0
+    while index < length:
+        if _pan_digit(line[index]) is None:
             index += 1
             continue
         start = index
-        symbols = 0
-        digits = 0
-        mask_symbols = 0
-        previous = None
-        previous_len = 0
-        adjacent = False
-        while index < length and not money[index]:
-            masks = _mask_length(text, index)
-            if masks >= 2:
-                symbols += masks
-                mask_symbols += masks
-                if previous == "d" and previous_len >= 2:
-                    adjacent = True
-                previous, previous_len = "m", masks
-                index += masks
-                continue
-            if masks == 1:
-                break
-            count = _digit_length(text, index)
-            if count:
-                symbols += count
-                digits += count
-                if previous == "m" and previous_len >= 2 and count >= 2:
-                    adjacent = True
-                previous, previous_len = "d", count
-                index += count
-                continue
-            if text[index] and _pan_separator(text[index]):
-                gap = index + 1
-                while gap < length and not money[gap] and _pan_separator(text[gap]):
-                    gap += 1
-                if gap < length and not money[gap] and (_mask_length(text, gap) >= 2 or _digit_length(text, gap)):
-                    index = gap
-                    continue
-            break
-        found.append((start, index, adjacent or (digits > 0 and symbols >= 13), digits >= 4 or mask_symbols >= 2))
-    return found
+        while index < length and _pan_digit(line[index]) is not None:
+            index += 1
+        number_end = index
+        if index < length and line[index] in ",.":
+            fraction = index + 1
+            if fraction < length and _pan_digit(line[fraction]) is not None:
+                while fraction < length and _pan_digit(line[fraction]) is not None:
+                    fraction += 1
+                number_end = fraction
+                index = fraction
+        cursor = number_end
+        while cursor < length and line[cursor].isspace():
+            cursor += 1
+        if _unit_at(line, cursor):
+            spans.append((start, number_end))
+    return spans
+
+
+def _label_digit_spans(line):
+    """Digit runs of 2 or more on a card-label line, prices and quantities kept."""
+    protected = bytearray(len(line))
+    for start, end in _money_ranges(line):
+        protected[start:end] = b"\x01" * (end - start)
+    for start, end in _quantity_spans(line):
+        protected[start:end] = b"\x01" * (end - start)
+    spans = []
+    index = 0
+    length = len(line)
+    while index < length:
+        if _pan_digit(line[index]) is None:
+            index += 1
+            continue
+        start = index
+        while index < length and _pan_digit(line[index]) is not None:
+            index += 1
+        if index - start >= 2 and not any(protected[cursor] for cursor in range(start, index)):
+            spans.append((start, index))
+    return spans
+
+
+def _line_secret_spans(line):
+    symbols, candidates = _line_candidates(line)
+    if not symbols:
+        return []
+    ranges = _money_ranges(line)
+    cover = bytearray(len(line))
+    for start, end in ranges:
+        cover[start:end] = b"\x01" * (end - start)
+    spans = []
+    for start, end in candidates:
+        window = symbols[start:end]
+        spans.extend(_candidate_spans(window, _flag_candidate(window, cover), ranges))
+    return spans
 
 
 def _word_at(line, index, word):
@@ -247,9 +408,21 @@ def _split_card_label(line, nxt):
     return (_ends_word(line, "nr") or _ends_word(line, "numer")) and _starts_word(nxt, "karty")
 
 
+def _merge_spans(spans):
+    if not spans:
+        return []
+    ordered = sorted(spans)
+    merged = [ordered[0]]
+    for start, end in ordered[1:]:
+        if start <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+    return merged
+
+
 def _pan_spans(text):
-    """Whole-run spans plus card-label runs. No window search."""
-    runs = _symbol_runs(text)
+    """PAN windows per line, then 2-digit fragments on a label and the next two lines."""
     lines = text.split("\n")
     label = [False] * len(lines)
     for number, line in enumerate(lines):
@@ -266,19 +439,16 @@ def _pan_spans(text):
             follow[number + 1] = True
         if number + 2 < len(lines):
             follow[number + 2] = True
-    bases = []
-    offset = 0
-    for line in lines:
-        bases.append(offset)
-        offset += len(line) + 1
     spans = []
-    line_no = 0
-    for start, end, secret, cardlike in runs:
-        while line_no + 1 < len(bases) and start >= bases[line_no + 1]:
-            line_no += 1
-        if secret or (cardlike and (label[line_no] or follow[line_no])):
-            spans.append((start, end))
-    return spans
+    offset = 0
+    for number, line in enumerate(lines):
+        for start, end in _line_secret_spans(line):
+            spans.append((offset + start, offset + end))
+        if label[number] or follow[number]:
+            for start, end in _label_digit_spans(line):
+                spans.append((offset + start, offset + end))
+        offset += len(line) + 1
+    return _merge_spans(spans)
 
 
 def _redact_spans(text, spans):
@@ -435,14 +605,22 @@ def _parse_lines(lines):
             line["net_line_total"] = _bounded_sum((line["gross_line_total"], negate_money(line["discount_amount"])))
             pending = None
             continue
-        match = _ITEM.fullmatch(value)
-        name = None
-        if match is not None:
-            name = match["name"]
+        match = _NAMED_UNIT.fullmatch(value)
+        bare_match = None if match is not None else _BARE_UNIT.fullmatch(value)
+        if bare_match is not None:
+            match = bare_match
+            name = match["unit"]
+        elif match is not None:
+            name = (match["name"] or "").strip() or pending or match["unit"]
         else:
-            calculation = _CALCULATION.fullmatch(value)
-            if calculation is not None and pending:
-                match, name = calculation, pending
+            match = _ITEM.fullmatch(value)
+            name = None
+            if match is not None:
+                name = match["name"]
+            else:
+                calculation = _CALCULATION.fullmatch(value)
+                if calculation is not None and pending:
+                    match, name = calculation, pending
         if match is None or name is None:
             key = fold_text(value)
             if (re.search(r"[A-Za-zĄ-ż]", value) and len(value) <= MAX_LINE_NAME_LEN
