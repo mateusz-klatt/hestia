@@ -86,7 +86,7 @@ from pydantic.json_schema import models_json_schema
 # 0.33.0: a category-baseline conflict skips only that category and lists it on
 #         summary.baseline_conflicts (optional, zero migration). Not strictly additive:
 #         budget_forecast_config_conflict (0.31–0.32) is withdrawn; a conflict is HTTP 200.
-# 0.34.0: additive category parent_id (migration 0022). List rows include parent_id. Create and update
+# 0.34.0: additive category parent_id (migration 0020). List rows include parent_id. Create and update
 #         accept an optional parent_id: omit it on update to leave the parent, send null to detach.
 CONTRACT_VERSION = "0.34.0"
 OPENAPI_PATH = Path(__file__).resolve().parent.parent / "docs" / "api" / "openapi.json"

@@ -1,9 +1,10 @@
 """Nullable parent on owner budget categories so spending can roll up a tree.
 
-Revision ID: 0022
+Revision ID: 0020
 Revises: 0019
 
-Open PRs #238 (0020) and #239 (0021) re-parent onto this revision at merge.
+#248 merges before #238, so this revision is 0020. Open PRs #238 and #239
+re-parent onto it when they land.
 Depth, cycles and "archive only after children move" are enforced in the store;
 the database keeps the self-link, forbids a category parenting itself, and
 restricts deletes of a category that still has children.
@@ -11,7 +12,7 @@ restricts deletes of a category that still has children.
 from alembic import op
 import sqlalchemy as sa
 
-revision = "0022"
+revision = "0020"
 down_revision = "0019"
 branch_labels = None
 depends_on = None

@@ -26,7 +26,7 @@ class CategoryParentMigrationTests(unittest.TestCase):
         self.addCleanup(db.reset_engine_cache)
         self.path = Path(self.directory.name) / "categories.db"
 
-    def test_migration_0022_adds_parent_and_downgrade_keeps_categories(self):
+    def test_migration_0020_adds_parent_and_downgrade_keeps_categories(self):
         engine = db.make_engine(self.path)
         try:
             with engine.begin() as conn:
@@ -38,7 +38,7 @@ class CategoryParentMigrationTests(unittest.TestCase):
                     "VALUES ('transport', 'alice', 'Transport', 'transport', 0, 1, 1, 1),"
                     "('fuel', 'alice', 'Fuel', 'fuel', 0, 1, 1, 1)")
             with engine.begin() as conn:
-                command.upgrade(db._alembic_config(conn), "0022")
+                command.upgrade(db._alembic_config(conn), "0020")
             inspector = inspect(engine)
             columns = {column["name"]: column for column in inspector.get_columns("budget_categories")}
             self.assertIn("parent_id", columns)
