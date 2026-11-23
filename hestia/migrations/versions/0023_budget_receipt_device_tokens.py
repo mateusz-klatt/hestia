@@ -3,7 +3,6 @@
 Revision ID: 0023
 Revises: 0022
 
-Temporary number: another branch also uses 0023 and both are renumbered at merge.
 Downgrade drops these tables only. Receipt rows from 0022 stay.
 """
 from alembic import op

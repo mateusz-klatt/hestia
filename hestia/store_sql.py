@@ -309,6 +309,7 @@ def set_user_db(username: str, password_hash: str, role: str = DEFAULT_NEW_ROLE,
     try:
         with Session(engine) as session, session.begin():
             _upsert(session, User, "username", username, {"password_hash": password_hash, "role": role})
+            _revoke_receipt_devices(session, username)
     finally:
         engine.dispose()
 
@@ -350,11 +351,9 @@ def _other_enabled_admins(session, exclude_username: str) -> int:
 
 
 def _revoke_receipt_devices(session, username: str) -> None:
-    """Drop live receipts device tokens in the same write as a password, role, or disable change.
-
-    Imported lazily so this module does not import the device-token store at load time.
-    """
+    """Revoke receipts credentials in the same transaction as an account change."""
     from .budget.device_token import revoke_owner_tokens
+
     revoke_owner_tokens(session, username)
 
 
@@ -394,9 +393,7 @@ def set_user_disabled(username: str, disabled: bool, *, path=None) -> str:
             if disabled and not row.disabled:
                 if row.role == "admin" and _other_enabled_admins(session, username) == 0:
                     return "last_admin"
-                row.disabled = True
                 _revoke_receipt_devices(session, username)
-                return "ok"
             row.disabled = disabled
         return "ok"
     finally:

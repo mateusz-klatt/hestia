@@ -10,6 +10,7 @@ import json
 import os
 import shutil
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -867,6 +868,39 @@ class RolesTests(unittest.TestCase):
                 row = s.get(db.User, "mama")
             self.assertEqual(row.password_hash, "new-hash")
             self.assertEqual(row.role, "admin")                            # role preserved
+
+    def test_cli_reset_and_disable_invalidate_only_affected_receipt_credentials(self):
+        engine, sessions = db.init_db(self.db)
+        owners = ("cli_reset", "disabled", "unchanged")
+        store_sql.cutover_users(engine, dict.fromkeys(owners, "old-hash"))
+        now = time.time()
+        with sessions.begin() as session:
+            for index, owner in enumerate(owners):
+                session.add(db.BudgetReceiptDeviceToken(
+                    id=owner, owner=owner, device_name="Vesta", token_hmac=f"{index:064x}",
+                    created_at=now, sliding_written_at=now, expires_at=now + 3600,
+                    hard_expires_at=now + 7200,
+                ))
+                session.add(db.BudgetReceiptPairCode(
+                    id=owner, owner=owner, code_hmac=f"{index:064x}",
+                    created_at=now, expires_at=now + 300,
+                ))
+
+        store_sql.set_user_db("cli_reset", "new-hash", "admin", path=self.db)
+        self.assertEqual(store_sql.set_user_disabled("disabled", True, path=self.db), "ok")
+        self.assertEqual(store_sql.set_user_disabled("disabled", False, path=self.db), "ok")
+
+        with sessions() as session:
+            revoked = dict(session.execute(select(
+                db.BudgetReceiptDeviceToken.owner, db.BudgetReceiptDeviceToken.revoked_at,
+            )).all())
+            consumed = dict(session.execute(select(
+                db.BudgetReceiptPairCode.owner, db.BudgetReceiptPairCode.consumed_at,
+            )).all())
+        self.assertIsNotNone(revoked["cli_reset"])
+        self.assertIsNotNone(revoked["disabled"])
+        self.assertIsNone(revoked["unchanged"])
+        self.assertEqual(consumed, revoked)
 
 
 if __name__ == "__main__":  # pragma: no cover

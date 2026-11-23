@@ -36,6 +36,7 @@ class DeviceTokenMigration0023Tests(unittest.TestCase):
         with engine.connect() as conn:
             integrity = conn.exec_driver_sql("PRAGMA integrity_check").all()
             self.assertEqual([tuple(row) for row in integrity], [("ok",)])
+            self.assertEqual(conn.exec_driver_sql("PRAGMA foreign_key_check").all(), [])
             leftovers = conn.exec_driver_sql(
                 "SELECT name FROM sqlite_master WHERE type = 'table' "
                 "AND name LIKE '!_alembic!_tmp!_%' ESCAPE '!'"
@@ -114,3 +115,5 @@ class DeviceTokenMigration0023Tests(unittest.TestCase):
         self.assertEqual(self._revision(engine), "0023")
         with engine.connect() as conn:
             self.assertEqual(compare_metadata(MigrationContext.configure(conn), db.Base.metadata), [])
+            self.assertEqual(conn.exec_driver_sql("SELECT id FROM budget_receipts").scalar(),
+                             "11111111-1111-4111-8111-111111111111")
