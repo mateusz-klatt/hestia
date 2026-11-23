@@ -1,5 +1,5 @@
 import type { Rf433Device } from "./api/types";
-import { t } from "./i18n";
+import { currentLocale, t } from "./i18n";
 
 export type FetchRf433 = () => Promise<Rf433Device[] | null>;
 
@@ -29,7 +29,7 @@ function deviceRow(device: Rf433Device): HTMLLIElement {
 
   const ts = document.createElement("time");
   ts.className = "rf433-ts";
-  ts.textContent = new Date(device.last_seen * 1000).toLocaleString();
+  ts.textContent = new Date(device.last_seen * 1000).toLocaleString(currentLocale());
 
   row.append(
     span("rf433-key", device.key),

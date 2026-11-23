@@ -2,7 +2,7 @@ import type { AuditEvent, DeviceInfo } from "./api/types";
 import { currentLocale, t } from "./i18n";
 import type { MessageKey } from "./i18n/locales/en";
 import { coverPercent } from "./render/cover";
-import { fmtTemp } from "./render/format";
+import { fmtTemp, typeLabel } from "./render/format";
 
 export type FetchAudit = () => Promise<AuditEvent[] | null>;
 
@@ -27,7 +27,7 @@ export function formatAuditTarget(
   const info = devices[target];
   if (info === undefined) return target;
   const name = info.name?.trim();
-  const label = name !== undefined && name !== "" ? name : `${info.type} #${target}`;
+  const label = name !== undefined && name !== "" ? name : `${typeLabel(info.type)} #${target}`;
   const room = info.room?.trim();
   return room !== undefined && room !== "" ? `${label} · ${room}` : label;
 }
