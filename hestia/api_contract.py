@@ -3601,7 +3601,11 @@ def _household_grant_header():
 
 def _household_responses(model):
     responses = _analytics_responses(model)
-    responses["200"]["description"] = "Read-only household view. No bank request and no database write."
+    responses["200"]["description"] = (
+        "Household view. No bank request. The body is sent only after a fresh grant check commits in one "
+        "immediate transaction. A successful data read may write one sanitised analytics-audit row naming "
+        "the member, owner and view, at most once per 60 seconds. Discovery writes no audit row. A denial "
+        "writes nothing.")
     responses["403"]["description"] = ("Stored role must be exactly an active viewer with a grant whose owner is an "
                                        "active admin. Data reads also require exactly one matching X-Budget-Grant. "
                                        "The viewer route floor admits higher roles; those roles are rejected here. "
@@ -3668,9 +3672,14 @@ def _household_paths():
     for name, operation, summary, model, parameters in reads:
         entry = {"operationId": operation, "summary": summary,
                  "description": "Requires an authenticated active viewer, both budget flags, SQLite users and a "
-                                "grant whose owner is an active admin. Reads the same owner projection through a "
-                                "separate allowlist. Makes no bank request and no database write. "
-                                "GET /monthly-budget-settings reads the P1 bootstrap config only.",
+                                "grant whose owner is an active admin. The grant header is 64 lowercase hex "
+                                "characters. Reads the same owner projection through a separate allowlist. No bank "
+                                "request. Data reads may write one sanitised internal analytics-audit row for the "
+                                "member, owner and view name, at most once per 60 seconds, in the same immediate "
+                                "transaction as the fresh grant check. Household audit rows older than 180 days are "
+                                "pruned on that write. GET /access returns only the member's grant id and writes no "
+                                "audit row. Failures write nothing. The row is not visible on /api/audit or the SSE "
+                                "stream. GET /monthly-budget-settings reads the P1 bootstrap config only.",
                  "parameters": [] if name == "access" else [_household_grant_header(), *parameters],
                  "responses": _household_responses(model)}
         paths[prefix + name] = {"get": entry}

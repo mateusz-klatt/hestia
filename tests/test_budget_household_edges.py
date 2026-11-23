@@ -235,11 +235,15 @@ class HouseholdEdgeTests(unittest.TestCase):
         self.assertEqual(caught.exception.status, 413)
         with self.assertRaises(AnalyticsError):
             reader._page([], reader._cursor_encode(context, "digest", 5, now), context, "digest", 50)
-        for cursor in (1, "", "!!!!", self._sealed(reader, ["nope"]), self._sealed(reader, {
-            "context": context, "digest": "digest", "index": -1, "issued": now, "expires": now + 10,
-        }), self._sealed(reader, {
-            "context": context, "digest": "digest", "index": 0, "issued": "now", "expires": now + 10,
-        })):
+        for cursor in (1, "", "!!!!", self._sealed(reader, ["nope"], context), self._sealed(reader, {
+            "context": context, "digest": "digest", "index": 0, "issued": now, "expires": now + 10,
+        }, context), self._sealed(reader, {
+            "digest": "digest", "index": -1, "issued": now, "expires": now + 10,
+        }, context), self._sealed(reader, {
+            "digest": "digest", "index": "0", "issued": now, "expires": now + 10,
+        }, context), self._sealed(reader, {
+            "digest": "digest", "index": 0, "issued": "now", "expires": now + 10,
+        }, context)):
             with self.assertRaises(AnalyticsError):
                 reader._cursor_index(cursor, context, "digest", now)
 
@@ -404,10 +408,16 @@ class HouseholdEdgeTests(unittest.TestCase):
                 "summary": {"start_budget": "0.00", "spent": "10.00"},
                 "expected_income": None,
                 "pass_through": None,
-                "category_spend": [{
-                    "category_id": "cat-salary", "archived": False, "expenses": "10.00", "refunds": "0.00",
-                    "net_spending": "10.00", "limit": None, "one_off": True, "label": "Remont lazienki",
-                }],
+                "category_spend": [
+                    {"category_id": "cat-salary", "archived": False, "expenses": "4.00", "refunds": "1.00",
+                     "net_spending": "3.00", "limit": "100.00", "one_off": False},
+                    {"category_id": "cat-salary", "archived": True, "expenses": "6.00", "refunds": "0.50",
+                     "net_spending": "5.50", "limit": None, "one_off": True, "name": "Remont lazienki"},
+                    {"category_id": "cat-other", "archived": False, "expenses": "1.00", "refunds": "0.00",
+                     "net_spending": "1.00", "limit": None, "one_off": True, "name": "Prywatna etykieta"},
+                    {"category_id": "cat-other", "archived": True, "expenses": "2.00", "refunds": "1.00",
+                     "net_spending": "1.00", "limit": "9.00", "one_off": False},
+                ],
             })
             if include_series:
                 body["_series_daily"] = [{"date": "2026-11-01", "cumulative_spent": "10.00"}]
@@ -418,10 +428,29 @@ class HouseholdEdgeTests(unittest.TestCase):
         monthly = reader._monthly(None, None, "alice", {"period": PERIOD, "currency": "PLN"}, book, GRANT)
         encoded = json.dumps(monthly)
         self.assertNotIn("Remont lazienki", encoded)
+        self.assertNotIn("Prywatna etykieta", encoded)
+        self.assertNotIn("Groceries", encoded)
         self.assertNotIn("acc-1/secret", encoded)
         self.assertNotIn("one_off", encoded)
         self.assertEqual(monthly["budget"]["coverage"]["pending_row_keys"], [])
-        self.assertEqual(monthly["series"]["category_labels"][0]["name"], "salary")
+        spend = {row["name"]: row for row in monthly["budget"]["category_spend"]}
+        self.assertEqual(set(spend), {"salary", "1"})
+        self.assertEqual(spend["salary"]["expenses"], "10")
+        self.assertEqual(spend["salary"]["refunds"], "1.5")
+        self.assertEqual(spend["salary"]["net_spending"], "8.5")
+        self.assertEqual(spend["salary"]["limit"], "100.00")
+        self.assertIs(spend["salary"]["archived"], False)
+        self.assertEqual(spend["1"]["expenses"], "3")
+        self.assertEqual(spend["1"]["refunds"], "1")
+        self.assertEqual(spend["1"]["net_spending"], "2")
+        self.assertEqual(spend["1"]["limit"], "9.00")
+        self.assertIs(spend["1"]["archived"], True)
+        selected = next(item for item in monthly["series"]["months"] if item["period"] == PERIOD)
+        self.assertEqual(len(selected["categories"]), 2)
+        self.assertEqual(sorted(row["net_spending"] for row in selected["categories"]), ["2", "8.5"])
+        self.assertEqual([row["name"] for row in monthly["series"]["category_labels"]], ["1", "salary"])
+        self.assertIs(monthly["series"]["category_labels"][0]["archived"], True)
+        self.assertIs(monthly["series"]["category_labels"][1]["archived"], False)
         reader._evaluate = lambda *args, **kwargs: {"current_month": PERIOD, "period": PERIOD, "category_spend": []}
         with self.assertRaises(AnalyticsError):
             reader._monthly(None, None, "alice", {"period": PERIOD, "currency": "PLN"}, book, GRANT)
@@ -438,8 +467,28 @@ class HouseholdEdgeTests(unittest.TestCase):
             mock.patch.object(household_views.inbox_mod, "build_inbox_items", return_value=items).start()
             self.addCleanup(mock.patch.stopall)
 
-    def _sealed(self, reader, payload):
+    def test_cursor_length_does_not_depend_on_the_owner_name(self):
+        reader = HouseholdReader(object(), cursor_secret=SECRET)
+        now = 1_700_000_000
+        filters = {"period": PERIOD, "currency": None, "kind": None,
+                   "account_id": None, "category_id": None, "limit": 1}
+        short = household_views._cursor_context("viewer", "a", GRANT, "transactions", filters)
+        long = household_views._cursor_context("viewer", "ą" * 80, GRANT, "transactions", filters)
+        nonce = b"0123456789ab"
+        with mock.patch.object(household_views.os, "urandom", return_value=nonce):
+            first = reader._cursor_encode(short, "ab" * 32, 3, now)
+            second = reader._cursor_encode(long, "ab" * 32, 3, now)
+        self.assertEqual(len(first), len(second))
+        self.assertNotEqual(first, second)
+        self.assertEqual(reader._cursor_index(first, short, "ab" * 32, now), 3)
+        with self.assertRaises(AnalyticsError):
+            reader._cursor_index(first, long, "ab" * 32, now)
+        with self.assertRaises(AnalyticsError) as caught:
+            reader._cursor_index(first, short, "cd" * 32, now)
+        self.assertEqual(caught.exception.status, 409)
+
+    def _sealed(self, reader, payload, context):
         nonce = b"0123456789ab"
         data = json.dumps(payload).encode()
-        token = nonce + reader._cipher.encrypt(nonce, data, household_views._CURSOR_DOMAIN)
+        token = nonce + reader._cipher.encrypt(nonce, data, household_views._cursor_aad(context))
         return base64.urlsafe_b64encode(token).rstrip(b"=").decode("ascii")

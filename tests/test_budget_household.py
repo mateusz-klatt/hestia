@@ -1,4 +1,4 @@
-"""Household grants, the viewer read gate, and the read-only household API."""
+"""Household grants, the viewer read gate, and the household API."""
 from __future__ import annotations
 
 import asyncio
@@ -16,6 +16,7 @@ from unittest import mock
 from alembic import command
 from multidict import MultiDict
 from sqlalchemy import event, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from hestia import auth, db, store_sql, web
@@ -218,6 +219,11 @@ class HouseholdCommandTests(unittest.TestCase):
             self.assertEqual(conn.exec_driver_sql("SELECT version_num FROM alembic_version").scalar(), "0022")
         with sessions.begin() as session:
             session.add(db.BudgetHouseholdMember(member_username="viewer", owner="alice", grant_id="cd" * 32))
+        with self.assertRaises(IntegrityError):
+            with sessions.begin() as session:
+                session.get(db.BudgetHouseholdMember, "viewer").grant_id = "CD" * 32
+        with sessions.begin() as session:
+            self.assertEqual(session.get(db.BudgetHouseholdMember, "viewer").grant_id, "cd" * 32)
         self._assert_migration_clean()
 
         db.downgrade_db(self.path, "0021")
@@ -566,6 +572,7 @@ class HouseholdAPITests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(self.grant_id, text)
         self.assertNotIn(SALARY_NAME, text)
         self.assertEqual(json.loads(text)["error"], "budget_forbidden")
+        self.assertEqual(self._audit_split()[0], [])
         old = await self.fetch("transactions")
         self.assertEqual(old.status, 403)
         renewed = await self.fetch("transactions", grant=self.renewed)
@@ -637,7 +644,7 @@ class HouseholdAPITests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("series", body)
 
     async def test_recheck_exception_and_oversized_body_stay_fixed(self):
-        with mock.patch.object(household_api, "_recheck", side_effect=RuntimeError("boom")):
+        with mock.patch.object(household_api, "_commit", side_effect=RuntimeError("boom")):
             failed = await self.fetch("access")
         self.assertEqual(failed.status, 500)
         self.assertEqual((await failed.json())["error"], "budget_internal_error")
@@ -666,10 +673,11 @@ class HouseholdAPITests(unittest.IsolatedAsyncioTestCase):
             return [(row.actor, row.action, row.target, row.detail, row.result) for row in rows]
 
     async def test_successful_viewer_read_writes_one_sanitised_audit_row(self):
-        """One analytics-audit row per successful spouse read, and none when the read is refused.
+        """One sanitised analytics-audit row for a successful spouse read, and none when it is refused.
 
-        The row names the member, the grant owner and the view. It does not carry amounts,
-        aliases, the grant id or query values, and it does not appear on /api/audit or SSE.
+        Repeats inside 60 seconds do not add another row, and discovery writes none. The row names
+        the member, the grant owner and the view. It does not carry amounts, aliases, the grant id
+        or query values, and it does not appear on /api/audit or SSE.
         """
         household_rows, other = self._audit_split()
         self.assertEqual(household_rows, [])
@@ -683,9 +691,14 @@ class HouseholdAPITests(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(subscription.close)
         reader = household_api._reader(SECRET)
         with self.assertRaises(AnalyticsError):
-            reader.record_read("viewer", "alice", "period=" + PERIOD)
+            reader.commit_authorized_read("viewer", "alice", self.grant_id, self.grant_id, "period=" + PERIOD)
         with self.assertRaises(AnalyticsError):
-            reader.record_read("viewer", "alice", PREFIX + "/transactions?period=" + PERIOD)
+            reader.commit_authorized_read(
+                "viewer", "alice", self.grant_id, self.grant_id, PREFIX + "/transactions?period=" + PERIOD)
+        with self.assertRaises(HouseholdAuthError):
+            reader.commit_authorized_read("viewer", "bob", self.grant_id, self.grant_id, "overview")
+        with self.assertRaises(HouseholdAuthError):
+            reader.commit_authorized_read("viewer", "alice", "ab" * 32, self.grant_id, "overview")
         self.assertEqual(self._audit_split()[0], [])
 
         stream = io.StringIO()
@@ -725,7 +738,7 @@ class HouseholdAPITests(unittest.IsolatedAsyncioTestCase):
             with mock.patch.object(household_api, "MAX_RESPONSE_BYTES", 0):
                 oversized = await self.fetch("mortgages")
             self.assertEqual(oversized.status, 413)
-            with mock.patch.object(household_views.HouseholdReader, "record_read",
+            with mock.patch.object(household_views.HouseholdReader, "commit_authorized_read",
                                     side_effect=RuntimeError(AMOUNT)):
                 broken = await self.fetch("quarantine")
             self.assertEqual(broken.status, 500)
@@ -745,8 +758,6 @@ class HouseholdAPITests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(other_after, other)
         self.assertEqual(rows, [
             ("alice", "viewer", "transactions", "null", "null"),
-            ("alice", "viewer", "transactions", "null", "null"),
-            ("alice", "viewer", "access", "null", "null"),
         ])
         recorded = json.dumps(rows)
         for secret in (AMOUNT, self.grant_id, alias, cursor, PERIOD, REMITTANCE, IBAN, SALARY_NAME,
@@ -768,3 +779,134 @@ class HouseholdAPITests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(self.grant_id, logged)
         self.assertNotIn(alias, logged)
         self.assertNotIn(cursor, logged)
+
+    async def test_revoke_after_the_commit_returns_the_body_and_keeps_the_row(self):
+        engine, _sessions = db.init_db()
+        statements = []
+
+        def capture(*args):
+            statements.append(args[2])
+
+        event.listen(engine, "before_cursor_execute", capture)
+
+        def revoke():
+            household.revoke_grant("viewer", "alice", self.grant_id, path=str(self.path))
+
+        try:
+            with mock.patch.object(household_api, "after_grant_commit", revoke):
+                response = await self.fetch("overview")
+        finally:
+            event.remove(engine, "before_cursor_execute", capture)
+        self.assertEqual(response.status, 200, await response.text())
+        body = await response.json()
+        self.assertEqual(body["grant_id"], self.grant_id)
+        self.assertEqual(body["period"], PERIOD)
+        spent = body["currencies"][0]["expenses"]
+        self.assertTrue(spent)
+        self.assertIn("BEGIN IMMEDIATE", statements)
+        rows, _other = self._audit_split()
+        self.assertEqual(rows, [("alice", "viewer", "overview", "null", "null")])
+        follow = await self.fetch("overview")
+        self.assertEqual(follow.status, 403)
+        follow_text = await follow.text()
+        self.assertNotIn(spent, follow_text)
+        self.assertNotIn(self.grant_id, follow_text)
+        self.assertEqual(self._audit_split()[0], rows)
+
+    async def test_audit_dedup_retention_and_access_do_not_write_a_row(self):
+        stamp = {"now": 1_700_000_000.0}
+        cutoff = stamp["now"] - 180 * 86400
+        with self.sessions.begin() as session:
+            session.add_all([
+                db.BudgetAnalyticsAudit(
+                    owner="alice", subject_type="household_read", subject_id="viewer", action="categories",
+                    before_json="null", after_json="null", changed_at=cutoff - 1),
+                db.BudgetAnalyticsAudit(
+                    owner="alice", subject_type="household_read", subject_id="viewer", action="rules",
+                    before_json="null", after_json="null", changed_at=cutoff),
+                db.BudgetAnalyticsAudit(
+                    owner="alice", subject_type="household_read", subject_id="viewer", action="mortgages",
+                    before_json="null", after_json="null", changed_at=stamp["now"] - 179 * 86400),
+                db.BudgetAnalyticsAudit(
+                    owner="alice", subject_type="category", subject_id="cat-kept", action="update",
+                    before_json="null", after_json="{}", changed_at=1),
+            ])
+
+        def frozen(self):
+            return stamp["now"]
+
+        with mock.patch.object(BudgetAnalyticsStore, "_now", frozen):
+            first = await self.fetch("transactions", params={"period": PERIOD, "limit": "1"})
+            self.assertEqual(first.status, 200, await first.text())
+            second = await self.fetch("transactions", params={"period": PERIOD, "limit": "1"})
+            self.assertEqual(second.status, 200, await second.text())
+            discovered = await self.fetch("access")
+            self.assertEqual(discovered.status, 200, await discovered.text())
+            self.assertEqual((await discovered.json())["grant_id"], self.grant_id)
+            self.assertEqual(
+                [row[2] for row in self._audit_split()[0]], ["rules", "mortgages", "transactions"])
+            stamp["now"] += 60
+            boundary = await self.fetch("transactions", params={"period": PERIOD, "limit": "1"})
+            self.assertEqual(boundary.status, 200, await boundary.text())
+            self.assertEqual(
+                [row[2] for row in self._audit_split()[0]], ["rules", "mortgages", "transactions"])
+            stamp["now"] += 1
+            later = await self.fetch("transactions", params={"period": PERIOD, "limit": "1"})
+            self.assertEqual(later.status, 200, await later.text())
+            overview = await self.fetch("overview")
+            self.assertEqual(overview.status, 200, await overview.text())
+            self.assertEqual(
+                [row[2] for row in self._audit_split()[0]],
+                ["mortgages", "transactions", "transactions", "overview"])
+            with self.sessions() as session:
+                kept = session.scalars(select(db.BudgetAnalyticsAudit).where(
+                    db.BudgetAnalyticsAudit.subject_type == "category")).all()
+            self.assertIn(("cat-kept", "update"), [(row.subject_id, row.action) for row in kept])
+            self.assertGreater(len(kept), 1)
+
+            def revoke():
+                household.revoke_grant("viewer", "alice", self.grant_id, path=str(self.path))
+
+            before = self._audit_split()[0]
+            with mock.patch.object(household_api, "before_grant_recheck", revoke):
+                denied = await self.fetch("overview")
+            self.assertEqual(denied.status, 403)
+            self.assertNotIn(AMOUNT, await denied.text())
+            self.assertEqual(self._audit_split()[0], before)
+
+    async def test_grant_header_is_rejected_before_lookup_and_the_analytics_lock(self):
+        entered = []
+        real = household_views._read_lock
+
+        class Recording:
+            def __enter__(self):
+                entered.append(True)
+                return real.__enter__()
+
+            def __exit__(self, exc_type, exc, tb):
+                return real.__exit__(exc_type, exc, tb)
+
+        for header in ("é" + "a" * 63, "AB" * 32, "g" * 64, "ab" * 31, "ab" * 32 + "c"):
+            entered.clear()
+            with mock.patch.object(household_views, "_read_lock", Recording()):
+                response = await self.fetch("transactions", grant=header)
+            self.assertEqual(response.status, 403, header)
+            self.assertEqual((await response.json())["error"], "budget_forbidden")
+            self.assertEqual(entered, [], header)
+            self.assertNotIn(AMOUNT, await response.text())
+        self.assertEqual(self._audit_split()[0], [])
+        session = mock.Mock()
+        with self.assertRaises(HouseholdAuthError) as caught:
+            household.authorize_household(session, "viewer", header="é" + "a" * 63, require_header=True)
+        self.assertEqual(caught.exception.status, 403)
+        session.get.assert_not_called()
+        self.assertFalse(household.valid_grant_id(None))
+        self.assertFalse(household.valid_grant_id(b"ab" * 32))
+        self.assertFalse(household.valid_grant_id("AB" * 32))
+        self.assertTrue(household.valid_grant_id(self.grant_id))
+        entered.clear()
+        with mock.patch.object(household_views, "_read_lock", Recording()):
+            mismatched = await self.fetch("overview", grant="ab" * 32)
+        self.assertEqual(mismatched.status, 403)
+        self.assertEqual(entered, [])
+        self.assertEqual(self._audit_split()[0], [])

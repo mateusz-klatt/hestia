@@ -14,7 +14,8 @@ Decisions for this branch:
   header and it must equal the grant id from that snapshot.
 - Route floor ``viewer`` also admits operator and admin. Authorization still
   requires the stored role to be exactly ``viewer`` and the grant owner to be
-  an active admin, in the read snapshot and again before the response is built.
+  an active admin, in the read snapshot and again in one immediate transaction
+  before the response is sent.
 - A disabled viewer fails this gate with ``budget_forbidden``. The auth
   middleware returns 401 first when it already sees the disabled account.
 - Category labels are ``salary`` or ``child_benefit`` only when the stored name
@@ -33,9 +34,11 @@ Decisions for this branch:
   the series does not publish spending the dashboard withholds. Month buckets
   cover at most 12 periods, end at the selected month, and stop at 1900-01.
   Historical buckets set ``income_estimate_partial`` false.
-- Household cursors use their own AEAD domain and a digest of safe rows. They
-  are not the owner snapshot digest. Recurring output is capped at the owner
-  hint cap; the truncation flag is not in the allowlist.
+- Household cursors use their own AEAD domain and a digest of safe rows. The
+  actor, owner, grant, route and filters are additional data, so the token
+  length does not depend on the owner's name. They are not the owner snapshot
+  digest. Recurring output is capped at the owner hint cap; the truncation
+  flag is not in the allowlist.
 """
 from __future__ import annotations
 
@@ -43,6 +46,7 @@ import hashlib
 import hmac
 import logging
 import os
+import re
 import secrets
 from pathlib import Path
 
@@ -57,6 +61,7 @@ log = logging.getLogger("hestia.budget.household")
 SCHEMA_REVISION = "0022"
 _GRANT_BYTES = 32
 _USERS_MARKER = "users_authoritative"
+_GRANT_ID = re.compile(r"[0-9a-f]{64}\Z", re.ASCII)
 
 # Exact stored names that may be serialized as a fixed code. Anything else is an ordinal.
 APPROVED_CATEGORY_LABELS = {
@@ -103,12 +108,20 @@ def entity_alias(secret, grant_id, domain, key):
     return hmac.new(secret, material, hashlib.sha256).hexdigest()
 
 
+def valid_grant_id(value):
+    """Exactly 64 lowercase hex characters. Anything else is rejected before a lookup or ``compare_digest``."""
+    return isinstance(value, str) and _GRANT_ID.fullmatch(value) is not None
+
+
 def authorize_household(session, member, *, header, require_header):
     """Role, grant and owner checks. Caller holds the snapshot used for the read.
 
     Returns ``(member, owner, grant_id)``. ``header`` is the single header value,
     or None when the caller already rejected a missing or duplicate header.
+    A data read validates the header before any database lookup.
     """
+    if require_header and not valid_grant_id(header):
+        raise HouseholdAuthError(403, "budget_forbidden")
     if session.get(AppMeta, _USERS_MARKER) is None:
         from .views import BudgetUsersBackendRequired
         raise BudgetUsersBackendRequired()
@@ -121,9 +134,8 @@ def authorize_household(session, member, *, header, require_header):
     owner = session.get(User, grant.owner)
     if owner is None or owner.disabled or owner.role != "admin":
         raise HouseholdAuthError(403, "budget_forbidden")
-    if require_header:
-        if not isinstance(header, str) or not hmac.compare_digest(header, grant.grant_id):
-            raise HouseholdAuthError(403, "budget_forbidden")
+    if require_header and not hmac.compare_digest(header, grant.grant_id):
+        raise HouseholdAuthError(403, "budget_forbidden")
     return member, grant.owner, grant.grant_id
 
 

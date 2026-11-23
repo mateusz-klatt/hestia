@@ -1,7 +1,9 @@
 """Allowlisted household serializers. Owner projections stay on the owner routes.
 
-Reads run inside the caller's snapshot, after ``authorize_household``. Cursors are
-sealed under a household domain and a digest of the safe rows only.
+Reads authorize before the shared analytics lock, then again inside the snapshot.
+One-off month rows are summed into their category. Cursors seal the page under a
+household domain; the actor, owner, grant, route and filters are additional data,
+so the token length does not depend on the owner's name.
 """
 from __future__ import annotations
 
@@ -16,7 +18,7 @@ import re
 
 from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from sqlalchemy import select, text
+from sqlalchemy import delete, select, text
 
 from .. import db
 from . import analytics_core as core
@@ -30,12 +32,13 @@ from .analytics_views import (
 )
 from .config import BudgetConfigError
 from .household import HouseholdAuthError, category_label, entity_alias, require_household_data_grant
-from .views import BudgetUsersBackendRequired
 
 MAX_RESPONSE_BYTES = 4 * 1024 * 1024
 _CURSOR_TTL = 900
 _MAX_CURSOR = 8192
 _CURSOR_DOMAIN = b"hestia/budget/household/cursor/v1"
+_AUDIT_INTERVAL = 60
+_AUDIT_RETENTION = 180 * 86400
 _TRANSFER_STATUSES = frozenset({"suggested", "accepted", "review", "boundary", "rejected", "undone"})
 _RULE_FIELDS = frozenset({"description", "counterparty_name", "mcc"})
 _RULE_OPERATORS = frozenset({"contains", "equals"})
@@ -130,10 +133,12 @@ class HouseholdReader:
     def read(self, member, operation, query, header):
         """Authorize and serialize inside one snapshot. Returns ``(body, owner, grant_id)``.
 
-        The snapshot is read-only. A successful response records its audit row later,
-        after the fresh grant check, so a denial never keeps a row.
+        Eligibility runs before ``_read_lock`` so a denial does not block owner analytics.
+        The snapshot repeats that check. The audit row is written later, in the same
+        immediate transaction as the final grant check.
         """
         require_header = operation != "access"
+        self._eligible(member, header, require_header)
         with _read_lock, self.sessions() as session:
             session.execute(text("BEGIN"))
             _member, owner, grant_id = require_household_data_grant(
@@ -143,30 +148,51 @@ class HouseholdReader:
             body = _encode(payload)
             return body, owner, grant_id
 
-    def record_read(self, member, owner, view):
-        """One analytics-audit row for a household read that is about to be returned.
+    def _eligible(self, member, header, require_header):
+        """Grant check with no analytics lock. An invalid header fails before any lookup."""
+        with self.sessions() as session:
+            session.execute(text("BEGIN"))
+            require_household_data_grant(session, member, header=header, require_header=require_header)
 
-        ``member`` is the actor and ``owner`` is the grant owner. ``view`` is an
-        allowlisted view name (the route's last segment). The row is written with
-        ``BudgetAnalyticsStore._analytics_audit``, so it stays in
-        ``budget_analytics_audit`` and is not copied to the home audit log or the
-        event bus. Amounts, aliases, the grant id and query values are not stored.
+    def commit_authorized_read(self, member, owner, grant_id, header, view):
+        """Re-authorize exactly this grant, then audit it, in one ``BEGIN IMMEDIATE`` transaction.
+
+        The caller sends the body only after this returns. A denial rolls the transaction
+        back, so no audit row is kept. Discovery re-authorizes and writes nothing. Any other
+        allowlisted view inserts at most one row per member and view per 60 seconds, and
+        that insert deletes household audit rows older than 180 days. A recent row skips
+        the insert and still re-authorizes in this same transaction.
         """
         if view not in _QUERY:
             raise AnalyticsError()
+        require_header = view != "access"
         with self.views.transaction() as session:
+            _member, current_owner, current_grant = require_household_data_grant(
+                session, member, header=header, require_header=require_header)
+            if current_owner != owner or not hmac.compare_digest(current_grant, grant_id):
+                raise HouseholdAuthError(403, "budget_forbidden")
+            if view == "access":
+                return
+            now = self.views._now()
+            if self._household_read_is_recent(session, member, view, now):
+                return
+            self._prune_household_reads(session, now)
             self.views._analytics_audit(session, owner, "household_read", member, view, None, None)
 
-    def recheck(self, member, grant_id, header, *, require_header):
-        """Fresh snapshot. False when the grant is gone, changed, or the header no longer matches."""
-        try:
-            with self.sessions() as session:
-                session.execute(text("BEGIN"))
-                _member, _owner, current = require_household_data_grant(
-                    session, member, header=header, require_header=require_header)
-        except (HouseholdAuthError, BudgetUsersBackendRequired, AnalyticsError, BudgetConfigError):
-            return False
-        return hmac.compare_digest(current, grant_id)
+    def _household_read_is_recent(self, session, member, view, now):
+        found = session.scalar(select(db.BudgetAnalyticsAudit.id).where(
+            db.BudgetAnalyticsAudit.subject_type == "household_read",
+            db.BudgetAnalyticsAudit.subject_id == member,
+            db.BudgetAnalyticsAudit.action == view,
+            db.BudgetAnalyticsAudit.changed_at >= now - _AUDIT_INTERVAL,
+        ).limit(1))
+        return found is not None
+
+    def _prune_household_reads(self, session, now):
+        session.execute(delete(db.BudgetAnalyticsAudit).where(
+            db.BudgetAnalyticsAudit.subject_type == "household_read",
+            db.BudgetAnalyticsAudit.changed_at < now - _AUDIT_RETENTION,
+        ))
 
     def _build(self, session, member, owner, grant_id, operation, values):
         if operation == "access":
@@ -223,7 +249,7 @@ class HouseholdReader:
             payload = selected if month == chosen else self._evaluate(
                 session, snapshot, owner, month, currency, include_series=False)
             months.append(_month_bucket(payload, current, book))
-            for row in payload["category_spend"]:
+            for row in _fold_category_spend(payload["category_spend"]):
                 if row["category_id"] is not None:
                     labels[row["category_id"]] = row["archived"]
         return {
@@ -386,10 +412,11 @@ class HouseholdReader:
         return rows[index:end], nxt
 
     def _cursor_encode(self, context, digest, index, now):
-        payload = {"context": context, "digest": digest, "index": index, "issued": now, "expires": now + _CURSOR_TTL}
+        payload = {"digest": digest, "index": index, "issued": now, "expires": now + _CURSOR_TTL}
         data = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
         nonce = os.urandom(12)
-        token = base64.urlsafe_b64encode(nonce + self._cipher.encrypt(nonce, data, _CURSOR_DOMAIN)).rstrip(b"=").decode("ascii")
+        token = base64.urlsafe_b64encode(
+            nonce + self._cipher.encrypt(nonce, data, _cursor_aad(context))).rstrip(b"=").decode("ascii")
         if len(token) > _MAX_CURSOR:
             raise AnalyticsError("budget_analytics_limit", 413)
         return token
@@ -401,9 +428,9 @@ class HouseholdReader:
             if not isinstance(cursor, str) or not 1 <= len(cursor) <= _MAX_CURSOR:
                 raise ValueError
             raw = base64.b64decode(cursor + "=" * (-len(cursor) % 4), altchars=b"-_", validate=True)
-            payload = json.loads(self._cipher.decrypt(raw[:12], raw[12:], _CURSOR_DOMAIN))
-            if (not isinstance(payload, dict) or set(payload) != {"context", "digest", "index", "issued", "expires"}
-                    or payload["context"] != context or type(payload["index"]) is not int or payload["index"] < 0
+            payload = json.loads(self._cipher.decrypt(raw[:12], raw[12:], _cursor_aad(context)))
+            if (not isinstance(payload, dict) or set(payload) != {"digest", "index", "issued", "expires"}
+                    or type(payload["index"]) is not int or payload["index"] < 0
                     or not isinstance(payload["digest"], str)):
                 raise ValueError
             issued, expires = payload["issued"], payload["expires"]
@@ -701,7 +728,8 @@ def _sanitize_budget(budget, book):
     coverage = dict(budget["coverage"])
     coverage["pending_row_keys"] = []
     safe["coverage"] = coverage
-    safe["category_spend"] = [_sanitize_spend(row, book) for row in budget["category_spend"]]
+    safe["category_spend"] = [
+        _sanitize_spend(row, book) for row in _fold_category_spend(budget["category_spend"])]
     expected = budget["expected_income"]
     if expected is not None:
         safe["expected_income"] = {**expected, "items": [
@@ -759,9 +787,43 @@ def _month_bucket(payload, current_month, book):
         "spent": "0" if summary is None else summary["spent"],
         "categories": [
             {"category_id": book.category(row["category_id"]), "net_spending": row["net_spending"]}
-            for row in payload["category_spend"]
+            for row in _fold_category_spend(payload["category_spend"])
         ],
     }
+
+
+def _fold_category_spend(rows):
+    """Sum one-off splits into their category. The spouse sees category totals, not private labels."""
+    folded = []
+    index = {}
+    for row in rows:
+        key = row["category_id"]
+        slot = index.get(key)
+        if slot is None:
+            slot = {
+                "category_id": key,
+                "archived": row["archived"],
+                "expenses": row["expenses"],
+                "refunds": row["refunds"],
+                "net_spending": row["net_spending"],
+                "limit": None if row.get("one_off") else row.get("limit"),
+            }
+            index[key] = slot
+            folded.append(slot)
+            continue
+        slot["expenses"] = core.sum_money((slot["expenses"], row["expenses"]))
+        slot["refunds"] = core.sum_money((slot["refunds"], row["refunds"]))
+        slot["net_spending"] = core.sum_money((slot["net_spending"], row["net_spending"]))
+        if not row.get("one_off"):
+            slot["archived"] = row["archived"]
+            slot["limit"] = row.get("limit")
+    return folded
+
+
+def _cursor_aad(context):
+    """Bind cursor context as additional data. It does not change the ciphertext length."""
+    encoded = json.dumps(context, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")
+    return _CURSOR_DOMAIN + b"\0" + encoded
 
 
 def _cursor_context(member, owner, grant_id, route, filters):

@@ -1,19 +1,22 @@
-"""Read-only household budget API. Viewers see an allowlisted copy of one owner's data.
+"""Household budget API. Viewers see an allowlisted copy of one owner's data.
 
 The route floor is ``viewer``, which also admits operator and admin. ``require_household_data_grant``
-rejects every stored role other than an active viewer, and it runs inside the same SQLite snapshot
-as the read, before the projection cache, filters or cursor decryption. A second check in a fresh
-snapshot runs after the body is encoded and before the response is built. ``before_grant_recheck``
-is a no-op seam so tests can revoke the grant at that point.
+rejects every stored role other than an active viewer. Eligibility runs before the shared analytics
+lock, then again inside the read snapshot, before the projection cache, filters or cursor decryption.
+After the body is encoded, one ``BEGIN IMMEDIATE`` transaction re-authorizes that same grant and,
+except for discovery, writes at most one sanitised analytics-audit row per member and view per 60
+seconds. The body is sent only after that transaction commits. ``before_grant_recheck`` runs before
+the transaction and ``after_grant_commit`` runs after it, so tests can revoke on either side.
 
-Discovery (``GET /access``) ignores ``X-Budget-Grant`` and returns only ``grant_id``. Every other
-household GET requires exactly one of those headers. Final recheck failure, including a grant
-change, discards the encoded body and returns a fixed 403. The first check still reports a missing
-flag as 404 and a non-SQLite backend as 409.
+Discovery (``GET /access``) ignores ``X-Budget-Grant`` and returns only ``grant_id``. It uses the
+same immediate transaction and writes no audit row. Every other household GET requires exactly one
+header of 64 lowercase hex characters. A denial, a failed audit, or a grant change discards the
+encoded body and returns a fixed 403. The first check still reports a missing flag as 404 and a
+non-SQLite backend as 409.
 
-A response that is about to be sent writes one ``budget_analytics_audit`` row in this request:
-the actor is the member, the owner is the grant owner, and the action is the view name. A denied
-or failed read writes nothing. That row is not emitted to ``/api/audit`` or the SSE stream.
+An audit row names the member, the grant owner and the view. It stores no amounts, aliases, grant
+id or query values, and it is not emitted to ``/api/audit`` or the SSE stream. Household rows older
+than 180 days are deleted when a new row is inserted. A denied or failed read writes nothing.
 
 ``GET /monthly-budget-settings`` reads the P1 bootstrap ``HESTIA_BUDGET_MONTH_CONFIG`` only.
 P4's ``budget_month_settings`` table is not part of this API.
@@ -31,7 +34,7 @@ from ..db import init_db
 from . import api
 from .analytics_core import AnalyticsError
 from .config import BudgetConfigError
-from .household import HouseholdAuthError
+from .household import HouseholdAuthError, valid_grant_id
 from .household_views import MAX_RESPONSE_BYTES, HouseholdReader, _QUERY
 from .views import BudgetUsersBackendRequired
 
@@ -57,7 +60,12 @@ log = logging.getLogger("hestia.budget.household_api")
 
 
 def before_grant_recheck():
-    """Called after the read snapshot closes and before the fresh authorization check."""
+    """Called after the read snapshot closes and before the authorizing transaction."""
+    return None
+
+
+def after_grant_commit():
+    """Called after that transaction commits and before the body is sent."""
     return None
 
 
@@ -75,7 +83,7 @@ def _scope(request, auth_enabled, *, require_header):
     header = None
     if require_header:
         values = request.headers.getall(GRANT_HEADER, [])
-        if len(values) != 1 or not isinstance(values[0], str) or not values[0]:
+        if len(values) != 1 or not valid_grant_id(values[0]):
             raise HouseholdAuthError(403, "budget_forbidden")
         header = values[0]
     return user, header
@@ -108,13 +116,9 @@ def _read(member, operation, query, header, secret):
     return _reader(secret).read(member, operation, query, header)
 
 
-def _record(member, owner, view, secret):
-    """Audit a read only after the handler has decided the response will be sent."""
-    _reader(secret).record_read(member, owner, view)
-
-
-def _recheck(member, grant_id, header, secret, *, require_header):
-    return _reader(secret).recheck(member, grant_id, header, require_header=require_header)
+def _commit(member, owner, grant_id, header, view, secret):
+    """Re-authorize this grant and audit the read in one immediate transaction."""
+    _reader(secret).commit_authorized_read(member, owner, grant_id, header, view)
 
 
 def _log_failure(operation, exc):
@@ -134,20 +138,18 @@ def register(app, read_json_body, *, auth_enabled, session_secret):
             query = _query(request, operation)
             body, owner, grant_id = await asyncio.to_thread(_read, member, operation, query, header, secret)
             before_grant_recheck()
+            if len(body) > MAX_RESPONSE_BYTES:
+                body = None
+                return api._error(413, "budget_analytics_limit")
             try:
-                fresh = await asyncio.to_thread(
-                    _recheck, member, grant_id, header, secret, require_header=require_header)
+                await asyncio.to_thread(_commit, member, owner, grant_id, header, operation, secret)
+            except HouseholdAuthError:
+                raise
             except Exception as exc:
                 body = None
                 _log_failure(operation, exc)
                 return api._error(500, "budget_internal_error")
-            if not fresh:
-                body = None
-                return api._error(403, "budget_forbidden")
-            if len(body) > MAX_RESPONSE_BYTES:
-                body = None
-                return api._error(413, "budget_analytics_limit")
-            await asyncio.to_thread(_record, member, owner, operation, secret)
+            after_grant_commit()
             outgoing = bytes(body)
             body = None
             return web.Response(body=outgoing, content_type="application/json", charset="utf-8",
