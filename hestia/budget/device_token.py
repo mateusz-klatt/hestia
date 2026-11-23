@@ -487,21 +487,19 @@ class DeviceTokenStore:
             return self._issue_token(session, row.owner, name, moment, root)
 
     def _make_token_room(self, session, owner, name, moment, *, rotate):
-        active = session.scalars(select(DeviceToken).where(
+        rotated = False
+        if rotate:
+            replaced = session.execute(update(DeviceToken).where(
+                DeviceToken.owner == owner, DeviceToken.device_name == name, DeviceToken.revoked_at.is_(None),
+            ).values(revoked_at=moment))
+            rotated = replaced.rowcount > 0
+        overflow = session.scalars(select(DeviceToken).where(
             DeviceToken.owner == owner, DeviceToken.revoked_at.is_(None),
             DeviceToken.expires_at > moment, DeviceToken.hard_expires_at > moment,
         ).order_by(func.coalesce(DeviceToken.last_used_at, DeviceToken.created_at).desc(),
-                   DeviceToken.created_at.desc(), DeviceToken.id))
-        rotated = False
-        retained = 0
-        for row in active:
-            if rotate and row.device_name == name:
-                row.revoked_at = moment
-                rotated = True
-            elif retained >= MAX_ACTIVE_TOKENS - 1:
-                row.revoked_at = moment
-            else:
-                retained += 1
+                   DeviceToken.created_at.desc(), DeviceToken.id).offset(MAX_ACTIVE_TOKENS - 1))
+        for row in overflow:
+            row.revoked_at = moment
         return rotated
 
     def _issue_token(self, session, owner, name, moment, root, *, rotate=False):

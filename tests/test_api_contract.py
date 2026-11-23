@@ -60,6 +60,13 @@ class OpenApiArtifactTests(unittest.TestCase):
         document = api_contract.build_openapi()
         self.assertEqual(document["info"]["version"], "0.44.0")
         del document["paths"]["/api/login"]["post"]["responses"]["429"]
+        schemas = document["components"]["schemas"]
+        for name in ("BudgetAnalyticsInboxDeviceItem", "BudgetAnalyticsInboxDeviceParams", "BudgetAnalyticsInboxDeviceRef"):
+            del schemas[name]
+        inbox_items = schemas["BudgetAnalyticsInbox"]["properties"]["items"]["items"]
+        del inbox_items["discriminator"]["mapping"]["device_added"]
+        inbox_items["oneOf"].remove({"$ref": "#/components/schemas/BudgetAnalyticsInboxDeviceItem"})
+        schemas["BudgetAnalyticsInboxKeyRequest"]["properties"]["kind"]["enum"].remove("device_added")
         del document["paths"]["/api/budget/analytics/category-colors-spread"]
         for name in ("BudgetAnalyticsCategoryColorSpreadRequest", "BudgetAnalyticsCategoryColorSpreadResult"):
             del document["components"]["schemas"][name]

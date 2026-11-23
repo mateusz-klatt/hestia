@@ -1295,7 +1295,7 @@ export interface paths {
         put?: never;
         /**
          * Issue a receipts-scoped device token using an enabled budget owner's password.
-         * @description Requires budget HTTP and receipts. Send uncompressed application/json (at most 4096 bytes) without Cookie or Authorization. Shares the /api/login quota of 10 attempts per minute per username and IPv4 address or IPv6 /64. An active token with the same device name is rotated. At five active tokens, issuance revokes the least recently used token.
+         * @description Requires budget HTTP and receipts. Send uncompressed application/json (at most 4096 bytes) without Cookie or Authorization. Shares the /api/login quota of 10 attempts per minute per username and IPv4 address or IPv6 /64. An unrevoked token with the same device name is rotated. At five active tokens, issuance revokes the least recently used token.
          */
         post: operations["loginBudgetReceiptDevice"];
         delete?: never;
@@ -2756,7 +2756,7 @@ export interface components {
              */
             evaluation_timezone: "UTC";
             /** Items */
-            items: (components["schemas"]["BudgetAnalyticsInboxConsentItem"] | components["schemas"]["BudgetAnalyticsInboxMortgageItem"] | components["schemas"]["BudgetAnalyticsInboxSpendingLimitItem"])[];
+            items: (components["schemas"]["BudgetAnalyticsInboxConsentItem"] | components["schemas"]["BudgetAnalyticsInboxMortgageItem"] | components["schemas"]["BudgetAnalyticsInboxSpendingLimitItem"] | components["schemas"]["BudgetAnalyticsInboxDeviceItem"])[];
             /** Reads Cap */
             reads_cap: number;
             /** Reads Count */
@@ -2815,6 +2815,41 @@ export interface components {
             /** Connection Id */
             connection_id: string;
         };
+        /** BudgetAnalyticsInboxDeviceItem */
+        BudgetAnalyticsInboxDeviceItem: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "device_added";
+            /** Milestone */
+            milestone: string;
+            params: components["schemas"]["BudgetAnalyticsInboxDeviceParams"];
+            /** Read */
+            read: boolean;
+            /** Read At */
+            read_at: number | null;
+            ref: components["schemas"]["BudgetAnalyticsInboxDeviceRef"];
+            /** Subject Id */
+            subject_id: string;
+        };
+        /** BudgetAnalyticsInboxDeviceParams */
+        BudgetAnalyticsInboxDeviceParams: {
+            /** Date */
+            date: string;
+            /** Device Name */
+            device_name: string;
+            /**
+             * Status
+             * @constant
+             */
+            status: "added";
+        };
+        /** BudgetAnalyticsInboxDeviceRef */
+        BudgetAnalyticsInboxDeviceRef: {
+            /** Token Id */
+            token_id: string;
+        };
         /**
          * BudgetAnalyticsInboxKeyRequest
          * @description One opaque owner-inbox alert key (kind, stable local subject_id, milestone).
@@ -2824,7 +2859,7 @@ export interface components {
              * Kind
              * @enum {string}
              */
-            kind: "consent_renewal" | "mortgage_due" | "spending_limit";
+            kind: "consent_renewal" | "mortgage_due" | "spending_limit" | "device_added";
             /** Milestone */
             milestone: string;
             /** Subject Id */

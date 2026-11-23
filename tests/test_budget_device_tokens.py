@@ -15,8 +15,9 @@ from aiohttp.test_utils import TestClient, TestServer
 from sqlalchemy import select
 from yarl import URL
 
-from hestia import auth, db, store_sql, web
-from hestia.budget import api, consent_api, consent_context, device_token, receipt_api
+from hestia import api_contract, auth, db, store_sql, web
+from hestia.budget import (analytics_api, api, consent_api, consent_context, device_token, household, household_api,
+                           receipt_api)
 from hestia.budget.config import BudgetConfigError
 from hestia.budget.receipt_parser import ReceiptError
 from hestia.budget.views import BudgetUsersBackendRequired
@@ -583,6 +584,42 @@ class DeviceTokenHTTPTests(fixture.unittest.IsolatedAsyncioTestCase):
         stored = json.dumps(self._stored_text())
         self.assertTrue(all(secret not in stored for secret in (LOGIN_PASSWORD, first["token"], second["token"])))
 
+    async def test_new_device_inbox_item_is_owner_private_and_can_be_marked_read(self):
+        self._set_login_passwords("alice")
+        grant = household.grant_member("viewer", "alice")["grant_id"]
+        inbox_path = analytics_api.PREFIX + "/inbox"
+        with mock.patch.dict(os.environ, {analytics_api.FLAG: "1"}):
+            device = await self._logged_in_device()
+            with self.sessions.begin() as session:
+                previous = session.get(db.BudgetReceiptDeviceToken, device["token_id"])
+                previous.expires_at = previous.created_at
+            await self._logged_in_device()
+            response = await self.client.get(inbox_path, headers=self.headers())
+            _status(response, 200)
+            body = await response.json()
+            api_contract.BudgetAnalyticsInbox.model_validate(body)
+            item, = [entry for entry in body["items"] if entry["kind"] == "device_added"]
+            self.assertEqual(item["ref"], {"token_id": device["token_id"]})
+            row = next(row for row in self.rows(db.BudgetReceiptDeviceToken) if row.id == device["token_id"])
+            date = datetime.fromtimestamp(row.created_at, timezone.utc).date().isoformat()
+            self.assertEqual(item["params"], {"device_name": "Vesta", "status": "added", "date": date})
+            self.assertFalse(item["read"])
+            self.assertTrue(device["token"] not in json.dumps(body))
+            mark = await self._post(inbox_path + "-mark", {
+                "items": [{key: item[key] for key in ("kind", "subject_id", "milestone")}],
+                "read": True, "expected_reads_version": body["reads_version"],
+            }, self.headers(origin=True))
+            _status(mark, 200)
+            read = await self.client.get(inbox_path, headers=self.headers())
+            self.assertTrue((await read.json())["items"][0]["read"])
+            for path, headers in (
+                (inbox_path, self.headers("bob")),
+                (household_api.PREFIX + "/inbox", {**self.headers("viewer"), household_api.GRANT_HEADER: grant}),
+            ):
+                foreign = await self.client.get(path, headers=headers)
+                _status(foreign, 200)
+                self.assertFalse(any(entry["kind"] == "device_added" for entry in (await foreign.json())["items"]))
+
     async def test_password_login_caps_tokens_across_issuance_methods_and_evicts_lru(self):
         self._set_login_passwords("alice")
         start = int(web._now())
@@ -595,10 +632,11 @@ class DeviceTokenHTTPTests(fixture.unittest.IsolatedAsyncioTestCase):
         self.assertEqual(active, {devices[i]["token_id"] for i in (0, 2, 3, 4)} | {paired["token_id"]})
 
     async def test_password_login_failures_match_and_each_runs_one_password_check(self):
-        stored = self._set_login_passwords("alice", "viewer", "operator", "disabled")
+        stored = self._set_login_passwords("alice", "bob", "viewer", "operator", "disabled")
         with self.sessions.begin() as session:
             session.add(db.User(username="no-budget", role="admin", password_hash=stored))
-        for user, correct in (("missing", True), ("alice", False), ("viewer", True), ("operator", True),
+            session.get(db.User, "bob").role = "viewer"
+        for user, correct in (("missing", True), ("alice", False), ("bob", True), ("viewer", True), ("operator", True),
                               ("disabled", True), ("no-budget", True)):
             with self.subTest(user=user), mock.patch.object(auth, "verify_password", wraps=auth.verify_password) as verify:
                 response = await self._login_device(user, LOGIN_PASSWORD if correct else "incorrect")

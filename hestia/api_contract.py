@@ -2187,7 +2187,7 @@ class BudgetAnalyticsMortgages(BaseModel):
     reminders: list[BudgetAnalyticsMortgageReminder]
 
 
-BudgetAnalyticsInboxKind = Literal["consent_renewal", "mortgage_due", "spending_limit"]
+BudgetAnalyticsInboxKind = Literal["consent_renewal", "mortgage_due", "spending_limit", "device_added"]
 BudgetAnalyticsInboxMilestone = Annotated[str, Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9:_-]+$")]
 
 
@@ -2282,8 +2282,27 @@ class BudgetAnalyticsInboxSpendingLimitItem(BudgetAnalyticsInboxItemBase):
     params: BudgetAnalyticsInboxSpendingLimitParams
 
 
+class BudgetAnalyticsInboxDeviceParams(BaseModel):
+    model_config = _READ
+    status: Literal["added"]
+    device_name: Annotated[str, Field(min_length=1, max_length=64)]
+    date: Annotated[str, Field(pattern=r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$")]
+
+
+class BudgetAnalyticsInboxDeviceRef(BaseModel):
+    model_config = _READ
+    token_id: str
+
+
+class BudgetAnalyticsInboxDeviceItem(BudgetAnalyticsInboxItemBase):
+    kind: Literal["device_added"]
+    ref: BudgetAnalyticsInboxDeviceRef
+    params: BudgetAnalyticsInboxDeviceParams
+
+
 BudgetAnalyticsInboxItem = Annotated[
-    BudgetAnalyticsInboxConsentItem | BudgetAnalyticsInboxMortgageItem | BudgetAnalyticsInboxSpendingLimitItem,
+    BudgetAnalyticsInboxConsentItem | BudgetAnalyticsInboxMortgageItem | BudgetAnalyticsInboxSpendingLimitItem
+    | BudgetAnalyticsInboxDeviceItem,
     Field(discriminator="kind"),
 ]
 
@@ -4136,7 +4155,7 @@ def _device_token_paths():
             "summary": "Issue a receipts-scoped device token using an enabled budget owner's password.",
             "description": ("Requires budget HTTP and receipts. Send uncompressed application/json (at most 4096 bytes) "
                             "without Cookie or Authorization. Shares the /api/login quota of 10 attempts per minute "
-                            "per username and IPv4 address or IPv6 /64. An active token with the same device name "
+                            "per username and IPv4 address or IPv6 /64. An unrevoked token with the same device name "
                             "is rotated. At five active tokens, issuance revokes the least recently used token."),
             "requestBody": {"required": True, "content": {_APP_JSON: {
                 "schema": _ref("BudgetReceiptDeviceLoginRequest")}}},

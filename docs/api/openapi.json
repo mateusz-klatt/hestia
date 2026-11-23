@@ -1895,6 +1895,7 @@
               "discriminator": {
                 "mapping": {
                   "consent_renewal": "#/components/schemas/BudgetAnalyticsInboxConsentItem",
+                  "device_added": "#/components/schemas/BudgetAnalyticsInboxDeviceItem",
                   "mortgage_due": "#/components/schemas/BudgetAnalyticsInboxMortgageItem",
                   "spending_limit": "#/components/schemas/BudgetAnalyticsInboxSpendingLimitItem"
                 },
@@ -1909,6 +1910,9 @@
                 },
                 {
                   "$ref": "#/components/schemas/BudgetAnalyticsInboxSpendingLimitItem"
+                },
+                {
+                  "$ref": "#/components/schemas/BudgetAnalyticsInboxDeviceItem"
                 }
               ]
             },
@@ -2078,6 +2082,95 @@
         "title": "BudgetAnalyticsInboxConsentRef",
         "type": "object"
       },
+      "BudgetAnalyticsInboxDeviceItem": {
+        "properties": {
+          "kind": {
+            "const": "device_added",
+            "title": "Kind",
+            "type": "string"
+          },
+          "milestone": {
+            "title": "Milestone",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/components/schemas/BudgetAnalyticsInboxDeviceParams"
+          },
+          "read": {
+            "title": "Read",
+            "type": "boolean"
+          },
+          "read_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Read At"
+          },
+          "ref": {
+            "$ref": "#/components/schemas/BudgetAnalyticsInboxDeviceRef"
+          },
+          "subject_id": {
+            "title": "Subject Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "subject_id",
+          "milestone",
+          "read",
+          "read_at",
+          "kind",
+          "ref",
+          "params"
+        ],
+        "title": "BudgetAnalyticsInboxDeviceItem",
+        "type": "object"
+      },
+      "BudgetAnalyticsInboxDeviceParams": {
+        "properties": {
+          "date": {
+            "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+            "title": "Date",
+            "type": "string"
+          },
+          "device_name": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Device Name",
+            "type": "string"
+          },
+          "status": {
+            "const": "added",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "device_name",
+          "date"
+        ],
+        "title": "BudgetAnalyticsInboxDeviceParams",
+        "type": "object"
+      },
+      "BudgetAnalyticsInboxDeviceRef": {
+        "properties": {
+          "token_id": {
+            "title": "Token Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "token_id"
+        ],
+        "title": "BudgetAnalyticsInboxDeviceRef",
+        "type": "object"
+      },
       "BudgetAnalyticsInboxKeyRequest": {
         "additionalProperties": false,
         "description": "One opaque owner-inbox alert key (kind, stable local subject_id, milestone).",
@@ -2086,7 +2179,8 @@
             "enum": [
               "consent_renewal",
               "mortgage_due",
-              "spending_limit"
+              "spending_limit",
+              "device_added"
             ],
             "title": "Kind",
             "type": "string"
@@ -21714,7 +21808,7 @@
     },
     "/api/budget/receipts/device-token/login": {
       "post": {
-        "description": "Requires budget HTTP and receipts. Send uncompressed application/json (at most 4096 bytes) without Cookie or Authorization. Shares the /api/login quota of 10 attempts per minute per username and IPv4 address or IPv6 /64. An active token with the same device name is rotated. At five active tokens, issuance revokes the least recently used token.",
+        "description": "Requires budget HTTP and receipts. Send uncompressed application/json (at most 4096 bytes) without Cookie or Authorization. Shares the /api/login quota of 10 attempts per minute per username and IPv4 address or IPv6 /64. An unrevoked token with the same device name is rotated. At five active tokens, issuance revokes the least recently used token.",
         "operationId": "loginBudgetReceiptDevice",
         "requestBody": {
           "content": {

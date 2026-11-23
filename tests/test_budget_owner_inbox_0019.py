@@ -20,6 +20,7 @@ from hestia.budget import analytics_api, owner_inbox as inbox_mod
 from hestia.budget.analytics_core import AnalyticsError
 from hestia.budget.analytics_views import BudgetAnalyticsViews
 from tests import test_budget_analytics_api as analytics_fixture
+from tests.migration_head import HEAD
 from tests.test_budget_analytics_store import AnalyticsCase
 
 HEX_A = "a" * 64
@@ -229,6 +230,30 @@ class OwnerInboxMigration0019Tests(unittest.TestCase):
         self.addCleanup(self.directory.cleanup)
         self.addCleanup(db.reset_engine_cache)
         self.path = Path(self.directory.name) / "m0019.db"
+
+    def test_device_markers_roundtrip_preserves_existing_reads(self):
+        engine, _ = db.init_db(self.path)
+        self.addCleanup(engine.dispose)
+        insert = ("INSERT INTO budget_owner_inbox_reads (owner, kind, subject_id, milestone, read_at) "
+                  "VALUES ('alice', ?, ?, 'added', 100.0)")
+        with engine.begin() as conn:
+            self.assertEqual(conn.exec_driver_sql("SELECT version_num FROM alembic_version").scalar_one(), HEAD)
+            conn.exec_driver_sql("INSERT INTO users (username, password_hash, role) VALUES ('alice', 'h', 'admin')")
+            conn.exec_driver_sql(insert, ("mortgage_due", HEX_A))
+            conn.exec_driver_sql(insert, ("device_added", HEX_B))
+
+        db.downgrade_db(self.path, "0028")
+        with engine.begin() as conn:
+            self.assertEqual(conn.exec_driver_sql("SELECT kind FROM budget_owner_inbox_reads").scalars().all(),
+                             ["mortgage_due"])
+            with self.assertRaises(IntegrityError):
+                conn.exec_driver_sql(insert, ("device_added", HEX_B))
+
+        upgraded, _ = db.init_db(self.path)
+        with upgraded.begin() as conn:
+            self.assertEqual(conn.exec_driver_sql("SELECT version_num FROM alembic_version").scalar_one(), HEAD)
+            conn.exec_driver_sql(insert, ("device_added", HEX_B))
+            self.assertEqual(conn.exec_driver_sql("PRAGMA foreign_key_check").all(), [])
 
     def test_migration_0019_zero_drift_constraints_restrictive_fk_and_roundtrip(self):
         engine = db.make_engine(self.path)
