@@ -102,7 +102,9 @@ from pydantic.json_schema import models_json_schema
 # Documentation-only follow-up to 0.40.0: clarify the #262 budget browser-session requirement and the
 # receipts device-token exception. No schema or wire change.
 # 0.41.0: persistent root-category hues and explicit even re-spreading (migration 0026, down_revision 0025).
-CONTRACT_VERSION = "0.41.0"
+
+# 0.42.0: queue Gmail syncs and expose manual-forward review metadata (migration 0027, down_revision 0026).
+CONTRACT_VERSION = "0.42.0"
 OPENAPI_PATH = Path(__file__).resolve().parent.parent / "docs" / "api" / "openapi.json"
 
 # De-duplicated string literals (SonarPython S1192): the OpenAPI content-type, the paths reused
@@ -2715,6 +2717,8 @@ class BudgetReceiptSummary(BaseModel):
     due_date: Annotated[str, Field(pattern=r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
                                    json_schema_extra={"format": "date"})] | None = None
     import_expires_at: float | None = None
+    forwarded_manually: bool = False
+    forwarded_sender_domain: Annotated[str, Field(min_length=1, max_length=253)] | None = None
 
 
 class BudgetReceiptDetail(BudgetReceiptSummary):
@@ -2847,11 +2851,7 @@ class BudgetReceiptGmailSyncResult(BaseModel):
     model_config = _READ
     ok: Literal[True]
     sync_phase: BudgetReceiptGmailSyncPhase
-    imported_count: int
-    skipped_count: int
-    has_more: bool
-    attention: BudgetReceiptGmailAttention | None
-    next_sync_at: float
+    version: int
 
 
 class BudgetReceiptGmailStatus(BaseModel):
@@ -2870,6 +2870,7 @@ class BudgetReceiptGmailStatus(BaseModel):
     last_http_status: int | None
     last_error: str | None
     pending_imported_count: int
+    batch_processed_count: int
     google_revoke_url: Literal["https://myaccount.google.com/linkedapps"]
     google_revoke_affects_calendar_sync: Literal[True]
 
@@ -4120,16 +4121,22 @@ def _gmail_receipt_paths():
     for name, operation, summary, request_model, response_model, conflict in (
         ("grant", "setBudgetReceiptGmailGrant", "Enable or disable the local Gmail grant",
          "BudgetReceiptGmailGrantRequest", "BudgetReceiptGmailGrantResult",
-         "Version conflict or a missing authoritative SQLite users backend."),
+         "Version conflict, missing authoritative SQLite users backend, or Gmail busy (budget_receipt_gmail_busy)."),
         ("revoke", "revokeBudgetReceiptGmailGrant", "Revoke the local grant and purge unconfirmed imports",
          "BudgetReceiptGmailRevokeRequest", "BudgetReceiptGmailGrantResult",
-         "Version conflict or a missing authoritative SQLite users backend."),
-        ("sync", "syncBudgetReceiptGmail", "Run one bounded Gmail import batch",
+         "Version conflict, missing authoritative SQLite users backend, or Gmail busy (budget_receipt_gmail_busy)."),
+        ("sync", "syncBudgetReceiptGmail", "Schedule one Gmail import for the background poller",
          "BudgetReceiptGmailSyncRequest", "BudgetReceiptGmailSyncResult",
-         "Grant is inactive, the sync is already running, or authoritative SQLite users are unavailable."),
+         "Grant is inactive or authoritative SQLite users are unavailable."),
     ):
         responses = _budget_responses(response_model)
-        responses["200"]["description"] = summary
+        if name == "sync":
+            accepted = responses.pop("200")
+            accepted["description"] = ("Accepted for the background poller. Kicks share queued or running work. "
+                                       "A full-resync request upgrades that work.")
+            responses["202"] = accepted
+        else:
+            responses["200"]["description"] = summary
         responses["409"] = _receipt_error(conflict)
         responses["411"] = _receipt_error("Content-Length is required.")
         responses["413"] = _receipt_error("JSON body exceeds 4096 bytes.")

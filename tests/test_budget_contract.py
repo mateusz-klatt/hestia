@@ -272,7 +272,7 @@ class BudgetOpenApiTests(unittest.TestCase):
         self.assertIn("budget_receipt_quota_exceeded", parse_limit)
         self.assertIn("131072", receipts["/api/budget/receipts/confirm"]["post"]["responses"]["413"]["description"])
         self.assertIn("16384", receipts["/api/budget/receipts/list"]["post"]["responses"]["413"]["description"])
-        self.assertEqual(document["info"]["version"], "0.41.0")
+        self.assertEqual(document["info"]["version"], "0.42.0")
         receipt_schemas = document["components"]["schemas"]
         self.assertEqual(receipt_schemas["BudgetReceiptDeviceRedeemResult"]["properties"]["expires_at"]["format"],
                          "date-time")
@@ -298,7 +298,13 @@ class BudgetOpenApiTests(unittest.TestCase):
             self.assertEqual(version["name"], "X-Hestia-Contract-Version")
             self.assertFalse(version["required"])
         self.assertNotIn("parameters", receipts["/api/budget/receipts/gmail-status"]["get"])
-        self.assertIn("429", receipts["/api/budget/receipts/gmail-sync"]["post"]["responses"])
+        sync_post = receipts["/api/budget/receipts/gmail-sync"]["post"]
+        self.assertIn("202", sync_post["responses"])
+        self.assertNotIn("200", sync_post["responses"])
+        self.assertIn("429", sync_post["responses"])
+        self.assertEqual(set(document["components"]["schemas"]["BudgetReceiptGmailSyncResult"]["required"]),
+                         {"ok", "sync_phase", "version"})
+        self.assertIn("batch_processed_count", document["components"]["schemas"]["BudgetReceiptGmailStatus"]["required"])
         batch = analytics["/api/budget/analytics/rule-batch-preview"]["post"]["description"]
         self.assertIn("1..100", batch)
         self.assertIn("All-or-nothing", batch)

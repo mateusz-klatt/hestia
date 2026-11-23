@@ -24,6 +24,7 @@ import unicodedata
 
 PARSER_SOCKET = "/run/hestia-receipt-parser/worker.sock"
 PARSE_TIMEOUT_SECONDS = 5.0
+_READY_TIMEOUT_SECONDS = 1.0
 MAX_HTML_BYTES = 1024 * 1024
 MAX_PDF_BYTES = 5 * 1024 * 1024
 MAX_TEXT_BYTES = 32 * 1024
@@ -114,8 +115,8 @@ class ReceiptParserWorker:
     def __init__(self, socket_path: str = PARSER_SOCKET):
         self.socket_path = socket_path
 
-    def _exchange(self, request: bytes) -> bytes:
-        deadline = time.monotonic() + PARSE_TIMEOUT_SECONDS
+    def _exchange(self, request: bytes, *, timeout: float) -> bytes:
+        deadline = time.monotonic() + timeout
         try:
             with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
                 connection.settimeout(_remaining(deadline))
@@ -129,14 +130,14 @@ class ReceiptParserWorker:
 
     def ready(self) -> bool:
         try:
-            return self._exchange(b"?") == b"+"
+            return self._exchange(b"?", timeout=_READY_TIMEOUT_SECONDS) == b"+"
         except WorkerUnavailable:
             return False
 
     def parse(self, kind: str, payload: bytes) -> str:
         code = _KINDS.get(kind, b"")
         _validate_request(code, payload)
-        return _validate_output(self._exchange(code + payload))
+        return _validate_output(self._exchange(code + payload, timeout=PARSE_TIMEOUT_SECONDS))
 
 
 class _InvoiceHTML(HTMLParser):

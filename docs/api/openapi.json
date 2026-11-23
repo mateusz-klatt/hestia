@@ -9549,6 +9549,25 @@
             "default": null,
             "title": "Due Date"
           },
+          "forwarded_manually": {
+            "default": false,
+            "title": "Forwarded Manually",
+            "type": "boolean"
+          },
+          "forwarded_sender_domain": {
+            "anyOf": [
+              {
+                "maxLength": 253,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Forwarded Sender Domain"
+          },
           "image_available": {
             "title": "Image Available",
             "type": "boolean"
@@ -10080,6 +10099,10 @@
             "title": "Backoff Until",
             "type": "number"
           },
+          "batch_processed_count": {
+            "title": "Batch Processed Count",
+            "type": "integer"
+          },
           "configured": {
             "title": "Configured",
             "type": "boolean"
@@ -10186,6 +10209,7 @@
           "last_http_status",
           "last_error",
           "pending_imported_count",
+          "batch_processed_count",
           "google_revoke_url",
           "google_revoke_affects_calendar_sync"
         ],
@@ -10206,43 +10230,10 @@
       },
       "BudgetReceiptGmailSyncResult": {
         "properties": {
-          "attention": {
-            "anyOf": [
-              {
-                "enum": [
-                  "authorization",
-                  "configuration",
-                  "identity_mismatch",
-                  "quota"
-                ],
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Attention"
-          },
-          "has_more": {
-            "title": "Has More",
-            "type": "boolean"
-          },
-          "imported_count": {
-            "title": "Imported Count",
-            "type": "integer"
-          },
-          "next_sync_at": {
-            "title": "Next Sync At",
-            "type": "number"
-          },
           "ok": {
             "const": true,
             "title": "Ok",
             "type": "boolean"
-          },
-          "skipped_count": {
-            "title": "Skipped Count",
-            "type": "integer"
           },
           "sync_phase": {
             "enum": [
@@ -10253,16 +10244,16 @@
             ],
             "title": "Sync Phase",
             "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
           }
         },
         "required": [
           "ok",
           "sync_phase",
-          "imported_count",
-          "skipped_count",
-          "has_more",
-          "attention",
-          "next_sync_at"
+          "version"
         ],
         "title": "BudgetReceiptGmailSyncResult",
         "type": "object"
@@ -10791,6 +10782,25 @@
             ],
             "default": null,
             "title": "Due Date"
+          },
+          "forwarded_manually": {
+            "default": false,
+            "title": "Forwarded Manually",
+            "type": "boolean"
+          },
+          "forwarded_sender_domain": {
+            "anyOf": [
+              {
+                "maxLength": 253,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Forwarded Sender Domain"
           },
           "image_available": {
             "title": "Image Available",
@@ -14346,7 +14356,7 @@
   "info": {
     "description": "Local cloud-free smart-home control API. Generated from hestia/api_contract.py \u2014 do not edit by hand; run `python -m hestia.api_contract`.",
     "title": "hestia API",
-    "version": "0.41.0"
+    "version": "0.42.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -22068,7 +22078,7 @@
                 }
               }
             },
-            "description": "Version conflict or a missing authoritative SQLite users backend."
+            "description": "Version conflict, missing authoritative SQLite users backend, or Gmail busy (budget_receipt_gmail_busy)."
           },
           "411": {
             "content": {
@@ -22208,7 +22218,7 @@
                 }
               }
             },
-            "description": "Version conflict or a missing authoritative SQLite users backend."
+            "description": "Version conflict, missing authoritative SQLite users backend, or Gmail busy (budget_receipt_gmail_busy)."
           },
           "411": {
             "content": {
@@ -22370,7 +22380,7 @@
           "required": true
         },
         "responses": {
-          "200": {
+          "202": {
             "content": {
               "application/json": {
                 "schema": {
@@ -22378,7 +22388,7 @@
                 }
               }
             },
-            "description": "Run one bounded Gmail import batch"
+            "description": "Accepted for the background poller. Kicks share queued or running work. A full-resync request upgrades that work."
           },
           "400": {
             "content": {
@@ -22428,7 +22438,7 @@
                 }
               }
             },
-            "description": "Grant is inactive, the sync is already running, or authoritative SQLite users are unavailable."
+            "description": "Grant is inactive or authoritative SQLite users are unavailable."
           },
           "411": {
             "content": {
@@ -22491,7 +22501,7 @@
             "description": "budget configuration unavailable"
           }
         },
-        "summary": "Run one bounded Gmail import batch",
+        "summary": "Schedule one Gmail import for the background poller",
         "x-required-role": "admin"
       }
     },

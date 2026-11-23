@@ -6,7 +6,6 @@ from email.utils import getaddresses
 import re
 
 from .gmail_address import canonical_domain, canonical_mailbox
-from .gmail_invoice import has_provider_invoice_number
 
 _PUBLIC_WEBMAIL = frozenset({
     "gmail.com", "icloud.com", "wp.pl", "onet.pl", "o2.pl", "interia.pl", "outlook.com", "yahoo.com",
@@ -19,6 +18,7 @@ _AUTH_RESULT = re.compile(r"\s*(dkim|spf|dmarc)(?:/[0-9]+)?\s*=\s*pass(?=\s|$)",
 _AUTH_PROPERTY = re.compile(rf'\s+([a-z][a-z0-9._-]*)\s*=\s*({_QUOTED_VALUE}|[^\s"]+)', re.ASCII | re.IGNORECASE)
 _MAX_AUTH_CHARS = 16 * 1024
 
+_INVALID_FORWARD = object()
 _MAX_FORWARD_DEPTH = 2
 _MAX_FORWARD_BYTES = 1024 * 1024
 _MAX_FORWARD_HEADER_LINES = 32
@@ -64,9 +64,8 @@ def normalize_sender_rules(sender_allowlist, spouse_forward_senders, known_merch
     merchants = set(_normalize_rules(known_merchant_domains, _domain_rule))
     if not direct and not spouse:
         raise ValueError(_CONFIG_ERROR)
-    # An exact public-webmail rule remains exact even inside a forward.
-    merchants.update(rule.rpartition("@")[2] for rule in direct)
-    return direct, spouse, tuple(sorted(merchants - _PUBLIC_WEBMAIL))
+    merchants.update(rule[1:] for rule in direct if rule.startswith("@"))
+    return direct, spouse, tuple(sorted(merchants))
 
 
 def _mailbox(value):
@@ -178,7 +177,15 @@ def _pass_domain(method, properties, signatures):
     return address.rpartition("@")[2] if address else canonical_domain(value)
 
 
-def _gmail_authenticated(domain, results, signatures):
+def _domains_align(authenticated, domain, *, relaxed):
+    """Strict equality, or a From subdomain of a multi-label authenticated domain."""
+    if not authenticated or authenticated == domain:
+        return bool(authenticated) and authenticated == domain
+    return (relaxed and len(authenticated.split(".")) >= 2
+            and domain.endswith("." + authenticated))
+
+
+def _gmail_authenticated(domain, results, signatures, *, relaxed=False):
     if not results:
         return False
     # Gmail strips incoming Authentication-Results claiming its own authserv-id.
@@ -192,13 +199,17 @@ def _gmail_authenticated(domain, results, signatures):
             continue
         properties = _auth_properties(clause[result.end():])
         method = result[1].lower()
-        # Strict alignment requires the actual authenticated domain to match From.
-        if properties is not None and _pass_domain(method, properties, signatures) == domain:
+        # DMARC header.from stays an exact From-domain match. DKIM and SPF may use
+        # the allowlist's subdomain rule; everyone else stays strict.
+        if properties is not None and _domains_align(
+            _pass_domain(method, properties, signatures), domain,
+            relaxed=relaxed and method != "dmarc",
+        ):
             aligned.add(method)
     return "dkim" in aligned and bool(aligned & {"spf", "dmarc"})
 
 
-def classify_sender(headers, sender_allowlist, spouse_forward_senders):
+def classify_sender(headers, sender_allowlist, spouse_forward_senders, owner_mailbox=None):
     """Classify ordered outer headers, preserving duplicates and the topmost AR."""
     by_name = {}
     for name, value in headers:
@@ -214,8 +225,11 @@ def classify_sender(headers, sender_allowlist, spouse_forward_senders):
         if not sender or sender.rpartition("@")[2] != domain:
             return "untrusted"
     if not _gmail_authenticated(domain, by_name.get("authentication-results", ()),
-                               by_name.get("dkim-signature", ())):
+                               by_name.get("dkim-signature", ()),
+                               relaxed=_on_allowlist(address, sender_allowlist)):
         return "untrusted"
+    if owner_mailbox and address == owner_mailbox:
+        return "owner_forward"
     if address in spouse_forward_senders:
         return "spouse_forward"
     if _on_allowlist(address, sender_allowlist):
@@ -223,11 +237,13 @@ def classify_sender(headers, sender_allowlist, spouse_forward_senders):
     return "untrusted"
 
 
-def _inline_forward(text, sender_allowlist):
+def _inline_forward(text):
     lines = text.splitlines()
     markers = [i for i, line in enumerate(lines) if line.strip(" \t-:").casefold() in _FORWARD_MARKERS]
-    if len(markers) != 1:
+    if not markers:
         return None
+    if len(markers) != 1:
+        return _INVALID_FORWARD
     marker = markers[0]
     fields = {}
     chars = 0
@@ -242,43 +258,55 @@ def _inline_forward(text, sender_allowlist):
             break
         chars += len(line) + 1
         if chars > _MAX_FORWARD_HEADER_CHARS:
-            return None
+            return _INVALID_FORWARD
         if name == "od":
             name = "from"
         if name in fields:
-            return None
+            return _INVALID_FORWARD
         fields[name] = value.strip()
     else:
-        return None
+        return _INVALID_FORWARD
     address = _mailbox(fields.get("from", ""))
-    if not address or not _on_allowlist(address, sender_allowlist):
-        return None
-    body = "\n".join(lines[index:])
-    if not has_provider_invoice_number(body):
-        return None
+    if not address:
+        return _INVALID_FORWARD
     original = EmailMessage()
     original["From"] = address
     if fields.get("message-id"):
         original["Message-ID"] = fields["message-id"]
-    original.set_content(body)
+    original.set_content("\n".join(lines[index:]))
     return original
 
 
-def _inline_body(message, render_html):
-    body = message.get_body(("plain", "html") if render_html else ("plain",))
-    if body is None:
-        return None
-    payload = body.get_payload(decode=True)
-    if not payload or len(payload) > _MAX_FORWARD_BYTES:
-        return None
-    try:
-        text = payload.decode(body.get_content_charset() or "utf-8", errors="replace")
-    except LookupError:
-        return None
-    if body.get_content_subtype() == "html":
-        utf8 = text.encode("utf-8")
-        return render_html(utf8) if len(utf8) <= _MAX_FORWARD_BYTES else None
-    return text
+def _inline_original(message, render_html):
+    original = None
+    for subtype in ("plain", "html"):
+        part = message.get_body((subtype,))
+        if part is None or (subtype == "html" and render_html is None):
+            continue
+        payload = part.get_payload(decode=True)
+        if payload is None or part.defects or len(payload) > _MAX_FORWARD_BYTES:
+            return _INVALID_FORWARD
+        try:
+            text = payload.decode(part.get_content_charset() or "utf-8", errors="replace")
+        except LookupError:
+            return _INVALID_FORWARD
+        if subtype == "html":
+            if not text.strip():
+                continue
+            utf8 = text.encode("utf-8")
+            if len(utf8) > _MAX_FORWARD_BYTES:
+                return _INVALID_FORWARD
+            text = render_html(utf8)
+        candidate = _inline_forward(text)
+        if candidate is _INVALID_FORWARD:
+            return _INVALID_FORWARD
+        if candidate is None:
+            continue
+        if original is None:
+            original = candidate
+        elif any(original.get(name) != candidate.get(name) for name in ("From", "Message-ID")):
+            return _INVALID_FORWARD
+    return original
 
 
 def mime_parts(message):
@@ -291,45 +319,55 @@ def mime_parts(message):
             parts.extend(reversed(list(part.iter_parts())))
 
 
-def _forwarded_original(message, sender_allowlist, render_html):
+def _forwarded_original(message, render_html):
+    """Return the next envelope, None at the end, or _INVALID_FORWARD."""
     wrappers = [part for part in mime_parts(message) if part.get_content_type() == "message/rfc822"]
-    if wrappers:
-        if len(wrappers) != 1:
-            return None
-        wrapper = wrappers[0]
-        encodings = [value.strip().lower() for name, value in wrapper.raw_items()
-                     if name.lower() == "content-transfer-encoding"]
-        # RFC 2046 §5.2.1 applies these encodings to the wrapper. The
-        # embedded message can still transfer-encode its own body parts.
-        if len(encodings) > 1 or (encodings and encodings[0] not in _RFC822_TRANSFER_ENCODINGS):
-            return None
-        originals = list(wrapper.iter_parts())
-        if len(originals) != 1 or originals[0].defects:
-            return None
-        return originals[0]
-    text = _inline_body(message, render_html)
-    return _inline_forward(text, sender_allowlist) if text else None
+    inline = _inline_original(message, render_html)
+    if not wrappers:
+        return inline
+    if len(wrappers) != 1 or inline is not None:
+        return _INVALID_FORWARD
+
+    wrapper = wrappers[0]
+    encodings = [value.strip().lower() for name, value in wrapper.raw_items()
+                 if name.lower() == "content-transfer-encoding"]
+    # RFC 2046 §5.2.1 applies these encodings to the wrapper. The
+    # embedded message can still transfer-encode its own body parts.
+    if wrapper.defects or len(encodings) > 1 or (encodings and encodings[0] not in _RFC822_TRANSFER_ENCODINGS):
+        return _INVALID_FORWARD
+    originals = list(wrapper.iter_parts())
+    if len(originals) != 1 or originals[0].defects:
+        return _INVALID_FORWARD
+    return originals[0]
 
 
-def unwrap_forward(message, known_merchant_domains, require_known=True, *,
-                   sender_allowlist=(), render_html=None):
-    """Select one original, after the caller has classified the outer spouse sender.
+def _forward_sender(message):
+    authors = [value for name, value in message.raw_items() if name.lower() == "from"]
+    return _mailbox(authors[0]) if len(authors) == 1 else None
 
-    Every relay must be a configured merchant. The legacy require_known option
-    cannot bypass this boundary. Inline HTML uses the supplied isolated worker.
-    """
+
+def forward_sender_domain(message):
+    """Return the inner From domain."""
+    address = _forward_sender(message)
+    return address.rpartition("@")[2] if address else None
+
+
+def unwrap_trusted_forward(message, *, sender_allowlist=(), render_html=None):
+    """Return the final original and whether it needs manual review."""
+    current = message
+    manual = False
     for _ in range(_MAX_FORWARD_DEPTH):
-        message = _forwarded_original(message, sender_allowlist, render_html)
-        if message is None:
+        original = _forwarded_original(current, render_html)
+        if original is None:
+            break
+        if original is _INVALID_FORWARD:
             return None
-        authors = [value for name, value in message.raw_items() if name.lower() == "from"]
-        address = _mailbox(authors[0]) if len(authors) == 1 else None
-        if not address:
+        address = _forward_sender(original)
+        if address is None:
             return None
-        domain = address.rpartition("@")[2]
-        if not (_on_allowlist(address, sender_allowlist)
-                or any(_domain_matches(domain, rule) for rule in known_merchant_domains)):
+        manual |= address not in sender_allowlist
+        current = original
+    else:
+        if _forwarded_original(current, render_html) is not None:
             return None
-        if not any(part.get_content_type() == "message/rfc822" for part in mime_parts(message)):
-            return message
-    return None
+    return (current, manual) if current is not message else None

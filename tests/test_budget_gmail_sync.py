@@ -13,8 +13,9 @@ from sqlalchemy import select
 from hestia import db
 from hestia.budget import gmail_address, gmail_client as client_module, gmail_sync as sync_module
 from hestia.budget.gmail_client import GMAIL_API, TOKEN_URL, GmailClient, GmailCredentials, GmailError, RunLimit
-from hestia.budget.gmail_store import DAY, GMAIL_MESSAGE_DOMAIN, GmailStore, PendingMessage, digest
+from hestia.budget.gmail_store import DAY, GMAIL_MESSAGE_DOMAIN, IMPORT_TTL, GmailStore, PendingMessage, digest
 from hestia.budget.gmail_sync import GmailSettings, GmailSync
+from hestia.budget.receipt_reconcile import reconcile_receipt_links
 from hestia.budget.receipt_store import BudgetReceiptStore
 from hestia.calendar_sync.providers import HTTPResponse, ProviderError
 
@@ -281,6 +282,59 @@ class GmailSyncTests(TestCase):
         self.assertEqual([json.loads(row.after_json)["action"] for row in self.rows(db.BudgetAnalyticsAudit)],
                          ["enable", "disable", "revoke"])
 
+    def test_manual_review_expiry_cap_and_revoke_preserve_receipt_returned_to_review(self):
+        self.enable()
+        manual = PendingMessage("a" * 64, NOW, "owner_forward", "imported",
+                                forwarded_manually=True, sender_domain="vendor.test")
+        old_items = tuple(replace(manual, gmail_id_hmac=key * 64) for key in "abc")
+        self.assertEqual(self.store.commit(OWNER, 1, {}, old_items), (3, 0, True))
+        messages = {row.gmail_id_hmac[0]: row for row in self.rows(db.BudgetGmailMessage)}
+        with self.sessions.begin() as session:
+            legacy = session.get(db.BudgetReceipt, messages["b"].receipt_id)
+            legacy.import_expires_at = None
+            session.add(db.BudgetConnection(id="connection", owner=OWNER, application_id="fixture",
+                                            bank_name="Fixture", country="PL", enabled=True,
+                                            next_attempt=0, failures=0))
+            session.flush()
+            session.add(db.BudgetAccount(id="account", connection_id="connection", owner=OWNER,
+                                         identification_hash="fixture", enabled=True, balances_json="{}"))
+            session.flush()
+            session.add(db.BudgetTransaction(account_id="account", entry_reference="old-entry",
+                                             payload_json="{}", observed_at=NOW, uncertain=True))
+            session.flush()
+            confirmed = session.get(db.BudgetReceipt, messages["c"].receipt_id)
+            confirmed.status, confirmed.payment_method, confirmed.import_expires_at = "confirmed", "card", None
+            confirmed.receipt_date, confirmed.total_amount, confirmed.currency = "2026-11-21", "100", "PLN"
+            confirmed.linked_account_id, confirmed.linked_entry_ref = "account", "old-entry"
+            confirmed.linked_fingerprint, confirmed.linked_evidence = "prior-fingerprint", "{}"
+            self.assertEqual(reconcile_receipt_links(session, OWNER, NOW), 1)
+            self.assertEqual(confirmed.status, "needs_review")
+
+        self.assertEqual(self.store.status(OWNER)["pending_imported_count"], 2)
+        with mock.patch("hestia.budget.gmail_store.MAX_PENDING_IMPORTS", 2):
+            self.assertTrue(self.store.at_pending_cap(OWNER))
+        with mock.patch("hestia.budget.gmail_store.MAX_PENDING_IMPORTS", 3):
+            self.assertFalse(self.store.at_pending_cap(OWNER))
+
+        self.tick(IMPORT_TTL - 1)
+        self.store.retain(OWNER, 1)
+        self.assertEqual(len(self.rows(db.BudgetReceipt)), 3)
+        with self.sessions() as session:
+            self.assertEqual(session.get(db.BudgetReceipt, messages["a"].receipt_id).import_expires_at,
+                             NOW + IMPORT_TTL)
+        self.tick(1)
+        self.store.retain(OWNER, 1)
+        self.assertEqual([row.id for row in self.rows(db.BudgetReceipt)], [messages["c"].receipt_id])
+        tombstones = {row.gmail_id_hmac[0]: row for row in self.rows(db.BudgetGmailMessage)}
+        for key in "ab":
+            self.assertEqual((tombstones[key].outcome, tombstones[key].receipt_id), ("deleted", None))
+
+        fresh = replace(manual, gmail_id_hmac="d" * 64, internal_date=self.clock.now)
+        self.assertEqual(self.store.commit(OWNER, 1, {}, (fresh,)), (1, 0, True))
+        self.service.transition(OWNER, 2, "revoked")
+        self.assertEqual([row.id for row in self.rows(db.BudgetReceipt)], [messages["c"].receipt_id])
+        self.assertEqual(self.rows(db.BudgetGmailMessage), [])
+
     def test_bad_identity_on_enable_and_sync_never_persists_email(self):
         other = "wrong@example.test"
         self.transport.profile["emailAddress"] = other
@@ -367,6 +421,45 @@ class GmailSyncTests(TestCase):
         receipts.purge_expired()
         self.assertEqual(self.rows(db.BudgetGmailMessage), [])
 
+    def test_manual_placeholder_and_authenticated_invoice_dedupe_independently_in_either_order(self):
+        self.enable()
+        for manual_id, direct_id, rfc, manual_first in (("a", "b", "e", True), ("c", "d", "f", False)):
+            with self.subTest(manual_first=manual_first):
+                manual = PendingMessage(manual_id * 64, NOW, "owner_forward", "imported", rfc * 64,
+                                        forwarded_manually=True, sender_domain="vendor.test")
+                direct = PendingMessage(direct_id * 64, NOW, "direct_allowlist", "imported", rfc * 64, INVOICE)
+                items = (manual, direct) if manual_first else (direct, manual)
+                self.assertEqual(self.store.commit(OWNER, 1, {}, items), (2, 0, True))
+                self.assertEqual(self.store.commit(OWNER, 1, {}, items), (0, 0, True))
+                with self.sessions() as session:
+                    review = session.get(db.BudgetGmailMessage, (OWNER, manual.gmail_id_hmac))
+                    invoice = session.get(db.BudgetGmailMessage, (OWNER, direct.gmail_id_hmac))
+                    self.assertIsNone(review.rfc_message_id_hmac)
+                    self.assertEqual(invoice.rfc_message_id_hmac, rfc * 64)
+                    self.assertEqual(session.get(db.BudgetReceipt, review.receipt_id).status, "needs_review")
+                    self.assertEqual(session.get(db.BudgetReceipt, invoice.receipt_id).status, "imported")
+
+    def test_legacy_linked_placeholder_hash_does_not_suppress_an_invoice(self):
+        self.enable()
+        for manual_id, direct_id, rfc, expire_first in (("a", "b", "e", False), ("c", "d", "f", True)):
+            with self.subTest(expire_first=expire_first):
+                now = self.clock.now
+                manual = PendingMessage(manual_id * 64, now, "spouse_forward", "imported",
+                                        forwarded_manually=True, sender_domain="vendor.test")
+                self.assertEqual(self.store.commit(OWNER, 1, {}, (manual,)), (1, 0, True))
+                with self.sessions.begin() as session:
+                    row = session.get(db.BudgetGmailMessage, (OWNER, manual.gmail_id_hmac))
+                    row.rfc_message_id_hmac = rfc * 64
+                if expire_first:
+                    self.tick(IMPORT_TTL)
+                    self.store.retain(OWNER, 1)
+                    with self.sessions() as session:
+                        row = session.get(db.BudgetGmailMessage, (OWNER, manual.gmail_id_hmac))
+                        self.assertEqual((row.outcome, row.rfc_message_id_hmac), ("deleted", None))
+                direct = PendingMessage(direct_id * 64, self.clock.now, "direct_allowlist", "imported",
+                                        rfc * 64, INVOICE)
+                self.assertEqual(self.store.commit(OWNER, 1, {}, (direct,)), (1, 0, True))
+
     def test_quota_delay_retains_backfill_page_and_honors_retry_after(self):
         self.enable()
         self.transport.routes[("/messages", None)] = response(page("mail-one", token="backfill-two"))
@@ -378,6 +471,7 @@ class GmailSyncTests(TestCase):
                          (None, "100", "backfill-two"))
         self.assertEqual((state.backoff_until, state.next_sync_at, state.failures, state.last_http_status),
                          (NOW + 180, NOW + SETTINGS.sync_interval_seconds, 1, 429))
+        self.assertEqual(self.store.status(OWNER)["batch_processed_count"], 1)
         self.assertIsNone(self.sync(poll=True))
         with self.assertRaisesRegex(GmailError, "backoff"):
             self.sync()
@@ -650,7 +744,7 @@ class GmailSyncTests(TestCase):
             with self.assertRaisesRegex(GmailError, "sync_busy"):
                 self.sync()
         with mock.patch.object(self.client, "lock", return_value=mock.MagicMock(acquire=lambda **_: False)):
-            with self.assertRaisesRegex(GmailError, "transition_busy"):
+            with self.assertRaisesRegex(GmailError, "^budget_receipt_gmail_busy$"):
                 self.service.transition(OWNER, 2, "revoked")
         self.assertEqual(self.store.state(OWNER).grant_status, "active")
         self.service.transition(OWNER, 2, "revoked")
@@ -713,3 +807,178 @@ class GmailSyncTests(TestCase):
         self.assertEqual(self.rows(db.BudgetReceipt), [])
         self.assertEqual(self.rows(db.BudgetGmailMessage), [])
         self.assertIsNone(self.store.state(OWNER).last_error)
+
+    def test_restart_after_committed_chunk_resumes_without_duplicates(self):
+        self.enable()
+        self.transport.routes[("/messages", None)] = response(page("one", "two"))
+        self.service.schedule(OWNER)
+        process = self.processor.process
+
+        def crash_on_second(*args):
+            if args[1] == "two":
+                raise RuntimeError("synthetic container stop")
+            return process(*args)
+
+        with mock.patch.object(sync_module, "BATCH_COMMIT_SIZE", 1), \
+                mock.patch.object(self.processor, "process", side_effect=crash_on_second):
+            with self.assertRaisesRegex(RuntimeError, "container stop"):
+                self.sync(poll=True)
+        state = self.store.state(OWNER)
+        self.assertEqual((state.sync_phase, state.history_id, state.pending_history_id, state.run_requested),
+                         ("backfill", None, "100", 1))
+        self.assertEqual(len(self.rows(db.BudgetReceipt)), 1)
+        with sync_module._sync_lock(self.path):
+            pass
+
+        self.processor = SyntheticProcessor(self.clock)
+        self.client = GmailClient(self.transport, monotonic=self.clock.monotonic, sleep=self.clock.sleep)
+        self.service = GmailSync(SETTINGS, self.store, self.client, self.processor, self.path, jitter=lambda *_: 0)
+        self.tick(60)
+        restarted = self.sync(poll=True)
+        state = self.store.state(OWNER)
+        self.assertEqual(restarted["imported_count"], 1)
+        self.assertEqual(self.processor.processed, ["two"])
+        self.assertEqual(len(self.rows(db.BudgetReceipt)), 2)
+        self.assertEqual(len(self.rows(db.BudgetGmailMessage)), 2)
+        self.assertEqual((state.sync_phase, state.history_id, state.pending_history_id, state.run_requested),
+                         ("idle", "100", None, 0))
+
+    def test_repeated_kicks_never_run_parallel_pollers(self):
+        self.enable()
+        self.transport.routes[("/messages", None)] = response(page("one"))
+        self.service.schedule(OWNER)
+        self.service.schedule(OWNER)
+        before_profiles = len(self.transport.requests("/profile"))
+        started = threading.Event()
+        unblock = threading.Event()
+        errors = []
+
+        def profile(_params):
+            started.set()
+            assert unblock.wait(3)
+            return response(self.transport.profile)
+
+        self.transport.routes[("/profile", None)] = profile
+
+        def poll():
+            try:
+                self.sync(poll=True)
+            except GmailError as error:
+                errors.append(error.code)
+
+        first = threading.Thread(target=poll)
+        second = threading.Thread(target=poll)
+        first.start()
+        try:
+            self.assertTrue(started.wait(3))
+            second.start()
+            second.join(3)
+            self.assertFalse(second.is_alive())
+        finally:
+            unblock.set()
+            first.join(3)
+            second.join(3)
+        self.assertFalse(first.is_alive())
+        self.assertIn(errors, ([], ["budget_receipt_gmail_sync_busy"]))
+        self.assertEqual(len(self.transport.requests("/profile")), before_profiles + 1)
+        self.assertEqual(len(self.rows(db.BudgetReceipt)), 1)
+        self.assertEqual(self.store.state(OWNER).run_requested, 0)
+
+    def test_schedule_queues_a_poller_run_without_calling_gmail(self):
+        with self.assertRaisesRegex(GmailError, "disabled"):
+            self.service.schedule(OWNER)
+        with self.assertRaisesRegex(GmailError, "unconfigured"):
+            self.service.schedule("intruder")
+        self.enable()
+        calls = list(self.transport.calls)
+        queued = self.service.schedule(OWNER)
+        upgraded = self.service.schedule(OWNER, force_full_resync=True)
+        self.assertEqual(upgraded["version"], queued["version"])
+        state = self.store.state(OWNER)
+        self.assertEqual(self.transport.calls, calls)
+        self.assertEqual((queued["ok"], queued["sync_phase"], queued["version"]), (True, "idle", state.version))
+        self.assertEqual((state.run_requested, state.force_full_resync, state.next_sync_at), (1, 1, self.clock.now))
+        kept = self.service.schedule(OWNER, force_full_resync=False)
+        self.assertEqual(kept["version"], queued["version"])
+        self.assertEqual(self.store.state(OWNER).force_full_resync, 1)
+        with self.sessions.begin() as session:
+            session.get(db.BudgetGmailState, OWNER).attention = "identity_mismatch"
+        with self.assertRaisesRegex(GmailError, "mailbox_mismatch"):
+            self.service.schedule(OWNER)
+        self.assertEqual(self.store.state(OWNER).version, kept["version"])
+
+    def test_poller_consumes_a_scheduled_full_resync(self):
+        self.enable()
+        self.transport.routes[("/messages", None)] = response(page("mail-one"))
+        self.sync()
+        self.tick(60)
+        self.service.schedule(OWNER, force_full_resync=True)
+        before_messages = len(self.transport.requests("/messages"))
+        before_history = len(self.transport.requests("/history"))
+        self.sync(poll=True)
+        state = self.store.state(OWNER)
+        self.assertEqual((state.force_full_resync, state.run_requested, state.sync_phase), (0, 0, "idle"))
+        self.assertGreater(len(self.transport.requests("/messages")), before_messages)
+        self.assertEqual(len(self.transport.requests("/history")), before_history)
+
+    def test_poll_waits_out_cooldown_without_recording_a_failure(self):
+        self.enable()
+        self.transport.routes[("/messages", None)] = response(page("mail-one"))
+        self.sync()
+        with self.sessions.begin() as session:
+            row = session.get(db.BudgetGmailState, OWNER)
+            row.next_sync_at = self.clock.now
+            row.run_requested = 1
+        self.assertIsNone(self.sync(poll=True))
+        state = self.store.state(OWNER)
+        self.assertEqual((state.failures, state.run_requested), (0, 1))
+        self.assertEqual(self.service.schedule(OWNER)["version"], state.version)
+        self.assertEqual(self.store.state(OWNER).run_requested, 1)
+        self.tick(60)
+        self.sync(poll=True)
+        self.assertEqual(self.store.state(OWNER).run_requested, 0)
+        self.assertEqual(self.store.state(OWNER).failures, 0)
+
+    def test_scheduled_run_retries_after_quota_attention(self):
+        self.enable()
+        self.transport.routes[("/messages", None)] = response(
+            {"error": {"errors": [{"reason": "dailyLimitExceeded"}]}}, 403)
+        with self.assertRaisesRegex(GmailError, "quota"):
+            self.sync()
+        with self.assertRaisesRegex(GmailError, "backoff"):
+            self.service.schedule(OWNER)
+        state = self.store.state(OWNER)
+        self.assertEqual(state.attention, "quota")
+        self.assertEqual(state.run_requested, 0)
+        self.clock.now = state.backoff_until
+        self.assertIsNone(self.sync(poll=True))
+        self.transport.routes[("/messages", None)] = response(page())
+        self.assertEqual(self.service.schedule(OWNER)["ok"], True)
+        self.sync(poll=True)
+        state = self.store.state(OWNER)
+        self.assertIsNone(state.attention)
+        self.assertEqual((state.sync_phase, state.run_requested, state.failures), ("idle", 0, 0))
+
+    def test_accepted_retry_survives_restart_with_attention_latched(self):
+        self.enable()
+        self.transport.routes[("/profile", None)] = response({}, 401)
+        with self.assertRaisesRegex(GmailError, "authorization"):
+            self.sync()
+        state = self.store.state(OWNER)
+        self.assertEqual(state.attention, "authorization")
+        self.clock.now = state.backoff_until
+        self.service.schedule(OWNER)
+
+        with mock.patch.object(self.processor, "ready", side_effect=RuntimeError("synthetic restart")):
+            with self.assertRaisesRegex(RuntimeError, "synthetic restart"):
+                self.sync(poll=True)
+        state = self.store.state(OWNER)
+        self.assertEqual((state.attention, state.run_requested), ("authorization", 1))
+
+        self.tick(60)
+        del self.transport.routes[("/profile", None)]
+        client = GmailClient(self.transport, monotonic=self.clock.monotonic, sleep=self.clock.sleep)
+        restarted = GmailSync(SETTINGS, self.store, client, self.processor, self.path)
+        self.assertTrue(restarted.sync(OWNER, poll=True)["ok"])
+        state = self.store.state(OWNER)
+        self.assertEqual((state.attention, state.run_requested), (None, 0))

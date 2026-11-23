@@ -8,6 +8,8 @@ import sqlite3
 import tempfile
 import unittest
 
+from tests.migration_head import HEAD
+
 from hestia import db
 from hestia.budget.analytics_core import AnalyticsError
 from hestia.budget.analytics_store import _even_hues, _largest_gap_hue
@@ -68,7 +70,7 @@ class CategoryHueMigrationTests(unittest.TestCase):
         for upgrade in (1, 2):
             with self.subTest(upgrade=upgrade):
                 db.init_db(self.path)
-                self._clean("0026")
+                self._clean(HEAD)
                 with closing(sqlite3.connect(self.path)) as connection:
                     for owner, count in (("alice", 7), ("bob", 3)):
                         rows = connection.execute(

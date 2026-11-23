@@ -78,8 +78,9 @@ def _history_messages(page):
 
 
 def _terms(settings):
-    senders = sorted(set(settings.sender_allowlist + settings.spouse_forward_senders))
-    return tuple(f'from:"{sender.removeprefix("@")}"' for sender in senders)
+    senders = set(settings.sender_allowlist + settings.spouse_forward_senders)
+    senders.add(settings.owner_mailbox)
+    return tuple(f'from:"{sender.removeprefix("@")}"' for sender in sorted(senders))
 
 
 def _query(settings, terms, cutoff=None):
@@ -105,10 +106,10 @@ def _sync_lock(database_path):
 
 
 @contextmanager
-def grant_transition_lock(client, owner):
+def grant_transition_lock(client, owner, *, timeout=35):
     lock = client.lock(owner)
-    if not lock.acquire(timeout=35):
-        raise GmailError("budget_receipt_gmail_transition_busy")
+    if not lock.acquire(timeout=timeout):
+        raise GmailError("budget_receipt_gmail_busy", 409)
     try:
         yield
     finally:
@@ -151,26 +152,29 @@ class GmailSync:
             raise GmailError("mailbox_mismatch", 403, attention="identity_mismatch")
         return _history_id(profile.get("historyId"))
 
-    def transition(self, owner, expected_version, status):
+    def transition(self, owner, expected_version, status, *, defer_profile=False):
         self._require_owner(owner)
-        with grant_transition_lock(self.client, owner):
+        with grant_transition_lock(self.client, owner, timeout=0 if defer_profile else 35):
             self.store.check_version(owner, expected_version)
+            if status == "active" and defer_profile and not self.processor.ready():
+                raise GmailError("parser_unavailable")
             self.client.forget(owner)
             mailbox_hmac = None
             if status == "active":
-                state = self.store.state(owner)
-                run = self.client.run(owner, state.grant_generation, self.settings.credentials,
-                                      lambda: self.store.check_version(owner, expected_version))
-                try:
-                    self._profile(run)
-                except GmailError as error:
-                    self.store.opt_in_error(owner, expected_version, attention=error.attention, code=error.code,
-                                            http_status=error.http_status)
-                    raise
-                finally:
-                    self.client.forget(owner)
+                if not defer_profile:
+                    state = self.store.state(owner)
+                    run = self.client.run(owner, state.grant_generation, self.settings.credentials,
+                                          lambda: self.store.check_version(owner, expected_version))
+                    try:
+                        self._profile(run)
+                    except GmailError as error:
+                        self.store.opt_in_error(owner, expected_version, attention=error.attention, code=error.code,
+                                                http_status=error.http_status)
+                        raise
+                    finally:
+                        self.client.forget(owner)
                 mailbox_hmac = digest(self.settings.hmac_secret, MAILBOX_DOMAIN, self.settings.owner_mailbox)
-            self.store.transition(owner, expected_version, status, mailbox_hmac)
+            self.store.transition(owner, expected_version, status, mailbox_hmac, queue_sync=defer_profile)
             return self.store.status(owner)
 
     def _commit(self, owner, progress, changes, pending=()):
@@ -186,10 +190,13 @@ class GmailSync:
         if full:
             last_sync = state.last_sync_at if state.last_sync_at is not None else now
             cutoff = max(cutoff, last_sync - 7 * DAY)
-        self._commit(owner, progress, {
+        changes = {
             **_PHASE_RESET, "history_id": None, "pending_history_id": profile_history, "resume_cutoff_ts": cutoff,
             "sync_phase": "full_resync" if full else "backfill",
-        })
+        }
+        if full:
+            changes["force_full_resync"] = 0
+        self._commit(owner, progress, changes)
 
     def _completion(self, state):
         now = self.store.clock()
@@ -339,7 +346,7 @@ class GmailSync:
         attention = error.attention
         if error.code == "daily_quota" or hint.suspended:
             attention = "quota"
-        self._commit(owner, progress, {"failures": failures, "backoff_until": deadline,
+        self._commit(owner, progress, {"failures": failures, "backoff_until": deadline, "run_requested": 0,
                                       "next_sync_at": max(deadline, now + self.settings.sync_interval_seconds),
                                       "attention": attention, "last_http_status": error.http_status,
                                       "last_error": error.code})
@@ -351,17 +358,21 @@ class GmailSync:
             generation = state.grant_generation
             self.store.fence(owner, generation)
             now = self.store.clock()
-            if poll and (state.attention is not None or state.next_sync_at > now):
+            if poll and state.attention == "identity_mismatch":
+                return None
+            if poll and not state.run_requested and (state.attention is not None or state.next_sync_at > now):
                 return None
             if state.attention == "identity_mismatch":
                 raise GmailError("mailbox_mismatch", 403, attention="identity_mismatch")
             if state.backoff_until > now:
                 raise GmailError("budget_receipt_gmail_backoff", 429)
             if state.last_attempt_at is not None and state.last_attempt_at + MANUAL_COOLDOWN > now:
+                if poll:
+                    return None
                 raise GmailError("budget_receipt_gmail_cooldown", 429)
             run = self.client.run(owner, generation, self.settings.credentials, lambda: self.store.fence(owner, generation))
             progress = _Progress(generation, run, terms=_terms(self.settings))
-            self._commit(owner, progress, {"last_attempt_at": now})
+            self._commit(owner, progress, {"last_attempt_at": now, "run_requested": 1})
             try:
                 if not self.processor.ready():
                     raise GmailError("parser_unavailable")
@@ -371,15 +382,22 @@ class GmailSync:
                 profile_history = self._profile(run, state.mailbox_hmac)
                 self.store.retain(owner, generation)
                 progress.label_id = self._label(run)
-                if force_full_resync or (state.history_id is None and state.pending_history_id is None):
-                    self._start_recovery(owner, progress, profile_history, state, full=force_full_resync)
-                if state.history_id is None or force_full_resync:
-                    self._backfill(owner, progress)
-                else:
-                    self._incremental(owner, progress, profile_history)
+                state = self.store.state(owner)
+                force = bool(force_full_resync or state.force_full_resync)
+                while True:
+                    if force or (state.history_id is None and state.pending_history_id is None):
+                        self._start_recovery(owner, progress, profile_history, state, full=force)
+                    if state.history_id is None or force:
+                        self._backfill(owner, progress)
+                    else:
+                        self._incremental(owner, progress, profile_history)
+                    state = self.store.state(owner)
+                    if not (state.run_requested and state.force_full_resync):
+                        break
+                    force = True
             except RunLimit:
                 self._commit(owner, progress, {"next_sync_at": self.store.clock() + self.settings.sync_interval_seconds,
-                                              "backoff_until": 0, "failures": 0, "attention": None,
+                                              "backoff_until": 0, "failures": 0, "attention": None, "run_requested": 0,
                                               "last_http_status": None, "last_error": None})
             except GmailError as error:
                 if error.code != "budget_receipt_gmail_disabled":
@@ -390,3 +408,9 @@ class GmailSync:
             return {"ok": True, "sync_phase": state.sync_phase, "imported_count": progress.imported,
                     "skipped_count": progress.skipped, "has_more": state.sync_phase != "idle",
                     "attention": state.attention, "next_sync_at": state.next_sync_at}
+
+    def schedule(self, owner, *, force_full_resync=False):
+        """Record a due poller run. Import work stays on the background loop."""
+        self._require_owner(owner)
+        return self.store.schedule_sync(owner, now=self.store.clock(), force_full_resync=force_full_resync,
+                                        cooldown=MANUAL_COOLDOWN)
