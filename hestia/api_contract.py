@@ -2332,7 +2332,6 @@ class BudgetAnalyticsForecastDeduplication(BaseModel):
     last_observed_date: str
     day_distance: Annotated[int, Field(ge=0, le=5)]
     account_stale: bool
-    baseline_category_id: Annotated[str | None, Field(default=None, json_schema_extra=_OMIT)] = None
 
 
 class BudgetAnalyticsForecastItem(BaseModel):

@@ -1458,17 +1458,6 @@
             "title": "Amount",
             "type": "string"
           },
-          "baseline_category_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Baseline Category Id"
-          },
           "currency": {
             "title": "Currency",
             "type": "string"

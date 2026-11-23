@@ -261,7 +261,7 @@ class BudgetOpenApiTests(unittest.TestCase):
 
     def test_forecast_schemas_pin_wire_fields_and_bounds(self):
         schemas = contract.build_openapi()["components"]["schemas"]
-        optional_keys = {"Deduplication": {"baseline_category_id"}}
+        optional_keys = {}
         for suffix, keys in {
             "": {"evaluation_date", "evaluation_timezone", "horizon_months", "start_month", "end_month",
                  "ledger_as_of", "freshness_stale", "stale_account_ids", "stale_account_ids_truncated",
@@ -270,8 +270,7 @@ class BudgetOpenApiTests(unittest.TestCase):
                         "lapsed_recurring_count", "deduped_recurring_count", "stale_recurring_count"},
             "CurrencyTotal": {"currency", "total", "scheduled_total", "estimated_total"},
             "Deduplication": {"schedule_id", "schedule_label", "recurring_label", "amount", "currency",
-                              "matched_due_date", "last_observed_date", "day_distance", "account_stale",
-                              "baseline_category_id"},
+                              "matched_due_date", "last_observed_date", "day_distance", "account_stale"},
             "Month": {"month", "currencies", "items"},
             "Item": {"source", "schedule_id", "label", "amount", "currency", "expected_date", "confidence",
                      "past_due", "account_stale"},

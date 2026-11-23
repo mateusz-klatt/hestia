@@ -486,15 +486,15 @@ the account's first dated row are omitted. The current month subtracts net spend
 booked, floored at zero. An estimate that is not positive is omitted.
 
 Hints and mortgages have no category column. A configured category conflicts when an active
-recurring hint has evidence that all falls in that category, or an enabled mortgage has
-exactly one category among same-currency debits of the instalment amount within five days of
-that month's due date. Stale hints stay active. Lapsed hints and disabled schedules do not
-conflict. Empty, missing, or mixed evidence does not conflict, and a mortgage that matches
-zero or several categories does not conflict. Those ambiguous matches are left in place and
-are not subtracted. The forecast does not subtract mortgage or recurring items from a
-baseline. A conflict returns HTTP `503` (`budget_forecast_config_conflict`) and does not
-depend on the request currency. Other invalid configuration, including a non-string
-estimator, returns HTTP `503` (`budget_unavailable`).
+recurring hint has any mapped evidence row in that category, including a partial overlap, or
+an enabled mortgage has any same-currency debit of the instalment amount in that category
+within five days of a due date in the debit's month or the month on either side. Stale hints
+stay active. Lapsed hints and disabled schedules do not conflict. A hint whose evidence has
+no category mapping, and a mortgage with no matching debit, do not conflict. The forecast
+does not subtract mortgage or recurring items from a baseline. The same check runs when
+baselines are passed straight into the evaluator. A conflict returns HTTP `503`
+(`budget_forecast_config_conflict`) before the request currency filter. Other invalid
+configuration, including a non-string estimator, returns HTTP `503` (`budget_unavailable`).
 
 ```json
 {"owner": {"category_ids": ["electricity", "mobile"], "history_months": 6, "estimator": "median"}}

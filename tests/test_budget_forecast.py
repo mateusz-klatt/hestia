@@ -576,24 +576,34 @@ class CategoryBaselineTests(unittest.TestCase):
         self.assertEqual(clamped[0].monthly_amounts, ("10", "20", "30"))
         self.assertEqual(clamped[0].name, " Archived power ")
 
-    def test_assignment_requires_one_category_and_unanimous_evidence(self):
+    def test_any_overlap_inside_the_match_window_assigns_the_category(self):
         allowed = {"cat-power"}
         near = [("cat-power", "PLN", "2026-10-15", "100", 15)]
         loan = _schedule("loan", amount="100", due_day=15, start_date="2026-01-01")
-        self.assertEqual(forecast._schedule_categories([loan], near, allowed), {"loan": ("cat-power", "PLN")})
+        self.assertEqual(forecast._schedule_categories([loan], near, allowed),
+                         {"loan": (frozenset({"cat-power"}), "PLN")})
         self.assertEqual(forecast._schedule_categories([replace(loan, enabled=False)], near, allowed), {})
         self.assertEqual(forecast._schedule_categories([loan], [("cat-power", "PLN", "2026-10-01", "100", 1)], allowed), {})
         self.assertEqual(forecast._schedule_categories([loan], [("cat-power", "PLN", "2026-10-15", "90", 15)], allowed), {})
         self.assertEqual(forecast._schedule_categories(
-            [loan], near + [("cat-rent", "PLN", "2026-10-16", "100", 16)], allowed), {})
+            [loan], near + [("cat-rent", "PLN", "2026-10-16", "100", 16)], allowed),
+            {"loan": (frozenset({"cat-power"}), "PLN")})
+        early = _schedule("early", amount="100", due_day=1, start_date="2026-01-01")
+        self.assertEqual(forecast._schedule_categories(
+            [early], [("cat-power", "PLN", "2026-10-30", "100", 30)], allowed),
+            {"early": (frozenset({"cat-power"}), "PLN")})
         self.assertEqual(forecast._schedule_categories([loan], [("cat-rent", "PLN", "2026-10-15", "100", 15)], allowed), {})
         self.assertEqual(forecast._schedule_categories(
             [replace(loan, start_date="2026-11-01")], [("cat-power", "PLN", "2026-10-15", "100", 15)], allowed), {})
         phone = _hint("Orange", evidence=(_occurrence("a"), _occurrence("b")))
         evidence = {("source", "a"): "cat-power", ("source", "b"): "cat-power"}
-        self.assertEqual(forecast._hint_categories([phone], evidence, allowed), {forecast._hint_identity(phone): "cat-power"})
-        self.assertEqual(forecast._hint_categories([phone], {("source", "a"): "cat-power", ("source", "b"): "cat-rent"}, allowed), {})
-        self.assertEqual(forecast._hint_categories([phone], {("source", "a"): "cat-power"}, allowed), {})
+        self.assertEqual(forecast._hint_categories([phone], evidence, allowed),
+                         {forecast._hint_identity(phone): frozenset({"cat-power"})})
+        self.assertEqual(forecast._hint_categories(
+            [phone], {("source", "a"): "cat-power", ("source", "b"): "cat-rent"}, allowed),
+            {forecast._hint_identity(phone): frozenset({"cat-power"})})
+        self.assertEqual(forecast._hint_categories([phone], {("source", "a"): "cat-power"}, allowed),
+                         {forecast._hint_identity(phone): frozenset({"cat-power"})})
         self.assertEqual(forecast._hint_categories([_hint("Orange")], evidence, allowed), {})
         self.assertEqual(forecast._hint_categories([phone], {("source", "a"): "cat-rent", ("source", "b"): "cat-rent"}, allowed), {})
         self.assertEqual(forecast._hint_categories(
@@ -775,17 +785,38 @@ class CategoryBaselineTests(unittest.TestCase):
         with self.assertRaises(forecast.ForecastConfigConflict):
             load(orange, hints=[lapsed], timestamps={"source": (None, None)})
         mixed = _hint("Orange", evidence=(_occurrence("a"), _occurrence("b")))
-        quiet = load([
-            _txn("cat-power", "25", "2026-10-20", reference="a"),
-            _txn("cat-rent", "25", "2026-10-21", reference="b"),
-        ], hints=[mixed])
-        self.assertEqual(quiet[0][0].category_id, "cat-power")
+        with self.assertRaises(forecast.ForecastConfigConflict):
+            load([
+                _txn("cat-power", "25", "2026-10-20", reference="a"),
+                _txn("cat-rent", "25", "2026-10-21", reference="b"),
+            ], hints=[mixed])
         self.assertTrue(load(schedules=[replace(loan, enabled=False)]))
-        self.assertTrue(load(schedules=[loan], extra_rows=[_txn("cat-rent", "40", "2026-10-16", reference="rent")]))
+        with self.assertRaises(forecast.ForecastConfigConflict):
+            load(schedules=[loan], extra_rows=[_txn("cat-rent", "40", "2026-10-16", reference="rent")])
         self.assertTrue(load(schedules=[replace(loan, currency="EUR")]))
         # The conflict does not depend on a later currency filter: a PLN mortgage still rejects the category.
         with self.assertRaises(forecast.ForecastConfigConflict):
             load(schedules=[loan])
+
+    def test_partial_cross_month_and_direct_baselines_conflict(self):
+        baseline = _baseline(monthly_amounts=("10", "10", "10"))
+        early = _schedule("early", amount="40", due_day=1, start_date="2026-01-01")
+        with self.assertRaises(forecast.ForecastConfigConflict):
+            _forecast(baselines=[baseline], schedules=[early], currency="EUR",
+                      baseline_expenses=[("cat-power", "PLN", "2026-10-30", "40")], months=1)
+        occurrences = tuple(_occurrence(f"e{index}", f"2026-{month:02d}-15") for index, month in enumerate(range(5, 11)))
+        partial = _hint("Orange", evidence=occurrences, first_date="2026-05-15", last_date="2026-10-15")
+        evidence = {("source", f"e{index}"): "cat-power" if index < 5 else "cat-rent" for index in range(6)}
+        with self.assertRaises(forecast.ForecastConfigConflict):
+            _forecast(baselines=[baseline], hints=[partial], baseline_evidence=evidence, months=1)
+        split = _schedule("split", amount="40", due_day=15, start_date="2026-01-01")
+        rent = _baseline(category_id="cat-rent", name="Rent", monthly_amounts=("10", "10", "10"))
+        with self.assertRaises(forecast.ForecastConfigConflict):
+            _forecast(baselines=[baseline, rent], schedules=[split], baseline_expenses=[
+                ("cat-power", "PLN", "2026-10-15", "40"),
+                ("cat-rent", "PLN", "2026-10-16", "40"),
+            ], months=1)
+        self.assertEqual(_forecast(baselines=[baseline], months=1)["months"][0]["items"][0]["source"], "category_baseline")
 
     def test_current_month_remaining_floors_at_zero(self):
         for spend, november in (("40", "60"), ("100", None), ("150", None)):

@@ -170,9 +170,9 @@ describe("ForecastView", () => {
   });
 
   it.each([
-    { locale: "en-US", badge: "≈ estimated", adjustments: "Category estimate adjustments", merged: "Merged with instalment" },
-    { locale: "pl-PL", badge: "≈ szacowane", adjustments: "Korekty szacunku", merged: "Połączono z ratą" },
-  ])("shows a category baseline estimate badge in $locale", async ({ locale, badge, adjustments, merged }) => {
+    { locale: "en-US", badge: "≈ estimated", merged: "Merged with instalment" },
+    { locale: "pl-PL", badge: "≈ szacowane", merged: "Połączono z ratą" },
+  ])("shows a category baseline estimate badge in $locale", async ({ locale, badge, merged }) => {
     const api = fakeApi();
     const base = forecastOf();
     const estimate = {
@@ -183,18 +183,11 @@ describe("ForecastView", () => {
       source: "category_baseline",
       confidence: "estimated",
     } as unknown as ReturnType<typeof forecastItem>;
-    const adjustment = {
-      ...forecastDeduplication({
-        schedule_id: "cat-power", schedule_label: "Electricity", recurring_label: "Orange", amount: "40",
-        matched_due_date: "2026-11-28", last_observed_date: "2026-10-12", account_stale: false,
-      }),
-      baseline_category_id: "cat-power",
-    } as unknown as ReturnType<typeof forecastDeduplication>;
     const total = forecastCurrencyTotal({ currency: "PLN", total: "180.5", scheduled_total: "0", estimated_total: "180.5" });
     api.forecast.mockResolvedValue(ok({
       ...base,
       totals: [total],
-      deduplications: [forecastDeduplication(), adjustment],
+      deduplications: [forecastDeduplication()],
       months: base.months.map((month) => month.month === base.start_month
         ? { ...month, items: [estimate], currencies: [total] }
         : month),
@@ -205,20 +198,15 @@ describe("ForecastView", () => {
     expect([...month.querySelectorAll(".budget-chip")].map((chip) => chip.textContent)).toEqual([badge]);
     expect(month.textContent).toContain("Electricity");
     expect(month.textContent).toContain("2026-11-28");
+    expect(host.textContent).not.toContain(locale === "pl-PL" ? "Korekty szacunku" : "Category estimate adjustments");
+    expect(host.textContent).not.toContain(locale === "pl-PL" ? "Uwzględniono" : "Counted on");
 
     const mergedDetails = [...host.querySelectorAll("details")].find((item) => item.querySelector("summary")?.textContent === merged);
-    const adjustmentDetails = [...host.querySelectorAll("details")].find((item) => item.querySelector("summary")?.textContent === adjustments);
-    if (mergedDetails === undefined || adjustmentDetails === undefined) throw new Error("Missing forecast details");
-    expect(mergedDetails.textContent).not.toContain("Orange");
-    expect(adjustmentDetails.textContent).not.toContain("Synthetic Bank Mortgage");
-    await update(() => { requireElement(adjustmentDetails.querySelector("summary"), adjustments).click(); });
-    expect(adjustmentDetails.open).toBe(true);
-    expect(adjustmentDetails.textContent).toContain("Orange");
-    expect(adjustmentDetails.textContent).toContain("Electricity");
-    expect(adjustmentDetails.textContent).not.toContain("→");
-    expect(adjustmentDetails.textContent).toContain(locale === "pl-PL" ? "Uwzględniono 2026-11-28" : "Counted on 2026-11-28");
-    expect(adjustmentDetails.textContent).not.toContain(locale === "pl-PL" ? "Termin raty" : "Instalment due");
-    expect(adjustmentDetails.querySelector(".budget-chip")?.textContent).toBe(badge);
+    if (mergedDetails === undefined) throw new Error("Missing forecast details");
+    await update(() => { requireElement(mergedDetails.querySelector("summary"), merged).click(); });
+    expect(mergedDetails.open).toBe(true);
+    expect(mergedDetails.textContent).toContain("→");
+    expect(mergedDetails.textContent).toContain(locale === "pl-PL" ? "Termin raty" : "Instalment due");
   });
 
   it("labels each currency chart and shows exact monthly totals in text tables", async () => {

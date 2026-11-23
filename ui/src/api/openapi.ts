@@ -1943,8 +1943,6 @@ export interface components {
             account_stale: boolean;
             /** Amount */
             amount: string;
-            /** Baseline Category Id */
-            baseline_category_id?: string | null;
             /** Currency */
             currency: string;
             /** Day Distance */

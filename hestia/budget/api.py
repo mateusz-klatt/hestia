@@ -18,6 +18,7 @@ from ..api_contract import (BudgetBackgroundSelectionRequest, BudgetConnectionSt
 from ..db import init_db
 from . import jobs
 from .config import BudgetConfigError
+from .forecast import ForecastConfigConflict
 from .job_store import BudgetJobError, IDEMPOTENCY_KEY
 from .store import BudgetStoreError
 from .views import (BudgetAccessDenied, BudgetControlConflict, BudgetHTTPStore, BudgetNotFound,
@@ -203,8 +204,10 @@ def _failure(exc, operation):
         return _error(exc.status, exc.code)
     if isinstance(exc, (BudgetStoreError, ValidationError)):
         return _error(400, "budget_invalid_request")
+    if isinstance(exc, ForecastConfigConflict):
+        return _error(503, exc.code)
     if isinstance(exc, BudgetConfigError):
-        return _error(503, getattr(exc, "code", "budget_unavailable"))
+        return _error(503, "budget_unavailable")
     log.error("Budget API operation=%s exception=%s", operation, type(exc).__name__)
     return _error(500, "budget_internal_error")
 

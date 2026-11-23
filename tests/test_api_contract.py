@@ -78,7 +78,6 @@ class OpenApiArtifactTests(unittest.TestCase):
         item_properties = document["components"]["schemas"]["BudgetAnalyticsForecastItem"]["properties"]
         item_properties["source"]["enum"] = ["mortgage", "recurring"]
         item_properties["confidence"]["enum"] = ["scheduled", "high", "medium"]
-        del document["components"]["schemas"]["BudgetAnalyticsForecastDeduplication"]["properties"]["baseline_category_id"]
         # Strip this batch addition and compare with the 0.29.0 monthly-budget contract.
         for path in ("/api/budget/analytics/rule-batch-preview", "/api/budget/analytics/rule-batch-save"):
             del document["paths"][path]

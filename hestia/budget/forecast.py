@@ -373,19 +373,15 @@ def _hint_categories(hints, evidence_categories, allowed):
             raise ForecastDataError()
         if not hint.evidence:
             continue
-        found = []
-        complete = True
+        found = set()
         for item in hint.evidence:
             key = _evidence_key(item)
             if key not in evidence_categories:
-                complete = False
-                break
-            found.append(evidence_categories[key])
-        if not complete or len(set(found)) != 1:
-            continue
-        category_id = found[0]
-        if category_id in allowed:
-            assigned[_hint_identity(hint)] = category_id
+                continue
+            found.add(evidence_categories[key])
+        overlap = found & allowed
+        if overlap:
+            assigned[_hint_identity(hint)] = frozenset(overlap)
     return assigned
 
 
@@ -407,19 +403,33 @@ def _schedule_categories(schedules, expenses, allowed):
             raise ForecastDataError() from None
         hits = set()
         for category_id, iso_date in buckets.get((schedule.currency, amount), ()):
-            try:
-                due = installment_due_date(schedule.due_day, schedule.start_date, schedule.end_date, iso_date[:7])
-            except MortgageInputError:
-                raise ForecastDataError() from None
-            if due is None:
-                continue
-            if abs((_iso_day(iso_date) - date.fromisoformat(due)).days) <= _MAX_MATCH_DISTANCE:
+            if _schedule_debit_matches(schedule, iso_date):
                 hits.add(category_id)
-        if len(hits) == 1:
-            category_id = next(iter(hits))
-            if category_id in allowed:
-                assigned[schedule.schedule_id] = (category_id, schedule.currency)
+        overlap = hits & allowed
+        if overlap:
+            assigned[schedule.schedule_id] = (frozenset(overlap), schedule.currency)
     return assigned
+
+
+def _schedule_debit_matches(schedule, iso_date):
+    """True when the debit is within five days of a due date in this month or either neighbour.
+
+    The neighbour months match ``_deduplicate``: a due day of 1 paid on the 28th–31st of the
+    previous month is the same instalment.
+    """
+    observed = _iso_day(iso_date)
+    center = _month_number(observed)
+    for month_number in range(max(_FIRST_MONTH, center - 1), min(_LAST_MONTH, center + 1) + 1):
+        try:
+            due = installment_due_date(
+                schedule.due_day, schedule.start_date, schedule.end_date, _month_name(month_number))
+        except MortgageInputError:
+            raise ForecastDataError() from None
+        if due is None:
+            continue
+        if abs((observed - date.fromisoformat(due)).days) <= _MAX_MATCH_DISTANCE:
+            return True
+    return False
 
 
 def _account_start(account_id, flow_first, account_first_dates):
@@ -554,13 +564,13 @@ def _reject_baseline_conflicts(*, category_ids, hints, schedules, expenses, evid
                                evaluation_date, account_timestamps):
     """Reject a configured category that an active hint or an enabled mortgage already represents.
 
-    Hints and mortgages have no category column. A hint conflicts when it is active and every evidence
-    row maps to the same configured category. A mortgage conflicts when it is enabled and exactly one
-    category, among same-currency expenses of the instalment amount within five days of that month's
-    due date, is configured. Empty, missing, or mixed evidence does not conflict. A mortgage that
-    matches zero or several categories does not conflict. Stale hints stay active. Lapsed hints and
-    disabled schedules do not conflict. Ambiguous matches are left in place and are not subtracted.
-    The check ignores the request currency.
+    Hints and mortgages have no category column. A hint conflicts when it is active and any mapped
+    evidence row is in a configured category, including a partial overlap such as five of six
+    occurrences. A mortgage conflicts when it is enabled and any same-currency debit of the instalment
+    amount falls in a configured category within five days of a due date in that debit's month or the
+    month on either side. Evidence with no category mapping, and a mortgage with no such debit, do not
+    conflict. Stale hints stay active. Lapsed hints and disabled schedules do not conflict. The check
+    ignores the request currency. Matching rows are not subtracted from the baseline.
     """
     if not isinstance(account_timestamps, Mapping):
         raise ForecastDataError()
@@ -847,7 +857,9 @@ def evaluate_forecast(*, owner: str, evaluation_date: str, months: int, currency
                       account_timestamps: Mapping[str, tuple[int | float | None, int | float | None]],
                       excluded_accounts: int, schedules: Sequence[MortgageSchedule], hints: Sequence[RecurringHint],
                       snapshot_digest: str, schedules_version: str,
-                      baselines: Sequence[CategoryBaseline] = (), baseline_estimator: str = "median") -> dict:
+                      baselines: Sequence[CategoryBaseline] = (), baseline_estimator: str = "median",
+                      baseline_expenses: Sequence[tuple] = (),
+                      baseline_evidence: Mapping = MappingProxyType({})) -> dict:
     """Evaluate validated horizon and currency values against gathered owner data."""
     try:
         reminders = evaluate_mortgage_reminders(owner, evaluation_date, schedules)
@@ -870,11 +882,17 @@ def evaluate_forecast(*, owner: str, evaluation_date: str, months: int, currency
     projected = [_project_month(month, evaluation_date, enabled, remaining) for month in horizon]
     if not isinstance(baselines, Sequence) or isinstance(baselines, (str, bytes)):
         raise ForecastDataError()
-    if baselines and (not isinstance(baseline_estimator, str) or baseline_estimator not in _BASELINE_ESTIMATORS):
-        raise ForecastDataError()
     for item in baselines:
         if not isinstance(item, CategoryBaseline):
             raise ForecastDataError()
+    if baselines and (not isinstance(baseline_estimator, str) or baseline_estimator not in _BASELINE_ESTIMATORS):
+        raise ForecastDataError()
+    if baselines:
+        _reject_baseline_conflicts(
+            category_ids=tuple(item.category_id for item in baselines), hints=hints, schedules=schedules,
+            expenses=baseline_expenses, evidence_categories=baseline_evidence,
+            evaluation_date=evaluation_date, account_timestamps=account_timestamps,
+        )
     selected_baselines = [item for item in baselines if currency is None or item.currency == currency]
     if len(selected_baselines) > MAX_BASELINE_SERIES:
         raise ForecastLimitError()
@@ -898,7 +916,7 @@ def evaluate_forecast(*, owner: str, evaluation_date: str, months: int, currency
         audit["schedule_label"] = display_label(audit["schedule_label"])
         audit["recurring_label"] = display_label(audit["recurring_label"])
     audits.sort(key=lambda audit: (audit["currency"], audit["matched_due_date"], audit["schedule_id"],
-                                   audit.get("baseline_category_id") or "", audit["recurring_label"], audit["amount"]))
+                                   audit["recurring_label"], audit["amount"]))
 
     return {
         "evaluation_date": evaluation_date, "evaluation_timezone": "UTC", "horizon_months": months,
