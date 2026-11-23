@@ -1,9 +1,12 @@
 """Category parent migration, store rules, and month-budget limit roll-up."""
 from __future__ import annotations
 
+from contextlib import closing
 from pathlib import Path
+import sqlite3
 import tempfile
 import unittest
+from unittest import mock
 
 from alembic import command
 from alembic.autogenerate import compare_metadata
@@ -67,6 +70,177 @@ class CategoryParentMigrationTests(unittest.TestCase):
                 self.assertEqual(compare_metadata(MigrationContext.configure(conn), db.metadata), [])
         finally:
             engine.dispose()
+
+
+class CategoryParentInitDbTests(unittest.TestCase):
+    """0020 through real ``init_db``: production turns foreign keys on, and child rows reference categories."""
+
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.addCleanup(db.reset_engine_cache)
+        self.path = Path(self.directory.name) / "categories.db"
+
+    def _database_at_0019(self, *, orphan_rule=False, leftover_temp=False):
+        engine = db.make_engine(self.path)
+        try:
+            with engine.begin() as conn:
+                command.upgrade(db._alembic_config(conn), "0019")
+                conn.exec_driver_sql(
+                    "INSERT INTO users (username, password_hash, role) VALUES ('alice', 'h', 'admin')")
+                conn.exec_driver_sql(
+                    "INSERT INTO budget_categories "
+                    "(id, owner, name, name_key, archived, version, created_at, updated_at) "
+                    "VALUES ('cat', 'alice', 'Food', 'food', 0, 1, 1, 1)")
+                conn.exec_driver_sql(
+                    "INSERT INTO budget_rules "
+                    "(id, owner, field, operator, value, category_id, kind, priority, enabled, version, "
+                    "created_at, updated_at) "
+                    "VALUES ('rule', 'alice', 'memo', 'contains', 'shop', 'cat', 'expense', 1, 1, 1, 1, 1)")
+                conn.exec_driver_sql(
+                    "INSERT INTO budget_category_limits "
+                    "(id, owner, category_id, currency, monthly_limit, warning_percent, enabled, version, "
+                    "created_at, updated_at) "
+                    "VALUES ('lim', 'alice', 'cat', 'PLN', '10', 80, 1, 1, 1, 1)")
+                conn.exec_driver_sql(
+                    "INSERT INTO budget_connections "
+                    "(id, owner, application_id, bank_name, country, enabled, next_attempt, failures) "
+                    "VALUES ('c1', 'alice', 'app', 'bank', 'PL', 1, 0, 0)")
+                conn.exec_driver_sql(
+                    "INSERT INTO budget_accounts "
+                    "(id, connection_id, owner, identification_hash, enabled, balances_json) "
+                    "VALUES ('a1', 'c1', 'alice', 'hash', 1, '{}')")
+                conn.exec_driver_sql(
+                    "INSERT INTO budget_transactions "
+                    "(account_id, entry_reference, payload_json, observed_at, uncertain) "
+                    "VALUES ('a1', 'e1', '{}', 1, 0)")
+                conn.exec_driver_sql(
+                    "INSERT INTO budget_annotations "
+                    "(account_id, entry_reference, owner, mode, category_id, kind, ledger_fingerprint, "
+                    "version, updated_at) "
+                    "VALUES ('a1', 'e1', 'alice', 'manual', 'cat', 'expense', 'fp', 1, 1)")
+        finally:
+            engine.dispose()
+        if orphan_rule or leftover_temp:
+            with closing(sqlite3.connect(self.path)) as raw:
+                raw.execute("PRAGMA foreign_keys=OFF")
+                if orphan_rule:
+                    raw.execute(
+                        "INSERT INTO budget_rules "
+                        "(id, owner, field, operator, value, category_id, kind, priority, enabled, version, "
+                        "created_at, updated_at) "
+                        "VALUES ('orphan', 'alice', 'memo', 'contains', 'x', 'missing', 'expense', 1, 1, 1, 1, 1)")
+                if leftover_temp:
+                    raw.execute("CREATE TABLE _alembic_tmp_budget_categories (id TEXT)")
+                raw.commit()
+
+    def _snapshot(self):
+        with closing(sqlite3.connect(self.path)) as raw:
+            version = raw.execute("SELECT version_num FROM alembic_version").fetchall()
+            columns = [row[1] for row in raw.execute("PRAGMA table_info(budget_categories)")]
+            rules = raw.execute("SELECT id, category_id FROM budget_rules ORDER BY id").fetchall()
+            limits = raw.execute("SELECT id, category_id FROM budget_category_limits ORDER BY id").fetchall()
+            annotations = raw.execute(
+                "SELECT account_id, entry_reference, category_id FROM budget_annotations ORDER BY account_id"
+            ).fetchall()
+            temp_tables = raw.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE '%alembic_tmp%'"
+            ).fetchall()
+            raw.execute("PRAGMA foreign_keys=ON")
+            violations = raw.execute("PRAGMA foreign_key_check").fetchall()
+        return version, columns, rules, limits, annotations, temp_tables, violations
+
+    def test_init_db_roundtrip_preserves_rows_that_reference_categories(self):
+        self._database_at_0019()
+        observed = []
+        real_upgrade = command.upgrade
+
+        def spy(config, revision):
+            connection = config.attributes["connection"]
+            raw = connection.connection.dbapi_connection
+            observed.append((
+                raw.in_transaction,
+                raw.isolation_level,
+                connection.exec_driver_sql("PRAGMA foreign_keys").scalar(),
+                revision,
+            ))
+            return real_upgrade(config, revision)
+
+        with mock.patch("hestia.db.command.upgrade", spy):
+            engine, _ = db.init_db(self.path)
+        self.assertEqual(observed, [(True, None, 0, "head")])
+        version, columns, rules, limits, annotations, temp_tables, violations = self._snapshot()
+        self.assertEqual(version, [("0020",)])
+        self.assertIn("parent_id", columns)
+        self.assertEqual(rules, [("rule", "cat")])
+        self.assertEqual(limits, [("lim", "cat")])
+        self.assertEqual(annotations, [("a1", "e1", "cat")])
+        self.assertEqual(temp_tables, [])
+        self.assertEqual(violations, [])
+        with engine.connect() as connection:
+            self.assertEqual(connection.exec_driver_sql("PRAGMA foreign_keys").scalar(), 1)
+            self.assertEqual(connection.exec_driver_sql("PRAGMA journal_mode").scalar(), "wal")
+            self.assertEqual(connection.exec_driver_sql("PRAGMA synchronous").scalar(), 2)
+            self.assertEqual(connection.exec_driver_sql("PRAGMA busy_timeout").scalar(), 5000)
+            self.assertEqual(connection.connection.dbapi_connection.isolation_level, "")
+
+        def downgrade(connection):
+            raw = connection.connection.dbapi_connection
+            self.assertTrue(raw.in_transaction)
+            self.assertIsNone(raw.isolation_level)
+            self.assertEqual(connection.exec_driver_sql("PRAGMA foreign_keys").scalar(), 0)
+            command.downgrade(db._alembic_config(connection), "0019")
+
+        db._run_sqlite_migration(engine, downgrade)
+        version, columns, rules, limits, annotations, temp_tables, violations = self._snapshot()
+        self.assertEqual(version, [("0019",)])
+        self.assertNotIn("parent_id", columns)
+        self.assertEqual(rules, [("rule", "cat")])
+        self.assertEqual(limits, [("lim", "cat")])
+        self.assertEqual(annotations, [("a1", "e1", "cat")])
+        self.assertEqual(temp_tables, [])
+        self.assertEqual(violations, [])
+
+        db.reset_engine_cache()
+        with mock.patch("hestia.db.command.upgrade", spy):
+            engine, _ = db.init_db(self.path)
+        self.assertEqual(observed, [(True, None, 0, "head"), (True, None, 0, "head")])
+        version, columns, rules, limits, annotations, temp_tables, violations = self._snapshot()
+        self.assertEqual(version, [("0020",)])
+        self.assertIn("parent_id", columns)
+        self.assertEqual(rules, [("rule", "cat")])
+        self.assertEqual(limits, [("lim", "cat")])
+        self.assertEqual(annotations, [("a1", "e1", "cat")])
+        self.assertEqual(temp_tables, [])
+        self.assertEqual(violations, [])
+        with engine.connect() as connection:
+            self.assertEqual(connection.exec_driver_sql("PRAGMA foreign_keys").scalar(), 1)
+
+    def test_leftover_batch_temp_table_does_not_block_upgrade(self):
+        self._database_at_0019(leftover_temp=True)
+        db.init_db(self.path)
+        version, columns, rules, limits, annotations, temp_tables, violations = self._snapshot()
+        self.assertEqual(version, [("0020",)])
+        self.assertIn("parent_id", columns)
+        self.assertEqual(rules, [("rule", "cat")])
+        self.assertEqual(limits, [("lim", "cat")])
+        self.assertEqual(annotations, [("a1", "e1", "cat")])
+        self.assertEqual(temp_tables, [])
+        self.assertEqual(violations, [])
+
+    def test_foreign_key_violation_rolls_back_to_0019_without_partial_ddl(self):
+        self._database_at_0019(orphan_rule=True)
+        with self.assertRaises(RuntimeError) as caught:
+            db.init_db(self.path)
+        self.assertIn("foreign_key_check", str(caught.exception))
+        version, columns, rules, limits, annotations, temp_tables, _violations = self._snapshot()
+        self.assertEqual(version, [("0019",)])
+        self.assertNotIn("parent_id", columns)
+        self.assertEqual(rules, [("orphan", "missing"), ("rule", "cat")])
+        self.assertEqual(limits, [("lim", "cat")])
+        self.assertEqual(annotations, [("a1", "e1", "cat")])
+        self.assertEqual(temp_tables, [])
+        self.assertNotIn(str(self.path), db._ENGINE_CACHE)
 
 
 class CategoryParentStoreTests(AnalyticsCase):

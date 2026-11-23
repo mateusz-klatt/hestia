@@ -82,6 +82,25 @@ class DbSchemaTests(unittest.TestCase):
             self.assertEqual(c.exec_driver_sql("PRAGMA foreign_keys").scalar(), 1)
             self.assertEqual(c.exec_driver_sql("PRAGMA busy_timeout").scalar(), 5000)
 
+    def test_foreign_keys_pragma_is_rejected_inside_a_transaction(self):
+        # Production connections enable foreign keys on connect. SQLite ignores
+        # PRAGMA foreign_keys inside an open transaction, which is why turning it
+        # off around engine.begin() never let a batch DROP of a referenced table through.
+        engine = db.make_engine(self.path)
+        try:
+            with engine.connect() as connection:
+                raw = connection.connection.dbapi_connection
+                raw.execute("BEGIN")
+                try:
+                    with self.assertRaises(RuntimeError) as caught:
+                        db._set_sqlite_foreign_keys(connection, False)
+                    self.assertIn("did not apply", str(caught.exception))
+                    self.assertEqual(raw.execute("PRAGMA foreign_keys").fetchone()[0], 1)
+                finally:
+                    raw.rollback()
+        finally:
+            engine.dispose()
+
     def test_make_engine_creates_parent_dir(self):
         nested = self.dir / "a" / "b" / "hestia.db"
         db.make_engine(nested)

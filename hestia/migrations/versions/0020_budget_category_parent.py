@@ -23,7 +23,21 @@ _CHECK = "ck_budget_categories_parent_not_self"
 _INDEX = "ix_budget_categories_parent_id"
 
 
+def _drop_leftover_batch_table(table: str) -> None:
+    """Drop Alembic's batch-copy table if an aborted rebuild left it behind.
+
+    ``batch_alter_table`` copies into ``_alembic_tmp_<table>`` (truncated to 50
+    characters, matching Alembic). SQLite can autocommit that CREATE when no
+    explicit transaction is open, so a failed DROP leaves the empty temp table
+    in place and the next attempt dies with "table already exists". Call this
+    before every batch rebuild; future batch migrations should do the same.
+    """
+    temp_name = ("_alembic_tmp_%s" % table)[:50]
+    op.execute(f'DROP TABLE IF EXISTS "{temp_name}"')
+
+
 def upgrade():
+    _drop_leftover_batch_table(_TABLE)
     with op.batch_alter_table(_TABLE) as batch:
         batch.add_column(sa.Column("parent_id", sa.String(), nullable=True))
         batch.create_foreign_key(_FK, _TABLE, ["parent_id"], ["id"])
@@ -34,6 +48,7 @@ def upgrade():
 def downgrade():
     # Take a SQLite backup before downgrading: dropping parent_id forgets which
     # category sat under which, while the category rows themselves stay.
+    _drop_leftover_batch_table(_TABLE)
     with op.batch_alter_table(_TABLE) as batch:
         batch.drop_index(_INDEX)
         batch.drop_constraint(_CHECK, type_="check")

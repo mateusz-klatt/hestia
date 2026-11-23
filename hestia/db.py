@@ -801,9 +801,72 @@ def init_db(path=None) -> tuple[Engine, sessionmaker[Session]]:
     """Engine + session factory for the DB at ``path`` (default ``HESTIA_DB``), upgraded to the latest
     schema via Alembic. **Cached per resolved path**: the engine is built and the migration run ONCE per
     DB file for the process lifetime; later calls return the same pair (call ``reset_engine_cache`` to
-    rebuild). Migrations run programmatically — never runtime autogenerate."""
+    rebuild). Migrations run programmatically — never runtime autogenerate. The upgrade uses one
+    dedicated connection: foreign keys off, a real ``BEGIN``, then ``PRAGMA foreign_key_check`` before
+    commit. Every other connection still opens with ``PRAGMA foreign_keys=ON``."""
     with _ENGINE_CACHE_LOCK:
         return _init_db_locked(path)
+
+
+def _set_sqlite_foreign_keys(connection, enabled: bool) -> None:
+    """Set ``PRAGMA foreign_keys`` and require the new value to read back.
+
+    SQLite ignores this pragma while a transaction is open and leaves the previous
+    value in place. Callers must already be in autocommit, with no transaction open.
+    """
+    statement = "PRAGMA foreign_keys=ON" if enabled else "PRAGMA foreign_keys=OFF"
+    cursor = connection.connection.dbapi_connection.cursor()
+    try:
+        cursor.execute(statement)
+        cursor.execute("PRAGMA foreign_keys")
+        observed = cursor.fetchone()[0]
+    finally:
+        cursor.close()
+    if int(observed) != int(enabled):
+        raise RuntimeError(
+            f"{statement} did not apply (read back {observed!r}). "
+            "SQLite ignores this pragma inside a transaction."
+        )
+
+
+def _run_sqlite_migration(engine: Engine, apply) -> None:
+    """Run one Alembic operation in the SQLite batch transaction Alembic recommends.
+
+    ``batch_alter_table`` rebuilds a table by copying it and dropping the original.
+    Child foreign keys reject that DROP while ``PRAGMA foreign_keys`` is ON, and the
+    pragma cannot be changed inside a transaction. sqlite3's legacy transaction mode
+    also autocommits DDL unless a real ``BEGIN`` is already open, which is how a
+    failed rebuild leaves ``_alembic_tmp_*`` behind.
+
+    On this connection only: turn foreign keys off in autocommit and read the pragma
+    back, ``BEGIN``, run ``apply``, then ``PRAGMA foreign_key_check``. Any violation
+    rolls the whole migration back (no partial DDL). Commit, turn foreign keys back
+    on, and invalidate the connection so the pool never reuses autocommit or
+    foreign_keys=OFF. Other connections keep the usual pragmas.
+    """
+    connection = engine.connect()
+    try:
+        raw = connection.connection.dbapi_connection
+        # sqlite3 must not emit its own BEGIN; SQLAlchemy's begin() does not either.
+        # An explicit BEGIN then keeps DDL inside the transaction we commit or roll back.
+        raw.isolation_level = None
+        _set_sqlite_foreign_keys(connection, False)
+        transaction = connection.begin()
+        try:
+            connection.exec_driver_sql("BEGIN")
+            apply(connection)
+            violations = connection.exec_driver_sql("PRAGMA foreign_key_check").all()
+            if violations:
+                detail = ", ".join(repr(tuple(row)) for row in violations)
+                raise RuntimeError(f"PRAGMA foreign_key_check failed after migration: {detail}")
+            transaction.commit()
+        except Exception:
+            transaction.rollback()
+            raise
+        _set_sqlite_foreign_keys(connection, True)
+    finally:
+        connection.invalidate()
+        connection.close()
 
 
 def _init_db_locked(path) -> tuple[Engine, sessionmaker[Session]]:
@@ -812,12 +875,13 @@ def _init_db_locked(path) -> tuple[Engine, sessionmaker[Session]]:
     if cached is not None:
         return cached
     engine = make_engine(key)
-    # The outer engine.begin() owns this connection and its commit. Alembic's env.py calls
-    # context.begin_transaction() on the same connection, but for SQLite (non-transactional
-    # DDL) that's a no-op context — there is no nested/second BEGIN, and the migration's DDL
-    # commits with the outer transaction.
-    with engine.begin() as connection:
-        command.upgrade(_alembic_config(connection), "head")
+    try:
+        _run_sqlite_migration(
+            engine, lambda connection: command.upgrade(_alembic_config(connection), "head")
+        )
+    except Exception:
+        engine.dispose()
+        raise
     result = (engine, sessionmaker(bind=engine))
     _ENGINE_CACHE[key] = result
     return result
