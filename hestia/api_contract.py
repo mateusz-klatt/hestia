@@ -94,6 +94,8 @@ from pydantic.json_schema import models_json_schema
 #         down_revision 0021).
 # 0.37.0: additive household read API (GET /api/budget/household/*, migration 0023,
 #         down_revision 0022). Owner routes stay admin. The one-off label is not on this API.
+# 0.38.0: counterparty-account rules store keyed digests and masked display values (zero migration).
+#         Optional inactive_reason on a rule when that key is missing or rotated (additive).
 # 0.39.0: receipts device tokens and one-time pairing codes (migration 0024, down_revision 0023),
 #         plus optional parse-text source_kind.
 CONTRACT_VERSION = "0.39.0"
@@ -1601,9 +1603,10 @@ class BudgetAnalyticsRulePreviewRequest(BaseModel):
     model_config = _STRICT
     rule_id: BudgetId | None
     expected_version: BudgetAnalyticsVersion
-    field: Literal["description", "counterparty_name", "mcc"]
+    field: Literal["description", "counterparty_name", "counterparty_account", "mcc"]
     operator: Literal["contains", "equals"]
-    value: Annotated[str, Field(min_length=1, max_length=256)]
+    value: Annotated[str, Field(max_length=256, json_schema_extra=_OMIT)] = ""
+    counterparty_account_key: Annotated[str | None, Field(pattern=r"^[0-9a-f]{64}$", json_schema_extra=_OMIT)] = None
     category_id: BudgetId | None
     kind: BudgetAnalyticsKind
     priority: Annotated[int, Field(ge=0, le=10000)]
@@ -1685,6 +1688,14 @@ class BudgetAnalyticsRule(BaseModel):
     field: str
     operator: str
     value: str
+    counterparty_account_key: Annotated[str | None, Field(pattern=r"^[0-9a-f]{64}$", json_schema_extra=_OMIT)] = None
+    inactive_reason: Annotated[
+        Literal["rule_key_unavailable", "rule_key_rotated"] | None,
+        Field(
+            description="Set when a counterparty-account rule cannot match because its key is missing or was rotated.",
+            json_schema_extra=_OMIT,
+        ),
+    ] = None
     category_id: str | None
     kind: str
     priority: int
@@ -1808,6 +1819,8 @@ class BudgetAnalyticsTransaction(BudgetTransaction):
     annotation: BudgetAnalyticsAnnotation
     effective: BudgetAnalyticsEffective
     metadata: BudgetAnalyticsMetadata | None
+    counterparty_account_key: Annotated[str | None, Field(pattern=r"^[0-9a-f]{64}$", json_schema_extra=_OMIT)] = None
+    counterparty_account: Annotated[str | None, Field(json_schema_extra=_OMIT)] = None
     transfer: BudgetAnalyticsTransactionTransfer
 
 

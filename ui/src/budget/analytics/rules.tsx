@@ -19,11 +19,14 @@ export const rulesLabels = {
     archiveBlocked: "Move its subcategories first. Archived subcategories still have to be moved.",
     rulesHelp: "Rules sort new and existing entries automatically. Your own choice on an entry always wins over a rule.",
     noRules: "No rules yet.", newRule: "New rule", edit: "Edit", field: "When", operator: "", value: "text",
-    fields: { description: "description", counterparty_name: "counterparty", mcc: "card merchant code" },
+    fields: { description: "description", counterparty_name: "counterparty", counterparty_account: "counterparty account (IBAN)", mcc: "card merchant code" },
     operators: { contains: "contains", equals: "equals" },
     category: "Category", keep: "No category change", kind: "Type",
     kinds: { auto: "No type change", expense: "Expense", income: "Income", refund: "Refund", excluded: "Leave out of the budget" },
-    priority: "Priority", enabled: "Enabled", disabled: "disabled", preview: "Preview", back: "Change the rule",
+    priority: "Priority", enabled: "Enabled", disabled: "disabled",
+    inactiveKeyMissing: "Inactive: missing key",
+    inactiveKeyRotated: "Inactive: key changed – create the rule again",
+    preview: "Preview", back: "Change the rule",
     saveRule: "Save rule", affects: (count: number) => `This rule would apply to ${String(count)} entries, for example:`,
     reference: "entry", account: "Account",
     nothingToDo: "Choose a category or a type for the rule.",
@@ -38,11 +41,14 @@ export const rulesLabels = {
     archiveBlocked: "Najpierw przenieś jej podkategorie. Zarchiwizowane też trzeba przenieść.",
     rulesHelp: "Reguły porządkują nowe i dotychczasowe pozycje automatycznie. Twój ręczny wybór przy pozycji zawsze ma pierwszeństwo.",
     noRules: "Nie ma jeszcze reguł.", newRule: "Nowa reguła", edit: "Edytuj", field: "Gdy", operator: "", value: "tekst",
-    fields: { description: "opis", counterparty_name: "kontrahent", mcc: "kod branży karty" },
+    fields: { description: "opis", counterparty_name: "kontrahent", counterparty_account: "konto kontrahenta (IBAN)", mcc: "kod branży karty" },
     operators: { contains: "zawiera", equals: "równa się" },
     category: "Kategoria", keep: "Bez zmiany kategorii", kind: "Rodzaj",
     kinds: { auto: "Bez zmiany rodzaju", expense: "Wydatek", income: "Wpływ", refund: "Zwrot", excluded: "Pomiń w budżecie" },
-    priority: "Priorytet", enabled: "Włączona", disabled: "wyłączona", preview: "Podgląd", back: "Popraw regułę",
+    priority: "Priorytet", enabled: "Włączona", disabled: "wyłączona",
+    inactiveKeyMissing: "Nieaktywna: brak klucza",
+    inactiveKeyRotated: "Nieaktywna: zmieniony klucz – utwórz regułę ponownie",
+    preview: "Podgląd", back: "Popraw regułę",
     saveRule: "Zapisz regułę", affects: (count: number) => `Reguła obejmie pozycji: ${String(count)}, na przykład:`,
     reference: "pozycja", account: "Konto",
     nothingToDo: "Wybierz kategorię albo rodzaj dla reguły.",
@@ -64,9 +70,11 @@ export interface CategoriesViewProps {
   locale?: string;
   revision: number;
   onAccessLoss: Loss;
+  initialRule?: RuleCandidate | null | undefined;
 }
 
-export function CategoriesView({ api, accounts, connections = [], text, locale = "en", revision, onAccessLoss }: CategoriesViewProps) {
+export function CategoriesView({ api, accounts, connections = [], text, locale = "en", revision, onAccessLoss,
+  initialRule = null }: CategoriesViewProps) {
   const [categories, setCategories] = useState<Listed<AnalyticsCategory>>("loading");
   const [rules, setRules] = useState<Listed<AnalyticsRule>>("loading");
   const [changes, setChanges] = useState(0);
@@ -104,7 +112,8 @@ export function CategoriesView({ api, accounts, connections = [], text, locale =
   return (
     <section className="budget-month" aria-label={`${text.categories} · ${text.rules}`}>
       <CategoriesPanel categories={categories} api={api} run={run} text={text} locale={locale} onSaved={reload} epoch={epoch} />
-      <RulesPanel rules={rules} categories={shown} accounts={accounts} connections={connections} api={api} run={run} text={text} onSaved={reload} epoch={epoch} />
+      <RulesPanel rules={rules} categories={shown} accounts={accounts} connections={connections} api={api} run={run} text={text}
+        onSaved={reload} epoch={epoch} initialRule={initialRule} />
     </section>
   );
 }
@@ -112,6 +121,12 @@ export function CategoriesView({ api, accounts, connections = [], text, locale =
 type Run = <T>(action: () => Promise<BudgetResult<T>>) => Promise<BudgetResult<T> | null>;
 
 const PREVIEW_GONE: ReadonlySet<string> = new Set([ANALYTICS_ERROR.previewExpired, ANALYTICS_ERROR.stalePreview]);
+
+function inactiveKeyNote(text: RulesLabels, reason: string | null | undefined): string | null {
+  if (reason === "rule_key_unavailable") return text.inactiveKeyMissing;
+  if (reason === "rule_key_rotated") return text.inactiveKeyRotated;
+  return null;
+}
 
 function failure(text: RulesLabels, error: string): string {
   if (RELOAD_ERRORS.has(error)) return text.conflict;
@@ -256,10 +271,11 @@ interface RulesProps {
   onSaved: () => void;
   /** Changes with every reload of the view. */
   epoch: number;
+  initialRule: RuleCandidate | null;
 }
 
-function RulesPanel({ rules, categories, accounts, connections, api, run, text, onSaved, epoch }: RulesProps) {
-  const [editing, setEditing] = useState<RuleCandidate | null>(null);
+function RulesPanel({ rules, categories, accounts, connections, api, run, text, onSaved, epoch, initialRule }: RulesProps) {
+  const [editing, setEditing] = useState<RuleCandidate | null>(initialRule);
   const [preview, setPreview] = useState<RulePreview | null>(null);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
@@ -298,7 +314,9 @@ function RulesPanel({ rules, categories, accounts, connections, api, run, text, 
     const asked = draft.current;
     setBusy(true);
     setNotice(null);
-    const result = await run(() => api.previewRule({ ...editing, value: editing.value.trim() }));
+    const candidate: RuleCandidate = { ...editing, value: editing.value.trim() };
+    if (candidate.counterparty_account_key == null) delete candidate.counterparty_account_key;
+    const result = await run(() => api.previewRule(candidate));
     setBusy(false);
     // Dropped: access was lost, the view reloaded, or the form changed since this preview was asked for.
     if (result === null || asked !== draft.current) return;
@@ -334,6 +352,7 @@ function RulesPanel({ rules, categories, accounts, connections, api, run, text, 
         <ul className="budget-entry-list">
           {rules.map((rule) => {
             const ruleCategory = categoryName(rule.category_id);
+            const keyNote = inactiveKeyNote(text, rule.inactive_reason);
             return (
               <li key={rule.id} className="budget-entry budget-rule">
                 <div className="budget-entry-facts">
@@ -345,6 +364,7 @@ function RulesPanel({ rules, categories, accounts, connections, api, run, text, 
                   {rule.kind === "auto" ? null : <span className="budget-chip">{labelOf(text.kinds, rule.kind)}</span>}
                   <span>{text.priority} {rule.priority}</span>
                   {rule.enabled ? null : <span className="budget-warn">{text.disabled}</span>}
+                  {keyNote === null ? null : <span className="budget-muted">{keyNote}</span>}
                   <button type="button" disabled={busy || editing !== null} onClick={() => { open(rule); }}>{text.edit}</button>
                 </div>
               </li>
@@ -357,18 +377,25 @@ function RulesPanel({ rules, categories, accounts, connections, api, run, text, 
       ) : (
         <form className="budget-rule-editor" onSubmit={(event) => { event.preventDefault(); void ask(); }}>
           <label>{text.field}
-            <select name="field" value={editing.field} disabled={busy} onChange={(event) => { change({ field: event.currentTarget.value as RuleCandidate["field"] }); }}>
+            <select name="field" value={editing.field} disabled={busy} onChange={(event) => {
+              const field = event.currentTarget.value as RuleCandidate["field"];
+              change({ field, operator: field === "counterparty_account" ? "equals" : editing.operator, counterparty_account_key: null });
+            }}>
               {RULE_FIELDS.map((field) => <option key={field} value={field}>{text.fields[field]}</option>)}
             </select>
           </label>
           <label>{text.operator}
-            <select name="operator" aria-label={text.operators.contains} value={editing.operator} disabled={busy}
+            <select name="operator" aria-label={text.operators.contains} value={editing.operator}
+              disabled={busy || editing.field === "counterparty_account"}
               onChange={(event) => { change({ operator: event.currentTarget.value as RuleCandidate["operator"] }); }}>
-              {RULE_OPERATORS.map((operator) => <option key={operator} value={operator}>{text.operators[operator]}</option>)}
+              {(editing.field === "counterparty_account" ? ["equals"] as const : RULE_OPERATORS)
+                .map((operator) => <option key={operator} value={operator}>{text.operators[operator]}</option>)}
             </select>
           </label>
-          <label>{text.value}
-            <input name="value" maxLength={RULE_VALUE_MAX} value={editing.value} disabled={busy} onChange={(event) => { change({ value: event.currentTarget.value }); }} />
+          <label>{editing.field === "counterparty_account" ? text.fields.counterparty_account : text.value}
+            <input name="value" maxLength={RULE_VALUE_MAX} value={editing.value} disabled={busy} onChange={(event) => {
+              change({ value: event.currentTarget.value, counterparty_account_key: null });
+            }} />
           </label>
           <label>{text.category}
             <select name="category_id" value={editing.category_id ?? ""} disabled={busy} onChange={(event) => { change({ category_id: event.currentTarget.value || null }); }}>

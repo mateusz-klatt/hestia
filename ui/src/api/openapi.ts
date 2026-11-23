@@ -3515,6 +3515,8 @@ export interface components {
         BudgetAnalyticsRule: {
             /** Category Id */
             category_id: string | null;
+            /** Counterparty Account Key */
+            counterparty_account_key?: string | null;
             /** Created At */
             created_at: number;
             /** Enabled */
@@ -3523,6 +3525,11 @@ export interface components {
             field: string;
             /** Id */
             id: string;
+            /**
+             * Inactive Reason
+             * @description Set when a counterparty-account rule cannot match because its key is missing or was rotated.
+             */
+            inactive_reason?: ("rule_key_unavailable" | "rule_key_rotated") | null;
             /** Kind */
             kind: string;
             /** Operator */
@@ -3572,6 +3579,8 @@ export interface components {
         BudgetAnalyticsRulePreviewRequest: {
             /** Category Id */
             category_id: string | null;
+            /** Counterparty Account Key */
+            counterparty_account_key?: string | null;
             /** Enabled */
             enabled: boolean;
             /** Expected Version */
@@ -3580,7 +3589,7 @@ export interface components {
              * Field
              * @enum {string}
              */
-            field: "description" | "counterparty_name" | "mcc";
+            field: "description" | "counterparty_name" | "counterparty_account" | "mcc";
             /**
              * Kind
              * @enum {string}
@@ -3596,7 +3605,7 @@ export interface components {
             /** Rule Id */
             rule_id: string | null;
             /** Value */
-            value: string;
+            value?: string;
         };
         /** BudgetAnalyticsRuleResult */
         BudgetAnalyticsRuleResult: {
@@ -3618,6 +3627,8 @@ export interface components {
             category_id: string | null;
             /** Changed */
             changed: boolean;
+            /** Counterparty Account Key */
+            counterparty_account_key?: string | null;
             /** Created At */
             created_at: number;
             /** Enabled */
@@ -3626,6 +3637,11 @@ export interface components {
             field: string;
             /** Id */
             id: string;
+            /**
+             * Inactive Reason
+             * @description Set when a counterparty-account rule cannot match because its key is missing or was rotated.
+             */
+            inactive_reason?: ("rule_key_unavailable" | "rule_key_rotated") | null;
             /** Kind */
             kind: string;
             /** Operator */
@@ -3795,6 +3811,10 @@ export interface components {
             api_observed_at: number | null;
             /** Booking Date */
             booking_date: string | null;
+            /** Counterparty Account */
+            counterparty_account?: string | null;
+            /** Counterparty Account Key */
+            counterparty_account_key?: string | null;
             /**
              * Credit Debit Indicator
              * @enum {string}

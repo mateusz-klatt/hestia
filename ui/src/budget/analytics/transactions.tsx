@@ -9,10 +9,10 @@ import { buildCategoryColors } from "./category_colors";
 import { ExportMenu } from "./export_menu";
 import { exportBasename, exportLabels } from "./export_rows";
 import { ANALYTICS_ERROR, EFFECTIVE_KINDS, NO_FILTER, RELOAD_ERRORS, UNCATEGORISED, annotationRequest, canPair, canonicalAmount,
-  counterparty, accountName as nameOf, currentChoice, daysBetween, kindChoice, kindChoicesFor, labelOf, manualPairRequest,
+  counterparty, counterpartyRuleCandidate, accountName as nameOf, currentChoice, daysBetween, kindChoice, kindChoicesFor, labelOf, manualPairRequest,
   pairCandidates, pairDate, pairPeriods, transactionRowKey } from "./model";
 import type { AnalyticsCategory, AnalyticsTransaction, AnalyticsTransactionsByKeysRequest, CategoryChoice, KindChoice,
-  TransactionFilter } from "./model";
+  RuleCandidate, TransactionFilter } from "./model";
 
 const kindsEn = { auto: "Automatic", expense: "Expense", income: "Income", refund: "Refund", excluded: "Leave out of the budget",
   unclassified_credit: "To classify", transfer: "Own transfer" };
@@ -46,6 +46,7 @@ export const transactionLabels = {
     pairInvalid: "These entries cannot be paired (amount, currency, dates or account differ).",
     oneOffLabel: "One-off label",
     oneOffHint: "The amount shows under this name in the bars instead of Other.",
+    accountRule: "Create rule from recipient account",
   },
   pl: {
     title: "Transakcje", exportMenu: exportLabels.pl, currency: "Waluta", category: "Kategoria", kind: "Rodzaj", search: "Szukaj", apply: "Zastosuj",
@@ -74,6 +75,7 @@ export const transactionLabels = {
     pairInvalid: "Tych pozycji nie można sparować (różnią się kwota, waluta, daty lub konto).",
     oneOffLabel: "Etykieta jednorazowa",
     oneOffHint: "Kwota pojawi się pod tą etykietą na słupkach zamiast w Pozostałe.",
+    accountRule: "Utwórz regułę z konta odbiorcy",
   },
 };
 export type TransactionLabels = typeof transactionLabels.en;
@@ -182,6 +184,7 @@ export interface TransactionsProps {
   initialProvisionalTruncated?: boolean | undefined;
   /** Scroll this section into view when mounted (e.g. opened from the provisional banner link). */
   focusOnMount?: boolean | undefined;
+  onCreateRule?: ((candidate: RuleCandidate) => void) | undefined;
 }
 
 const rowKey = transactionRowKey;
@@ -229,7 +232,7 @@ function orderRows(
 
 export function TransactionsPanel({ api, period, currencies, accounts, connections = [], text, locale, revision, onAccessLoss,
   onChanged, rowCap = TRANSACTION_ROW_CAP, initialCurrency, initialProvisionalKeys, initialProvisionalTotal,
-  initialProvisionalTruncated, focusOnMount = false }: TransactionsProps) {
+  initialProvisionalTruncated, focusOnMount = false, onCreateRule }: TransactionsProps) {
   const startingFilter: TransactionFilter = initialCurrency === undefined ? NO_FILTER : { ...NO_FILTER, currency: initialCurrency };
   const [filter, setFilter] = useState<TransactionFilter>(startingFilter);
   const [draft, setDraft] = useState<TransactionFilter>(startingFilter);
@@ -670,7 +673,8 @@ export function TransactionsPanel({ api, period, currencies, accounts, connectio
                   </div>
                   {editing === key ? (
                     <Editor row={row} categories={categories} text={text} kindText={kindText} saving={busy === key}
-                      onSave={(category, kind, label) => { void save(row, category, kind, label); }} onCancel={stopEditing} />
+                      onSave={(category, kind, label) => { void save(row, category, kind, label); }} onCancel={stopEditing}
+                      onCreateRule={onCreateRule} />
                   ) : null}
                   {pairing === key ? (
                     <PairPicker debit={row} page={pairPage} accounts={accounts} connections={connections} text={text} locale={locale}
@@ -743,6 +747,7 @@ interface EditorProps {
   saving: boolean;
   onSave: (category: CategoryChoice, kind: KindChoice, label: string) => void;
   onCancel: () => void;
+  onCreateRule?: ((candidate: RuleCandidate) => void) | undefined;
 }
 
 function oneOffLabel(row: AnalyticsTransaction): string {
@@ -760,12 +765,13 @@ function decode(value: string): CategoryChoice {
   return { mode: "manual", category_id: value.startsWith("cat:") ? value.slice(4) : null };
 }
 
-function Editor({ row, categories, text, kindText, saving, onSave, onCancel }: EditorProps) {
+function Editor({ row, categories, text, kindText, saving, onSave, onCancel, onCreateRule }: EditorProps) {
   const [category, setCategory] = useState(encode(currentChoice(row)));
   const kinds = kindChoicesFor(row.credit_debit_indicator);
   const [kind, setKind] = useState<KindChoice>(row.annotation.mode === "manual"
     ? kindChoice(row.annotation.kind, row.credit_debit_indicator) : "auto");
   const [label, setLabel] = useState(oneOffLabel(row));
+  const accountCandidate = counterpartyRuleCandidate(row);
   // An archived category stays selectable only as this entry's current classification: the category it shows now,
   // or its own manual choice unless the bank changed the entry since. Assigning any other archived category is refused.
   const manual = row.annotation.mode === "manual" && !row.annotation.stale ? row.annotation.category_id : null;
@@ -803,6 +809,10 @@ function Editor({ row, categories, text, kindText, saving, onSave, onCancel }: E
           onChange={(event) => { setLabel(event.currentTarget.value); }} />
       </label>
       <p className="budget-muted">{text.oneOffHint}</p>
+      {onCreateRule === undefined || accountCandidate === null ? null : (
+        <button type="button" disabled={saving} title={row.counterparty_account ?? undefined}
+          onClick={() => { onCreateRule(accountCandidate); }}>{text.accountRule}</button>
+      )}
       <button type="submit" className="budget-primary" disabled={saving}>{text.save}</button>
       <button type="button" disabled={saving} onClick={onCancel}>{text.cancel}</button>
     </form>

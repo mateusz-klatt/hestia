@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BudgetApi, BudgetResult } from "../api";
 import { buildCategoryColors, contrastRatio, parseHexColor } from "./category_colors";
 import { categoryList } from "./fixtures";
-import type { AnalyticsRule, RulePreview, RuleSaved } from "./model";
+import type { AnalyticsRule, RuleCandidate, RulePreview, RuleSaved } from "./model";
 import { account } from "../fixtures";
 import { CategoriesView, rulesLabels } from "./rules";
 
@@ -48,11 +48,12 @@ afterEach(async () => {
 async function settle(): Promise<void> {
   await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
 }
-async function show(api: ReturnType<typeof fakeApi>, options: { revision?: number; lost?: boolean; text?: typeof rulesLabels.en; locale?: string } = {}) {
+async function show(api: ReturnType<typeof fakeApi>, options: { revision?: number; lost?: boolean; text?: typeof rulesLabels.en;
+  locale?: string; initialRule?: RuleCandidate | null } = {}) {
   const onAccessLoss = vi.fn((result: { ok: boolean }) => options.lost === true && !result.ok);
   await act(async () => {
     root.render(<CategoriesView api={api} accounts={accounts} text={options.text ?? rulesLabels.en} locale={options.locale ?? "en"}
-      revision={options.revision ?? 0} onAccessLoss={onAccessLoss} />);
+      revision={options.revision ?? 0} onAccessLoss={onAccessLoss} initialRule={options.initialRule} />);
     await Promise.resolve();
   });
   await settle();
@@ -191,6 +192,24 @@ describe("categories", () => {
 });
 
 describe("rules", () => {
+  it("shows a Polish note when an account rule key is missing or rotated", async () => {
+    const api = fakeApi();
+    api.rules.mockImplementation(() => ok({ rules: [
+      { ...rule, id: "plain", field: "description", operator: "contains", value: "Synthetic Shop", enabled: true },
+      { ...rule, id: "missing", field: "counterparty_account", operator: "equals", value: "PL** … 1234", enabled: true,
+        inactive_reason: "rule_key_unavailable" },
+      { ...rule, id: "rotated", field: "counterparty_account", operator: "equals", value: "PL** … 5678", enabled: true,
+        inactive_reason: "rule_key_rotated" },
+    ] }));
+    await show(api, { text: rulesLabels.pl, locale: "pl" });
+    const panel = section("Reguły");
+    expect(panel.textContent).toContain("Nieaktywna: brak klucza");
+    expect(panel.textContent).toContain("Nieaktywna: zmieniony klucz – utwórz regułę ponownie");
+    expect(panel.textContent.match(/Nieaktywna/g)).toHaveLength(2);
+    expect(rulesLabels.en.inactiveKeyMissing).toBe("Inactive: missing key");
+    expect(rulesLabels.en.inactiveKeyRotated).toBe("Inactive: key changed – create the rule again");
+  });
+
   it("describes each rule and says manual choices win", async () => {
     await show(fakeApi());
     const panel = section("Rules");
@@ -204,6 +223,49 @@ describe("rules", () => {
       return parseHexColor(value)?.hex ?? value;
     };
     expect(contrastRatio(rgb(badge?.style.backgroundColor ?? ""), rgb(badge?.style.color ?? ""))).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it("offers equals only for a manually typed counterparty account", async () => {
+    const api = fakeApi();
+    await show(api);
+    await click(button("New rule"));
+    const form = section("Rules").querySelector("form");
+    if (form === null) throw new Error("editor missing");
+    await choose(field(form, "When") as HTMLSelectElement, "counterparty_account");
+    const operator = form.querySelector<HTMLSelectElement>('select[name="operator"]');
+    expect(operator?.disabled).toBe(true);
+    expect([...operator?.options ?? []].map((option) => option.value)).toEqual(["equals"]);
+    const syntheticIban = ` pl ${"0 ".repeat(22)}1234 `;
+    await type(form.querySelector('input[name="value"]'), syntheticIban);
+    await choose(field(form, "Category") as HTMLSelectElement, "cat-food");
+    await act(async () => { form.requestSubmit(); await Promise.resolve(); });
+    await settle();
+    expect(api.previewRule).toHaveBeenCalledWith({
+      rule_id: null, expected_version: 0, field: "counterparty_account", operator: "equals", value: syntheticIban.trim(),
+      category_id: "cat-food", kind: "auto", priority: 100, enabled: true,
+    });
+  });
+
+  it("keeps an opaque account key until the masked value is edited", async () => {
+    const api = fakeApi();
+    const key = "b".repeat(64);
+    const initialRule: RuleCandidate = {
+      rule_id: null, expected_version: 0, field: "counterparty_account", operator: "equals", value: "PL** … 1234",
+      counterparty_account_key: key, category_id: "cat-food", kind: "auto", priority: 100, enabled: true,
+    };
+    await show(api, { initialRule });
+    const form = section("Rules").querySelector("form");
+    if (form === null) throw new Error("editor missing");
+    await act(async () => { form.requestSubmit(); await Promise.resolve(); });
+    await settle();
+    expect(api.previewRule).toHaveBeenCalledWith(initialRule);
+    const replacement = `PL${"0".repeat(22)}5678`;
+    await type(form.querySelector('input[name="value"]'), replacement);
+    await act(async () => { form.requestSubmit(); await Promise.resolve(); });
+    await settle();
+    const edited = api.previewRule.mock.calls[1]?.[0];
+    expect(edited?.value).toBe(replacement);
+    expect(edited).not.toHaveProperty("counterparty_account_key");
   });
 
   it("saves only a fresh preview and drops it when the rule changes", async () => {

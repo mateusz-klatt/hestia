@@ -23,7 +23,7 @@ from sqlalchemy.orm import Session
 from hestia import auth, db, store_sql, web
 from hestia.budget import analytics_api, device_token, household, household_api, household_views, month_budget
 from hestia.proxy import EventBus
-from hestia.budget.analytics_core import AnalyticsError
+from hestia.budget.analytics_core import AnalyticsError, counterparty_rule_value
 from hestia.budget.analytics_store import BudgetAnalyticsStore
 from hestia.budget.household import (
     HouseholdAuthError, entity_alias, require_household_data_grant, run_household_command,
@@ -51,6 +51,18 @@ def _versions(path):
 
 def _head_revision():
     return ScriptDirectory.from_config(db._alembic_config(None)).get_current_head()
+
+
+def _mapping_keys(value):
+    found = set()
+    if isinstance(value, dict):
+        found.update(value)
+        for item in value.values():
+            found.update(_mapping_keys(item))
+    elif isinstance(value, list):
+        for item in value:
+            found.update(_mapping_keys(item))
+    return found
 
 
 def _tables(path):
@@ -442,6 +454,45 @@ class HouseholdAPITests(unittest.IsolatedAsyncioTestCase):
         settings = bodies["monthly-budget-settings"]
         self.assertEqual(settings["income_category_ids"], [])
         self.assertIsNone(settings["pass_through"])
+
+    async def test_spouse_views_omit_counterparty_account_fields(self):
+        mask = "PL** … 1234"
+        digest = "cd" * 32
+        stored = counterparty_rule_value("ab" * 8, digest, mask)
+        with self.sessions.begin() as session:
+            session.add(db.BudgetRule(
+                id="rule-account", owner="alice", field="counterparty_account", operator="equals",
+                value=stored, category_id=None, kind="expense", priority=1, enabled=True, version=1,
+                created_at=1, updated_at=1))
+        rules = await self.fetch("rules")
+        self.assertEqual(rules.status, 200, await rules.text())
+        rules_body = await rules.json()
+        transactions = await self.fetch("transactions")
+        self.assertEqual(transactions.status, 200, await transactions.text())
+        tx_body = await transactions.json()
+        with mock.patch.dict(os.environ):
+            os.environ.pop("HESTIA_BUDGET_RULE_KEY_FILE", None)
+            owner_rules = await self.client.get("/api/budget/analytics/rules", headers=self.headers("alice"))
+            self.assertEqual(owner_rules.status, 200, await owner_rules.text())
+            owner_rules_body = await owner_rules.json()
+            owner_tx = await self.client.get("/api/budget/analytics/transactions", params={"period": PERIOD},
+                                              headers=self.headers("alice"))
+        self.assertEqual(owner_tx.status, 200, await owner_tx.text())
+        owner_tx_body = await owner_tx.json()
+        account_rule = next(row for row in owner_rules_body["rules"] if row["field"] == "counterparty_account")
+        self.assertEqual(account_rule["value"], mask)
+        self.assertEqual(account_rule["counterparty_account_key"], digest)
+        self.assertEqual(account_rule["inactive_reason"], "rule_key_unavailable")
+        self.assertIn("counterparty_account_key", owner_tx_body["transactions"][0])
+        self.assertIn("counterparty_account", owner_tx_body["transactions"][0])
+        forbidden = {"counterparty_account_key", "counterparty_account", "inactive_reason"}
+        for body in (rules_body, tx_body):
+            self.assertTrue(forbidden.isdisjoint(_mapping_keys(body)))
+            text = json.dumps(body)
+            for secret in (mask, digest, stored, "cpacct:", "rule_key_unavailable", "rule_key_rotated"):
+                self.assertNotIn(secret, text)
+        self.assertEqual([row["field"] for row in rules_body["rules"]], ["description"])
+        self.assertGreaterEqual(len(tx_body["transactions"]), 1)
 
     async def test_aliases_follow_the_grant_and_hidden_text_does_not_move_the_cursor(self):
         first = await (await self.fetch("report-accounts")).json()

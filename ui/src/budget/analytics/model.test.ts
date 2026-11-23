@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { accountName, annotationRequest, canPair, canonicalAmount, clampPercentString, counterparty, currentMonth,
-  daysBetween, formatRatioHalfEven, formatScaledBigInt, hasAnalytics, isMonth, isPositiveDecimal, isZero, kindChoice,
+  counterpartyRuleCandidate, daysBetween, formatRatioHalfEven, formatScaledBigInt, hasAnalytics, isMonth, isPositiveDecimal, isZero, kindChoice,
   kindChoicesFor, legsMatch, limitCurrencies, manualPairRequest, monthLabel, monthlyBudgetCurrencies, mortgageCurrencies,
   pairCandidates, pairDate, pairPeriods, parseIntInRange, parseScaledInt, parseWarningPercent, pluralPl, ratioPercentFloor,
-  recurringCurrencies, shiftMonth, transactionRowKey, transferActions, transferDecision, validCurrency, validIsoDate,
-  validLimitAmount, validMortgageLabel } from "./model";
-import type { AnalyticsTransaction } from "./model";
+  recurringCurrencies, ruleCandidate, shiftMonth, transactionRowKey, transferActions, transferDecision, validCandidate,
+  validCurrency, validIsoDate, validLimitAmount, validMortgageLabel } from "./model";
+import type { AnalyticsRule, AnalyticsTransaction } from "./model";
 import { entry, leg, mortgageSchedule, pair, recurringHint, spendingLimit } from "./fixtures";
 import { account, connection } from "../fixtures";
 
@@ -179,6 +179,27 @@ describe("analytics decisions", () => {
     expect(counterparty(entry("a", { metadata }))).toBe("Synthetic Payee");
     expect(counterparty(entry("b", { metadata, credit_debit_indicator: "CRDT" }))).toBe("Synthetic Payer");
     expect(counterparty(entry("c"))).toBeNull();
+  });
+
+  it("builds counterparty-account drafts without a raw identifier", () => {
+    const key = "c".repeat(64);
+    const categorized = entry("account", { counterparty_account_key: key, counterparty_account: "PL** … 1234",
+      effective: { kind: "expense", category_id: "cat-food", source: "manual", rule_id: null } });
+    expect(counterpartyRuleCandidate(categorized)).toMatchObject({ field: "counterparty_account", operator: "equals",
+      counterparty_account_key: key, value: "PL** … 1234", category_id: "cat-food", kind: "auto" });
+    const credit = entry("credit", { credit_debit_indicator: "CRDT", counterparty_account_key: key,
+      counterparty_account: "PL** … 1234" });
+    expect(counterpartyRuleCandidate(credit)?.kind).toBe("income");
+    expect(counterpartyRuleCandidate(entry("missing"))).toBeNull();
+    expect(counterpartyRuleCandidate(entry("bad-key", { counterparty_account_key: "not-a-key",
+      counterparty_account: "PL** … 1234" }))).toBeNull();
+    const saved: AnalyticsRule = { id: "rule-account", version: 3, field: "counterparty_account", operator: "equals",
+      value: "PL** … 1234", counterparty_account_key: key, category_id: "cat-food", kind: "auto", priority: 20,
+      enabled: true, created_at: 1, updated_at: 2 };
+    const draft = ruleCandidate(saved);
+    expect(draft.counterparty_account_key).toBe(key);
+    expect(validCandidate(draft)).toBe(true);
+    expect(validCandidate({ ...draft, operator: "contains" })).toBe(false);
   });
 
   it("offers only the actions each transfer state allows", () => {
