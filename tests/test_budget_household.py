@@ -1,4 +1,4 @@
-"""Household grants, the viewer read gate, and the household API."""
+"""Household grants, the member read gate, and the household API."""
 from __future__ import annotations
 
 import asyncio
@@ -133,19 +133,23 @@ class HouseholdCommandTests(unittest.TestCase):
         self.assertNotEqual(second["grant_id"], first["grant_id"])
         self.assertNotIn(second["grant_id"], _logged)
 
-    def test_invalid_member_owner_and_demotion_do_not_write(self):
+    def test_invalid_member_and_owner_do_not_write(self):
         _engine, sessions = self._ready()
         code, out, err, _logged = self._run("grant", "alice", "alice")
+        self.assertEqual((code, err.strip(), out), (2, "household_member_invalid", ""))
+        code, out, err, _logged = self._run("grant", "bob", "alice")
         self.assertEqual((code, err.strip(), out), (2, "household_member_invalid", ""))
         code, _out, err, _logged = self._run("grant", "viewer", "missing")
         self.assertEqual(err.strip(), "household_owner_invalid")
         granted = household.grant_member("viewer", "alice", path=str(self.path))
         with sessions.begin() as session:
-            session.get(db.User, "viewer").role = "operator"
+            member = session.get(db.User, "viewer")
+            member.role = "operator"
+            member.disabled = True
         code, _out, err, _logged = self._run("grant", "viewer", "alice")
         self.assertEqual(err.strip(), "household_member_invalid")
         with sessions.begin() as session:
-            session.get(db.User, "viewer").role = "viewer"
+            session.get(db.User, "viewer").disabled = False
             session.get(db.User, "alice").disabled = True
         code, _out, err, _logged = self._run("grant", "viewer", "alice")
         self.assertEqual(err.strip(), "household_owner_invalid")
@@ -495,9 +499,8 @@ class HouseholdAPITests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await mismatched.json())["error"], "budget_forbidden")
 
         with self.sessions.begin() as session:
-            session.add(db.BudgetHouseholdMember(member_username="operator", owner="alice", grant_id="ab" * 32))
             session.add(db.BudgetHouseholdMember(member_username="alice", owner="bob", grant_id="cd" * 32))
-        operator = await self.fetch("access", user="operator", headers=self.grant_headers("operator", grant="ab" * 32))
+        operator = await self.fetch("access", user="operator")
         self.assertEqual(operator.status, 403)
         self.assert_private_headers(operator)
         admin = await self.fetch("monthly-budget", user="alice", headers=self.grant_headers("alice", grant="cd" * 32))
@@ -564,6 +567,47 @@ class HouseholdAPITests(unittest.IsolatedAsyncioTestCase):
                 require_household_data_grant(session, "operator", header="ab" * 32, require_header=True)
             with self.assertRaises(HouseholdAuthError):
                 require_household_data_grant(session, "alice", header="cd" * 32, require_header=True)
+
+    async def test_changes_between_eligible_roles_keep_the_grant(self):
+        for role, operation in (("operator", "transactions"), ("viewer", "overview")):
+            with self.subTest(role=role):
+                with self.sessions.begin() as session:
+                    session.get(db.User, "viewer").role = role
+                response = await self.fetch(operation)
+                self.assertEqual(response.status, 200, await response.text())
+                self.assertEqual((await response.json())["grant_id"], self.grant_id)
+        self.assertCountEqual(self._audit_split()[0], [
+            ("alice", "viewer", "transactions", "null", "null"),
+            ("alice", "viewer", "overview", "null", "null"),
+        ])
+
+    async def test_member_ineligibility_during_final_recheck_discards_the_body(self):
+        grant = household.grant_member("operator", "alice", path=str(self.path))["grant_id"]
+
+        def update_member(role, disabled):
+            with self.sessions.begin() as session:
+                member = session.get(db.User, "operator")
+                member.role = role
+                member.disabled = disabled
+
+        for role, disabled, discovery_status in (("admin", False, 403), ("operator", True, 401)):
+            with self.subTest(role=role, disabled=disabled):
+                update_member("operator", False)
+                with mock.patch.object(household_api, "before_grant_recheck",
+                                       side_effect=lambda: update_member(role, disabled)) as recheck:
+                    response = await self.fetch("transactions", user="operator", grant=grant)
+                recheck.assert_called_once_with()
+                self.assertEqual(response.status, 403)
+                self.assert_private_headers(response)
+                body = await response.text()
+                self.assertEqual(json.loads(body)["error"], "budget_forbidden")
+                self.assertNotIn(AMOUNT, body)
+                self.assertNotIn(grant, body)
+                self.assertEqual(self._audit_split()[0], [])
+                discovery = await self.fetch("access", user="operator")
+                self.assertEqual(discovery.status, discovery_status)
+                with self.sessions() as session:
+                    self.assertEqual(session.get(db.BudgetHouseholdMember, "operator").grant_id, grant)
 
     async def test_revoke_during_the_final_recheck_discards_the_body(self):
         def revoke():
