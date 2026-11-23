@@ -166,10 +166,10 @@ class HouseholdEdgeTests(unittest.TestCase):
         with self.sessions() as session:
             self.assertIsNone(session.get(db.BudgetHouseholdMember, "carol"))
 
-    def test_cli_main_dispatches_household_without_bank_io(self):
+    def test_cli_main_grants_an_operator_without_bank_io(self):
         from hestia.budget.__main__ import main
         with self.sessions.begin() as session:
-            session.add(db.User(username="dave", password_hash="unused", role="viewer"))
+            session.add(db.User(username="dave", password_hash="unused", role="operator"))
         stdout = io.StringIO()
         with redirect_stdout(stdout), \
              mock.patch("hestia.budget.__main__.execute", side_effect=AssertionError("execute")), \

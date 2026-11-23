@@ -873,7 +873,7 @@ export interface paths {
         };
         /**
          * Discover the caller's household grant id
-         * @description Requires an authenticated active viewer, both budget flags, SQLite users and a grant whose owner is an active admin. The grant header is 64 lowercase hex characters. Reads the same owner projection through a separate allowlist. No bank request. Data reads may write one sanitised internal analytics-audit row for the member, owner and view name, at most once per 60 seconds, in the same immediate transaction as the fresh grant check. Household audit rows older than 180 days are pruned on that write. GET /access returns only the member's grant id and writes no audit row. Failures write nothing. The row is not visible on /api/audit or the SSE stream. GET /monthly-budget-settings reads the P1 bootstrap config only.
+         * @description Requires an authenticated, enabled viewer or operator, both budget flags, SQLite users and a grant whose owner is an enabled admin. The grant header is 64 lowercase hex characters. Reads the same owner projection through a separate allowlist. No bank request. Data reads may write one sanitised internal analytics-audit row for the member, owner and view name, at most once per 60 seconds, in the same immediate transaction as the fresh grant check. Household audit rows older than 180 days are pruned on that write. GET /access returns only the member's grant id and writes no audit row. Failures write nothing. The row is not visible on /api/audit or the SSE stream. GET /monthly-budget-settings reads the P1 bootstrap config only.
          */
         get: operations["getBudgetHouseholdAccess"];
         put?: never;
@@ -893,7 +893,7 @@ export interface paths {
         };
         /**
          * Household category aliases and safe labels
-         * @description Requires an authenticated active viewer, both budget flags, SQLite users and a grant whose owner is an active admin. The grant header is 64 lowercase hex characters. Reads the same owner projection through a separate allowlist. No bank request. Data reads may write one sanitised internal analytics-audit row for the member, owner and view name, at most once per 60 seconds, in the same immediate transaction as the fresh grant check. Household audit rows older than 180 days are pruned on that write. GET /access returns only the member's grant id and writes no audit row. Failures write nothing. The row is not visible on /api/audit or the SSE stream. GET /monthly-budget-settings reads the P1 bootstrap config only.
+         * @description Requires an authenticated, enabled viewer or operator, both budget flags, SQLite users and a grant whose owner is an enabled admin. The grant header is 64 lowercase hex characters. Reads the same owner projection through a separate allowlist. No bank request. Data reads may write one sanitised internal analytics-audit row for the member, owner and view name, at most once per 60 seconds, in the same immediate transaction as the fresh grant check. Household audit rows older than 180 days are pruned on that write. GET /access returns only the member's grant id and writes no audit row. Failures write nothing. The row is not visible on /api/audit or the SSE stream. GET /monthly-budget-settings reads the P1 bootstrap config only.
          */
         get: operations["getBudgetHouseholdCategories"];
         put?: never;
@@ -913,7 +913,7 @@ export interface paths {
         };
         /**
          * Household mortgage and spending-limit inbox
-         * @description Requires an authenticated active viewer, both budget flags, SQLite users and a grant whose owner is an active admin. The grant header is 64 lowercase hex characters. Reads the same owner projection through a separate allowlist. No bank request. Data reads may write one sanitised internal analytics-audit row for the member, owner and view name, at most once per 60 seconds, in the same immediate transaction as the fresh grant check. Household audit rows older than 180 days are pruned on that write. GET /access returns only the member's grant id and writes no audit row. Failures write nothing. The row is not visible on /api/audit or the SSE stream. GET /monthly-budget-settings reads the P1 bootstrap config only.
+         * @description Requires an authenticated, enabled viewer or operator, both budget flags, SQLite users and a grant whose owner is an enabled admin. The grant header is 64 lowercase hex characters. Reads the same owner projection through a separate allowlist. No bank request. Data reads may write one sanitised internal analytics-audit row for the member, owner and view name, at most once per 60 seconds, in the same immediate transaction as the fresh grant check. Household audit rows older than 180 days are pruned on that write. GET /access returns only the member's grant id and writes no audit row. Failures write nothing. The row is not visible on /api/audit or the SSE stream. GET /monthly-budget-settings reads the P1 bootstrap config only.
          */
         get: operations["getBudgetHouseholdInbox"];
         put?: never;
@@ -933,7 +933,7 @@ export interface paths {
         };
         /**
          * Household monthly budget and series
-         * @description Requires an authenticated active viewer, both budget flags, SQLite users and a grant whose owner is an active admin. The grant header is 64 lowercase hex characters. Reads the same owner projection through a separate allowlist. No bank request. Data reads may write one sanitised internal analytics-audit row for the member, owner and view name, at most once per 60 seconds, in the same immediate transaction as the fresh grant check. Household audit rows older than 180 days are pruned on that write. GET /access returns only the member's grant id and writes no audit row. Failures write nothing. The row is not visible on /api/audit or the SSE stream. GET /monthly-budget-settings reads the P1 bootstrap config only.
+         * @description Requires an authenticated, enabled viewer or operator, both budget flags, SQLite users and a grant whose owner is an enabled admin. The grant header is 64 lowercase hex characters. Reads the same owner projection through a separate allowlist. No bank request. Data reads may write one sanitised internal analytics-audit row for the member, owner and view name, at most once per 60 seconds, in the same immediate transaction as the fresh grant check. Household audit rows older than 180 days are pruned on that write. GET /access returns only the member's grant id and writes no audit row. Failures write nothing. The row is not visible on /api/audit or the SSE stream. GET /monthly-budget-settings reads the P1 bootstrap config only.
          */
         get: operations["getBudgetHouseholdMonthlyBudget"];
         put?: never;
@@ -953,7 +953,7 @@ export interface paths {
         };
         /**
          * Bootstrap monthly-budget settings with grant-scoped category ids
-         * @description Requires an authenticated active viewer, both budget flags, SQLite users and a grant whose owner is an active admin. The grant header is 64 lowercase hex characters. Reads the same owner projection through a separate allowlist. No bank request. Data reads may write one sanitised internal analytics-audit row for the member, owner and view name, at most once per 60 seconds, in the same immediate transaction as the fresh grant check. Household audit rows older than 180 days are pruned on that write. GET /access returns only the member's grant id and writes no audit row. Failures write nothing. The row is not visible on /api/audit or the SSE stream. GET /monthly-budget-settings reads the P1 bootstrap config only.
+         * @description Requires an authenticated, enabled viewer or operator, both budget flags, SQLite users and a grant whose owner is an enabled admin. The grant header is 64 lowercase hex characters. Reads the same owner projection through a separate allowlist. No bank request. Data reads may write one sanitised internal analytics-audit row for the member, owner and view name, at most once per 60 seconds, in the same immediate transaction as the fresh grant check. Household audit rows older than 180 days are pruned on that write. GET /access returns only the member's grant id and writes no audit row. Failures write nothing. The row is not visible on /api/audit or the SSE stream. GET /monthly-budget-settings reads the P1 bootstrap config only.
          */
         get: operations["getBudgetHouseholdMonthlyBudgetSettings"];
         put?: never;
@@ -973,7 +973,7 @@ export interface paths {
         };
         /**
          * Household mortgage schedules without labels
-         * @description Requires an authenticated active viewer, both budget flags, SQLite users and a grant whose owner is an active admin. The grant header is 64 lowercase hex characters. Reads the same owner projection through a separate allowlist. No bank request. Data reads may write one sanitised internal analytics-audit row for the member, owner and view name, at most once per 60 seconds, in the same immediate transaction as the fresh grant check. Household audit rows older than 180 days are pruned on that write. GET /access returns only the member's grant id and writes no audit row. Failures write nothing. The row is not visible on /api/audit or the SSE stream. GET /monthly-budget-settings reads the P1 bootstrap config only.
+         * @description Requires an authenticated, enabled viewer or operator, both budget flags, SQLite users and a grant whose owner is an enabled admin. The grant header is 64 lowercase hex characters. Reads the same owner projection through a separate allowlist. No bank request. Data reads may write one sanitised internal analytics-audit row for the member, owner and view name, at most once per 60 seconds, in the same immediate transaction as the fresh grant check. Household audit rows older than 180 days are pruned on that write. GET /access returns only the member's grant id and writes no audit row. Failures write nothing. The row is not visible on /api/audit or the SSE stream. GET /monthly-budget-settings reads the P1 bootstrap config only.
          */
         get: operations["getBudgetHouseholdMortgages"];
         put?: never;
@@ -993,7 +993,7 @@ export interface paths {
         };
         /**
          * Household selected-account totals
-         * @description Requires an authenticated active viewer, both budget flags, SQLite users and a grant whose owner is an active admin. The grant header is 64 lowercase hex characters. Reads the same owner projection through a separate allowlist. No bank request. Data reads may write one sanitised internal analytics-audit row for the member, owner and view name, at most once per 60 seconds, in the same immediate transaction as the fresh grant check. Household audit rows older than 180 days are pruned on that write. GET /access returns only the member's grant id and writes no audit row. Failures write nothing. The row is not visible on /api/audit or the SSE stream. GET /monthly-budget-settings reads the P1 bootstrap config only.
+         * @description Requires an authenticated, enabled viewer or operator, both budget flags, SQLite users and a grant whose owner is an enabled admin. The grant header is 64 lowercase hex characters. Reads the same owner projection through a separate allowlist. No bank request. Data reads may write one sanitised internal analytics-audit row for the member, owner and view name, at most once per 60 seconds, in the same immediate transaction as the fresh grant check. Household audit rows older than 180 days are pruned on that write. GET /access returns only the member's grant id and writes no audit row. Failures write nothing. The row is not visible on /api/audit or the SSE stream. GET /monthly-budget-settings reads the P1 bootstrap config only.
          */
         get: operations["getBudgetHouseholdOverview"];
         put?: never;
@@ -1013,7 +1013,7 @@ export interface paths {
         };
         /**
          * Household quarantine counts over selected accounts
-         * @description Requires an authenticated active viewer, both budget flags, SQLite users and a grant whose owner is an active admin. The grant header is 64 lowercase hex characters. Reads the same owner projection through a separate allowlist. No bank request. Data reads may write one sanitised internal analytics-audit row for the member, owner and view name, at most once per 60 seconds, in the same immediate transaction as the fresh grant check. Household audit rows older than 180 days are pruned on that write. GET /access returns only the member's grant id and writes no audit row. Failures write nothing. The row is not visible on /api/audit or the SSE stream. GET /monthly-budget-settings reads the P1 bootstrap config only.
+         * @description Requires an authenticated, enabled viewer or operator, both budget flags, SQLite users and a grant whose owner is an enabled admin. The grant header is 64 lowercase hex characters. Reads the same owner projection through a separate allowlist. No bank request. Data reads may write one sanitised internal analytics-audit row for the member, owner and view name, at most once per 60 seconds, in the same immediate transaction as the fresh grant check. Household audit rows older than 180 days are pruned on that write. GET /access returns only the member's grant id and writes no audit row. Failures write nothing. The row is not visible on /api/audit or the SSE stream. GET /monthly-budget-settings reads the P1 bootstrap config only.
          */
         get: operations["getBudgetHouseholdQuarantine"];
         put?: never;
@@ -1033,7 +1033,7 @@ export interface paths {
         };
         /**
          * Household recurring hints with generic ordinals
-         * @description Requires an authenticated active viewer, both budget flags, SQLite users and a grant whose owner is an active admin. The grant header is 64 lowercase hex characters. Reads the same owner projection through a separate allowlist. No bank request. Data reads may write one sanitised internal analytics-audit row for the member, owner and view name, at most once per 60 seconds, in the same immediate transaction as the fresh grant check. Household audit rows older than 180 days are pruned on that write. GET /access returns only the member's grant id and writes no audit row. Failures write nothing. The row is not visible on /api/audit or the SSE stream. GET /monthly-budget-settings reads the P1 bootstrap config only.
+         * @description Requires an authenticated, enabled viewer or operator, both budget flags, SQLite users and a grant whose owner is an enabled admin. The grant header is 64 lowercase hex characters. Reads the same owner projection through a separate allowlist. No bank request. Data reads may write one sanitised internal analytics-audit row for the member, owner and view name, at most once per 60 seconds, in the same immediate transaction as the fresh grant check. Household audit rows older than 180 days are pruned on that write. GET /access returns only the member's grant id and writes no audit row. Failures write nothing. The row is not visible on /api/audit or the SSE stream. GET /monthly-budget-settings reads the P1 bootstrap config only.
          */
         get: operations["getBudgetHouseholdRecurring"];
         put?: never;
@@ -1053,7 +1053,7 @@ export interface paths {
         };
         /**
          * Selected accounts as grant-scoped aliases and ordinals
-         * @description Requires an authenticated active viewer, both budget flags, SQLite users and a grant whose owner is an active admin. The grant header is 64 lowercase hex characters. Reads the same owner projection through a separate allowlist. No bank request. Data reads may write one sanitised internal analytics-audit row for the member, owner and view name, at most once per 60 seconds, in the same immediate transaction as the fresh grant check. Household audit rows older than 180 days are pruned on that write. GET /access returns only the member's grant id and writes no audit row. Failures write nothing. The row is not visible on /api/audit or the SSE stream. GET /monthly-budget-settings reads the P1 bootstrap config only.
+         * @description Requires an authenticated, enabled viewer or operator, both budget flags, SQLite users and a grant whose owner is an enabled admin. The grant header is 64 lowercase hex characters. Reads the same owner projection through a separate allowlist. No bank request. Data reads may write one sanitised internal analytics-audit row for the member, owner and view name, at most once per 60 seconds, in the same immediate transaction as the fresh grant check. Household audit rows older than 180 days are pruned on that write. GET /access returns only the member's grant id and writes no audit row. Failures write nothing. The row is not visible on /api/audit or the SSE stream. GET /monthly-budget-settings reads the P1 bootstrap config only.
          */
         get: operations["getBudgetHouseholdReportAccounts"];
         put?: never;
@@ -1073,7 +1073,7 @@ export interface paths {
         };
         /**
          * Household rules without literal operands
-         * @description Requires an authenticated active viewer, both budget flags, SQLite users and a grant whose owner is an active admin. The grant header is 64 lowercase hex characters. Reads the same owner projection through a separate allowlist. No bank request. Data reads may write one sanitised internal analytics-audit row for the member, owner and view name, at most once per 60 seconds, in the same immediate transaction as the fresh grant check. Household audit rows older than 180 days are pruned on that write. GET /access returns only the member's grant id and writes no audit row. Failures write nothing. The row is not visible on /api/audit or the SSE stream. GET /monthly-budget-settings reads the P1 bootstrap config only.
+         * @description Requires an authenticated, enabled viewer or operator, both budget flags, SQLite users and a grant whose owner is an enabled admin. The grant header is 64 lowercase hex characters. Reads the same owner projection through a separate allowlist. No bank request. Data reads may write one sanitised internal analytics-audit row for the member, owner and view name, at most once per 60 seconds, in the same immediate transaction as the fresh grant check. Household audit rows older than 180 days are pruned on that write. GET /access returns only the member's grant id and writes no audit row. Failures write nothing. The row is not visible on /api/audit or the SSE stream. GET /monthly-budget-settings reads the P1 bootstrap config only.
          */
         get: operations["getBudgetHouseholdRules"];
         put?: never;
@@ -1093,7 +1093,7 @@ export interface paths {
         };
         /**
          * Enabled household spending limits
-         * @description Requires an authenticated active viewer, both budget flags, SQLite users and a grant whose owner is an active admin. The grant header is 64 lowercase hex characters. Reads the same owner projection through a separate allowlist. No bank request. Data reads may write one sanitised internal analytics-audit row for the member, owner and view name, at most once per 60 seconds, in the same immediate transaction as the fresh grant check. Household audit rows older than 180 days are pruned on that write. GET /access returns only the member's grant id and writes no audit row. Failures write nothing. The row is not visible on /api/audit or the SSE stream. GET /monthly-budget-settings reads the P1 bootstrap config only.
+         * @description Requires an authenticated, enabled viewer or operator, both budget flags, SQLite users and a grant whose owner is an enabled admin. The grant header is 64 lowercase hex characters. Reads the same owner projection through a separate allowlist. No bank request. Data reads may write one sanitised internal analytics-audit row for the member, owner and view name, at most once per 60 seconds, in the same immediate transaction as the fresh grant check. Household audit rows older than 180 days are pruned on that write. GET /access returns only the member's grant id and writes no audit row. Failures write nothing. The row is not visible on /api/audit or the SSE stream. GET /monthly-budget-settings reads the P1 bootstrap config only.
          */
         get: operations["getBudgetHouseholdSpendingLimits"];
         put?: never;
@@ -1113,7 +1113,7 @@ export interface paths {
         };
         /**
          * Household transactions without bank text
-         * @description Requires an authenticated active viewer, both budget flags, SQLite users and a grant whose owner is an active admin. The grant header is 64 lowercase hex characters. Reads the same owner projection through a separate allowlist. No bank request. Data reads may write one sanitised internal analytics-audit row for the member, owner and view name, at most once per 60 seconds, in the same immediate transaction as the fresh grant check. Household audit rows older than 180 days are pruned on that write. GET /access returns only the member's grant id and writes no audit row. Failures write nothing. The row is not visible on /api/audit or the SSE stream. GET /monthly-budget-settings reads the P1 bootstrap config only.
+         * @description Requires an authenticated, enabled viewer or operator, both budget flags, SQLite users and a grant whose owner is an enabled admin. The grant header is 64 lowercase hex characters. Reads the same owner projection through a separate allowlist. No bank request. Data reads may write one sanitised internal analytics-audit row for the member, owner and view name, at most once per 60 seconds, in the same immediate transaction as the fresh grant check. Household audit rows older than 180 days are pruned on that write. GET /access returns only the member's grant id and writes no audit row. Failures write nothing. The row is not visible on /api/audit or the SSE stream. GET /monthly-budget-settings reads the P1 bootstrap config only.
          */
         get: operations["getBudgetHouseholdTransactions"];
         put?: never;
@@ -1133,7 +1133,7 @@ export interface paths {
         };
         /**
          * Household transfer pairs whose both legs are selected
-         * @description Requires an authenticated active viewer, both budget flags, SQLite users and a grant whose owner is an active admin. The grant header is 64 lowercase hex characters. Reads the same owner projection through a separate allowlist. No bank request. Data reads may write one sanitised internal analytics-audit row for the member, owner and view name, at most once per 60 seconds, in the same immediate transaction as the fresh grant check. Household audit rows older than 180 days are pruned on that write. GET /access returns only the member's grant id and writes no audit row. Failures write nothing. The row is not visible on /api/audit or the SSE stream. GET /monthly-budget-settings reads the P1 bootstrap config only.
+         * @description Requires an authenticated, enabled viewer or operator, both budget flags, SQLite users and a grant whose owner is an enabled admin. The grant header is 64 lowercase hex characters. Reads the same owner projection through a separate allowlist. No bank request. Data reads may write one sanitised internal analytics-audit row for the member, owner and view name, at most once per 60 seconds, in the same immediate transaction as the fresh grant check. Household audit rows older than 180 days are pruned on that write. GET /access returns only the member's grant id and writes no audit row. Failures write nothing. The row is not visible on /api/audit or the SSE stream. GET /monthly-budget-settings reads the P1 bootstrap config only.
          */
         get: operations["getBudgetHouseholdTransfers"];
         put?: never;
@@ -10754,7 +10754,7 @@ export interface operations {
                     "application/json": components["schemas"]["BudgetError"];
                 };
             };
-            /** @description Stored role must be exactly an active viewer with a grant whose owner is an active admin. Data reads also require exactly one matching X-Budget-Grant. The viewer route floor admits higher roles; those roles are rejected here. Middleware may return an empty body. */
+            /** @description The member must be an enabled viewer or operator with a grant whose owner is an enabled admin. Data reads also require exactly one matching X-Budget-Grant. Middleware may return an empty body. */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -10849,7 +10849,7 @@ export interface operations {
                     "application/json": components["schemas"]["BudgetError"];
                 };
             };
-            /** @description Stored role must be exactly an active viewer with a grant whose owner is an active admin. Data reads also require exactly one matching X-Budget-Grant. The viewer route floor admits higher roles; those roles are rejected here. Middleware may return an empty body. */
+            /** @description The member must be an enabled viewer or operator with a grant whose owner is an enabled admin. Data reads also require exactly one matching X-Budget-Grant. Middleware may return an empty body. */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -10944,7 +10944,7 @@ export interface operations {
                     "application/json": components["schemas"]["BudgetError"];
                 };
             };
-            /** @description Stored role must be exactly an active viewer with a grant whose owner is an active admin. Data reads also require exactly one matching X-Budget-Grant. The viewer route floor admits higher roles; those roles are rejected here. Middleware may return an empty body. */
+            /** @description The member must be an enabled viewer or operator with a grant whose owner is an enabled admin. Data reads also require exactly one matching X-Budget-Grant. Middleware may return an empty body. */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -11044,7 +11044,7 @@ export interface operations {
                     "application/json": components["schemas"]["BudgetError"];
                 };
             };
-            /** @description Stored role must be exactly an active viewer with a grant whose owner is an active admin. Data reads also require exactly one matching X-Budget-Grant. The viewer route floor admits higher roles; those roles are rejected here. Middleware may return an empty body. */
+            /** @description The member must be an enabled viewer or operator with a grant whose owner is an enabled admin. Data reads also require exactly one matching X-Budget-Grant. Middleware may return an empty body. */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -11139,7 +11139,7 @@ export interface operations {
                     "application/json": components["schemas"]["BudgetError"];
                 };
             };
-            /** @description Stored role must be exactly an active viewer with a grant whose owner is an active admin. Data reads also require exactly one matching X-Budget-Grant. The viewer route floor admits higher roles; those roles are rejected here. Middleware may return an empty body. */
+            /** @description The member must be an enabled viewer or operator with a grant whose owner is an enabled admin. Data reads also require exactly one matching X-Budget-Grant. Middleware may return an empty body. */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -11234,7 +11234,7 @@ export interface operations {
                     "application/json": components["schemas"]["BudgetError"];
                 };
             };
-            /** @description Stored role must be exactly an active viewer with a grant whose owner is an active admin. Data reads also require exactly one matching X-Budget-Grant. The viewer route floor admits higher roles; those roles are rejected here. Middleware may return an empty body. */
+            /** @description The member must be an enabled viewer or operator with a grant whose owner is an enabled admin. Data reads also require exactly one matching X-Budget-Grant. Middleware may return an empty body. */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -11333,7 +11333,7 @@ export interface operations {
                     "application/json": components["schemas"]["BudgetError"];
                 };
             };
-            /** @description Stored role must be exactly an active viewer with a grant whose owner is an active admin. Data reads also require exactly one matching X-Budget-Grant. The viewer route floor admits higher roles; those roles are rejected here. Middleware may return an empty body. */
+            /** @description The member must be an enabled viewer or operator with a grant whose owner is an enabled admin. Data reads also require exactly one matching X-Budget-Grant. Middleware may return an empty body. */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -11428,7 +11428,7 @@ export interface operations {
                     "application/json": components["schemas"]["BudgetError"];
                 };
             };
-            /** @description Stored role must be exactly an active viewer with a grant whose owner is an active admin. Data reads also require exactly one matching X-Budget-Grant. The viewer route floor admits higher roles; those roles are rejected here. Middleware may return an empty body. */
+            /** @description The member must be an enabled viewer or operator with a grant whose owner is an enabled admin. Data reads also require exactly one matching X-Budget-Grant. Middleware may return an empty body. */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -11525,7 +11525,7 @@ export interface operations {
                     "application/json": components["schemas"]["BudgetError"];
                 };
             };
-            /** @description Stored role must be exactly an active viewer with a grant whose owner is an active admin. Data reads also require exactly one matching X-Budget-Grant. The viewer route floor admits higher roles; those roles are rejected here. Middleware may return an empty body. */
+            /** @description The member must be an enabled viewer or operator with a grant whose owner is an enabled admin. Data reads also require exactly one matching X-Budget-Grant. Middleware may return an empty body. */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -11620,7 +11620,7 @@ export interface operations {
                     "application/json": components["schemas"]["BudgetError"];
                 };
             };
-            /** @description Stored role must be exactly an active viewer with a grant whose owner is an active admin. Data reads also require exactly one matching X-Budget-Grant. The viewer route floor admits higher roles; those roles are rejected here. Middleware may return an empty body. */
+            /** @description The member must be an enabled viewer or operator with a grant whose owner is an enabled admin. Data reads also require exactly one matching X-Budget-Grant. Middleware may return an empty body. */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -11715,7 +11715,7 @@ export interface operations {
                     "application/json": components["schemas"]["BudgetError"];
                 };
             };
-            /** @description Stored role must be exactly an active viewer with a grant whose owner is an active admin. Data reads also require exactly one matching X-Budget-Grant. The viewer route floor admits higher roles; those roles are rejected here. Middleware may return an empty body. */
+            /** @description The member must be an enabled viewer or operator with a grant whose owner is an enabled admin. Data reads also require exactly one matching X-Budget-Grant. Middleware may return an empty body. */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -11814,7 +11814,7 @@ export interface operations {
                     "application/json": components["schemas"]["BudgetError"];
                 };
             };
-            /** @description Stored role must be exactly an active viewer with a grant whose owner is an active admin. Data reads also require exactly one matching X-Budget-Grant. The viewer route floor admits higher roles; those roles are rejected here. Middleware may return an empty body. */
+            /** @description The member must be an enabled viewer or operator with a grant whose owner is an enabled admin. Data reads also require exactly one matching X-Budget-Grant. Middleware may return an empty body. */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -11882,7 +11882,7 @@ export interface operations {
                 /** @description Grant-scoped category alias. The owner token uncategorised is rejected. */
                 category_id?: string;
                 limit?: number;
-                /** @description Opaque cursor bound to the viewer, owner, grant, route and safe rows. */
+                /** @description Opaque cursor bound to the member, owner, grant, route and safe rows. */
                 cursor?: string;
             };
             header: {
@@ -11921,7 +11921,7 @@ export interface operations {
                     "application/json": components["schemas"]["BudgetError"];
                 };
             };
-            /** @description Stored role must be exactly an active viewer with a grant whose owner is an active admin. Data reads also require exactly one matching X-Budget-Grant. The viewer route floor admits higher roles; those roles are rejected here. Middleware may return an empty body. */
+            /** @description The member must be an enabled viewer or operator with a grant whose owner is an enabled admin. Data reads also require exactly one matching X-Budget-Grant. Middleware may return an empty body. */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -11985,7 +11985,7 @@ export interface operations {
                 currency?: string;
                 status?: "suggested" | "accepted" | "review" | "boundary" | "rejected" | "undone";
                 limit?: number;
-                /** @description Opaque cursor bound to the viewer, owner, grant, route and safe rows. */
+                /** @description Opaque cursor bound to the member, owner, grant, route and safe rows. */
                 cursor?: string;
             };
             header: {
@@ -12024,7 +12024,7 @@ export interface operations {
                     "application/json": components["schemas"]["BudgetError"];
                 };
             };
-            /** @description Stored role must be exactly an active viewer with a grant whose owner is an active admin. Data reads also require exactly one matching X-Budget-Grant. The viewer route floor admits higher roles; those roles are rejected here. Middleware may return an empty body. */
+            /** @description The member must be an enabled viewer or operator with a grant whose owner is an enabled admin. Data reads also require exactly one matching X-Budget-Grant. Middleware may return an empty body. */
             403: {
                 headers: {
                     [name: string]: unknown;

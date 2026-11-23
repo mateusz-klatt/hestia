@@ -1,6 +1,7 @@
 import type { Messages } from "./en";
 
 const messages: Partial<Messages> = {
+  "header.title": "hestia",
   "header.confirmed": "{confirmed}/{total} مؤكدة",
   "header.unknown": "{unknown} غير معروفة",
 
@@ -186,6 +187,7 @@ const messages: Partial<Messages> = {
   "auto.error": "خطأ {status}",
   "auto.trig.scene": "مشهد {id} @عقدة {node}",
   "auto.trig.state": "عقدة {node}{gang} {field} {op} {value}",
+  "auto.trig.stateGlobal": "{field} {op} {value}",
   "auto.trig.gang": " مفتاح {ep}",
   "auto.trig.time": "عند {time}{days}",
   "auto.trig.cron": "cron {expr}",
@@ -201,7 +203,7 @@ const messages: Partial<Messages> = {
   "rule.wizardTitle": "معالج القاعدة",
   "rule.id": "id",
   "rule.enabled": "مفعّلة",
-  "rule.debounce": "debounce s",
+  "rule.debounce": "الفاصل الأدنى بين مرات التفعيل s",
   "rule.trigger": "المشغّل",
   "rule.conditions": "الشروط:",
   "rule.actions": "الإجراءات:",
@@ -223,7 +225,7 @@ const messages: Partial<Messages> = {
   "rule.gang": "مفتاح",
   "rule.phRuleId": "معرّف-القاعدة",
   "rule.phButton": "زر",
-  "rule.phOffset": "offset min",
+  "rule.phOffset": "إزاحة min",
   "rule.phWindowStart": "HH:MM",
   "rule.phWindowEnd": "HH:MM",
   "rule.errNumberRequired": "{label}: رقم مطلوب",

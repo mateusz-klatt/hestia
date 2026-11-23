@@ -4013,9 +4013,8 @@ def _household_responses(model):
         "immediate transaction. A successful data read may write one sanitised analytics-audit row naming "
         "the member, owner and view, at most once per 60 seconds. Discovery writes no audit row. A denial "
         "writes nothing.")
-    responses["403"]["description"] = ("Stored role must be exactly an active viewer with a grant whose owner is an "
-                                       "active admin. Data reads also require exactly one matching X-Budget-Grant. "
-                                       "The viewer route floor admits higher roles; those roles are rejected here. "
+    responses["403"]["description"] = ("The member must be an enabled viewer or operator with a grant whose owner "
+                                       "is an enabled admin. Data reads also require exactly one matching X-Budget-Grant. "
                                        "Middleware may return an empty body.")
     responses["413"]["description"] = ("Household response exceeded 4 MiB of UTF-8 JSON, or a monthly-budget "
                                        "processing cap was hit. No partial body is returned.")
@@ -4023,7 +4022,7 @@ def _household_responses(model):
 
 
 def _household_paths():
-    """P3 viewer reads. Existing owner routes stay admin. Settings reads the P1 bootstrap config only."""
+    """P3 household reads. Existing owner routes stay admin. Settings reads the P1 bootstrap config only."""
     prefix = "/api/budget/household/"
     period = _budget_query("period", required=True, schema={"type": "string", "pattern": r"^[0-9]{4}(?:-[0-9]{2})?$"},
                            description="Inclusive calendar month or year, 1900 through 9999.")
@@ -4032,7 +4031,7 @@ def _household_paths():
                           description="Inclusive calendar month YYYY-MM.")
     page = [_budget_query("limit", schema={"type": "integer", "minimum": 1, "maximum": 200, "default": 50}),
             _budget_query("cursor", schema={"type": "string", "minLength": 1, "maxLength": 8192},
-                          description="Opaque cursor bound to the viewer, owner, grant, route and safe rows.")]
+                          description="Opaque cursor bound to the member, owner, grant, route and safe rows.")]
     month_optional = _budget_query(
         "period", schema={"type": "string", "pattern": r"^[0-9]{4}-[0-9]{2}$"},
         description="Optional calendar month YYYY-MM through the current Europe/Warsaw month. Defaults to that month.")
@@ -4078,9 +4077,9 @@ def _household_paths():
     paths = {}
     for name, operation, summary, model, parameters in reads:
         entry = {"operationId": operation, "summary": summary,
-                 "description": "Requires an authenticated active viewer, both budget flags, SQLite users and a "
-                                "grant whose owner is an active admin. The grant header is 64 lowercase hex "
-                                "characters. Reads the same owner projection through a separate allowlist. No bank "
+                 "description": "Requires an authenticated, enabled viewer or operator, both budget flags, SQLite "
+                                "users and a grant whose owner is an enabled admin. The grant header is 64 lowercase "
+                                "hex characters. Reads the same owner projection through a separate allowlist. No bank "
                                 "request. Data reads may write one sanitised internal analytics-audit row for the "
                                 "member, owner and view name, at most once per 60 seconds, in the same immediate "
                                 "transaction as the fresh grant check. Household audit rows older than 180 days are "

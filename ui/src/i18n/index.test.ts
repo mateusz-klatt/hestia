@@ -59,11 +59,11 @@ describe("t / tPlural", () => {
     expect(t("user.loggedInAs", { user: "tata" })).toBe("signed in: tata");
   });
 
-  it("translates after loading a locale, falling back to English for missing keys", async () => {
+  it("translates after loading a locale and preserves the brand name", async () => {
     await loadLocale("pl");
     expect(currentLocale()).toBe("pl");
     expect(t("login.submit")).toBe("Zaloguj");
-    expect(t("header.title")).toBe("hestia"); // pl omits header.title → English fallback
+    expect(t("header.title")).toBe("hestia");
   });
 
   it("applies CLDR plural categories (en one/other; pl one/few/many)", async () => {

@@ -1,6 +1,7 @@
 import type { Messages } from "./en";
 
 const messages: Partial<Messages> = {
+  "header.title": "hestia",
   "header.confirmed": "{confirmed}/{total} disahkan",
   "header.unknown": "{unknown} tidak diketahui",
 
@@ -108,6 +109,11 @@ const messages: Partial<Messages> = {
   "rooms.editIcons": "Edit ikon",
   "rooms.editIconsDone": "Selesai",
   "rooms.iconNone": "—",
+  "rooms.deviceCount.zero": "{n} peranti",
+  "rooms.deviceCount.one": "{n} peranti",
+  "rooms.deviceCount.two": "{n} peranti",
+  "rooms.deviceCount.few": "{n} peranti",
+  "rooms.deviceCount.many": "{n} peranti",
   "rooms.deviceCount.other": "{n} peranti",
 
   "ctl.on": "Hidup",
@@ -181,6 +187,7 @@ const messages: Partial<Messages> = {
   "auto.error": "ralat {status}",
   "auto.trig.scene": "adegan {id} @nod {node}",
   "auto.trig.state": "nod {node}{gang} {field} {op} {value}",
+  "auto.trig.stateGlobal": "{field} {op} {value}",
   "auto.trig.gang": " butang {ep}",
   "auto.trig.time": "pada {time}{days}",
   "auto.trig.cron": "cron {expr}",
@@ -196,7 +203,7 @@ const messages: Partial<Messages> = {
   "rule.wizardTitle": "Wizard peraturan",
   "rule.id": "id",
   "rule.enabled": "didayakan",
-  "rule.debounce": "debounce s",
+  "rule.debounce": "sela minimum antara pelaksanaan s",
   "rule.trigger": "pencetus",
   "rule.conditions": "syarat:",
   "rule.actions": "tindakan:",
@@ -218,9 +225,9 @@ const messages: Partial<Messages> = {
   "rule.gang": "butang",
   "rule.phRuleId": "id-peraturan",
   "rule.phButton": "butang",
-  "rule.phOffset": "offset min",
-  "rule.phWindowStart": "JJ:MM",
-  "rule.phWindowEnd": "JJ:MM",
+  "rule.phOffset": "anjakan masa min",
+  "rule.phWindowStart": "HH:MM",
+  "rule.phWindowEnd": "HH:MM",
   "rule.errNumberRequired": "{label}: nombor diperlukan",
   "rule.errInvalidNumber": "{label}: nombor tidak sah",
   "rule.errNoValue": "predikat “{field}”: tiada nilai",

@@ -1,6 +1,7 @@
 import type { Messages } from "./en";
 
 const messages: Partial<Messages> = {
+  "header.title": "hestia",
   "header.confirmed": "{confirmed}/{total} নিশ্চিত",
   "header.unknown": "{unknown} অজানা",
 
@@ -108,7 +109,11 @@ const messages: Partial<Messages> = {
   "rooms.editIcons": "আইকন সম্পাদনা",
   "rooms.editIconsDone": "সম্পন্ন",
   "rooms.iconNone": "—",
+  "rooms.deviceCount.zero": "{n}টি ডিভাইস",
   "rooms.deviceCount.one": "{n}টি ডিভাইস",
+  "rooms.deviceCount.two": "{n}টি ডিভাইস",
+  "rooms.deviceCount.few": "{n}টি ডিভাইস",
+  "rooms.deviceCount.many": "{n}টি ডিভাইস",
   "rooms.deviceCount.other": "{n}টি ডিভাইস",
 
   "ctl.on": "চালু",
@@ -182,6 +187,7 @@ const messages: Partial<Messages> = {
   "auto.error": "ত্রুটি {status}",
   "auto.trig.scene": "দৃশ্য {id} @নোড {node}",
   "auto.trig.state": "নোড {node}{gang} {field} {op} {value}",
+  "auto.trig.stateGlobal": "{field} {op} {value}",
   "auto.trig.gang": " বোতাম {ep}",
   "auto.trig.time": "সময় {time}{days}",
   "auto.trig.cron": "cron {expr}",
@@ -197,7 +203,7 @@ const messages: Partial<Messages> = {
   "rule.wizardTitle": "নিয়ম উইজার্ড",
   "rule.id": "id",
   "rule.enabled": "সক্রিয়",
-  "rule.debounce": "debounce s",
+  "rule.debounce": "সক্রিয় করার ন্যূনতম ব্যবধান s",
   "rule.trigger": "ট্রিগার",
   "rule.conditions": "শর্ত:",
   "rule.actions": "কাজ:",
@@ -219,7 +225,7 @@ const messages: Partial<Messages> = {
   "rule.gang": "বোতাম",
   "rule.phRuleId": "নিয়ম-id",
   "rule.phButton": "বোতাম",
-  "rule.phOffset": "offset min",
+  "rule.phOffset": "সময়ের ব্যবধান min",
   "rule.phWindowStart": "HH:MM",
   "rule.phWindowEnd": "HH:MM",
   "rule.errNumberRequired": "{label}: সংখ্যা প্রয়োজন",

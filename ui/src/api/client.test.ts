@@ -100,7 +100,7 @@ describe("postName", () => {
 
   it("maps a rejected fetch to {ok:false, status:0} without throwing", async () => {
     vi.stubGlobal("fetch", () => Promise.reject(new Error("offline")));
-    await expect(postName({ node: 7 })).resolves.toEqual({ ok: false, status: 0, body: "błąd" });
+    await expect(postName({ node: 7 })).resolves.toEqual({ ok: false, status: 0, body: "error" });
   });
 });
 
@@ -129,7 +129,7 @@ describe("postIr", () => {
 
   it("maps a rejected fetch to {ok:false} without throwing (never-rejects contract)", async () => {
     vi.stubGlobal("fetch", () => Promise.reject(new Error("offline")));
-    await expect(postIr("/x.ir", "off")).resolves.toEqual({ ok: false, error: "błąd" });
+    await expect(postIr("/x.ir", "off")).resolves.toEqual({ ok: false, error: "error" });
   });
 
   it("maps a non-JSON body to an error-<status> result", async () => {

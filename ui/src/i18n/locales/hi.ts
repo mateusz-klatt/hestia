@@ -1,6 +1,7 @@
 import type { Messages } from "./en";
 
 const messages: Partial<Messages> = {
+  "header.title": "hestia",
   "header.confirmed": "{confirmed}/{total} पुष्टि की गई",
   "header.unknown": "{unknown} अज्ञात",
 
@@ -108,7 +109,11 @@ const messages: Partial<Messages> = {
   "rooms.editIcons": "आइकन संपादित करें",
   "rooms.editIconsDone": "हो गया",
   "rooms.iconNone": "—",
+  "rooms.deviceCount.zero": "{n} डिवाइस",
   "rooms.deviceCount.one": "{n} डिवाइस",
+  "rooms.deviceCount.two": "{n} डिवाइस",
+  "rooms.deviceCount.few": "{n} डिवाइस",
+  "rooms.deviceCount.many": "{n} डिवाइस",
   "rooms.deviceCount.other": "{n} डिवाइस",
 
   "ctl.on": "चालू",
@@ -182,6 +187,7 @@ const messages: Partial<Messages> = {
   "auto.error": "त्रुटि {status}",
   "auto.trig.scene": "दृश्य {id} @नोड {node}",
   "auto.trig.state": "नोड {node}{gang} {field} {op} {value}",
+  "auto.trig.stateGlobal": "{field} {op} {value}",
   "auto.trig.gang": " बटन {ep}",
   "auto.trig.time": "समय {time}{days}",
   "auto.trig.cron": "cron {expr}",
@@ -197,7 +203,7 @@ const messages: Partial<Messages> = {
   "rule.wizardTitle": "नियम विज़ार्ड",
   "rule.id": "id",
   "rule.enabled": "सक्षम",
-  "rule.debounce": "debounce s",
+  "rule.debounce": "दोबारा सक्रिय होने का न्यूनतम अंतराल s",
   "rule.trigger": "ट्रिगर",
   "rule.conditions": "शर्तें:",
   "rule.actions": "कार्रवाइयाँ:",
@@ -219,7 +225,7 @@ const messages: Partial<Messages> = {
   "rule.gang": "बटन",
   "rule.phRuleId": "नियम-id",
   "rule.phButton": "बटन",
-  "rule.phOffset": "offset min",
+  "rule.phOffset": "समय अंतर min",
   "rule.phWindowStart": "HH:MM",
   "rule.phWindowEnd": "HH:MM",
   "rule.errNumberRequired": "{label}: संख्या आवश्यक",

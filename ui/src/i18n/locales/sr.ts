@@ -1,6 +1,7 @@
 import type { Messages } from "./en";
 
 const messages: Partial<Messages> = {
+  "header.title": "hestia",
   "header.confirmed": "{confirmed}/{total} потврђено",
   "header.unknown": "{unknown} непознато",
 
@@ -108,8 +109,11 @@ const messages: Partial<Messages> = {
   "rooms.editIcons": "Уреди иконе",
   "rooms.editIconsDone": "Готово",
   "rooms.iconNone": "—",
+  "rooms.deviceCount.zero": "{n} уређаја",
   "rooms.deviceCount.one": "{n} уређај",
+  "rooms.deviceCount.two": "{n} уређаја",
   "rooms.deviceCount.few": "{n} уређаја",
+  "rooms.deviceCount.many": "{n} уређаја",
   "rooms.deviceCount.other": "{n} уређаја",
 
   "ctl.on": "Укључено",
@@ -183,6 +187,7 @@ const messages: Partial<Messages> = {
   "auto.error": "грешка {status}",
   "auto.trig.scene": "сцена {id} @чвор {node}",
   "auto.trig.state": "чвор {node}{gang} {field} {op} {value}",
+  "auto.trig.stateGlobal": "{field} {op} {value}",
   "auto.trig.gang": " тастер {ep}",
   "auto.trig.time": "у {time}{days}",
   "auto.trig.cron": "cron {expr}",
@@ -198,7 +203,7 @@ const messages: Partial<Messages> = {
   "rule.wizardTitle": "Чаробњак за правило",
   "rule.id": "id",
   "rule.enabled": "омогућено",
-  "rule.debounce": "debounce s",
+  "rule.debounce": "најмањи интервал s",
   "rule.trigger": "окидач",
   "rule.conditions": "услови:",
   "rule.actions": "радње:",
@@ -220,9 +225,9 @@ const messages: Partial<Messages> = {
   "rule.gang": "тастер",
   "rule.phRuleId": "id-правила",
   "rule.phButton": "дугме",
-  "rule.phOffset": "offset min",
-  "rule.phWindowStart": "ЧЧ:ММ",
-  "rule.phWindowEnd": "ЧЧ:ММ",
+  "rule.phOffset": "померај min",
+  "rule.phWindowStart": "HH:MM",
+  "rule.phWindowEnd": "HH:MM",
   "rule.errNumberRequired": "{label}: потребан број",
   "rule.errInvalidNumber": "{label}: неважећи број",
   "rule.errNoValue": "предикат „{field}”: нема вредности",

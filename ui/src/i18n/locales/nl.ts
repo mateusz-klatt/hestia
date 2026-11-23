@@ -1,6 +1,7 @@
 import type { Messages } from "./en";
 
 const messages: Partial<Messages> = {
+  "header.title": "hestia",
   "header.confirmed": "{confirmed}/{total} bevestigd",
   "header.unknown": "{unknown} onbekend",
 
@@ -108,7 +109,11 @@ const messages: Partial<Messages> = {
   "rooms.editIcons": "Pictogrammen bewerken",
   "rooms.editIconsDone": "Klaar",
   "rooms.iconNone": "—",
+  "rooms.deviceCount.zero": "{n} apparaten",
   "rooms.deviceCount.one": "{n} apparaat",
+  "rooms.deviceCount.two": "{n} apparaten",
+  "rooms.deviceCount.few": "{n} apparaten",
+  "rooms.deviceCount.many": "{n} apparaten",
   "rooms.deviceCount.other": "{n} apparaten",
 
   "ctl.on": "Aan",
@@ -182,6 +187,7 @@ const messages: Partial<Messages> = {
   "auto.error": "fout {status}",
   "auto.trig.scene": "scène {id} @knooppunt {node}",
   "auto.trig.state": "knooppunt {node}{gang} {field} {op} {value}",
+  "auto.trig.stateGlobal": "{field} {op} {value}",
   "auto.trig.gang": " toets {ep}",
   "auto.trig.time": "om {time}{days}",
   "auto.trig.cron": "cron {expr}",
@@ -197,7 +203,7 @@ const messages: Partial<Messages> = {
   "rule.wizardTitle": "Regelwizard",
   "rule.id": "id",
   "rule.enabled": "ingeschakeld",
-  "rule.debounce": "debounce s",
+  "rule.debounce": "minimale tijd tussen uitvoeringen s",
   "rule.trigger": "trigger",
   "rule.conditions": "voorwaarden:",
   "rule.actions": "acties:",
@@ -219,7 +225,7 @@ const messages: Partial<Messages> = {
   "rule.gang": "toets",
   "rule.phRuleId": "regel-id",
   "rule.phButton": "knop",
-  "rule.phOffset": "offset min",
+  "rule.phOffset": "verschuiving min",
   "rule.phWindowStart": "HH:MM",
   "rule.phWindowEnd": "HH:MM",
   "rule.errNumberRequired": "{label}: getal vereist",

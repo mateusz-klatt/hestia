@@ -17,7 +17,7 @@ const TYPE_KEYS: Record<string, MessageKey> = {
 
 /** The localised device-type name (light/blind/…); falls back to the raw value for an unmapped type. */
 export function typeLabel(type: string): string {
-  const key = TYPE_KEYS[type];
+  const key = Object.hasOwn(TYPE_KEYS, type) ? TYPE_KEYS[type] : undefined;
   return key !== undefined ? t(key) : type;
 }
 

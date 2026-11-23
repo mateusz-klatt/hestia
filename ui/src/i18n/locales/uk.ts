@@ -1,6 +1,7 @@
 import type { Messages } from "./en";
 
 const messages: Partial<Messages> = {
+  "header.title": "hestia",
   "header.confirmed": "{confirmed}/{total} підтверджено",
   "header.unknown": "{unknown} невідомо",
 
@@ -108,7 +109,9 @@ const messages: Partial<Messages> = {
   "rooms.editIcons": "Редагувати піктограми",
   "rooms.editIconsDone": "Готово",
   "rooms.iconNone": "—",
+  "rooms.deviceCount.zero": "{n} пристрою",
   "rooms.deviceCount.one": "{n} пристрій",
+  "rooms.deviceCount.two": "{n} пристрою",
   "rooms.deviceCount.few": "{n} пристрої",
   "rooms.deviceCount.many": "{n} пристроїв",
   "rooms.deviceCount.other": "{n} пристрою",
@@ -184,6 +187,7 @@ const messages: Partial<Messages> = {
   "auto.error": "помилка {status}",
   "auto.trig.scene": "сцена {id} @вузол {node}",
   "auto.trig.state": "вузол {node}{gang} {field} {op} {value}",
+  "auto.trig.stateGlobal": "{field} {op} {value}",
   "auto.trig.gang": " клавіша {ep}",
   "auto.trig.time": "о {time}{days}",
   "auto.trig.cron": "cron {expr}",
@@ -199,7 +203,7 @@ const messages: Partial<Messages> = {
   "rule.wizardTitle": "Майстер правила",
   "rule.id": "id",
   "rule.enabled": "увімкнено",
-  "rule.debounce": "debounce s",
+  "rule.debounce": "мінімальний інтервал s",
   "rule.trigger": "тригер",
   "rule.conditions": "умови:",
   "rule.actions": "дії:",
@@ -221,9 +225,9 @@ const messages: Partial<Messages> = {
   "rule.gang": "клавіша",
   "rule.phRuleId": "id-правила",
   "rule.phButton": "кнопка",
-  "rule.phOffset": "offset min",
-  "rule.phWindowStart": "ГГ:ХХ",
-  "rule.phWindowEnd": "ГГ:ХХ",
+  "rule.phOffset": "зсув min",
+  "rule.phWindowStart": "HH:MM",
+  "rule.phWindowEnd": "HH:MM",
   "rule.errNumberRequired": "{label}: потрібне число",
   "rule.errInvalidNumber": "{label}: неправильне число",
   "rule.errNoValue": "предикат «{field}»: немає значення",

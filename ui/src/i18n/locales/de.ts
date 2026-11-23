@@ -1,6 +1,7 @@
 import type { Messages } from "./en";
 
 const messages: Partial<Messages> = {
+  "header.title": "hestia",
   "header.confirmed": "{confirmed}/{total} bestätigt",
   "header.unknown": "{unknown} unbekannt",
 
@@ -108,7 +109,11 @@ const messages: Partial<Messages> = {
   "rooms.editIcons": "Symbole bearbeiten",
   "rooms.editIconsDone": "Fertig",
   "rooms.iconNone": "—",
+  "rooms.deviceCount.zero": "{n} Geräte",
   "rooms.deviceCount.one": "{n} Gerät",
+  "rooms.deviceCount.two": "{n} Geräte",
+  "rooms.deviceCount.few": "{n} Geräte",
+  "rooms.deviceCount.many": "{n} Geräte",
   "rooms.deviceCount.other": "{n} Geräte",
 
   "ctl.on": "Ein",
@@ -182,6 +187,7 @@ const messages: Partial<Messages> = {
   "auto.error": "Fehler {status}",
   "auto.trig.scene": "Szene {id} @Knoten {node}",
   "auto.trig.state": "Knoten {node}{gang} {field} {op} {value}",
+  "auto.trig.stateGlobal": "{field} {op} {value}",
   "auto.trig.gang": " Taste {ep}",
   "auto.trig.time": "um {time}{days}",
   "auto.trig.cron": "cron {expr}",
@@ -197,7 +203,7 @@ const messages: Partial<Messages> = {
   "rule.wizardTitle": "Regelassistent",
   "rule.id": "id",
   "rule.enabled": "aktiviert",
-  "rule.debounce": "debounce s",
+  "rule.debounce": "Mindestabstand s",
   "rule.trigger": "Auslöser",
   "rule.conditions": "Bedingungen:",
   "rule.actions": "Aktionen:",
@@ -219,7 +225,7 @@ const messages: Partial<Messages> = {
   "rule.gang": "Taste",
   "rule.phRuleId": "regel-id",
   "rule.phButton": "Taste",
-  "rule.phOffset": "offset min",
+  "rule.phOffset": "Versatz min",
   "rule.phWindowStart": "HH:MM",
   "rule.phWindowEnd": "HH:MM",
   "rule.errNumberRequired": "{label}: Zahl erforderlich",

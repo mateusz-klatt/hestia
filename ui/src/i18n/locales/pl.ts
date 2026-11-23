@@ -1,8 +1,9 @@
 import type { Messages } from "./en";
 
-// Polish — the UI's original language. Omitted keys (e.g. header.title "hestia") fall back to
-// English. Polish has one/few/many plural categories (Intl.PluralRules picks per count).
+// Polish — the UI's original language. Intl.PluralRules selects one/few/many/other;
+// the other source categories are retained for catalog completeness.
 const pl: Partial<Messages> = {
+  "header.title": "hestia",
   "header.confirmed": "{confirmed}/{total} potwierdzone",
   "header.unknown": "{unknown} nieznane",
 
@@ -110,7 +111,9 @@ const pl: Partial<Messages> = {
   "rooms.editIcons": "Edytuj ikony",
   "rooms.editIconsDone": "Gotowe",
   "rooms.iconNone": "—",
+  "rooms.deviceCount.zero": "{n} urządzeń",
   "rooms.deviceCount.one": "{n} urządzenie",
+  "rooms.deviceCount.two": "{n} urządzenia",
   "rooms.deviceCount.few": "{n} urządzenia",
   "rooms.deviceCount.many": "{n} urządzeń",
   "rooms.deviceCount.other": "{n} urządzenia",
@@ -169,7 +172,7 @@ const pl: Partial<Messages> = {
 
   "mode.plain": "tryb: {mode}",
   "mode.cloudFree": "tryb: {mode} (bez chmury)",
-  "mode.graduated": "tryb: {mode} → standalone zapisane — zrestartuj hestię",
+  "mode.graduated": "tryb: {mode} → standalone zapisane — uruchom ponownie program hestia",
   "mode.envPinned": "tryb: {mode} (HESTIA_MODE={override} wymusza tryb; zapisany: {target})",
   "discovery.loadError": "nie udało się wczytać /api/discovery",
   "adv.refresh": "Odśwież",
@@ -203,7 +206,7 @@ const pl: Partial<Messages> = {
   "rule.wizardTitle": "Kreator reguły",
   "rule.id": "id",
   "rule.enabled": "włączona",
-  "rule.debounce": "debounce s",
+  "rule.debounce": "minimalny odstęp między wywołaniami s",
   "rule.trigger": "wyzwalacz",
   "rule.conditions": "warunki:",
   "rule.actions": "akcje:",
@@ -225,9 +228,9 @@ const pl: Partial<Messages> = {
   "rule.gang": "klawisz",
   "rule.phRuleId": "id-reguły",
   "rule.phButton": "przycisk",
-  "rule.phOffset": "offset min",
-  "rule.phWindowStart": "GG:MM",
-  "rule.phWindowEnd": "GG:MM",
+  "rule.phOffset": "przesunięcie min",
+  "rule.phWindowStart": "HH:MM",
+  "rule.phWindowEnd": "HH:MM",
   "rule.errNumberRequired": "{label}: wymagana liczba",
   "rule.errInvalidNumber": "{label}: nieprawidłowa liczba",
   "rule.errNoValue": "predykat „{field}”: brak wartości",
