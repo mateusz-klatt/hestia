@@ -447,7 +447,13 @@ class HouseholdEdgeTests(unittest.TestCase):
         self.assertIs(spend["1"]["archived"], True)
         selected = next(item for item in monthly["series"]["months"] if item["period"] == PERIOD)
         self.assertEqual(len(selected["categories"]), 2)
-        self.assertEqual(sorted(row["net_spending"] for row in selected["categories"]), ["2", "8.5"])
+        self.assertEqual([row["name"] for row in monthly["budget"]["category_spend"]], ["salary", "1"])
+        self.assertEqual([row["net_spending"] for row in monthly["budget"]["category_spend"]], ["8.5", "2"])
+        self.assertEqual([row["net_spending"] for row in selected["categories"]], ["8.5", "2"])
+        self.assertEqual(
+            [row["category_id"] for row in selected["categories"]],
+            [row["category_id"] for row in monthly["budget"]["category_spend"]],
+        )
         self.assertEqual([row["name"] for row in monthly["series"]["category_labels"]], ["1", "salary"])
         self.assertIs(monthly["series"]["category_labels"][0]["archived"], True)
         self.assertIs(monthly["series"]["category_labels"][1]["archived"], False)
@@ -466,6 +472,66 @@ class HouseholdEdgeTests(unittest.TestCase):
         if items:
             mock.patch.object(household_views.inbox_mod, "build_inbox_items", return_value=items).start()
             self.addCleanup(mock.patch.stopall)
+
+    def test_one_off_label_changes_do_not_reorder_spouse_categories(self):
+        from datetime import datetime, timezone
+
+        from tests.test_budget_month import _cat, _tx
+
+        book = _book()
+        categories = [_cat("cat-salary", "salary"), _cat("cat-other", "Groceries", archived=True)]
+        settings = month_budget.MonthBudgetSettings(income_category_ids=("cat-salary",))
+        evaluated_at = datetime(2026, 11, 22, 12, tzinfo=timezone.utc).timestamp()
+
+        def labelled(reference, category, amount, label):
+            return _tx(
+                "acc-a", reference, amount=amount, category_id=category, kind="expense",
+                annotation={"version": 1, "mode": "manual", "category_id": category, "kind": "expense",
+                            "stale": False, "label": label},
+            )
+
+        def evaluated(salary_label, other_label):
+            return month_budget.evaluate_monthly_budget(
+                owner="alice", period=PERIOD, currency="PLN", evaluated_at=evaluated_at,
+                transactions=[
+                    labelled("e-salary", "cat-salary", "30.00", salary_label),
+                    labelled("e-other", "cat-other", "10.00", other_label),
+                    _tx("acc-a", "e-plain", amount="1.00", category_id=None, kind="expense"),
+                ],
+                transfers=[], scan_limited=False, categories=categories, rules=[], identities={"acc-a": []},
+                limits=[], account_component_timestamps={"acc-a": evaluated_at}, account_kinds={},
+                settings=settings, one_off_secret=SECRET, include_series=True,
+            )
+
+        def occurrence(body):
+            seen = []
+            for row in body["category_spend"]:
+                if row["category_id"] not in seen:
+                    seen.append(row["category_id"])
+            return seen
+
+        def spouse(body):
+            budget = household_views._sanitize_budget(body, book)
+            month = household_views._month_bucket(body, body["current_month"], book)
+            return budget["category_spend"], month["categories"]
+
+        first = evaluated("zeta", "alpha")
+        second = evaluated("alpha", "zeta")
+        self.assertNotEqual(occurrence(first), occurrence(second))
+        left_spend, left_categories = spouse(first)
+        right_spend, right_categories = spouse(second)
+        self.assertEqual(left_spend, right_spend)
+        self.assertEqual(left_categories, right_categories)
+        self.assertEqual([row["name"] for row in left_spend], ["salary", "1", None])
+        self.assertEqual([row["net_spending"] for row in left_spend], ["30", "10", "1"])
+        self.assertEqual(
+            [(row["category_id"], row["net_spending"]) for row in left_categories],
+            [(row["category_id"], row["net_spending"]) for row in left_spend],
+        )
+        encoded = json.dumps({"spend": left_spend, "categories": left_categories})
+        self.assertNotIn("alpha", encoded)
+        self.assertNotIn("zeta", encoded)
+        self.assertNotIn("Groceries", encoded)
 
     def test_cursor_length_does_not_depend_on_the_owner_name(self):
         reader = HouseholdReader(object(), cursor_secret=SECRET)

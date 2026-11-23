@@ -664,7 +664,8 @@ class BudgetHouseholdMember(Base):
         UniqueConstraint("grant_id", name="uq_budget_household_members_grant_id"),
         CheckConstraint("member_username <> owner", name="ck_budget_household_members_distinct"),
         CheckConstraint(
-            "typeof(grant_id) = 'text' AND length(grant_id) = 64 AND grant_id NOT GLOB '*[^0-9a-f]*'",
+            "typeof(grant_id) = 'text' AND length(grant_id) = 64 AND grant_id NOT GLOB '*[^0-9a-f]*' "
+            "AND instr(grant_id, char(0)) = 0",
             name="ck_budget_household_members_grant_id",
         ),
     )
@@ -757,6 +758,7 @@ class BudgetTransferLeg(Base):
 
 class BudgetAnalyticsAudit(Base):
     __tablename__ = "budget_analytics_audit"
+    __table_args__ = (Index("ix_budget_analytics_audit_subject_action_at", "subject_id", "action", "changed_at"),)
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     owner: Mapped[str] = mapped_column(ForeignKey("users.username"))
     subject_type: Mapped[str]

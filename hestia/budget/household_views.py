@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import base64
 from datetime import datetime, timezone
+from decimal import Decimal
 import hashlib
 import hmac
 import json
@@ -729,7 +730,7 @@ def _sanitize_budget(budget, book):
     coverage["pending_row_keys"] = []
     safe["coverage"] = coverage
     safe["category_spend"] = [
-        _sanitize_spend(row, book) for row in _fold_category_spend(budget["category_spend"])]
+        _sanitize_spend(row, book) for row in _folded_category_rows(budget["category_spend"], book)]
     expected = budget["expected_income"]
     if expected is not None:
         safe["expected_income"] = {**expected, "items": [
@@ -787,9 +788,24 @@ def _month_bucket(payload, current_month, book):
         "spent": "0" if summary is None else summary["spent"],
         "categories": [
             {"category_id": book.category(row["category_id"]), "net_spending": row["net_spending"]}
-            for row in _fold_category_spend(payload["category_spend"])
+            for row in _folded_category_rows(payload["category_spend"], book)
         ],
     }
+
+
+def _folded_category_rows(rows, book):
+    """Category totals ordered by the category alone, never by a private one-off label."""
+    folded = _fold_category_spend(rows)
+    folded.sort(key=lambda row: _category_sort_key(row, book))
+    return folded
+
+
+def _category_sort_key(row, book):
+    identifier = row["category_id"]
+    ordinal = book.category_ordinal.get(identifier)
+    alias = book.category(identifier)
+    # Amount descending, then the category ordinal and alias. None sorts last.
+    return (-Decimal(row["net_spending"]), ordinal is None, ordinal or 0, alias or "")
 
 
 def _fold_category_spend(rows):

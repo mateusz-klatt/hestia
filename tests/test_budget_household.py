@@ -224,6 +224,11 @@ class HouseholdCommandTests(unittest.TestCase):
                 session.get(db.BudgetHouseholdMember, "viewer").grant_id = "CD" * 32
         with sessions.begin() as session:
             self.assertEqual(session.get(db.BudgetHouseholdMember, "viewer").grant_id, "cd" * 32)
+        with self.assertRaises(IntegrityError):
+            with sessions.begin() as session:
+                session.get(db.BudgetHouseholdMember, "viewer").grant_id = ("ab" * 32) + "\x00" + "ZZ"
+        with sessions.begin() as session:
+            self.assertEqual(session.get(db.BudgetHouseholdMember, "viewer").grant_id, "cd" * 32)
         self._assert_migration_clean()
 
         db.downgrade_db(self.path, "0022")
@@ -233,6 +238,7 @@ class HouseholdCommandTests(unittest.TestCase):
             self.assertEqual(raw.execute("SELECT version_num FROM alembic_version").fetchone()[0], "0022")
             self.assertNotIn("budget_household_members", names)
             self.assertIn("budget_receipts", names)
+            self.assertNotIn("ix_budget_analytics_audit_subject_action_at", names)
             self.assertEqual(raw.execute("SELECT name FROM budget_categories WHERE id='cat-salary'").fetchone()[0],
                              SALARY_NAME)
             self.assertEqual(raw.execute("SELECT milestone FROM budget_owner_inbox_reads").fetchone()[0], "due")
