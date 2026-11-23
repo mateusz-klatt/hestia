@@ -808,6 +808,32 @@ def init_db(path=None) -> tuple[Engine, sessionmaker[Session]]:
         return _init_db_locked(path)
 
 
+def downgrade_db(path, revision: str) -> None:
+    """Downgrade the database at ``path`` to ``revision`` on the dedicated migration connection.
+
+    Shares ``_run_sqlite_migration`` with ``init_db``: ``PRAGMA foreign_keys=OFF`` (read back
+    and required to be 0), an explicit ``BEGIN``, the Alembic downgrade, ``PRAGMA
+    foreign_key_check``, then commit or roll back and raise. Foreign keys are turned back on
+    before that connection is discarded. Every other connection still opens with
+    ``PRAGMA foreign_keys=ON``.
+
+    Reuses the cached engine for ``path`` when ``init_db`` already opened it. The cache entry
+    is dropped and the engine disposed before this returns, including when the downgrade
+    rolls back, so the next ``init_db`` on this path runs migrations again.
+    """
+    key = str(path)
+    with _ENGINE_CACHE_LOCK:
+        cached = _ENGINE_CACHE.pop(key, None)
+        engine = cached[0] if cached is not None else make_engine(key)
+        try:
+            _run_sqlite_migration(
+                engine,
+                lambda connection: command.downgrade(_alembic_config(connection), revision),
+            )
+        finally:
+            engine.dispose()
+
+
 def _set_sqlite_foreign_keys(connection, enabled: bool) -> None:
     """Set ``PRAGMA foreign_keys`` and require the new value to read back.
 

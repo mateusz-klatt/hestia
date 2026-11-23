@@ -150,6 +150,16 @@ class CategoryParentInitDbTests(unittest.TestCase):
             violations = raw.execute("PRAGMA foreign_key_check").fetchall()
         return version, columns, rules, limits, annotations, temp_tables, violations
 
+    def _assert_integrity_and_no_batch_temp(self):
+        """``PRAGMA integrity_check`` is ok and no ``_alembic_tmp_%`` table remains."""
+        with closing(sqlite3.connect(self.path)) as raw:
+            integrity = [row[0] for row in raw.execute("PRAGMA integrity_check")]
+            leftovers = [row[0] for row in raw.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table' "
+                "AND name LIKE '!_alembic!_tmp!_%' ESCAPE '!'")]
+        self.assertEqual(integrity, ["ok"])
+        self.assertEqual(leftovers, [])
+
     def test_init_db_roundtrip_preserves_rows_that_reference_categories(self):
         self._database_at_0019()
         observed = []
@@ -177,6 +187,7 @@ class CategoryParentInitDbTests(unittest.TestCase):
         self.assertEqual(annotations, [("a1", "e1", "cat")])
         self.assertEqual(temp_tables, [])
         self.assertEqual(violations, [])
+        self._assert_integrity_and_no_batch_temp()
         with engine.connect() as connection:
             self.assertEqual(connection.exec_driver_sql("PRAGMA foreign_keys").scalar(), 1)
             self.assertEqual(connection.exec_driver_sql("PRAGMA journal_mode").scalar(), "wal")
@@ -184,14 +195,20 @@ class CategoryParentInitDbTests(unittest.TestCase):
             self.assertEqual(connection.exec_driver_sql("PRAGMA busy_timeout").scalar(), 5000)
             self.assertEqual(connection.connection.dbapi_connection.isolation_level, "")
 
-        def downgrade(connection):
+        real_downgrade = command.downgrade
+
+        def spy_downgrade(config, revision):
+            connection = config.attributes["connection"]
             raw = connection.connection.dbapi_connection
             self.assertTrue(raw.in_transaction)
             self.assertIsNone(raw.isolation_level)
             self.assertEqual(connection.exec_driver_sql("PRAGMA foreign_keys").scalar(), 0)
-            command.downgrade(db._alembic_config(connection), "0019")
+            self.assertEqual(revision, "0019")
+            return real_downgrade(config, revision)
 
-        db._run_sqlite_migration(engine, downgrade)
+        with mock.patch("hestia.db.command.downgrade", spy_downgrade):
+            db.downgrade_db(self.path, "0019")
+        self.assertNotIn(str(self.path), db._ENGINE_CACHE)
         version, columns, rules, limits, annotations, temp_tables, violations = self._snapshot()
         self.assertEqual(version, [("0019",)])
         self.assertNotIn("parent_id", columns)
@@ -200,8 +217,8 @@ class CategoryParentInitDbTests(unittest.TestCase):
         self.assertEqual(annotations, [("a1", "e1", "cat")])
         self.assertEqual(temp_tables, [])
         self.assertEqual(violations, [])
+        self._assert_integrity_and_no_batch_temp()
 
-        db.reset_engine_cache()
         with mock.patch("hestia.db.command.upgrade", spy):
             engine, _ = db.init_db(self.path)
         self.assertEqual(observed, [(True, None, 0, "head"), (True, None, 0, "head")])
@@ -213,11 +230,57 @@ class CategoryParentInitDbTests(unittest.TestCase):
         self.assertEqual(annotations, [("a1", "e1", "cat")])
         self.assertEqual(temp_tables, [])
         self.assertEqual(violations, [])
+        self._assert_integrity_and_no_batch_temp()
         with engine.connect() as connection:
             self.assertEqual(connection.exec_driver_sql("PRAGMA foreign_keys").scalar(), 1)
 
+    def test_downgrade_db_opens_its_own_engine_when_uncached(self):
+        self._database_at_0019()
+        db.init_db(self.path)
+        db.reset_engine_cache()
+        self.assertNotIn(str(self.path), db._ENGINE_CACHE)
+        db.downgrade_db(self.path, "0019")
+        version, columns, rules, limits, annotations, temp_tables, violations = self._snapshot()
+        self.assertEqual(version, [("0019",)])
+        self.assertNotIn("parent_id", columns)
+        self.assertEqual(rules, [("rule", "cat")])
+        self.assertEqual(limits, [("lim", "cat")])
+        self.assertEqual(annotations, [("a1", "e1", "cat")])
+        self.assertEqual(temp_tables, [])
+        self.assertEqual(violations, [])
+        self.assertNotIn(str(self.path), db._ENGINE_CACHE)
+        self._assert_integrity_and_no_batch_temp()
+
+    def test_downgrade_db_rolls_back_when_foreign_key_check_fails(self):
+        self._database_at_0019()
+        db.init_db(self.path)
+        with closing(sqlite3.connect(self.path)) as raw:
+            raw.execute("PRAGMA foreign_keys=OFF")
+            raw.execute(
+                "INSERT INTO budget_rules "
+                "(id, owner, field, operator, value, category_id, kind, priority, enabled, version, "
+                "created_at, updated_at) "
+                "VALUES ('orphan', 'alice', 'memo', 'contains', 'x', 'missing', 'expense', 1, 1, 1, 1, 1)")
+            raw.commit()
+        with self.assertRaises(RuntimeError) as caught:
+            db.downgrade_db(self.path, "0019")
+        self.assertIn("foreign_key_check", str(caught.exception))
+        version, columns, rules, limits, annotations, temp_tables, _violations = self._snapshot()
+        self.assertEqual(version, [("0020",)])
+        self.assertIn("parent_id", columns)
+        self.assertEqual(rules, [("orphan", "missing"), ("rule", "cat")])
+        self.assertEqual(limits, [("lim", "cat")])
+        self.assertEqual(annotations, [("a1", "e1", "cat")])
+        self.assertEqual(temp_tables, [])
+        self.assertNotIn(str(self.path), db._ENGINE_CACHE)
+
     def test_leftover_batch_temp_table_does_not_block_upgrade(self):
         self._database_at_0019(leftover_temp=True)
+        with closing(sqlite3.connect(self.path)) as raw:
+            leftovers = [row[0] for row in raw.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table' "
+                "AND name LIKE '!_alembic!_tmp!_%' ESCAPE '!'")]
+        self.assertEqual(leftovers, ["_alembic_tmp_budget_categories"])
         db.init_db(self.path)
         version, columns, rules, limits, annotations, temp_tables, violations = self._snapshot()
         self.assertEqual(version, [("0020",)])
