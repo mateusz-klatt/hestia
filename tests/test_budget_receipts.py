@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import random
+import unicodedata
 from unittest import mock
 
 from sqlalchemy import String
@@ -17,7 +18,7 @@ from hestia.budget.analytics_views import BudgetAnalyticsViews
 from hestia.budget.import_file import parse_import
 from hestia.budget.normalize import AccountSnapshot, Snapshot
 from hestia.budget.receipt_parser import (CONFIRMED_TEXT_TTL_SECONDS, DRAFT_TTL_SECONDS, LINE_FIELDS, ReceiptError,
-                                         parse_receipt, redact_pan, validate_confirm)
+                                         parse_receipt, redact_digit_field, redact_pan, validate_confirm)
 from hestia.budget.receipt_store import BudgetReceiptStore
 from tests import test_budget_api as fixture
 from tests.test_budget_analytics_store import AnalyticsCase
@@ -35,51 +36,32 @@ def receipt_text(*, total="100", day="2026-11-30", kind="purchase", payment="KAR
             f"SUMA PLN {total.replace('.', ',')}\n{payment}\nNR KARTY {MASKED_PAN}\nAID {PAN}")
 
 
-_DIGIT_JOIN = frozenset(" .,/-\n\t") | frozenset("‐‑‒–—―")
+_TEXT_FIELDS = frozenset({"raw_shop_name", "raw_name", "raw_name_key", "raw_unit"})
 
 
-def _long_digit_runs(value):
-    runs, digits = [], []
-
-    def flush():
-        if len(digits) >= 12:
-            runs.append("".join(digits))
-        digits.clear()
-
-    for char in value:
-        if "0" <= char <= "9":
-            digits.append(char)
-        elif char in _DIGIT_JOIN:
-            continue
-        else:
-            flush()
-    flush()
-    return runs
+def _nd_count(value):
+    """Digit count for one field. It does not share the line scanner's separator set."""
+    normalized = unicodedata.normalize("NFKC", value)
+    return sum(unicodedata.category(char) == "Nd" for char in normalized)
 
 
-def _assert_no_pan_windows(test, value, windows):
-    if not isinstance(value, str):
+def _assert_digit_cap(test, value, key=None):
+    if isinstance(value, dict):
+        for item_key, item in value.items():
+            _assert_digit_cap(test, item, item_key)
         return
-    for run in _long_digit_runs(value):
-        for index in range(len(run) - 11):
-            test.assertNotIn(run[index:index + 12], windows, value)
-
-
-def _walk_no_pan(test, value, windows):
-    if isinstance(value, str):
-        _assert_no_pan_windows(test, value, windows)
-    elif isinstance(value, dict):
-        for item in value.values():
-            _walk_no_pan(test, item, windows)
-    elif isinstance(value, (list, tuple)):
+    if isinstance(value, (list, tuple)):
         for item in value:
-            _walk_no_pan(test, item, windows)
+            _assert_digit_cap(test, item, key)
+        return
+    if isinstance(value, str) and key in _TEXT_FIELDS and _nd_count(value) >= 12:
+        test.assertEqual(value, "[usunięto]")
 
 
-def _scan_text_columns(test, row, windows):
+def _scan_text_columns(test, row):
     for column in row.__table__.columns:
-        if isinstance(column.type, String):
-            _assert_no_pan_windows(test, getattr(row, column.key), windows)
+        if isinstance(column.type, String) and column.key in _TEXT_FIELDS:
+            _assert_digit_cap(test, getattr(row, column.key), column.key)
 
 
 def confirm_values(parsed, *, link=None, **changes):
@@ -885,53 +867,114 @@ NR KARTY ****5555
         with self.assertRaises(ReceiptError):
             validate_confirm(long_name)
 
+    def test_text_fields_count_every_digit_between_letters(self):
+        self.assertIsNone(redact_digit_field(None))
+        self.assertEqual(redact_digit_field(411111111111), 411111111111)
+        self.assertEqual(redact_digit_field("SKLEP 41111111111"), "SKLEP 41111111111")
+        self.assertEqual(redact_digit_field("4111 abc 1111 def 1111"), "[usunięto]")
+        self.assertEqual(redact_digit_field("4111 MLEKO 1111 CHLEB 1111"), "[usunięto]")
+        self.assertEqual(redact_digit_field("４１１１１１１１１１１１"), "[usunięto]")
+        self.assertEqual(redact_digit_field("١٢٣٤٥٦٧٨٩٠١٢"), "[usunięto]")
+        text = (
+            "SKLEP 4111abc1111def1111\nNIP 7791011327\nPARAGON FISKALNY\n2026-11-20 12:34\n"
+            "4111 word 1111 word 1111 1 x 3,50 3,50 A\n"
+            "CHLEB 1 x 4,20 4,20 A\nSUMA PLN 7,70\n"
+        )
+        parsed = self.receipts.parse_text("owner", text)
+        self.assertEqual(parsed["draft"]["raw_shop_name"], "[usunięto]")
+        milk = parsed["draft"]["lines"][0]
+        self.assertEqual((milk["raw_name"], milk["raw_name_key"]), ("[usunięto]", "[usunieto]"))
+        values = confirm_values(parsed)
+        values["raw_shop_name"] = "BIEDRONKA 5351 xx 0055 yy 5555 zz 55"
+        values["lines"][0]["raw_name"] = "SER 4111abc1111def1111"
+        values["lines"][0]["raw_unit"] = "123456789012"
+        confirmed = self.receipts.confirm("owner", values)["receipt"]
+        self.assertEqual(confirmed["raw_shop_name"], "[usunięto]")
+        self.assertEqual(confirmed["lines"][0]["raw_name"], "[usunięto]")
+        self.assertEqual(confirmed["lines"][0]["raw_name_key"], "[usunieto]")
+        self.assertEqual(confirmed["lines"][0]["raw_unit"], "[usunięto]")
+        self.assertEqual(confirmed["total_amount"], "7.7")
+        self.assertEqual(confirmed["receipt_date"], "2026-11-20")
+        self.assertEqual(self.receipt_row(parsed["receipt_id"]).raw_shop_name, "[usunięto]")
+        _assert_digit_cap(self, confirmed)
+
     def test_wrapped_pan_never_survives_storage_or_responses(self):
         rng = random.Random(20261123)
         separators = list(" .,/-")
+        words = ("MLEKO", "CHLEB", "SER", "MASLO", "KAWA")
         items = ("MLEKO 1 x 3,50 3,50 A", "CHLEB 1 x 4,20 4,20 A")
         for trial in range(24):
             length = rng.randint(13, 19)
             pan = "".join(str(rng.randrange(10)) for _ in range(length))
-            windows = {pan[index:index + 12] for index in range(length - 11)}
-            pieces = rng.randint(1, 6)
-            if pieces == 1:
-                cuts = []
+            kind = ("separators", "letters", "words")[trial % 3]
+            if kind == "separators":
+                pieces = rng.randint(1, 6)
+                if pieces == 1:
+                    groups = [pan]
+                else:
+                    cuts = sorted(rng.sample(range(1, length), pieces - 1))
+                    bounds = [0, *cuts, length]
+                    groups = [pan[start:end] for start, end in zip(bounds, bounds[1:])]
             else:
-                cuts = sorted(rng.sample(range(1, length), pieces - 1))
-            bounds = [0, *cuts, length]
-            pan_lines = []
-            for start, end in zip(bounds, bounds[1:]):
-                body = []
-                for offset, digit in enumerate(pan[start:end]):
-                    if offset:
-                        body.append(rng.choice(separators))
-                    body.append(digit)
-                pan_lines.append("".join(body))
-            pending = list(items)
-            sequence = []
-            for line in pan_lines:
-                if pending and rng.random() < 0.5:
-                    sequence.append(pending.pop(0))
-                sequence.append(line)
-            sequence.extend(pending)
-            text = "\n".join((
-                "BIEDRONKA", "NIP 7791011327", "PARAGON FISKALNY", "2026-11-20 12:34", "KARTA",
-                *sequence, "PIN OK", "SUMA PLN 7,70",
-            ))
-            with self.subTest(trial=trial, length=length, pieces=pieces):
+                # Each group stays under the joined-run limit. Letters or words between
+                # them hide the PAN from the line scanner, so the field rule has to fire.
+                while True:
+                    pieces = rng.randint(2, 6)
+                    cuts = sorted(rng.sample(range(1, length), pieces - 1))
+                    bounds = [0, *cuts, length]
+                    groups = [pan[start:end] for start, end in zip(bounds, bounds[1:])]
+                    if all(len(group) < 12 for group in groups):
+                        break
+            header = ["BIEDRONKA", "NIP 7791011327", "PARAGON FISKALNY", "2026-11-20 12:34", "KARTA"]
+            sequence = list(items)
+            planted = None
+            if kind == "separators":
+                pan_lines = []
+                for group in groups:
+                    body = []
+                    for offset, digit in enumerate(group):
+                        if offset:
+                            body.append(rng.choice(separators))
+                        body.append(digit)
+                    pan_lines.append("".join(body))
+                pending = list(items)
+                sequence = []
+                for line in pan_lines:
+                    if pending and rng.random() < 0.5:
+                        sequence.append(pending.pop(0))
+                    sequence.append(line)
+                sequence.extend(pending)
+            else:
+                glued = []
+                for index, group in enumerate(groups):
+                    if index:
+                        glued.append(rng.choice("abcdefghijklmn") if kind == "letters" else rng.choice(words))
+                    glued.append(group)
+                payload = "".join(glued) if kind == "letters" else " ".join(glued)
+                if rng.random() < 0.5:
+                    header[0] = f"SKLEP {payload}"
+                    planted = "shop"
+                else:
+                    sequence[0] = f"{payload} nazwa 1 x 3,50 3,50 A"
+                    planted = "item"
+            text = "\n".join((*header, *sequence, "PIN OK", "SUMA PLN 7,70"))
+            with self.subTest(trial=trial, kind=kind, length=length, pieces=pieces, planted=planted):
                 parsed = self.receipts.parse_text("owner", text)
                 confirmed = self.receipts.confirm("owner", confirm_values(parsed))
                 detail = self.receipts.detail("owner", parsed["receipt_id"])
                 for body in (parsed, confirmed, detail):
-                    _walk_no_pan(self, body, windows)
-                    _assert_no_pan_windows(self, json.dumps(body), windows)
+                    _assert_digit_cap(self, body)
                     self.assertNotIn("raw_ocr_text", json.dumps(body))
+                if planted == "shop":
+                    self.assertEqual(parsed["draft"]["raw_shop_name"], "[usunięto]")
+                elif planted == "item":
+                    self.assertIn("[usunięto]", [line["raw_name"] for line in parsed["draft"]["lines"]])
                 row = self.receipt_row(parsed["receipt_id"])
                 self.assertIsNone(row.raw_ocr_text)
-                _scan_text_columns(self, row, windows)
+                _scan_text_columns(self, row)
                 for line in self.rows(db.BudgetReceiptLine):
                     if line.receipt_id == row.id:
-                        _scan_text_columns(self, line, windows)
+                        _scan_text_columns(self, line)
                 self.assertEqual(confirmed["receipt"]["total_amount"], "7.7")
                 self.assertEqual(confirmed["receipt"]["receipt_date"], "2026-11-20")
 

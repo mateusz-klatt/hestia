@@ -20,7 +20,8 @@ from ..db import (BudgetAccount as Account, BudgetConnection as Connection, Budg
 from .analytics_core import (AnalyticsError, canonical_money, compare_money, financial_fingerprint, negate_money,
                              sum_money)
 from .receipt_parser import (CONFIRMED_TEXT_TTL_SECONDS, DRAFT_TTL_SECONDS, MAX_RECEIPT_LINES, ReceiptError,
-                             merchant_tokens, normalize_shop_name, parse_receipt, validate_confirm)
+                             merchant_tokens, normalize_shop_name, parse_receipt, redact_digit_field,
+                             validate_confirm)
 from .receipt_reconcile import (audit_payload, creditor_name, evidence_json, erase_receipt_audit, link_evidence,
                                 write_audit)
 from .views import BudgetHTTPStore
@@ -76,9 +77,10 @@ def _date_distance(payload, receipt_date):
 
 def _line_dict(row):
     return {
-        "line_no": row.line_no, "line_kind": row.line_kind, "raw_name": row.raw_name,
-        "raw_name_key": row.raw_name_key, "ptu_code": row.ptu_code, "quantity": row.quantity,
-        "raw_unit": row.raw_unit, "unit_price_raw": row.unit_price_raw,
+        "line_no": row.line_no, "line_kind": row.line_kind, "raw_name": redact_digit_field(row.raw_name),
+        "raw_name_key": redact_digit_field(row.raw_name_key), "ptu_code": row.ptu_code,
+        "quantity": row.quantity, "raw_unit": redact_digit_field(row.raw_unit),
+        "unit_price_raw": row.unit_price_raw,
         "gross_line_total": row.gross_line_total, "discount_amount": row.discount_amount,
         "net_line_total": row.net_line_total,
     }
@@ -131,7 +133,8 @@ class BudgetReceiptStore(BudgetHTTPStore):
         shop = None if row.shop_id is None else session.get(Shop, row.shop_id)
         values = {
             "receipt_id": row.id, "shop_id": row.shop_id, "chain_key": None if shop is None else shop.chain_key,
-            "raw_shop_name": row.raw_shop_name, "raw_nip": row.raw_nip, "receipt_kind": row.receipt_kind,
+            "raw_shop_name": redact_digit_field(row.raw_shop_name), "raw_nip": row.raw_nip,
+            "receipt_kind": row.receipt_kind,
             "receipt_date": row.receipt_date, "receipt_time": row.receipt_time, "total_amount": row.total_amount,
             "currency": row.currency, "payment_method": row.payment_method, "status": row.status,
             "source_kind": row.source_kind, "linked": row.linked_account_id is not None,

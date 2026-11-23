@@ -243,6 +243,21 @@ def _contains_secret(value):
     return bool(_secret_lines(value))
 
 
+def _nd_digits(value):
+    """Decimal digits after NFKC. Letters and separators do not reset the count."""
+    normalized = unicodedata.normalize("NFKC", value)
+    return sum(unicodedata.category(char) == "Nd" for char in normalized)
+
+
+def redact_digit_field(value):
+    """Replace a persisted text field that carries twelve or more decimal digits."""
+    if not isinstance(value, str):
+        return value
+    if _nd_digits(value) >= _SECRET_DIGITS:
+        return _REMOVED
+    return value
+
+
 def _normalize_receipt_text(text):
     """Allowlist after NFKC. The stored OCR text is this form.
 
@@ -399,7 +414,7 @@ def _shop_name(lines):
             continue
         if _DATE_ISO.search(value) or _DATE_PL.search(value) or not re.search(r"[A-Za-zĄ-ż]", value):
             continue
-        return value
+        return redact_digit_field(value)
     return None
 
 
@@ -413,7 +428,7 @@ def _line_kind(name, gross):
 
 
 def _make_line(name, match, line_no):
-    raw_name = " ".join(name.strip().split())
+    raw_name = redact_digit_field(" ".join(name.strip().split()))
     raw_name_key = fold_text(raw_name)
     if (not raw_name or len(raw_name) > MAX_LINE_NAME_LEN or not raw_name_key
             or len(raw_name_key) > MAX_LINE_NAME_LEN or _CONTROL.search(raw_name)):
@@ -588,6 +603,7 @@ def _clean_text(value, *, limit, optional=False):
             unicodedata.category(char) in ("Cf", "Cs") for char in value):
         raise ReceiptError()
     value = normalize_shop_name(value)
+    value = redact_digit_field(value)
     if not value or len(value) > limit:
         raise ReceiptError()
     value = redact_pan(value)
