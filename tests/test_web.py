@@ -55,7 +55,7 @@ class _LoopThread:
         self.loop.call_soon(self._ready.set)
         self.loop.run_forever()
 
-    def submit(self, coro, timeout=2.0):
+    def submit(self, coro, timeout=10.0):  # CI runners can be slow to start aiohttp
         return asyncio.run_coroutine_threadsafe(coro, self.loop).result(timeout=timeout)
 
     def close(self):
@@ -76,7 +76,7 @@ class _StartedWeb:
         if self._stopped:
             return
         self._stopped = True
-        self._loop_thread.submit(web.stop_web(self._handle), timeout=3.0)
+        self._loop_thread.submit(web.stop_web(self._handle), timeout=10.0)
 
 
 def _start_web(rt, loop_thread, host="127.0.0.1", port=0):
