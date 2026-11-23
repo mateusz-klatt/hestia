@@ -1,17 +1,13 @@
 """Owner-private receipt drafts, structured lines and informational bank links.
 
 Revision ID: 0022
-Revises: 0020
-
-``down_revision`` is temporarily ``0020`` so this branch has a single head on
-current master. PR #251 lands migration 0021 first. Re-parent this revision to
-``0021`` when #251 merges. Holzera re-parents at merge.
+Revises: 0021
 """
 from alembic import op
 import sqlalchemy as sa
 
 revision = "0022"
-down_revision = "0020"
+down_revision = "0021"
 branch_labels = None
 depends_on = None
 

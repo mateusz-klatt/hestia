@@ -245,6 +245,10 @@ class DbSchemaTests(unittest.TestCase):
                 conn.exec_driver_sql("SELECT version_num FROM alembic_version").fetchall(),
                 [("0022",)],
             )
+            annotation_columns = [row[1] for row in conn.exec_driver_sql("PRAGMA table_info(budget_annotations)")]
+            category_columns = [row[1] for row in conn.exec_driver_sql("PRAGMA table_info(budget_categories)")]
+            self.assertIn("label", annotation_columns)
+            self.assertIn("parent_id", category_columns)
 
     def test_migration_0002_backfills_existing_users_to_admin(self):
         # The #73 guarantee: accounts that existed before roles must come out of the migration as admin

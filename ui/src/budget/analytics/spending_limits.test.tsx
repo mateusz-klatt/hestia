@@ -111,6 +111,7 @@ describe("SpendingLimitsView", () => {
     expect(host.textContent).toContain("Over by: 5.00 PLN");
     expect(host.textContent).toContain("Refunds: 5.00 PLN");
     expect(host.querySelector("progress")?.value).toBe(100);
+    expect(host.querySelectorAll(".budget-cat-swatch")).toHaveLength(2);
     expect(setItem).not.toHaveBeenCalled();
     expect(window.location.search).toBe("");
 

@@ -1,8 +1,7 @@
 """Migration 0022 receipt schema, restrictive constraints and reversible roundtrip.
 
-``down_revision`` is temporarily ``0020`` (category parent on current master) so
-the branch has one Alembic head before PR #251 lands migration 0021. Re-parent
-to ``0021`` when that pull request merges.
+``down_revision`` is ``0021`` (one-off annotation label). Downgrade to ``0020``
+walks through that revision and leaves ``budget_analytics_audit`` rows in place.
 """
 from __future__ import annotations
 

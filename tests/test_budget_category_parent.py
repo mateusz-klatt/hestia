@@ -73,10 +73,10 @@ class CategoryParentMigrationTests(unittest.TestCase):
 
 
 class CategoryParentInitDbTests(unittest.TestCase):
-    """Category parent through real ``init_db``.
+    """Category parent through real ``init_db``. Head is 0022, which includes the 0021 annotation label.
 
-    Head is 0022 once receipts land. Production turns foreign keys on, and child
-    rows reference categories.
+    Production turns foreign keys on, and child rows reference categories. The runner
+    upgrades to that head with foreign keys off inside one transaction, then checks them.
     """
 
     def setUp(self):

@@ -1801,6 +1801,8 @@ export interface components {
             category_id: string | null;
             /** Kind */
             kind: string;
+            /** Label */
+            label?: string | null;
             /** Mode */
             mode: string;
             /** Stale */
@@ -1825,6 +1827,8 @@ export interface components {
              * @enum {string}
              */
             kind: "auto" | "expense" | "income" | "refund" | "excluded";
+            /** Label */
+            label?: string | null;
             /**
              * Mode
              * @enum {string}
@@ -1852,6 +1856,8 @@ export interface components {
             entry_reference: string;
             /** Kind */
             kind: string;
+            /** Label */
+            label?: string | null;
             /** Ledger Fingerprint */
             ledger_fingerprint: string;
             /** Mode */
@@ -1958,6 +1964,10 @@ export interface components {
             name: string | null;
             /** Net Spending */
             net_spending: string;
+            /** One Off */
+            one_off?: boolean;
+            /** One Off Key */
+            one_off_key?: string | null;
             /** Refunds */
             refunds: string;
         };
@@ -2562,6 +2572,10 @@ export interface components {
             name: string | null;
             /** Net Spending */
             net_spending: string;
+            /** One Off */
+            one_off?: boolean;
+            /** One Off Key */
+            one_off_key?: string | null;
             /** Refunds */
             refunds: string;
         };
@@ -2710,8 +2724,14 @@ export interface components {
         BudgetAnalyticsMonthlyBudgetSeriesCategory: {
             /** Category Id */
             category_id: string | null;
+            /** Name */
+            name?: string | null;
             /** Net Spending */
             net_spending: string;
+            /** One Off */
+            one_off?: boolean;
+            /** One Off Key */
+            one_off_key?: string | null;
         };
         /** BudgetAnalyticsMonthlyBudgetSeriesMonth */
         BudgetAnalyticsMonthlyBudgetSeriesMonth: {

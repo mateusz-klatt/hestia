@@ -4,6 +4,9 @@ import { useCallback, useEffect, useId, useRef, useState } from "react";
 import type { BudgetApi, BudgetResult } from "../api";
 import type { BudgetAccount } from "../model";
 import { formatAmount } from "../model";
+import { CategorySwatch } from "./category_badge";
+import { buildCategoryColors } from "./category_colors";
+import type { CategoryColorResolver } from "./category_colors";
 import { ANALYTICS_ERROR, DEFAULT_WARNING_PERCENT, RELOAD_ERRORS, SPENDING_LIMIT_AMOUNT_MAX, currentMonth,
   isMonth, isZero, labelOf, limitCurrencies, monthLabel, parseWarningPercent, shiftMonth, validCurrency,
   validLimitAmount } from "./model";
@@ -161,11 +164,12 @@ function buildRequest(draft: LimitDraft): SpendingLimitSaveRequest | null {
 interface StatusPanelProps {
   statuses: readonly AnalyticsSpendingLimitStatus[];
   categoryMap: ReadonlyMap<string, AnalyticsCategory>;
+  categoryColors: CategoryColorResolver;
   text: SpendingLimitsLabels;
   locale: string;
 }
 
-function StatusPanel({ statuses, categoryMap, text, locale }: StatusPanelProps) {
+function StatusPanel({ statuses, categoryMap, categoryColors, text, locale }: StatusPanelProps) {
   return (
     <section className="budget-entries" aria-label={text.evaluationTitle}>
       <h4>{text.evaluationTitle}</h4>
@@ -180,6 +184,7 @@ function StatusPanel({ statuses, categoryMap, text, locale }: StatusPanelProps) 
               <li key={`${item.currency}/${item.category_id}`} className="budget-entry">
                 <div className="budget-limit-main">
                   <span className="budget-entry-text">
+                    <CategorySwatch color={categoryColors.get(item.category_id)} />
                     <strong>{label}</strong>
                     {item.archived ? <span className="budget-muted"> ({text.archived})</span> : null}
                   </span>
@@ -367,6 +372,7 @@ export function SpendingLimitsView({ api, accounts, text, locale, revision, onAc
   }, [api, currency, onAccessLoss, reload, text]);
 
   const categoryMap = new Map(categories.map((item) => [item.id, item]));
+  const categoryColors = buildCategoryColors(categories);
   const activeCategories = categories.filter((item) => !item.archived);
   const limits = shown.state === "ready" ? shown.data.limits : [];
   const suggestions = limitCurrencies(limits, accounts);
@@ -435,7 +441,7 @@ export function SpendingLimitsView({ api, accounts, text, locale, revision, onAc
       {shown.state === "error" ? <p className="budget-notice" role="alert">{text.error}</p> : null}
       {shown.state === "ready" ? (
         <>
-          <StatusPanel statuses={shown.data.statuses} categoryMap={categoryMap} text={text} locale={locale} />
+          <StatusPanel statuses={shown.data.statuses} categoryMap={categoryMap} categoryColors={categoryColors} text={text} locale={locale} />
           <section className="budget-entries" aria-label={text.configuredTitle}>
             <div className="budget-limit-main">
               <h4>{text.configuredTitle}</h4>
@@ -475,6 +481,7 @@ export function SpendingLimitsView({ api, accounts, text, locale, revision, onAc
                     <li key={limit.id} className="budget-entry">
                       <div className="budget-limit-main">
                         <span className="budget-entry-text">
+                          <CategorySwatch color={categoryColors.get(limit.category_id)} />
                           <strong className={limit.enabled ? undefined : "budget-muted"}>
                             {category?.name ?? limit.category_id}
                           </strong>

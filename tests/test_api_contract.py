@@ -56,15 +56,33 @@ class OpenApiArtifactTests(unittest.TestCase):
         )
 
     def test_monthly_budget_contract_chain_from_0_27_0(self):
-        """0.27.0 through 0.32.0 stay strictly additive. 0.33.0 withdraws a 503 code.
-        0.34.0 adds parent_id. 0.36.0 adds receipts and is strictly additive over 0.34.0.
-        0.35.0 is reserved for the one-off label (PR #251) and is not part of this chain."""
+        """0.36.0 adds receipts on top of 0.35.0. 0.35.0 adds the one-off label on top of 0.34.0.
+        Earlier steps stay as published."""
         document = api_contract.build_openapi()
         self.assertEqual(document["info"]["version"], "0.36.0")
         for path in [path for path in document["paths"] if path.startswith("/api/budget/receipts/")]:
             del document["paths"][path]
         for name in [name for name in document["components"]["schemas"] if name.startswith("BudgetReceipt")]:
             del document["components"]["schemas"][name]
+        document["info"]["version"] = "0.35.0"
+        # 0.35.0 one-off label is additive over 0.34.0. Remove it before that digest.
+        for schema, field in (
+            ("BudgetAnalyticsAnnotationRequest", "label"),
+            ("BudgetAnalyticsAnnotationSaved", "label"),
+            ("BudgetAnalyticsAnnotation", "label"),
+            ("BudgetAnalyticsCategoryTotal", "one_off"),
+            ("BudgetAnalyticsCategoryTotal", "one_off_key"),
+            ("BudgetAnalyticsMonthlyBudgetSeriesCategory", "name"),
+            ("BudgetAnalyticsMonthlyBudgetSeriesCategory", "one_off"),
+            ("BudgetAnalyticsMonthlyBudgetSeriesCategory", "one_off_key"),
+            ("BudgetAnalyticsMonthlyBudgetCategorySpend", "one_off"),
+            ("BudgetAnalyticsMonthlyBudgetCategorySpend", "one_off_key"),
+        ):
+            properties = document["components"]["schemas"][schema]["properties"]
+            properties.pop(field, None)
+            required = document["components"]["schemas"][schema].get("required")
+            if isinstance(required, list) and field in required:
+                required.remove(field)
         document["info"]["version"] = "0.34.0"
         canonical_0_34 = json.dumps(document, sort_keys=True, separators=(",", ":")).encode("utf-8")
         self.assertEqual(hashlib.sha256(canonical_0_34).hexdigest(),

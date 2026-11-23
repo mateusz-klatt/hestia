@@ -152,11 +152,12 @@ def _category(category_id, categories):
 
 def _annotation(row, financial_fp):
     if row is None:
-        return {"version": 0, "mode": "auto", "category_id": None, "kind": "auto", "stale": False}
+        return {"version": 0, "mode": "auto", "category_id": None, "kind": "auto", "stale": False, "label": None}
     if row.mode not in ("auto", "manual") or row.kind not in core.KINDS:
         raise AnalyticsError()
     return {"version": row.version, "mode": row.mode, "category_id": row.category_id,
-            "kind": row.kind, "stale": row.ledger_fingerprint != financial_fp}
+            "kind": row.kind, "stale": row.ledger_fingerprint != financial_fp,
+            "label": core.stored_one_off_label(row.label)}
 
 
 def _effective(payload, metadata, annotation, categories, rules, *, texts=None, compiled=None):
@@ -349,6 +350,9 @@ def _recurring_hints(snapshot):
     entries = []
     for row in snapshot["transactions"]:
         payload, metadata = row["payload"], row["metadata"] or {}
+        # A one-off label is real spending and not a commitment, so it cannot seed a hint.
+        if core.active_one_off_label(row["annotation"], payload["amount"]) is not None:
+            continue
         entries.append(RecurringEntry(
             owner=snapshot["owner"],
             account_id=row["account_id"],
@@ -571,19 +575,57 @@ def _totals(rows):
     return result
 
 
-def _category_totals(rows, categories):
+def _mortgage_pass_through_category(owner):
+    """Mortgage category whose legs stay put when labelled, or ``None`` when pass-through is off."""
+    configs = month_budget_mod.load_month_config()
+    settings = None if configs is None else configs.get(owner)
+    pair = None if settings is None else settings.pass_through
+    return None if pair is None else pair.mortgage_category_id
+
+
+def _category_totals(rows, categories, *, split_one_offs=False, pass_through_category_id=None,
+                     one_off_secret=None):
+    """Expense and refund nets by category.
+
+    ``split_one_offs`` moves a labelled row into its own entry (``one_off`` true, ``name`` is the label,
+    ``category_id`` stays the underlying category, ``one_off_key`` identifies the member transactions).
+    A pass-through mortgage leg stays in its category so rent matching does not drift. Spending limits
+    keep the default and still count the amount in that category. An empty category bucket is omitted
+    once every row has moved out.
+    """
     names = {row["id"]: row for row in categories}
     grouped = defaultdict(list)
     for row in rows:
-        if row["effective"]["kind"] in ("expense", "refund"):
-            grouped[(row["effective"]["category_id"], row["payload"]["currency"])].append(row)
+        if row["effective"]["kind"] not in ("expense", "refund"):
+            continue
+        identifier = row["effective"]["category_id"]
+        currency = row["payload"]["currency"]
+        label = None
+        # None is the uncategorised bucket, not a pass-through category. Compare only a real id.
+        protected = pass_through_category_id is not None and identifier == pass_through_category_id
+        if split_one_offs and not protected:
+            label = core.active_one_off_label(row["annotation"], row["payload"]["amount"])
+        grouped[(label is not None, label, identifier, currency)].append(row)
+
+    def ordering(item):
+        one_off, label, identifier, currency = item[0]
+        if split_one_offs:
+            return (one_off, identifier or "", label or "", currency)
+        return (identifier or "", currency)
+
     result = []
-    for (identifier, currency), values in sorted(grouped.items(), key=lambda item: (item[0][0] or "", item[0][1])):
+    for (one_off, label, identifier, currency), values in sorted(grouped.items(), key=ordering):
         total = _totals(values)[0]
         category = names.get(identifier)
-        result.append({"category_id": identifier, "name": None if category is None else category["name"],
-                       "archived": False if category is None else category["archived"], "currency": currency,
-                       **{field: total[field] for field in ("expenses", "refunds", "net_spending")}})
+        entry = {"category_id": identifier, "name": label if one_off else (None if category is None else category["name"]),
+                 "archived": False if category is None else category["archived"], "currency": currency,
+                 **{field: total[field] for field in ("expenses", "refunds", "net_spending")}}
+        if split_one_offs:
+            entry["one_off"] = one_off
+            entry["one_off_key"] = core.one_off_key(
+                ((row["account_id"], row["entry_reference"]) for row in values), one_off_secret,
+            ) if one_off else None
+        result.append(entry)
     return result
 
 
@@ -759,7 +801,11 @@ class BudgetAnalyticsViews(BudgetAnalyticsStore):
                     "scope": {**snapshot["counts"], "freshness": self._freshness(session, snapshot, self._now())},
                     "currencies": _totals(rows), "months": [{"month": month, "currencies": _totals(values)}
                         for month, values in sorted(months.items())],
-                    "categories": _category_totals(rows, snapshot["categories"]), "transfer_summary": summary}
+                    "categories": _category_totals(
+                        rows, snapshot["categories"], split_one_offs=True,
+                        pass_through_category_id=_mortgage_pass_through_category(owner),
+                        one_off_secret=self._cursor_secret),
+                    "transfer_summary": summary}
 
     def _cursor_encode(self, context, snapshot, index, now):
         payload = {"context": context, "snapshot": snapshot, "index": index, "issued": now, "expires": now + CURSOR_TTL}
@@ -1060,6 +1106,7 @@ class BudgetAnalyticsViews(BudgetAnalyticsStore):
                     scan_limited=snapshot["_scan_limited"], categories=snapshot["categories"],
                     rules=snapshot["rules"], identities=snapshot["identities"], limits=all_limits,
                     account_component_timestamps=account_timestamps, account_kinds=account_kinds, settings=settings,
+                    one_off_secret=self._cursor_secret,
                 )
         except month_budget_mod.MonthInputError:
             raise AnalyticsError() from None

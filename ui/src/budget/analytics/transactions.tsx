@@ -4,6 +4,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { BudgetApi } from "../api";
 import type { BudgetAccount, BudgetConnection } from "../model";
 import { formatAmount, transactionDate, transactionText } from "../model";
+import { CategoryBadge } from "./category_badge";
+import { buildCategoryColors } from "./category_colors";
+import { ExportMenu } from "./export_menu";
+import { exportBasename, exportLabels } from "./export_rows";
 import { ANALYTICS_ERROR, EFFECTIVE_KINDS, NO_FILTER, RELOAD_ERRORS, UNCATEGORISED, annotationRequest, canPair, canonicalAmount,
   counterparty, accountName as nameOf, currentChoice, daysBetween, kindChoice, kindChoicesFor, labelOf, manualPairRequest,
   pairCandidates, pairDate, pairPeriods, transactionRowKey } from "./model";
@@ -17,7 +21,7 @@ const kindsPl = { auto: "Automatycznie", expense: "Wydatek", income: "Wpływ", r
 
 export const transactionLabels = {
   en: {
-    title: "Transactions", currency: "Currency", category: "Category", kind: "Type", search: "Search", apply: "Apply",
+    title: "Transactions", exportMenu: exportLabels.en, currency: "Currency", category: "Category", kind: "Type", search: "Search", apply: "Apply",
     provisionalOnly: "Unconfirmed or provisional only",
     all: "All", uncategorised: "Uncategorised", automatic: "Automatic (rules)", kinds: kindsEn,
     edit: "Change", save: "Save", cancel: "Cancel", archived: "archived", total: (count: number) => `${String(count)} entries`,
@@ -40,9 +44,11 @@ export const transactionLabels = {
     pairReserved: "One of these entries is already in another pair; the latest state was loaded.",
     pairExisting: "These two entries already have a decision; see the own-transfer queues.",
     pairInvalid: "These entries cannot be paired (amount, currency, dates or account differ).",
+    oneOffLabel: "One-off label",
+    oneOffHint: "The amount shows under this name in the bars instead of Other.",
   },
   pl: {
-    title: "Transakcje", currency: "Waluta", category: "Kategoria", kind: "Rodzaj", search: "Szukaj", apply: "Zastosuj",
+    title: "Transakcje", exportMenu: exportLabels.pl, currency: "Waluta", category: "Kategoria", kind: "Rodzaj", search: "Szukaj", apply: "Zastosuj",
     provisionalOnly: "Tylko niepotwierdzone (wynik wstępny)",
     all: "Wszystkie", uncategorised: "Bez kategorii", automatic: "Automatycznie (reguły)", kinds: kindsPl,
     edit: "Zmień", save: "Zapisz", cancel: "Anuluj", archived: "archiwalna", total: (count: number) => `Pozycji: ${String(count)}`,
@@ -66,6 +72,8 @@ export const transactionLabels = {
     pairReserved: "Jedna z tych pozycji jest już w innej parze; wczytano aktualny stan.",
     pairExisting: "Te dwie pozycje mają już decyzję; zobacz kolejki przelewów własnych.",
     pairInvalid: "Tych pozycji nie można sparować (różnią się kwota, waluta, daty lub konto).",
+    oneOffLabel: "Etykieta jednorazowa",
+    oneOffHint: "Kwota pojawi się pod tą etykietą na słupkach zamiast w Pozostałe.",
   },
 };
 export type TransactionLabels = typeof transactionLabels.en;
@@ -407,6 +415,7 @@ export function TransactionsPanel({ api, period, currencies, accounts, connectio
     return extras.length === 0 ? currencies : [...currencies, ...extras].sort((a, b) => a.localeCompare(b));
   }, [currencies, draft.currency, filter.currency]);
   const categoryNames = useMemo(() => new Map(categories.map((item) => [item.id, item.name])), [categories]);
+  const categoryColors = useMemo(() => buildCategoryColors(categories), [categories]);
   const categoryName = useCallback(
     (id: string | null) => (id === null ? text.uncategorised : (categoryNames.get(id) ?? text.uncategorised)),
     [categoryNames, text.uncategorised],
@@ -440,11 +449,11 @@ export function TransactionsPanel({ api, period, currencies, accounts, connectio
     void loadPairs(row, pickerToken, generation.current);
   }, [loadPairs, shownRows]);
 
-  const save = useCallback(async (row: AnalyticsTransaction, category: CategoryChoice, kind: KindChoice) => {
+  const save = useCallback(async (row: AnalyticsTransaction, category: CategoryChoice, kind: KindChoice, label: string) => {
     const token = generation.current;
     setBusy(rowKey(row));
     setNotice(null);
-    const result = await api.annotate(annotationRequest(row, category, kind));
+    const result = await api.annotate(annotationRequest(row, category, kind, label));
     // The access barrier runs first, so a lost session clears even when the list moved on meanwhile.
     const accessLost = onAccessLoss(result);
     if (!accessLost && result.ok) onChanged();
@@ -534,7 +543,11 @@ export function TransactionsPanel({ api, period, currencies, accounts, connectio
 
   return (
     <section className="budget-entries" aria-label={text.title} ref={sectionRef}>
-      <h4>{text.title}</h4>
+      <header className="budget-entries-head">
+        <h4>{text.title}</h4>
+        <ExportMenu text={text.exportMenu} filename={exportBasename(period)} periods={[period]} filter={filter}
+          rowKeys={activeProvisionalKeys} accounts={accounts} connections={connections} api={api} onAccessLoss={onAccessLoss} />
+      </header>
       <form className="budget-range" onSubmit={(event) => { event.preventDefault(); setFilter(draft); }}>
         <label>{text.currency}
           <select name="currency" value={draft.currency} onChange={(event) => { setDraft({ ...draft, currency: event.currentTarget.value }); }}>
@@ -632,13 +645,21 @@ export function TransactionsPanel({ api, period, currencies, accounts, connectio
                   </div>
                   <div className="budget-entry-facts">
                     <span>{accountName(row.account_id)}</span>
-                    <span className="budget-chip">{categoryName(row.effective.category_id)}</span>
+                    <CategoryBadge
+                      color={categoryColors.get(
+                        row.effective.category_id !== null && categoryNames.has(row.effective.category_id)
+                          ? row.effective.category_id
+                          : null,
+                      )}
+                      label={categoryName(row.effective.category_id)}
+                    />
                     {row.effective.kind === "expense" || row.effective.kind === "income" ? null
                       : <span className="budget-chip">{kindText(row.effective.kind)}</span>}
                     {row.effective.source === "manual" ? <span>{text.manual}</span> : null}
                     {row.effective.source === "rule" ? <span>{text.rule}</span> : null}
                     {transfer === "" ? null : <span className="budget-chip">{transfer}</span>}
                     {row.transfer.ambiguous ? <span className="budget-warn">{text.ambiguous}</span> : null}
+                    {oneOffLabel(row) === "" ? null : <span className="budget-chip budget-one-off">{oneOffLabel(row)}</span>}
                     {row.annotation.stale ? <span className="budget-warn">{text.stale}</span> : null}
                     {editing === key ? null : (
                       <button type="button" disabled={busy !== null} onClick={() => { startEditing(key); }}>{text.edit}</button>
@@ -649,7 +670,7 @@ export function TransactionsPanel({ api, period, currencies, accounts, connectio
                   </div>
                   {editing === key ? (
                     <Editor row={row} categories={categories} text={text} kindText={kindText} saving={busy === key}
-                      onSave={(category, kind) => { void save(row, category, kind); }} onCancel={stopEditing} />
+                      onSave={(category, kind, label) => { void save(row, category, kind, label); }} onCancel={stopEditing} />
                   ) : null}
                   {pairing === key ? (
                     <PairPicker debit={row} page={pairPage} accounts={accounts} connections={connections} text={text} locale={locale}
@@ -720,8 +741,13 @@ interface EditorProps {
   text: TransactionLabels;
   kindText: (kind: string) => string;
   saving: boolean;
-  onSave: (category: CategoryChoice, kind: KindChoice) => void;
+  onSave: (category: CategoryChoice, kind: KindChoice, label: string) => void;
   onCancel: () => void;
+}
+
+function oneOffLabel(row: AnalyticsTransaction): string {
+  const value = (row.annotation as { label?: string | null }).label;
+  return typeof value === "string" ? value : "";
 }
 
 /** Select values: "auto" (rules decide), "none" (explicitly uncategorised) or "cat:<id>". */
@@ -739,6 +765,7 @@ function Editor({ row, categories, text, kindText, saving, onSave, onCancel }: E
   const kinds = kindChoicesFor(row.credit_debit_indicator);
   const [kind, setKind] = useState<KindChoice>(row.annotation.mode === "manual"
     ? kindChoice(row.annotation.kind, row.credit_debit_indicator) : "auto");
+  const [label, setLabel] = useState(oneOffLabel(row));
   // An archived category stays selectable only as this entry's current classification: the category it shows now,
   // or its own manual choice unless the bank changed the entry since. Assigning any other archived category is refused.
   const manual = row.annotation.mode === "manual" && !row.annotation.stale ? row.annotation.category_id : null;
@@ -755,7 +782,7 @@ function Editor({ row, categories, text, kindText, saving, onSave, onCancel }: E
     if (value === "auto") setKind("auto");
   };
   return (
-    <form className="budget-entry-editor" onSubmit={(event) => { event.preventDefault(); onSave(decode(category), kind); }}>
+    <form className="budget-entry-editor" onSubmit={(event) => { event.preventDefault(); onSave(decode(category), kind, label); }}>
       <label>{text.category}
         <select name="category_id" value={category} disabled={saving} onChange={(event) => { chooseCategory(event.currentTarget.value); }}>
           <option value="auto">{text.automatic}</option>
@@ -771,6 +798,11 @@ function Editor({ row, categories, text, kindText, saving, onSave, onCancel }: E
           {kinds.map((item) => <option key={item} value={item}>{kindText(item)}</option>)}
         </select>
       </label>
+      <label>{text.oneOffLabel}
+        <input name="one_off_label" type="text" maxLength={80} value={label} disabled={saving}
+          onChange={(event) => { setLabel(event.currentTarget.value); }} />
+      </label>
+      <p className="budget-muted">{text.oneOffHint}</p>
       <button type="submit" className="budget-primary" disabled={saving}>{text.save}</button>
       <button type="button" disabled={saving} onClick={onCancel}>{text.cancel}</button>
     </form>

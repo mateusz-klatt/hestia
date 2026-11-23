@@ -95,6 +95,13 @@ function select(label: string, scope: ParentNode = host): HTMLSelectElement {
   if (found === null || found === undefined) throw new Error(`select ${label} missing`);
   return found;
 }
+async function typeInto(input: HTMLInputElement, value: string): Promise<void> {
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(input, value);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    await Promise.resolve();
+  });
+}
 async function choose(element: HTMLSelectElement, value: string): Promise<void> {
   await act(async () => {
     element.value = value;
@@ -188,9 +195,46 @@ describe("period entries", () => {
     await choose(select("Type", editor), "expense");
     await submit(host.querySelector(".budget-entry-editor"));
     expect(api.annotate).toHaveBeenCalledWith({ account_id: "acc-1", entry_reference: "e1", mode: "manual",
-      category_id: "cat-food", kind: "expense", expected_fingerprint: "fp-e1", expected_version: 0 });
+      category_id: "cat-food", kind: "expense", expected_fingerprint: "fp-e1", expected_version: 0, label: null });
     expect(onChanged).toHaveBeenCalledTimes(1);
     expect(host.querySelector(".budget-entry-editor")).toBeNull();
+  });
+
+  it("shows a one-off label on the row and saves a trimmed label from the editor", async () => {
+    const phrase = "Remont łazienki";
+    const annotated = entry("e1", {
+      annotation: {
+        version: 3, mode: "manual", category_id: "cat-food", kind: "expense", stale: true, label: phrase,
+      },
+    });
+    const api = fakeApi([annotated]);
+    await show(api);
+    expect(host.querySelector(".budget-one-off")?.textContent).toBe(phrase);
+    expect(host.textContent).toContain(transactionLabels.en.stale);
+    await click(button("Change"));
+    const editor = host.querySelector(".budget-entry-editor");
+    const input = editor?.querySelector<HTMLInputElement>('input[name="one_off_label"]');
+    if (editor === null || input === undefined || input === null) throw new Error("label field missing");
+    expect(input.value).toBe(phrase);
+    expect(editor.textContent).toContain("One-off label");
+    expect(editor.textContent).toContain("instead of Other");
+    await typeInto(input, "  Fachowiec  ");
+    await submit(editor instanceof HTMLFormElement ? editor : null);
+    expect(api.annotate).toHaveBeenCalledWith(expect.objectContaining({ label: "Fachowiec", expected_version: 3 }));
+  });
+
+  it("uses the Polish one-off label and clears it when the field is blank", async () => {
+    const api = fakeApi();
+    await show(api, { text: transactionLabels.pl, locale: "pl" });
+    await click(button("Zmień"));
+    const editor = host.querySelector(".budget-entry-editor");
+    const input = editor?.querySelector<HTMLInputElement>('input[name="one_off_label"]');
+    if (editor === null || input === undefined || input === null) throw new Error("label field missing");
+    expect(editor.textContent).toContain("Etykieta jednorazowa");
+    expect(editor.textContent).toContain("zamiast w Pozostałe");
+    await typeInto(input, "   ");
+    await submit(editor instanceof HTMLFormElement ? editor : null);
+    expect(api.annotate).toHaveBeenCalledWith(expect.objectContaining({ label: null }));
   });
 
   it("distinguishes explicit uncategorised from a reset to automatic, with the seen version", async () => {

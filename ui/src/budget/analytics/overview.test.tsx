@@ -5,7 +5,9 @@ import type { Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BudgetResult } from "../api";
 import { account, connection } from "../fixtures";
+import { NEUTRAL_CATEGORY_COLOR, buildCategoryColors, parseHexColor, relativeLuminance } from "./category_colors";
 import { overviewOf, staleFreshness, totals } from "./fixtures";
+import { oneOffRowKey } from "./model";
 import type { AnalyticsCategory, AnalyticsOverview, AnalyticsScope } from "./model";
 import { OverviewPanel, overviewLabels } from "./overview";
 
@@ -152,9 +154,44 @@ describe("period overview", () => {
     expect([...pln?.querySelectorAll("tr") ?? []].map((row) => row.textContent)).toEqual([
       "Synthetic Food300.00 PLN", "Synthetic Old (archived)7.00 PLN", "Uncategorised50.00 PLN"]);
     expect(pln?.querySelector(".is-uncategorised")).not.toBeNull();
+    const uncatSwatch = pln?.querySelector<HTMLElement>(".is-uncategorised .budget-cat-swatch");
+    expect(uncatSwatch).not.toBeNull();
+    const toHex = (css: string) => {
+      const m = /^rgb\(\s*(\d+),\s*(\d+),\s*(\d+)\s*\)$/i.exec(css.trim());
+      if (m !== null) return `#${[m[1], m[2], m[3]].map((n) => Number(n).toString(16).padStart(2, "0")).join("")}`;
+      return parseHexColor(css)?.hex ?? css;
+    };
+    expect(toHex(uncatSwatch?.style.backgroundColor ?? "")).toBe(NEUTRAL_CATEGORY_COLOR.background);
     const eur = host.querySelector('[aria-label="Spending by category EUR"]');
     expect(eur?.textContent).toContain("Synthetic Travel");
     expect(eur?.textContent).not.toContain("Synthetic Food");
+  });
+
+  it("keys a one-off row by one_off_key and keeps the label out of the key", () => {
+    const key = "cd".repeat(32);
+    const labelled = { category_id: "cat-food", one_off: true, one_off_key: key };
+    expect(oneOffRowKey(labelled, 0)).toBe(key);
+    expect(oneOffRowKey(labelled, 0).includes("Remont")).toBe(false);
+    expect(oneOffRowKey({ category_id: "cat-food", one_off: false, one_off_key: null }, 1)).toBe("cat-food");
+    expect(oneOffRowKey({ category_id: null, one_off: false, one_off_key: null }, 2)).toBe("uncategorised-2");
+    expect(oneOffRowKey({ category_id: "cat-food", one_off: true, one_off_key: null }, 3)).toBe("one-off:cat-food:3");
+  });
+
+  it("shows a labelled amount on its own row with a one-off tag", async () => {
+    const data = rich("2026-11");
+    data.categories = [...data.categories, {
+      currency: "PLN", category_id: null, name: "Remont łazienki", archived: false,
+      expenses: "2000", refunds: "0", net_spending: "2000", one_off: true,
+      one_off_key: "ab".repeat(32),
+    }];
+    await show((period) => Promise.resolve<Answer>({ ok: true, data: { ...data, period } }));
+    const row = host.querySelector(".budget-one-off");
+    expect(row?.textContent).toContain("Remont łazienki");
+    expect(row?.textContent).toContain("one-off");
+    expect(row?.textContent).toContain("2,000.00 PLN");
+    expect(row?.classList.contains("is-uncategorised")).toBe(false);
+    await show((period) => Promise.resolve<Answer>({ ok: true, data: { ...data, period } }), { text: overviewLabels.pl, locale: "pl" });
+    expect(host.querySelector(".budget-one-off")?.textContent).toContain("jednorazowe");
   });
 
   it("rolls a parent up from its children and collapses the subtree", async () => {
@@ -175,6 +212,17 @@ describe("period overview", () => {
     const table = host.querySelector('[aria-label="Spending by category PLN"]');
     const rows = [...table?.querySelectorAll("tbody tr") ?? []];
     expect(rows.map((row) => row.getAttribute("data-depth"))).toEqual(["0", "1", "0"]);
+    const swatches = rows.map((row) => row.querySelector<HTMLElement>(".budget-cat-swatch")?.style.backgroundColor ?? "");
+    const expectedColors = buildCategoryColors(links);
+    const toHex = (css: string) => {
+      const m = /^rgb\(\s*(\d+),\s*(\d+),\s*(\d+)\s*\)$/i.exec(css.trim());
+      if (m !== null) return `#${[m[1], m[2], m[3]].map((n) => Number(n).toString(16).padStart(2, "0")).join("")}`;
+      return parseHexColor(css)?.hex ?? css;
+    };
+    expect(toHex(swatches[0] ?? "")).toBe(expectedColors.get("cat-transport").background);
+    expect(toHex(swatches[1] ?? "")).toBe(expectedColors.get("cat-fuel").background);
+    expect(toHex(swatches[2] ?? "")).toBe(NEUTRAL_CATEGORY_COLOR.background);
+    expect(relativeLuminance(toHex(swatches[1] ?? ""))).toBeGreaterThan(relativeLuminance(toHex(swatches[0] ?? "")));
     expect(rows[0]?.textContent).toContain("Synthetic Transport");
     expect(rows[0]?.textContent).toContain("50.00 PLN");
     expect(rows[1]?.textContent).toContain("Synthetic Fuel");

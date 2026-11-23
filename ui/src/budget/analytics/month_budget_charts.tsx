@@ -3,6 +3,9 @@
 // plus keyboard-operable exact HTML data tables.
 import { useId } from "react";
 import { formatAmount } from "../model";
+import { CategorySwatch } from "./category_badge";
+import { OTHER_CATEGORY_COLOR, buildCategoryColors, oneOffCategoryColor } from "./category_colors";
+import type { CategoryColorInput, CategoryColorOverrides } from "./category_colors";
 import { categoryParentMap, hasCategoryParents, rollupNetAmounts } from "./category_tree";
 import type { CategoryLink } from "./category_tree";
 import { formatRatioHalfEven, formatScaledBigInt, isZero, parseScaledInt } from "./model";
@@ -44,6 +47,7 @@ export interface MonthBudgetChartLabels {
   unknownCategory: string;
   archived: string;
   category: string;
+  oneOffTag?: string;
   chartDailyDesc: (currency: string, start: string, cutoff: string) => string;
   chartCategoriesDesc: (count: number, currency: string) => string;
   chartIncomeSpendDesc: (count: number, currency: string) => string;
@@ -55,14 +59,6 @@ const PLOT_LEFT = 64;
 const PLOT_RIGHT = 346;
 const PLOT_TOP = 16;
 const PLOT_BOTTOM = 172;
-const TOP_CATEGORY_COLORS = [
-  "var(--chart-cat-1)",
-  "var(--chart-cat-2)",
-  "var(--chart-cat-3)",
-  "var(--chart-cat-4)",
-  "var(--chart-cat-5)",
-] as const;
-const OTHER_CATEGORY_COLOR = "var(--chart-cat-other)";
 
 function signedBigInt(value: string): { coeff: bigint; scale: number } {
   const parsed = parseScaledInt(value);
@@ -460,20 +456,29 @@ function CumulativeDailyChart({ budget, daily, paceProjection, schedulePending, 
 }
 
 // ---------------------------------------------------------------------------
-// Chart 2: Category spending by month (stacked around zero, top 5 + Other)
+// Chart 2: Category spending by month (stacked around zero, top 8 + Other)
 // ---------------------------------------------------------------------------
+
+/** Roots drawn on the stacked chart. Everything past this rank is hatched "Pozostałe". */
+export const TOP_CATEGORY_ROOTS = 8;
 
 export interface RankedCategory {
   id: string | null;
+  /** Chart identity. Regular rows are `c:<id>`; a one-off uses its annotation hash. */
+  seriesKey: string;
   name: string;
   archived: boolean;
   absTotal: bigint;
+  color: string;
+  hatched: boolean;
+  oneOff: boolean;
 }
 
 export interface CategorySlice {
   key: string;
   label: string;
   color: string;
+  hatched: boolean;
   value: bigint;
   y0: bigint;
   y1: bigint;
@@ -492,6 +497,7 @@ export interface CategoryChartModel {
   hasOtherPositive: boolean;
   hasOtherNegative: boolean;
   allCategories: RankedCategory[];
+  oneOffs: RankedCategory[];
   byMonthAndCategory: Map<string, Map<string | null, string>>;
   stacks: MonthCategoryStack[];
 }
@@ -509,8 +515,56 @@ function topLevelMonths(
   }
   return {
     labels: [...merged.values()],
-    months: months.map((month) => ({ ...month, categories: rollupNetAmounts(month.categories, parents, null) })),
+    months: months.map((month) => {
+      // A labelled one-off stays beside its category. Only the regular rows roll up to the parent.
+      const regular = month.categories.filter((entry) => entry.one_off !== true);
+      const labelled = month.categories.filter((entry) => entry.one_off === true);
+      const rolled = rollupNetAmounts(regular, parents, null).map((entry) => ({
+        category_id: entry.category_id,
+        net_spending: entry.net_spending,
+        name: null,
+        one_off: false,
+        one_off_key: null,
+      }));
+      return { ...month, categories: [...rolled, ...labelled] };
+    }),
   };
+}
+
+function chartPoint(entry: AnalyticsMonthlyBudgetSeriesMonth["categories"][number]): {
+  category_id: string | null;
+  net_spending: string;
+  one_off: boolean;
+  name: string | null;
+  one_off_key: string | null;
+} {
+  const name = typeof entry.name === "string" && entry.name !== "" ? entry.name : null;
+  const rawKey = entry.one_off_key;
+  const oneOffKey = typeof rawKey === "string" && rawKey !== "" ? rawKey : null;
+  const oneOff = entry.one_off === true && name !== null;
+  return {
+    category_id: entry.category_id,
+    net_spending: entry.net_spending,
+    one_off: oneOff,
+    name,
+    one_off_key: oneOff ? oneOffKey : null,
+  };
+}
+
+function seriesKeyOf(point: {
+  category_id: string | null;
+  one_off: boolean;
+  one_off_key: string | null;
+}): string {
+  // Regular rows stay `c:<id>` so the ranking can recover the category id. A one-off uses its hash.
+  if (point.one_off) return point.one_off_key ?? `one-off:${point.category_id ?? ""}`;
+  return `c:${point.category_id ?? ""}`;
+}
+
+function categoryIdFromSeriesKey(seriesKey: string): string | null {
+  // Regular series keys are always `c:` plus the category id. `c:` itself is uncategorised.
+  const id = seriesKey.slice(2);
+  return id === "" ? null : id;
 }
 
 export function buildCategoryChartModel(
@@ -518,6 +572,7 @@ export function buildCategoryChartModel(
   categoryLabels: readonly AnalyticsMonthlyBudgetCategoryLabel[],
   options: { uncategorised: string; unknownCategory: string; otherCategory: string },
   categories?: readonly CategoryLink[],
+  overrides?: CategoryColorOverrides,
 ): CategoryChartModel {
   const prepared = topLevelMonths(months, categoryLabels, categories);
   const chartMonths = prepared.months;
@@ -528,33 +583,69 @@ export function buildCategoryChartModel(
   }
   const { scale } = alignDecimals(allNetStrings);
 
-  const perMonthBig = new Map<string, Map<string | null, bigint>>();
+  const perMonthBig = new Map<string, Map<string, bigint>>();
   const byMonthAndCategory = new Map<string, Map<string | null, string>>();
-  const absTotals = new Map<string | null, bigint>();
+  const absTotals = new Map<string, bigint>();
+  const oneOffAbs = new Map<string, bigint>();
+  const oneOffNames = new Map<string, { id: string | null; name: string }>();
 
   for (const month of chartMonths) {
-    const bigMap = new Map<string | null, bigint>();
+    const bigMap = new Map<string, bigint>();
     const strMap = new Map<string | null, string>();
     for (const entry of month.categories) {
-      const parsed = signedBigInt(entry.net_spending);
+      const point = chartPoint(entry);
+      const key = seriesKeyOf(point);
+      const parsed = signedBigInt(point.net_spending);
       const scaled = parsed.coeff * (10n ** BigInt(scale - parsed.scale));
-      bigMap.set(entry.category_id, scaled);
-      strMap.set(entry.category_id, entry.net_spending);
+      bigMap.set(key, (bigMap.get(key) ?? 0n) + scaled);
+      // Regular amounts stay under the category id, which is how the tree roll-up is read.
+      // A one-off keeps its hash so it does not replace that category.
+      strMap.set(point.one_off ? key : point.category_id, point.net_spending);
       const absVal = scaled < 0n ? -scaled : scaled;
-      absTotals.set(entry.category_id, (absTotals.get(entry.category_id) ?? 0n) + absVal);
+      if (point.one_off) {
+        oneOffAbs.set(key, (oneOffAbs.get(key) ?? 0n) + absVal);
+        oneOffNames.set(key, { id: point.category_id, name: point.name ?? options.unknownCategory });
+      } else {
+        absTotals.set(key, (absTotals.get(key) ?? 0n) + absVal);
+      }
     }
     perMonthBig.set(month.period, bigMap);
     byMonthAndCategory.set(month.period, strMap);
   }
 
-  const allCategories: RankedCategory[] = [...absTotals.entries()].map(([id, absTotal]) => {
-    if (id === null) return { id: null, name: options.uncategorised, archived: false, absTotal };
+  const colorInputs: CategoryColorInput[] = [...(categories ?? [])];
+  const knownColorIds = new Set(colorInputs.map((item) => item.id));
+  const rememberColorId = (id: string | null, name?: string) => {
+    if (id === null || knownColorIds.has(id)) return;
+    knownColorIds.add(id);
+    colorInputs.push(name === undefined || name === ""
+      ? { id, parent_id: null }
+      : { id, parent_id: null, name });
+  };
+  for (const item of prepared.labels) rememberColorId(item.category_id, item.name);
+  for (const seriesKey of absTotals.keys()) rememberColorId(categoryIdFromSeriesKey(seriesKey));
+  for (const meta of oneOffNames.values()) rememberColorId(meta.id);
+  const categoryColors = buildCategoryColors(colorInputs, overrides === undefined ? undefined : { overrides });
+
+  const allCategories: RankedCategory[] = [...absTotals.entries()].map(([seriesKey, absTotal]) => {
+    const id = categoryIdFromSeriesKey(seriesKey);
+    const resolved = categoryColors.get(id);
+    if (id === null) {
+      return {
+        id: null, seriesKey, name: options.uncategorised, archived: false, absTotal, oneOff: false,
+        color: resolved.background, hatched: resolved.hatched,
+      };
+    }
     const meta = labelLookup.get(id);
     return {
       id,
+      seriesKey,
       name: meta?.name ?? options.unknownCategory,
       archived: meta?.archived ?? false,
       absTotal,
+      oneOff: false,
+      color: resolved.background,
+      hatched: resolved.hatched,
     };
   });
 
@@ -566,45 +657,66 @@ export function buildCategoryChartModel(
     return idA < idB ? -1 : idA > idB ? 1 : 0;
   });
 
+  const oneOffs: RankedCategory[] = [...oneOffAbs.entries()].map(([seriesKey, absTotal]) => {
+    const meta = oneOffNames.get(seriesKey);
+    const id = meta?.id ?? null;
+    const resolved = oneOffCategoryColor(categoryColors, id);
+    return {
+      id,
+      seriesKey,
+      name: meta?.name ?? options.unknownCategory,
+      archived: false,
+      absTotal,
+      oneOff: true,
+      color: resolved.background,
+      hatched: resolved.hatched,
+    };
+  });
+  oneOffs.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : a.seriesKey < b.seriesKey ? -1 : 1));
+
   const nonzeroCategories = allCategories.filter((item) => item.absTotal > 0n);
-  const displayed = nonzeroCategories.slice(0, 5);
-  const restIds = new Set(nonzeroCategories.slice(5).map((item) => item.id));
-  const displayedColor = new Map<string | null, string>(
-    displayed.map((item, index) => [item.id, TOP_CATEGORY_COLORS[index] ?? OTHER_CATEGORY_COLOR]),
-  );
+  const displayed = nonzeroCategories.slice(0, TOP_CATEGORY_ROOTS);
+  const restKeys = new Set(nonzeroCategories.slice(TOP_CATEGORY_ROOTS).map((item) => item.seriesKey));
 
   let hasOtherPositive = false;
   let hasOtherNegative = false;
   const stacks: MonthCategoryStack[] = chartMonths.map((month) => {
-    const bigMap = perMonthBig.get(month.period) ?? new Map<string | null, bigint>();
+    const bigMap = perMonthBig.get(month.period) ?? new Map<string, bigint>();
     let posCursor = 0n;
     let negCursor = 0n;
     const slices: CategorySlice[] = [];
 
-    for (const cat of displayed) {
-      const val = bigMap.get(cat.id) ?? 0n;
-      const color = displayedColor.get(cat.id) ?? OTHER_CATEGORY_COLOR;
-      const sliceKey = cat.id === null ? "__uncategorised__" : cat.id;
+    const pushSlice = (cat: RankedCategory, val: bigint) => {
+      if (val === 0n) return;
+      const sliceKey = cat.oneOff ? cat.seriesKey : cat.id === null ? "__uncategorised__" : cat.id;
       if (val > 0n) {
-        slices.push({ key: sliceKey, label: cat.name, color, value: val, y0: posCursor, y1: posCursor + val });
+        slices.push({
+          key: sliceKey, label: cat.name, color: cat.color, hatched: cat.hatched,
+          value: val, y0: posCursor, y1: posCursor + val,
+        });
         posCursor += val;
-      } else if (val < 0n) {
-        slices.push({ key: sliceKey, label: cat.name, color, value: val, y0: negCursor, y1: negCursor + val });
+      } else {
+        slices.push({
+          key: sliceKey, label: cat.name, color: cat.color, hatched: cat.hatched,
+          value: val, y0: negCursor, y1: negCursor + val,
+        });
         negCursor += val;
       }
-    }
+    };
+
+    for (const cat of displayed) pushSlice(cat, bigMap.get(cat.seriesKey) ?? 0n);
 
     let otherPos = 0n;
     let otherNeg = 0n;
-    for (const id of restIds) {
-      const val = bigMap.get(id) ?? 0n;
+    for (const key of restKeys) {
+      const val = bigMap.get(key) ?? 0n;
       if (val > 0n) otherPos += val;
       else if (val < 0n) otherNeg += val;
     }
     if (otherPos > 0n) {
       hasOtherPositive = true;
       slices.push({
-        key: "__other_pos__", label: options.otherCategory, color: OTHER_CATEGORY_COLOR,
+        key: "__other_pos__", label: options.otherCategory, color: OTHER_CATEGORY_COLOR.background, hatched: true,
         value: otherPos, y0: posCursor, y1: posCursor + otherPos,
       });
       posCursor += otherPos;
@@ -612,16 +724,20 @@ export function buildCategoryChartModel(
     if (otherNeg < 0n) {
       hasOtherNegative = true;
       slices.push({
-        key: "__other_neg__", label: options.otherCategory, color: OTHER_CATEGORY_COLOR,
+        key: "__other_neg__", label: options.otherCategory, color: OTHER_CATEGORY_COLOR.background, hatched: true,
         value: otherNeg, y0: negCursor, y1: negCursor + otherNeg,
       });
       negCursor += otherNeg;
     }
+    // One-offs are drawn after Other and never folded into it, even when the amount is small.
+    for (const cat of oneOffs) pushSlice(cat, bigMap.get(cat.seriesKey) ?? 0n);
 
     return { month, slices, posTotal: posCursor, negTotal: negCursor };
   });
 
-  return { scale, displayed, hasOtherPositive, hasOtherNegative, allCategories, byMonthAndCategory, stacks };
+  return {
+    scale, displayed, hasOtherPositive, hasOtherNegative, allCategories, oneOffs, byMonthAndCategory, stacks,
+  };
 }
 
 function monthTickSuffix(month: AnalyticsMonthlyBudgetSeriesMonth): string {
@@ -651,6 +767,11 @@ function CategorySpendingChart({ series, currency, locale, text, categories }: {
   const hasCurrent = series.months.some((month) => month.is_current_month);
   const hasProvisional = series.months.some((month) => month.provisional);
   const hasOther = model.hasOtherPositive || model.hasOtherNegative;
+  const customHatchColors = [...new Set(
+    model.stacks.flatMap((stack) => stack.slices)
+      .filter((slice) => slice.hatched && !slice.key.startsWith("__other_"))
+      .map((slice) => slice.color),
+  )];
 
   return (
     <article className="budget-total budget-month-chart" aria-label={`${text.chartCategoriesTitle} · ${currency}`}>
@@ -660,9 +781,16 @@ function CategorySpendingChart({ series, currency, locale, text, categories }: {
         <desc id={`${id}-desc`}>{text.chartCategoriesDesc(series.months.length, currency)}</desc>
         <defs>
           <pattern id={`${id}-other-pattern`} width="5" height="5" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
-            <rect width="5" height="5" fill={OTHER_CATEGORY_COLOR} fillOpacity="0.25" />
-            <line x1="0" y1="0" x2="0" y2="5" stroke={OTHER_CATEGORY_COLOR} strokeWidth="2" />
+            <rect width="5" height="5" fill={OTHER_CATEGORY_COLOR.background} fillOpacity="0.25" />
+            <line x1="0" y1="0" x2="0" y2="5" stroke={OTHER_CATEGORY_COLOR.background} strokeWidth="2" />
           </pattern>
+          {customHatchColors.map((hatchColor, idx) => (
+            <pattern key={hatchColor} id={`${id}-hatch-${String(idx)}`} width="5" height="5"
+              patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+              <rect width="5" height="5" fill={hatchColor} fillOpacity="0.25" />
+              <line x1="0" y1="0" x2="0" y2="5" stroke={hatchColor} strokeWidth="2" />
+            </pattern>
+          ))}
         </defs>
         <YAxisGrid scaleObj={yScale} scale={model.scale} denom={1n} locale={locale} />
         {model.stacks.map((stack, index) => {
@@ -679,10 +807,16 @@ function CategorySpendingChart({ series, currency, locale, text, categories }: {
                 const top = Math.min(yA, yB);
                 const rectHeight = Math.max(0.5, Number(Math.abs(yA - yB).toFixed(2)));
                 const isOther = slice.key.startsWith("__other_");
+                const hatchIdx = !isOther && slice.hatched ? customHatchColors.indexOf(slice.color) : -1;
+                const fill = isOther
+                  ? `url(#${id}-other-pattern)`
+                  : hatchIdx >= 0
+                    ? `url(#${id}-hatch-${String(hatchIdx)})`
+                    : slice.color;
+                const stroke = isOther || slice.hatched ? slice.color : "var(--surface)";
                 return (
                   <rect key={`${stack.month.period}-${slice.key}`} x={x} y={top} width={w} height={rectHeight}
-                    fill={isOther ? `url(#${id}-other-pattern)` : slice.color}
-                    stroke={isOther ? OTHER_CATEGORY_COLOR : "var(--surface)"} strokeWidth="0.6" />
+                    fill={fill} stroke={stroke} strokeWidth="0.6" />
                 );
               })}
               {showLabel ? (
@@ -695,22 +829,27 @@ function CategorySpendingChart({ series, currency, locale, text, categories }: {
         })}
       </svg>
       <ul className="budget-chart-legend">
-        {model.displayed.map((cat, index) => (
-          <li key={cat.id ?? "__uncategorised__"}>
-            <span className="budget-chart-swatch"
-              style={{ background: TOP_CATEGORY_COLORS[index] ?? OTHER_CATEGORY_COLOR, borderColor: "transparent" }} aria-hidden="true" />
+        {model.displayed.map((cat) => (
+          <li key={cat.seriesKey}>
+            <CategorySwatch color={{ background: cat.color, hatched: cat.hatched }} className="budget-chart-swatch" />
             <span>
               {cat.name}
               {cat.archived ? <small className="budget-muted"> ({text.archived})</small> : null}
             </span>
           </li>
         ))}
+        {model.oneOffs.map((cat) => (
+          <li key={cat.seriesKey} className="budget-one-off">
+            <CategorySwatch color={{ background: cat.color, hatched: cat.hatched }} className="budget-chart-swatch" />
+            <span>
+              {cat.name}
+              <small className="budget-one-off-tag">{text.oneOffTag ?? "one-off"}</small>
+            </span>
+          </li>
+        ))}
         {hasOther ? (
           <li>
-            <span className="budget-chart-swatch" style={{
-              background: `repeating-linear-gradient(45deg, ${OTHER_CATEGORY_COLOR}, ${OTHER_CATEGORY_COLOR} 2px, var(--surface) 2px, var(--surface) 4px)`,
-              borderColor: OTHER_CATEGORY_COLOR,
-            }} aria-hidden="true" />
+            <CategorySwatch color={OTHER_CATEGORY_COLOR} className="budget-chart-swatch" />
             <span>{text.otherCategory}</span>
           </li>
         ) : null}
@@ -735,14 +874,16 @@ function CategorySpendingChart({ series, currency, locale, text, categories }: {
               </tr>
             </thead>
             <tbody>
-              {model.allCategories.map((cat) => (
-                <tr key={cat.id ?? "__uncategorised__"} className={cat.id === null ? "is-uncategorised" : undefined}>
+              {[...model.allCategories, ...model.oneOffs].map((cat) => (
+                <tr key={cat.seriesKey} className={cat.oneOff ? "budget-one-off" : cat.id === null ? "is-uncategorised" : undefined}>
                   <th scope="row">
+                    <CategorySwatch color={{ background: cat.color, hatched: cat.hatched }} />
                     {cat.name}
+                    {cat.oneOff ? <small className="budget-one-off-tag">{text.oneOffTag ?? "one-off"}</small> : null}
                     {cat.archived ? <small className="budget-muted"> ({text.archived})</small> : null}
                   </th>
                   {series.months.map((month) => {
-                    const value = model.byMonthAndCategory.get(month.period)?.get(cat.id);
+                    const value = model.byMonthAndCategory.get(month.period)?.get(cat.oneOff ? cat.seriesKey : cat.id);
                     return <td key={month.period}>{value === undefined ? text.noValue : money(value)}</td>;
                   })}
                 </tr>
