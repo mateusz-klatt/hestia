@@ -259,6 +259,17 @@ NR KARTY ****5555
         self.assertEqual(saved["raw_shop_name"], row.raw_shop_name)
         self.assertEqual(saved["lines"][0]["raw_name"], line.raw_name)
 
+    def test_confirm_rejects_a_line_when_name_and_unit_share_twelve_digits(self):
+        parsed = self.draft()
+        values = confirm_values(parsed)
+        values["lines"][0]["raw_name"] = "MLEKO 12345678"
+        values["lines"][0]["raw_unit"] = "9012"
+        with self.assertRaises(ReceiptError) as rejected:
+            self.receipts.confirm("owner", values)
+        self.assertEqual((rejected.exception.code, rejected.exception.status),
+                         ("budget_receipt_invalid_request", 400))
+        self.assertEqual(self.receipt_row(parsed["receipt_id"]).status, "draft")
+
     def test_receipt_match_friday_purchase_booked_monday(self):
         self.add_transaction("a", "monday", amount="100", booking_date="2026-11-23", transaction_date=None)
         parsed = self.draft(day="2026-11-20")

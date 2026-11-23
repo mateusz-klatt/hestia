@@ -736,6 +736,8 @@ def _validate_line(value, line_no):
     if ptu is not None and ptu not in PTU_CODES:
         raise ReceiptError()
     unit = _clean_text(value["raw_unit"], limit=16, optional=True)
+    if _nd_digits(name + (unit or "")) >= _SECRET_DIGITS:
+        raise ReceiptError()
     unit_price = value["unit_price_raw"]
     if unit_price is not None:
         unit_price = _confirm_money(unit_price)
