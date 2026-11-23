@@ -2685,6 +2685,8 @@ class BudgetReceiptParseResult(BaseModel):
 class BudgetReceiptDetailResult(BaseModel):
     model_config = _READ
     receipt: BudgetReceiptDetail
+    # Present only when the receipt is needs_review, so it can re-issue a token for its own link.
+    candidates: list[BudgetReceiptCandidate] | None = None
 
 
 class BudgetReceiptConfirmResult(BaseModel):

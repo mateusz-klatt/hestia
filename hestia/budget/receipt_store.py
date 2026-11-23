@@ -20,7 +20,7 @@ from ..db import (BudgetAccount as Account, BudgetConnection as Connection, Budg
 from .analytics_core import (AnalyticsError, canonical_money, compare_money, financial_fingerprint, negate_money,
                              sum_money)
 from .receipt_parser import (CONFIRMED_TEXT_TTL_SECONDS, DRAFT_TTL_SECONDS, MAX_RECEIPT_LINES, ReceiptError,
-                             merchant_tokens, parse_receipt, validate_confirm)
+                             merchant_tokens, normalize_shop_name, parse_receipt, validate_confirm)
 from .receipt_reconcile import (audit_payload, creditor_name, evidence_json, erase_receipt_audit, link_evidence,
                                 write_audit)
 from .views import BudgetHTTPStore
@@ -230,13 +230,18 @@ class BudgetReceiptStore(BudgetHTTPStore):
             return self._candidates(session, owner, preview, parsed)
 
     @staticmethod
-    def _candidate_rows(session, owner):
-        active_link = exists().where(
+    def _candidate_rows(session, owner, *, include_receipt_id=None):
+        # Confirmed and needs_review rows reserve a transaction. Re-issuing for one
+        # needs_review receipt must still see that receipt's own reservation.
+        held = [
             Receipt.owner == owner,
             Receipt.linked_account_id == Transaction.account_id,
             Receipt.linked_entry_ref == Transaction.entry_reference,
             Receipt.status.in_(("confirmed", "needs_review")),
-        )
+        ]
+        if include_receipt_id is not None:
+            held.append(Receipt.id != include_receipt_id)
+        active_link = exists().where(*held)
         transfer_leg = exists().where(
             Leg.account_id == Transaction.account_id, Leg.entry_reference == Transaction.entry_reference,
             Leg.account_id == Account.id, Account.owner == owner,
@@ -246,7 +251,7 @@ class BudgetReceiptStore(BudgetHTTPStore):
             Transaction.uncertain.is_(False), ~active_link, ~transfer_leg,
         ))
 
-    def _candidates(self, session, owner, row, parsed):
+    def _candidates(self, session, owner, row, parsed, *, include_receipt_id=None):
         if (row.total_amount is None or row.currency is None or row.receipt_date is None
                 or row.payment_method in ("cash", "mixed")):
             return []
@@ -255,9 +260,10 @@ class BudgetReceiptStore(BudgetHTTPStore):
         except AnalyticsError:
             return []
         direction = "CRDT" if row.receipt_kind == "refund" else "DBIT"
+        shop_name = normalize_shop_name(row.raw_shop_name)
         tokens = merchant_tokens(row.raw_shop_name, row.raw_nip)
         ranked = []
-        for transaction in self._candidate_rows(session, owner):
+        for transaction in self._candidate_rows(session, owner, include_receipt_id=include_receipt_id):
             try:
                 payload = _json(transaction.payload_json)
                 if (not isinstance(payload, dict) or payload.get("status") != "BOOK"
@@ -278,7 +284,7 @@ class BudgetReceiptStore(BudgetHTTPStore):
                 creditor = creditor_name(session, owner, transaction.account_id, transaction.entry_reference, fingerprint)
                 evidence = link_evidence(
                     owner, transaction.account_id, transaction.entry_reference, payload,
-                    row.raw_shop_name, row.raw_nip, creditor, fingerprint)
+                    shop_name, row.raw_nip, creditor, fingerprint)
                 token = self._candidate_token(evidence)
             except (AnalyticsError, ValueError, TypeError, RecursionError):
                 continue
@@ -361,7 +367,7 @@ class BudgetReceiptStore(BudgetHTTPStore):
             creditor = creditor_name(session, owner, link["account_id"], link["entry_reference"], fingerprint)
             current = link_evidence(
                 owner, link["account_id"], link["entry_reference"], payload,
-                cleaned["raw_shop_name"], cleaned["raw_nip"], creditor, fingerprint)
+                normalize_shop_name(cleaned["raw_shop_name"]), cleaned["raw_nip"], creditor, fingerprint)
             expected = self._candidate_token(current)
             stored = evidence_json(current)
         except (AnalyticsError, ValueError, TypeError, KeyError, RecursionError):
@@ -543,7 +549,19 @@ class BudgetReceiptStore(BudgetHTTPStore):
             now = self._now()
             self._purge(session, owner, now)
             row = self._owned(session, owner, receipt_id)
-            return {"receipt": self._detail(session, row)}
+            receipt = self._detail(session, row)
+            # Re-issue outside the writer lock. The token is bound to this receipt's
+            # own reservation; confirm checks the link again inside BEGIN IMMEDIATE.
+            preview = None if row.status != "needs_review" else SimpleNamespace(
+                total_amount=row.total_amount, currency=row.currency, receipt_date=row.receipt_date,
+                payment_method=row.payment_method, receipt_kind=row.receipt_kind,
+                raw_shop_name=row.raw_shop_name, raw_nip=row.raw_nip, id=row.id,
+            )
+        if preview is None:
+            return {"receipt": receipt}
+        with self._read(owner) as session:
+            candidates = self._candidates(session, owner, preview, {}, include_receipt_id=preview.id)
+        return {"receipt": receipt, "candidates": candidates}
 
     def image(self, owner, receipt_id):
         with self.transaction() as session:

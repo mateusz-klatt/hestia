@@ -971,6 +971,57 @@ NR KARTY ****5555
             self.assertEqual(reconcile_receipt_links(session, "owner", self.now + 5), 0)
         self.assert_latched(parsed["receipt_id"], confirmed["version"])
 
+    def test_spaced_and_decomposed_shop_names_match_the_candidate_token(self):
+        import unicodedata
+
+        from hestia.budget.receipt_parser import normalize_shop_name
+
+        self.assertIsNone(normalize_shop_name(None))
+        self.assertEqual(normalize_shop_name("   "), "")
+        shop = unicodedata.normalize("NFD", "ŻÓŁTY") + "  SKLEP"
+        parsed = self.receipts.parse_text("owner", receipt_text().replace(PRIVATE_SHOP, shop, 1))
+        self.assertEqual(parsed["draft"]["raw_shop_name"], "ŻÓŁTY  SKLEP")
+        self.assertNotIn("candidates", self.receipts.detail("owner", parsed["receipt_id"]))
+        saved = self.receipts.confirm("owner", confirm_values(parsed, link=self.link()))["receipt"]
+        self.assertEqual(saved["raw_shop_name"], "ŻÓŁTY SKLEP")
+        self.assertTrue(saved["linked"])
+        self.assertEqual(json.loads(self.receipt_row(parsed["receipt_id"]).linked_evidence)["raw_shop_name"],
+                         "ŻÓŁTY SKLEP")
+
+    def test_needs_review_reissue_includes_own_reservation(self):
+        import unicodedata
+
+        from hestia.budget.receipt_reconcile import reconcile_receipt_links
+
+        parsed, confirmed = self.confirmed()
+        self.change_transaction(remittance_information=["Changed after confirm"])
+        with self.sessions.begin() as session:
+            self.assertEqual(reconcile_receipt_links(session, "owner", self.now), 1)
+        identifier = parsed["receipt_id"]
+        version = self.receipt_row(identifier).version
+        self.assertEqual(self.receipt_row(identifier).status, "needs_review")
+        spaced = unicodedata.normalize("NFD", "ŻÓŁTY") + "  SKLEP"
+        with self.sessions.begin() as session:
+            session.get(db.BudgetReceipt, identifier).raw_shop_name = spaced
+        again = self.receipts.parse_text("owner", receipt_text())
+        self.assertNotIn("debit", {item["entry_reference"] for item in again["candidates"]})
+        detail = self.receipts.detail("owner", identifier)
+        api_contract.BudgetReceiptDetailResult.model_validate(detail)
+        match = next(item for item in detail["candidates"] if item["entry_reference"] == "debit")
+        stale = confirm_values(parsed, link=self.link(), expected_version=version)
+        with self.assertRaises(ReceiptError) as rejected:
+            self.receipts.confirm("owner", stale)
+        self.assertEqual(rejected.exception.code, "budget_receipt_stale_source")
+        self.assertEqual(self.receipt_row(identifier).status, "needs_review")
+        saved = self.receipts.confirm("owner", confirm_values(
+            parsed, link={**self.link(), "candidate_token": match["candidate_token"]},
+            expected_version=version, raw_shop_name="ŻÓŁTY SKLEP",
+        ))["receipt"]
+        self.assertEqual((saved["status"], saved["raw_shop_name"], saved["linked"]),
+                         ("confirmed", "ŻÓŁTY SKLEP", True))
+        self.assertEqual(json.loads(self.receipt_row(identifier).linked_evidence)["raw_shop_name"], "ŻÓŁTY SKLEP")
+        self.assertEqual(saved["version"], confirmed["version"] + 2)
+
     def test_confirm_token_binds_remittance_fingerprint_and_stays_compact(self):
         from hestia.budget.receipt_reconcile import reconcile_receipt_links
 

@@ -8097,6 +8097,21 @@
       },
       "BudgetReceiptDetailResult": {
         "properties": {
+          "candidates": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/BudgetReceiptCandidate"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Candidates"
+          },
           "receipt": {
             "$ref": "#/components/schemas/BudgetReceiptDetail"
           }

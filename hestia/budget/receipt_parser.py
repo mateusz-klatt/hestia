@@ -541,6 +541,13 @@ def parse_receipt(text):
     }
 
 
+def normalize_shop_name(value):
+    """NFC plus collapsed whitespace. Candidate signatures and confirm both use this."""
+    if not isinstance(value, str):
+        return None
+    return " ".join(unicodedata.normalize("NFC", value).split())
+
+
 def _clean_text(value, *, limit, optional=False):
     if value is None or (optional and value == ""):
         if optional:
@@ -549,7 +556,7 @@ def _clean_text(value, *, limit, optional=False):
     if not isinstance(value, str) or _CONTROL.search(value) or any(
             unicodedata.category(char) in ("Cf", "Cs") for char in value):
         raise ReceiptError()
-    value = " ".join(unicodedata.normalize("NFC", value).split())
+    value = normalize_shop_name(value)
     if not value or len(value) > limit:
         raise ReceiptError()
     value = redact_pan(value)
