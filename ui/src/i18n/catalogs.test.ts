@@ -81,17 +81,17 @@ const identicalStrings: Partial<Record<MessageKey, IdenticalString>> = {
   "rule.errGeneric": { value: "error", locales: ["es", "fil"] },
 
   // PHASE-2: add other locales once budget.* is translated if legitimately identical in those languages.
-  "budget.main.scopeWithState": { value: "{scope}: {state}", locales: ["pl", "el", "tr", "ar", "hi", "sq", "bn", "fa", "hy"] },
-  "budget.year.noData": { value: "—", locales: ["pl", "el", "tr", "ar", "hi", "sq", "bn", "fa", "hy"] },
-  "budget.export.xlsx": { value: "XLSX", locales: ["pl", "el", "tr", "ar", "hi", "sq", "bn", "fa", "hy"] },
-  "budget.export.csv": { value: "CSV", locales: ["pl", "el", "tr", "ar", "hi", "sq", "bn", "fa", "hy"] },
+  "budget.main.scopeWithState": { value: "{scope}: {state}", locales: ["pl", "el", "tr", "ar", "hi", "sq", "bn", "fa", "hy", "he"] },
+  "budget.year.noData": { value: "—", locales: ["pl", "el", "tr", "ar", "hi", "sq", "bn", "fa", "hy", "he"] },
+  "budget.export.xlsx": { value: "XLSX", locales: ["pl", "el", "tr", "ar", "hi", "sq", "bn", "fa", "hy", "he"] },
+  "budget.export.csv": { value: "CSV", locales: ["pl", "el", "tr", "ar", "hi", "sq", "bn", "fa", "hy", "he"] },
   "budget.export.colStatus": { value: "Status", locales: ["pl"] },
-  "budget.rules.conditionSummary": { value: "{field} {operator} „{value}”", locales: ["pl", "el", "tr", "ar", "hi", "sq", "bn", "fa", "hy"] },
-  "budget.mortgages.windowRange": { value: "{start} – {end}", locales: ["pl", "el", "tr", "ar", "hi", "sq", "bn", "fa", "hy"] },
+  "budget.rules.conditionSummary": { value: "{field} {operator} „{value}”", locales: ["pl", "el", "tr", "ar", "hi", "sq", "bn", "fa", "hy", "he"] },
+  "budget.mortgages.windowRange": { value: "{start} – {end}", locales: ["pl", "el", "tr", "ar", "hi", "sq", "bn", "fa", "hy", "he"] },
   "budget.monthBudget.limitColumn": { value: "Limit", locales: ["pl", "tr"] },
-  "budget.monthBudget.noLimit": { value: "—", locales: ["pl", "el", "tr", "ar", "hi", "sq", "bn", "fa", "hy"] },
+  "budget.monthBudget.noLimit": { value: "—", locales: ["pl", "el", "tr", "ar", "hi", "sq", "bn", "fa", "hy", "he"] },
   "budget.monthBudget.statusColumn": { value: "Status", locales: ["pl"] },
-  "budget.monthBudget.noValue": { value: "—", locales: ["pl", "el", "tr", "ar", "hi", "sq", "bn", "fa", "hy"] },
+  "budget.monthBudget.noValue": { value: "—", locales: ["pl", "el", "tr", "ar", "hi", "sq", "bn", "fa", "hy", "he"] },
 };
 
 // PHASE-2: budget.* translations pending
