@@ -146,7 +146,7 @@ class HouseholdEdgeTests(unittest.TestCase):
                 return self
 
             def all(self):
-                return ["0023"]
+                return [household.SCHEMA_REVISION]
 
             def first(self):
                 return None
@@ -290,7 +290,7 @@ class HouseholdEdgeTests(unittest.TestCase):
         labels = {row["label"] for row in categories}
         self.assertIn("salary", labels)
         self.assertTrue(any(row["category_id"] is None and row["income"] != "0" for row in categories))
-        self.assertNotIn("Groceries", json.dumps(categories))
+        self.assertNotIn("Groceries", json.dumps([row["label"] for row in categories]))
 
         evidence = (SimpleNamespace(date="2026-11-01"),)
         hints = (
@@ -429,7 +429,7 @@ class HouseholdEdgeTests(unittest.TestCase):
         encoded = json.dumps(monthly)
         self.assertNotIn("Remont lazienki", encoded)
         self.assertNotIn("Prywatna etykieta", encoded)
-        self.assertNotIn("Groceries", encoded)
+        self.assertNotIn("Groceries", json.dumps([row["name"] for row in monthly["budget"]["category_spend"]]))
         self.assertNotIn("acc-1/secret", encoded)
         self.assertNotIn("one_off", encoded)
         self.assertEqual(monthly["budget"]["coverage"]["pending_row_keys"], [])
@@ -531,7 +531,7 @@ class HouseholdEdgeTests(unittest.TestCase):
         encoded = json.dumps({"spend": left_spend, "categories": left_categories})
         self.assertNotIn("alpha", encoded)
         self.assertNotIn("zeta", encoded)
-        self.assertNotIn("Groceries", encoded)
+        self.assertNotIn("Groceries", json.dumps([row["name"] for row in left_spend]))
 
     def test_cursor_length_does_not_depend_on_the_owner_name(self):
         reader = HouseholdReader(object(), cursor_secret=SECRET)

@@ -4,7 +4,7 @@ Revision 0021 revises 0020. Upgrade and downgrade go through ``init_db`` and
 ``downgrade_db``: foreign keys off, ``BEGIN IMMEDIATE``, then
 ``PRAGMA foreign_key_check``. After upgrade, downgrade, and upgrade again,
 ``PRAGMA integrity_check`` is ok and no ``_alembic_tmp_*`` table remains.
-No table references ``budget_annotations``. The annotation row itself
+No table other than its label translations references ``budget_annotations``. The annotation row itself
 references transactions, users and categories, so the runner's check still
 sees those outgoing keys after the batch rebuild.
 
@@ -107,6 +107,12 @@ class AnnotationLabelMigration0021Tests(unittest.TestCase):
         cfg.set_main_option("script_location", str(db._MIGRATIONS_DIR))
         script = ScriptDirectory.from_config(cfg)
         self.assertEqual(script.get_heads(), [HEAD])
+        i18n = script.get_revision(HEAD)
+        self.assertEqual(i18n.down_revision, "0028")
+        device_inbox = script.get_revision("0028")
+        self.assertEqual(device_inbox.down_revision, "0027")
+        gmail_sync = script.get_revision("0027")
+        self.assertEqual(gmail_sync.down_revision, "0026")
         hues = script.get_revision("0026")
         self.assertEqual(hues.down_revision, "0025")
         devices = script.get_revision("0025")
@@ -216,7 +222,10 @@ class AnnotationLabelMigration0021Tests(unittest.TestCase):
         self.assertIn("char(10)", sql)
         self.assertIn("char(13)", sql)
         self.assertIn("char(9)", sql)
-        self.assertEqual(self._inbound_annotation_fks(), [])
+        self.assertEqual(self._inbound_annotation_fks(), [
+            ("budget_annotation_label_translations", "account_id", "account_id"),
+            ("budget_annotation_label_translations", "entry_reference", "entry_reference"),
+        ])
         with engine.connect() as conn:
             self.assertIsNone(conn.exec_driver_sql(
                 "SELECT label FROM budget_annotations WHERE entry_reference='kept'").scalar())
@@ -290,7 +299,10 @@ class AnnotationLabelMigration0021Tests(unittest.TestCase):
                 conn.exec_driver_sql(_INSERT, ("after", ""))
                 conn.commit()
         self.assertEqual(self._kept_row(), _KEPT_ROW)
-        self.assertEqual(self._inbound_annotation_fks(), [])
+        self.assertEqual(self._inbound_annotation_fks(), [
+            ("budget_annotation_label_translations", "account_id", "account_id"),
+            ("budget_annotation_label_translations", "entry_reference", "entry_reference"),
+        ])
         self._assert_integrity_and_no_batch_temp()
 
     def test_leftover_batch_temp_table_does_not_block_upgrade(self):

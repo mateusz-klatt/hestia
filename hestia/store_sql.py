@@ -27,6 +27,7 @@ from sqlalchemy.orm import Session
 
 from . import auth
 from .automations import AutomationStore, Rule
+from .budget.i18n import preferred_languages
 from .db import (AppMeta, Audit, Automation, Node, User, UserSetting, db_path, init_db, make_engine,
                  session_scope)
 from .registry import Registry
@@ -493,7 +494,8 @@ def _cap_setting(value):
 
 
 def _settings_dict(row) -> dict:
-    return {"locale": row.locale, "temp_scale": row.temp_scale, "theme": row.theme}
+    return {"locale": row.locale, "temp_scale": row.temp_scale, "theme": row.theme,
+            "preferred_languages": preferred_languages(row)}
 
 
 def get_user_settings(username) -> "dict | None":
@@ -519,7 +521,8 @@ def set_user_settings(username, **fields) -> bool:
     try:
         with session_scope(session_factory) as session:
             _upsert(session, UserSetting, "username", username,
-                    {key: _cap_setting(value) for key, value in fields.items()})
+                    {key: (value if key == "preferred_languages" else _cap_setting(value))
+                     for key, value in fields.items()})
         return True
     finally:
         engine.dispose()

@@ -204,7 +204,9 @@ class BudgetOpenApiTests(unittest.TestCase):
         analytics_reads = {"overview", "transactions", "categories", "rules", "transfers", "recurring",
                            "spending-limits", "mortgages", "inbox", "quarantine", "forecast",
                            "monthly-budget", "monthly-budget/charts"}
-        analytics_writes = {"transactions-by-keys", "category-create", "category-update", "category-colors-spread", "annotation", "rule-preview",
+        analytics_writes = {"transactions-by-keys", "category-create", "category-update", "category-colors-spread", "category-translation-set",
+                            "category-translation-delete", "label-translation-set", "label-translation-delete",
+                            "translation-import", "annotation", "rule-preview",
                             "rule-save", "rule-batch-preview", "rule-batch-save",
                             "transfer-decision", "spending-limit-save", "mortgage-save", "mortgage-payment-set",
                             "inbox-mark"}
@@ -277,7 +279,7 @@ class BudgetOpenApiTests(unittest.TestCase):
         self.assertIn("budget_receipt_quota_exceeded", parse_limit)
         self.assertIn("131072", receipts["/api/budget/receipts/confirm"]["post"]["responses"]["413"]["description"])
         self.assertIn("16384", receipts["/api/budget/receipts/list"]["post"]["responses"]["413"]["description"])
-        self.assertEqual(document["info"]["version"], "0.44.0")
+        self.assertEqual(document["info"]["version"], contract.CONTRACT_VERSION)
         receipt_schemas = document["components"]["schemas"]
         self.assertEqual(receipt_schemas["BudgetReceiptDeviceRedeemResult"]["properties"]["expires_at"]["format"],
                          "date-time")
@@ -348,6 +350,7 @@ class BudgetOpenApiTests(unittest.TestCase):
                 hue = schema["properties"]["color_hue"]
                 if name.startswith("BudgetHousehold"):
                     self.assertIn("color_hue", schema["required"])
+                    self.assertNotIn("display_name", schema["properties"])
                 else:
                     self.assertNotIn("color_hue", schema["required"])
                 self.assertEqual(hue["anyOf"][0]["minimum"], 0)
@@ -401,7 +404,7 @@ class BudgetOpenApiTests(unittest.TestCase):
 
     def test_forecast_schemas_pin_wire_fields_and_bounds(self):
         schemas = contract.build_openapi()["components"]["schemas"]
-        optional_keys = {"Summary": {"baseline_conflicts"}}
+        optional_keys = {"Summary": {"baseline_conflicts"}, "Item": {"display_name"}}
         for suffix, keys in {
             "": {"evaluation_date", "evaluation_timezone", "horizon_months", "start_month", "end_month",
                  "ledger_as_of", "freshness_stale", "stale_account_ids", "stale_account_ids_truncated",
@@ -413,7 +416,7 @@ class BudgetOpenApiTests(unittest.TestCase):
             "Deduplication": {"schedule_id", "schedule_label", "recurring_label", "amount", "currency",
                               "matched_due_date", "last_observed_date", "day_distance", "account_stale"},
             "Month": {"month", "currencies", "items"},
-            "Item": {"source", "schedule_id", "label", "amount", "currency", "expected_date", "confidence",
+            "Item": {"source", "schedule_id", "label", "display_name", "amount", "currency", "expected_date", "confidence",
                      "past_due", "account_stale"},
             "BaselineConflict": {"category_id", "reason"},
         }.items():
@@ -480,7 +483,7 @@ class BudgetOpenApiTests(unittest.TestCase):
         schemas = contract.build_openapi()["components"]["schemas"]
         optional_keys = {"Configuration": {"income_window"},
                          "Coverage": {"pending_row_keys", "pending_row_keys_truncated"},
-                         "CategorySpend": {"one_off", "one_off_key", "color_hue"}}
+                         "CategorySpend": {"one_off", "one_off_key", "display_name", "display_label", "color_hue"}}
         for suffix, keys in {
             "": {"period", "start", "end", "cutoff", "current_month", "evaluated_at", "evaluation_date",
                  "evaluation_timezone", "currency", "available_currencies", "configuration", "coverage",
@@ -497,7 +500,7 @@ class BudgetOpenApiTests(unittest.TestCase):
             "Pace": {"basis", "budget", "status", "daily_rate", "projected_month_spend", "exhaustion_day"},
             "CategoryLimit": {"monthly_limit", "remaining", "over_by", "percent_used_floor",
                               "warning_percent", "status"},
-            "CategorySpend": {"category_id", "name", "archived", "color_hue", "expenses", "refunds", "net_spending", "limit",
+            "CategorySpend": {"category_id", "name", "display_name", "display_label", "archived", "color_hue", "expenses", "refunds", "net_spending", "limit",
                               "one_off", "one_off_key"},
             "PassThrough": {"rent_category_id", "mortgage_category_id", "rent_received", "mortgage_debits",
                             "mortgage_refunds", "unapplied_mortgage_refunds", "matched", "unapplied_rent",
@@ -586,13 +589,14 @@ class BudgetOpenApiTests(unittest.TestCase):
             self.assertIn("monthly-budget/charts", responses["409"]["description"])
 
         schemas = doc["components"]["schemas"]
-        optional = {"SeriesCategory": {"name", "one_off", "one_off_key"}}
+        optional = {"SeriesCategory": {"name", "one_off", "one_off_key", "display_name", "display_label"},
+                    "CategoryLabel": {"display_name"}}
         for suffix, keys in {
             "DailyPoint": {"date", "cumulative_spent"},
-            "SeriesCategory": {"category_id", "net_spending", "name", "one_off", "one_off_key"},
+            "SeriesCategory": {"category_id", "net_spending", "name", "display_name", "display_label", "one_off", "one_off_key"},
             "SeriesMonth": {"period", "has_activity", "is_current_month", "income_estimate_partial",
                             "provisional", "start_budget", "spent", "categories"},
-            "CategoryLabel": {"category_id", "name", "archived"},
+            "CategoryLabel": {"category_id", "name", "display_name", "archived"},
             "Series": {"daily", "months", "category_labels"},
             "Charts": {"budget", "series"},
         }.items():
@@ -631,6 +635,10 @@ class BudgetOpenApiTests(unittest.TestCase):
                               "BudgetAnalyticsMortgageSaveRequest", "BudgetAnalyticsMortgagePaymentSetRequest",
                               "BudgetAnalyticsInboxKeyRequest", "BudgetAnalyticsInboxMarkRequest",
                               "BudgetAnalyticsTransactionsByKeysRequest",
+                              "BudgetCategoryTranslationSetRequest", "BudgetCategoryTranslationDeleteRequest",
+                              "BudgetLabelTranslationSetRequest", "BudgetLabelTranslationDeleteRequest",
+                              "BudgetCategoryTranslationImportEntry", "BudgetLabelTranslationImportEntry",
+                              "BudgetTranslationImportRequest",
                               "BudgetReceiptParseTextRequest", "BudgetReceiptConfirmRequest", "BudgetReceiptLineInput",
                               "BudgetReceiptLinkRequest", "BudgetReceiptListRequest", "BudgetReceiptSearchRequest",
                               "BudgetReceiptDeleteRequest", "BudgetReceiptDeviceBrowserRequest",

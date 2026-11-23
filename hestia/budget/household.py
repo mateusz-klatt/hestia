@@ -2,7 +2,8 @@
 
 Decisions for this branch:
 
-- Schema revision is 0023 and it revises 0022. Downgrade of 0023 returns to
+- The current schema revision includes the household-grant lineage introduced by 0023.
+  Downgrade of 0023 returns to
   0022 and deletes grants only. Receipt rows, category parents and one-off
   labels stay.
 - ``household grant`` and ``household revoke`` open the existing SQLite file and

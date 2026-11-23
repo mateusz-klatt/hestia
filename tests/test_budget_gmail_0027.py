@@ -5,6 +5,8 @@ import unittest
 from sqlalchemy import inspect, select
 from sqlalchemy.exc import IntegrityError
 
+from tests.migration_head import HEAD
+
 from hestia import db
 from hestia.budget.gmail_store import GmailStore, PendingMessage
 from tests.migration_head import HEAD
@@ -33,7 +35,7 @@ class GmailScheduleMigrationTests(unittest.TestCase):
                 "AND name LIKE '!_alembic!_tmp!_%' ESCAPE '!'"
             ).all(), [])
 
-    def test_populated_0025_to_0026_to_0025_roundtrip(self):
+    def test_populated_0026_upgrade_and_downgrade_roundtrip(self):
         db.init_db(self.path)
         db.downgrade_db(self.path, "0026")
         original = self._open()

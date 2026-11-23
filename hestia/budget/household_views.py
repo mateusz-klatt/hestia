@@ -261,8 +261,8 @@ class HouseholdReader:
                 "daily": daily,
                 "months": months,
                 "category_labels": [
-                    {"category_id": book.category(identifier), "name": book.label(identifier), "archived": archived,
-                     "color_hue": book.category_meta[identifier].get("color_hue")}
+                    {"category_id": book.category(identifier), "name": book.label(identifier),
+                     "archived": archived, "color_hue": book.category_meta[identifier].get("color_hue")}
                     for identifier, archived in sorted(labels.items())
                 ],
             },

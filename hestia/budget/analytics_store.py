@@ -10,10 +10,15 @@ import re
 import unicodedata
 import uuid
 
+from pydantic import TypeAdapter, ValidationError
 from sqlalchemy import delete, func, select
+from sqlalchemy.exc import IntegrityError
 
+from .. import api_contract
 from ..db import BudgetAccount as Account, BudgetAccountIdentity as Identity
 from ..db import BudgetAnnotation as Annotation, BudgetAnalyticsAudit as Audit, BudgetCategory as Category
+from ..db import BudgetAnnotationLabelTranslation as LabelTranslation
+from ..db import BudgetCategoryTranslation as CategoryTranslation
 from ..db import BudgetCategoryLimit as CategoryLimitRow
 from ..db import BudgetMortgagePayment as MortgagePaymentRow, BudgetMortgageSchedule as MortgageScheduleRow
 from ..db import BudgetConnection as Connection, BudgetRule as Rule, BudgetRulePreview as Preview
@@ -25,6 +30,7 @@ from .analytics_core import (AnalyticsError, KINDS, COUNTERPARTY_RULE_PREFIX, cl
                              match_texts, pair_fingerprint)
 from .client import _reject_constant, _unique_error_fields
 from .config import BudgetConfigError, _read_secret
+from .i18n import LANGUAGES
 from .receipt_reconcile import reconcile_receipt_links
 from .mortgage_reminders import (MAX_PAID_MONTHS as MAX_MORTGAGE_PAID_MONTHS, MAX_SCHEDULES as MAX_MORTGAGE_SCHEDULES,
                                  PRIVATE_DESTINATIONS as MORTGAGE_DESTINATIONS, MortgageInputError,
@@ -34,6 +40,8 @@ from .spending_limits import SpendingLimitInputError, _format_scaled, _parse_amo
 from .views import BudgetHTTPStore
 
 MAX_CATEGORY_LIMITS = 200
+_TRANSLATION_ENTRY_ADAPTER = TypeAdapter(
+    api_contract.BudgetCategoryTranslationImportEntry | api_contract.BudgetLabelTranslationImportEntry)
 _LIMIT_ERROR = "budget_analytics_limit"
 MAX_RULES = 5000
 MAX_BATCH_RULES = 100
@@ -304,6 +312,10 @@ class BudgetAnalyticsStore(BudgetHTTPStore):
                 if prior.name != name or prior.parent_id != parent_id:
                     raise AnalyticsError("budget_analytics_conflict", 409)
                 return {**_dict(prior, _CATEGORY_FIELDS), "changed": False}
+            translated = session.scalar(select(CategoryTranslation.category_id).where(
+                CategoryTranslation.owner == owner, CategoryTranslation.name_key == key).limit(1))
+            if translated is not None:
+                raise AnalyticsError("budget_analytics_conflict", 409)
             if session.scalar(select(func.count()).select_from(Category).where(Category.owner == owner)) >= 100:
                 raise AnalyticsError("budget_analytics_limit", 413)
             parent_id = self._checked_parent(session, owner, parent_id, None)
@@ -312,7 +324,10 @@ class BudgetAnalyticsStore(BudgetHTTPStore):
             row = Category(id=str(uuid.uuid4()), owner=owner, name=name, name_key=key, archived=False, version=1,
                            created_at=now, updated_at=now, parent_id=parent_id, color_hue=hue)
             session.add(row)
-            session.flush()
+            try:
+                session.flush()
+            except IntegrityError:
+                raise AnalyticsError("budget_analytics_conflict", 409) from None
             result = _dict(row, _CATEGORY_FIELDS)
             self._analytics_audit(session, owner, "category", row.id, "create", None, result)
             return {**result, "changed": True}
@@ -330,6 +345,11 @@ class BudgetAnalyticsStore(BudgetHTTPStore):
             other = session.scalar(select(Category).where(Category.owner == owner, Category.name_key == name.casefold(),
                                                           Category.id != row.id))
             if other is not None:
+                raise AnalyticsError("budget_analytics_conflict", 409)
+            translated = session.scalar(select(CategoryTranslation.category_id).where(
+                CategoryTranslation.owner == owner, CategoryTranslation.name_key == name.casefold(),
+                CategoryTranslation.category_id != row.id).limit(1))
+            if translated is not None:
                 raise AnalyticsError("budget_analytics_conflict", 409)
             new_parent = row.parent_id if parent_id is _UNSET else self._checked_parent(session, owner, parent_id, row.id)
             if new_parent is not None and color_hue is not _UNSET:
@@ -351,6 +371,10 @@ class BudgetAnalyticsStore(BudgetHTTPStore):
             row.color_hue = new_hue
             row.version += 1
             row.updated_at = self._now()
+            try:
+                session.flush()
+            except IntegrityError:
+                raise AnalyticsError("budget_analytics_conflict", 409) from None
             result = _dict(row, _CATEGORY_FIELDS)
             self._analytics_audit(session, owner, "category", row.id, "update", before, result)
             return {**result, "changed": True}
@@ -374,6 +398,120 @@ class BudgetAnalyticsStore(BudgetHTTPStore):
                 self._analytics_audit(session, owner, "category", row.id, "color-spread", before, after)
                 result.append(after)
             return result
+
+    @staticmethod
+    def _translation_language(lang):
+        if not isinstance(lang, str) or lang not in LANGUAGES:
+            raise AnalyticsError()
+        return lang
+
+    def _set_category_translation(self, session, owner, category_id, lang, name):
+        lang = self._translation_language(lang)
+        name = " ".join(_text(name).split())
+        self._owned(session, Category, owner, category_id)
+        key = name.casefold()
+        canonical = session.scalar(select(Category.id).where(
+            Category.owner == owner, Category.name_key == key, Category.id != category_id).limit(1))
+        if canonical is not None:
+            raise AnalyticsError("budget_analytics_conflict", 409)
+        other = session.scalar(select(CategoryTranslation).where(
+            CategoryTranslation.owner == owner, CategoryTranslation.name_key == key,
+            CategoryTranslation.category_id != category_id,
+        ))
+        if other is not None:
+            raise AnalyticsError("budget_analytics_conflict", 409)
+        row = session.get(CategoryTranslation, (category_id, lang))
+        changed = row is None or row.name != name
+        if row is None:
+            row = CategoryTranslation(category_id=category_id, owner=owner, lang=lang, name=name, name_key=key)
+            session.add(row)
+        else:
+            row.name, row.name_key = name, key
+        try:
+            session.flush()
+        except IntegrityError:
+            raise AnalyticsError("budget_analytics_conflict", 409) from None
+        return {"category_id": category_id, "lang": lang, "name": name, "changed": changed}
+
+    def set_category_translation(self, owner, *, category_id, lang, name):
+        with self.transaction() as session:
+            self._owner(session, owner)
+            return self._set_category_translation(session, owner, category_id, lang, name)
+
+    def delete_category_translation(self, owner, *, category_id, lang):
+        lang = self._translation_language(lang)
+        with self.transaction() as session:
+            self._owner(session, owner)
+            self._owned(session, Category, owner, category_id)
+            row = session.get(CategoryTranslation, (category_id, lang))
+            if row is not None:
+                session.delete(row)
+            return {"category_id": category_id, "lang": lang, "changed": row is not None}
+
+    def _owned_label(self, session, owner, account_id, entry_reference, *, require_label):
+        row = session.get(Annotation, (account_id, entry_reference))
+        if row is None or row.owner != owner or (require_label and row.label is None):
+            raise AnalyticsError("budget_analytics_not_found", 404)
+        return row
+
+    def _set_label_translation(self, session, owner, account_id, entry_reference, lang, label):
+        lang = self._translation_language(lang)
+        label = clean_one_off_label(label)
+        if label is None:
+            raise AnalyticsError()
+        self._owned_label(session, owner, account_id, entry_reference, require_label=True)
+        key = (account_id, entry_reference, lang)
+        row = session.get(LabelTranslation, key)
+        changed = row is None or row.label != label
+        if row is None:
+            row = LabelTranslation(account_id=account_id, entry_reference=entry_reference, lang=lang, label=label)
+            session.add(row)
+        else:
+            row.label = label
+        session.flush()
+        return {"account_id": account_id, "entry_reference": entry_reference, "lang": lang,
+                "label": label, "changed": changed}
+
+    def set_label_translation(self, owner, *, account_id, entry_reference, lang, label):
+        with self.transaction() as session:
+            self._owner(session, owner)
+            return self._set_label_translation(session, owner, account_id, entry_reference, lang, label)
+
+    def delete_label_translation(self, owner, *, account_id, entry_reference, lang):
+        lang = self._translation_language(lang)
+        with self.transaction() as session:
+            self._owner(session, owner)
+            self._owned_label(session, owner, account_id, entry_reference, require_label=False)
+            row = session.get(LabelTranslation, (account_id, entry_reference, lang))
+            if row is not None:
+                session.delete(row)
+            return {"account_id": account_id, "entry_reference": entry_reference, "lang": lang,
+                    "changed": row is not None}
+
+    def import_translations(self, owner, *, entries):
+        if not isinstance(entries, list) or not 1 <= len(entries) <= 500:
+            raise AnalyticsError()
+        results = []
+        with self.transaction() as session:
+            self._owner(session, owner)
+            for index, entry in enumerate(entries):
+                try:
+                    with session.begin_nested():
+                        try:
+                            values = _TRANSLATION_ENTRY_ADAPTER.validate_python(entry).model_dump()
+                        except ValidationError:
+                            raise AnalyticsError() from None
+                        if values["kind"] == "category":
+                            saved = self._set_category_translation(
+                                session, owner, values["category_id"], values["lang"], values["name"])
+                        else:
+                            saved = self._set_label_translation(
+                                session, owner, values["account_id"], values["entry_reference"],
+                                values["lang"], values["label"])
+                    results.append({"index": index, "ok": True, "changed": saved["changed"]})
+                except AnalyticsError as exc:
+                    results.append({"index": index, "ok": False, "error": exc.code})
+        return results
 
     @staticmethod
     def _validate_limit_write(category_id, currency, monthly_limit, warning_percent, enabled, expected_version):
@@ -596,6 +734,11 @@ class BudgetAnalyticsStore(BudgetHTTPStore):
                                  label=next_label)
                 session.add(row)
             row.mode, row.category_id, row.kind, row.ledger_fingerprint = desired[:4]
+            if row.label != next_label:
+                session.execute(delete(LabelTranslation).where(
+                    LabelTranslation.account_id == account_id,
+                    LabelTranslation.entry_reference == entry_reference,
+                ))
             row.label = next_label
             row.version += 1
             row.updated_at = self._now()

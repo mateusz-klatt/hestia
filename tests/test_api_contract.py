@@ -56,17 +56,65 @@ class OpenApiArtifactTests(unittest.TestCase):
         )
 
     def test_monthly_budget_contract_chain_from_0_27_0(self):
-        """Remove additive receipts and household surfaces before verifying earlier contract snapshots."""
+        """Remove each additive surface before verifying earlier contract snapshots."""
         document = api_contract.build_openapi()
-        self.assertEqual(document["info"]["version"], "0.44.0")
-        del document["paths"]["/api/login"]["post"]["responses"]["429"]
+        self.assertEqual(document["info"]["version"], "0.45.0")
         schemas = document["components"]["schemas"]
+        for operation in ("category-translation-set", "category-translation-delete", "label-translation-set",
+                          "label-translation-delete", "translation-import"):
+            document["paths"].pop("/api/budget/analytics/" + operation)
+        for name in list(schemas):
+            if name.startswith(("BudgetCategoryTranslation", "BudgetLabelTranslation", "BudgetTranslationImport")):
+                schemas.pop(name)
+        for schema, field in (
+            ("Settings", "preferred_languages"), ("SettingsUpdate", "preferred_languages"),
+            ("BudgetAnalyticsCategory", "display_name"), ("BudgetAnalyticsCategory", "translations"),
+            ("BudgetAnalyticsCategorySaved", "display_name"), ("BudgetAnalyticsCategorySaved", "translations"),
+            ("BudgetAnalyticsAnnotationSaved", "display_label"), ("BudgetAnalyticsAnnotation", "display_label"),
+            ("BudgetAnalyticsCategoryTotal", "display_name"), ("BudgetAnalyticsCategoryTotal", "display_label"),
+            ("BudgetAnalyticsSpendingLimitStatus", "display_name"),
+            ("BudgetAnalyticsForecastItem", "display_name"),
+            ("BudgetAnalyticsMonthlyBudgetCategorySpend", "display_name"),
+            ("BudgetAnalyticsMonthlyBudgetCategorySpend", "display_label"),
+            ("BudgetAnalyticsMonthlyBudgetSeriesCategory", "display_name"),
+            ("BudgetAnalyticsMonthlyBudgetSeriesCategory", "display_label"),
+            ("BudgetAnalyticsMonthlyBudgetCategoryLabel", "display_name"),
+        ):
+            schemas[schema]["properties"].pop(field)
+            if field in schemas[schema].get("required", []):
+                schemas[schema]["required"].remove(field)
+        document["info"]["version"] = "0.44.0"
+        schemas["Settings"]["description"] = (
+            "GET /api/settings — the logged-in user's UI prefs. All three keys are ALWAYS present, null when\n"
+            "unset (an unauthenticated / no-row request returns all-null, never an error)."
+        )
+        schemas["SettingsUpdate"]["description"] = (
+            "POST /api/settings — a PARTIAL update: only the keys present are persisted (absent keys are left\n"
+            "untouched). null clears a field. temp_scale ∈ {C,F,K}. locale ≤ 35 chars."
+        )
+        # 0.44.0 device login and alerts precede the translation surface.
+        del document["paths"]["/api/login"]["post"]["responses"]["429"]
         for name in ("BudgetAnalyticsInboxDeviceItem", "BudgetAnalyticsInboxDeviceParams", "BudgetAnalyticsInboxDeviceRef"):
             del schemas[name]
         inbox_items = schemas["BudgetAnalyticsInbox"]["properties"]["items"]["items"]
         del inbox_items["discriminator"]["mapping"]["device_added"]
         inbox_items["oneOf"].remove({"$ref": "#/components/schemas/BudgetAnalyticsInboxDeviceItem"})
         schemas["BudgetAnalyticsInboxKeyRequest"]["properties"]["kind"]["enum"].remove("device_added")
+        document["info"]["version"] = "0.42.0"
+        # 0.42.0 Gmail queue/review metadata precedes the 0.41.0 category hues.
+        for name, field in (
+            ("BudgetReceiptSummary", "forwarded_manually"),
+            ("BudgetReceiptSummary", "forwarded_sender_domain"),
+            ("BudgetReceiptDetail", "forwarded_manually"),
+            ("BudgetReceiptDetail", "forwarded_sender_domain"),
+            ("BudgetReceiptGmailStatus", "batch_processed_count"),
+            ("BudgetReceiptGmailSyncResult", "version"),
+        ):
+            schemas[name]["properties"].pop(field)
+            if field in schemas[name].get("required", []):
+                schemas[name]["required"].remove(field)
+        document["info"]["version"] = "0.41.0"
+        # 0.41.0 category hues.
         del document["paths"]["/api/budget/analytics/category-colors-spread"]
         for name in ("BudgetAnalyticsCategoryColorSpreadRequest", "BudgetAnalyticsCategoryColorSpreadResult"):
             del document["components"]["schemas"][name]
@@ -549,7 +597,9 @@ class RegistrySettingsContractTests(unittest.TestCase):
         from hestia.web import _EMPTY_SETTINGS
         api_contract.Settings.model_validate(_EMPTY_SETTINGS)                 # the real all-null default
         api_contract.Settings.model_validate({"locale": "pl", "temp_scale": "C", "theme": "warm"})
-        with self.assertRaises(ValueError):                                   # all 3 keys required (nullable)
+        api_contract.Settings.model_validate({"locale": "pl", "temp_scale": "C", "theme": "warm",
+                                              "preferred_languages": ["pl", "en"]})
+        with self.assertRaises(ValueError):                                   # required UI keys remain required
             api_contract.Settings.model_validate({"locale": None, "temp_scale": None})
 
     def test_settings_update_is_partial_with_scale_enum(self):
@@ -666,7 +716,11 @@ class TolerantResponseContractTests(unittest.TestCase):
 
     REQUEST_ONLY = {
         "BudgetAnalyticsCategoryCreateRequest", "BudgetAnalyticsCategoryUpdateRequest",
-        "BudgetAnalyticsCategoryColorSpreadRequest", "BudgetAnalyticsAnnotationRequest", "BudgetAnalyticsRulePreviewRequest", "BudgetAnalyticsRuleSaveRequest",
+        "BudgetCategoryTranslationSetRequest", "BudgetCategoryTranslationDeleteRequest",
+        "BudgetLabelTranslationSetRequest", "BudgetLabelTranslationDeleteRequest",
+        "BudgetCategoryTranslationImportEntry", "BudgetLabelTranslationImportEntry", "BudgetTranslationImportRequest",
+        "BudgetAnalyticsAnnotationRequest", "BudgetAnalyticsRulePreviewRequest", "BudgetAnalyticsRuleSaveRequest",
+        "BudgetAnalyticsCategoryColorSpreadRequest",
         "BudgetAnalyticsRuleBatchPreviewRequest", "BudgetAnalyticsRuleBatchSaveRequest",
         "BudgetAnalyticsTransferDecisionRequest", "BudgetAnalyticsLegRequest",
         "BudgetAnalyticsSpendingLimitSaveRequest", "BudgetAnalyticsMortgageSaveRequest",

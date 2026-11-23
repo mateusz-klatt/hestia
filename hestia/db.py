@@ -26,7 +26,7 @@ from threading import RLock
 from alembic import command
 from alembic.config import Config
 from alembic.util import CommandError
-from sqlalchemy import CheckConstraint, URL, Engine, ForeignKey, ForeignKeyConstraint, Index, Text, UniqueConstraint, create_engine, event, text
+from sqlalchemy import CheckConstraint, URL, Engine, ForeignKey, ForeignKeyConstraint, Index, JSON, Text, UniqueConstraint, create_engine, event, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
 DEFAULT_DB_PATH = "/data/hestia.db"
@@ -87,13 +87,14 @@ class User(Base):
 
 
 class UserSetting(Base):
-    """Per-user UI preferences (#55): locale / temperature scale / theme."""
+    """Per-user UI settings and ordered budget display languages."""
 
     __tablename__ = "user_settings"
     username: Mapped[str] = mapped_column(ForeignKey("users.username"), primary_key=True)
     locale: Mapped[str | None]
     temp_scale: Mapped[str | None]
     theme: Mapped[str | None]
+    preferred_languages: Mapped[list[str] | None] = mapped_column(JSON(none_as_null=True))
 
 
 class Audit(Base):
@@ -491,6 +492,7 @@ class BudgetCategory(Base):
                         name="ck_budget_categories_color_hue_range"),
         CheckConstraint("parent_id IS NULL OR color_hue IS NULL", name="ck_budget_categories_color_hue_root"),
         Index("ix_budget_categories_parent_id", "parent_id"),
+        Index("uq_budget_categories_id_owner", "id", "owner", unique=True),
     )
     id: Mapped[str] = mapped_column(primary_key=True)
     owner: Mapped[str] = mapped_column(ForeignKey("users.username"))
@@ -502,6 +504,23 @@ class BudgetCategory(Base):
     updated_at: Mapped[float]
     parent_id: Mapped[str | None] = mapped_column(ForeignKey("budget_categories.id", name="fk_budget_categories_parent_id"))
     color_hue: Mapped[int | None]
+
+
+class BudgetCategoryTranslation(Base):
+    """Translated display name bound to a category and its owner."""
+
+    __tablename__ = "budget_category_translations"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["category_id", "owner"], ["budget_categories.id", "budget_categories.owner"],
+            name="fk_budget_category_translations_category_owner", ondelete="CASCADE",
+        ),
+    )
+    category_id: Mapped[str] = mapped_column(primary_key=True)
+    lang: Mapped[str] = mapped_column(primary_key=True)
+    owner: Mapped[str]
+    name: Mapped[str]
+    name_key: Mapped[str]
 
 
 class BudgetCategoryLimit(Base):
@@ -698,6 +717,23 @@ class BudgetAnnotation(Base):
     version: Mapped[int]
     updated_at: Mapped[float]
     label: Mapped[str | None] = mapped_column(Text())
+
+
+class BudgetAnnotationLabelTranslation(Base):
+    """Translated display text for one annotation's one-off label."""
+
+    __tablename__ = "budget_annotation_label_translations"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["account_id", "entry_reference"], ["budget_annotations.account_id", "budget_annotations.entry_reference"],
+            name="fk_budget_annotation_label_translations_annotation", ondelete="CASCADE",
+        ),
+        CheckConstraint(annotation_label_check_sql(), name="ck_budget_annotation_label_translations_label"),
+    )
+    account_id: Mapped[str] = mapped_column(primary_key=True)
+    entry_reference: Mapped[str] = mapped_column(primary_key=True)
+    lang: Mapped[str] = mapped_column(primary_key=True)
+    label: Mapped[str] = mapped_column(Text())
 
 
 class BudgetRule(Base):

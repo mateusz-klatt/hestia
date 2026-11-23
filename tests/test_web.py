@@ -879,18 +879,21 @@ class SettingsEndpointTests(_WebTestBase):
         headers = self._headers()
         status, _, body = _get(self.web.address, "/api/settings", headers=headers)
         self.assertEqual(status, 200)
-        self.assertEqual(json.loads(body), {"locale": None, "temp_scale": None, "theme": None})
+        self.assertEqual(json.loads(body), {"locale": None, "temp_scale": None, "theme": None,
+                                            "preferred_languages": ["en"]})
 
         store_sql.set_user_settings("tata", locale="pl", temp_scale="F", theme="dark")
         status, _, body = _get(self.web.address, "/api/settings", headers=headers)
         self.assertEqual(status, 200)
-        self.assertEqual(json.loads(body), {"locale": "pl", "temp_scale": "F", "theme": "dark"})
+        self.assertEqual(json.loads(body), {"locale": "pl", "temp_scale": "F", "theme": "dark",
+                                            "preferred_languages": ["pl"]})
 
     def test_get_auth_off_returns_nulls(self):
         with mock.patch.object(web, "_AUTH_ENABLED", False):
             status, _, body = _get(self.web.address, "/api/settings")
         self.assertEqual(status, 200)
-        self.assertEqual(json.loads(body), {"locale": None, "temp_scale": None, "theme": None})
+        self.assertEqual(json.loads(body), {"locale": None, "temp_scale": None, "theme": None,
+                                            "preferred_languages": ["en"]})
 
     def test_post_requires_json_content_type(self):
         status, _, body = _post(self.web.address, "/api/settings", "x",
@@ -906,6 +909,9 @@ class SettingsEndpointTests(_WebTestBase):
             ({"temp_scale": "X"}, "temp_scale"),
             ({"temp_scale": []}, "temp_scale"),
             ({"theme": 5}, "theme"),
+            ({"preferred_languages": ["xx"]}, "preferred_languages"),
+            ({"preferred_languages": ["de", "de"]}, "preferred_languages"),
+            ({"preferred_languages": "de"}, "preferred_languages"),
         ]
         for payload, fragment in bad_payloads:
             with self.subTest(payload=payload):
@@ -934,11 +940,11 @@ class SettingsEndpointTests(_WebTestBase):
         from hestia import store_sql
         with mock.patch("hestia.web._audit"):
             status, _, body = _post(self.web.address, "/api/settings",
-                                    {"temp_scale": "K", "theme": "dark"}, headers=self._headers())
+                                    {"temp_scale": "K", "theme": "dark", "preferred_languages": ["fr", "en"]}, headers=self._headers())
         self.assertEqual(status, 200)
         self.assertEqual(json.loads(body), {"ok": True})
         self.assertEqual(store_sql.get_user_settings("tata"),
-                         {"locale": None, "temp_scale": "K", "theme": "dark"})
+                         {"locale": None, "temp_scale": "K", "theme": "dark", "preferred_languages": ["fr", "en"]})
 
     def test_post_persists_partial_merge_and_audits(self):
         from hestia import store_sql
@@ -949,7 +955,7 @@ class SettingsEndpointTests(_WebTestBase):
         self.assertEqual(status, 200)
         self.assertEqual(json.loads(body), {"ok": True})
         self.assertEqual(store_sql.get_user_settings("tata"),
-                         {"locale": "pl", "temp_scale": "F", "theme": None})
+                         {"locale": "pl", "temp_scale": "F", "theme": None, "preferred_languages": ["pl"]})
         audit.assert_called_once()
         self.assertEqual(audit.call_args.args[:3], (self.rt, "tata", "settings"))
         self.assertIn("locale=pl,scale=None", audit.call_args.kwargs["detail"])
@@ -2059,7 +2065,11 @@ SPOUSE_ROUTE_STATUS = {
     ("POST", "/api/budget/analytics/category-create"): 403,
     ("POST", "/api/budget/analytics/category-update"): 403,
     ("POST", "/api/budget/analytics/category-colors-spread"): 403,
-    ("POST", "/api/budget/analytics/category-colors-spread"): 403,
+    ("POST", "/api/budget/analytics/category-translation-set"): 403,
+    ("POST", "/api/budget/analytics/category-translation-delete"): 403,
+    ("POST", "/api/budget/analytics/label-translation-set"): 403,
+    ("POST", "/api/budget/analytics/label-translation-delete"): 403,
+    ("POST", "/api/budget/analytics/translation-import"): 403,
     ("POST", "/api/budget/analytics/inbox-mark"): 403,
     ("POST", "/api/budget/analytics/mortgage-payment-set"): 403,
     ("POST", "/api/budget/analytics/mortgage-save"): 403,

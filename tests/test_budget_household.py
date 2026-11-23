@@ -39,6 +39,7 @@ REMITTANCE = "Alice private description"
 IBAN = "PL00123456789012345678901234"
 RULE_VALUE = "SECRET-RULE-OPERAND"
 GROCERIES = "Groceries SECRET NAME"
+TRANSLATION = "Zakupy SECRET TRANSLATION"
 SALARY_NAME = "Wynagrodzenie"
 ZUS_NAME = "Świadczenia ZUS"
 PYTHON = None  # tests invoke library functions directly; the fleet command is recorded in the module doc.
@@ -396,6 +397,8 @@ class HouseholdAPITests(unittest.IsolatedAsyncioTestCase):
         logger = logging.getLogger("hestia.budget")
         logger.addHandler(handler)
         self.addCleanup(logger.removeHandler, handler)
+        BudgetAnalyticsStore(self.sessions, cursor_secret=SECRET).set_category_translation(
+            "alice", category_id=self.groceries["id"], lang="fr", name=TRANSLATION)
         bodies = {}
         for operation, model in models.items():
             response = await self.fetch(operation)
@@ -409,8 +412,9 @@ class HouseholdAPITests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(await head.read(), b"")
             owner_head = await self.client.head(PREFIX + "/" + operation, headers=self.headers("alice"))
             self.assertEqual(owner_head.status, 405, operation)
-        text = json.dumps(bodies)
-        for secret in (SALARY_NAME, ZUS_NAME, GROCERIES, "child benefit", REMITTANCE, IBAN, RULE_VALUE,
+        self.assertFalse({"display_name", "display_label"} & _mapping_keys(bodies))
+        text = json.dumps(bodies, ensure_ascii=False)
+        for secret in (SALARY_NAME, ZUS_NAME, GROCERIES, TRANSLATION, "child benefit", REMITTANCE, IBAN, RULE_VALUE,
                        self.alice_id, self.bob_id, fixture.PRIVATE_A, fixture.PRIVATE_B, "alice-entry"):
             self.assertNotIn(secret, text, secret)
         logged = stream.getvalue()
