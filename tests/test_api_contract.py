@@ -56,7 +56,12 @@ class OpenApiArtifactTests(unittest.TestCase):
 
     def test_monthly_budget_contract_is_strictly_additive_from_0_27_0(self):
         document = api_contract.build_openapi()
-        self.assertEqual(document["info"]["version"], "0.31.0")
+        self.assertEqual(document["info"]["version"], "0.32.0")
+        # Strip the per-category conflict note and compare with the 0.31.0 forecast contract.
+        summary = document["components"]["schemas"]["BudgetAnalyticsForecastSummary"]
+        del summary["properties"]["baseline_conflicts"]
+        summary["required"].remove("baseline_conflicts")
+        del document["components"]["schemas"]["BudgetAnalyticsForecastBaselineConflict"]
         # Strip the category-baseline addition and compare with the 0.30.0 forecast contract.
         forecast_get = document["paths"]["/api/budget/analytics/forecast"]["get"]
         forecast_get["description"] = (

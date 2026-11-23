@@ -210,7 +210,7 @@ export function forecastOf(changes: Partial<AnalyticsForecast> = {}): AnalyticsF
     schedules_version: "synthetic-schedules-v1", rule_version: 1,
     summary: {
       selected_accounts: 1, excluded_accounts: 0, stale_accounts: 0, overdue_mortgage_schedule_count: 0,
-      lapsed_recurring_count: 0, deduped_recurring_count: 0, stale_recurring_count: 0,
+      lapsed_recurring_count: 0, deduped_recurring_count: 0, stale_recurring_count: 0, baseline_conflicts: [],
     },
     totals: [], deduplications: [],
     months: ["2026-11", "2026-12", "2027-01"].map((month) => ({ month, currencies: [], items: [] })),

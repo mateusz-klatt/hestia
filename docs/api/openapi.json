@@ -1419,6 +1419,31 @@
         "title": "BudgetAnalyticsForecast",
         "type": "object"
       },
+      "BudgetAnalyticsForecastBaselineConflict": {
+        "description": "A configured category omitted because an active hint or an enabled mortgage already represents it.\n\nNo amounts. A category may appear twice when both reasons apply.",
+        "properties": {
+          "category_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Category Id",
+            "type": "string"
+          },
+          "reason": {
+            "enum": [
+              "recurring",
+              "mortgage"
+            ],
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "category_id",
+          "reason"
+        ],
+        "title": "BudgetAnalyticsForecastBaselineConflict",
+        "type": "object"
+      },
       "BudgetAnalyticsForecastCurrencyTotal": {
         "description": "Exact decimal commitment totals in one currency.",
         "properties": {
@@ -1608,6 +1633,14 @@
       },
       "BudgetAnalyticsForecastSummary": {
         "properties": {
+          "baseline_conflicts": {
+            "items": {
+              "$ref": "#/components/schemas/BudgetAnalyticsForecastBaselineConflict"
+            },
+            "maxItems": 64,
+            "title": "Baseline Conflicts",
+            "type": "array"
+          },
           "deduped_recurring_count": {
             "title": "Deduped Recurring Count",
             "type": "integer"
@@ -1644,7 +1677,8 @@
           "overdue_mortgage_schedule_count",
           "lapsed_recurring_count",
           "deduped_recurring_count",
-          "stale_recurring_count"
+          "stale_recurring_count",
+          "baseline_conflicts"
         ],
         "title": "BudgetAnalyticsForecastSummary",
         "type": "object"
@@ -10689,7 +10723,7 @@
   "info": {
     "description": "Local cloud-free smart-home control API. Generated from hestia/api_contract.py \u2014 do not edit by hand; run `python -m hestia.api_contract`.",
     "title": "hestia API",
-    "version": "0.31.0"
+    "version": "0.32.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -11589,7 +11623,7 @@
     },
     "/api/budget/analytics/forecast": {
       "get": {
-        "description": "Read-only evaluation of unmarked mortgage instalments and active recurring charges from one local snapshot using the server UTC date. Matches recurring hints to individual scheduled instalments to suppress duplicate estimates. When HESTIA_BUDGET_FORECAST_CONFIG names categories, each month also includes a category_baseline estimate (confidence estimated, schedule_id null, label is the category name): the median or trimmed mean of net spending over prior complete months inside each account's coverage window, including months with no spend. The current month subtracts net spending already booked, floored at zero. A configured category already represented by an active recurring hint or an enabled mortgage schedule is rejected. An optional currency filter scopes commitments, deduplications and their summary counts. Snapshot metadata and account freshness cover all selected accounts. The estimate excludes spending limits and makes no bank requests or stored changes.",
+        "description": "Read-only evaluation of unmarked mortgage instalments and active recurring charges from one local snapshot using the server UTC date. Matches recurring hints to individual scheduled instalments to suppress duplicate estimates. When HESTIA_BUDGET_FORECAST_CONFIG names categories, each month also includes a category_baseline estimate (confidence estimated, schedule_id null, label is the category name): the median or trimmed mean of net spending over prior complete months inside each account's coverage window, including months with no spend. The current month subtracts net spending already booked, floored at zero. A configured category already represented by an active recurring hint or an enabled mortgage schedule is omitted from the baselines and listed in summary.baseline_conflicts (category id and reason only, no amounts). Every other baseline, mortgage and recurring item is still computed. An optional currency filter scopes commitments, deduplications and their summary counts. Snapshot metadata and account freshness cover all selected accounts. The estimate excludes spending limits and makes no bank requests or stored changes.",
         "operationId": "getBudgetAnalyticsForecast",
         "parameters": [
           {
@@ -11703,7 +11737,7 @@
                 }
               }
             },
-            "description": "Analytics storage or budget configuration unavailable (`budget_analytics_unavailable`, `budget_unavailable`, or `budget_forecast_config_conflict`)."
+            "description": "Analytics storage or budget configuration unavailable (`budget_analytics_unavailable` or `budget_unavailable`)."
           }
         },
         "summary": "Read the owner-private upcoming commitments estimate",

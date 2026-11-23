@@ -25,6 +25,9 @@ LAPSED_AFTER_DAYS = 45
 MAX_FORECAST_HINTS = 200
 MAX_BASELINE_CATEGORIES = 32
 MAX_BASELINE_SERIES = 64
+# One configured category can conflict as both a recurring hint and a mortgage.
+MAX_BASELINE_CONFLICTS = MAX_BASELINE_CATEGORIES * 2
+_CONFLICT_REASONS = frozenset({"recurring", "mortgage"})
 # Schedules, recurring hints, and one series per configured category and currency.
 MAX_FORECAST_ITEMS = (100 + MAX_FORECAST_HINTS + MAX_BASELINE_SERIES) * 12
 MAX_FORECAST_LABEL = 256
@@ -73,18 +76,6 @@ class ForecastLimitError(ValueError):
         super().__init__("Forecast limit exceeded")
 
 
-class ForecastConfigConflict(BudgetConfigError):
-    """A configured category is already represented by an active hint or an enabled mortgage.
-
-    The message stays generic. Callers map ``code`` to HTTP 503.
-    """
-
-    code = "budget_forecast_config_conflict"
-
-    def __init__(self):
-        super().__init__(_CONFIG_ERROR)
-
-
 @dataclass(frozen=True, repr=False)
 class ForecastBaselineSettings:
     category_ids: tuple[str, ...]
@@ -115,6 +106,51 @@ def _config_text(value):
             or value == "uncategorised"):
         raise BudgetConfigError(_CONFIG_ERROR)
     return value
+
+
+def _conflict_row(row):
+    """One wire conflict. Amounts and any other key are rejected."""
+    if not isinstance(row, Mapping):
+        raise ForecastDataError()
+    category_id = row.get("category_id")
+    reason = row.get("reason")
+    if set(row) - {"category_id", "reason"}:
+        raise ForecastDataError()
+    if reason not in _CONFLICT_REASONS:
+        raise ForecastDataError()
+    if (not isinstance(category_id, str) or not category_id or len(category_id) > 128
+            or _CONTROL_RE.search(category_id) or category_id == "uncategorised"):
+        raise ForecastDataError()
+    return {"category_id": category_id, "reason": reason}
+
+
+def _conflict_maps(rows):
+    """Unique ``{category_id, reason}`` rows, sorted, with no amounts attached."""
+    if not isinstance(rows, Sequence) or isinstance(rows, (str, bytes)):
+        raise ForecastDataError()
+    unique = {}
+    for row in rows:
+        item = _conflict_row(row)
+        unique.setdefault((item["category_id"], item["reason"]), item)
+    return [unique[key] for key in sorted(unique)]
+
+
+def _named_categories(category_ids, category_names):
+    """Validate configured ids against the snapshot. Unknown ids are configuration errors."""
+    if (not isinstance(category_ids, Sequence) or isinstance(category_ids, (str, bytes))
+            or not isinstance(category_names, Mapping)):
+        raise ForecastDataError()
+    if len(category_ids) != len(set(category_ids)):
+        raise ForecastDataError()
+    names = {}
+    for category_id in category_ids:
+        if not isinstance(category_id, str) or category_id not in category_names:
+            raise BudgetConfigError(_CONFIG_ERROR)
+        name = category_names[category_id]
+        if not isinstance(name, str) or not name.strip() or _CONTROL_RE.search(name):
+            raise ForecastDataError()
+        names[category_id] = name
+    return names
 
 
 def _unique_object_pairs(pairs):
@@ -465,24 +501,11 @@ def build_category_baselines(*, category_ids: Sequence[str], category_names: Map
     Months before the account's first dated row are omitted. The series cap is applied later, after
     the request currency filter.
     """
-    if (not isinstance(category_ids, Sequence) or isinstance(category_ids, (str, bytes))
-            or not isinstance(category_names, Mapping)
-            or type(history_months) is not int
-            or not MIN_BASELINE_MONTHS <= history_months <= MAX_BASELINE_HISTORY_MONTHS):
+    if type(history_months) is not int or not MIN_BASELINE_MONTHS <= history_months <= MAX_BASELINE_HISTORY_MONTHS:
         raise ForecastDataError()
-    if len(category_ids) != len(set(category_ids)):
-        raise ForecastDataError()
+    names = _named_categories(category_ids, category_names)
     evaluation = _iso_day(evaluation_date)
-    allowed = set()
-    names = {}
-    for category_id in category_ids:
-        if not isinstance(category_id, str) or category_id not in category_names:
-            raise BudgetConfigError(_CONFIG_ERROR)
-        name = category_names[category_id]
-        if not isinstance(name, str) or not name.strip() or _CONTROL_RE.search(name):
-            raise ForecastDataError()
-        allowed.add(category_id)
-        names[category_id] = name
+    allowed = set(names)
     if (not isinstance(expenses, Sequence) or isinstance(expenses, (str, bytes))
             or not isinstance(refunds, Sequence) or isinstance(refunds, (str, bytes))):
         raise ForecastDataError()
@@ -560,9 +583,13 @@ def build_category_baselines(*, category_ids: Sequence[str], category_names: Map
     return tuple(baselines)
 
 
-def _reject_baseline_conflicts(*, category_ids, hints, schedules, expenses, evidence_categories,
-                               evaluation_date, account_timestamps):
-    """Reject a configured category that an active hint or an enabled mortgage already represents.
+def _baseline_conflicts(*, category_ids, hints, schedules, expenses, evidence_categories,
+                        evaluation_date, account_timestamps):
+    """Return ``(conflicts, blocked_ids)`` for configured categories an active hint or mortgage already covers.
+
+    Conflicts are ``{category_id, reason}`` only. ``reason`` is ``recurring`` or ``mortgage``. A category
+    in both sets produces both rows. Nothing here is emitted as a baseline: callers drop every id in
+    ``blocked_ids``, including ids omitted when the wire list is later capped.
 
     Hints and mortgages have no category column. A hint conflicts when it is active and any mapped
     evidence row is in a configured category, including a partial overlap such as five of six
@@ -592,8 +619,9 @@ def _reject_baseline_conflicts(*, category_ids, hints, schedules, expenses, evid
             continue
         active.append(hint)
     allowed = set(category_ids)
-    if _hint_categories(active, evidence_categories, allowed):
-        raise ForecastConfigConflict()
+    recurring = set()
+    for overlap in _hint_categories(active, evidence_categories, allowed).values():
+        recurring.update(overlap)
     if not isinstance(expenses, Sequence) or isinstance(expenses, (str, bytes)):
         raise ForecastDataError()
     normalized = []
@@ -602,25 +630,34 @@ def _reject_baseline_conflicts(*, category_ids, hints, schedules, expenses, evid
         if flow is not None:
             category_id, currency, iso_date, amount, day, _account_id = flow
             normalized.append((category_id, currency, iso_date, amount, day))
-    if _schedule_categories(schedules, normalized, allowed):
-        raise ForecastConfigConflict()
+    mortgage = set()
+    for overlap, _currency in _schedule_categories(schedules, normalized, allowed).values():
+        mortgage.update(overlap)
+    rows = []
+    for category_id in category_ids:
+        if category_id in recurring:
+            rows.append({"category_id": category_id, "reason": "recurring"})
+        if category_id in mortgage:
+            rows.append({"category_id": category_id, "reason": "mortgage"})
+    return _conflict_maps(rows), frozenset(recurring | mortgage)
 
 
 def baselines_for_snapshot(snapshot, evaluation_date, hints, schedules, *, account_timestamps=None, environ=None):
-    """Return ``(baselines, estimator)``. Missing config yields no baselines and does not read the snapshot.
+    """Return ``(baselines, estimator, conflicts)``. Missing config yields no baselines and does not read the snapshot.
 
     A configured owner requires ``account_timestamps`` so lapsed hints can be told from active ones.
-    A category that already has an active hint or an enabled mortgage raises ``ForecastConfigConflict``.
+    A category that already has an active hint or an enabled mortgage is omitted from ``baselines`` and
+    listed in ``conflicts``. Unknown category ids still raise ``BudgetConfigError``.
     """
     settings = load_forecast_config(environ)
     if not settings:
-        return (), "median"
+        return (), "median", ()
     if not isinstance(snapshot, Mapping):
         raise ForecastDataError()
     owner = snapshot.get("owner")
     owner_settings = settings.get(owner) if isinstance(owner, str) else None
     if owner_settings is None:
-        return (), "median"
+        return (), "median", ()
     categories = snapshot.get("categories")
     if not isinstance(categories, Sequence) or isinstance(categories, (str, bytes)):
         raise ForecastDataError()
@@ -632,15 +669,16 @@ def baselines_for_snapshot(snapshot, evaluation_date, hints, schedules, *, accou
     if not isinstance(account_timestamps, Mapping):
         raise ForecastDataError()
     expenses, refunds, evidence, first_dates = expenses_from_transactions(snapshot.get("transactions"))
-    _reject_baseline_conflicts(
+    _named_categories(owner_settings.category_ids, names)
+    conflicts, blocked = _baseline_conflicts(
         category_ids=owner_settings.category_ids, hints=hints, schedules=schedules, expenses=expenses,
         evidence_categories=evidence, evaluation_date=evaluation_date, account_timestamps=account_timestamps,
     )
+    clean = [category_id for category_id in owner_settings.category_ids if category_id not in blocked]
     return build_category_baselines(
-        category_ids=owner_settings.category_ids, category_names=names,
-        history_months=owner_settings.history_months, evaluation_date=evaluation_date,
-        expenses=expenses, refunds=refunds, account_first_dates=first_dates,
-    ), owner_settings.estimator
+        category_ids=clean, category_names=names, history_months=owner_settings.history_months,
+        evaluation_date=evaluation_date, expenses=expenses, refunds=refunds, account_first_dates=first_dates,
+    ), owner_settings.estimator, tuple(conflicts)
 
 
 def _project_category_baselines(projected, horizon, baselines, estimator, evaluation_month, stale_accounts):
@@ -859,7 +897,8 @@ def evaluate_forecast(*, owner: str, evaluation_date: str, months: int, currency
                       snapshot_digest: str, schedules_version: str,
                       baselines: Sequence[CategoryBaseline] = (), baseline_estimator: str = "median",
                       baseline_expenses: Sequence[tuple] = (),
-                      baseline_evidence: Mapping = MappingProxyType({})) -> dict:
+                      baseline_evidence: Mapping = MappingProxyType({}),
+                      baseline_conflicts: Sequence[Mapping] = ()) -> dict:
     """Evaluate validated horizon and currency values against gathered owner data."""
     try:
         reminders = evaluate_mortgage_reminders(owner, evaluation_date, schedules)
@@ -887,13 +926,20 @@ def evaluate_forecast(*, owner: str, evaluation_date: str, months: int, currency
             raise ForecastDataError()
     if baselines and (not isinstance(baseline_estimator, str) or baseline_estimator not in _BASELINE_ESTIMATORS):
         raise ForecastDataError()
+    supplied = _conflict_maps(baseline_conflicts)
+    blocked = {item["category_id"] for item in supplied}
+    detected = []
     if baselines:
-        _reject_baseline_conflicts(
-            category_ids=tuple(item.category_id for item in baselines), hints=hints, schedules=schedules,
-            expenses=baseline_expenses, evidence_categories=baseline_evidence,
+        detected, detected_blocked = _baseline_conflicts(
+            category_ids=tuple(dict.fromkeys(item.category_id for item in baselines)), hints=hints,
+            schedules=schedules, expenses=baseline_expenses, evidence_categories=baseline_evidence,
             evaluation_date=evaluation_date, account_timestamps=account_timestamps,
         )
-    selected_baselines = [item for item in baselines if currency is None or item.currency == currency]
+        blocked.update(detected_blocked)
+    # Cap the note only. Every blocked category stays out of the estimate, including ones past the cap.
+    reported_conflicts = _conflict_maps([*supplied, *detected])[:MAX_BASELINE_CONFLICTS]
+    selected_baselines = [item for item in baselines
+                          if item.category_id not in blocked and (currency is None or item.currency == currency)]
     if len(selected_baselines) > MAX_BASELINE_SERIES:
         raise ForecastLimitError()
     _project_category_baselines(projected, horizon, selected_baselines, baseline_estimator, m0, stale_accounts)
@@ -928,7 +974,7 @@ def evaluate_forecast(*, owner: str, evaluation_date: str, months: int, currency
         "summary": {"selected_accounts": len(account_timestamps), "excluded_accounts": excluded_accounts,
                     "stale_accounts": len(stale_accounts), "overdue_mortgage_schedule_count": overdue_schedules,
                     "lapsed_recurring_count": lapsed_count, "deduped_recurring_count": len(match_audits),
-                    "stale_recurring_count": stale_count},
+                    "stale_recurring_count": stale_count, "baseline_conflicts": reported_conflicts},
         "totals": _currency_totals(chain.from_iterable(month["items"] for month in month_rows)),
         "deduplications": audits, "months": month_rows,
     }

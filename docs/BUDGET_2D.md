@@ -492,9 +492,12 @@ within five days of a due date in the debit's month or the month on either side.
 stay active. Lapsed hints and disabled schedules do not conflict. A hint whose evidence has
 no category mapping, and a mortgage with no matching debit, do not conflict. The forecast
 does not subtract mortgage or recurring items from a baseline. The same check runs when
-baselines are passed straight into the evaluator. A conflict returns HTTP `503`
-(`budget_forecast_config_conflict`) before the request currency filter. Other invalid
-configuration, including a non-string estimator, returns HTTP `503` (`budget_unavailable`).
+baselines are passed straight into the evaluator. A conflict skips baselines only for the
+conflicting categories and lists them on `summary.baseline_conflicts` (`category_id` and
+`reason` of `recurring` or `mortgage`, capped, no amounts). Every other baseline, mortgage
+and recurring item is still computed. The check runs before the request currency filter.
+Other invalid configuration, including a non-string estimator or an unknown category id,
+returns HTTP `503` (`budget_unavailable`).
 
 ```json
 {"owner": {"category_ids": ["electricity", "mobile"], "history_months": 6, "estimator": "median"}}

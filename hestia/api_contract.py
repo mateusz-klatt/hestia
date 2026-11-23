@@ -80,8 +80,10 @@ from pydantic.json_schema import models_json_schema
 # 0.30.0: batch rule preview and save (POST /api/budget/analytics/rule-batch-preview and rule-batch-save,
 #         zero migration).
 # 0.31.0: additive forecast source category_baseline and confidence estimated
-#         (HESTIA_BUDGET_FORECAST_CONFIG, zero migration). The open follow-up remains 0.32.0.
-CONTRACT_VERSION = "0.31.0"
+#         (HESTIA_BUDGET_FORECAST_CONFIG, zero migration).
+# 0.32.0: a category-baseline conflict skips only that category and lists it on
+#         summary.baseline_conflicts (zero migration). budget_forecast_config_conflict is retired.
+CONTRACT_VERSION = "0.32.0"
 OPENAPI_PATH = Path(__file__).resolve().parent.parent / "docs" / "api" / "openapi.json"
 
 # De-duplicated string literals (SonarPython S1192): the OpenAPI content-type, the paths reused
@@ -2298,6 +2300,16 @@ class BudgetAnalyticsQuarantine(BaseModel):
     items: list[BudgetAnalyticsQuarantineItem]
 
 
+class BudgetAnalyticsForecastBaselineConflict(BaseModel):
+    """A configured category omitted because an active hint or an enabled mortgage already represents it.
+
+    No amounts. A category may appear twice when both reasons apply.
+    """
+    model_config = _READ
+    category_id: Annotated[str, Field(min_length=1, max_length=128)]
+    reason: Literal["recurring", "mortgage"]
+
+
 class BudgetAnalyticsForecastSummary(BaseModel):
     model_config = _READ
     selected_accounts: int
@@ -2307,6 +2319,7 @@ class BudgetAnalyticsForecastSummary(BaseModel):
     lapsed_recurring_count: int
     deduped_recurring_count: int
     stale_recurring_count: int
+    baseline_conflicts: Annotated[list[BudgetAnalyticsForecastBaselineConflict], Field(max_length=64)]
 
 
 class BudgetAnalyticsForecastCurrencyTotal(BaseModel):
@@ -3301,9 +3314,11 @@ def _analytics_paths():
             "name): the median or trimmed mean of net spending over prior complete months inside each account's "
             "coverage window, including months with no spend. The current month subtracts net spending already "
             "booked, floored at zero. A configured category already represented by an active recurring hint or an "
-            "enabled mortgage schedule is rejected. An optional currency filter scopes commitments, "
-            "deduplications and their summary counts. Snapshot metadata and account freshness cover all selected "
-            "accounts. The estimate excludes spending limits and makes no bank requests or stored changes."
+            "enabled mortgage schedule is omitted from the baselines and listed in summary.baseline_conflicts "
+            "(category id and reason only, no amounts). Every other baseline, mortgage and recurring item is still "
+            "computed. An optional currency filter scopes commitments, deduplications and their summary counts. "
+            "Snapshot metadata and account freshness cover all selected accounts. The estimate excludes spending "
+            "limits and makes no bank requests or stored changes."
         )),
         "monthly-budget": ("Read the owner-private monthly budget dashboard", (
             "Pure read-only single-snapshot monthly budget dashboard evaluated in Europe/Warsaw from one UTC instant. "
@@ -3333,8 +3348,8 @@ def _analytics_paths():
         "500": "Stored mortgage schedule, ledger, or metadata integrity check failed (`budget_analytics_data_error`), "
                "including stored-data helper errors mapped to 500 after forecast query validation, or unexpected "
                "internal failure (`budget_internal_error`).",
-        "503": "Analytics storage or budget configuration unavailable (`budget_analytics_unavailable`, "
-               "`budget_unavailable`, or `budget_forecast_config_conflict`).",
+        "503": "Analytics storage or budget configuration unavailable (`budget_analytics_unavailable` or "
+               "`budget_unavailable`).",
     }
     for code, description in forecast_descriptions.items():
         forecast_responses[code]["description"] = description
