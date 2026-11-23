@@ -6,7 +6,7 @@ import hmac
 import json
 import uuid
 
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import and_, case, delete, func, or_, select, update
 
 from ..db import BudgetAnalyticsAudit, BudgetGmailMessage, BudgetGmailState, BudgetReceipt, BudgetReceiptLine
 from .gmail_client import GmailError
@@ -32,10 +32,12 @@ GRANT_RESET = {
     **_PHASE_RESET, "history_id": None, "sync_phase": "idle", "mailbox_hmac": None,
     "last_sync_at": None, "last_attempt_at": None, "next_sync_at": 0, "backoff_until": 0, "failures": 0,
     "attention": None, "last_http_status": None, "last_error": None, "backfill_completed_at": None,
+    "run_requested": 0, "force_full_resync": 0,
 }
 
 STATUS_FIELDS = ("grant_status", "grant_generation", "version", "sync_phase", "attention", "last_sync_at",
-                 "next_sync_at", "backoff_until", "failures", "last_http_status", "last_error")
+                 "next_sync_at", "backoff_until", "failures", "last_http_status", "last_error",
+                 "batch_processed_count")
 
 
 def digest(secret, domain, value):
@@ -51,23 +53,43 @@ class PendingMessage:
     rfc_message_id_hmac: str | None = None
     invoice: object = None
     source_kind: str = "email"
+    forwarded_manually: bool = False
+    sender_domain: str | None = None
+
+
+def _linked_manual_forward():
+    return select(BudgetReceipt.id).where(
+        BudgetReceipt.id == BudgetGmailMessage.receipt_id, BudgetReceipt.forwarded_manually == 1,
+    ).exists()
+
+
+def _tombstone_messages(session, *predicates):
+    session.execute(update(BudgetGmailMessage).where(*predicates).values(
+        receipt_id=None, outcome="deleted",
+        rfc_message_id_hmac=case((_linked_manual_forward(), None), else_=BudgetGmailMessage.rfc_message_id_hmac),
+    ))
 
 
 def tombstone_receipt(session, owner, receipt_id):
-    session.execute(update(BudgetGmailMessage).where(
-        BudgetGmailMessage.owner == owner, BudgetGmailMessage.receipt_id == receipt_id,
-    ).values(receipt_id=None, outcome="deleted"))
+    _tombstone_messages(session, BudgetGmailMessage.owner == owner, BudgetGmailMessage.receipt_id == receipt_id)
+
+
+def _unconfirmed_import():
+    # Confirmation sets a payment method. Ledger drift can later return the receipt to review.
+    return or_(BudgetReceipt.status == "imported",
+               and_(BudgetReceipt.status == "needs_review", BudgetReceipt.forwarded_manually == 1,
+                    BudgetReceipt.payment_method.is_(None)))
 
 
 def _delete_imports(session, owner, expires_at=None):
-    receipts = select(BudgetReceipt.id).where(BudgetReceipt.status == "imported")
+    receipts = select(BudgetReceipt.id).where(_unconfirmed_import())
     if owner is not None:
         receipts = receipts.where(BudgetReceipt.owner == owner)
     if expires_at is not None:
-        receipts = receipts.where(BudgetReceipt.import_expires_at <= expires_at)
-        session.execute(update(BudgetGmailMessage).where(
-            BudgetGmailMessage.receipt_id.in_(receipts),
-        ).values(receipt_id=None, outcome="deleted"))
+        # Earlier manual-review rows had no explicit expiry.
+        deadline = func.coalesce(BudgetReceipt.import_expires_at, BudgetReceipt.created_at + IMPORT_TTL)
+        receipts = receipts.where(deadline <= expires_at)
+        _tombstone_messages(session, BudgetGmailMessage.receipt_id.in_(receipts))
     session.execute(delete(BudgetReceiptLine).where(BudgetReceiptLine.receipt_id.in_(receipts)))
     session.execute(delete(BudgetReceipt).where(BudgetReceipt.id.in_(receipts)))
 
@@ -106,13 +128,38 @@ class GmailStore(BudgetStore):
     def fence(self, owner, generation):
         self._active(self.state(owner), generation)
 
+    def schedule_sync(self, owner, *, now, force_full_resync, cooldown):
+        """Queue a poller run. The request does not fetch or parse mail."""
+        with self.transaction() as session:
+            BudgetHTTPStore._owner(session, owner)
+            row = self._state(session, owner)
+            if row.grant_status != "active":
+                raise GmailError("budget_receipt_gmail_disabled", 409)
+            if row.attention == "identity_mismatch":
+                raise GmailError("mailbox_mismatch", 403, attention="identity_mismatch")
+            if row.backoff_until > now:
+                raise GmailError("budget_receipt_gmail_backoff", 429)
+            if row.run_requested:
+                if force_full_resync and row.sync_phase != "full_resync":
+                    row.force_full_resync = 1
+                return {"ok": True, "sync_phase": row.sync_phase, "version": row.version}
+            if row.last_attempt_at is not None and row.last_attempt_at + cooldown > now:
+                raise GmailError("budget_receipt_gmail_cooldown", 429)
+            session.add(row)
+            row.next_sync_at = now
+            row.run_requested = 1
+            if force_full_resync:
+                row.force_full_resync = 1
+            row.version += 1
+            return {"ok": True, "sync_phase": row.sync_phase, "version": row.version}
+
     def check_version(self, owner, expected):
         self._version(self.state(owner), expected)
 
     @staticmethod
     def _pending_count(session, owner):
         return session.scalar(select(func.count()).select_from(BudgetReceipt).where(
-            BudgetReceipt.owner == owner, BudgetReceipt.status == "imported"))
+            BudgetReceipt.owner == owner, _unconfirmed_import()))
 
     def status(self, owner):
         with self.sessions() as session:
@@ -125,7 +172,7 @@ class GmailStore(BudgetStore):
         with self.sessions() as session:
             return self._pending_count(session, owner) >= MAX_PENDING_IMPORTS
 
-    def transition(self, owner, expected, status, mailbox_hmac=None):
+    def transition(self, owner, expected, status, mailbox_hmac=None, *, queue_sync=False):
         with self.transaction() as session:
             BudgetHTTPStore._owner(session, owner)
             row = self._state(session, owner)
@@ -140,6 +187,9 @@ class GmailStore(BudgetStore):
             if status == "active":
                 row.mailbox_hmac = mailbox_hmac
                 row.granted_at, row.revoked_at = now, None
+                if queue_sync:
+                    row.run_requested = 1
+                    row.next_sync_at = now
             elif status == "revoked":
                 row.revoked_at = now
                 session.execute(update(BudgetGmailMessage).where(BudgetGmailMessage.owner == owner)
@@ -170,7 +220,7 @@ class GmailStore(BudgetStore):
     def _duplicate(session, owner, rfc_hmac):
         return rfc_hmac is not None and session.scalar(select(BudgetGmailMessage.gmail_id_hmac).where(
             BudgetGmailMessage.owner == owner, BudgetGmailMessage.rfc_message_id_hmac == rfc_hmac,
-            BudgetGmailMessage.outcome.in_(("imported", "deleted")),
+            BudgetGmailMessage.outcome.in_(("imported", "deleted")), ~_linked_manual_forward(),
         ).limit(1)) is not None
 
     @staticmethod
@@ -181,6 +231,18 @@ class GmailStore(BudgetStore):
                                 due_date=invoice.due_date, total_amount=invoice.amount, currency=invoice.currency,
                                 status="imported", document_kind="invoice", source_kind=item.source_kind,
                                 version=1, created_at=now, updated_at=now, import_expires_at=now + IMPORT_TTL)
+        session.add(receipt)
+        session.flush()
+        return receipt.id
+
+    @staticmethod
+    def _manual(session, owner, item, now):
+        """A manual forward waits for the owner. No body, full address, or transaction link is stored."""
+        receipt = BudgetReceipt(
+            id=str(uuid.uuid4()), owner=owner, raw_shop_name="przekazane ręcznie",
+            forwarded_sender_domain=item.sender_domain, forwarded_manually=1,
+            status="needs_review", document_kind="invoice", source_kind=item.source_kind,
+            version=1, created_at=now, updated_at=now, import_expires_at=now + IMPORT_TTL)
         session.add(receipt)
         session.flush()
         return receipt.id
@@ -199,18 +261,21 @@ class GmailStore(BudgetStore):
                     continue
                 receipt_id = None
                 outcome = item.outcome
-                if self._duplicate(session, owner, item.rfc_message_id_hmac):
+                # Review placeholders are keyed by their outer Gmail ID.
+                rfc_hmac = None if item.forwarded_manually else item.rfc_message_id_hmac
+                if self._duplicate(session, owner, rfc_hmac):
                     outcome = "skipped_duplicate"
                 if outcome == "imported":
                     if self._pending_count(session, owner) >= MAX_PENDING_IMPORTS:
                         drained = False
                         break
-                    receipt_id = self._invoice(session, owner, item, now)
+                    receipt_id = (self._manual(session, owner, item, now) if item.forwarded_manually
+                                  else self._invoice(session, owner, item, now))
                     imported += 1
                 else:
                     skipped += 1
                 session.add(BudgetGmailMessage(owner=owner, gmail_id_hmac=item.gmail_id_hmac,
-                                               rfc_message_id_hmac=item.rfc_message_id_hmac,
+                                               rfc_message_id_hmac=rfc_hmac,
                                                internal_date=item.internal_date, trust_path=item.trust_path,
                                                outcome=outcome, created_at=now, receipt_id=receipt_id))
             if row.sync_phase in ("backfill", "full_resync"):
@@ -218,6 +283,9 @@ class GmailStore(BudgetStore):
             if drained:
                 for key, value in changes.items():
                     setattr(row, key, value)
+                if changes.get("sync_phase") == "idle":
+                    # A force request may arrive after the worker chose what to scan.
+                    row.run_requested = int(bool(row.force_full_resync))
         return imported, skipped, drained
 
     def retain(self, owner, generation):

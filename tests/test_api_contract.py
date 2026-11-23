@@ -58,7 +58,7 @@ class OpenApiArtifactTests(unittest.TestCase):
     def test_monthly_budget_contract_chain_from_0_27_0(self):
         """Remove each additive surface before verifying earlier contract snapshots."""
         document = api_contract.build_openapi()
-        self.assertEqual(document["info"]["version"], "0.41.0")
+        self.assertEqual(document["info"]["version"], "0.43.0")
         schemas = document["components"]["schemas"]
         for operation in ("category-translation-set", "category-translation-delete", "label-translation-set",
                           "label-translation-delete", "translation-import"):
@@ -79,11 +79,14 @@ class OpenApiArtifactTests(unittest.TestCase):
             ("BudgetAnalyticsMonthlyBudgetSeriesCategory", "display_name"),
             ("BudgetAnalyticsMonthlyBudgetSeriesCategory", "display_label"),
             ("BudgetAnalyticsMonthlyBudgetCategoryLabel", "display_name"),
+            ("BudgetHouseholdCategoryLabel", "display_name"),
+            ("BudgetHouseholdOverviewCategory", "display_name"),
+            ("BudgetHouseholdCategory", "display_name"),
         ):
             schemas[schema]["properties"].pop(field)
             if field in schemas[schema].get("required", []):
                 schemas[schema]["required"].remove(field)
-        document["info"]["version"] = "0.40.0"
+        document["info"]["version"] = "0.42.0"
         schemas["Settings"]["description"] = (
             "GET /api/settings — the logged-in user's UI prefs. All three keys are ALWAYS present, null when\n"
             "unset (an unauthenticated / no-row request returns all-null, never an error)."
@@ -92,6 +95,29 @@ class OpenApiArtifactTests(unittest.TestCase):
             "POST /api/settings — a PARTIAL update: only the keys present are persisted (absent keys are left\n"
             "untouched). null clears a field. temp_scale ∈ {C,F,K}. locale ≤ 35 chars."
         )
+        # 0.42.0 Gmail queue/review metadata precedes the 0.41.0 category hues.
+        for name, field in (
+            ("BudgetReceiptSummary", "forwarded_manually"),
+            ("BudgetReceiptSummary", "forwarded_sender_domain"),
+            ("BudgetReceiptDetail", "forwarded_manually"),
+            ("BudgetReceiptDetail", "forwarded_sender_domain"),
+            ("BudgetReceiptGmailStatus", "batch_processed_count"),
+            ("BudgetReceiptGmailSyncResult", "version"),
+        ):
+            schemas[name]["properties"].pop(field)
+            if field in schemas[name].get("required", []):
+                schemas[name]["required"].remove(field)
+        document["info"]["version"] = "0.41.0"
+        # 0.41.0 category hues.
+        del document["paths"]["/api/budget/analytics/category-colors-spread"]
+        for name in ("BudgetAnalyticsCategoryColorSpreadRequest", "BudgetAnalyticsCategoryColorSpreadResult"):
+            del document["components"]["schemas"][name]
+        for name in ("BudgetAnalyticsCategory", "BudgetAnalyticsCategorySaved",
+                     "BudgetAnalyticsCategoryUpdateRequest", "BudgetAnalyticsMonthlyBudgetCategorySpend"):
+            schema = document["components"]["schemas"][name]
+            schema["properties"].pop("color_hue")
+            if "required" in schema and "color_hue" in schema["required"]:
+                schema["required"].remove("color_hue")
         for name in ("BudgetAnalyticsRule", "BudgetAnalyticsRuleSaved"):
             schema = document["components"]["schemas"][name]
             self.assertNotIn("inactive_reason", schema["required"])
@@ -688,6 +714,7 @@ class TolerantResponseContractTests(unittest.TestCase):
         "BudgetLabelTranslationSetRequest", "BudgetLabelTranslationDeleteRequest",
         "BudgetCategoryTranslationImportEntry", "BudgetLabelTranslationImportEntry", "BudgetTranslationImportRequest",
         "BudgetAnalyticsAnnotationRequest", "BudgetAnalyticsRulePreviewRequest", "BudgetAnalyticsRuleSaveRequest",
+        "BudgetAnalyticsCategoryColorSpreadRequest",
         "BudgetAnalyticsRuleBatchPreviewRequest", "BudgetAnalyticsRuleBatchSaveRequest",
         "BudgetAnalyticsTransferDecisionRequest", "BudgetAnalyticsLegRequest",
         "BudgetAnalyticsSpendingLimitSaveRequest", "BudgetAnalyticsMortgageSaveRequest",

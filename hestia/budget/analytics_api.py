@@ -35,6 +35,7 @@ WRITES = {
     "label-translation-set": (api_contract.BudgetLabelTranslationSetRequest, "set_label_translation", "translation"),
     "label-translation-delete": (api_contract.BudgetLabelTranslationDeleteRequest, "delete_label_translation", "translation"),
     "translation-import": (api_contract.BudgetTranslationImportRequest, "import_translations", "results"),
+    "category-colors-spread": (api_contract.BudgetAnalyticsCategoryColorSpreadRequest, "spread_category_colors", "categories"),
     "annotation": (api_contract.BudgetAnalyticsAnnotationRequest, "annotate", "annotation"),
     "rule-preview": (api_contract.BudgetAnalyticsRulePreviewRequest, "preview_rule", "preview"),
     "rule-save": (api_contract.BudgetAnalyticsRuleSaveRequest, "save_rule", "rule"),

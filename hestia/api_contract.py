@@ -101,9 +101,14 @@ from .budget.i18n import LANGUAGES, validate_languages
 # 0.39.0: receipts device tokens and one-time pairing codes (migration 0025, down_revision 0024),
 #         plus optional parse-text source_kind.
 # 0.40.0: separate Gmail receipt grant, status, sync and revocation (migration 0024).
-# 0.41.0: ordered per-user budget display languages, category and one-off label translations
-#         (migration 0026, down_revision 0025), resolved display fields and admin bulk import.
-CONTRACT_VERSION = "0.41.0"
+# Documentation-only follow-up to 0.40.0: clarify the #262 budget browser-session requirement and the
+# receipts device-token exception. No schema or wire change.
+# 0.41.0: persistent root-category hues and explicit even re-spreading (migration 0026, down_revision 0025).
+
+# 0.42.0: queue Gmail syncs and expose manual-forward review metadata (migration 0027, down_revision 0026).
+# 0.43.0: ordered per-user budget display languages, category and one-off label translations
+#         (migration 0028, down_revision 0027), resolved display fields and admin bulk import.
+CONTRACT_VERSION = "0.43.0"
 OPENAPI_PATH = Path(__file__).resolve().parent.parent / "docs" / "api" / "openapi.json"
 
 # De-duplicated string literals (SonarPython S1192): the OpenAPI content-type, the paths reused
@@ -1565,6 +1570,7 @@ class BudgetConflict(BudgetError):
 
 # Owner-private analytics requests are strict; read values remain forward compatible.
 BudgetAnalyticsVersion = Annotated[int, Field(ge=0)]
+BudgetCategoryHue = Annotated[int, Field(ge=0, le=359)]
 BudgetAnalyticsFingerprint = Annotated[str, Field(pattern=r"^[a-f0-9]{64}$")]
 BudgetAnalyticsReference = Annotated[str, Field(min_length=1, max_length=1024)]
 _ROW_KEY_PATTERN = r"^[^/\x00-\x1f\x7f]{1,128}/[^\x00-\x1f\x7f]{1,1024}$"
@@ -1597,6 +1603,8 @@ class BudgetAnalyticsCategoryUpdateRequest(BudgetAnalyticsCategoryCreateRequest)
     category_id: BudgetId
     archived: bool
     expected_version: BudgetAnalyticsVersion
+    # Omitted keeps the current hue. Null selects the largest-gap automatic hue; only roots accept this field.
+    color_hue: Annotated[BudgetCategoryHue | None, Field(json_schema_extra=_OMIT)] = None
 
 
 class BudgetAnalyticsAnnotationRequest(BaseModel):
@@ -1780,6 +1788,7 @@ class BudgetAnalyticsCategory(BaseModel):
     created_at: float
     updated_at: float
     parent_id: str | None
+    color_hue: Annotated[BudgetCategoryHue | None, Field(json_schema_extra=_OMIT)] = None
 
 
 class BudgetAnalyticsCategorySaved(BudgetAnalyticsCategory):
@@ -1795,6 +1804,16 @@ class BudgetAnalyticsCategoryResult(BaseModel):
     model_config = _READ
     ok: Literal[True]
     category: BudgetAnalyticsCategorySaved
+
+
+class BudgetAnalyticsCategoryColorSpreadRequest(BaseModel):
+    model_config = _STRICT
+
+
+class BudgetAnalyticsCategoryColorSpreadResult(BaseModel):
+    model_config = _READ
+    ok: Literal[True]
+    categories: list[BudgetAnalyticsCategory]
 
 
 class BudgetAnalyticsAnnotationSaved(BaseModel):
@@ -2671,6 +2690,7 @@ class BudgetAnalyticsMonthlyBudgetCategorySpend(BaseModel):
     display_name: Annotated[str | None, Field(default=None, json_schema_extra=_OMIT)] = None
     display_label: Annotated[str | None, Field(default=None, json_schema_extra=_OMIT)] = None
     archived: bool
+    color_hue: Annotated[BudgetCategoryHue | None, Field(json_schema_extra=_OMIT)] = None
     expenses: BudgetAnalyticsMonthlyBudgetMoney
     refunds: BudgetAnalyticsMonthlyBudgetMoney
     net_spending: BudgetAnalyticsMonthlyBudgetMoney
@@ -2839,6 +2859,8 @@ class BudgetReceiptSummary(BaseModel):
     due_date: Annotated[str, Field(pattern=r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
                                    json_schema_extra={"format": "date"})] | None = None
     import_expires_at: float | None = None
+    forwarded_manually: bool = False
+    forwarded_sender_domain: Annotated[str, Field(min_length=1, max_length=253)] | None = None
 
 
 class BudgetReceiptDetail(BudgetReceiptSummary):
@@ -2971,11 +2993,7 @@ class BudgetReceiptGmailSyncResult(BaseModel):
     model_config = _READ
     ok: Literal[True]
     sync_phase: BudgetReceiptGmailSyncPhase
-    imported_count: int
-    skipped_count: int
-    has_more: bool
-    attention: BudgetReceiptGmailAttention | None
-    next_sync_at: float
+    version: int
 
 
 class BudgetReceiptGmailStatus(BaseModel):
@@ -2994,6 +3012,7 @@ class BudgetReceiptGmailStatus(BaseModel):
     last_http_status: int | None
     last_error: str | None
     pending_imported_count: int
+    batch_processed_count: int
     google_revoke_url: Literal["https://myaccount.google.com/linkedapps"]
     google_revoke_affects_calendar_sync: Literal[True]
 
@@ -3116,6 +3135,7 @@ class BudgetHouseholdCategoryLabel(BaseModel):
     name: str
     display_name: Annotated[str | None, Field(default=None, json_schema_extra=_OMIT)] = None
     archived: bool
+    color_hue: BudgetCategoryHue | None
 
 
 class BudgetHouseholdSeries(BaseModel):
@@ -3154,6 +3174,7 @@ class BudgetHouseholdOverviewCategory(BaseModel):
     label: str | None
     display_name: Annotated[str | None, Field(default=None, json_schema_extra=_OMIT)] = None
     archived: bool
+    color_hue: BudgetCategoryHue | None
     currency: str
     expenses: _HouseholdMoney
     refunds: _HouseholdMoney
@@ -3196,6 +3217,7 @@ class BudgetHouseholdCategory(BaseModel):
     label: str
     display_name: Annotated[str | None, Field(default=None, json_schema_extra=_OMIT)] = None
     archived: bool
+    color_hue: BudgetCategoryHue | None
 
 
 class BudgetHouseholdCategories(BaseModel):
@@ -3356,6 +3378,7 @@ _HOUSEHOLD_MODELS = (BudgetHouseholdAccess, BudgetHouseholdAccounts, BudgetHouse
                      BudgetHouseholdQuarantine, BudgetHouseholdSettings)
 
 _ANALYTICS_MODELS = (BudgetAnalyticsCategoryCreateRequest, BudgetAnalyticsCategoryUpdateRequest,
+                     BudgetAnalyticsCategoryColorSpreadRequest, BudgetAnalyticsCategoryColorSpreadResult,
                      BudgetAnalyticsAnnotationRequest, BudgetAnalyticsTransactionsByKeysRequest,
                      BudgetCategoryTranslationSetRequest, BudgetCategoryTranslationDeleteRequest,
                      BudgetLabelTranslationSetRequest, BudgetLabelTranslationDeleteRequest,
@@ -3436,6 +3459,7 @@ _PATH_ROLES = {
     ("POST", "/api/budget/analytics/label-translation-set"): "admin",
     ("POST", "/api/budget/analytics/label-translation-delete"): "admin",
     ("POST", "/api/budget/analytics/translation-import"): "admin",
+    ("POST", "/api/budget/analytics/category-colors-spread"): "admin",
     ("POST", "/api/budget/analytics/annotation"): "admin",
     ("POST", "/api/budget/analytics/rule-preview"): "admin",
     ("POST", "/api/budget/analytics/rule-save"): "admin",
@@ -4080,6 +4104,13 @@ def _receipt_error(description):
 
 _RECEIPT_AMBIGUITY = "Cookie plus Authorization returns 400 budget_auth_ambiguous."
 _DEVICE_UNAUTHENTICATED = "A missing or invalid credential, device_token_expired, or device_token_revoked."
+_BUDGET_BROWSER_AUTH = (
+    "Every /api/budget/* route requires the browser hestia_session cookie and configured same-origin Origin. "
+    "A login/session Authorization: Bearer from /api/login returns 403 budget_browser_session_required on every "
+    "budget route, including GETs. The only bearer exception is a receipts-scoped device token obtained through "
+    "browser pairing: it is accepted only on receipts parse-text, confirm, list, search, delete, detail and image, "
+    "plus device-token/revoke for itself. Household viewer/operator access is browser-only too."
+)
 
 
 def _receipt_paths():
@@ -4207,7 +4238,7 @@ def _device_token_paths():
         prefix + "pair-code": {"post": {
             "operationId": "pairBudgetReceiptDevice",
             "summary": "Issue one 5-minute pairing code for the signed-in admin owner.",
-            "description": note + " Browser cookie and exact Origin. At most 3 active codes.",
+            "description": note + " Browser cookie and exact Origin. At most 3 active codes. " + _BUDGET_BROWSER_AUTH,
             "requestBody": {"required": True, "content": {_APP_JSON: {
                 "schema": _ref("BudgetReceiptDeviceBrowserRequest")}}},
             "responses": pair,
@@ -4248,16 +4279,22 @@ def _gmail_receipt_paths():
     for name, operation, summary, request_model, response_model, conflict in (
         ("grant", "setBudgetReceiptGmailGrant", "Enable or disable the local Gmail grant",
          "BudgetReceiptGmailGrantRequest", "BudgetReceiptGmailGrantResult",
-         "Version conflict or a missing authoritative SQLite users backend."),
+         "Version conflict, missing authoritative SQLite users backend, or Gmail busy (budget_receipt_gmail_busy)."),
         ("revoke", "revokeBudgetReceiptGmailGrant", "Revoke the local grant and purge unconfirmed imports",
          "BudgetReceiptGmailRevokeRequest", "BudgetReceiptGmailGrantResult",
-         "Version conflict or a missing authoritative SQLite users backend."),
-        ("sync", "syncBudgetReceiptGmail", "Run one bounded Gmail import batch",
+         "Version conflict, missing authoritative SQLite users backend, or Gmail busy (budget_receipt_gmail_busy)."),
+        ("sync", "syncBudgetReceiptGmail", "Schedule one Gmail import for the background poller",
          "BudgetReceiptGmailSyncRequest", "BudgetReceiptGmailSyncResult",
-         "Grant is inactive, the sync is already running, or authoritative SQLite users are unavailable."),
+         "Grant is inactive or authoritative SQLite users are unavailable."),
     ):
         responses = _budget_responses(response_model)
-        responses["200"]["description"] = summary
+        if name == "sync":
+            accepted = responses.pop("200")
+            accepted["description"] = ("Accepted for the background poller. Kicks share queued or running work. "
+                                       "A full-resync request upgrades that work.")
+            responses["202"] = accepted
+        else:
+            responses["200"]["description"] = summary
         responses["409"] = _receipt_error(conflict)
         responses["411"] = _receipt_error("Content-Length is required.")
         responses["413"] = _receipt_error("JSON body exceeds 4096 bytes.")
@@ -4528,6 +4565,7 @@ def _analytics_paths():
         ("label-translation-set", "setBudgetLabelTranslation", "BudgetLabelTranslationSetRequest", "BudgetLabelTranslationSetResult"),
         ("label-translation-delete", "deleteBudgetLabelTranslation", "BudgetLabelTranslationDeleteRequest", "BudgetLabelTranslationDeleteResult"),
         ("translation-import", "importBudgetTranslations", "BudgetTranslationImportRequest", "BudgetTranslationImportResult"),
+        ("category-colors-spread", "spreadBudgetAnalyticsCategoryColors", "BudgetAnalyticsCategoryColorSpreadRequest", "BudgetAnalyticsCategoryColorSpreadResult"),
         ("annotation", "annotateBudgetAnalyticsTransaction", "BudgetAnalyticsAnnotationRequest", "BudgetAnalyticsAnnotationResult"),
         ("rule-preview", "previewBudgetAnalyticsRule", "BudgetAnalyticsRulePreviewRequest", "BudgetAnalyticsPreviewResult"),
         ("rule-save", "saveBudgetAnalyticsRule", "BudgetAnalyticsRuleSaveRequest", "BudgetAnalyticsRuleResult"),

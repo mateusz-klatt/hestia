@@ -240,7 +240,8 @@ class HouseholdReader:
         accounts = session.scalars(select(db.BudgetAccount.id).join(db.BudgetConnection).where(
             db.BudgetAccount.owner == owner, db.BudgetConnection.owner == owner, db.BudgetAccount.enabled)
             .order_by(db.BudgetAccount.id))
-        categories = [{"id": row.id, "name": row.name, "archived": row.archived} for row in session.scalars(
+        categories = [{"id": row.id, "name": row.name, "archived": row.archived, "color_hue": row.color_hue}
+                      for row in session.scalars(
             select(db.BudgetCategory).where(db.BudgetCategory.owner == owner).order_by(db.BudgetCategory.id))]
         return AliasBook(self.secret, grant_id, list(accounts), categories, DisplayResolver(session, owner, member))
 
@@ -269,7 +270,8 @@ class HouseholdReader:
                 "months": months,
                 "category_labels": [
                     {"category_id": book.category(identifier), "name": book.label(identifier),
-                     "display_name": book.display_name(identifier), "archived": archived}
+                     "display_name": book.display_name(identifier), "archived": archived,
+                     "color_hue": book.category_meta[identifier].get("color_hue")}
                     for identifier, archived in sorted(labels.items())
                 ],
             },
@@ -535,7 +537,8 @@ def _report_accounts(book, grant_id):
 def _categories(book, grant_id):
     rows = [{"id": book.category(identifier), "label": book.label(identifier),
              "display_name": book.display_name(identifier),
-             "archived": bool(book.category_meta[identifier]["archived"])}
+             "archived": bool(book.category_meta[identifier]["archived"]),
+             "color_hue": book.category_meta[identifier].get("color_hue")}
             for identifier in sorted(book.category_ordinal, key=book.category_ordinal.get)]
     return {"grant_id": grant_id, "categories": rows}
 
@@ -640,6 +643,7 @@ def _category_rows(rows, book):
             "label": book.label(row["category_id"]) if row["category_id"] is not None else None,
             "display_name": book.display_name(row["category_id"]),
             "archived": False if row["category_id"] is None else bool(book.category_meta[row["category_id"]]["archived"]),
+            "color_hue": None if row["category_id"] is None else book.category_meta[row["category_id"]].get("color_hue"),
             "currency": row["currency"],
             "expenses": row["expenses"],
             "refunds": row["refunds"],
@@ -655,6 +659,7 @@ def _category_rows(rows, book):
             "label": book.label(identifier) if identifier is not None else None,
             "display_name": book.display_name(identifier),
             "archived": False if identifier is None else bool(book.category_meta[identifier]["archived"]),
+            "color_hue": None if identifier is None else book.category_meta[identifier].get("color_hue"),
             "currency": currency,
             "expenses": "0",
             "refunds": "0",
@@ -769,6 +774,7 @@ def _sanitize_spend(row, book):
         "name": book.label(identifier) if identifier is not None else None,
         "display_name": book.display_name(identifier),
         "archived": row["archived"],
+        "color_hue": None if identifier is None else book.category_meta[identifier].get("color_hue"),
         "expenses": row["expenses"],
         "refunds": row["refunds"],
         "net_spending": row["net_spending"],

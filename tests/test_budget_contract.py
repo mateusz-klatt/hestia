@@ -204,7 +204,7 @@ class BudgetOpenApiTests(unittest.TestCase):
         analytics_reads = {"overview", "transactions", "categories", "rules", "transfers", "recurring",
                            "spending-limits", "mortgages", "inbox", "quarantine", "forecast",
                            "monthly-budget", "monthly-budget/charts"}
-        analytics_writes = {"transactions-by-keys", "category-create", "category-update", "category-translation-set",
+        analytics_writes = {"transactions-by-keys", "category-create", "category-update", "category-colors-spread", "category-translation-set",
                             "category-translation-delete", "label-translation-set", "label-translation-delete",
                             "translation-import", "annotation", "rule-preview",
                             "rule-save", "rule-batch-preview", "rule-batch-save",
@@ -300,7 +300,13 @@ class BudgetOpenApiTests(unittest.TestCase):
             self.assertEqual(version["name"], "X-Hestia-Contract-Version")
             self.assertFalse(version["required"])
         self.assertNotIn("parameters", receipts["/api/budget/receipts/gmail-status"]["get"])
-        self.assertIn("429", receipts["/api/budget/receipts/gmail-sync"]["post"]["responses"])
+        sync_post = receipts["/api/budget/receipts/gmail-sync"]["post"]
+        self.assertIn("202", sync_post["responses"])
+        self.assertNotIn("200", sync_post["responses"])
+        self.assertIn("429", sync_post["responses"])
+        self.assertEqual(set(document["components"]["schemas"]["BudgetReceiptGmailSyncResult"]["required"]),
+                         {"ok", "sync_phase", "version"})
+        self.assertIn("batch_processed_count", document["components"]["schemas"]["BudgetReceiptGmailStatus"]["required"])
         batch = analytics["/api/budget/analytics/rule-batch-preview"]["post"]["description"]
         self.assertIn("1..100", batch)
         self.assertIn("All-or-nothing", batch)
@@ -328,6 +334,31 @@ class BudgetOpenApiTests(unittest.TestCase):
             self.assertNotIn("parent_id", schema["required"])
             self.assertIsNone(parent["default"])
             self.assertIn("omit this field", parent["description"])
+
+    def test_category_hue_is_bounded_and_spread_is_additive(self):
+        document = contract.build_openapi()
+        schemas = document["components"]["schemas"]
+        for name in ("BudgetAnalyticsCategory", "BudgetAnalyticsCategorySaved", "BudgetHouseholdCategory",
+                     "BudgetHouseholdCategoryLabel", "BudgetHouseholdOverviewCategory"):
+            with self.subTest(schema=name):
+                schema = schemas[name]
+                hue = schema["properties"]["color_hue"]
+                if name.startswith("BudgetHousehold"):
+                    self.assertIn("color_hue", schema["required"])
+                else:
+                    self.assertNotIn("color_hue", schema["required"])
+                self.assertEqual(hue["anyOf"][0]["minimum"], 0)
+                self.assertEqual(hue["anyOf"][0]["maximum"], 359)
+                self.assertEqual(hue["anyOf"][1], {"type": "null"})
+        update = schemas["BudgetAnalyticsCategoryUpdateRequest"]
+        self.assertNotIn("color_hue", update["required"])
+        self.assertNotIn("default", update["properties"]["color_hue"])
+        self.assertNotIn("color_hue", schemas["BudgetAnalyticsCategoryCreateRequest"]["properties"])
+        spread = document["paths"]["/api/budget/analytics/category-colors-spread"]["post"]
+        self.assertEqual(spread["x-required-role"], "admin")
+        self.assertEqual(spread["requestBody"]["content"]["application/json"]["schema"],
+                         {"$ref": "#/components/schemas/BudgetAnalyticsCategoryColorSpreadRequest"})
+        self.assertEqual(schemas["BudgetAnalyticsCategoryColorSpreadRequest"]["additionalProperties"], False)
 
     def test_forecast_query_and_error_contract(self):
         paths = contract.build_openapi()["paths"]
@@ -446,7 +477,7 @@ class BudgetOpenApiTests(unittest.TestCase):
         schemas = contract.build_openapi()["components"]["schemas"]
         optional_keys = {"Configuration": {"income_window"},
                          "Coverage": {"pending_row_keys", "pending_row_keys_truncated"},
-                         "CategorySpend": {"one_off", "one_off_key", "display_name", "display_label"}}
+                         "CategorySpend": {"one_off", "one_off_key", "display_name", "display_label", "color_hue"}}
         for suffix, keys in {
             "": {"period", "start", "end", "cutoff", "current_month", "evaluated_at", "evaluation_date",
                  "evaluation_timezone", "currency", "available_currencies", "configuration", "coverage",
@@ -463,7 +494,7 @@ class BudgetOpenApiTests(unittest.TestCase):
             "Pace": {"basis", "budget", "status", "daily_rate", "projected_month_spend", "exhaustion_day"},
             "CategoryLimit": {"monthly_limit", "remaining", "over_by", "percent_used_floor",
                               "warning_percent", "status"},
-            "CategorySpend": {"category_id", "name", "display_name", "display_label", "archived", "expenses", "refunds", "net_spending", "limit",
+            "CategorySpend": {"category_id", "name", "display_name", "display_label", "archived", "color_hue", "expenses", "refunds", "net_spending", "limit",
                               "one_off", "one_off_key"},
             "PassThrough": {"rent_category_id", "mortgage_category_id", "rent_received", "mortgage_debits",
                             "mortgage_refunds", "unapplied_mortgage_refunds", "matched", "unapplied_rent",
@@ -591,7 +622,7 @@ class BudgetOpenApiTests(unittest.TestCase):
         request_names = {model.__name__ for model, _ in BudgetRequestContractTests.CASES}
         request_names.add("BudgetConsentFlowRequest")
         request_names.update({"BudgetAnalyticsCategoryCreateRequest", "BudgetAnalyticsCategoryUpdateRequest",
-                              "BudgetAnalyticsAnnotationRequest", "BudgetAnalyticsRulePreviewRequest",
+                              "BudgetAnalyticsCategoryColorSpreadRequest", "BudgetAnalyticsAnnotationRequest", "BudgetAnalyticsRulePreviewRequest",
                               "BudgetAnalyticsRuleSaveRequest", "BudgetAnalyticsRuleBatchPreviewRequest",
                               "BudgetAnalyticsRuleBatchSaveRequest", "BudgetAnalyticsTransferDecisionRequest",
                               "BudgetAnalyticsLegRequest", "BudgetAnalyticsSpendingLimitSaveRequest",

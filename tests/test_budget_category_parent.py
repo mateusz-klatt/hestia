@@ -6,6 +6,8 @@ from pathlib import Path
 import sqlite3
 import tempfile
 import unittest
+
+from tests.migration_head import HEAD
 from unittest import mock
 
 from alembic import command
@@ -15,7 +17,6 @@ from sqlalchemy import inspect
 from sqlalchemy.exc import IntegrityError
 
 from hestia import db
-from tests.test_db import _head_revision
 from hestia.budget import month_budget
 from hestia.budget.analytics_core import AnalyticsError
 from hestia.budget.month_budget import MonthBudgetSettings, MonthDataError
@@ -189,7 +190,7 @@ class CategoryParentInitDbTests(unittest.TestCase):
             engine, _ = db.init_db(self.path)
         self.assertEqual(observed, [(True, None, 0, "head")])
         version, columns, rules, limits, annotations, temp_tables, violations = self._snapshot()
-        self.assertEqual(version, [(_head_revision(),)])
+        self.assertEqual(version, [(HEAD,)])
         self.assertIn("parent_id", columns)
         self.assertEqual(rules, [("rule", "cat")])
         self.assertEqual(limits, [("lim", "cat")])
@@ -236,7 +237,7 @@ class CategoryParentInitDbTests(unittest.TestCase):
             engine, _ = db.init_db(self.path)
         self.assertEqual(observed, [(True, None, 0, "head"), (True, None, 0, "head")])
         version, columns, rules, limits, annotations, temp_tables, violations = self._snapshot()
-        self.assertEqual(version, [(_head_revision(),)])
+        self.assertEqual(version, [(HEAD,)])
         self.assertIn("parent_id", columns)
         self.assertEqual(rules, [("rule", "cat")])
         self.assertEqual(limits, [("lim", "cat")])
@@ -279,7 +280,7 @@ class CategoryParentInitDbTests(unittest.TestCase):
             db.downgrade_db(self.path, "0019")
         self.assertIn("foreign_key_check", str(caught.exception))
         version, columns, rules, limits, annotations, temp_tables, _violations = self._snapshot()
-        self.assertEqual(version, [(_head_revision(),)])
+        self.assertEqual(version, [(HEAD,)])
         self.assertIn("parent_id", columns)
         self.assertEqual(rules, [("orphan", "missing"), ("rule", "cat")])
         self.assertEqual(limits, [("lim", "cat")])
@@ -296,7 +297,7 @@ class CategoryParentInitDbTests(unittest.TestCase):
         self.assertEqual(leftovers, ["_alembic_tmp_budget_categories"])
         db.init_db(self.path)
         version, columns, rules, limits, annotations, temp_tables, violations = self._snapshot()
-        self.assertEqual(version, [(_head_revision(),)])
+        self.assertEqual(version, [(HEAD,)])
         self.assertIn("parent_id", columns)
         self.assertEqual(rules, [("rule", "cat")])
         self.assertEqual(limits, [("lim", "cat")])
@@ -432,7 +433,10 @@ class CategoryParentStoreTests(AnalyticsCase):
             if not foreign_keys:
                 conn.exec_driver_sql("PRAGMA foreign_keys=OFF")
             try:
-                conn.exec_driver_sql("UPDATE budget_categories SET parent_id=? WHERE id=?", (parent_id, category_id))
+                # A child may not keep a root hue (ck_budget_categories_color_hue_root), so forcing a parent clears it.
+                conn.exec_driver_sql(
+                    "UPDATE budget_categories SET parent_id=?, color_hue=CASE WHEN ? IS NULL THEN color_hue END "
+                    "WHERE id=?", (parent_id, parent_id, category_id))
                 conn.commit()
             finally:
                 if not foreign_keys:

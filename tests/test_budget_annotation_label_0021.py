@@ -21,6 +21,8 @@ from pathlib import Path
 import sqlite3
 import tempfile
 import unittest
+
+from tests.migration_head import HEAD
 from unittest import mock
 
 from alembic import command
@@ -39,7 +41,6 @@ from hestia.budget.analytics_core import (
 from tests import test_budget_analytics_api as analytics_api_tests
 from tests.test_budget_analytics_store import AnalyticsCase
 from tests.test_budget_analytics_views import ProjectionCase
-from tests.test_db import _head_revision
 from tests.test_budget_month import DEFAULT_SETTINGS, ONE_OFF_TEST_SECRET, _cat, _eval, _eval_charts, _tx
 
 # One scenario for the overview and the chart series. A labelled mortgage leg stays in its category.
@@ -105,9 +106,13 @@ class AnnotationLabelMigration0021Tests(unittest.TestCase):
         cfg = Config()
         cfg.set_main_option("script_location", str(db._MIGRATIONS_DIR))
         script = ScriptDirectory.from_config(cfg)
-        self.assertEqual(script.get_heads(), [_head_revision()])
-        i18n = script.get_revision("0026")
-        self.assertEqual(i18n.down_revision, "0025")
+        self.assertEqual(script.get_heads(), [HEAD])
+        i18n = script.get_revision("0028")
+        self.assertEqual(i18n.down_revision, "0027")
+        gmail_sync = script.get_revision("0027")
+        self.assertEqual(gmail_sync.down_revision, "0026")
+        hues = script.get_revision("0026")
+        self.assertEqual(hues.down_revision, "0025")
         devices = script.get_revision("0025")
         self.assertEqual(devices.down_revision, "0024")
         gmail = script.get_revision("0024")
@@ -222,7 +227,7 @@ class AnnotationLabelMigration0021Tests(unittest.TestCase):
         with engine.connect() as conn:
             self.assertIsNone(conn.exec_driver_sql(
                 "SELECT label FROM budget_annotations WHERE entry_reference='kept'").scalar())
-            self.assertEqual(conn.exec_driver_sql("SELECT version_num FROM alembic_version").scalar(), _head_revision())
+            self.assertEqual(conn.exec_driver_sql("SELECT version_num FROM alembic_version").scalar(), HEAD)
         self._assert_integrity_and_no_batch_temp()
 
         def insert(reference, label):
@@ -310,7 +315,7 @@ class AnnotationLabelMigration0021Tests(unittest.TestCase):
             version = raw.execute("SELECT version_num FROM alembic_version").fetchone()
             label = raw.execute(
                 "SELECT label FROM budget_annotations WHERE entry_reference='kept'").fetchone()
-        self.assertEqual(version, (_head_revision(),))
+        self.assertEqual(version, (HEAD,))
         self.assertEqual(label, (None,))
         self.assertEqual(self._kept_row(), _KEPT_ROW)
         self._assert_integrity_and_no_batch_temp()

@@ -76,8 +76,8 @@ class TranslationMigrationTests(unittest.TestCase):
     def test_schema_constraints_cascade_and_downgrade_roundtrip(self):
         cfg = Config()
         cfg.set_main_option("script_location", str(db._MIGRATIONS_DIR))
-        revision = ScriptDirectory.from_config(cfg).get_revision("0026")
-        self.assertEqual(revision.down_revision, "0025")
+        revision = ScriptDirectory.from_config(cfg).get_revision("0028")
+        self.assertEqual(revision.down_revision, "0027")
         engine, sessions = db.init_db(self.path)
         with sessions.begin() as session:
             session.add(db.User(username="owner", password_hash="unused", role="admin"))
@@ -109,7 +109,7 @@ class TranslationMigrationTests(unittest.TestCase):
             self.assertEqual(session.get(db.BudgetCategory, "other").name, "Other")
         engine.dispose()
 
-        db.downgrade_db(self.path, "0025")
+        db.downgrade_db(self.path, "0027")
         with closing(sqlite3.connect(self.path)) as raw:
             tables = {row[0] for row in raw.execute("SELECT name FROM sqlite_master WHERE type='table'")}
             self.assertNotIn("budget_category_translations", tables)
@@ -290,6 +290,7 @@ class TranslationAPITests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(rows[food["id"]]["display_name"], "Nourriture")
         self.assertEqual(rows[food["id"]]["translations"], {"en": "Food", "fr": "Nourriture", "de": "Essen"})
         self.assertEqual(rows[food["id"]]["name"], "Canonical Food")
+        self.assertEqual(rows[food["id"]]["color_hue"], food["color_hue"])
         self.assertEqual((rows[empty["id"]]["display_name"], rows[empty["id"]]["translations"]),
                          ("No Translation", {}))
         self.preferences(["de", "fr"])
@@ -379,9 +380,11 @@ class ViewerPreferenceHouseholdTests(unittest.IsolatedAsyncioTestCase):
         categories = await (await self.fetch("categories")).json()
         row = next(row for row in categories["categories"] if row["id"] == alias)
         self.assertEqual(row["display_name"], "Courses")
+        self.assertEqual(row["color_hue"], self.groceries["color_hue"])
         overview = await (await self.fetch("overview")).json()
         row = next(row for row in overview["categories"] if row["category_id"] == alias)
         self.assertEqual(row["display_name"], "Courses")
+        self.assertEqual(row["color_hue"], self.groceries["color_hue"])
         with self.sessions.begin() as session:
             session.get(db.UserSetting, "viewer").preferred_languages = ["de"]
         categories = await (await self.fetch("categories")).json()

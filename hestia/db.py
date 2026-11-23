@@ -482,12 +482,15 @@ class BudgetTransactionMetadata(Base):
 
 
 class BudgetCategory(Base):
-    """Owner category. ``parent_id`` is an optional same-table parent (depth is enforced in the store)."""
+    """Owner category. Parent depth is store-enforced; ``color_hue`` is meaningful only at the root."""
 
     __tablename__ = "budget_categories"
     __table_args__ = (
         UniqueConstraint("owner", "name_key"),
         CheckConstraint("parent_id IS NULL OR parent_id != id", name="ck_budget_categories_parent_not_self"),
+        CheckConstraint("color_hue IS NULL OR (color_hue >= 0 AND color_hue <= 359)",
+                        name="ck_budget_categories_color_hue_range"),
+        CheckConstraint("parent_id IS NULL OR color_hue IS NULL", name="ck_budget_categories_color_hue_root"),
         Index("ix_budget_categories_parent_id", "parent_id"),
         Index("uq_budget_categories_id_owner", "id", "owner", unique=True),
     )
@@ -500,6 +503,7 @@ class BudgetCategory(Base):
     created_at: Mapped[float]
     updated_at: Mapped[float]
     parent_id: Mapped[str | None] = mapped_column(ForeignKey("budget_categories.id", name="fk_budget_categories_parent_id"))
+    color_hue: Mapped[int | None]
 
 
 class BudgetCategoryTranslation(Base):
@@ -901,9 +905,18 @@ class BudgetReceipt(Base):
         CheckConstraint("source_kind IN ('live_text', 'local_ocr', 'cloud_ai', 'paste', 'photo', 'email', 'attachment')",
                         name="ck_budget_receipts_source"),
         CheckConstraint(
-            "status IN ('draft', 'imported') OR (receipt_date IS NOT NULL AND total_amount IS NOT NULL "
+            "status IN ('draft', 'imported') OR (forwarded_manually = 1 AND status = 'needs_review') "
+            "OR (receipt_date IS NOT NULL AND total_amount IS NOT NULL "
             "AND currency IS NOT NULL AND payment_method IS NOT NULL)",
             name="ck_budget_receipts_confirmed_fields",
+        ),
+        CheckConstraint("forwarded_manually IN (0, 1)", name="ck_budget_receipts_forwarded_manually"),
+        CheckConstraint(
+            "forwarded_sender_domain IS NULL OR (length(forwarded_sender_domain) BETWEEN 1 AND 253 "
+            "AND instr(forwarded_sender_domain, '@') = 0 AND forwarded_sender_domain GLOB '*.*' "
+            "AND forwarded_sender_domain NOT GLOB '*[A-Z]*' "
+            "AND forwarded_sender_domain NOT GLOB '*[^a-z0-9.-]*')",
+            name="ck_budget_receipts_forwarded_sender_domain",
         ),
         CheckConstraint(
             "(linked_account_id IS NULL AND linked_entry_ref IS NULL AND linked_fingerprint IS NULL "
@@ -946,6 +959,8 @@ class BudgetReceipt(Base):
     import_expires_at: Mapped[float | None]
     invoice_number: Mapped[str | None]
     due_date: Mapped[str | None]
+    forwarded_manually: Mapped[int] = mapped_column(server_default=text("0"))
+    forwarded_sender_domain: Mapped[str | None]
     image_relpath: Mapped[str | None]
     image_expires_at: Mapped[float | None]
     raw_ocr_text: Mapped[str | None] = mapped_column(Text)
@@ -1070,6 +1085,8 @@ class BudgetGmailState(Base):
         CheckConstraint("backfill_completed_at IS NULL OR backfill_completed_at >= 0",
                         name="ck_budget_gmail_state_backfill_completed_at"),
         CheckConstraint("version >= 1", name="ck_budget_gmail_state_version"),
+        CheckConstraint("run_requested IN (0, 1)", name="ck_budget_gmail_state_run_requested"),
+        CheckConstraint("force_full_resync IN (0, 1)", name="ck_budget_gmail_state_force_full_resync"),
     )
     owner: Mapped[str] = mapped_column(ForeignKey("users.username"), primary_key=True)
     grant_status: Mapped[str] = mapped_column(server_default=text("'disabled'"))
@@ -1096,6 +1113,8 @@ class BudgetGmailState(Base):
     last_error: Mapped[str | None]
     backfill_completed_at: Mapped[float | None]
     version: Mapped[int] = mapped_column(server_default=text("1"))
+    run_requested: Mapped[int] = mapped_column(server_default=text("0"))
+    force_full_resync: Mapped[int] = mapped_column(server_default=text("0"))
 
 
 class BudgetGmailMessage(Base):
@@ -1113,7 +1132,7 @@ class BudgetGmailMessage(Base):
         CheckConstraint("rfc_message_id_hmac IS NULL OR (length(rfc_message_id_hmac) = 64 "
                         "AND rfc_message_id_hmac NOT GLOB '*[^0-9a-f]*')", name="ck_budget_gmail_messages_rfc_message_id_hmac"),
         CheckConstraint("internal_date >= 0", name="ck_budget_gmail_messages_internal_date"),
-        CheckConstraint("trust_path IN ('direct_allowlist', 'spouse_forward', 'untrusted')",
+        CheckConstraint("trust_path IN ('direct_allowlist', 'spouse_forward', 'owner_forward', 'untrusted')",
                         name="ck_budget_gmail_messages_trust_path"),
         CheckConstraint("outcome IN ('imported', 'skipped_non_receipt', 'skipped_untrusted_sender', "
                         "'skipped_oversized', 'skipped_duplicate', 'parse_failed', 'deleted')",

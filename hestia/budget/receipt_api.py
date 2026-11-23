@@ -33,7 +33,8 @@ _CURRENT_VERSION = tuple(int(part) for part in api_contract.CONTRACT_VERSION.spl
 _RECEIPT_RESULT_KEY = {"parse-text": "draft", "confirm": "receipt", "list": "receipts",
                        "search": "receipts", "detail": "receipt"}
 _LEGACY_SOURCE = {"paste": "live_text", "email": "live_text", "photo": "local_ocr", "attachment": "local_ocr"}
-_GMAIL_FIELDS = ("document_kind", "invoice_number", "due_date", "import_expires_at")
+_GMAIL_FIELDS = ("document_kind", "invoice_number", "due_date", "import_expires_at",
+                 "forwarded_manually", "forwarded_sender_domain")
 
 
 def enabled():

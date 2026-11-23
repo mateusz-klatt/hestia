@@ -288,11 +288,13 @@
         explicitly approves.</p>
       <p>Hestia stores structured receipt and invoice fields and a keyed hash of the Gmail
         message ID to avoid duplicate imports. It stores no message bodies, attachments or email
-        addresses from those messages. Unconfirmed imports expire after 30 days. Hestia keeps the
-        keyed message hashes for up to 400 days to prevent re-imports.</p>
+        addresses from those messages. Pending imports, including forwarded items awaiting manual
+        review, expire 30 days after import. Hestia keeps the keyed message hashes for up to
+        400 days to prevent re-imports.</p>
       <p>The owner can pause or revoke the Hestia grant. Revocation stops Gmail import and clears
-        local access tokens, sync state, unconfirmed imports and message hashes. Confirmed receipts
-        remain until deleted by the owner. Removing Google-side access in the owner's
+        local access tokens, sync state, pending imports and message hashes. Previously confirmed
+        receipts remain until the owner deletes them, including receipts returned to review after
+        a change to the linked transaction. Removing Google-side access in the owner's
         <a href="https://myaccount.google.com/linkedapps">Google Account</a> can also disconnect
         Calendar Sync if it uses the same OAuth client and require Calendar consent again.</p>
       <p>Cloudflare and the Apache reverse proxy may process requests and responses that contain

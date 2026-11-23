@@ -5,13 +5,14 @@ from pathlib import Path
 import tempfile
 import unittest
 
+from tests.migration_head import HEAD
+
 from alembic.autogenerate import compare_metadata
 from alembic.runtime.migration import MigrationContext
 from sqlalchemy import inspect
 from sqlalchemy.exc import IntegrityError
 
 from hestia import db
-from tests.test_db import _head_revision
 
 _TABLES = {"budget_receipt_device_tokens", "budget_receipt_pair_codes"}
 _HEX = "ab" * 32
@@ -50,7 +51,7 @@ class DeviceTokenMigration0025Tests(unittest.TestCase):
     def test_upgrade_downgrade_and_metadata_match(self):
         engine, _ = db.init_db(self.path)
         self._assert_clean(engine)
-        self.assertEqual(self._revision(engine), _head_revision())
+        self.assertEqual(self._revision(engine), HEAD)
         self.assertTrue(_TABLES <= set(inspect(engine).get_table_names()))
         self.assertNotIn("budget_receipt_pair_locks", inspect(engine).get_table_names())
         self.assertFalse({"token", "code", "token_hash", "code_hash"} & self._columns(engine, "budget_receipt_device_tokens"))
@@ -130,7 +131,7 @@ class DeviceTokenMigration0025Tests(unittest.TestCase):
             ).all(), [("category", "category-01"), ("receipt", "11111111-1111-4111-8111-111111111111")])
         engine, _ = db.init_db(self.path)
         self._assert_clean(engine)
-        self.assertEqual(self._revision(engine), _head_revision())
+        self.assertEqual(self._revision(engine), HEAD)
         with engine.connect() as conn:
             self.assertEqual(compare_metadata(MigrationContext.configure(conn), db.Base.metadata), [])
             self.assertEqual(conn.exec_driver_sql("SELECT id FROM budget_receipts").scalar(),

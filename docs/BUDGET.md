@@ -67,11 +67,24 @@ below; reads never fetch missing labels from the bank.
 Browser-only POST controls are `/api/budget/account-selection`, `/account-kind`
 and `/connection-state`. They require the HttpOnly session cookie, JSON, and exact
 `Origin` matching an explicitly configured HTTPS `HESTIA_BUDGET_PUBLIC_ORIGIN`
-(for example `https://hestia.klatt.ie`). Any Authorization header is rejected for
-these mutations; authenticated bearer reads remain supported. Unknown fields,
-duplicate JSON fields, duplicate scalar query parameters and invalid types are
-rejected. Supply the current `control_version` as `expected_version`; a missing
-or stale conflicting version returns 409 with safe current owner metadata.
+(for example `https://hestia.klatt.ie`). Unknown fields, duplicate JSON fields,
+duplicate scalar query parameters and invalid types are rejected. Supply the
+current `control_version` as `expected_version`; a missing or stale conflicting
+version returns 409 with safe current owner metadata.
+
+The whole budget HTTP API is browser-only: use the HttpOnly `hestia_session`
+cookie and the configured same-origin `Origin`. A login/session bearer returned
+by `POST /api/login` is not a budget credential. Sending it as
+`Authorization: Bearer` is rejected with 403 `budget_browser_session_required`
+on **every** `/api/budget/*` route, GETs included. Household access for a spouse
+or other viewer/operator is browser-only too; a household grant does not make a
+login bearer valid.
+
+The only bearer exception is a receipts-scoped device token obtained through
+browser pairing. It works only on the seven receipts routes (`parse-text`,
+`confirm`, `list`, `search`, `delete`, `detail` and `image`) and on
+`device-token/revoke` to revoke **itself**. It does not authorize pairing,
+device listing, Gmail import, other budget routes or household reads.
 
 Selection/kind/pause writes audit the authenticated username with origin `web` in
 the same transaction, without publishing financial details in the global audit

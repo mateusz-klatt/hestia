@@ -210,6 +210,7 @@ _ROUTE_MIN_ROLE = {
     ("POST", "/api/budget/analytics/label-translation-set"): _ADMIN,
     ("POST", "/api/budget/analytics/label-translation-delete"): _ADMIN,
     ("POST", "/api/budget/analytics/translation-import"): _ADMIN,
+    ("POST", "/api/budget/analytics/category-colors-spread"): _ADMIN,
     ("POST", "/api/budget/analytics/annotation"): _ADMIN,
     ("POST", "/api/budget/analytics/rule-preview"): _ADMIN,
     ("POST", "/api/budget/analytics/rule-save"): _ADMIN,

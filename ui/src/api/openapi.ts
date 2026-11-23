@@ -165,6 +165,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/budget/analytics/category-colors-spread": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Save an owner-private local classification
+         * @description Requires the exact admin owner, browser cookie and configured HTTPS Origin. Version and source fingerprints prevent stale changes. No bank request is made.
+         */
+        post: operations["spreadBudgetAnalyticsCategoryColors"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/budget/analytics/category-create": {
         parameters: {
             query?: never;
@@ -1375,7 +1395,7 @@ export interface paths {
         put?: never;
         /**
          * Issue one 5-minute pairing code for the signed-in admin owner.
-         * @description Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Cookie plus Authorization returns 400 budget_auth_ambiguous.  Browser cookie and exact Origin. At most 3 active codes.
+         * @description Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Cookie plus Authorization returns 400 budget_auth_ambiguous.  Browser cookie and exact Origin. At most 3 active codes. Every /api/budget/* route requires the browser hestia_session cookie and configured same-origin Origin. A login/session Authorization: Bearer from /api/login returns 403 budget_browser_session_required on every budget route, including GETs. The only bearer exception is a receipts-scoped device token obtained through browser pairing: it is accepted only on receipts parse-text, confirm, list, search, delete, detail and image, plus device-token/revoke for itself. Household viewer/operator access is browser-only too.
          */
         post: operations["pairBudgetReceiptDevice"];
         delete?: never;
@@ -1494,7 +1514,7 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Run one bounded Gmail import batch
+         * Schedule one Gmail import for the background poller
          * @description Default-off with HESTIA_BUDGET_GMAIL_IMPORT_ENABLED. Requires an authenticated SQLite admin and a same-origin browser session. Send exact Origin and a JSON body of at most 4 KiB.
          */
         post: operations["syncBudgetReceiptGmail"];
@@ -2442,6 +2462,8 @@ export interface components {
         BudgetAnalyticsCategory: {
             /** Archived */
             archived: boolean;
+            /** Color Hue */
+            color_hue?: number | null;
             /** Created At */
             created_at: number;
             /** Display Name */
@@ -2460,6 +2482,18 @@ export interface components {
             updated_at: number;
             /** Version */
             version: number;
+        };
+        /** BudgetAnalyticsCategoryColorSpreadRequest */
+        BudgetAnalyticsCategoryColorSpreadRequest: Record<string, never>;
+        /** BudgetAnalyticsCategoryColorSpreadResult */
+        BudgetAnalyticsCategoryColorSpreadResult: {
+            /** Categories */
+            categories: components["schemas"]["BudgetAnalyticsCategory"][];
+            /**
+             * Ok
+             * @constant
+             */
+            ok: true;
         };
         /** BudgetAnalyticsCategoryCreateRequest */
         BudgetAnalyticsCategoryCreateRequest: {
@@ -2487,6 +2521,8 @@ export interface components {
             archived: boolean;
             /** Changed */
             changed: boolean;
+            /** Color Hue */
+            color_hue?: number | null;
             /** Created At */
             created_at: number;
             /** Display Name */
@@ -2537,6 +2573,8 @@ export interface components {
             archived: boolean;
             /** Category Id */
             category_id: string;
+            /** Color Hue */
+            color_hue?: number | null;
             /** Expected Version */
             expected_version: number;
             /** Name */
@@ -3129,6 +3167,8 @@ export interface components {
             archived: boolean;
             /** Category Id */
             category_id: string | null;
+            /** Color Hue */
+            color_hue?: number | null;
             /** Display Label */
             display_label?: string | null;
             /** Display Name */
@@ -4901,6 +4941,8 @@ export interface components {
         BudgetHouseholdCategory: {
             /** Archived */
             archived: boolean;
+            /** Color Hue */
+            color_hue: number | null;
             /** Display Name */
             display_name?: string | null;
             /** Id */
@@ -4914,6 +4956,8 @@ export interface components {
             archived: boolean;
             /** Category Id */
             category_id: string;
+            /** Color Hue */
+            color_hue: number | null;
             /** Display Name */
             display_name?: string | null;
             /** Name */
@@ -5055,6 +5099,8 @@ export interface components {
             archived: boolean;
             /** Category Id */
             category_id: string | null;
+            /** Color Hue */
+            color_hue: number | null;
             /** Currency */
             currency: string;
             /** Display Name */
@@ -5602,6 +5648,16 @@ export interface components {
              * @default null
              */
             due_date: string | null;
+            /**
+             * Forwarded Manually
+             * @default false
+             */
+            forwarded_manually: boolean;
+            /**
+             * Forwarded Sender Domain
+             * @default null
+             */
+            forwarded_sender_domain: string | null;
             /** Image Available */
             image_available: boolean;
             /** Image Expires At */
@@ -5775,6 +5831,8 @@ export interface components {
             attention: ("authorization" | "configuration" | "identity_mismatch" | "quota") | null;
             /** Backoff Until */
             backoff_until: number;
+            /** Batch Processed Count */
+            batch_processed_count: number;
             /** Configured */
             configured: boolean;
             /** Enabled */
@@ -5826,26 +5884,18 @@ export interface components {
         };
         /** BudgetReceiptGmailSyncResult */
         BudgetReceiptGmailSyncResult: {
-            /** Attention */
-            attention: ("authorization" | "configuration" | "identity_mismatch" | "quota") | null;
-            /** Has More */
-            has_more: boolean;
-            /** Imported Count */
-            imported_count: number;
-            /** Next Sync At */
-            next_sync_at: number;
             /**
              * Ok
              * @constant
              */
             ok: true;
-            /** Skipped Count */
-            skipped_count: number;
             /**
              * Sync Phase
              * @enum {string}
              */
             sync_phase: "idle" | "backfill" | "incremental" | "full_resync";
+            /** Version */
+            version: number;
         };
         /** BudgetReceiptLine */
         BudgetReceiptLine: {
@@ -6008,6 +6058,16 @@ export interface components {
              * @default null
              */
             due_date: string | null;
+            /**
+             * Forwarded Manually
+             * @default false
+             */
+            forwarded_manually: boolean;
+            /**
+             * Forwarded Sender Domain
+             * @default null
+             */
+            forwarded_sender_domain: string | null;
             /** Image Available */
             image_available: boolean;
             /** Image Expires At */
@@ -7868,6 +7928,102 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["BudgetAnalyticsCategories"];
+                };
+            };
+            /** @description invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description session required; middleware may return an empty body */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description admin owner or browser-origin requirement failed; middleware may return an empty body */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description unknown, disabled or foreign resource */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Version, financial source, reserved transfer leg, preview or cursor changed; reload and review. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Explicit analytics processing or owner configuration limit; no partial totals. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description budget configuration unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+        };
+    };
+    spreadBudgetAnalyticsCategoryColors: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BudgetAnalyticsCategoryColorSpreadRequest"];
+            };
+        };
+        responses: {
+            /** @description owner-scoped stored state; no bank request */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetAnalyticsCategoryColorSpreadResult"];
                 };
             };
             /** @description invalid request */
@@ -14104,7 +14260,7 @@ export interface operations {
                     "application/json": components["schemas"]["BudgetError"];
                 };
             };
-            /** @description Version conflict or a missing authoritative SQLite users backend. */
+            /** @description Version conflict, missing authoritative SQLite users backend, or Gmail busy (budget_receipt_gmail_busy). */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -14227,7 +14383,7 @@ export interface operations {
                     "application/json": components["schemas"]["BudgetError"];
                 };
             };
-            /** @description Version conflict or a missing authoritative SQLite users backend. */
+            /** @description Version conflict, missing authoritative SQLite users backend, or Gmail busy (budget_receipt_gmail_busy). */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -14379,8 +14535,8 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Run one bounded Gmail import batch */
-            200: {
+            /** @description Accepted for the background poller. Kicks share queued or running work. A full-resync request upgrades that work. */
+            202: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -14424,7 +14580,7 @@ export interface operations {
                     "application/json": components["schemas"]["BudgetError"];
                 };
             };
-            /** @description Grant is inactive, the sync is already running, or authoritative SQLite users are unavailable. */
+            /** @description Grant is inactive or authoritative SQLite users are unavailable. */
             409: {
                 headers: {
                     [name: string]: unknown;

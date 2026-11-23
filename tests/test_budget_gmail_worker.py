@@ -195,6 +195,15 @@ worker.serve(sys.argv[1])
         with patch.object(worker.ReceiptParserWorker, "_exchange", return_value=b"-"):
             self.assertFalse(worker.ReceiptParserWorker().ready())
 
+    def test_readiness_probe_times_out_when_the_socket_stays_silent(self):
+        with tempfile.TemporaryDirectory() as directory, socket.socket(socket.AF_UNIX) as listener:
+            path = str(Path(directory) / "silent.sock")
+            listener.bind(path)
+            listener.listen(1)
+            started = time.monotonic()
+            self.assertFalse(worker.ReceiptParserWorker(path).ready())
+            self.assertLess(time.monotonic() - started, 2)
+
     def test_supervisor_kills_child_on_timeout_and_peer_disconnect(self):
         listener, client = MagicMock(), MagicMock()
         reader, writer = MagicMock(), MagicMock()

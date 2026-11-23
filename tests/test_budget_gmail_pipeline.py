@@ -41,8 +41,10 @@ class GmailPipelineTests(TestCase):
             spoof.replace_header("From", "billing@orange.example.test")
             untrusted_forward = self._email("intruder@untrusted.example.test", "Synthetic cover note")
             untrusted_forward.add_attachment(direct)
+            review = self._email("spouse@example.test", "Synthetic cover note")
+            review.add_attachment(self._email("other@orange.example.test", body, subtype="html"))
             messages = {"mock-forward": forward, "mock-direct": direct, "mock-spoof": spoof,
-                        "mock-untrusted-forward": untrusted_forward}
+                        "mock-untrusted-forward": untrusted_forward, "mock-review": review}
 
             transport, clock = FakeGmailTransport(), FakeClock()
             transport.routes[("/messages", None)] = response(page(*messages))
@@ -65,12 +67,15 @@ class GmailPipelineTests(TestCase):
                     self.assertTrue(worker.ready())
                     service.transition(OWNER, 1, "active")
                     outcome = service.sync(OWNER)
-                    self.assertEqual((outcome["imported_count"], outcome["skipped_count"]), (1, 3))
+                    self.assertEqual((outcome["imported_count"], outcome["skipped_count"]), (2, 3))
                 finally:
                     sidecar.terminate()
 
             with sessions() as session:
-                invoice, = list(session.scalars(select(db.BudgetReceipt)))
+                invoice, = list(session.scalars(select(db.BudgetReceipt).where(db.BudgetReceipt.status == "imported")))
+                review, = list(session.scalars(select(db.BudgetReceipt).where(db.BudgetReceipt.status == "needs_review")))
+                self.assertEqual((review.forwarded_manually, review.forwarded_sender_domain, review.invoice_number),
+                                 (1, "orange.example.test", None))
                 self.assertEqual((invoice.raw_shop_name, invoice.raw_nip, invoice.invoice_number, invoice.total_amount,
                                   invoice.currency, invoice.receipt_date, invoice.due_date),
                                  ("Orange", "9370008168", "FV/2026/10/12345", "76.45", "PLN", "2026-10-06", "2026-10-19"))

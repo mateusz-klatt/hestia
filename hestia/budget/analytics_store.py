@@ -44,7 +44,8 @@ MAX_BATCH_RULES = 100
 _HASH = re.compile(r"[a-f0-9]{64}\Z", re.ASCII)
 _CURRENCY = re.compile(r"[A-Z]{3}\Z", re.ASCII)
 _RULE_FIELDS = frozenset({"rule_id", "expected_version", "field", "operator", "value", "category_id", "kind", "priority", "enabled"})
-_CATEGORY_FIELDS = ("id", "name", "archived", "version", "created_at", "updated_at", "parent_id")
+_CATEGORY_FIELDS = ("id", "name", "archived", "version", "created_at", "updated_at", "parent_id", "color_hue")
+_CATEGORY_HUE_OFFSET = 20
 _MAX_CATEGORY_DEPTH = 3
 _UNSET = object()
 _RULE_KEY_UNCHECKED = object()
@@ -136,6 +137,24 @@ def _fingerprint(current, expected):
         raise AnalyticsError("budget_analytics_source_changed", 409)
 
 
+def _even_hues(count):
+    return [round(index * 360 / count + _CATEGORY_HUE_OFFSET) % 360 for index in range(count)]
+
+
+def _largest_gap_hue(hues):
+    ordered = sorted(set(hues))
+    if not ordered:
+        return _CATEGORY_HUE_OFFSET
+    gaps = []
+    for index, start in enumerate(ordered):
+        end = ordered[(index + 1) % len(ordered)]
+        if index == len(ordered) - 1:
+            end += 360
+        gaps.append((end - start, start, end))
+    _width, start, end = min(gaps, key=lambda gap: (-gap[0], gap[1]))
+    return (start + (end - start) // 2) % 360
+
+
 class BudgetAnalyticsStore(BudgetHTTPStore):
     def __init__(self, sessions, *, rule_key_file=None, **kwargs):
         super().__init__(sessions, **kwargs)
@@ -211,6 +230,19 @@ class BudgetAnalyticsStore(BudgetHTTPStore):
             return [_dict(row, _CATEGORY_FIELDS) for row in session.scalars(select(Category).where(Category.owner == owner)
                                                                            .order_by(Category.name_key, Category.id))]
 
+    @staticmethod
+    def _next_category_hue(session, owner, *, exclude_id=None):
+        query = select(Category.color_hue).where(Category.owner == owner, Category.parent_id.is_(None),
+                                                 Category.color_hue.is_not(None))
+        if exclude_id is not None:
+            query = query.where(Category.id != exclude_id)
+        return _largest_gap_hue(session.scalars(query))
+
+    @staticmethod
+    def _validate_category_hue(value):
+        if value is not None and (type(value) is not int or not 0 <= value <= 359):
+            raise AnalyticsError()
+
     def _checked_parent(self, session, owner, parent_id, subject_id):
         """Same-owner active parent, no cycle, and the moved subtree stays within depth 3."""
         if parent_id is None:
@@ -280,18 +312,21 @@ class BudgetAnalyticsStore(BudgetHTTPStore):
                 raise AnalyticsError("budget_analytics_limit", 413)
             parent_id = self._checked_parent(session, owner, parent_id, None)
             now = self._now()
+            hue = None if parent_id is not None else self._next_category_hue(session, owner)
             row = Category(id=str(uuid.uuid4()), owner=owner, name=name, name_key=key, archived=False, version=1,
-                           created_at=now, updated_at=now, parent_id=parent_id)
+                           created_at=now, updated_at=now, parent_id=parent_id, color_hue=hue)
             session.add(row)
             session.flush()
             result = _dict(row, _CATEGORY_FIELDS)
             self._analytics_audit(session, owner, "category", row.id, "create", None, result)
             return {**result, "changed": True}
 
-    def update_category(self, owner, identifier, *, name, archived, expected_version, parent_id=_UNSET):
+    def update_category(self, owner, identifier, *, name, archived, expected_version, parent_id=_UNSET, color_hue=_UNSET):
         name = " ".join(_text(name).split())
         if type(archived) is not bool:
             raise AnalyticsError()
+        if color_hue is not _UNSET:
+            self._validate_category_hue(color_hue)
         with self.transaction() as session:
             self._owner(session, owner)
             row = self._owned(session, Category, owner, identifier)
@@ -301,17 +336,48 @@ class BudgetAnalyticsStore(BudgetHTTPStore):
             if other is not None:
                 raise AnalyticsError("budget_analytics_conflict", 409)
             new_parent = row.parent_id if parent_id is _UNSET else self._checked_parent(session, owner, parent_id, row.id)
+            if new_parent is not None and color_hue is not _UNSET:
+                raise AnalyticsError()
             before = _dict(row, _CATEGORY_FIELDS)
-            if (row.name, row.archived, row.parent_id) == (name, archived, new_parent):
+            new_hue = row.color_hue
+            if new_parent is not None:
+                new_hue = None
+            elif color_hue is not _UNSET:
+                new_hue = (self._next_category_hue(session, owner, exclude_id=row.id)
+                           if color_hue is None else color_hue)
+            elif row.parent_id is not None or (row.color_hue is None and row.archived and not archived):
+                new_hue = self._next_category_hue(session, owner, exclude_id=row.id)
+            if (row.name, row.archived, row.parent_id, row.color_hue) == (name, archived, new_parent, new_hue):
                 return {**before, "changed": False}
             if archived and self._has_children(session, owner, row.id):
                 raise AnalyticsError()
             row.name, row.name_key, row.archived, row.parent_id = name, name.casefold(), archived, new_parent
+            row.color_hue = new_hue
             row.version += 1
             row.updated_at = self._now()
             result = _dict(row, _CATEGORY_FIELDS)
             self._analytics_audit(session, owner, "category", row.id, "update", before, result)
             return {**result, "changed": True}
+
+    def spread_category_colors(self, owner):
+        with self.transaction() as session:
+            self._owner(session, owner)
+            rows = list(session.scalars(select(Category).where(
+                Category.owner == owner, Category.parent_id.is_(None), Category.archived.is_(False))
+                .order_by(Category.name_key, Category.id)))
+            result = []
+            for row, hue in zip(rows, _even_hues(len(rows))):
+                before = _dict(row, _CATEGORY_FIELDS)
+                if row.color_hue == hue:
+                    result.append(before)
+                    continue
+                row.color_hue = hue
+                row.version += 1
+                row.updated_at = self._now()
+                after = _dict(row, _CATEGORY_FIELDS)
+                self._analytics_audit(session, owner, "category", row.id, "color-spread", before, after)
+                result.append(after)
+            return result
 
     @staticmethod
     def _translation_language(lang):

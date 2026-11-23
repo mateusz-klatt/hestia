@@ -955,6 +955,19 @@
             "title": "Archived",
             "type": "boolean"
           },
+          "color_hue": {
+            "anyOf": [
+              {
+                "maximum": 359,
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Color Hue"
+          },
           "created_at": {
             "title": "Created At",
             "type": "number"
@@ -1073,6 +1086,34 @@
         "title": "BudgetAnalyticsCategory",
         "type": "object"
       },
+      "BudgetAnalyticsCategoryColorSpreadRequest": {
+        "additionalProperties": false,
+        "properties": {},
+        "title": "BudgetAnalyticsCategoryColorSpreadRequest",
+        "type": "object"
+      },
+      "BudgetAnalyticsCategoryColorSpreadResult": {
+        "properties": {
+          "categories": {
+            "items": {
+              "$ref": "#/components/schemas/BudgetAnalyticsCategory"
+            },
+            "title": "Categories",
+            "type": "array"
+          },
+          "ok": {
+            "const": true,
+            "title": "Ok",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "categories"
+        ],
+        "title": "BudgetAnalyticsCategoryColorSpreadResult",
+        "type": "object"
+      },
       "BudgetAnalyticsCategoryCreateRequest": {
         "additionalProperties": false,
         "properties": {
@@ -1131,6 +1172,19 @@
           "changed": {
             "title": "Changed",
             "type": "boolean"
+          },
+          "color_hue": {
+            "anyOf": [
+              {
+                "maximum": 359,
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Color Hue"
           },
           "created_at": {
             "title": "Created At",
@@ -1358,6 +1412,19 @@
             "minLength": 1,
             "title": "Category Id",
             "type": "string"
+          },
+          "color_hue": {
+            "anyOf": [
+              {
+                "maximum": 359,
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Color Hue"
           },
           "expected_version": {
             "minimum": 0,
@@ -2972,6 +3039,19 @@
               }
             ],
             "title": "Category Id"
+          },
+          "color_hue": {
+            "anyOf": [
+              {
+                "maximum": 359,
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Color Hue"
           },
           "display_label": {
             "anyOf": [
@@ -8179,6 +8259,19 @@
             "title": "Archived",
             "type": "boolean"
           },
+          "color_hue": {
+            "anyOf": [
+              {
+                "maximum": 359,
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Color Hue"
+          },
           "display_name": {
             "anyOf": [
               {
@@ -8205,7 +8298,8 @@
         "required": [
           "id",
           "label",
-          "archived"
+          "archived",
+          "color_hue"
         ],
         "title": "BudgetHouseholdCategory",
         "type": "object"
@@ -8222,6 +8316,19 @@
             "pattern": "^[0-9a-f]{64}$",
             "title": "Category Id",
             "type": "string"
+          },
+          "color_hue": {
+            "anyOf": [
+              {
+                "maximum": 359,
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Color Hue"
           },
           "display_name": {
             "anyOf": [
@@ -8242,7 +8349,8 @@
         "required": [
           "category_id",
           "name",
-          "archived"
+          "archived",
+          "color_hue"
         ],
         "title": "BudgetHouseholdCategoryLabel",
         "type": "object"
@@ -8662,6 +8770,19 @@
             ],
             "title": "Category Id"
           },
+          "color_hue": {
+            "anyOf": [
+              {
+                "maximum": 359,
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Color Hue"
+          },
           "currency": {
             "title": "Currency",
             "type": "string"
@@ -8717,6 +8838,7 @@
           "category_id",
           "label",
           "archived",
+          "color_hue",
           "currency",
           "expenses",
           "refunds",
@@ -10570,6 +10692,25 @@
             "default": null,
             "title": "Due Date"
           },
+          "forwarded_manually": {
+            "default": false,
+            "title": "Forwarded Manually",
+            "type": "boolean"
+          },
+          "forwarded_sender_domain": {
+            "anyOf": [
+              {
+                "maxLength": 253,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Forwarded Sender Domain"
+          },
           "image_available": {
             "title": "Image Available",
             "type": "boolean"
@@ -11101,6 +11242,10 @@
             "title": "Backoff Until",
             "type": "number"
           },
+          "batch_processed_count": {
+            "title": "Batch Processed Count",
+            "type": "integer"
+          },
           "configured": {
             "title": "Configured",
             "type": "boolean"
@@ -11207,6 +11352,7 @@
           "last_http_status",
           "last_error",
           "pending_imported_count",
+          "batch_processed_count",
           "google_revoke_url",
           "google_revoke_affects_calendar_sync"
         ],
@@ -11227,43 +11373,10 @@
       },
       "BudgetReceiptGmailSyncResult": {
         "properties": {
-          "attention": {
-            "anyOf": [
-              {
-                "enum": [
-                  "authorization",
-                  "configuration",
-                  "identity_mismatch",
-                  "quota"
-                ],
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Attention"
-          },
-          "has_more": {
-            "title": "Has More",
-            "type": "boolean"
-          },
-          "imported_count": {
-            "title": "Imported Count",
-            "type": "integer"
-          },
-          "next_sync_at": {
-            "title": "Next Sync At",
-            "type": "number"
-          },
           "ok": {
             "const": true,
             "title": "Ok",
             "type": "boolean"
-          },
-          "skipped_count": {
-            "title": "Skipped Count",
-            "type": "integer"
           },
           "sync_phase": {
             "enum": [
@@ -11274,16 +11387,16 @@
             ],
             "title": "Sync Phase",
             "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
           }
         },
         "required": [
           "ok",
           "sync_phase",
-          "imported_count",
-          "skipped_count",
-          "has_more",
-          "attention",
-          "next_sync_at"
+          "version"
         ],
         "title": "BudgetReceiptGmailSyncResult",
         "type": "object"
@@ -11812,6 +11925,25 @@
             ],
             "default": null,
             "title": "Due Date"
+          },
+          "forwarded_manually": {
+            "default": false,
+            "title": "Forwarded Manually",
+            "type": "boolean"
+          },
+          "forwarded_sender_domain": {
+            "anyOf": [
+              {
+                "maxLength": 253,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Forwarded Sender Domain"
           },
           "image_available": {
             "title": "Image Available",
@@ -15587,7 +15719,7 @@
   "info": {
     "description": "Local cloud-free smart-home control API. Generated from hestia/api_contract.py \u2014 do not edit by hand; run `python -m hestia.api_contract`.",
     "title": "hestia API",
-    "version": "0.41.0"
+    "version": "0.43.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -16262,6 +16394,116 @@
           }
         },
         "summary": "Read owner-private local budget analytics",
+        "x-required-role": "admin"
+      }
+    },
+    "/api/budget/analytics/category-colors-spread": {
+      "post": {
+        "description": "Requires the exact admin owner, browser cookie and configured HTTPS Origin. Version and source fingerprints prevent stale changes. No bank request is made.",
+        "operationId": "spreadBudgetAnalyticsCategoryColors",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BudgetAnalyticsCategoryColorSpreadRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetAnalyticsCategoryColorSpreadResult"
+                }
+              }
+            },
+            "description": "owner-scoped stored state; no bank request"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "session required; middleware may return an empty body"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "admin owner or browser-origin requirement failed; middleware may return an empty body"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "unknown, disabled or foreign resource"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Version, financial source, reserved transfer leg, preview or cursor changed; reload and review."
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Explicit analytics processing or owner configuration limit; no partial totals."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "budget configuration unavailable"
+          }
+        },
+        "summary": "Save an owner-private local classification",
         "x-required-role": "admin"
       }
     },
@@ -23335,7 +23577,7 @@
     },
     "/api/budget/receipts/device-token/pair-code": {
       "post": {
-        "description": "Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Cookie plus Authorization returns 400 budget_auth_ambiguous.  Browser cookie and exact Origin. At most 3 active codes.",
+        "description": "Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Cookie plus Authorization returns 400 budget_auth_ambiguous.  Browser cookie and exact Origin. At most 3 active codes. Every /api/budget/* route requires the browser hestia_session cookie and configured same-origin Origin. A login/session Authorization: Bearer from /api/login returns 403 budget_browser_session_required on every budget route, including GETs. The only bearer exception is a receipts-scoped device token obtained through browser pairing: it is accepted only on receipts parse-text, confirm, list, search, delete, detail and image, plus device-token/revoke for itself. Household viewer/operator access is browser-only too.",
         "operationId": "pairBudgetReceiptDevice",
         "requestBody": {
           "content": {
@@ -23749,7 +23991,7 @@
                 }
               }
             },
-            "description": "Version conflict or a missing authoritative SQLite users backend."
+            "description": "Version conflict, missing authoritative SQLite users backend, or Gmail busy (budget_receipt_gmail_busy)."
           },
           "411": {
             "content": {
@@ -23889,7 +24131,7 @@
                 }
               }
             },
-            "description": "Version conflict or a missing authoritative SQLite users backend."
+            "description": "Version conflict, missing authoritative SQLite users backend, or Gmail busy (budget_receipt_gmail_busy)."
           },
           "411": {
             "content": {
@@ -24051,7 +24293,7 @@
           "required": true
         },
         "responses": {
-          "200": {
+          "202": {
             "content": {
               "application/json": {
                 "schema": {
@@ -24059,7 +24301,7 @@
                 }
               }
             },
-            "description": "Run one bounded Gmail import batch"
+            "description": "Accepted for the background poller. Kicks share queued or running work. A full-resync request upgrades that work."
           },
           "400": {
             "content": {
@@ -24109,7 +24351,7 @@
                 }
               }
             },
-            "description": "Grant is inactive, the sync is already running, or authoritative SQLite users are unavailable."
+            "description": "Grant is inactive or authoritative SQLite users are unavailable."
           },
           "411": {
             "content": {
@@ -24172,7 +24414,7 @@
             "description": "budget configuration unavailable"
           }
         },
-        "summary": "Run one bounded Gmail import batch",
+        "summary": "Schedule one Gmail import for the background poller",
         "x-required-role": "admin"
       }
     },
