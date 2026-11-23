@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { accountName, annotationRequest, canPair, canonicalAmount, clampPercentString, counterparty, currentMonth,
+import { loadLocale } from "../../i18n";
+import { CONSENT_STATUS_KEYS, RULE_FIELD_KEYS, accountName, annotationRequest, canPair, canonicalAmount, clampPercentString, counterparty, currentMonth,
   counterpartyRuleCandidate, daysBetween, formatRatioHalfEven, formatScaledBigInt, hasAnalytics, isMonth, isPositiveDecimal, isZero, kindChoice,
-  kindChoicesFor, legsMatch, limitCurrencies, manualPairRequest, monthLabel, monthlyBudgetCurrencies, mortgageCurrencies,
+  kindChoicesFor, labelOf, legsMatch, limitCurrencies, manualPairRequest, monthLabel, monthlyBudgetCurrencies, mortgageCurrencies,
   pairCandidates, pairDate, pairPeriods, parseIntInRange, parseScaledInt, parseWarningPercent, pluralPl, ratioPercentFloor,
   recurringCurrencies, ruleCandidate, shiftMonth, transactionRowKey, transferActions, transferDecision, validCandidate,
   validCurrency, validIsoDate, validLimitAmount, validMortgageLabel } from "./model";
@@ -388,5 +389,21 @@ describe("analytics decisions", () => {
   it("builds stable account/reference keys for transactions", () => {
     expect(transactionRowKey(entry("e-42"))).toBe("acc-1/e-42");
     expect(transactionRowKey(entry("ref-9", { account_id: "card-2" }))).toBe("card-2/ref-9");
+  });
+
+  it("resolves server code maps through the active i18n catalog and preserves raw fallback", async () => {
+    try {
+      await loadLocale("en");
+      expect(labelOf(CONSENT_STATUS_KEYS, "healthy")).toBe("Healthy");
+      expect(labelOf(RULE_FIELD_KEYS, "counterparty_account")).toBe("counterparty account (IBAN)");
+      expect(labelOf(CONSENT_STATUS_KEYS, "future_server_code")).toBe("future_server_code");
+
+      await loadLocale("pl");
+      expect(labelOf(CONSENT_STATUS_KEYS, "healthy")).toBe("Aktywna");
+      expect(labelOf(RULE_FIELD_KEYS, "counterparty_account")).toBe("konto kontrahenta (IBAN)");
+      expect(labelOf(CONSENT_STATUS_KEYS, "future_server_code")).toBe("future_server_code");
+    } finally {
+      await loadLocale("en");
+    }
   });
 });
