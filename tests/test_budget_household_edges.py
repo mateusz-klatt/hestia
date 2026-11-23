@@ -5,6 +5,8 @@ These are fixed denials and redaction edges. They do not add a spouse permission
 from __future__ import annotations
 
 import base64
+from contextlib import redirect_stdout
+import io
 import json
 import os
 from pathlib import Path
@@ -163,6 +165,21 @@ class HouseholdEdgeTests(unittest.TestCase):
         self.assertEqual(caught.exception.code, "household_grant_conflict")
         with self.sessions() as session:
             self.assertIsNone(session.get(db.BudgetHouseholdMember, "carol"))
+
+    def test_cli_main_dispatches_household_without_bank_io(self):
+        from hestia.budget.__main__ import main
+        with self.sessions.begin() as session:
+            session.add(db.User(username="dave", password_hash="unused", role="viewer"))
+        stdout = io.StringIO()
+        with redirect_stdout(stdout), \
+             mock.patch("hestia.budget.__main__.execute", side_effect=AssertionError("execute")), \
+             mock.patch("hestia.budget.__main__.load_config", side_effect=AssertionError("config")), \
+             mock.patch("hestia.budget.__main__.budget_lock", side_effect=AssertionError("lock")):
+            code = main(["--db", str(self.path), "household", "grant", "--member", "dave", "--owner", "alice"])
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(stdout.getvalue())["status"], "granted")
+        with self.sessions() as session:
+            self.assertIsNotNone(session.get(db.BudgetHouseholdMember, "dave"))
 
     def test_query_cursors_transfers_and_redaction(self):
         normalize = household_views._normalize_query
