@@ -19,12 +19,13 @@ time, and real (non-stringised) PEP 604 unions are the most robust on Python 3.1
 """
 import os
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from pathlib import Path
 from threading import RLock
 
 from alembic import command
 from alembic.config import Config
+from alembic.util import CommandError
 from sqlalchemy import CheckConstraint, URL, Engine, ForeignKey, ForeignKeyConstraint, Index, Text, UniqueConstraint, create_engine, event, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
@@ -819,8 +820,8 @@ def init_db(path=None) -> tuple[Engine, sessionmaker[Session]]:
     schema via Alembic. **Cached per resolved path**: the engine is built and the migration run ONCE per
     DB file for the process lifetime; later calls return the same pair (call ``reset_engine_cache`` to
     rebuild). Migrations run programmatically — never runtime autogenerate. The upgrade uses one
-    dedicated connection: foreign keys off, a real ``BEGIN``, then ``PRAGMA foreign_key_check`` before
-    commit. Every other connection still opens with ``PRAGMA foreign_keys=ON``."""
+    dedicated connection: foreign keys off, a real ``BEGIN IMMEDIATE``, then ``PRAGMA foreign_key_check``
+    before commit. Every other connection still opens with ``PRAGMA foreign_keys=ON``."""
     with _ENGINE_CACHE_LOCK:
         return _init_db_locked(path)
 
@@ -829,24 +830,29 @@ def downgrade_db(path, revision: str) -> None:
     """Downgrade the database at ``path`` to ``revision`` on the dedicated migration connection.
 
     Shares ``_run_sqlite_migration`` with ``init_db``: ``PRAGMA foreign_keys=OFF`` (read back
-    and required to be 0), an explicit ``BEGIN``, the Alembic downgrade, ``PRAGMA
+    and required to be 0), an explicit ``BEGIN IMMEDIATE``, the Alembic downgrade, ``PRAGMA
     foreign_key_check``, then commit or roll back and raise. Foreign keys are turned back on
     before that connection is discarded. Every other connection still opens with
     ``PRAGMA foreign_keys=ON``.
 
-    Reuses the cached engine for ``path`` when ``init_db`` already opened it. The cache entry
-    is dropped and the engine disposed before this returns, including when the downgrade
-    rolls back, so the next ``init_db`` on this path runs migrations again.
+    Reuses the cached engine for ``path`` when ``init_db`` already opened it (normalising the
+    cache key the same way ``init_db`` does). The cache entry is dropped and the engine disposed
+    before this returns, including when the downgrade rolls back, so the next ``init_db`` on this
+    path runs migrations again. Raises ``ValueError`` for ``None``, empty, or invalid revisions.
     """
-    key = str(path)
+    if not isinstance(revision, str) or not revision.strip():
+        raise ValueError(f"Invalid downgrade revision: {revision!r}")
+    target, key = _resolve_db_target(path)
     with _ENGINE_CACHE_LOCK:
         cached = _ENGINE_CACHE.pop(key, None)
-        engine = cached[0] if cached is not None else make_engine(key)
+        engine = cached[0] if cached is not None else make_engine(target)
         try:
             _run_sqlite_migration(
                 engine,
                 lambda connection: command.downgrade(_alembic_config(connection), revision),
             )
+        except CommandError as exc:
+            raise ValueError(str(exc)) from exc
         finally:
             engine.dispose()
 
@@ -882,21 +888,23 @@ def _run_sqlite_migration(engine: Engine, apply) -> None:
     failed rebuild leaves ``_alembic_tmp_*`` behind.
 
     On this connection only: turn foreign keys off in autocommit and read the pragma
-    back, ``BEGIN``, run ``apply``, then ``PRAGMA foreign_key_check``. Any violation
-    rolls the whole migration back (no partial DDL). Commit, turn foreign keys back
-    on, and invalidate the connection so the pool never reuses autocommit or
-    foreign_keys=OFF. Other connections keep the usual pragmas.
+    back, ``BEGIN IMMEDIATE`` (acquiring the write lock up front), run ``apply``, then
+    ``PRAGMA foreign_key_check``. Any violation rolls the whole migration back (no
+    partial DDL). Commit (rolling back ``raw`` explicitly if commit raises), turn
+    foreign keys back on, and invalidate the connection so the pool never reuses
+    autocommit or foreign_keys=OFF. Other connections keep the usual pragmas.
     """
     connection = engine.connect()
     try:
         raw = connection.connection.dbapi_connection
         # sqlite3 must not emit its own BEGIN; SQLAlchemy's begin() does not either.
-        # An explicit BEGIN then keeps DDL inside the transaction we commit or roll back.
+        # An explicit BEGIN IMMEDIATE then keeps DDL inside the transaction we commit or
+        # roll back and acquires the write lock up front.
         raw.isolation_level = None
         _set_sqlite_foreign_keys(connection, False)
         transaction = connection.begin()
         try:
-            connection.exec_driver_sql("BEGIN")
+            connection.exec_driver_sql("BEGIN IMMEDIATE")
             apply(connection)
             violations = connection.exec_driver_sql("PRAGMA foreign_key_check").all()
             if violations:
@@ -904,7 +912,16 @@ def _run_sqlite_migration(engine: Engine, apply) -> None:
                 raise RuntimeError(f"PRAGMA foreign_key_check failed after migration: {detail}")
             transaction.commit()
         except Exception:
-            transaction.rollback()
+            try:
+                transaction.rollback()
+            finally:
+                # RootTransaction._do_commit deactivates the transaction before commit failure
+                # escapes, so transaction.rollback() becomes a no-op while sqlite3 stays open.
+                with suppress(Exception):
+                    if raw.in_transaction:
+                        raw.rollback()
+                with suppress(Exception):
+                    _set_sqlite_foreign_keys(connection, True)
             raise
         _set_sqlite_foreign_keys(connection, True)
     finally:
@@ -912,12 +929,18 @@ def _run_sqlite_migration(engine: Engine, apply) -> None:
         connection.close()
 
 
+def _resolve_db_target(path) -> tuple[Path, str]:
+    """Return the raw target ``Path`` and its resolved string used as the ``_ENGINE_CACHE`` key."""
+    target = db_path() if path is None else Path(path)
+    return target, str(target.resolve())
+
+
 def _init_db_locked(path) -> tuple[Engine, sessionmaker[Session]]:
-    key = str(db_path() if path is None else path)
+    target, key = _resolve_db_target(path)
     cached = _ENGINE_CACHE.get(key)
     if cached is not None:
         return cached
-    engine = make_engine(key)
+    engine = make_engine(target)
     try:
         _run_sqlite_migration(
             engine, lambda connection: command.upgrade(_alembic_config(connection), "head")

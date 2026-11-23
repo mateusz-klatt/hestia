@@ -4,6 +4,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { BudgetApi } from "../api";
 import type { BudgetAccount, BudgetConnection } from "../model";
 import { formatAmount, transactionDate, transactionText } from "../model";
+import { ExportMenu } from "./export_menu";
+import { exportBasename, exportLabels } from "./export_rows";
 import { ANALYTICS_ERROR, EFFECTIVE_KINDS, NO_FILTER, RELOAD_ERRORS, UNCATEGORISED, annotationRequest, canPair, canonicalAmount,
   counterparty, accountName as nameOf, currentChoice, daysBetween, kindChoice, kindChoicesFor, labelOf, manualPairRequest,
   pairCandidates, pairDate, pairPeriods, transactionRowKey } from "./model";
@@ -17,7 +19,7 @@ const kindsPl = { auto: "Automatycznie", expense: "Wydatek", income: "Wpływ", r
 
 export const transactionLabels = {
   en: {
-    title: "Transactions", currency: "Currency", category: "Category", kind: "Type", search: "Search", apply: "Apply",
+    title: "Transactions", exportMenu: exportLabels.en, currency: "Currency", category: "Category", kind: "Type", search: "Search", apply: "Apply",
     provisionalOnly: "Unconfirmed or provisional only",
     all: "All", uncategorised: "Uncategorised", automatic: "Automatic (rules)", kinds: kindsEn,
     edit: "Change", save: "Save", cancel: "Cancel", archived: "archived", total: (count: number) => `${String(count)} entries`,
@@ -44,7 +46,7 @@ export const transactionLabels = {
     oneOffHint: "The amount shows under this name in the bars instead of Other.",
   },
   pl: {
-    title: "Transakcje", currency: "Waluta", category: "Kategoria", kind: "Rodzaj", search: "Szukaj", apply: "Zastosuj",
+    title: "Transakcje", exportMenu: exportLabels.pl, currency: "Waluta", category: "Kategoria", kind: "Rodzaj", search: "Szukaj", apply: "Zastosuj",
     provisionalOnly: "Tylko niepotwierdzone (wynik wstępny)",
     all: "Wszystkie", uncategorised: "Bez kategorii", automatic: "Automatycznie (reguły)", kinds: kindsPl,
     edit: "Zmień", save: "Zapisz", cancel: "Anuluj", archived: "archiwalna", total: (count: number) => `Pozycji: ${String(count)}`,
@@ -538,7 +540,11 @@ export function TransactionsPanel({ api, period, currencies, accounts, connectio
 
   return (
     <section className="budget-entries" aria-label={text.title} ref={sectionRef}>
-      <h4>{text.title}</h4>
+      <header className="budget-entries-head">
+        <h4>{text.title}</h4>
+        <ExportMenu text={text.exportMenu} filename={exportBasename(period)} periods={[period]} filter={filter}
+          rowKeys={activeProvisionalKeys} accounts={accounts} connections={connections} api={api} onAccessLoss={onAccessLoss} />
+      </header>
       <form className="budget-range" onSubmit={(event) => { event.preventDefault(); setFilter(draft); }}>
         <label>{text.currency}
           <select name="currency" value={draft.currency} onChange={(event) => { setDraft({ ...draft, currency: event.currentTarget.value }); }}>
