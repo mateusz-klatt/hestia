@@ -344,9 +344,9 @@ export const DEFAULT_REMIND_DAYS_BEFORE = 5;
 export type CategoryCreateRequest = Schemas["BudgetAnalyticsCategoryCreateRequest"];
 export type CategoryUpdateRequest = Schemas["BudgetAnalyticsCategoryUpdateRequest"];
 
-export type RuleField = "description" | "counterparty_name" | "mcc";
+export type RuleField = "description" | "counterparty_name" | "counterparty_account" | "mcc";
 export type RuleOperator = "contains" | "equals";
-export const RULE_FIELDS: readonly RuleField[] = ["description", "counterparty_name", "mcc"];
+export const RULE_FIELDS: readonly RuleField[] = ["description", "counterparty_name", "counterparty_account", "mcc"];
 export const RULE_OPERATORS: readonly RuleOperator[] = ["contains", "equals"];
 
 export type AnalyticsRule = Schemas["BudgetAnalyticsRule"];
@@ -367,8 +367,24 @@ export function ruleCandidate(rule: AnalyticsRule | null): RuleCandidate {
   }
   const field = (RULE_FIELDS as readonly string[]).includes(rule.field) ? rule.field as RuleField : "description";
   const operator = (RULE_OPERATORS as readonly string[]).includes(rule.operator) ? rule.operator as RuleOperator : "contains";
-  return { rule_id: rule.id, expected_version: rule.version, field, operator, value: rule.value,
+  const candidate: RuleCandidate = { rule_id: rule.id, expected_version: rule.version, field, operator, value: rule.value,
     category_id: rule.category_id, kind: kindChoice(rule.kind), priority: rule.priority, enabled: rule.enabled };
+  if (field === "counterparty_account" && typeof rule.counterparty_account_key === "string") {
+    candidate.counterparty_account_key = rule.counterparty_account_key;
+  }
+  return candidate;
+}
+
+/** A transaction action carries only the server's opaque account key and its masked display form. */
+export function counterpartyRuleCandidate(row: AnalyticsTransaction): RuleCandidate | null {
+  const key = row.counterparty_account_key;
+  const masked = row.counterparty_account;
+  if (typeof key !== "string" || !/^[0-9a-f]{64}$/.test(key) || typeof masked !== "string" || masked === "") return null;
+  const categoryId = row.effective.category_id;
+  return { rule_id: null, expected_version: 0, field: "counterparty_account", operator: "equals", value: masked,
+    counterparty_account_key: key, category_id: categoryId,
+    kind: categoryId !== null ? "auto" : row.credit_debit_indicator === "DBIT" ? "expense" : "income",
+    priority: 100, enabled: true };
 }
 
 /** A candidate the server could accept: a trimmed non-empty value within limits and an integer priority in range. */
@@ -376,6 +392,7 @@ export function validCandidate(candidate: RuleCandidate): boolean {
   const value = candidate.value.trim();
   return value !== "" && value.length <= RULE_VALUE_MAX && Number.isInteger(candidate.priority)
     && candidate.priority >= 0 && candidate.priority <= RULE_PRIORITY_MAX
+    && (candidate.field !== "counterparty_account" || candidate.operator === "equals")
     && (candidate.category_id !== null || candidate.kind !== "auto");
 }
 

@@ -23,6 +23,7 @@ import { CategoriesView, rulesLabels } from "./analytics/rules";
 import { SpendingLimitsView, spendingLimitsLabels } from "./analytics/spending_limits";
 import { YearView, yearLabels } from "./analytics/year";
 import { hasAnalytics } from "./analytics/model";
+import type { RuleCandidate } from "./analytics/model";
 import "./budget.css";
 
 const labels = {
@@ -206,6 +207,7 @@ export function Budget({ active, api = budgetApi, pollMs = 2000, principal,
     total: number;
     truncated: boolean;
   } | undefined>(undefined);
+  const [focusRule, setFocusRule] = useState<RuleCandidate | undefined>(undefined);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState<ReadonlySet<string>>(new Set());
   const retryKeys = useRef(new Map<string, string>());
@@ -237,7 +239,7 @@ export function Budget({ active, api = budgetApi, pollMs = 2000, principal,
     generation.current += 1;
     setConnections([]); setAccounts([]); setJobs([]); setDetail(null); setCapabilities(null); setBusy(new Set());
     setLimits(null); setShowLimits(false); setShowConsentHealth(false); setConsents([]); setPending([]);
-    setFocusMonth(undefined); setFocusToday(undefined); setFocusCurrency(undefined); setFocusProvisional(undefined); setView("accounts");
+    setFocusMonth(undefined); setFocusToday(undefined); setFocusCurrency(undefined); setFocusProvisional(undefined); setFocusRule(undefined); setView("accounts");
     setLoad(disabled ? "disabled" : "denied");
   }, []);
   const barrier = useCallback((result: { ok: boolean; status?: number; error?: string }): boolean => {
@@ -470,7 +472,7 @@ export function Budget({ active, api = budgetApi, pollMs = 2000, principal,
         <div className="budget-views" role="group" aria-label={text.viewsLabel}>
           {(["monthly_budget", "accounts", "inbox", "month", "year", "limits", "recurring", "mortgages", "forecast", "quarantine", "rules"] as const).map((item) => (
             <button type="button" key={item} aria-pressed={shownView === item}
-              onClick={() => { setView(item); if (item === "month") { setFocusMonth(undefined); setFocusToday(undefined); setFocusCurrency(undefined); setFocusProvisional(undefined); } }}>{text.views[item]}</button>
+              onClick={() => { setView(item); if (item === "month") { setFocusMonth(undefined); setFocusToday(undefined); setFocusCurrency(undefined); setFocusProvisional(undefined); } if (item === "rules") setFocusRule(undefined); }}>{text.views[item]}</button>
           ))}
         </div>
       ) : null}
@@ -503,7 +505,8 @@ export function Budget({ active, api = budgetApi, pollMs = 2000, principal,
           initialProvisionalKeys={focusProvisional?.keys}
           initialProvisionalTotal={focusProvisional?.total}
           initialProvisionalTruncated={focusProvisional?.truncated}
-          {...(focusToday === undefined ? {} : { today: focusToday })} />
+          {...(focusToday === undefined ? {} : { today: focusToday })}
+          onCreateRule={(candidate) => { setFocusRule(candidate); setView("rules"); }} />
       ) : shownView === "year" ? (
         <YearView api={api} accounts={accounts} connections={connections} text={yearText} locale={locale} revision={revision} onAccessLoss={barrier}
           onOpenMonth={(month) => { setFocusMonth(month); setFocusToday(undefined); setFocusCurrency(undefined); setFocusProvisional(undefined); setView("month"); }} />
@@ -523,7 +526,8 @@ export function Budget({ active, api = budgetApi, pollMs = 2000, principal,
         <QuarantineView api={api} accounts={accounts} connections={connections} text={quarantineText} revision={revision}
           onAccessLoss={barrier} />
       ) : shownView === "rules" ? (
-        <CategoriesView api={api} accounts={accounts} connections={connections} text={rulesText} locale={locale} revision={revision} onAccessLoss={barrier} />
+        <CategoriesView api={api} accounts={accounts} connections={connections} text={rulesText} locale={locale} revision={revision}
+          onAccessLoss={barrier} initialRule={focusRule ?? null} />
       ) : (
         <>
         {connections.length === 0 ? <p className="budget-status">{text.empty}</p> : null}

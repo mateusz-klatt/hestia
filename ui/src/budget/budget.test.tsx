@@ -1128,6 +1128,33 @@ describe("analytics views", () => {
     expect(api.forecast).toHaveBeenCalledTimes(2);
   });
 
+  it("opens a transaction's opaque account key in the rule editor", async () => {
+    const api = fakeApi();
+    const key = "d".repeat(64);
+    api.connections.mockImplementation(() => ok({ connections: [connection], capabilities: analysis }));
+    api.analyticsTransactions.mockImplementation((period) => ok(entriesOf(period, [
+      entry("electricity", { account_id: "local-a", counterparty_account_key: key, counterparty_account: "PL** … 1234" }),
+    ])));
+    api.previewRule.mockImplementation(() => ok({ preview: {
+      preview_id: "account-preview", affected_count: 1, expires_at: 2_000_000_000,
+      examples: [{ account_id: "local-a", entry_reference: "electricity" }],
+    } }));
+    await render(api);
+    await click(button("Month"));
+    await click(button("Change"));
+    await click(button("Create rule from recipient account"));
+    expect(button("Categories and rules").getAttribute("aria-pressed")).toBe("true");
+    const form = host.querySelector<HTMLFormElement>(".budget-rule-editor");
+    expect(form?.querySelector<HTMLSelectElement>('select[name="field"]')?.value).toBe("counterparty_account");
+    expect(form?.querySelector<HTMLSelectElement>('select[name="operator"]')?.value).toBe("equals");
+    expect(form?.querySelector<HTMLInputElement>('input[name="value"]')?.value).toBe("PL** … 1234");
+    await act(async () => { form?.requestSubmit(); await Promise.resolve(); });
+    await settle();
+    expect(api.previewRule).toHaveBeenCalledWith(expect.objectContaining({
+      field: "counterparty_account", operator: "equals", value: "PL** … 1234", counterparty_account_key: key,
+    }));
+  });
+
   it("switches between accounts and the month view", async () => {
     const api = fakeApi();
     api.connections.mockImplementation(() => ok({ connections: [connection], capabilities: analysis }));
