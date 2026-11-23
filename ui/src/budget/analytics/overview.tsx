@@ -1,6 +1,6 @@
 // Period overview of the owner's spending (2D). Currency totals stay server-computed. When categories have
 // parents, each parent row adds its own amount to its descendants. Every response passes the access barrier.
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import type { BudgetResult } from "../api";
 import type { BudgetAccount, BudgetConnection } from "../model";
@@ -160,13 +160,13 @@ function Amount({ value }: { value: string }) {
   return <span className="budget-amount">{value}</span>;
 }
 
-/** Label plus amount, repeated. The amount span never breaks; the line may break between parts. */
+/** Label plus amount, repeated. Each pair stays together when it fits; a line break only happens at the separator. */
 function Compound({ parts }: { parts: readonly (readonly [string, string])[] }) {
   return parts.map(([label, amount], index) => (
-    <span key={`${label}-${String(index)}`}>
+    <Fragment key={`${label}-${String(index)}`}>
       {index > 0 ? " · " : null}
-      {label} <Amount value={amount} />
-    </span>
+      <span className="budget-total-part">{label} <Amount value={amount} /></span>
+    </Fragment>
   ));
 }
 

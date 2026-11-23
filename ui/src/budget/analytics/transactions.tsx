@@ -296,8 +296,9 @@ export function TransactionsPanel({ api, period, currencies, accounts, connectio
         return;
       }
       fetchedAny = true;
-      const added = result.data.transactions.length;
-      rows = mergeRows(rows, result.data.transactions);
+      const merged = mergeRows(rows, result.data.transactions);
+      const added = merged.length - rows.length;
+      rows = merged;
       const total = result.data.filtered_total;
       const next = result.data.next_cursor;
       const exhausted = next === null || added === 0 || next === cursor;
@@ -396,9 +397,36 @@ export function TransactionsPanel({ api, period, currencies, accounts, connectio
     }
   }, [api, onAccessLoss]);
 
+  const provisionalKeySet = useMemo(
+    () => (activeProvisionalKeys === undefined ? null : new Set(activeProvisionalKeys)),
+    [activeProvisionalKeys],
+  );
+  const provisionalOnly = provisionalKeySet !== null;
+  const currencyOptions = useMemo(() => {
+    const extras = [draft.currency, filter.currency].filter((code) => code !== "" && !currencies.includes(code));
+    return extras.length === 0 ? currencies : [...currencies, ...extras].sort((a, b) => a.localeCompare(b));
+  }, [currencies, draft.currency, filter.currency]);
+  const categoryNames = useMemo(() => new Map(categories.map((item) => [item.id, item.name])), [categories]);
+  const categoryName = useCallback(
+    (id: string | null) => (id === null ? text.uncategorised : (categoryNames.get(id) ?? text.uncategorised)),
+    [categoryNames, text.uncategorised],
+  );
+  const accountName = (id: string) => nameOf(accounts, connections, id, text.account);
+  const kindText = (kind: string) => labelOf(text.kinds, kind);
+  const matchingRows = useMemo(() => {
+    if (provisionalKeySet === null) return page.rows;
+    return page.rows.filter((row) => provisionalKeySet.has(rowKey(row)));
+  }, [page.rows, provisionalKeySet]);
+  const shownRows = useMemo(
+    () => orderRows(matchingRows, sort, frozenOrder, categoryName, locale),
+    [matchingRows, sort, frozenOrder, categoryName, locale],
+  );
+  const shownTotal = provisionalOnly ? matchingRows.length : page.total;
+
   const closePairs = useCallback(() => {
     picker.current += 1;
     setPairing(null);
+    setFrozenOrder(null);
   }, []);
 
   const openPairs = useCallback((row: AnalyticsTransaction) => {
@@ -407,10 +435,10 @@ export function TransactionsPanel({ api, period, currencies, accounts, connectio
     setPairing(rowKey(row));
     setPairPage(PAIR_LOADING);
     setEditing(null);
-    setFrozenOrder(null);
+    setFrozenOrder(shownRows.map(rowKey));
     setNotice(null);
     void loadPairs(row, pickerToken, generation.current);
-  }, [loadPairs]);
+  }, [loadPairs, shownRows]);
 
   const save = useCallback(async (row: AnalyticsTransaction, category: CategoryChoice, kind: KindChoice) => {
     const token = generation.current;
@@ -462,33 +490,8 @@ export function TransactionsPanel({ api, period, currencies, accounts, connectio
     }
     picker.current += 1;
     setPairing(null);
+    setFrozenOrder(null);
   }, [api, onAccessLoss, onChanged, text]);
-
-  const provisionalKeySet = useMemo(
-    () => (activeProvisionalKeys === undefined ? null : new Set(activeProvisionalKeys)),
-    [activeProvisionalKeys],
-  );
-  const provisionalOnly = provisionalKeySet !== null;
-  const currencyOptions = useMemo(() => {
-    const extras = [draft.currency, filter.currency].filter((code) => code !== "" && !currencies.includes(code));
-    return extras.length === 0 ? currencies : [...currencies, ...extras].sort((a, b) => a.localeCompare(b));
-  }, [currencies, draft.currency, filter.currency]);
-  const categoryNames = useMemo(() => new Map(categories.map((item) => [item.id, item.name])), [categories]);
-  const categoryName = useCallback(
-    (id: string | null) => (id === null ? text.uncategorised : (categoryNames.get(id) ?? text.uncategorised)),
-    [categoryNames, text.uncategorised],
-  );
-  const accountName = (id: string) => nameOf(accounts, connections, id, text.account);
-  const kindText = (kind: string) => labelOf(text.kinds, kind);
-  const matchingRows = useMemo(() => {
-    if (provisionalKeySet === null) return page.rows;
-    return page.rows.filter((row) => provisionalKeySet.has(rowKey(row)));
-  }, [page.rows, provisionalKeySet]);
-  const shownRows = useMemo(
-    () => orderRows(matchingRows, sort, frozenOrder, categoryName, locale),
-    [matchingRows, sort, frozenOrder, categoryName, locale],
-  );
-  const shownTotal = provisionalOnly ? matchingRows.length : page.total;
 
   useEffect(() => {
     if (!focusOnMount) return;
@@ -516,7 +519,7 @@ export function TransactionsPanel({ api, period, currencies, accounts, connectio
   const changeSort = (key: TransactionSortKey) => {
     const next = nextSort(sort, key);
     setSort(next);
-    if (editing !== null) {
+    if (editing !== null || pairing !== null) {
       setFrozenOrder(sortTransactions(matchingRows, next, categoryName, locale).map(rowKey));
     } else {
       setFrozenOrder(null);

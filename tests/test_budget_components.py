@@ -228,6 +228,76 @@ class ComponentPublicationTests(ComponentCase):
             self.assertEqual(part["failures"], 1)
         self.assertIsNone(self.account().last_attempt)
 
+    def test_split_component_runs_advance_account_and_connection_last_success_only_once_all_complete(self):
+        self.config = configuration(accounts=("synthetic-hash", "second-hash"))
+        prepare_selected(self.store, self.config)
+        t1 = self.now
+        self.store.commit_snapshot("bank", self.batch(
+            self.observation(primary="synthetic-hash", transactions=(transaction("a1"),)),
+            self.observation(primary="second-hash")))
+        self.assertIsNone(self.account("synthetic-hash").observed_at)
+        self.assertIsNone(self.state()["last_success"])
+
+        self.now += 10
+        t2 = self.now
+        self.store.commit_snapshot("bank", self.batch(
+            self.observation(primary="synthetic-hash", balances=()),
+            self.observation(primary="second-hash")))
+        self.assertEqual(self.account("synthetic-hash").observed_at, t1)
+        self.assertIsNone(self.state()["last_success"])
+
+        self.now += 10
+        t3 = self.now
+        self.store.commit_snapshot("bank", self.batch(
+            self.observation(primary="synthetic-hash"),
+            self.observation(primary="second-hash", transactions=(transaction("b1"),))))
+        self.assertIsNone(self.account("second-hash").observed_at)
+        self.assertIsNone(self.state()["last_success"])
+
+        self.now += 10
+        t4 = self.now
+        self.store.commit_snapshot("bank", self.batch(
+            self.observation(primary="synthetic-hash"),
+            self.observation(primary="second-hash", balances=())))
+        self.assertEqual(self.account("second-hash").observed_at, t3)
+        self.assertEqual(self.state()["last_success"], t1)
+
+        # Partial failure blocks advancement until the failing component recovers.
+        self.now += 60
+        t5 = self.now
+        self.store.commit_snapshot("bank", self.batch(
+            self.observation(primary="synthetic-hash", transactions=(transaction("a2"),), balances=()),
+            self.observation(primary="second-hash", transactions_error="network", balances=())))
+        self.assertEqual(self.state()["last_error"], "partial_data")
+        self.assertEqual(self.state()["last_success"], t1)
+
+        self.now += 60
+        self.store.commit_snapshot("bank", self.batch(
+            self.observation(primary="synthetic-hash", transactions=(transaction("a3"),), balances=()),
+            self.observation(primary="second-hash")))
+        self.assertEqual(self.state()["last_error"], "partial_data")
+        self.assertEqual(self.state()["last_success"], t1)
+
+        self.now += 60
+        self.store.commit_snapshot("bank", self.batch(
+            self.observation(primary="synthetic-hash"),
+            self.observation(primary="second-hash", transactions=(transaction("b2"),))))
+        self.assertEqual(self.account("second-hash").observed_at, t5)
+        self.assertEqual(self.state()["last_success"], t5)
+        self.assertIsNone(self.state()["last_error"])
+        self.assertEqual(self.state()["failures"], 0)
+
+        # A missing component row prevents connection last_success advancement.
+        with self.sessions.begin() as session:
+            session.execute(delete(db.BudgetComponent).where(
+                db.BudgetComponent.account_id == self.account("second-hash").id,
+                db.BudgetComponent.operation == "balances"))
+        self.now += 60
+        self.store.commit_snapshot("bank", self.batch(
+            self.observation(primary="synthetic-hash", transactions=(transaction("a4"),), balances=()),
+            self.observation(primary="second-hash")))
+        self.assertEqual(self.state()["last_success"], t5)
+
 
 class ComponentLeaseTests(ComponentCase):
     def test_live_lease_cannot_be_replaced_but_expired_lease_can_be_reclaimed(self):

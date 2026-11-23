@@ -770,6 +770,94 @@ describe("period entries", () => {
     await click(button(transactionLabels.en.cancel));
     expect(names()).toEqual(["Synthetic shop huge", "Synthetic shop high", "Synthetic shop mid", "Synthetic shop low"]);
   });
+
+  it("stops background loading when a page adds no unique rows after deduplication", async () => {
+    const calls: Array<string | undefined> = [];
+    const api = fakeApi();
+    api.analyticsTransactions.mockImplementation((_period, _filter, cursor) => {
+      calls.push(cursor);
+      if (cursor === undefined) return ok(pageOf([entry("p1")], "c1"));
+      if (cursor === "c1") return ok(pageOf([entry("p1")], "c2"));
+      return ok(pageOf([entry("unreachable")]));
+    });
+    await show(api);
+    await drain();
+    expect(calls).toEqual([undefined, "c1"]);
+    expect(names()).toEqual(["Synthetic shop p1"]);
+    expect(host.textContent).not.toContain("Loading…");
+    expect(host.querySelector('[role="note"]')).toBeNull();
+  });
+
+  it("keeps row order stable while the pair picker is open and restores live sorting when closed or confirmed", async () => {
+    const listNames = () => [...host.querySelectorAll('ul[aria-label="Transactions"] > li > .budget-entry-main .budget-entry-text')]
+      .map((item) => item.textContent);
+    let releasePage2: (value: BudgetResult<AnalyticsTransactions>) => void = () => undefined;
+    let releasePage3: (value: BudgetResult<AnalyticsTransactions>) => void = () => undefined;
+    const api = fakeApi();
+    api.analyticsTransactions.mockImplementation((period, ...args) => {
+      const [, cursor, limit] = args;
+      if (limit === 200) return ok(entriesOf(period, [pairCredit("in", { amount: "20.00" })]));
+      if (cursor === undefined) {
+        return ok(pageOf([pairDebit("high", { amount: "50.00" }), pairDebit("mid", { amount: "20.00" })], "c1"));
+      }
+      if (cursor === "c1") return new Promise((resolve) => { releasePage2 = resolve; });
+      return new Promise((resolve) => { releasePage3 = resolve; });
+    });
+    await show(api);
+    await click(sortButton("Amount"));
+    expect(listNames()).toEqual(["Synthetic shop mid", "Synthetic shop high"]);
+
+    await click(button(transactionLabels.en.pair, host.querySelectorAll(".budget-entry")[0]));
+    expect(host.querySelector(".budget-pair-picker")).not.toBeNull();
+
+    // Background page arrives with a smaller amount while picker is open: existing rows must not jump.
+    await act(async () => {
+      releasePage2({ ok: true, data: pageOf([pairDebit("low", { amount: "5.00" })], "c2") });
+      await Promise.resolve();
+    });
+    await settle();
+    expect(listNames()).toEqual(["Synthetic shop mid", "Synthetic shop high", "Synthetic shop low"]);
+    expect(host.querySelectorAll(".budget-entry")[0]?.querySelector(".budget-pair-picker")).not.toBeNull();
+
+    // User explicitly re-sorts while picker is still open: order updates immediately.
+    await click(sortButton("Amount"));
+    expect(listNames()).toEqual(["Synthetic shop high", "Synthetic shop mid", "Synthetic shop low"]);
+
+    // Another background page arrives while picker remains open: newly sorted order stays stable.
+    await act(async () => {
+      releasePage3({ ok: true, data: pageOf([pairDebit("huge", { amount: "100.00" })]) });
+      await Promise.resolve();
+    });
+    await settle();
+    expect(listNames()).toEqual(["Synthetic shop high", "Synthetic shop mid", "Synthetic shop low", "Synthetic shop huge"]);
+
+    // Closing the picker restores live sorting across all loaded rows.
+    await click(button(transactionLabels.en.cancel));
+    expect(listNames()).toEqual(["Synthetic shop huge", "Synthetic shop high", "Synthetic shop mid", "Synthetic shop low"]);
+
+    // Confirming a pair also releases the frozen order.
+    let releaseConfirmPage2: (value: BudgetResult<AnalyticsTransactions>) => void = () => undefined;
+    api.analyticsTransactions.mockImplementation((period, ...args) => {
+      const [, cursor, limit] = args;
+      if (limit === 200) return ok(entriesOf(period, [pairCredit("in", { amount: "20.00" })]));
+      if (cursor === undefined) {
+        return ok(pageOf([pairDebit("high", { amount: "50.00" }), pairDebit("mid", { amount: "20.00" })], "c1"));
+      }
+      return new Promise((resolve) => { releaseConfirmPage2 = resolve; });
+    });
+    await show(api, { revision: 1 });
+    await click(sortButton("Amount"));
+    await click(button(transactionLabels.en.pair, host.querySelectorAll(".budget-entry")[0]));
+    await act(async () => {
+      releaseConfirmPage2({ ok: true, data: pageOf([pairDebit("low", { amount: "5.00" })]) });
+      await Promise.resolve();
+    });
+    await settle();
+    expect(listNames()).toEqual(["Synthetic shop mid", "Synthetic shop high", "Synthetic shop low"]);
+    await click(button(transactionLabels.en.pairConfirm));
+    expect(host.querySelector(".budget-pair-picker")).toBeNull();
+    expect(listNames()).toEqual(["Synthetic shop low", "Synthetic shop mid", "Synthetic shop high"]);
+  });
 });
 
 describe("manual own-transfer pairing", () => {
