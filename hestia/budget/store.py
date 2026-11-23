@@ -21,6 +21,7 @@ from .account_metadata import BudgetMetadataError, apply_account_metadata
 from .bank_metadata import apply_bank_metadata
 from .client import safe_http_status, safe_provider_error
 from .analytics_reconcile import reconcile_transfers
+from .receipt_reconcile import reconcile_receipt_links
 
 ACCOUNT_KINDS = frozenset({"current", "savings", "credit_card", "other"})
 OPERATIONS = ("transactions", "balances")
@@ -441,6 +442,7 @@ class BudgetStore:
                     row.failures, row.last_error = 0, None
                     set_diagnostic(row)
             reconcile_transfers(session, row.owner, now)
+            reconcile_receipt_links(session, row.owner, now)
 
     @staticmethod
     def _components_succeeded_at(session, account_ids):
@@ -590,6 +592,7 @@ class BudgetStore:
                 if bank is not None:
                     metadata["bank_metadata"] = bank
                 reconcile_transfers(session, item.owner, self.clock())
+                reconcile_receipt_links(session, item.owner, self.clock())
                 return {**report, **metadata}
             self._restore_api_conflicts(session, account.id)
             batch = ImportBatch(id=str(uuid.uuid4()), fingerprint=snapshot.digest,
@@ -617,6 +620,7 @@ class BudgetStore:
             if bank is not None:
                 metadata["bank_metadata"] = bank
             reconcile_transfers(session, item.owner, self.clock())
+            reconcile_receipt_links(session, item.owner, self.clock())
             return {**report, **metadata}
 
     @staticmethod
