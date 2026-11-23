@@ -1939,9 +1939,10 @@ class RoleHelpersTests(unittest.TestCase):
         self.assertEqual(web._required_role("POST", "/api/brand-new"), "admin")   # fail-closed
         self.assertEqual(web._required_role("DELETE", "/x"), "admin")
 
-    def test_required_role_unclassified_read_is_viewer(self):
-        self.assertEqual(web._required_role("GET", "/api/brand-new"), "viewer")
-        self.assertEqual(web._required_role("HEAD", "/x"), "viewer")
+    def test_required_role_unclassified_read_is_admin(self):
+        self.assertEqual(web._required_role("GET", "/api/brand-new"), "admin")
+        self.assertEqual(web._required_role("HEAD", "/x"), "admin")
+        self.assertEqual(web._required_role("OPTIONS", "/x"), "admin")
 
     def test_role_allows_hierarchy(self):
         self.assertTrue(web._role_allows("admin", "viewer"))
@@ -2082,7 +2083,7 @@ class RoutePolicyTests(unittest.TestCase):
 
 class AuthzTests(_WebTestBase):
     """RBAC floor enforcement (#73): the auth middleware resolves the role per request and gates each
-    route by its floor. A removed account 401s immediately; an unclassified write route is admin-only."""
+    route by its floor. A removed account 401s immediately; an unclassified route is admin-only."""
 
     def setUp(self):
         super().setUp()
@@ -2150,15 +2151,19 @@ class AuthzTests(_WebTestBase):
         self.assertEqual(self._post("/api/discovery", "viewer"), 403)
         self.assertEqual(self._post("/api/discovery", "admin"), 405)
 
-    def test_unclassified_read_route_is_viewer(self):
-        self.assertEqual(self._get("/api/does-not-exist", "viewer"), 404)   # viewer floor → routing → 404
+    def test_unclassified_read_route_is_admin_only(self):
+        # No route and no role entry. A viewer is denied; an admin passes the floor and routing returns 404.
+        self.assertEqual(self._get("/api/does-not-exist", "viewer"), 403)
+        self.assertEqual(self._get("/api/does-not-exist", "operator"), 403)
+        self.assertEqual(self._get("/api/does-not-exist", "admin"), 404)
 
     def test_spouse_status_is_classified_for_every_route(self):
-        """A new route fails until ``SPOUSE_ROUTE_STATUS`` names the viewer's status.
+        """A new route fails until it is classified and ``SPOUSE_ROUTE_STATUS`` names the viewer's status.
 
-        Budget owner routes stay 403, including ``POST .../transactions-by-keys``.
-        That POST is a pure read of owner rows; the spouse still does not receive it.
-        Household GETs are the spouse read API.
+        The walk rejects an unclassified route before comparing statuses, so a future receipts
+        route cannot pass by inheriting a viewer fallback. Budget owner routes stay 403, including
+        ``POST .../transactions-by-keys``. That POST is a pure read of owner rows; the spouse still
+        does not receive it. Household GETs are the spouse read API.
         """
         self.role = "viewer"
         with mock.patch.dict(os.environ, {"HESTIA_BUDGET_HTTP_ENABLED": "", "HESTIA_BUDGET_ANALYTICS_ENABLED": ""}):
@@ -2169,6 +2174,9 @@ class AuthzTests(_WebTestBase):
                 if "{path}" in path:
                     path = path.replace("{path}", "asset.js")
                 self.assertNotIn("{", path, path)
+                classified = (web._is_public_route(route.method, path)
+                              or (route.method, path) in web._ROUTE_MIN_ROLE)
+                self.assertTrue(classified, f"unclassified route: {route.method} {path}")
                 status, body = self._spouse_status(route.method, path)
                 actual[(route.method, path)] = status
                 if path.startswith("/api/budget/household/"):

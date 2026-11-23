@@ -264,14 +264,11 @@ _MUTATING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 
 
 def _required_role(method: str, path: str) -> str:
-    """The minimum role for a non-public route. Fail-closed: an UNclassified mutating method → admin (a
-    new write route stays locked down until explicitly classified); any other unclassified method
-    (GET/HEAD) → viewer. ``test_every_route_is_classified`` keeps the map complete, so the fallbacks are
-    a backstop, not the normal path."""
-    floor = _ROUTE_MIN_ROLE.get((method, path))
-    if floor is not None:
-        return floor
-    return _ADMIN if method in _MUTATING_METHODS else _VIEWER
+    """The minimum role for a non-public route. Fail-closed: an unclassified route is admin, including
+    GET and HEAD, so a new read cannot become viewer-readable until it is explicitly classified.
+    ``test_every_registered_route_is_public_or_classified`` keeps the map complete; this fallback is
+    the backstop."""
+    return _ROUTE_MIN_ROLE.get((method, path), _ADMIN)
 
 
 def _role_allows(role, floor: str) -> bool:
