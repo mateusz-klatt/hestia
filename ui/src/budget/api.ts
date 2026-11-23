@@ -1,6 +1,6 @@
-// Same-origin budget API calls. The HttpOnly session cookie authenticates; mutations send JSON and never an
-// Authorization header (the server rejects bearer mutations). Results are discriminated, never thrown, so a
-// failed call cannot become an unhandled rejection. Nothing here persists financial data in the browser.
+// Same-origin budget API calls use the HttpOnly session cookie and send JSON for mutations. Results are
+// discriminated, never thrown, so a failed call cannot become an unhandled rejection. Nothing here persists
+// financial data in the browser.
 import { apiUrl } from "../api/client";
 import type { BudgetAccount, BudgetCapabilities, BudgetConnection, BudgetConsent, BudgetConsentFlow,
   BudgetConsentReconcile, BudgetConsentRenewalReminders, BudgetJob, BudgetKind, BudgetBalances, BudgetLimit,

@@ -142,7 +142,7 @@ export function qrMatrix(payload: string): boolean[][] | null {
   }
   set(8, SIZE - 8, true);
   const format = formatBits(1, 0);
-  const bit = (index: number) => ((format >>> (14 - index)) & 1) === 1;
+  const bit = (index: number) => ((format >>> index) & 1) === 1;
   for (let index = 0; index <= 5; index += 1) set(8, index, bit(index));
   set(8, 7, bit(6));
   set(8, 8, bit(7));

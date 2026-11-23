@@ -27,6 +27,27 @@ describe("budget api", () => {
     expect(init).toMatchObject({ credentials: "same-origin", cache: "no-store" });
   });
 
+  it("posts receipt device management requests with the browser session", async () => {
+    const fetchMock = respond(200, {});
+    await budgetApi.receiptDevices();
+    await budgetApi.pairReceiptDevice();
+    await budgetApi.revokeReceiptDevice("paired-device");
+
+    const requests = [
+      { path: "list", body: {} },
+      { path: "pair-code", body: {} },
+      { path: "revoke", body: { token_id: "paired-device" } },
+    ];
+    requests.forEach(({ path, body }, index) => {
+      const { url, init } = sent(fetchMock, index);
+      expect(url.pathname).toBe(`/api/budget/receipts/device-token/${path}`);
+      expect(init).toEqual({
+        credentials: "same-origin", cache: "no-store", method: "POST",
+        headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+      });
+    });
+  });
+
   it("passes an analytics page limit only when one is given", async () => {
     const fetchMock = respond(200, { period: "2026-11", transactions: [], filtered_total: 0, next_cursor: null });
     const filter = { currency: "PLN", category: "", kind: "", query: "" };

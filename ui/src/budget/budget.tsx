@@ -527,7 +527,7 @@ export function Budget({ active, api = budgetApi, pollMs = 2000, principal,
         <CategoriesView api={api} accounts={accounts} connections={connections} text={rulesText} locale={locale} revision={revision} onAccessLoss={barrier} />
       ) : (
         <>
-        <ReceiptDevices api={api} locale={locale} revision={revision} />
+        <ReceiptDevices key={principal ?? ""} api={api} locale={locale} revision={revision} onAccessLoss={barrier} />
         {connections.length === 0 ? <p className="budget-status">{text.empty}</p> : null}
         {connections.map((connection) => {
           const job = latestJob(jobs, connection.id);

@@ -43,7 +43,14 @@ describe("pairing QR", () => {
     expect(matrix?.[1]?.[1]).toBe(false);
     expect(matrix?.[3]?.[3]).toBe(true);
     expect(matrix?.[17]?.[8]).toBe(true);
-    expect(matrix?.[0]?.[8]).toBe(true);
+    // Rows packed left to right from Project Nayuki's reference encoder, version 2/L, byte mode, mask 0.
+    expect(matrix?.map((row) => row.reduce((packed, on) => (packed << 1) | Number(on), 0))).toEqual([
+      0x1fc437f, 0x1048e41, 0x175205d, 0x174935d, 0x174935d,
+      0x1047741, 0x1fd557f, 0x0012800, 0x1df1cc4, 0x1a3bcc9,
+      0x057793b, 0x0b2dc20, 0x0a464cb, 0x0a9e043, 0x16fc857,
+      0x0f3a2e2, 0x14fd1f0, 0x001391f, 0x1fdf75f, 0x1055f12,
+      0x17525f3, 0x1746698, 0x17509bd, 0x10561ca, 0x1fd9123,
+    ]);
   });
 
   it("returns null when the payload is longer than a version-2 byte code", () => {
