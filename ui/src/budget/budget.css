@@ -89,6 +89,10 @@
 .budget-entry.budget-category[data-depth="2"] { padding-inline-start: 2.5rem; }
 .budget-entries { border: 1px solid var(--border); border-radius: .7rem; padding: .7rem 1rem; background: var(--surface); display: grid; gap: .5rem; }
 .budget-entries h4 { margin: 0; }
+.budget-entries-head { display: flex; justify-content: space-between; align-items: center; gap: .6rem; flex-wrap: wrap; }
+.budget-export { display: flex; flex-wrap: wrap; align-items: center; gap: .35rem .5rem; }
+.budget-export-menu { display: inline-flex; gap: .3rem; }
+.budget-export-progress { display: inline-flex; align-items: center; gap: .5rem; }
 .budget-sort { display: flex; flex-wrap: wrap; gap: .3rem; }
 .budget-sort button[data-sort="asc"]::after { content: " ↑"; }
 .budget-sort button[data-sort="desc"]::after { content: " ↓"; }
