@@ -80,54 +80,36 @@ const identicalStrings: Partial<Record<MessageKey, IdenticalString>> = {
   "rule.phNode": { value: "node", locales: ["da", "fil", "no"] },
   "rule.errGeneric": { value: "error", locales: ["es", "fil"] },
 
-  "budget.rules.edit": { value: "Edit", locales: ["id", "ms"] },
 
-  "budget.limits.edit": { value: "Edit", locales: ["id", "ms"] },
 
-  "budget.mortgages.edit": { value: "Edit", locales: ["id", "ms"] },
 
-  "budget.main.account": { value: "Account", locales: ["fil"] },
 
-  "budget.main.kinds.savings": { value: "Savings", locales: ["fil"] },
 
-  "budget.main.kinds.credit_card": { value: "Credit card", locales: ["fil"] },
 
-  "budget.overview.account": { value: "Account", locales: ["fil"] },
 
-  "budget.transfers.account": { value: "Account", locales: ["fil"] },
 
-  "budget.transactions.kinds.refund": { value: "Refund", locales: ["fil"] },
 
-  "budget.transactions.account": { value: "Account", locales: ["fil"] },
 
-  "budget.export.accountFallback": { value: "Account", locales: ["fil"] },
 
-  "budget.export.colAccount": { value: "Account", locales: ["fil"] },
 
-  "budget.export.types.refund": { value: "refund", locales: ["fil"] },
 
-  "budget.rules.kinds.refund": { value: "Refund", locales: ["fil"] },
 
-  "budget.rules.account": { value: "Account", locales: ["fil"] },
 
-  "budget.recurring.account": { value: "Account", locales: ["fil"] },
 
-  "budget.quarantine.account": { value: "Account", locales: ["fil"] },
 
-  "budget.forecast.account": { value: "Account", locales: ["fil"] },
 
-  // PHASE-2: add other locales once budget.* is translated if legitimately identical in those languages.
-  "budget.main.scopeWithState": { value: "{scope}: {state}", locales: ["pl", "it", "da", "de", "fr", "es", "pt", "nl", "sv", "no", "fi", "is"] },
-  "budget.year.noData": { value: "—", locales: ["pl", "it", "da", "de", "fr", "es", "pt", "nl", "sv", "no", "fi", "is"] },
-  "budget.export.xlsx": { value: "XLSX", locales: ["pl", "it", "da", "de", "fr", "es", "pt", "nl", "sv", "no", "fi", "is"] },
-  "budget.export.csv": { value: "CSV", locales: ["pl", "it", "da", "de", "fr", "es", "pt", "nl", "sv", "no", "fi", "is"] },
-  "budget.export.colStatus": { value: "Status", locales: ["pl", "da", "de", "pt", "nl", "sv", "no"] },
-  "budget.rules.conditionSummary": { value: "{field} {operator} „{value}”", locales: ["pl", "it", "da", "de", "fr", "es", "pt", "nl", "sv", "no", "fi", "is"] },
-  "budget.mortgages.windowRange": { value: "{start} – {end}", locales: ["pl", "it", "da", "de", "fr", "es", "pt", "nl", "sv", "no", "fi", "is"] },
-  "budget.monthBudget.limitColumn": { value: "Limit", locales: ["pl", "de"] },
-  "budget.monthBudget.noLimit": { value: "—", locales: ["pl", "it", "da", "de", "fr", "es", "pt", "nl", "sv", "no", "fi", "is"] },
-  "budget.monthBudget.statusColumn": { value: "Status", locales: ["pl", "da", "de", "pt", "nl", "sv", "no"] },
-  "budget.monthBudget.noValue": { value: "—", locales: ["pl", "it", "da", "de", "fr", "es", "pt", "nl", "sv", "no", "fi", "is"] },
+  // budget.* values that are legitimately identical to English (symbols, formats, cognates).
+  "budget.main.scopeWithState": { value: "{scope}: {state}", locales: ["pl", "it", "da", "de", "fr", "es", "pt", "nl", "sv", "no", "fi", "is", "cs", "sk", "hr", "bs", "sr", "lt", "lv", "hu", "uk", "ru", "ro", "el", "tr", "ar", "hi", "sq", "bn", "fa", "hy", "he", "ga", "ja", "id", "vi", "sw", "ms", "th", "ko", "zh", "fil", "my-MM", "zh-Hant"] },
+  "budget.year.noData": { value: "—", locales: ["pl", "it", "da", "de", "fr", "es", "pt", "nl", "sv", "no", "fi", "is", "cs", "sk", "hr", "bs", "sr", "lt", "lv", "hu", "uk", "ru", "ro", "el", "tr", "ar", "hi", "sq", "bn", "fa", "hy", "he", "ga", "ja", "id", "vi", "sw", "ms", "th", "ko", "zh", "fil", "my-MM", "zh-Hant"] },
+  "budget.export.xlsx": { value: "XLSX", locales: ["pl", "it", "da", "de", "fr", "es", "pt", "nl", "sv", "no", "fi", "is", "cs", "sk", "hr", "bs", "sr", "lt", "lv", "hu", "uk", "ru", "ro", "el", "tr", "ar", "hi", "sq", "bn", "fa", "hy", "he", "ga", "ja", "id", "vi", "sw", "ms", "th", "ko", "zh", "fil", "my-MM", "zh-Hant"] },
+  "budget.export.csv": { value: "CSV", locales: ["pl", "it", "da", "de", "fr", "es", "pt", "nl", "sv", "no", "fi", "is", "cs", "sk", "hr", "bs", "sr", "lt", "lv", "hu", "uk", "ru", "ro", "el", "tr", "ar", "hi", "sq", "bn", "fa", "hy", "he", "ga", "ja", "id", "vi", "sw", "ms", "th", "ko", "zh", "fil", "my-MM", "zh-Hant"] },
+  "budget.export.colStatus": { value: "Status", locales: ["pl", "da", "de", "pt", "nl", "sv", "no", "hr", "bs", "id", "ms"] },
+  "budget.rules.conditionSummary": { value: "{field} {operator} „{value}”", locales: ["pl", "it", "da", "de", "fr", "es", "pt", "nl", "sv", "no", "fi", "is", "cs", "sk", "hr", "bs", "sr", "lt", "lv", "hu", "uk", "ru", "ro", "el", "tr", "ar", "hi", "sq", "bn", "fa", "hy", "he", "ga", "ja", "id", "vi", "sw", "ms", "th", "ko", "zh", "fil", "my-MM", "zh-Hant"] },
+  "budget.mortgages.windowRange": { value: "{start} – {end}", locales: ["pl", "it", "da", "de", "fr", "es", "pt", "nl", "sv", "no", "fi", "is", "cs", "sk", "hr", "bs", "sr", "lt", "lv", "hu", "uk", "ru", "ro", "el", "tr", "ar", "hi", "sq", "bn", "fa", "hy", "he", "ga", "ja", "id", "vi", "sw", "ms", "th", "ko", "zh", "fil", "my-MM", "zh-Hant"] },
+  "budget.monthBudget.limitColumn": { value: "Limit", locales: ["pl", "de", "cs", "sk", "hr", "bs", "tr"] },
+  "budget.monthBudget.noLimit": { value: "—", locales: ["pl", "it", "da", "de", "fr", "es", "pt", "nl", "sv", "no", "fi", "is", "cs", "sk", "hr", "bs", "sr", "lt", "lv", "hu", "uk", "ru", "ro", "el", "tr", "ar", "hi", "sq", "bn", "fa", "hy", "he", "ga", "ja", "id", "vi", "sw", "ms", "th", "ko", "zh", "fil", "my-MM", "zh-Hant"] },
+  "budget.monthBudget.statusColumn": { value: "Status", locales: ["pl", "da", "de", "pt", "nl", "sv", "no", "hr", "bs", "id", "ms"] },
+  "budget.monthBudget.noValue": { value: "—", locales: ["pl", "it", "da", "de", "fr", "es", "pt", "nl", "sv", "no", "fi", "is", "cs", "sk", "hr", "bs", "sr", "lt", "lv", "hu", "uk", "ru", "ro", "el", "tr", "ar", "hi", "sq", "bn", "fa", "hy", "he", "ga", "ja", "id", "vi", "sw", "ms", "th", "ko", "zh", "fil", "my-MM", "zh-Hant"] },
   "budget.main.title": { value: "Budget", locales: ["it", "da", "de", "fr", "nl", "sv"] },
   "budget.transactions.kind": { value: "Type", locales: ["da", "fr", "nl", "no"] },
   "budget.export.colType": { value: "Type", locales: ["da", "fr", "nl", "no"] },
@@ -146,20 +128,32 @@ const identicalStrings: Partial<Record<MessageKey, IdenticalString>> = {
   "budget.recurring.occurrences.few": { value: "{n} occurrences", locales: ["fr"] },
   "budget.recurring.occurrences.many": { value: "{n} occurrences", locales: ["fr"] },
   "budget.recurring.occurrences.other": { value: "{n} occurrences", locales: ["fr"] },
-  "budget.quarantine.total": { value: "Total", locales: ["fr", "es", "pt"] },
-  "budget.forecast.total": { value: "Total", locales: ["fr", "es", "pt"] },
+  "budget.quarantine.total": { value: "Total", locales: ["fr", "es", "pt", "ro"] },
+  "budget.forecast.total": { value: "Total", locales: ["fr", "es", "pt", "ro"] },
   "budget.monthBudget.dateLabel": { value: "Date", locales: ["fr"] },
-  "budget.monthBudget.totalLabel": { value: "Total", locales: ["fr", "es", "pt"] },
+  "budget.monthBudget.totalLabel": { value: "Total", locales: ["fr", "es", "pt", "ro"] },
   "budget.overview.transferIn": { value: "in", locales: ["sv"] },
   "budget.overview.excludedIn": { value: "in", locales: ["sv"] },
-  "budget.rules.value": { value: "text", locales: ["sv"] },
+  "budget.rules.value": { value: "text", locales: ["sv", "cs", "sk", "ro"] },
+  "budget.rules.edit": { value: "Edit", locales: ["id", "ms"] },
+  "budget.limits.edit": { value: "Edit", locales: ["id", "ms"] },
+  "budget.mortgages.edit": { value: "Edit", locales: ["id", "ms"] },
+  "budget.main.account": { value: "Account", locales: ["fil"] },
+  "budget.main.kinds.savings": { value: "Savings", locales: ["fil"] },
+  "budget.main.kinds.credit_card": { value: "Credit card", locales: ["fil"] },
+  "budget.overview.account": { value: "Account", locales: ["fil"] },
+  "budget.transfers.account": { value: "Account", locales: ["fil"] },
+  "budget.transactions.kinds.refund": { value: "Refund", locales: ["fil"] },
+  "budget.transactions.account": { value: "Account", locales: ["fil"] },
+  "budget.export.accountFallback": { value: "Account", locales: ["fil"] },
+  "budget.export.colAccount": { value: "Account", locales: ["fil"] },
+  "budget.export.types.refund": { value: "refund", locales: ["fil"] },
+  "budget.rules.kinds.refund": { value: "Refund", locales: ["fil"] },
+  "budget.rules.account": { value: "Account", locales: ["fil"] },
+  "budget.recurring.account": { value: "Account", locales: ["fil"] },
+  "budget.quarantine.account": { value: "Account", locales: ["fil"] },
+  "budget.forecast.account": { value: "Account", locales: ["fil"] },
 };
-
-// PHASE-2: budget.* translations pending
-// Temporarily tolerate missing budget.* keys in the 43 non-en/non-pl locales until phase 2 fills them.
-function isPendingBudgetKey(locale: Locale, key: string, messages: Record<string, string>): boolean {
-  return locale !== "en" && locale !== "pl" && key.startsWith("budget.") && !(key in messages);
-}
 
 function placeholders(message: string): string[] {
   // Compare sets, so translators may reorder or repeat a parameter. Include malformed/non-ASCII
@@ -187,13 +181,11 @@ describe("translation catalogs", () => {
     const messages = catalogs[`./locales/${locale}.ts`] ?? {};
 
     it("has every source key and no extra keys", () => {
-      const expectedKeys = sourceKeys.filter((key) => !isPendingBudgetKey(locale, key, messages));
-      expect(Object.keys(messages).sort()).toEqual(expectedKeys);
+      expect(Object.keys(messages).sort()).toEqual(sourceKeys);
     });
 
     it("has non-empty messages with the source placeholder sets", () => {
       for (const [key, source] of Object.entries(en)) {
-        if (isPendingBudgetKey(locale, key, messages)) continue;
         const message = messages[key];
         expect(typeof message, key).toBe("string");
         expect(message?.trim(), key).not.toBe("");
@@ -206,7 +198,6 @@ describe("translation catalogs", () => {
       for (const base of pluralBases) {
         for (const category of categories) {
           const key = `${base}.${category}`;
-          if (isPendingBudgetKey(locale, key, messages)) continue;
           expect(messages[key]?.trim(), key).toBeTruthy();
         }
       }
