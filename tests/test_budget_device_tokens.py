@@ -739,6 +739,35 @@ class DeviceTokenHTTPTests(fixture.unittest.IsolatedAsyncioTestCase):
             response = await self._login_device(headers={"X-Forwarded-For": "192.0.2.3"})
             _status(response, 200)
 
+    async def test_session_login_resolves_proxy_sources_like_device_login(self):
+        self._set_login_passwords("alice")
+        body = {"user": "alice", "password": LOGIN_PASSWORD}
+        with mock.patch.dict(os.environ, {consent_context.TRUSTED_PROXY_ENV: "127.0.0.1/32,10.0.0.0/8"}), \
+                mock.patch.object(web, "_audit"):
+            for headers in ([], [("X-Forwarded-For", "bad")], [("X-Forwarded-For", "10.0.0.2")],
+                            [("X-Forwarded-For", "192.0.2.1"), ("X-Forwarded-For", "bad")]):
+                with mock.patch.object(auth.LoginLimiter, "take") as take:
+                    response = await self.client.post("/api/login", json=body, headers=headers)
+                    self.assertEqual((response.status, await response.json()),
+                                     (400, {"ok": False, "error": "invalid request"}))
+                    take.assert_not_called()
+            sources = []
+            real_take = auth.LoginLimiter.take
+
+            def record(limiter, user, source, now):
+                sources.append(source)
+                return real_take(limiter, user, source, now)
+            with mock.patch.object(auth.LoginLimiter, "take", record):
+                for headers in ([("X-Forwarded-For", "bad, 192.0.2.1, 10.0.0.1")],
+                                [("X-Forwarded-For", "bad"), ("X-Forwarded-For", "192.0.2.1, 10.0.0.1")]):
+                    _status(await self.client.post("/api/login", json=body, headers=headers), 200)
+            self.assertEqual(sources, ["192.0.2.1", "192.0.2.1"])
+        with mock.patch.dict(os.environ, {consent_context.TRUSTED_PROXY_ENV: "not-a-network"}), \
+                mock.patch.object(auth.LoginLimiter, "take") as take:
+            _status(await self.client.post("/api/login", json=body,
+                                           headers=[("X-Forwarded-For", "192.0.2.1")]), 400)
+            take.assert_not_called()
+
     async def test_password_login_rejects_credentials_in_headers_and_honors_flags(self):
         credentials = ({"Cookie": "unrelated=value"}, {"Cookie": ""}, {"Authorization": ""},
                        self.headers(bearer=True), self.headers())

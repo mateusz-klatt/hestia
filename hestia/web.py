@@ -39,7 +39,8 @@ from pathlib import Path
 from aiohttp import ClientConnectionError, web
 
 from . import auth, store_sql
-from .budget import consent_api, device_token
+from .budget import consent_api, consent_context, device_token
+from .budget.config import BudgetConfigError
 from .classifier import DeviceType
 from .automations import rule_vocab
 from .proxy import (INJECT_GAP_SECS, IR_BUTTONS, KLIMA, _CLOSED_SENTINEL, _LOOPBACK, _audit,
@@ -392,7 +393,13 @@ async def _login(request):
     user = op.get("user") if isinstance(op, dict) else None
     password = op.get("password") if isinstance(op, dict) else None
     if _AUTH_ENABLED and isinstance(user, str) and isinstance(password, str):
-        retry = request.app[_LOGIN_LIMITER_KEY].take(user, device_token.client_ip(request), time.monotonic())
+        # Same source resolution as the device login, so both share one bucket per client and a
+        # malformed forwarded chain cannot collapse callers onto the trusted proxy's address.
+        try:
+            source = consent_context.login_ip(request)
+        except (ValueError, BudgetConfigError):
+            return _json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "invalid request"})
+        retry = request.app[_LOGIN_LIMITER_KEY].take(user, source, time.monotonic())
         if retry is not None:
             response = _json(HTTPStatus.TOO_MANY_REQUESTS, {"ok": False, "error": "login rate limited"})
             response.headers["Retry-After"] = str(retry)
