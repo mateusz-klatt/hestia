@@ -1,5 +1,5 @@
-// Spending analytics (2D) helpers. Every total is computed by the server per currency and arrives as a decimal
-// STRING; the browser never adds, subtracts, converts or mixes amounts. Periods are "YYYY-MM" or "YYYY".
+// Spending analytics (2D) helpers. Server totals arrive as decimal STRINGs; UI projections use exact BigInt
+// arithmetic and never mix currencies. Periods are "YYYY-MM" or "YYYY".
 import type { components } from "../../api/openapi";
 import type { BudgetAccount, BudgetCapabilities, BudgetConnection } from "../model";
 import { accountLabel, formatAmount } from "../model";

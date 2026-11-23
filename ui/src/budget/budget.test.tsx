@@ -1117,15 +1117,15 @@ describe("analytics views", () => {
     api.connections.mockImplementationOnce(() => ok({ connections: [connection], capabilities: analysis }));
     await click(button("Reload"));
     expect(button("Mortgages").nextElementSibling).toBe(button("Forecast"));
-    expect(api.forecast).not.toHaveBeenCalled();
+    expect(api.forecast).toHaveBeenCalledWith(2, "PLN");
     await click(button("Forecast"));
     expect(button("Forecast").getAttribute("aria-pressed")).toBe("true");
-    expect(api.forecast).toHaveBeenCalledTimes(1);
+    expect(api.forecast).toHaveBeenCalledTimes(2);
 
     await click(button("Reload"));
     expect(host.textContent).not.toContain("Forecast");
     expect(host.textContent).toContain("Synthetic Current ••0001");
-    expect(api.forecast).toHaveBeenCalledTimes(1);
+    expect(api.forecast).toHaveBeenCalledTimes(2);
   });
 
   it("switches between accounts and the month view", async () => {
@@ -1142,7 +1142,7 @@ describe("analytics views", () => {
     expect(host.textContent).toContain("No categories yet.");
     api.recurring.mockImplementation(() => ok(recurringOf([recurringHint({ label: "Synthetic Fiber" })])));
     await click(button("Recurring"));
-    expect(api.recurring).toHaveBeenCalledTimes(1);
+    expect(api.recurring).toHaveBeenCalledTimes(2);
     expect(host.textContent).toContain("Synthetic Fiber");
     expect(button("Recurring").getAttribute("aria-pressed")).toBe("true");
     api.spendingLimits.mockImplementation((period) => ok(spendingLimitsOf(
@@ -1155,7 +1155,7 @@ describe("analytics views", () => {
     expect(button("Categories and rules").getAttribute("aria-pressed")).toBe("true");
     api.mortgages.mockImplementation(() => ok(mortgagesOf([mortgageSchedule()], [mortgageReminder()])));
     await click(button("Mortgages"));
-    expect(api.mortgages).toHaveBeenCalledTimes(1);
+    expect(api.mortgages).toHaveBeenCalledTimes(2);
     expect(host.textContent).toContain("Synthetic Home Loan");
     expect(button("Mortgages").getAttribute("aria-pressed")).toBe("true");
     api.inbox.mockImplementation(() => ok(inboxOf([inboxConsentItem()])));
@@ -1210,7 +1210,8 @@ describe("analytics views", () => {
   it("clears the whole budget when the mortgages read reports lost access", async () => {
     const api = fakeApi();
     api.connections.mockImplementation(() => ok({ connections: [connection], capabilities: analysis }));
-    api.mortgages.mockImplementation(() => fail(403, "budget_forbidden"));
+    api.mortgages.mockImplementationOnce(() => ok(mortgagesOf()))
+      .mockImplementation(() => fail(403, "budget_forbidden"));
     await render(api);
     await click(button("Mortgages"));
     expect(host.textContent).toContain("Only the budget's owner");
@@ -1228,15 +1229,15 @@ describe("analytics views", () => {
         ...month, currencies: [total], items: [forecastItem({ label, amount })],
       } : month);
       api.connections.mockImplementation(() => ok({ connections: [connection], capabilities: analysis }));
-      api.forecast.mockImplementationOnce(() => ok({ ...data, totals: [total], months }))
-        .mockImplementationOnce(() => fail(status, error));
+      api.forecast.mockImplementation(() => ok({ ...data, totals: [total], months }));
       await render(api);
       await click(button("Forecast"));
       expect(host.textContent).toContain(label);
       expect(host.textContent).toContain(`${amount} PLN`);
 
+      api.forecast.mockImplementationOnce(() => fail(status, error));
       await click(button("Reload"));
-      expect(api.forecast).toHaveBeenCalledTimes(2);
+      expect(api.forecast).toHaveBeenCalledTimes(3);
       expect(host.textContent).toContain("Only the budget's owner");
       expect(host.textContent).not.toContain(label);
       expect(host.textContent).not.toContain(`${amount} PLN`);
@@ -1257,7 +1258,8 @@ describe("analytics views", () => {
   it("clears the whole budget when the recurring read reports lost access", async () => {
     const api = fakeApi();
     api.connections.mockImplementation(() => ok({ connections: [connection], capabilities: analysis }));
-    api.recurring.mockImplementation(() => fail(403, "budget_forbidden"));
+    api.recurring.mockImplementationOnce(() => ok(recurringOf()))
+      .mockImplementation(() => fail(403, "budget_forbidden"));
     await render(api);
     await click(button("Recurring"));
     expect(host.textContent).toContain("Only the budget's owner");
