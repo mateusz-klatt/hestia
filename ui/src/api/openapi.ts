@@ -165,6 +165,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/budget/analytics/category-colors-spread": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Save an owner-private local classification
+         * @description Requires the exact admin owner, browser cookie and configured HTTPS Origin. Version and source fingerprints prevent stale changes. No bank request is made.
+         */
+        post: operations["spreadBudgetAnalyticsCategoryColors"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/budget/analytics/category-create": {
         parameters: {
             query?: never;
@@ -199,26 +219,6 @@ export interface paths {
          * @description Requires the exact admin owner, browser cookie and configured HTTPS Origin. Version and source fingerprints prevent stale changes. No bank request is made.
          */
         post: operations["updateBudgetAnalyticsCategory"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/budget/analytics/category-colors-spread": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Save an owner-private local classification
-         * @description Requires the exact admin owner, browser cookie and configured HTTPS Origin. Version and source fingerprints prevent stale changes. No bank request is made.
-         */
-        post: operations["spreadBudgetAnalyticsCategoryColors"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1295,7 +1295,7 @@ export interface paths {
         put?: never;
         /**
          * Issue one 5-minute pairing code for the signed-in admin owner.
-         * @description Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Cookie plus Authorization returns 400 budget_auth_ambiguous.  Browser cookie and exact Origin. At most 3 active codes.
+         * @description Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Cookie plus Authorization returns 400 budget_auth_ambiguous.  Browser cookie and exact Origin. At most 3 active codes. Every /api/budget/* route requires the browser hestia_session cookie and configured same-origin Origin. A login/session Authorization: Bearer from /api/login returns 403 budget_browser_session_required on every budget route, including GETs. The only bearer exception is a receipts-scoped device token obtained through browser pairing: it is accepted only on receipts parse-text, confirm, list, search, delete, detail and image, plus device-token/revoke for itself. Household viewer/operator access is browser-only too.
          */
         post: operations["pairBudgetReceiptDevice"];
         delete?: never;
@@ -2373,17 +2373,6 @@ export interface components {
             /** Version */
             version: number;
         };
-        /** BudgetAnalyticsCategoryCreateRequest */
-        BudgetAnalyticsCategoryCreateRequest: {
-            /** Name */
-            name: string;
-            /**
-             * Parent Id
-             * @description Parent category owned by the same user. Null is a top-level category. On update, omit this field to leave the parent unchanged and send null to detach.
-             * @default null
-             */
-            parent_id: string | null;
-        };
         /** BudgetAnalyticsCategoryColorSpreadRequest */
         BudgetAnalyticsCategoryColorSpreadRequest: Record<string, never>;
         /** BudgetAnalyticsCategoryColorSpreadResult */
@@ -2395,6 +2384,17 @@ export interface components {
              * @constant
              */
             ok: true;
+        };
+        /** BudgetAnalyticsCategoryCreateRequest */
+        BudgetAnalyticsCategoryCreateRequest: {
+            /** Name */
+            name: string;
+            /**
+             * Parent Id
+             * @description Parent category owned by the same user. Null is a top-level category. On update, omit this field to leave the parent unchanged and send null to detach.
+             * @default null
+             */
+            parent_id: string | null;
         };
         /** BudgetAnalyticsCategoryResult */
         BudgetAnalyticsCategoryResult: {
@@ -7646,7 +7646,7 @@ export interface operations {
             };
         };
     };
-    createBudgetAnalyticsCategory: {
+    spreadBudgetAnalyticsCategoryColors: {
         parameters: {
             query?: never;
             header?: never;
@@ -7655,7 +7655,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["BudgetAnalyticsCategoryCreateRequest"];
+                "application/json": components["schemas"]["BudgetAnalyticsCategoryColorSpreadRequest"];
             };
         };
         responses: {
@@ -7665,7 +7665,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["BudgetAnalyticsCategoryResult"];
+                    "application/json": components["schemas"]["BudgetAnalyticsCategoryColorSpreadResult"];
                 };
             };
             /** @description invalid request */
@@ -7742,7 +7742,7 @@ export interface operations {
             };
         };
     };
-    spreadBudgetAnalyticsCategoryColors: {
+    createBudgetAnalyticsCategory: {
         parameters: {
             query?: never;
             header?: never;
@@ -7751,7 +7751,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["BudgetAnalyticsCategoryColorSpreadRequest"];
+                "application/json": components["schemas"]["BudgetAnalyticsCategoryCreateRequest"];
             };
         };
         responses: {
@@ -7761,7 +7761,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["BudgetAnalyticsCategoryColorSpreadResult"];
+                    "application/json": components["schemas"]["BudgetAnalyticsCategoryResult"];
                 };
             };
             /** @description invalid request */

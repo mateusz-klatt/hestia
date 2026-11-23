@@ -1,16 +1,15 @@
 """Persist a stable hue for each active top-level budget category.
 
-Revision ID: 0027
+Revision ID: 0026
 Revises: 0025
 
-Numbered 0027 because another open migration already reserves 0026. Re-parent
-this revision when the earlier migrations merge. Existing active roots are
+Existing active roots are
 assigned once, independently per owner, in deterministic name_key order.
 """
 from alembic import op
 import sqlalchemy as sa
 
-revision = "0027"
+revision = "0026"
 down_revision = "0025"
 branch_labels = None
 depends_on = None

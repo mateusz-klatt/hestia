@@ -272,7 +272,7 @@ class BudgetOpenApiTests(unittest.TestCase):
         self.assertIn("budget_receipt_quota_exceeded", parse_limit)
         self.assertIn("131072", receipts["/api/budget/receipts/confirm"]["post"]["responses"]["413"]["description"])
         self.assertIn("16384", receipts["/api/budget/receipts/list"]["post"]["responses"]["413"]["description"])
-        self.assertEqual(document["info"]["version"], "0.42.0")
+        self.assertEqual(document["info"]["version"], "0.41.0")
         receipt_schemas = document["components"]["schemas"]
         self.assertEqual(receipt_schemas["BudgetReceiptDeviceRedeemResult"]["properties"]["expires_at"]["format"],
                          "date-time")

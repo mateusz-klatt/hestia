@@ -108,6 +108,38 @@ describe("receipt devices", () => {
     expect(host.textContent).toContain("Vesta");
   });
 
+  it("shows the local expiry in the UI locale and ticks the countdown", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 10, 23, 12, 0, 0));
+    const client = api();
+    const pair = { ...pairing(), expires_at: Date.now() / 1000 + 65 };
+    client.pairReceiptDevice.mockImplementation(() => ok(pair));
+    await render(client, "pl");
+    await act(async () => { button("Dodaj urządzenie").click(); await Promise.resolve(); });
+    const expiry = new Date(pair.expires_at * 1000);
+    const localTime = new Intl.DateTimeFormat("pl", { hour: "2-digit", minute: "2-digit" }).format(expiry);
+    expect(host.querySelector(".budget-pair")?.textContent).toContain(`Ważny do: ${localTime}`);
+    expect(host.querySelector(".budget-pair")?.textContent).toContain("Pozostało: 01:05");
+    expect(host.querySelector(".budget-pair")?.textContent).not.toContain(expiry.toISOString());
+    expect(host.querySelector('[role="timer"]')?.textContent).toBe("01:05");
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+    expect(host.querySelector('[role="timer"]')?.textContent).toBe("01:04");
+  });
+
+  it("includes the date when the pairing code expires on another day", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 10, 23, 23, 59, 30));
+    const client = api();
+    const pair = { ...pairing(), expires_at: Date.now() / 1000 + 65 };
+    client.pairReceiptDevice.mockImplementation(() => ok(pair));
+    await render(client);
+    await act(async () => { button("Add device").click(); await Promise.resolve(); });
+    const localDateTime = new Intl.DateTimeFormat("en", {
+      day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit",
+    }).format(new Date(pair.expires_at * 1000));
+    expect(host.querySelector(".budget-pair")?.textContent).toContain(`Expires: ${localDateTime}`);
+  });
+
   it("clears the pairing data as soon as it expires", async () => {
     vi.useFakeTimers();
     const client = api();

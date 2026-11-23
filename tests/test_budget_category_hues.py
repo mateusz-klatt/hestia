@@ -68,7 +68,7 @@ class CategoryHueMigrationTests(unittest.TestCase):
         for upgrade in (1, 2):
             with self.subTest(upgrade=upgrade):
                 db.init_db(self.path)
-                self._clean("0027")
+                self._clean("0026")
                 with closing(sqlite3.connect(self.path)) as connection:
                     for owner, count in (("alice", 7), ("bob", 3)):
                         rows = connection.execute(

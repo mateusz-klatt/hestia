@@ -920,6 +920,20 @@ describe("analytics views", () => {
     expect(api.monthlyBudgetCharts).not.toHaveBeenCalled();
   });
 
+  it("opens Accounts from the header and scrolls to the devices panel", async () => {
+    const api = fakeApi();
+    api.connections.mockImplementation(() => ok({ connections: [connection], capabilities: analysis }));
+    await render(api);
+    expect(host.querySelector(".budget-devices")).toBeNull();
+    const scrollSpy = vi.spyOn(Element.prototype, "scrollIntoView");
+    scrollSpy.mockClear();
+    await click(button("Devices (Vesta)"));
+    expect(button("Accounts").getAttribute("aria-pressed")).toBe("true");
+    expect(host.querySelector(".budget-devices")).not.toBeNull();
+    expect(api.receiptDevices).toHaveBeenCalledTimes(1);
+    expect(scrollSpy).toHaveBeenCalledWith({ behavior: "smooth", block: "start" });
+  });
+
   it("gates the quarantine tab on analytics, defaults to Monthly budget, and keeps Quarantine after Forecast", async () => {
     const api = fakeApi();
     await render(api);
