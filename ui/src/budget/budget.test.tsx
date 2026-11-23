@@ -2,6 +2,7 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import type { Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { loadLocale } from "../i18n";
 import type { BudgetApi, BudgetResult } from "./api";
 import { Budget } from "./budget";
 import { account, componentLimit, connection, sharedLimit } from "./fixtures";
@@ -104,7 +105,8 @@ function fakeApi(accounts: BudgetAccount[] = [account({ display })]) {
 let host: HTMLElement;
 let root: Root;
 
-beforeEach(() => {
+beforeEach(async () => {
+  await loadLocale("en");
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   // jsdom does not implement scrolling; the detail panel scrolls itself into view when opened.
   Element.prototype.scrollIntoView = vi.fn();
@@ -116,6 +118,7 @@ afterEach(async () => {
   await act(async () => { root.unmount(); await Promise.resolve(); });
   host.remove();
   vi.unstubAllGlobals();
+  await loadLocale("en");
 });
 
 async function render(api: ReturnType<typeof fakeApi>, active = true, principal?: string | null): Promise<void> {

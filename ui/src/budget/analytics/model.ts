@@ -3,7 +3,7 @@
 // across currencies. Periods are "YYYY-MM" or "YYYY".
 import type { components } from "../../api/openapi";
 import { t } from "../../i18n";
-import en, { type MessageKey } from "../../i18n/locales/en";
+import type { MessageKey } from "../../i18n/locales/en";
 import type { BudgetAccount, BudgetCapabilities, BudgetConnection } from "../model";
 import { accountLabel, formatAmount } from "../model";
 
@@ -424,11 +424,10 @@ export const MAIN_BALANCE_TYPE_KEYS: Readonly<Record<string, MessageKey>> = {
   PRCD: "budget.main.balanceTypes.PRCD",
 };
 
-/** A label for a server enum value via catalog key map or static label map; an unknown value is shown as it came. */
-export function labelOf(labels: Readonly<Record<string, string>>, value: string): string {
+/** A label for a server enum value via catalog key map; an unknown value is shown as it came. */
+export function labelOf(labels: Readonly<Record<string, MessageKey>>, value: string): string {
   const mapped = labels[value];
-  if (mapped === undefined) return value;
-  return Object.prototype.hasOwnProperty.call(en, mapped) ? t(mapped as MessageKey) : mapped;
+  return mapped === undefined ? value : t(mapped);
 }
 
 /** The kinds an entry can take by its direction: a payment out is never income or a refund, an incoming one never
