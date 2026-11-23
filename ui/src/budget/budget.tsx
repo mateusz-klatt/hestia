@@ -59,7 +59,7 @@ const labels = {
     consentContext: "The connection cannot be started safely from this address; open Hestia at its usual address.",
     consentUrl: "The bank returned an invalid address; nothing was opened.",
     limits: "Download limits", limitsHide: "Hide limits", limitsLoading: "Loading limits…",
-    consentHealth: "Consent status", consentHealthHide: "Hide consent status",
+    consentHealth: "Consent status", consentHealthHide: "Hide consent status", devices: "Devices (Vesta)",
     limitsError: "Limits could not be loaded.",
     limitsIntro: "Each account and data type is downloaded at most twice a day, at least 12 hours apart; a bank can ask for a longer pause. These are read-only.",
     scopes: { application: "All banks", provider: "This bank", connection: "This connection" },
@@ -105,7 +105,7 @@ const labels = {
     consentContext: "Nie można bezpiecznie rozpocząć połączenia z tego adresu; otwórz Hestię pod jej zwykłym adresem.",
     consentUrl: "Bank zwrócił nieprawidłowy adres; niczego nie otwarto.",
     limits: "Limity pobrań", limitsHide: "Ukryj limity", limitsLoading: "Wczytywanie limitów…",
-    consentHealth: "Stan zgód", consentHealthHide: "Ukryj stan zgód",
+    consentHealth: "Stan zgód", consentHealthHide: "Ukryj stan zgód", devices: "Urządzenia (Vesta)",
     limitsError: "Nie udało się wczytać limitów.",
     limitsIntro: "Każde konto i rodzaj danych pobieramy najwyżej 2 razy na dobę, co najmniej co 12 godzin; bank może zażądać dłuższej przerwy. To tylko podgląd.",
     scopes: { application: "Wszystkie banki", provider: "Ten bank", connection: "To połączenie" },
@@ -199,6 +199,7 @@ export function Budget({ active, api = budgetApi, pollMs = 2000, principal,
   const [pending, setPending] = useState<BudgetConsentFlow[]>([]);
   const [detail, setDetail] = useState<string | null>(null);
   const [view, setView] = useState<View>("monthly_budget");
+  const [devicesFocus, setDevicesFocus] = useState(0);
   // A month chosen in the monthly budget or year view; the month view opens on it.
   const [focusMonth, setFocusMonth] = useState<string | undefined>(undefined);
   const [focusToday, setFocusToday] = useState<(() => Date) | undefined>(undefined);
@@ -241,6 +242,7 @@ export function Budget({ active, api = budgetApi, pollMs = 2000, principal,
     setConnections([]); setAccounts([]); setJobs([]); setDetail(null); setCapabilities(null); setBusy(new Set());
     setLimits(null); setShowLimits(false); setShowConsentHealth(false); setConsents([]); setPending([]);
     setFocusMonth(undefined); setFocusToday(undefined); setFocusCurrency(undefined); setFocusProvisional(undefined); setFocusRule(undefined); setView("accounts");
+    setDevicesFocus(0);
     setLoad(disabled ? "disabled" : "denied");
   }, []);
   const barrier = useCallback((result: { ok: boolean; status?: number; error?: string }): boolean => {
@@ -427,6 +429,11 @@ export function Budget({ active, api = budgetApi, pollMs = 2000, principal,
           </button>
         ) : null}
         {load === "ready" ? (
+          <button type="button" onClick={() => { setView("accounts"); setDevicesFocus((current) => current + 1); }}>
+            {text.devices}
+          </button>
+        ) : null}
+        {load === "ready" ? (
           <button type="button" aria-pressed={showLimits} onClick={() => { setShowLimits((current) => !current); }}>
             {showLimits ? text.limitsHide : text.limits}
           </button>
@@ -531,7 +538,8 @@ export function Budget({ active, api = budgetApi, pollMs = 2000, principal,
           onAccessLoss={barrier} initialRule={focusRule ?? null} />
       ) : (
         <>
-        <ReceiptDevices key={principal ?? ""} api={api} locale={locale} revision={revision} onAccessLoss={barrier} />
+        <ReceiptDevices key={principal ?? ""} api={api} locale={locale} revision={revision} onAccessLoss={barrier}
+          focusRevision={devicesFocus} />
         {connections.length === 0 ? <p className="budget-status">{text.empty}</p> : null}
         {connections.map((connection) => {
           const job = latestJob(jobs, connection.id);

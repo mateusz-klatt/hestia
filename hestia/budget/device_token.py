@@ -223,11 +223,10 @@ def _quota_wait(stamps, moment, window, limit, backoff_after):
 def _charge(keys, moment, window):
     """Reserve all quota for one request or return the largest required wait."""
     with _bucket_lock:
-        if len(_buckets) + len(keys) > _MAX_BUCKETS:
-            stale_after = max(REDEEM_WINDOW, PARSE_WINDOW)
-            for key, stamps in tuple(_buckets.items()):
-                if moment - stamps[-1] >= stale_after:
-                    del _buckets[key]
+        stale_after = max(REDEEM_WINDOW, PARSE_WINDOW)
+        for key, stamps in tuple(_buckets.items()):
+            if moment - stamps[-1] >= stale_after:
+                del _buckets[key]
         waits = []
         updated = {}
         available = _MAX_BUCKETS - len(_buckets)
