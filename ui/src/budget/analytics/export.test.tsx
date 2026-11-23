@@ -10,11 +10,11 @@ import type { AnalyticsCategory, AnalyticsTransaction, AnalyticsTransactions } f
 import { accountName } from "./model";
 import { ExportMenu } from "./export_menu";
 import {
-  EXPORT_PAGE_SIZE, ExportCancelled, buildCsv, csvField, exportBasename, exportHeaders, exportLabels, exportStatus,
-  exportTypeLabel, mapExportRow, monthsOfYear, signedAmount, walkTransactions,
+  EXPORT_PAGE_SIZE, ExportCancelled, ExportSnapshotChanged, buildCsv, categoryIndex, csvAmount, csvField, exportBasename,
+  exportHeaders, exportLabels, exportStatus, exportTypeLabel, mapExportRow, monthsOfYear, signedAmount, walkTransactions,
 } from "./export_rows";
 import type { ExportContext, ExportRecord } from "./export_rows";
-import { buildWorkbook, crc32, excelSerial } from "./xlsx_writer";
+import { buildWorkbook, crc32, excelSerial, sheetTitle } from "./xlsx_writer";
 import type { XlsxCell } from "./xlsx_writer";
 import { TransactionsPanel, transactionLabels } from "./transactions";
 import { YearView, yearLabels } from "./year";
@@ -30,7 +30,7 @@ const accounts = [account({
   display: { product: "Synthetic Current", currency: "PLN", masked_suffix: "0001", source: "offline_import", observed_at: 1, imported_at: 2 },
 })];
 const connections = [connection];
-const context: ExportContext = { accounts, connections, categories, text };
+const context: ExportContext = { accounts, connections, categories: categoryIndex(categories), text };
 
 function row(changes: Partial<AnalyticsTransaction> = {}): AnalyticsTransaction {
   return entry("secret-ref", {
@@ -67,8 +67,15 @@ describe("transaction export rows", () => {
     expect(signedAmount("0.00", "DBIT")).toEqual({ text: "0.00", numeric: true });
     expect(signedAmount("100.00", "CRDT").text).toBe("100.00");
     expect(mapped.bookingDate).toBe("2026-11-03");
+    expect(mapped.bookingIsDate).toBe(true);
     expect(mapped.transactionDate).toBe("2026-11-01");
-    expect(mapped.bookingDate).not.toBe("2026-11-02");
+    expect(mapExportRow(row({ booking_date: null }), context).bookingDate).toBe("2026-11-02");
+    expect(mapExportRow(row({ booking_date: null, value_date: null, transaction_date: "2026-11-01" }), context).bookingDate).toBe("");
+    const early = mapExportRow(row({ booking_date: "1899-12-31", transaction_date: "1900-02-28" }), context);
+    expect(early.bookingDate).toBe("1899-12-31");
+    expect(early.bookingIsDate).toBe(false);
+    expect(early.transactionIsDate).toBe(false);
+    expect(mapExportRow(row({ booking_date: "1900-03-01" }), context).bookingIsDate).toBe(true);
     expect(mapped.description).toBe("Synthetic shop · note");
     expect(mapped.counterparty).toBe("Synthetic Market");
     expect(mapExportRow(row({ credit_debit_indicator: "CRDT" }), context).counterparty).toBe("Synthetic Payer");
@@ -104,7 +111,16 @@ describe("transaction export csv", () => {
     expect(csvField("say \"hi\"")).toBe("\"say \"\"hi\"\"\"");
     expect(csvField("line\r\nnext")).toBe("\"line\r\nnext\"");
     expect(csvField("=cmd")).toBe("'=cmd");
-    expect(csvField("-12.5")).toBe("-12.5");
+    expect(csvField("+cmd")).toBe("'+cmd");
+    expect(csvField("@cmd")).toBe("'@cmd");
+    expect(csvField("-12.5")).toBe("'-12.5");
+    expect(csvField(" =SUM(1)")).toBe("' =SUM(1)");
+    expect(csvField("\t=cmd")).toBe("'\t=cmd");
+    expect(csvField("\r=cmd")).toBe("\"'\r=cmd\"");
+    expect(csvAmount("-12.5")).toBe("-12,5");
+    expect(csvAmount("0.00")).toBe("0,00");
+    expect(csvAmount("100")).toBe("100");
+    expect(csvAmount("=12")).toBe("'=12");
     const record: ExportRecord = {
       ...mapExportRow(row(), context),
       description: "say \"hi\";\nnext",
@@ -116,7 +132,8 @@ describe("transaction export csv", () => {
     expect(csv.startsWith("\uFEFFData;Data transakcji;")).toBe(true);
     expect(csv).toContain("\"say \"\"hi\"\";\nnext\"");
     expect(csv).toContain("\"A;B\"");
-    expect(csv).toContain(";-12.5;PLN;");
+    expect(csv).toContain(";-12,5;PLN;");
+    expect(csv).not.toContain("-12.5");
     expect(csv.endsWith("\r\n")).toBe(true);
     expect(csv.split("\r\n").filter((line) => line !== "")).toHaveLength(2);
   });
@@ -134,9 +151,9 @@ function independentCrc(data: Uint8Array): number {
 function unzip(bytes: Uint8Array): Map<string, string> {
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const files = new Map<string, string>();
+  const locals: { name: string; crc: number; size: number; offset: number }[] = [];
   let offset = 0;
-  while (offset + 30 <= bytes.length) {
-    if (view.getUint32(offset, true) !== 0x04034b50) break;
+  while (offset + 30 <= bytes.length && view.getUint32(offset, true) === 0x04034b50) {
     const method = view.getUint16(offset + 8, true);
     const stored = view.getUint32(offset + 14, true);
     const size = view.getUint32(offset + 18, true);
@@ -151,9 +168,40 @@ function unzip(bytes: Uint8Array): Map<string, string> {
     if (independentCrc(data) !== stored) throw new Error("crc mismatch");
     const name = new TextDecoder().decode(bytes.subarray(nameStart, nameStart + nameLength));
     files.set(name, new TextDecoder().decode(data));
+    locals.push({ name, crc: stored, size, offset });
     offset = dataEnd;
   }
-  if (files.size === 0) throw new Error("zip had no files");
+  if (locals.length === 0) throw new Error("zip had no files");
+  const centralStart = offset;
+  const central: { name: string; crc: number; size: number; local: number }[] = [];
+  while (offset + 46 <= bytes.length && view.getUint32(offset, true) === 0x02014b50) {
+    const method = view.getUint16(offset + 10, true);
+    const crc = view.getUint32(offset + 16, true);
+    const size = view.getUint32(offset + 24, true);
+    const nameLength = view.getUint16(offset + 28, true);
+    const extraLength = view.getUint16(offset + 30, true);
+    const commentLength = view.getUint16(offset + 32, true);
+    const local = view.getUint32(offset + 42, true);
+    const nameStart = offset + 46;
+    const nameEnd = nameStart + nameLength + extraLength + commentLength;
+    if (nameEnd > bytes.length) throw new Error("truncated central directory");
+    if (method !== 0) throw new Error(`compressed central entry ${String(method)}`);
+    const name = new TextDecoder().decode(bytes.subarray(nameStart, nameStart + nameLength));
+    central.push({ name, crc, size, local });
+    offset = nameEnd;
+  }
+  if (offset + 22 > bytes.length || view.getUint32(offset, true) !== 0x06054b50) throw new Error("missing eocd");
+  const entries = view.getUint16(offset + 10, true);
+  const directorySize = view.getUint32(offset + 12, true);
+  const directoryOffset = view.getUint32(offset + 16, true);
+  if (entries !== locals.length || entries !== central.length) throw new Error("entry count");
+  if (directoryOffset !== centralStart || directorySize !== offset - centralStart) throw new Error("directory range");
+  for (let index = 0; index < central.length; index += 1) {
+    const item = central[index];
+    const local = locals[index];
+    if (item === undefined || local === undefined || item.name !== local.name || item.crc !== local.crc
+      || item.size !== local.size || item.local !== local.offset) throw new Error("central mismatch");
+  }
   return files;
 }
 
@@ -200,6 +248,35 @@ describe("transaction export xlsx", () => {
     expect(sheet).not.toContain("acc-secret");
     expect(sheet).not.toContain("secret-ref");
     expect(sheet).not.toContain("fp-secret");
+    expect(excelSerial("1900-02-28")).toBeNull();
+    expect(excelSerial("1900-03-01")).not.toBeNull();
+  });
+
+  it("quotes formula text, strips XML-illegal characters, and sanitises the sheet title", () => {
+    const risky = buildWorkbook(["Opis"], [[{ kind: "text", value: "\t=cmd\uFFFE\uFFFF" }]], "Sheet");
+    const sheet = unzip(risky).get("xl/worksheets/sheet1.xml") ?? "";
+    const styles = unzip(risky).get("xl/styles.xml") ?? "";
+    expect(styles).toContain("quotePrefix=\"1\"");
+    expect(sheet).toContain("s=\"3\"");
+    expect(sheet).toContain("xml:space=\"preserve\"");
+    expect(sheet).toContain("\t=cmd");
+    expect(sheet).not.toContain("\uFFFE");
+    expect(sheet).not.toContain("\uFFFF");
+    const early = buildWorkbook(["Data"], [[{ kind: "date", value: "1899-12-31" }]], "Dates");
+    expect(unzip(early).get("xl/worksheets/sheet1.xml")).toContain(">1899-12-31</t>");
+    expect(sheetTitle("'Sales'")).toBe("Sales");
+    expect(sheetTitle("Sales ")).toBe("Sales");
+    expect(sheetTitle("'")).toBe("Transactions");
+    expect(sheetTitle("History")).toBe("Transactions");
+    expect(sheetTitle("history")).toBe("Transactions");
+    expect(sheetTitle("  'History'  ")).toBe("Transactions");
+    const emoji = "\uD83D\uDE00";
+    expect(sheetTitle("a".repeat(30) + emoji)).toBe("a".repeat(30));
+    expect(sheetTitle("b".repeat(29) + emoji)).toBe("b".repeat(29) + emoji);
+    expect(/[\uD800-\uDFFF]/.test(sheetTitle("a".repeat(30) + emoji))).toBe(false);
+    const reserved = unzip(buildWorkbook(["A"], [], "History")).get("xl/workbook.xml") ?? "";
+    expect(reserved).toContain("name=\"Transactions\"");
+    expect(() => unzip(risky.subarray(0, risky.length - 22))).toThrow("missing eocd");
   });
 });
 
@@ -271,6 +348,13 @@ describe("transaction export pagination", () => {
     })).rejects.toThrow("budget_network");
     expect(load).toHaveBeenCalledTimes(2);
     expect(progress).toEqual([2]);
+  });
+
+  it("rejects when a later page belongs to a different snapshot", async () => {
+    const task = walkTransactions(["2026-01", "2026-02"], (period) => ({
+      transactions: [entry(period)], nextCursor: null, snapshotDigest: period === "2026-01" ? "one" : "two",
+    }), idle);
+    await expect(task).rejects.toBeInstanceOf(ExportSnapshotChanged);
   });
 });
 
@@ -395,6 +479,76 @@ describe("export menu", () => {
     expect([...bytes.slice(0, 2)]).toEqual([0x50, 0x4b]);
     expect(unzip(bytes).get("xl/worksheets/sheet1.xml")).toContain("<v>-12.5</v>");
   });
+
+  it("loads categories before the months and retries once when the snapshot changes", async () => {
+    const saved: string[] = [];
+    const order: string[] = [];
+    const digests = ["one", "two", "one", "one"];
+    const analyticsTransactions = vi.fn<BudgetApi["analyticsTransactions"]>((period) => {
+      order.push(period);
+      const snapshot_digest = digests.shift() ?? "one";
+      return ok({ ...entriesOf(period, [row()]), snapshot_digest });
+    });
+    const loadCategories = vi.fn<BudgetApi["categories"]>(() => {
+      order.push("categories");
+      return ok({ categories });
+    });
+    await act(async () => {
+      root.render(<ExportMenu text={text} filename="hestia-transakcje-2026" periods={["2026-01", "2026-02"]}
+        filter={{ currency: "", category: "", kind: "", query: "" }} accounts={accounts} connections={connections}
+        api={{ analyticsTransactions, categories: loadCategories }} onAccessLoss={() => false}
+        save={(blob, name) => { saved.push(`${name}:${String(blob.size)}`); }} />);
+      await Promise.resolve();
+    });
+    await click("Eksportuj");
+    await click("CSV");
+    await flush();
+    expect(saved[0]).toMatch(/^hestia-transakcje-2026\.csv:/);
+    expect(order).toEqual(["categories", "2026-01", "2026-02", "2026-01", "2026-02"]);
+  });
+
+  it("does not request months when the category read reports an ended session", async () => {
+    const analyticsTransactions = vi.fn<BudgetApi["analyticsTransactions"]>(() => ok(entriesOf("2026-01", [])));
+    const save = vi.fn();
+    const onAccessLoss = vi.fn(() => true);
+    await act(async () => {
+      root.render(<ExportMenu text={text} filename="hestia-transakcje-2026" periods={monthsOfYear("2026")}
+        filter={{ currency: "", category: "", kind: "", query: "" }} accounts={accounts} connections={connections}
+        api={{ analyticsTransactions, categories: vi.fn<BudgetApi["categories"]>(() => fail(401, "budget_http_401")) }}
+        onAccessLoss={onAccessLoss} save={save} />);
+      await Promise.resolve();
+    });
+    await click("Eksportuj");
+    await click("CSV");
+    await flush();
+    expect(onAccessLoss).toHaveBeenCalled();
+    expect(analyticsTransactions).not.toHaveBeenCalled();
+    expect(save).not.toHaveBeenCalled();
+    expect(host.textContent).not.toContain("Ponów");
+  });
+
+  it("writes only the header when the provisional key list is empty", async () => {
+    const analyticsTransactions = vi.fn<BudgetApi["analyticsTransactions"]>(() => ok(entriesOf("2026-11", [row()])));
+    const analyticsTransactionsByKeys = vi.fn<BudgetApi["analyticsTransactionsByKeys"]>(() => ok(entriesOf("", [row()])));
+    const saved: Promise<ArrayBuffer>[] = [];
+    await act(async () => {
+      root.render(<ExportMenu text={text} filename="hestia-transakcje-2026-11" periods={["2026-11"]} rowKeys={[]}
+        filter={{ currency: "PLN", category: "", kind: "", query: "" }} accounts={accounts} connections={connections}
+        api={{ analyticsTransactions, analyticsTransactionsByKeys, categories: vi.fn<BudgetApi["categories"]>(() => ok({ categories })) }}
+        onAccessLoss={() => false} save={(blob) => { saved.push(blob.arrayBuffer()); }} />);
+      await Promise.resolve();
+    });
+    await click("Eksportuj");
+    await click("CSV");
+    await flush();
+    expect(analyticsTransactions).not.toHaveBeenCalled();
+    expect(analyticsTransactionsByKeys).not.toHaveBeenCalled();
+    const raw = await saved[0];
+    if (raw === undefined) throw new Error("csv was not saved");
+    const body = new TextDecoder("utf-8", { ignoreBOM: true }).decode(new Uint8Array(raw));
+    expect(body.startsWith("\uFEFFData;")).toBe(true);
+    expect(body).not.toContain("Synthetic");
+  });
 });
 
 describe("export buttons on the month and year views", () => {
@@ -465,6 +619,39 @@ describe("export buttons on the month and year views", () => {
     expect(exportCall?.[1]).toMatchObject({ currency: "PLN" });
     expect(downloads.at(-1)?.name).toBe("hestia-transakcje-2026-11.csv");
     expect(await downloads.at(-1)?.body).toContain("Rent");
+  });
+
+  it("exports the provisional keys the month view is showing", async () => {
+    const keys = ["acc-secret/secret-ref"];
+    const analyticsTransactions = vi.fn<BudgetApi["analyticsTransactions"]>(() => ok(entriesOf("2026-11", [
+      row({ entry_reference: "whole-month", remittance_information: ["Whole month"] }),
+    ])));
+    const analyticsTransactionsByKeys = vi.fn<BudgetApi["analyticsTransactionsByKeys"]>(() => ok(entriesOf("", [row()])));
+    const api = {
+      analyticsTransactions,
+      analyticsTransactionsByKeys,
+      categories: vi.fn<BudgetApi["categories"]>(() => ok({ categories })),
+      annotate: vi.fn<BudgetApi["annotate"]>(),
+      decideTransfer: vi.fn<BudgetApi["decideTransfer"]>(),
+    };
+    await act(async () => {
+      root.render(<TransactionsPanel api={api} period="2026-11" currencies={["PLN"]} accounts={accounts} connections={connections}
+        text={transactionLabels.en} locale="en" revision={0} onAccessLoss={() => false} onChanged={() => {}}
+        initialCurrency="PLN" initialProvisionalKeys={keys} />);
+      await Promise.resolve();
+    });
+    await flushView();
+    expect(host.querySelector<HTMLInputElement>("input[name=\"provisional\"]")?.checked).toBe(true);
+    await act(async () => { button("Export").click(); await Promise.resolve(); });
+    await act(async () => { button("CSV").click(); await Promise.resolve(); });
+    await flushView();
+    expect(analyticsTransactions).not.toHaveBeenCalled();
+    const exportCall = analyticsTransactionsByKeys.mock.calls.find((call) => call[0].limit === EXPORT_PAGE_SIZE);
+    expect(exportCall?.[0]).toMatchObject({ row_keys: keys, currency: "PLN" });
+    expect(downloads.at(-1)?.name).toBe("hestia-transakcje-2026-11.csv");
+    const body = await downloads.at(-1)?.body;
+    expect(body).toContain("Synthetic shop");
+    expect(body).not.toContain("Whole month");
   });
 
   it("exports all twelve months from the year view", async () => {

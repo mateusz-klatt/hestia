@@ -1,5 +1,6 @@
 // Minimal SpreadsheetML workbook packed in a store-only ZIP (method 0, CRC-32). No shared strings:
 // text is inline, dates are Excel serials, amounts are decimal tokens with a Polish number format.
+import { formulaRisk, isExcelDate } from "./export_rows";
 
 export type XlsxCellKind = "text" | "number" | "date";
 export interface XlsxCell { kind: XlsxCellKind; value: string }
@@ -87,11 +88,19 @@ export function zipStore(entries: readonly ZipEntry[]): Uint8Array {
   return concat([...locals, directory, end]);
 }
 
+/** XML 1.0 Char: tab, LF, CR, and the legal planes. Excludes C0 controls, surrogates, U+FFFE and U+FFFF. */
+function isXmlChar(code: number): boolean {
+  return code === 0x9 || code === 0xa || code === 0xd
+    || (code >= 0x20 && code <= 0xd7ff)
+    || (code >= 0xe000 && code <= 0xfffd)
+    || (code >= 0x10000 && code <= 0x10ffff);
+}
+
 function xml(value: string): string {
   let out = "";
   for (const char of value) {
-    const code = char.charCodeAt(0);
-    if (code <= 0x8 || code === 0xb || code === 0xc || (code >= 0xe && code <= 0x1f)) continue;
+    const code = char.codePointAt(0) ?? 0;
+    if (!isXmlChar(code)) continue;
     if (char === "&") out += "&amp;";
     else if (char === "<") out += "&lt;";
     else if (char === ">") out += "&gt;";
@@ -116,8 +125,9 @@ function columnName(index: number): string {
   return name;
 }
 
-/** Days since 1899-12-30. Real dates after 1900-02-28 match Excel, including its false leap day. */
+/** Days since 1899-12-30. Dates before 1900-03-01 are not serialised; Excel's false leap day shifts them. */
 export function excelSerial(iso: string): number | null {
+  if (!isExcelDate(iso)) return null;
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
   if (match === null) return null;
   const year = Number(match[1]);
@@ -129,9 +139,31 @@ export function excelSerial(iso: string): number | null {
   return Math.round((stamp - Date.UTC(1899, 11, 30)) / 86_400_000);
 }
 
-function sheetTitle(name: string): string {
-  const cleaned = name.replace(/[:\\/?*[\]]/g, " ").trim();
-  return (cleaned === "" ? "Transactions" : cleaned).slice(0, 31);
+const SHEET_FALLBACK = "Transactions";
+
+function trimSheet(value: string): string {
+  let current = value;
+  for (let guard = 0; guard < 6; guard += 1) {
+    const next = current.trim().replace(/^'+/, "").replace(/'+$/, "");
+    if (next === current) return current;
+    current = next;
+  }
+  return current.trim();
+}
+
+/** At most 31 UTF-16 code units, never ending on a high surrogate. */
+function truncateUnits(value: string, max: number): string {
+  if (value.length <= max) return value;
+  const cut = value.charCodeAt(max - 1);
+  const end = cut >= 0xd800 && cut <= 0xdbff ? max - 1 : max;
+  return value.slice(0, end);
+}
+
+/** Excel forbids : \\ / ? * [ ], wrapping apostrophes, a trailing space, an empty name, and "History". */
+export function sheetTitle(name: string): string {
+  const cleaned = trimSheet(truncateUnits(trimSheet(name.replace(/[:\\/?*[\]]/g, " ")), 31));
+  if (cleaned === "" || cleaned.toLowerCase() === "history") return SHEET_FALLBACK;
+  return cleaned;
 }
 
 function cellXml(cell: XlsxCell, ref: string): string {
@@ -143,7 +175,8 @@ function cellXml(cell: XlsxCell, ref: string): string {
   }
   const text = xml(cell.value);
   const space = needsPreserve(cell.value) ? " xml:space=\"preserve\"" : "";
-  return `<c r="${ref}" t="inlineStr"><is><t${space}>${text}</t></is></c>`;
+  const quoted = formulaRisk(cell.value) ? " s=\"3\"" : "";
+  return `<c r="${ref}"${quoted} t="inlineStr"><is><t${space}>${text}</t></is></c>`;
 }
 
 function stylesXml(): string {
@@ -157,10 +190,11 @@ function stylesXml(): string {
   <fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills>
   <borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>
   <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
-  <cellXfs count="3">
+  <cellXfs count="4">
     <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
     <xf numFmtId="164" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>
     <xf numFmtId="165" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>
+    <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0" quotePrefix="1"/>
   </cellXfs>
   <cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>
 </styleSheet>`;

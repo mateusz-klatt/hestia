@@ -539,7 +539,7 @@ export function TransactionsPanel({ api, period, currencies, accounts, connectio
       <header className="budget-entries-head">
         <h4>{text.title}</h4>
         <ExportMenu text={text.exportMenu} filename={exportBasename(period)} periods={[period]} filter={filter}
-          accounts={accounts} connections={connections} api={api} onAccessLoss={onAccessLoss} />
+          rowKeys={activeProvisionalKeys} accounts={accounts} connections={connections} api={api} onAccessLoss={onAccessLoss} />
       </header>
       <form className="budget-range" onSubmit={(event) => { event.preventDefault(); setFilter(draft); }}>
         <label>{text.currency}

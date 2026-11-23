@@ -1,5 +1,6 @@
 // Browser export of analytics entries. Category cells are the stored leaf name only: names are globally unique,
-// and a parent path is never built. Amounts stay decimal strings; a debit indicator supplies the sign.
+// and a parent path is never built. Amounts stay dot-decimal strings for the workbook; CSV rewrites the amount
+// column with a decimal comma. A debit indicator supplies the sign. The booking column follows effective_date.
 import type { BudgetAccount, BudgetConnection } from "../model";
 import { transactionText } from "../model";
 import { accountName, counterparty } from "./model";
@@ -101,7 +102,8 @@ export interface ExportRecord {
 export interface ExportContext {
   accounts: readonly BudgetAccount[];
   connections: readonly BudgetConnection[];
-  categories: readonly AnalyticsCategory[];
+  /** Leaf names keyed by category id. Built once per export. */
+  categories: ReadonlyMap<string, string>;
   text: ExportLabels;
 }
 
@@ -117,6 +119,17 @@ export function isIsoDate(value: string): boolean {
   return stamp.getUTCFullYear() === year && stamp.getUTCMonth() === month - 1 && stamp.getUTCDate() === day;
 }
 
+/** Excel's 1900 leap-year bug makes serials before 1 March 1900 disagree with the civil date. Those stay text. */
+const EXCEL_DATE_MIN = "1900-03-01";
+
+export function isExcelDate(value: string): boolean {
+  return value >= EXCEL_DATE_MIN && isIsoDate(value);
+}
+
+export function categoryIndex(categories: readonly AnalyticsCategory[]): ReadonlyMap<string, string> {
+  return new Map(categories.map((item) => [item.id, item.name]));
+}
+
 /** A signed decimal token. Zero stays unsigned. Anything that is not a decimal is returned unchanged. */
 export function signedAmount(amount: string, indicator: string): { text: string; numeric: boolean } {
   const match = DECIMAL.exec(amount.trim());
@@ -129,13 +142,13 @@ export function signedAmount(amount: string, indicator: string): { text: string;
   return { text: `${negative ? "-" : ""}${body}`, numeric: true };
 }
 
-function leafCategory(categories: readonly AnalyticsCategory[], id: string | null, fallback: string): string {
+function leafCategory(categories: ReadonlyMap<string, string>, id: string | null, fallback: string): string {
   if (id === null) return fallback;
-  return categories.find((item) => item.id === id)?.name ?? fallback;
+  return categories.get(id) ?? fallback;
 }
 
 export function mapExportRow(row: AnalyticsTransaction, context: ExportContext): ExportRecord {
-  const bookingDate = row.booking_date ?? "";
+  const bookingDate = row.booking_date ?? row.value_date ?? "";
   const transactionDate = row.transaction_date ?? "";
   const amount = signedAmount(row.amount, row.credit_debit_indicator);
   return {
@@ -148,8 +161,8 @@ export function mapExportRow(row: AnalyticsTransaction, context: ExportContext):
     category: leafCategory(context.categories, row.effective.category_id, context.text.uncategorised),
     type: exportTypeLabel(row.effective.kind, context.text),
     status: exportStatus(row.status, context.text),
-    bookingIsDate: isIsoDate(bookingDate),
-    transactionIsDate: isIsoDate(transactionDate),
+    bookingIsDate: isExcelDate(bookingDate),
+    transactionIsDate: isExcelDate(transactionDate),
     amountIsNumber: amount.numeric,
   };
 }
@@ -161,27 +174,52 @@ export function exportCells(record: ExportRecord): string[] {
   ];
 }
 
-function csvNeutral(value: string): string {
-  if (value !== "" && /^[=+\-@]/.test(value) && !/^-?\d+(\.\d+)?$/.test(value)) return `'${value}`;
-  return value;
+const FORMULA_LEAD = new Set(["=", "+", "-", "@", "\t", "\r"]);
+
+/**
+ * Text that a spreadsheet may treat as a formula: a leading tab or CR, or `= + - @` as the first
+ * character or the first character after spaces. The amount column is the only numeric exception.
+ */
+export function formulaRisk(value: string): boolean {
+  const first = value[0];
+  if (first !== undefined && FORMULA_LEAD.has(first)) return true;
+  const skipped = value.trimStart()[0];
+  return skipped !== undefined && FORMULA_LEAD.has(skipped);
 }
 
-/** One RFC 4180 field. The separator is semicolon, so a comma needs no quotes. */
+function prefixFormula(value: string): string {
+  return formulaRisk(value) ? `'${value}` : value;
+}
+
+/** One RFC 4180 field. The separator is semicolon, so a comma needs no quotes. Text is never left numeric. */
 export function csvField(value: string): string {
-  const safe = csvNeutral(value);
+  const safe = prefixFormula(value);
   if (/[;"\r\n]/.test(safe)) return `"${safe.replaceAll("\"", "\"\"")}"`;
   return safe;
 }
 
+const DECIMAL_AMOUNT = /^-?\d+(?:\.\d+)?$/;
+
+/** Amount column only: a plain decimal keeps its sign and uses a Polish decimal comma. Other text is neutralised. */
+export function csvAmount(value: string): string {
+  if (DECIMAL_AMOUNT.test(value)) return value.replace(".", ",");
+  return csvField(value);
+}
+
 /** UTF-8 CSV with a leading BOM, semicolon separators and CRLF records. */
 export function buildCsv(headers: readonly string[], records: readonly ExportRecord[]): string {
-  const lines = [headers, ...records.map(exportCells)].map((row) => row.map(csvField).join(";"));
-  return `\uFEFF${lines.join("\r\n")}\r\n`;
+  const header = headers.map(csvField).join(";");
+  const body = records.map((record) => exportCells(record).map((value, index) => (
+    index === 5 ? csvAmount(value) : csvField(value)
+  )).join(";"));
+  return `\uFEFF${[header, ...body].join("\r\n")}\r\n`;
 }
 
 export interface ExportPage {
   transactions: readonly AnalyticsTransaction[];
   nextCursor: string | null;
+  /** Present on analytics pages. A later page with a different digest aborts the walk. */
+  snapshotDigest?: string;
 }
 
 export class ExportCancelled extends Error {
@@ -197,6 +235,14 @@ export class ExportFailed extends Error {
     super(code);
     this.name = "ExportFailed";
     this.code = code;
+  }
+}
+
+/** The projection changed between pages. The caller retries the walk once, then surfaces the error. */
+export class ExportSnapshotChanged extends Error {
+  constructor() {
+    super("export_snapshot_changed");
+    this.name = "ExportSnapshotChanged";
   }
 }
 
@@ -228,6 +274,7 @@ export async function walkTransactions(
 ): Promise<AnalyticsTransaction[]> {
   const rows: AnalyticsTransaction[] = [];
   const seen = new Set<string>();
+  let digest: string | undefined;
   for (const period of periods) {
     let cursor: string | undefined;
     const cursors = new Set<string>();
@@ -235,6 +282,10 @@ export async function walkTransactions(
       if (hooks.isCancelled()) throw new ExportCancelled();
       const page = await load(period, cursor);
       if (hooks.isCancelled()) throw new ExportCancelled();
+      if (page.snapshotDigest !== undefined) {
+        if (digest === undefined) digest = page.snapshotDigest;
+        else if (page.snapshotDigest !== digest) throw new ExportSnapshotChanged();
+      }
       let added = 0;
       for (const row of page.transactions) {
         const key = rowIdentity(row);
