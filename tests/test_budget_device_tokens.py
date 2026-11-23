@@ -577,10 +577,13 @@ class DeviceTokenHTTPTests(fixture.unittest.IsolatedAsyncioTestCase):
         _status(receipts, 200)
         revoked = await self._post(device_token.LIST_RECEIPTS_PATH, {}, self._auth(first))
         self.assertEqual((revoked.status, (await revoked.json())["error"]), (401, "device_token_revoked"))
-        audit, = self.rows(db.BudgetAnalyticsAudit)
+        audits = self.rows(db.BudgetAnalyticsAudit)
+        audit, = [row for row in audits if row.subject_id == first["token_id"]]
         self.assertEqual((audit.owner, audit.subject_id, audit.action),
                          ("alice", first["token_id"], device_token.NEW_DEVICE_LOGIN))
         self.assertEqual(json.loads(audit.after_json), {"actor": "device:" + first["token_id"]})
+        self.assertEqual({row.action for row in audits if row.subject_id == second["token_id"]},
+                         {device_token.NEW_DEVICE_LOGIN, device_token.DEVICE_ROTATE})
         stored = json.dumps(self._stored_text())
         self.assertTrue(all(secret not in stored for secret in (LOGIN_PASSWORD, first["token"], second["token"])))
 
@@ -590,9 +593,6 @@ class DeviceTokenHTTPTests(fixture.unittest.IsolatedAsyncioTestCase):
         inbox_path = analytics_api.PREFIX + "/inbox"
         with mock.patch.dict(os.environ, {analytics_api.FLAG: "1"}):
             device = await self._logged_in_device()
-            with self.sessions.begin() as session:
-                previous = session.get(db.BudgetReceiptDeviceToken, device["token_id"])
-                previous.expires_at = previous.created_at
             await self._logged_in_device()
             response = await self.client.get(inbox_path, headers=self.headers())
             _status(response, 200)
@@ -619,6 +619,48 @@ class DeviceTokenHTTPTests(fixture.unittest.IsolatedAsyncioTestCase):
                 foreign = await self.client.get(path, headers=headers)
                 _status(foreign, 200)
                 self.assertFalse(any(entry["kind"] == "device_added" for entry in (await foreign.json())["items"]))
+
+    async def test_password_replacements_audit_and_alert_only_genuine_rotations(self):
+        self._set_login_passwords("alice")
+        with mock.patch.dict(os.environ, {analytics_api.FLAG: "1"}), mock.patch.object(auth, "LOGIN_ATTEMPTS", 30):
+            for case in ("password", "qr", "expired", "hard-expired", "revoked", "unaudited"):
+                with self.subTest(case=case):
+                    name = "device-" + case
+                    if case == "qr":
+                        code = await self._pair()
+                        response = await self._redeem(code["code"], name=name)
+                        _status(response, 200)
+                        previous = await response.json()
+                    else:
+                        previous = await self._logged_in_device(name=name)
+                        with self.sessions.begin() as session:
+                            row = session.get(db.BudgetReceiptDeviceToken, previous["token_id"])
+                            if case == "expired":
+                                row.expires_at = row.created_at
+                            elif case == "hard-expired":
+                                row.expires_at = row.created_at
+                                row.hard_expires_at = row.created_at
+                            elif case == "revoked":
+                                row.revoked_at = row.created_at
+                            elif case == "unaudited":
+                                for audit in session.scalars(select(db.BudgetAnalyticsAudit).where(
+                                        db.BudgetAnalyticsAudit.subject_id == row.id)):
+                                    session.delete(audit)
+                    replacement = await self._logged_in_device(name=name)
+                    actions = {row.action for row in self.rows(db.BudgetAnalyticsAudit)
+                               if row.subject_id == replacement["token_id"]}
+                    self.assertEqual(actions, {device_token.NEW_DEVICE_LOGIN, device_token.DEVICE_ROTATE}
+                                     if case == "password" else {device_token.NEW_DEVICE_LOGIN})
+                    inbox = await self.client.get(analytics_api.PREFIX + "/inbox", headers=self.headers())
+                    _status(inbox, 200)
+                    alerts = {item["ref"]["token_id"] for item in (await inbox.json())["items"]
+                              if item["kind"] == "device_added"}
+                    self.assertEqual(replacement["token_id"] in alerts, case != "password")
+                    if case == "password":
+                        again = await self._logged_in_device(name=name)
+                        inbox = await self.client.get(analytics_api.PREFIX + "/inbox", headers=self.headers())
+                        self.assertFalse(any(item["ref"].get("token_id") == again["token_id"]
+                                             for item in (await inbox.json())["items"]))
 
     async def test_password_login_caps_tokens_across_issuance_methods_and_evicts_lru(self):
         self._set_login_passwords("alice")

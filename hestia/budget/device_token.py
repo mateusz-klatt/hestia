@@ -70,6 +70,7 @@ PAIR_TTL = 300
 MAX_ACTIVE_CODES = 3
 MAX_ACTIVE_TOKENS = 5
 NEW_DEVICE_LOGIN = "receipt_device_login"
+DEVICE_ROTATE = "receipt_device_rotate"
 SLIDE_TTL = 90 * 86400
 HARD_TTL = 180 * 86400
 SLIDE_WRITE_INTERVAL = 3600
@@ -489,10 +490,21 @@ class DeviceTokenStore:
     def _make_token_room(self, session, owner, name, moment, *, rotate):
         rotated = False
         if rotate:
-            replaced = session.execute(update(DeviceToken).where(
+            # A name alone is not proof of an existing password login. Pairing
+            # and expired credentials must still produce a new-device alert.
+            rotated = session.scalar(select(DeviceToken.id).where(
+                DeviceToken.owner == owner, DeviceToken.device_name == name, DeviceToken.revoked_at.is_(None),
+                DeviceToken.expires_at > moment, DeviceToken.hard_expires_at > moment,
+                select(BudgetAnalyticsAudit.id).where(
+                    BudgetAnalyticsAudit.owner == owner,
+                    BudgetAnalyticsAudit.subject_id == DeviceToken.id,
+                    BudgetAnalyticsAudit.subject_type == "receipt_device_token",
+                    BudgetAnalyticsAudit.action == NEW_DEVICE_LOGIN,
+                ).exists(),
+            ).limit(1)) is not None
+            session.execute(update(DeviceToken).where(
                 DeviceToken.owner == owner, DeviceToken.device_name == name, DeviceToken.revoked_at.is_(None),
             ).values(revoked_at=moment))
-            rotated = replaced.rowcount > 0
         overflow = session.scalars(select(DeviceToken).where(
             DeviceToken.owner == owner, DeviceToken.revoked_at.is_(None),
             DeviceToken.expires_at > moment, DeviceToken.hard_expires_at > moment,
@@ -517,8 +529,10 @@ class DeviceTokenStore:
             )
 
         row = _insert_unique(session, factory)
-        if rotate and not rotated:
+        if rotate:
             write_device_audit(session, owner, row.id, NEW_DEVICE_LOGIN, moment)
+            if rotated:
+                write_device_audit(session, owner, row.id, DEVICE_ROTATE, moment)
         expires_at = datetime.fromtimestamp(row.expires_at, timezone.utc).isoformat(timespec="seconds")
         return {"token": issued["token"], "token_id": row.id, "scope": "receipts", "expires_at": expires_at}
 

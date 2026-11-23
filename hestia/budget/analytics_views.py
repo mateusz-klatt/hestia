@@ -1272,6 +1272,10 @@ class BudgetAnalyticsViews(BudgetAnalyticsStore):
                 audit.owner == owner, audit.subject_id == tokens.id, audit.subject_type == "receipt_device_token",
                 audit.action == device_token.NEW_DEVICE_LOGIN,
             ).exists(),
+            ~select(audit.id).where(
+                audit.owner == owner, audit.subject_id == tokens.id, audit.subject_type == "receipt_device_token",
+                audit.action == device_token.DEVICE_ROTATE,
+            ).exists(),
         ))
         return [inbox_mod.device_entry(owner, token_id, name, added_at) for token_id, name, added_at in rows]
 
