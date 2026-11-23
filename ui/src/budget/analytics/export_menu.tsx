@@ -1,5 +1,6 @@
 // Excel and CSV download for the entries the owner is looking at. The ZIP writer loads only for XLSX.
 import { useEffect, useRef, useState } from "react";
+import { t } from "../../i18n";
 import type { BudgetApi } from "../api";
 import type { BudgetAccount, BudgetConnection } from "../model";
 import { transactionRowKey } from "./model";
@@ -8,14 +9,13 @@ import {
   EXPORT_PAGE_SIZE, ExportCancelled, ExportFailed, ExportSnapshotChanged, ExportStopped, buildCsv, categoryIndex,
   exportCells, exportHeaders, mapExportRow, walkTransactions,
 } from "./export_rows";
-import type { ExportLabels, ExportRecord } from "./export_rows";
+import type { ExportRecord } from "./export_rows";
 import type { XlsxCell } from "./xlsx_writer";
 
 type Format = "xlsx" | "csv";
 type Phase = "idle" | "running" | "error";
 
 export interface ExportMenuProps {
-  text: ExportLabels;
   /** File name without an extension, for example `hestia-transakcje-2026-11`. */
   filename: string;
   /** Periods whose pages are walked in order. A month is one period; a year is its twelve months. */
@@ -71,14 +71,14 @@ function sheetRows(records: readonly ExportRecord[]): XlsxCell[][] {
   }));
 }
 
-async function fileBlob(text: ExportLabels, format: Format, records: readonly ExportRecord[]): Promise<Blob> {
-  const headers = exportHeaders(text);
+async function fileBlob(format: Format, records: readonly ExportRecord[]): Promise<Blob> {
+  const headers = exportHeaders();
   if (format === "csv") return new Blob([buildCsv(headers, records)], { type: "text/csv;charset=utf-8" });
   const writer = await import("./xlsx_writer");
-  return writer.workbookBlob(headers, sheetRows(records), text.sheet);
+  return writer.workbookBlob(headers, sheetRows(records), t("budget.export.sheet"));
 }
 
-export function ExportMenu({ text, filename, periods, filter, rowKeys, accounts, connections, api, onAccessLoss, save }: ExportMenuProps) {
+export function ExportMenu({ filename, periods, filter, rowKeys, accounts, connections, api, onAccessLoss, save }: ExportMenuProps) {
   const [open, setOpen] = useState(false);
   const [phase, setPhase] = useState<Phase>("idle");
   const [count, setCount] = useState(0);
@@ -151,8 +151,8 @@ export function ExportMenu({ text, filename, periods, filter, rowKeys, accounts,
           rows = await loadRows();
         }
         if (token !== run.current) return;
-        const records = rows.map((row) => mapExportRow(row, { accounts, connections, categories: names, text }));
-        const blob = await fileBlob(text, next, records);
+        const records = rows.map((row) => mapExportRow(row, { accounts, connections, categories: names }));
+        const blob = await fileBlob(next, records);
         if (token !== run.current) return;
         write(blob, `${filename}.${next}`);
         setPhase("idle");
@@ -177,24 +177,24 @@ export function ExportMenu({ text, filename, periods, filter, rowKeys, accounts,
     <div className="budget-export">
       <button type="button" aria-haspopup="menu" aria-expanded={open} disabled={phase === "running"}
         onClick={() => { setOpen((current) => !current); }}>
-        {text.open}
+        {t("budget.export.open")}
       </button>
       {open && phase !== "running" ? (
         <div role="menu" className="budget-export-menu">
-          <button type="button" role="menuitem" onClick={() => { start("xlsx"); }}>{text.xlsx}</button>
-          <button type="button" role="menuitem" onClick={() => { start("csv"); }}>{text.csv}</button>
+          <button type="button" role="menuitem" onClick={() => { start("xlsx"); }}>{t("budget.export.xlsx")}</button>
+          <button type="button" role="menuitem" onClick={() => { start("csv"); }}>{t("budget.export.csv")}</button>
         </div>
       ) : null}
       {phase === "running" ? (
         <div className="budget-muted budget-export-progress" role="status">
-          <span>{text.fetching(count)}</span>
-          <button type="button" onClick={cancel}>{text.cancel}</button>
+          <span>{t("budget.export.fetching", { count })}</span>
+          <button type="button" onClick={cancel}>{t("budget.export.cancel")}</button>
         </div>
       ) : null}
       {phase === "error" ? (
         <div className="budget-notice budget-entries-action" role="alert">
-          <span>{text.error}</span>
-          <button type="button" onClick={() => { start(format); }}>{text.retry}</button>
+          <span>{t("budget.export.error")}</span>
+          <button type="button" onClick={() => { start(format); }}>{t("budget.export.retry")}</button>
         </div>
       ) : null}
     </div>

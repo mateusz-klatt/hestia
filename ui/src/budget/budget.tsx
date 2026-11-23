@@ -21,7 +21,7 @@ import { QuarantineView } from "./analytics/quarantine";
 import { RecurringView } from "./analytics/recurring";
 import { CategoriesView } from "./analytics/rules";
 import { SpendingLimitsView } from "./analytics/spending_limits";
-import { YearView, yearLabels } from "./analytics/year";
+import { YearView } from "./analytics/year";
 import { hasAnalytics } from "./analytics/model";
 import type { RuleCandidate } from "./analytics/model";
 import { ReceiptDevices } from "./devices";
@@ -124,12 +124,12 @@ const labels = {
 type Labels = typeof labels.en;
 
 function pick(): { text: Labels;
-  month: typeof monthLabels.en; year: typeof yearLabels.en;
+  month: typeof monthLabels.en;
   locale: string } {
   const locale = currentLocale();
   const pl = locale.startsWith("pl");
   return { text: pl ? labels.pl : labels.en,
-    month: pl ? monthLabels.pl : monthLabels.en, year: pl ? yearLabels.pl : yearLabels.en,
+    month: pl ? monthLabels.pl : monthLabels.en,
     locale };
 }
 
@@ -179,7 +179,6 @@ export interface BudgetProps {
 export function Budget({ active, api = budgetApi, pollMs = 2000, principal,
   navigate = (url) => { window.location.assign(url); }, completeUrl = "/budget/connect/complete" }: BudgetProps) {
   const { text, month: monthText,
-    year: yearText,
     locale } = pick();
   const [load, setLoad] = useState<Load>("loading");
   const [connections, setConnections] = useState<BudgetConnection[]>([]);
@@ -510,7 +509,7 @@ export function Budget({ active, api = budgetApi, pollMs = 2000, principal,
           {...(focusToday === undefined ? {} : { today: focusToday })}
           onCreateRule={(candidate) => { setFocusRule(candidate); setView("rules"); }} />
       ) : shownView === "year" ? (
-        <YearView api={api} accounts={accounts} connections={connections} text={yearText} locale={locale} revision={revision} onAccessLoss={barrier}
+        <YearView api={api} accounts={accounts} connections={connections} locale={locale} revision={revision} onAccessLoss={barrier}
           onOpenMonth={(month) => { setFocusMonth(month); setFocusToday(undefined); setFocusCurrency(undefined); setFocusProvisional(undefined); setView("month"); }} />
       ) : shownView === "limits" ? (
         <SpendingLimitsView api={api} accounts={accounts} locale={locale} revision={revision}

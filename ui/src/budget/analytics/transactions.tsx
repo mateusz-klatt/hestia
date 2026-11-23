@@ -7,7 +7,7 @@ import { formatAmount, transactionDate, transactionText } from "../model";
 import { CategoryBadge } from "./category_badge";
 import { buildCategoryColors } from "./category_colors";
 import { ExportMenu } from "./export_menu";
-import { exportBasename, exportLabels } from "./export_rows";
+import { exportBasename } from "./export_rows";
 import { ANALYTICS_ERROR, EFFECTIVE_KINDS, NO_FILTER, RELOAD_ERRORS, UNCATEGORISED, annotationRequest, canPair, canonicalAmount,
   counterparty, counterpartyRuleCandidate, accountName as nameOf, currentChoice, daysBetween, kindChoice, kindChoicesFor, labelOf, manualPairRequest,
   pairCandidates, pairDate, pairPeriods, transactionRowKey } from "./model";
@@ -21,7 +21,7 @@ const kindsPl = { auto: "Automatycznie", expense: "Wydatek", income: "Wpływ", r
 
 export const transactionLabels = {
   en: {
-    title: "Transactions", exportMenu: exportLabels.en, currency: "Currency", category: "Category", kind: "Type", search: "Search", apply: "Apply",
+    title: "Transactions", currency: "Currency", category: "Category", kind: "Type", search: "Search", apply: "Apply",
     provisionalOnly: "Unconfirmed or provisional only",
     all: "All", uncategorised: "Uncategorised", automatic: "Automatic (rules)", kinds: kindsEn,
     edit: "Change", save: "Save", cancel: "Cancel", archived: "archived", total: (count: number) => `${String(count)} entries`,
@@ -49,7 +49,7 @@ export const transactionLabels = {
     accountRule: "Create rule from recipient account",
   },
   pl: {
-    title: "Transakcje", exportMenu: exportLabels.pl, currency: "Waluta", category: "Kategoria", kind: "Rodzaj", search: "Szukaj", apply: "Zastosuj",
+    title: "Transakcje", currency: "Waluta", category: "Kategoria", kind: "Rodzaj", search: "Szukaj", apply: "Zastosuj",
     provisionalOnly: "Tylko niepotwierdzone (wynik wstępny)",
     all: "Wszystkie", uncategorised: "Bez kategorii", automatic: "Automatycznie (reguły)", kinds: kindsPl,
     edit: "Zmień", save: "Zapisz", cancel: "Anuluj", archived: "archiwalna", total: (count: number) => `Pozycji: ${String(count)}`,
@@ -548,7 +548,7 @@ export function TransactionsPanel({ api, period, currencies, accounts, connectio
     <section className="budget-entries" aria-label={text.title} ref={sectionRef}>
       <header className="budget-entries-head">
         <h4>{text.title}</h4>
-        <ExportMenu text={text.exportMenu} filename={exportBasename(period)} periods={[period]} filter={filter}
+        <ExportMenu filename={exportBasename(period)} periods={[period]} filter={filter}
           rowKeys={activeProvisionalKeys} accounts={accounts} connections={connections} api={api} onAccessLoss={onAccessLoss} />
       </header>
       <form className="budget-range" onSubmit={(event) => { event.preventDefault(); setFilter(draft); }}>

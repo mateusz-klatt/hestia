@@ -3,6 +3,7 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import type { Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { loadLocale, t } from "../../i18n";
 import type { BudgetApi, BudgetResult } from "../api";
 import { account, connection } from "../fixtures";
 import { categoryList, entriesOf, entry, overviewOf } from "./fixtures";
@@ -11,16 +12,15 @@ import { accountName } from "./model";
 import { ExportMenu } from "./export_menu";
 import {
   EXPORT_PAGE_SIZE, ExportCancelled, ExportSnapshotChanged, buildCsv, categoryIndex, csvAmount, csvField, exportBasename,
-  exportCells, exportHeaders, exportLabels, exportStatus, exportTypeLabel, mapExportRow, monthsOfYear, signedAmount,
+  exportCells, exportHeaders, exportStatus, exportTypeLabel, mapExportRow, monthsOfYear, signedAmount,
   walkTransactions,
 } from "./export_rows";
 import type { ExportContext, ExportRecord } from "./export_rows";
 import { buildWorkbook, crc32, excelSerial, sheetTitle } from "./xlsx_writer";
 import type { XlsxCell } from "./xlsx_writer";
 import { TransactionsPanel, transactionLabels } from "./transactions";
-import { YearView, yearLabels } from "./year";
+import { YearView } from "./year";
 
-const text = exportLabels.pl;
 const categories: AnalyticsCategory[] = [
   { id: "home", name: "Home", archived: false, version: 1, created_at: 1, updated_at: 1, parent_id: null },
   { id: "rent", name: "Rent", archived: false, version: 1, created_at: 1, updated_at: 1, parent_id: "home" },
@@ -31,7 +31,7 @@ const accounts = [account({
   display: { product: "Synthetic Current", currency: "PLN", masked_suffix: "0001", source: "offline_import", observed_at: 1, imported_at: 2 },
 })];
 const connections = [connection];
-const context: ExportContext = { accounts, connections, categories: categoryIndex(categories), text };
+const context: ExportContext = { accounts, connections, categories: categoryIndex(categories) };
 
 function row(changes: Partial<AnalyticsTransaction> = {}): AnalyticsTransaction {
   return entry("secret-ref", {
@@ -48,7 +48,10 @@ function ok<T>(data: T): Promise<BudgetResult<T>> { return Promise.resolve({ ok:
 function fail<T>(status: number, error: string): Promise<BudgetResult<T>> { return Promise.resolve({ ok: false, status, error }); }
 
 describe("transaction export rows", () => {
-  it("maps the leaf category, the signed amount and the type and status labels", () => {
+  beforeEach(async () => { await loadLocale("pl"); });
+  afterEach(async () => { await loadLocale("en"); });
+
+  it("maps the leaf category, the signed amount and the type and status labels", async () => {
     const mapped = mapExportRow(row(), context);
     expect(mapped.category).toBe("Rent");
     expect(mapped.category).not.toContain("Home");
@@ -57,12 +60,14 @@ describe("transaction export rows", () => {
     expect(mapped.type).toBe("wydatek");
     expect(mapExportRow(row({ effective: { kind: "income", category_id: null, source: "default", rule_id: null } }), context).type).toBe("przychód");
     expect(mapExportRow(row({ effective: { kind: "excluded", category_id: null, source: "manual", rule_id: null } }), context).type).toBe("wykluczone");
-    expect(exportTypeLabel("refund", text)).toBe("zwrot");
-    expect(exportTypeLabel("transfer", text)).toBe("przelew własny");
-    expect(exportTypeLabel("unclassified_credit", text)).toBe("do sklasyfikowania");
+    expect(exportTypeLabel("refund")).toBe("zwrot");
+    expect(exportTypeLabel("transfer")).toBe("przelew własny");
+    expect(exportTypeLabel("unclassified_credit")).toBe("do sklasyfikowania");
     expect(mapped.status).toBe("potwierdzone");
-    expect(exportStatus("PDNG", text)).toBe("wstępne");
-    expect(exportStatus("BOOK", exportLabels.en)).toBe("confirmed");
+    expect(exportStatus("PDNG")).toBe("wstępne");
+    await loadLocale("en");
+    expect(exportStatus("BOOK")).toBe("confirmed");
+    await loadLocale("pl");
     expect(mapped.amount).toBe("-12.5");
     expect(mapped.amountIsNumber).toBe(true);
     expect(signedAmount("0.00", "DBIT")).toEqual({ text: "0.00", numeric: true });
@@ -80,7 +85,7 @@ describe("transaction export rows", () => {
     expect(mapped.description).toBe("Synthetic shop · note");
     expect(mapped.counterparty).toBe("Synthetic Market");
     expect(mapExportRow(row({ credit_debit_indicator: "CRDT" }), context).counterparty).toBe("Synthetic Payer");
-    expect(mapped.account).toBe(accountName(accounts, connections, "acc-secret", text.accountFallback));
+    expect(mapped.account).toBe(accountName(accounts, connections, "acc-secret", t("budget.export.accountFallback")));
     expect(mapped.currency).toBe("PLN");
     const encoded = JSON.stringify(mapped);
     expect(encoded).not.toContain("acc-secret");
@@ -91,15 +96,17 @@ describe("transaction export rows", () => {
       .toBe("Bez kategorii");
   });
 
-  it("names a month file and a year file, and lists every month of the year", () => {
+  it("names a month file and a year file, and lists every month of the year", async () => {
     expect(exportBasename("2026-11")).toBe("hestia-transakcje-2026-11");
     expect(exportBasename("2026")).toBe("hestia-transakcje-2026");
-    expect(exportLabels.pl.fetching(4)).toBe("Pobieranie… 4");
-    expect(exportHeaders(text)).toEqual([
+    expect(t("budget.export.fetching", { count: 4 })).toBe("Pobieranie… 4");
+    expect(exportHeaders()).toEqual([
       "Data", "Data transakcji", "Konto", "Opis", "Kontrahent", "Kwota", "Waluta", "Kategoria", "Typ", "Status",
       "Etykieta jednorazowa",
     ]);
-    expect(exportHeaders(exportLabels.en).at(-1)).toBe("One-off label");
+    await loadLocale("en");
+    expect(exportHeaders().at(-1)).toBe("One-off label");
+    await loadLocale("pl");
     expect(monthsOfYear("2026")).toEqual([
       "2026-01", "2026-02", "2026-03", "2026-04", "2026-05", "2026-06",
       "2026-07", "2026-08", "2026-09", "2026-10", "2026-11", "2026-12",
@@ -120,7 +127,7 @@ describe("transaction export rows", () => {
     const risky = mapExportRow(row({
       annotation: { version: 1, mode: "manual", category_id: "rent", kind: "expense", stale: false, label: "=cmd" },
     }), context);
-    const csv = buildCsv(exportHeaders(text), [labelled, risky, cleared]);
+    const csv = buildCsv(exportHeaders(), [labelled, risky, cleared]);
     const header = csv.replace(/^\uFEFF/, "").split("\r\n")[0] ?? "";
     expect(header.split(";").at(-1)).toBe("Etykieta jednorazowa");
     expect(csv).toContain(";Remont lazienki\r\n");
@@ -130,6 +137,9 @@ describe("transaction export rows", () => {
 });
 
 describe("transaction export csv", () => {
+  beforeEach(async () => { await loadLocale("pl"); });
+  afterEach(async () => { await loadLocale("en"); });
+
   it("writes a UTF-8 BOM, semicolons, CRLF and RFC 4180 quotes", () => {
     expect(csvField("plain")).toBe("plain");
     expect(csvField("a;b")).toBe("\"a;b\"");
@@ -151,7 +161,7 @@ describe("transaction export csv", () => {
       description: "say \"hi\";\nnext",
       counterparty: "A;B",
     };
-    const csv = buildCsv(exportHeaders(text), [record]);
+    const csv = buildCsv(exportHeaders(), [record]);
     const bytes = new TextEncoder().encode(csv);
     expect([...bytes.slice(0, 3)]).toEqual([0xef, 0xbb, 0xbf]);
     expect(csv.startsWith("\uFEFFData;Data transakcji;")).toBe(true);
@@ -231,13 +241,16 @@ function unzip(bytes: Uint8Array): Map<string, string> {
 }
 
 describe("transaction export xlsx", () => {
+  beforeEach(async () => { await loadLocale("pl"); });
+  afterEach(async () => { await loadLocale("en"); });
+
   it("packs a stored workbook whose sheet has numeric amounts, dates and a frozen header", () => {
     expect(crc32(new TextEncoder().encode("123456789"))).toBe(0xcbf43926);
     const mapped = mapExportRow(row({
       remittance_information: ["Fish & chips"],
       annotation: { version: 1, mode: "manual", category_id: "rent", kind: "expense", stale: false, label: "Remont lazienki" },
     }), context);
-    const headers = exportHeaders(text);
+    const headers = exportHeaders();
     const cells: XlsxCell[] = [
       { kind: "date", value: mapped.bookingDate },
       { kind: "date", value: mapped.transactionDate },
@@ -251,7 +264,7 @@ describe("transaction export xlsx", () => {
       { kind: "text", value: mapped.status },
       { kind: "text", value: mapped.oneOffLabel },
     ];
-    const packed = buildWorkbook(headers, [cells], text.sheet);
+    const packed = buildWorkbook(headers, [cells], t("budget.export.sheet"));
     const files = unzip(packed);
     const types = files.get("[Content_Types].xml") ?? "";
     const workbook = files.get("xl/workbook.xml") ?? "";
@@ -405,7 +418,8 @@ async function flush(): Promise<void> {
 describe("export menu", () => {
   let host: HTMLElement;
   let root: Root;
-  beforeEach(() => {
+  beforeEach(async () => {
+    await loadLocale("pl");
     host = document.createElement("div");
     document.body.append(host);
     root = createRoot(host);
@@ -413,6 +427,7 @@ describe("export menu", () => {
   afterEach(async () => {
     await act(async () => { root.unmount(); await Promise.resolve(); });
     host.remove();
+    await loadLocale("en");
   });
 
   function button(label: string): HTMLButtonElement {
@@ -443,7 +458,7 @@ describe("export menu", () => {
       categories: vi.fn<BudgetApi["categories"]>(() => ok({ categories })),
     };
     await act(async () => {
-      root.render(<ExportMenu text={text} filename="hestia-transakcje-2026-11" periods={["2026-11"]}
+      root.render(<ExportMenu filename="hestia-transakcje-2026-11" periods={["2026-11"]}
         filter={{ currency: "PLN", category: "rent", kind: "expense", query: "shop" }}
         accounts={accounts} connections={connections} api={api} onAccessLoss={() => false} save={save} />);
       await Promise.resolve();
@@ -470,11 +485,12 @@ describe("export menu", () => {
   });
 
   it("cancels an in-flight download and does not save the file", async () => {
+    await loadLocale("en");
     const pending = deferred<BudgetResult<AnalyticsTransactions>>();
     const analyticsTransactions = vi.fn<BudgetApi["analyticsTransactions"]>(() => pending.promise);
     const save = vi.fn();
     await act(async () => {
-      root.render(<ExportMenu text={exportLabels.en} filename="hestia-transakcje-2026-11" periods={["2026-11"]}
+      root.render(<ExportMenu filename="hestia-transakcje-2026-11" periods={["2026-11"]}
         filter={{ currency: "", category: "", kind: "", query: "" }} accounts={accounts} connections={connections}
         api={{ analyticsTransactions, categories: vi.fn<BudgetApi["categories"]>(() => ok({ categories: categoryList })) }}
         onAccessLoss={() => false} save={save} />);
@@ -496,7 +512,7 @@ describe("export menu", () => {
     const saved: Blob[] = [];
     const analyticsTransactions = vi.fn<BudgetApi["analyticsTransactions"]>(() => ok(entriesOf("2026-11", [row()])));
     await act(async () => {
-      root.render(<ExportMenu text={text} filename="hestia-transakcje-2026-11" periods={["2026-11"]}
+      root.render(<ExportMenu filename="hestia-transakcje-2026-11" periods={["2026-11"]}
         filter={{ currency: "", category: "", kind: "", query: "" }} accounts={accounts} connections={connections}
         api={{ analyticsTransactions, categories: vi.fn<BudgetApi["categories"]>(() => ok({ categories })) }}
         onAccessLoss={() => false} save={(blob) => { saved.push(blob); }} />);
@@ -526,7 +542,7 @@ describe("export menu", () => {
       return ok({ categories });
     });
     await act(async () => {
-      root.render(<ExportMenu text={text} filename="hestia-transakcje-2026" periods={["2026-01", "2026-02"]}
+      root.render(<ExportMenu filename="hestia-transakcje-2026" periods={["2026-01", "2026-02"]}
         filter={{ currency: "", category: "", kind: "", query: "" }} accounts={accounts} connections={connections}
         api={{ analyticsTransactions, categories: loadCategories }} onAccessLoss={() => false}
         save={(blob, name) => { saved.push(`${name}:${String(blob.size)}`); }} />);
@@ -544,7 +560,7 @@ describe("export menu", () => {
     const save = vi.fn();
     const onAccessLoss = vi.fn(() => true);
     await act(async () => {
-      root.render(<ExportMenu text={text} filename="hestia-transakcje-2026" periods={monthsOfYear("2026")}
+      root.render(<ExportMenu filename="hestia-transakcje-2026" periods={monthsOfYear("2026")}
         filter={{ currency: "", category: "", kind: "", query: "" }} accounts={accounts} connections={connections}
         api={{ analyticsTransactions, categories: vi.fn<BudgetApi["categories"]>(() => fail(401, "budget_http_401")) }}
         onAccessLoss={onAccessLoss} save={save} />);
@@ -564,7 +580,7 @@ describe("export menu", () => {
     const analyticsTransactionsByKeys = vi.fn<BudgetApi["analyticsTransactionsByKeys"]>(() => ok(entriesOf("", [row()])));
     const saved: Promise<ArrayBuffer>[] = [];
     await act(async () => {
-      root.render(<ExportMenu text={text} filename="hestia-transakcje-2026-11" periods={["2026-11"]} rowKeys={[]}
+      root.render(<ExportMenu filename="hestia-transakcje-2026-11" periods={["2026-11"]} rowKeys={[]}
         filter={{ currency: "PLN", category: "", kind: "", query: "" }} accounts={accounts} connections={connections}
         api={{ analyticsTransactions, analyticsTransactionsByKeys, categories: vi.fn<BudgetApi["categories"]>(() => ok({ categories })) }}
         onAccessLoss={() => false} save={(blob) => { saved.push(blob.arrayBuffer()); }} />);
@@ -587,7 +603,8 @@ describe("export buttons on the month and year views", () => {
   let host: HTMLElement;
   let root: Root;
   const downloads: { name: string; body: Promise<string> }[] = [];
-  beforeEach(() => {
+  beforeEach(async () => {
+    await loadLocale("en");
     downloads.length = 0;
     host = document.createElement("div");
     document.body.append(host);
@@ -606,6 +623,7 @@ describe("export buttons on the month and year views", () => {
     await act(async () => { root.unmount(); await Promise.resolve(); });
     host.remove();
     vi.restoreAllMocks();
+    await loadLocale("en");
   });
   async function flushView(): Promise<void> {
     for (let attempt = 0; attempt < 10; attempt += 1) {
@@ -695,7 +713,7 @@ describe("export buttons on the month and year views", () => {
     const overview = vi.fn<BudgetApi["overview"]>((period) => ok(overviewOf(period, { currencies: [], months: [] })));
     await act(async () => {
       root.render(<YearView api={{ overview, analyticsTransactions, categories: vi.fn<BudgetApi["categories"]>(() => ok({ categories: [] })) }}
-        accounts={[]} text={yearLabels.en} locale="en" revision={0} onAccessLoss={() => false} onOpenMonth={() => {}}
+        accounts={[]} locale="en" revision={0} onAccessLoss={() => false} onOpenMonth={() => {}}
         today={() => new Date(2026, 10, 21, 12)} />);
       await Promise.resolve();
     });

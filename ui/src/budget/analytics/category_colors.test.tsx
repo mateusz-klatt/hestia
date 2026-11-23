@@ -47,7 +47,7 @@ import type { AnalyticsCategory } from "./model";
 import { MonthBudgetView } from "./month_budget";
 import { MonthBudgetCharts, buildCategoryChartModel } from "./month_budget_charts";
 import { TransactionsPanel, transactionLabels } from "./transactions";
-import { YearView, yearLabels } from "./year";
+import { YearView } from "./year";
 
 const sampleTree: CategoryColorInput[] = [
   { id: "transport", parent_id: null },
@@ -693,7 +693,6 @@ describe("CategorySwatch and CategoryBadge render", () => {
             analyticsTransactions: vi.fn(() => Promise.resolve({ ok: true as const, data: entriesOf("2026-11", []) })),
           }}
           accounts={[account({ id: "acc-1" })]}
-          text={yearLabels.en}
           locale="en"
           revision={0}
           onAccessLoss={() => false}
