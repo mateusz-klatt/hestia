@@ -81,18 +81,21 @@ const identicalStrings: Partial<Record<MessageKey, IdenticalString>> = {
   "rule.errGeneric": { value: "error", locales: ["es", "fil"] },
 
   // PHASE-2: add other locales once budget.* is translated if legitimately identical in those languages.
-  "budget.main.scopeWithState": { value: "{scope}: {state}", locales: ["pl", "it"] },
-  "budget.year.noData": { value: "—", locales: ["pl", "it"] },
-  "budget.export.xlsx": { value: "XLSX", locales: ["pl", "it"] },
-  "budget.export.csv": { value: "CSV", locales: ["pl", "it"] },
-  "budget.export.colStatus": { value: "Status", locales: ["pl"] },
-  "budget.rules.conditionSummary": { value: "{field} {operator} „{value}”", locales: ["pl", "it"] },
-  "budget.mortgages.windowRange": { value: "{start} – {end}", locales: ["pl", "it"] },
+  "budget.main.scopeWithState": { value: "{scope}: {state}", locales: ["pl", "it", "da"] },
+  "budget.year.noData": { value: "—", locales: ["pl", "it", "da"] },
+  "budget.export.xlsx": { value: "XLSX", locales: ["pl", "it", "da"] },
+  "budget.export.csv": { value: "CSV", locales: ["pl", "it", "da"] },
+  "budget.export.colStatus": { value: "Status", locales: ["pl", "da"] },
+  "budget.rules.conditionSummary": { value: "{field} {operator} „{value}”", locales: ["pl", "it", "da"] },
+  "budget.mortgages.windowRange": { value: "{start} – {end}", locales: ["pl", "it", "da"] },
   "budget.monthBudget.limitColumn": { value: "Limit", locales: ["pl"] },
-  "budget.monthBudget.noLimit": { value: "—", locales: ["pl", "it"] },
-  "budget.monthBudget.statusColumn": { value: "Status", locales: ["pl"] },
-  "budget.monthBudget.noValue": { value: "—", locales: ["pl", "it"] },
-  "budget.main.title": { value: "Budget", locales: ["it"] },
+  "budget.monthBudget.noLimit": { value: "—", locales: ["pl", "it", "da"] },
+  "budget.monthBudget.statusColumn": { value: "Status", locales: ["pl", "da"] },
+  "budget.monthBudget.noValue": { value: "—", locales: ["pl", "it", "da"] },
+  "budget.main.title": { value: "Budget", locales: ["it", "da"] },
+  "budget.transactions.kind": { value: "Type", locales: ["da"] },
+  "budget.export.colType": { value: "Type", locales: ["da"] },
+  "budget.rules.kind": { value: "Type", locales: ["da"] },
 };
 
 // PHASE-2: budget.* translations pending
