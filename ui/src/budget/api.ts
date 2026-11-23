@@ -120,6 +120,7 @@ export const budgetApi = {
     post<{ decision: TransferDecisionResult }>("analytics/transfer-decision", request),
   createCategory: (request: CategoryCreateRequest) => post<{ category: CategorySaved }>("analytics/category-create", request),
   updateCategory: (request: CategoryUpdateRequest) => post<{ category: CategorySaved }>("analytics/category-update", request),
+  spreadCategoryColors: () => post<{ categories: AnalyticsCategory[] }>("analytics/category-colors-spread", {}),
   rules: () => call<{ rules: AnalyticsRule[] }>(url("analytics/rules")),
   /** Shows what a rule would change; nothing is applied until the preview is saved. */
   previewRule: (candidate: RuleCandidate) => post<{ preview: RulePreview }>("analytics/rule-preview", candidate),
