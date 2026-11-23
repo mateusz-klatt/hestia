@@ -1,6 +1,7 @@
 import type { Messages } from "./en";
 
 const messages: Partial<Messages> = {
+  "header.title": "hestia",
   "header.confirmed": "{confirmed}/{total} onaylandı",
   "header.unknown": "{unknown} bilinmeyen",
 
@@ -108,7 +109,11 @@ const messages: Partial<Messages> = {
   "rooms.editIcons": "Simgeleri düzenle",
   "rooms.editIconsDone": "Bitti",
   "rooms.iconNone": "—",
+  "rooms.deviceCount.zero": "{n} cihaz",
   "rooms.deviceCount.one": "{n} cihaz",
+  "rooms.deviceCount.two": "{n} cihaz",
+  "rooms.deviceCount.few": "{n} cihaz",
+  "rooms.deviceCount.many": "{n} cihaz",
   "rooms.deviceCount.other": "{n} cihaz",
 
   "ctl.on": "Açık",
@@ -182,6 +187,7 @@ const messages: Partial<Messages> = {
   "auto.error": "hata {status}",
   "auto.trig.scene": "sahne {id} @düğüm {node}",
   "auto.trig.state": "düğüm {node}{gang} {field} {op} {value}",
+  "auto.trig.stateGlobal": "{field} {op} {value}",
   "auto.trig.gang": " tuş {ep}",
   "auto.trig.time": "saat {time}{days}",
   "auto.trig.cron": "cron {expr}",
@@ -197,7 +203,7 @@ const messages: Partial<Messages> = {
   "rule.wizardTitle": "Kural sihirbazı",
   "rule.id": "id",
   "rule.enabled": "etkin",
-  "rule.debounce": "debounce s",
+  "rule.debounce": "en kısa aralık s",
   "rule.trigger": "tetikleyici",
   "rule.conditions": "koşullar:",
   "rule.actions": "işlemler:",
@@ -219,9 +225,9 @@ const messages: Partial<Messages> = {
   "rule.gang": "tuş",
   "rule.phRuleId": "kural-id",
   "rule.phButton": "düğme",
-  "rule.phOffset": "offset min",
-  "rule.phWindowStart": "SS:DD",
-  "rule.phWindowEnd": "SS:DD",
+  "rule.phOffset": "kaydırma min",
+  "rule.phWindowStart": "HH:MM",
+  "rule.phWindowEnd": "HH:MM",
   "rule.errNumberRequired": "{label}: sayı gerekli",
   "rule.errInvalidNumber": "{label}: geçersiz sayı",
   "rule.errNoValue": "yüklem “{field}”: değer yok",

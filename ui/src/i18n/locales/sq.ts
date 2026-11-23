@@ -1,6 +1,7 @@
 import type { Messages } from "./en";
 
 const messages: Partial<Messages> = {
+  "header.title": "hestia",
   "header.confirmed": "{confirmed}/{total} të konfirmuara",
   "header.unknown": "{unknown} të panjohura",
 
@@ -108,7 +109,11 @@ const messages: Partial<Messages> = {
   "rooms.editIcons": "Redakto ikonat",
   "rooms.editIconsDone": "U krye",
   "rooms.iconNone": "—",
+  "rooms.deviceCount.zero": "{n} pajisje",
   "rooms.deviceCount.one": "{n} pajisje",
+  "rooms.deviceCount.two": "{n} pajisje",
+  "rooms.deviceCount.few": "{n} pajisje",
+  "rooms.deviceCount.many": "{n} pajisje",
   "rooms.deviceCount.other": "{n} pajisje",
 
   "ctl.on": "Ndezur",
@@ -182,6 +187,7 @@ const messages: Partial<Messages> = {
   "auto.error": "gabim {status}",
   "auto.trig.scene": "skenë {id} @nyje {node}",
   "auto.trig.state": "nyje {node}{gang} {field} {op} {value}",
+  "auto.trig.stateGlobal": "{field} {op} {value}",
   "auto.trig.gang": " tasti {ep}",
   "auto.trig.time": "në {time}{days}",
   "auto.trig.cron": "cron {expr}",
@@ -197,7 +203,7 @@ const messages: Partial<Messages> = {
   "rule.wizardTitle": "Asistent rregulli",
   "rule.id": "id",
   "rule.enabled": "aktivizuar",
-  "rule.debounce": "debounce s",
+  "rule.debounce": "intervali minimal s",
   "rule.trigger": "shkaktues",
   "rule.conditions": "kushte:",
   "rule.actions": "veprime:",
@@ -219,7 +225,7 @@ const messages: Partial<Messages> = {
   "rule.gang": "tasti",
   "rule.phRuleId": "id-rregulli",
   "rule.phButton": "buton",
-  "rule.phOffset": "offset min",
+  "rule.phOffset": "zhvendosje min",
   "rule.phWindowStart": "HH:MM",
   "rule.phWindowEnd": "HH:MM",
   "rule.errNumberRequired": "{label}: kërkohet numër",

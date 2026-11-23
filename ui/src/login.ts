@@ -30,7 +30,7 @@ export function renderLogin(container: HTMLElement, onSuccess: () => void): void
   brand.className = "login-brand";
   const name = document.createElement("span");
   name.className = "login-brand-name";
-  name.textContent = "hestia";
+  name.textContent = t("header.title");
   brand.append(flameLogo(44), name);
 
   const form = document.createElement("form");

@@ -1,6 +1,7 @@
 import type { Messages } from "./en";
 
 const messages: Partial<Messages> = {
+  "header.title": "hestia",
   "header.confirmed": "{confirmed}/{total} potvrđeno",
   "header.unknown": "{unknown} nepoznato",
 
@@ -108,8 +109,11 @@ const messages: Partial<Messages> = {
   "rooms.editIcons": "Uredi ikone",
   "rooms.editIconsDone": "Gotovo",
   "rooms.iconNone": "—",
+  "rooms.deviceCount.zero": "{n} uređaja",
   "rooms.deviceCount.one": "{n} uređaj",
+  "rooms.deviceCount.two": "{n} uređaja",
   "rooms.deviceCount.few": "{n} uređaja",
+  "rooms.deviceCount.many": "{n} uređaja",
   "rooms.deviceCount.other": "{n} uređaja",
 
   "ctl.on": "Uključeno",
@@ -165,7 +169,7 @@ const messages: Partial<Messages> = {
 
   "mode.plain": "način rada: {mode}",
   "mode.cloudFree": "način rada: {mode} (bez oblaka)",
-  "mode.graduated": "način rada: {mode} → standalone spremljen — ponovno pokreni hestiju",
+  "mode.graduated": "način rada: {mode} → standalone spremljen — ponovno pokreni aplikaciju hestia",
   "mode.envPinned": "način rada: {mode} (HESTIA_MODE={override} nameće način rada; spremljeno: {target})",
   "discovery.loadError": "nije moguće učitati /api/discovery",
   "adv.refresh": "Osvježi",
@@ -183,6 +187,7 @@ const messages: Partial<Messages> = {
   "auto.error": "pogreška {status}",
   "auto.trig.scene": "scena {id} @čvor {node}",
   "auto.trig.state": "čvor {node}{gang} {field} {op} {value}",
+  "auto.trig.stateGlobal": "{field} {op} {value}",
   "auto.trig.gang": " tipka {ep}",
   "auto.trig.time": "u {time}{days}",
   "auto.trig.cron": "cron {expr}",
@@ -198,7 +203,7 @@ const messages: Partial<Messages> = {
   "rule.wizardTitle": "Kreator pravila",
   "rule.id": "id",
   "rule.enabled": "omogućeno",
-  "rule.debounce": "debounce s",
+  "rule.debounce": "najmanji razmak između pokretanja s",
   "rule.trigger": "okidač",
   "rule.conditions": "uvjeti:",
   "rule.actions": "radnje:",
@@ -220,9 +225,9 @@ const messages: Partial<Messages> = {
   "rule.gang": "tipka",
   "rule.phRuleId": "id-pravila",
   "rule.phButton": "gumb",
-  "rule.phOffset": "offset min",
-  "rule.phWindowStart": "SS:MM",
-  "rule.phWindowEnd": "SS:MM",
+  "rule.phOffset": "pomak min",
+  "rule.phWindowStart": "HH:MM",
+  "rule.phWindowEnd": "HH:MM",
   "rule.errNumberRequired": "{label}: potreban broj",
   "rule.errInvalidNumber": "{label}: nevaljan broj",
   "rule.errNoValue": "predikat „{field}”: nema vrijednosti",

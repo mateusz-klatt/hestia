@@ -1,6 +1,7 @@
 import type { Messages } from "./en";
 
 const messages: Partial<Messages> = {
+  "header.title": "hestia",
   "header.confirmed": "{confirmed}/{total} bekræftet",
   "header.unknown": "{unknown} ukendte",
 
@@ -108,7 +109,11 @@ const messages: Partial<Messages> = {
   "rooms.editIcons": "Rediger ikoner",
   "rooms.editIconsDone": "Færdig",
   "rooms.iconNone": "—",
+  "rooms.deviceCount.zero": "{n} enheder",
   "rooms.deviceCount.one": "{n} enhed",
+  "rooms.deviceCount.two": "{n} enheder",
+  "rooms.deviceCount.few": "{n} enheder",
+  "rooms.deviceCount.many": "{n} enheder",
   "rooms.deviceCount.other": "{n} enheder",
 
   "ctl.on": "Til",
@@ -182,6 +187,7 @@ const messages: Partial<Messages> = {
   "auto.error": "fejl {status}",
   "auto.trig.scene": "scene {id} @node {node}",
   "auto.trig.state": "node {node}{gang} {field} {op} {value}",
+  "auto.trig.stateGlobal": "{field} {op} {value}",
   "auto.trig.gang": " tast {ep}",
   "auto.trig.time": "kl. {time}{days}",
   "auto.trig.cron": "cron {expr}",
@@ -197,7 +203,7 @@ const messages: Partial<Messages> = {
   "rule.wizardTitle": "Regelguide",
   "rule.id": "id",
   "rule.enabled": "aktiveret",
-  "rule.debounce": "debounce s",
+  "rule.debounce": "minimumsinterval s",
   "rule.trigger": "udløser",
   "rule.conditions": "betingelser:",
   "rule.actions": "handlinger:",
@@ -219,9 +225,9 @@ const messages: Partial<Messages> = {
   "rule.gang": "tast",
   "rule.phRuleId": "regel-id",
   "rule.phButton": "knap",
-  "rule.phOffset": "offset min",
-  "rule.phWindowStart": "TT:MM",
-  "rule.phWindowEnd": "TT:MM",
+  "rule.phOffset": "forskydning min",
+  "rule.phWindowStart": "HH:MM",
+  "rule.phWindowEnd": "HH:MM",
   "rule.errNumberRequired": "{label}: tal påkrævet",
   "rule.errInvalidNumber": "{label}: ugyldigt tal",
   "rule.errNoValue": "prædikat “{field}”: ingen værdi",

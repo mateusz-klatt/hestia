@@ -1,6 +1,7 @@
 import type { Messages } from "./en";
 
 const messages: Partial<Messages> = {
+  "header.title": "hestia",
   "header.confirmed": "{confirmed}/{total} επιβεβαιωμένα",
   "header.unknown": "{unknown} άγνωστα",
 
@@ -108,7 +109,11 @@ const messages: Partial<Messages> = {
   "rooms.editIcons": "Επεξεργασία εικονιδίων",
   "rooms.editIconsDone": "Τέλος",
   "rooms.iconNone": "—",
+  "rooms.deviceCount.zero": "{n} συσκευές",
   "rooms.deviceCount.one": "{n} συσκευή",
+  "rooms.deviceCount.two": "{n} συσκευές",
+  "rooms.deviceCount.few": "{n} συσκευές",
+  "rooms.deviceCount.many": "{n} συσκευές",
   "rooms.deviceCount.other": "{n} συσκευές",
 
   "ctl.on": "Ενεργό",
@@ -182,6 +187,7 @@ const messages: Partial<Messages> = {
   "auto.error": "σφάλμα {status}",
   "auto.trig.scene": "σκηνή {id} @κόμβος {node}",
   "auto.trig.state": "κόμβος {node}{gang} {field} {op} {value}",
+  "auto.trig.stateGlobal": "{field} {op} {value}",
   "auto.trig.gang": " πλήκτρο {ep}",
   "auto.trig.time": "στις {time}{days}",
   "auto.trig.cron": "cron {expr}",
@@ -197,7 +203,7 @@ const messages: Partial<Messages> = {
   "rule.wizardTitle": "Οδηγός κανόνα",
   "rule.id": "id",
   "rule.enabled": "ενεργό",
-  "rule.debounce": "debounce s",
+  "rule.debounce": "ελάχιστο διάστημα s",
   "rule.trigger": "έναυσμα",
   "rule.conditions": "συνθήκες:",
   "rule.actions": "ενέργειες:",
@@ -219,9 +225,9 @@ const messages: Partial<Messages> = {
   "rule.gang": "πλήκτρο",
   "rule.phRuleId": "id-κανόνα",
   "rule.phButton": "κουμπί",
-  "rule.phOffset": "offset min",
-  "rule.phWindowStart": "ΩΩ:ΛΛ",
-  "rule.phWindowEnd": "ΩΩ:ΛΛ",
+  "rule.phOffset": "μετατόπιση min",
+  "rule.phWindowStart": "HH:MM",
+  "rule.phWindowEnd": "HH:MM",
   "rule.errNumberRequired": "{label}: απαιτείται αριθμός",
   "rule.errInvalidNumber": "{label}: μη έγκυρος αριθμός",
   "rule.errNoValue": "κατηγόρημα «{field}»: καμία τιμή",

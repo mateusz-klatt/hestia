@@ -1,6 +1,7 @@
 import type { Messages } from "./en";
 
 const messages: Partial<Messages> = {
+  "header.title": "hestia",
   "header.confirmed": "{confirmed}/{total} تأیید شده",
   "header.unknown": "{unknown} ناشناس",
 
@@ -108,7 +109,11 @@ const messages: Partial<Messages> = {
   "rooms.editIcons": "ویرایش نمادها",
   "rooms.editIconsDone": "تمام",
   "rooms.iconNone": "—",
+  "rooms.deviceCount.zero": "{n} دستگاه",
   "rooms.deviceCount.one": "{n} دستگاه",
+  "rooms.deviceCount.two": "{n} دستگاه",
+  "rooms.deviceCount.few": "{n} دستگاه",
+  "rooms.deviceCount.many": "{n} دستگاه",
   "rooms.deviceCount.other": "{n} دستگاه",
 
   "ctl.on": "روشن",
@@ -182,6 +187,7 @@ const messages: Partial<Messages> = {
   "auto.error": "خطا {status}",
   "auto.trig.scene": "صحنه {id} @گره {node}",
   "auto.trig.state": "گره {node}{gang} {field} {op} {value}",
+  "auto.trig.stateGlobal": "{field} {op} {value}",
   "auto.trig.gang": " کلید {ep}",
   "auto.trig.time": "در {time}{days}",
   "auto.trig.cron": "cron {expr}",
@@ -197,7 +203,7 @@ const messages: Partial<Messages> = {
   "rule.wizardTitle": "راهنمای قاعده",
   "rule.id": "id",
   "rule.enabled": "فعال",
-  "rule.debounce": "debounce s",
+  "rule.debounce": "حداقل فاصلهٔ بین اجراها s",
   "rule.trigger": "محرک",
   "rule.conditions": "شرایط:",
   "rule.actions": "اقدامات:",
@@ -219,7 +225,7 @@ const messages: Partial<Messages> = {
   "rule.gang": "کلید",
   "rule.phRuleId": "شناسه-قاعده",
   "rule.phButton": "دکمه",
-  "rule.phOffset": "offset min",
+  "rule.phOffset": "اختلاف زمانی min",
   "rule.phWindowStart": "HH:MM",
   "rule.phWindowEnd": "HH:MM",
   "rule.errNumberRequired": "{label}: عدد لازم است",

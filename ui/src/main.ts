@@ -299,7 +299,7 @@ function startApp(): void {
       try {
         parsed = JSON.parse(ruleJson.value);
       } catch (e) {
-        setRuleStatus(t("rule.invalidJson", { msg: e instanceof Error ? e.message : "parse error" }), true);
+        setRuleStatus(t("rule.invalidJson", { msg: e instanceof Error ? e.message : t("rule.errGeneric") }), true);
         return;
       }
       const res = await postRule(parsed);

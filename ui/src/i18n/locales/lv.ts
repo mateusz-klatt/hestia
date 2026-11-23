@@ -1,6 +1,7 @@
 import type { Messages } from "./en";
 
 const messages: Partial<Messages> = {
+  "header.title": "hestia",
   "header.confirmed": "{confirmed}/{total} apstiprināts",
   "header.unknown": "{unknown} nezināms",
 
@@ -110,6 +111,9 @@ const messages: Partial<Messages> = {
   "rooms.iconNone": "—",
   "rooms.deviceCount.zero": "{n} ierīču",
   "rooms.deviceCount.one": "{n} ierīce",
+  "rooms.deviceCount.two": "{n} ierīces",
+  "rooms.deviceCount.few": "{n} ierīces",
+  "rooms.deviceCount.many": "{n} ierīces",
   "rooms.deviceCount.other": "{n} ierīces",
 
   "ctl.on": "Ieslēgts",
@@ -183,6 +187,7 @@ const messages: Partial<Messages> = {
   "auto.error": "kļūda {status}",
   "auto.trig.scene": "aina {id} @mezgls {node}",
   "auto.trig.state": "mezgls {node}{gang} {field} {op} {value}",
+  "auto.trig.stateGlobal": "{field} {op} {value}",
   "auto.trig.gang": " taustiņš {ep}",
   "auto.trig.time": "plkst. {time}{days}",
   "auto.trig.cron": "cron {expr}",
@@ -198,7 +203,7 @@ const messages: Partial<Messages> = {
   "rule.wizardTitle": "Kārtulas vednis",
   "rule.id": "id",
   "rule.enabled": "iespējota",
-  "rule.debounce": "debounce s",
+  "rule.debounce": "minimālais intervāls starp izpildēm s",
   "rule.trigger": "palaidējs",
   "rule.conditions": "nosacījumi:",
   "rule.actions": "darbības:",
@@ -220,7 +225,7 @@ const messages: Partial<Messages> = {
   "rule.gang": "taustiņš",
   "rule.phRuleId": "kārtulas-id",
   "rule.phButton": "poga",
-  "rule.phOffset": "offset min",
+  "rule.phOffset": "nobīde min",
   "rule.phWindowStart": "HH:MM",
   "rule.phWindowEnd": "HH:MM",
   "rule.errNumberRequired": "{label}: nepieciešams skaitlis",

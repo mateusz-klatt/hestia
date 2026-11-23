@@ -17,4 +17,5 @@ interface ImportMetaEnv {
 }
 interface ImportMeta {
   readonly env: ImportMetaEnv;
+  readonly glob: import("vite").ImportGlobFunction;
 }

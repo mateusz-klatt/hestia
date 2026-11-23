@@ -1,4 +1,5 @@
 import type { DeviceInfo, NamePayload, NameResult } from "./api/types";
+import { t } from "./i18n";
 
 /** Sends one registry mutation; returns ok + body (never rejects). */
 export type PostName = (payload: NamePayload) => Promise<NameResult>;
@@ -71,11 +72,11 @@ export function bindRow(tr: HTMLElement, node: number, info: DeviceInfo, postNam
   }
   const nameInput = tr.querySelector<HTMLInputElement>(".name");
   if (nameInput !== null) {
-    wire(tr, tr.querySelector(".save-name"), "save-name", "saved", () => ({ node, name: nameInput.value }), postName);
+    wire(tr, tr.querySelector(".save-name"), "save-name", t("rule.saved"), () => ({ node, name: nameInput.value }), postName);
   }
   const roomInput = tr.querySelector<HTMLInputElement>(".room");
   if (roomInput !== null) {
-    wire(tr, tr.querySelector(".save-room"), "save-room", "saved", () => ({ node, room: roomInput.value }), postName);
+    wire(tr, tr.querySelector(".save-room"), "save-room", t("rule.saved"), () => ({ node, room: roomInput.value }), postName);
   }
 }
 
@@ -83,5 +84,5 @@ export function bindRow(tr: HTMLElement, node: number, info: DeviceInfo, postNam
 export function bindSubRow(tr: HTMLElement, node: number, ep: number, postName: PostName): void {
   const input = tr.querySelector<HTMLInputElement>(".ep-name");
   if (input === null) return;
-  wire(tr, tr.querySelector(".save-ep-name"), "save-ep-name", "saved", () => ({ node, ep, name: input.value }), postName);
+  wire(tr, tr.querySelector(".save-ep-name"), "save-ep-name", t("rule.saved"), () => ({ node, ep, name: input.value }), postName);
 }

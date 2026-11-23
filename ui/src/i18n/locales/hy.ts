@@ -1,6 +1,7 @@
 import type { Messages } from "./en";
 
 const messages: Partial<Messages> = {
+  "header.title": "hestia",
   "header.confirmed": "{confirmed}/{total} հաստատված",
   "header.unknown": "{unknown} անհայտ",
 
@@ -108,8 +109,12 @@ const messages: Partial<Messages> = {
   "rooms.editIcons": "Խմբագրել պատկերակները",
   "rooms.editIconsDone": "Պատրաստ է",
   "rooms.iconNone": "—",
+  "rooms.deviceCount.zero": "{n} սարք",
   "rooms.deviceCount.one": "{n} սարք",
-  "rooms.deviceCount.other": "{n} սարքեր",
+  "rooms.deviceCount.two": "{n} սարք",
+  "rooms.deviceCount.few": "{n} սարք",
+  "rooms.deviceCount.many": "{n} սարք",
+  "rooms.deviceCount.other": "{n} սարք",
 
   "ctl.on": "Միացված",
   "ctl.off": "Անջատված",
@@ -182,6 +187,7 @@ const messages: Partial<Messages> = {
   "auto.error": "սխալ {status}",
   "auto.trig.scene": "սցենա {id} @հանգույց {node}",
   "auto.trig.state": "հանգույց {node}{gang} {field} {op} {value}",
+  "auto.trig.stateGlobal": "{field} {op} {value}",
   "auto.trig.gang": " ստեղն {ep}",
   "auto.trig.time": "ժամը {time}{days}",
   "auto.trig.cron": "cron {expr}",
@@ -197,7 +203,7 @@ const messages: Partial<Messages> = {
   "rule.wizardTitle": "Կանոնի վիզարդ",
   "rule.id": "id",
   "rule.enabled": "միացված",
-  "rule.debounce": "debounce s",
+  "rule.debounce": "գործարկումների նվազագույն ընդմիջում s",
   "rule.trigger": "գործարկիչ",
   "rule.conditions": "պայմաններ:",
   "rule.actions": "գործողություններ:",
@@ -219,7 +225,7 @@ const messages: Partial<Messages> = {
   "rule.gang": "ստեղն",
   "rule.phRuleId": "կանոնի-id",
   "rule.phButton": "կոճակ",
-  "rule.phOffset": "offset min",
+  "rule.phOffset": "շեղում min",
   "rule.phWindowStart": "HH:MM",
   "rule.phWindowEnd": "HH:MM",
   "rule.errNumberRequired": "{label}: թիվ է պահանջվում",

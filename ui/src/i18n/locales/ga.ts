@@ -1,6 +1,7 @@
 import type { Messages } from "./en";
 
 const messages: Partial<Messages> = {
+  "header.title": "hestia",
   "header.confirmed": "{confirmed}/{total} dearbhaithe",
   "header.unknown": "{unknown} anaithnid",
 
@@ -108,6 +109,7 @@ const messages: Partial<Messages> = {
   "rooms.editIcons": "Cuir deilbhíní in eagar",
   "rooms.editIconsDone": "Déanta",
   "rooms.iconNone": "—",
+  "rooms.deviceCount.zero": "{n} gléas",
   "rooms.deviceCount.one": "{n} ghléas",
   "rooms.deviceCount.two": "{n} ghléas",
   "rooms.deviceCount.few": "{n} ghléas",
@@ -185,6 +187,7 @@ const messages: Partial<Messages> = {
   "auto.error": "earráid {status}",
   "auto.trig.scene": "radharc {id} @nód {node}",
   "auto.trig.state": "nód {node}{gang} {field} {op} {value}",
+  "auto.trig.stateGlobal": "{field} {op} {value}",
   "auto.trig.gang": " cnaipe {ep}",
   "auto.trig.time": "ag {time}{days}",
   "auto.trig.cron": "cron {expr}",
@@ -200,7 +203,7 @@ const messages: Partial<Messages> = {
   "rule.wizardTitle": "Treoraí riail",
   "rule.id": "id",
   "rule.enabled": "cumasaithe",
-  "rule.debounce": "debounce s",
+  "rule.debounce": "eatramh íosta s",
   "rule.trigger": "truicear",
   "rule.conditions": "coinníollacha:",
   "rule.actions": "gníomhartha:",
@@ -222,7 +225,7 @@ const messages: Partial<Messages> = {
   "rule.gang": "cnaipe",
   "rule.phRuleId": "id-riail",
   "rule.phButton": "cnaipe",
-  "rule.phOffset": "offset min",
+  "rule.phOffset": "fritháireamh min",
   "rule.phWindowStart": "HH:MM",
   "rule.phWindowEnd": "HH:MM",
   "rule.errNumberRequired": "{label}: uimhir de dhíth",

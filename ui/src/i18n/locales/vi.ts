@@ -1,6 +1,7 @@
 import type { Messages } from "./en";
 
 const messages: Partial<Messages> = {
+  "header.title": "hestia",
   "header.confirmed": "{confirmed}/{total} đã xác nhận",
   "header.unknown": "{unknown} không xác định",
 
@@ -108,6 +109,11 @@ const messages: Partial<Messages> = {
   "rooms.editIcons": "Chỉnh sửa biểu tượng",
   "rooms.editIconsDone": "Xong",
   "rooms.iconNone": "—",
+  "rooms.deviceCount.zero": "{n} thiết bị",
+  "rooms.deviceCount.one": "{n} thiết bị",
+  "rooms.deviceCount.two": "{n} thiết bị",
+  "rooms.deviceCount.few": "{n} thiết bị",
+  "rooms.deviceCount.many": "{n} thiết bị",
   "rooms.deviceCount.other": "{n} thiết bị",
 
   "ctl.on": "Bật",
@@ -181,6 +187,7 @@ const messages: Partial<Messages> = {
   "auto.error": "lỗi {status}",
   "auto.trig.scene": "cảnh {id} @nút {node}",
   "auto.trig.state": "nút {node}{gang} {field} {op} {value}",
+  "auto.trig.stateGlobal": "{field} {op} {value}",
   "auto.trig.gang": " phím {ep}",
   "auto.trig.time": "lúc {time}{days}",
   "auto.trig.cron": "cron {expr}",
@@ -196,7 +203,7 @@ const messages: Partial<Messages> = {
   "rule.wizardTitle": "Trình hướng dẫn quy tắc",
   "rule.id": "id",
   "rule.enabled": "bật",
-  "rule.debounce": "debounce s",
+  "rule.debounce": "khoảng cách kích hoạt tối thiểu s",
   "rule.trigger": "trình kích hoạt",
   "rule.conditions": "điều kiện:",
   "rule.actions": "hành động:",
@@ -218,7 +225,7 @@ const messages: Partial<Messages> = {
   "rule.gang": "phím",
   "rule.phRuleId": "id-quy-tắc",
   "rule.phButton": "nút",
-  "rule.phOffset": "offset min",
+  "rule.phOffset": "độ lệch min",
   "rule.phWindowStart": "HH:MM",
   "rule.phWindowEnd": "HH:MM",
   "rule.errNumberRequired": "{label}: cần số",

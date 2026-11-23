@@ -1,6 +1,7 @@
 import type { Messages } from "./en";
 
 const messages: Partial<Messages> = {
+  "header.title": "hestia",
   "header.confirmed": "{confirmed}/{total} подтверждено",
   "header.unknown": "{unknown} неизвестно",
 
@@ -108,7 +109,9 @@ const messages: Partial<Messages> = {
   "rooms.editIcons": "Редактировать значки",
   "rooms.editIconsDone": "Готово",
   "rooms.iconNone": "—",
+  "rooms.deviceCount.zero": "{n} устройства",
   "rooms.deviceCount.one": "{n} устройство",
+  "rooms.deviceCount.two": "{n} устройства",
   "rooms.deviceCount.few": "{n} устройства",
   "rooms.deviceCount.many": "{n} устройств",
   "rooms.deviceCount.other": "{n} устройства",
@@ -184,6 +187,7 @@ const messages: Partial<Messages> = {
   "auto.error": "ошибка {status}",
   "auto.trig.scene": "сцена {id} @узел {node}",
   "auto.trig.state": "узел {node}{gang} {field} {op} {value}",
+  "auto.trig.stateGlobal": "{field} {op} {value}",
   "auto.trig.gang": " клавиша {ep}",
   "auto.trig.time": "в {time}{days}",
   "auto.trig.cron": "cron {expr}",
@@ -199,7 +203,7 @@ const messages: Partial<Messages> = {
   "rule.wizardTitle": "Мастер правила",
   "rule.id": "id",
   "rule.enabled": "включена",
-  "rule.debounce": "debounce s",
+  "rule.debounce": "минимальный интервал s",
   "rule.trigger": "триггер",
   "rule.conditions": "условия:",
   "rule.actions": "действия:",
@@ -221,9 +225,9 @@ const messages: Partial<Messages> = {
   "rule.gang": "клавиша",
   "rule.phRuleId": "id-правила",
   "rule.phButton": "кнопка",
-  "rule.phOffset": "offset min",
-  "rule.phWindowStart": "ЧЧ:ММ",
-  "rule.phWindowEnd": "ЧЧ:ММ",
+  "rule.phOffset": "смещение min",
+  "rule.phWindowStart": "HH:MM",
+  "rule.phWindowEnd": "HH:MM",
   "rule.errNumberRequired": "{label}: требуется число",
   "rule.errInvalidNumber": "{label}: неверное число",
   "rule.errNoValue": "предикат «{field}»: нет значения",
