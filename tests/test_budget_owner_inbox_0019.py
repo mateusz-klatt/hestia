@@ -242,7 +242,7 @@ class OwnerInboxMigration0019Tests(unittest.TestCase):
             conn.exec_driver_sql(insert, ("mortgage_due", HEX_A))
             conn.exec_driver_sql(insert, ("device_added", HEX_B))
 
-        db.downgrade_db(self.path, "0028")
+        db.downgrade_db(self.path, "0027")
         with engine.begin() as conn:
             self.assertEqual(conn.exec_driver_sql("SELECT kind FROM budget_owner_inbox_reads").scalars().all(),
                              ["mortgage_due"])

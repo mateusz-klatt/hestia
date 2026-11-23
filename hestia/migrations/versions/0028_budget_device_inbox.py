@@ -1,12 +1,12 @@
 """Allow private device alerts to be marked read in the owner inbox.
 
-Revision ID: 0029
-Revises: 0028
+Revision ID: 0028
+Revises: 0027
 """
 from alembic import op
 
-revision = "0029"
-down_revision = "0028"
+revision = "0028"
+down_revision = "0027"
 branch_labels = None
 depends_on = None
 

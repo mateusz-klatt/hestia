@@ -104,7 +104,7 @@ from pydantic.json_schema import models_json_schema
 # 0.41.0: persistent root-category hues and explicit even re-spreading (migration 0026, down_revision 0025).
 
 # 0.42.0: queue Gmail syncs and expose manual-forward review metadata (migration 0027, down_revision 0026).
-# 0.44.0: password-based receipt device login, pairing-code cancellation, and owner device alerts (migration 0029).
+# 0.44.0: password-based receipt device login, pairing-code cancellation, and owner device alerts (migration 0028, down_revision 0027).
 CONTRACT_VERSION = "0.44.0"
 OPENAPI_PATH = Path(__file__).resolve().parent.parent / "docs" / "api" / "openapi.json"
 
