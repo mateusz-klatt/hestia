@@ -914,7 +914,7 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Validate exact line and total identities, review an optional bank link, and retain redacted text for 30 days; JSON body cap 128 KiB.
+         * Validate exact line and total identities, review an optional bank link; JSON body cap 128 KiB.
          * @description Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Requires an authenticated SQLite admin owner, browser cookie and exact configured Origin before the body is read. 411 means Content-Length is required and 415 means Content-Type must be application/json.
          */
         post: operations["confirmBudgetReceipt"];

@@ -243,6 +243,11 @@ class BudgetOpenApiTests(unittest.TestCase):
         self.assertEqual(document["info"]["version"], "0.36.0")
         detail = receipts["/api/budget/receipts/detail"]["get"]
         self.assertNotIn("raw text", detail["summary"])
+        confirm = receipts["/api/budget/receipts/confirm"]["post"]
+        self.assertNotIn("30 days", confirm["summary"])
+        self.assertNotIn("redacted text", confirm["summary"])
+        self.assertIn("optional bank link", confirm["summary"])
+        self.assertIn("128 KiB", confirm["summary"])
         detail_result = document["components"]["schemas"]["BudgetReceiptDetailResult"]
         self.assertNotIn("candidates", detail_result["required"])
         self.assertNotIn("default", detail_result["properties"]["candidates"])

@@ -3473,8 +3473,7 @@ def _receipt_paths():
          "SQLite users backend is required (budget_requires_sqlite_users).",
          "JSON body exceeds 49152 bytes, or the owner already has 20 active drafts (budget_receipt_quota_exceeded)."),
         ("confirm", "confirmBudgetReceipt", "BudgetReceiptConfirmRequest", "BudgetReceiptConfirmResult",
-         "Validate exact line and total identities, review an optional bank link, and retain redacted text for 30 days; "
-         "JSON body cap 128 KiB.",
+         "Validate exact line and total identities, review an optional bank link; JSON body cap 128 KiB.",
          "Stale expected_version (budget_receipt_conflict), the bank transaction is already linked "
          "(budget_receipt_tx_already_linked), or the candidate token no longer matches the owner, transaction, "
          "dates and merchant evidence shown at preview (budget_receipt_stale_source). A missing SQLite users backend "

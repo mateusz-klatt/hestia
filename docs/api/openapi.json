@@ -17238,7 +17238,7 @@
             "description": "budget configuration unavailable"
           }
         },
-        "summary": "Validate exact line and total identities, review an optional bank link, and retain redacted text for 30 days; JSON body cap 128 KiB.",
+        "summary": "Validate exact line and total identities, review an optional bank link; JSON body cap 128 KiB.",
         "x-required-role": "admin"
       }
     },
