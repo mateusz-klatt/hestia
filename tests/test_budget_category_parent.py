@@ -168,6 +168,10 @@ class CategoryParentInitDbTests(unittest.TestCase):
         def spy(config, revision):
             connection = config.attributes["connection"]
             raw = connection.connection.dbapi_connection
+            with closing(sqlite3.connect(self.path, timeout=0)) as contender:
+                contender.isolation_level = None
+                with self.assertRaises(sqlite3.OperationalError):
+                    contender.execute("BEGIN IMMEDIATE")
             observed.append((
                 raw.in_transaction,
                 raw.isolation_level,
@@ -200,6 +204,10 @@ class CategoryParentInitDbTests(unittest.TestCase):
         def spy_downgrade(config, revision):
             connection = config.attributes["connection"]
             raw = connection.connection.dbapi_connection
+            with closing(sqlite3.connect(self.path, timeout=0)) as contender:
+                contender.isolation_level = None
+                with self.assertRaises(sqlite3.OperationalError):
+                    contender.execute("BEGIN IMMEDIATE")
             self.assertTrue(raw.in_transaction)
             self.assertIsNone(raw.isolation_level)
             self.assertEqual(connection.exec_driver_sql("PRAGMA foreign_keys").scalar(), 0)
