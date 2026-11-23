@@ -87,17 +87,17 @@ const identicalStrings: Partial<Record<MessageKey, IdenticalString>> = {
   "budget.mortgages.edit": { value: "Edit", locales: ["id"] },
 
   // PHASE-2: add other locales once budget.* is translated if legitimately identical in those languages.
-  "budget.main.scopeWithState": { value: "{scope}: {state}", locales: ["pl", "ja", "id", "vi"] },
-  "budget.year.noData": { value: "—", locales: ["pl", "ja", "id", "vi"] },
-  "budget.export.xlsx": { value: "XLSX", locales: ["pl", "ja", "id", "vi"] },
-  "budget.export.csv": { value: "CSV", locales: ["pl", "ja", "id", "vi"] },
+  "budget.main.scopeWithState": { value: "{scope}: {state}", locales: ["pl", "ja", "id", "vi", "sw"] },
+  "budget.year.noData": { value: "—", locales: ["pl", "ja", "id", "vi", "sw"] },
+  "budget.export.xlsx": { value: "XLSX", locales: ["pl", "ja", "id", "vi", "sw"] },
+  "budget.export.csv": { value: "CSV", locales: ["pl", "ja", "id", "vi", "sw"] },
   "budget.export.colStatus": { value: "Status", locales: ["pl", "id"] },
-  "budget.rules.conditionSummary": { value: "{field} {operator} „{value}”", locales: ["pl", "ja", "id", "vi"] },
-  "budget.mortgages.windowRange": { value: "{start} – {end}", locales: ["pl", "ja", "id", "vi"] },
+  "budget.rules.conditionSummary": { value: "{field} {operator} „{value}”", locales: ["pl", "ja", "id", "vi", "sw"] },
+  "budget.mortgages.windowRange": { value: "{start} – {end}", locales: ["pl", "ja", "id", "vi", "sw"] },
   "budget.monthBudget.limitColumn": { value: "Limit", locales: ["pl"] },
-  "budget.monthBudget.noLimit": { value: "—", locales: ["pl", "ja", "id", "vi"] },
+  "budget.monthBudget.noLimit": { value: "—", locales: ["pl", "ja", "id", "vi", "sw"] },
   "budget.monthBudget.statusColumn": { value: "Status", locales: ["pl", "id"] },
-  "budget.monthBudget.noValue": { value: "—", locales: ["pl", "ja", "id", "vi"] },
+  "budget.monthBudget.noValue": { value: "—", locales: ["pl", "ja", "id", "vi", "sw"] },
 };
 
 // PHASE-2: budget.* translations pending
