@@ -19,7 +19,7 @@ import { MonthBudgetView, monthBudgetLabels } from "./analytics/month_budget";
 import { MortgagesView } from "./analytics/mortgages";
 import { QuarantineView } from "./analytics/quarantine";
 import { RecurringView } from "./analytics/recurring";
-import { CategoriesView, rulesLabels } from "./analytics/rules";
+import { CategoriesView } from "./analytics/rules";
 import { SpendingLimitsView } from "./analytics/spending_limits";
 import { YearView, yearLabels } from "./analytics/year";
 import { hasAnalytics } from "./analytics/model";
@@ -125,13 +125,13 @@ type Labels = typeof labels.en;
 
 function pick(): { text: Labels;
   monthBudget: typeof monthBudgetLabels.en; month: typeof monthLabels.en; year: typeof yearLabels.en;
-  rules: typeof rulesLabels.en; locale: string } {
+  locale: string } {
   const locale = currentLocale();
   const pl = locale.startsWith("pl");
   return { text: pl ? labels.pl : labels.en,
     monthBudget: pl ? monthBudgetLabels.pl : monthBudgetLabels.en,
     month: pl ? monthLabels.pl : monthLabels.en, year: pl ? yearLabels.pl : yearLabels.en,
-    rules: pl ? rulesLabels.pl : rulesLabels.en, locale };
+    locale };
 }
 
 type View = "monthly_budget" | "accounts" | "inbox" | "month" | "year" | "limits" | "recurring" | "mortgages" | "forecast" | "quarantine" | "rules";
@@ -181,7 +181,7 @@ export function Budget({ active, api = budgetApi, pollMs = 2000, principal,
   navigate = (url) => { window.location.assign(url); }, completeUrl = "/budget/connect/complete" }: BudgetProps) {
   const { text, monthBudget: monthBudgetText, month: monthText,
     year: yearText,
-    rules: rulesText, locale } = pick();
+    locale } = pick();
   const [load, setLoad] = useState<Load>("loading");
   const [connections, setConnections] = useState<BudgetConnection[]>([]);
   const [capabilities, setCapabilities] = useState<BudgetCapabilities | null>(null);
@@ -529,7 +529,7 @@ export function Budget({ active, api = budgetApi, pollMs = 2000, principal,
         <QuarantineView api={api} accounts={accounts} connections={connections} revision={revision}
           onAccessLoss={barrier} />
       ) : shownView === "rules" ? (
-        <CategoriesView api={api} accounts={accounts} connections={connections} text={rulesText} locale={locale} revision={revision}
+        <CategoriesView api={api} accounts={accounts} connections={connections} locale={locale} revision={revision}
           onAccessLoss={barrier} initialRule={focusRule ?? null} />
       ) : (
         <>

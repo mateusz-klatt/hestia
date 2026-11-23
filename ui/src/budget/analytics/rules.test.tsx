@@ -7,8 +7,9 @@ import type { BudgetApi, BudgetResult } from "../api";
 import { buildCategoryColors, contrastRatio, parseHexColor } from "./category_colors";
 import { categoryList } from "./fixtures";
 import type { AnalyticsRule, RuleCandidate, RulePreview, RuleSaved } from "./model";
+import { loadLocale, t } from "../../i18n";
 import { account } from "../fixtures";
-import { CategoriesView, rulesLabels } from "./rules";
+import { CategoriesView } from "./rules";
 
 function ok<T>(data: T): Promise<BudgetResult<T>> { return Promise.resolve({ ok: true, data }); }
 function fail<T>(status: number, error: string): Promise<BudgetResult<T>> { return Promise.resolve({ ok: false, status, error }); }
@@ -44,16 +45,19 @@ beforeEach(() => {
 afterEach(async () => {
   await act(async () => { root.unmount(); await Promise.resolve(); });
   host.remove();
+  await loadLocale("en");
 });
 
 async function settle(): Promise<void> {
   await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
 }
-async function show(api: ReturnType<typeof fakeApi>, options: { revision?: number; lost?: boolean; text?: typeof rulesLabels.en;
+async function show(api: ReturnType<typeof fakeApi>, options: { revision?: number; lost?: boolean;
   locale?: string; initialRule?: RuleCandidate | null } = {}) {
   const onAccessLoss = vi.fn((result: { ok: boolean }) => options.lost === true && !result.ok);
+  const locale = options.locale ?? "en";
+  await loadLocale(locale.startsWith("pl") ? "pl" : "en");
   await act(async () => {
-    root.render(<CategoriesView api={api} accounts={accounts} text={options.text ?? rulesLabels.en} locale={options.locale ?? "en"}
+    root.render(<CategoriesView api={api} accounts={accounts} locale={locale}
       revision={options.revision ?? 0} onAccessLoss={onAccessLoss} initialRule={options.initialRule} />);
     await Promise.resolve();
   });
@@ -199,7 +203,7 @@ describe("categories", () => {
     expect(parentSwatch?.style.backgroundColor).not.toBe(childSwatch?.style.backgroundColor);
     expect(expectedColors.get("cat-fuel").oklch.l).toBeGreaterThan(expectedColors.get("cat-transport").oklch.l);
     expect(button("Archive", parent).disabled).toBe(true);
-    expect(button("Archive", parent).title).toBe(rulesLabels.en.archiveBlocked);
+    expect(button("Archive", parent).title).toBe(t("budget.rules.archiveBlocked"));
     expect(button("Archive", child).disabled).toBe(false);
     const add = [...panel.querySelectorAll("form")].at(-1);
     if (add === undefined) throw new Error("form missing");
@@ -222,12 +226,12 @@ describe("categories", () => {
   });
 
   it("labels the parent field in Polish", async () => {
-    await show(fakeApi(), { text: rulesLabels.pl, locale: "pl" });
+    await show(fakeApi(), { locale: "pl" });
     const panel = section("Kategorie");
     expect(panel.textContent).toContain("Kategoria nadrzędna");
     expect(panel.textContent).toContain("Najwyższy poziom");
     expect(panel.textContent).toContain("Rozłóż kolory równomiernie");
-    expect(rulesLabels.pl.archiveBlocked).toBe("Najpierw przenieś jej podkategorie. Zarchiwizowane też trzeba przenieść.");
+    expect(t("budget.rules.archiveBlocked")).toBe("Najpierw przenieś jej podkategorie. Zarchiwizowane też trzeba przenieść.");
   });
 });
 
@@ -241,13 +245,14 @@ describe("rules", () => {
       { ...rule, id: "rotated", field: "counterparty_account", operator: "equals", value: "PL** … 5678", enabled: true,
         inactive_reason: "rule_key_rotated" },
     ] }));
-    await show(api, { text: rulesLabels.pl, locale: "pl" });
+    await show(api, { locale: "pl" });
     const panel = section("Reguły");
     expect(panel.textContent).toContain("Nieaktywna: brak klucza");
     expect(panel.textContent).toContain("Nieaktywna: zmieniony klucz – utwórz regułę ponownie");
     expect(panel.textContent.match(/Nieaktywna/g)).toHaveLength(2);
-    expect(rulesLabels.en.inactiveKeyMissing).toBe("Inactive: missing key");
-    expect(rulesLabels.en.inactiveKeyRotated).toBe("Inactive: key changed – create the rule again");
+    await loadLocale("en");
+    expect(t("budget.rules.inactiveKeyMissing")).toBe("Inactive: missing key");
+    expect(t("budget.rules.inactiveKeyRotated")).toBe("Inactive: key changed – create the rule again");
   });
 
   it("describes each rule and says manual choices win", async () => {
