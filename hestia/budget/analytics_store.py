@@ -61,6 +61,14 @@ def _dict(row, fields):
     return {key: getattr(row, key) for key in fields}
 
 
+def _same_account_digest(row, key):
+    """True when an edit resubmits the digest already stored on this account rule."""
+    if row is None or row.field != "counterparty_account" or not isinstance(key, str):
+        return False
+    stored_key = counterparty_rule_parts(row.value)[1]
+    return hmac.compare_digest(key, stored_key)
+
+
 def _account_rule_inactive_reason(stored_key_id, key_context):
     """``key_context`` is ``None`` when the rule key is missing or unsafe, else ``(secret, key id)``."""
     if key_context is None:
@@ -564,25 +572,34 @@ class BudgetAnalyticsStore(BudgetHTTPStore):
         if value["field"] == "counterparty_account":
             key = value.pop("counterparty_account_key", None)
             raw = value["value"]
-            if not isinstance(raw, str) or len(raw) > 256 or (raw.startswith("cpacct:") and not allow_stored):
+            if not isinstance(raw, str) or len(raw) > 256:
                 raise AnalyticsError()
-            if key is not None:
+            row = None if value["rule_id"] is None else self._owned(session, Rule, owner, value["rule_id"])
+            if _same_account_digest(row, key):
+                # Same account: keep the stored kid, digest and mask. Priority, category and enabled
+                # can change without current evidence or a usable key; a different account cannot.
+                value["value"] = row.value
+            elif key is not None:
+                if raw.lstrip().startswith("cpacct:"):
+                    raise AnalyticsError()
                 masked = self._counterparty_mask(session, owner, key)
                 _secret, key_id = self._rule_key_context()
                 value["value"] = counterparty_rule_value(key_id, key, masked)
+            elif raw.lstrip().startswith("cpacct:"):
+                if not allow_stored:
+                    raise AnalyticsError()
+                raw = _text(raw, 256)
+                key_id, stored_key, masked = counterparty_rule_parts(raw)
+                value["value"] = counterparty_rule_value(key_id, stored_key, masked)
             else:
                 raw = _text(raw, 256)
-                if raw.startswith(COUNTERPARTY_RULE_PREFIX):
-                    key_id, stored_key, masked = counterparty_rule_parts(raw)
-                    value["value"] = counterparty_rule_value(key_id, stored_key, masked)
-                else:
-                    secret, _key_id = self._rule_key_context()
-                    value["value"] = counterparty_rule_from_identification(raw, secret, owner=owner)
+                secret, _key_id = self._rule_key_context()
+                value["value"] = counterparty_rule_from_identification(raw, secret, owner=owner)
         else:
             if value.pop("counterparty_account_key", None) is not None:
                 raise AnalyticsError()
             value["value"] = _text(value["value"], 256)
-        row = None if value["rule_id"] is None else self._owned(session, Rule, owner, value["rule_id"])
+            row = None if value["rule_id"] is None else self._owned(session, Rule, owner, value["rule_id"])
         _version(0 if row is None else row.version, value["expected_version"])
         if row is not None and not value["enabled"] and row.category_id == value["category_id"]:
             if value["category_id"] is not None:

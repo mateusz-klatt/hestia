@@ -201,18 +201,17 @@ def normalize_counterparty_account(value):
     return normalized
 
 
-def _iban_check_digits(bban):
-    converted = bban + "2521" + "00"
-    return 98 - int(converted) % 97
-
-
 def canonical_counterparty_account(value, scheme=None):
     normalized = normalize_counterparty_account(value)
     if re.fullmatch(r"[A-Z]{2}[0-9]{2}[A-Z0-9]{11,30}", normalized, re.ASCII):
         return "IBAN", normalized
     if (re.fullmatch(r"[0-9]{26}", normalized, re.ASCII)
             and (scheme is None or (isinstance(scheme, str) and scheme.upper() == "BBAN"))):
-        return "IBAN", f"PL{_iban_check_digits(normalized):02d}{normalized}"
+        # A Polish NRB already includes the IBAN check digits, so the IBAN is PL plus those 26 digits.
+        from .bank_metadata import _iban
+        verified = _iban("PL" + normalized)
+        if verified is not None:
+            return "IBAN", verified
     if scheme is None:
         return "OTHER", normalized
     if not isinstance(scheme, str) or re.fullmatch(r"[A-Za-z0-9]{1,32}", scheme, re.ASCII) is None:

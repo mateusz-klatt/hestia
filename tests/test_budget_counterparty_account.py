@@ -12,14 +12,16 @@ from hestia.budget.analytics_core import (AnalyticsError, canonical_counterparty
     counterparty_account_key, counterparty_key_id, counterparty_rule_from_identification, counterparty_rule_parts,
     counterparty_rule_value, first_matching_rule, mask_counterparty_account, match_texts,
     normalize_counterparty_account, rule_matches)
+from hestia.budget.bank_metadata import _aliases
 from tests.test_budget_analytics_core import identity, payload
 from tests.test_budget_analytics_views import ProjectionCase
 
 
 SYNTHETIC_IBAN = "PL" + "0" * 22 + "1234"
 OTHER_IBAN = "PL" + "0" * 22 + "5678"
-POLISH_BBAN = "0" * 26
-POLISH_IBAN = "PL04" + POLISH_BBAN
+# 26-digit NRB whose IBAN is PL plus those digits (ISO 13616), not a second pair of check digits.
+POLISH_BBAN = "04" + "0" * 24
+POLISH_IBAN = "PL" + POLISH_BBAN
 SECRET = b"synthetic-only-32-byte-rule-key-value"
 
 
@@ -50,8 +52,15 @@ class CounterpartyAccountCoreTests(unittest.TestCase):
         self.assertNotIn(SYNTHETIC_IBAN, stored)
 
     def test_polish_bban_aliases_and_canonical_schemes_deduplicate_without_collisions(self):
+        self.assertEqual(len(POLISH_IBAN), 28)
+        self.assertEqual(_aliases({"scheme": "BBAN", "identification": POLISH_BBAN}, "PL"),
+                         [{"scheme": "IBAN", "identification": POLISH_IBAN}])
         self.assertEqual(canonical_counterparty_account(POLISH_BBAN, "BBAN"), ("IBAN", POLISH_IBAN))
+        self.assertEqual(canonical_counterparty_account(POLISH_BBAN), ("IBAN", POLISH_IBAN))
         self.assertEqual(canonical_counterparty_account(POLISH_IBAN, "IBAN"), ("IBAN", POLISH_IBAN))
+        self.assertEqual(canonical_counterparty_account("0" * 26, "BBAN"), ("BBAN", "0" * 26))
+        self.assertEqual(canonical_counterparty_account("0" * 26), ("OTHER", "0" * 26))
+        self.assertEqual(_aliases({"scheme": "BBAN", "identification": "0" * 26}, "PL"), [])
         self.assertEqual(counterparty_account_key(POLISH_BBAN, SECRET, "BBAN", owner="owner"),
                          counterparty_account_key(POLISH_IBAN, SECRET, "IBAN", owner="owner"))
         self.assertNotEqual(counterparty_account_key("ABCDEF1234", SECRET, "BBAN", owner="owner"),
@@ -195,21 +204,28 @@ class CounterpartyAccountProjectionTests(ProjectionCase):
 
     def test_bban_and_iban_aliases_produce_one_row_key_and_match_end_to_end(self):
         self.add_transaction("a", "polish-debit")
+        aliases = _aliases({"scheme": "BBAN", "identification": POLISH_BBAN}, "PL")
+        self.assertEqual(aliases, [{"scheme": "IBAN", "identification": POLISH_IBAN}])
         formatted_bban = "-".join(POLISH_BBAN[index:index + 4] for index in range(0, len(POLISH_BBAN), 4))
         self.metadata("a", "polish-debit", {"creditor_accounts": [
             {"scheme": "BBAN", "identification": formatted_bban},
-            {"scheme": "IBAN", "identification": spaced(POLISH_IBAN)},
+            aliases[0],
         ]})
         body = self.store.transactions("owner", "2026")
         row = body["transactions"][0]
         self.assertEqual(row["counterparty_account"], "PL** … 0000")
         self.assertRegex(row["counterparty_account_key"], r"^[0-9a-f]{64}$")
+        with self.sessions() as session:
+            evidence = self.store._snapshot(session, "owner")["transactions"][0]["_counterparty_accounts"]
+        self.assertEqual([key for key, _masked in evidence], [row["counterparty_account_key"]])
         self.assertNotIn(POLISH_BBAN, json.dumps(body))
+        self.assertNotIn(POLISH_IBAN, json.dumps(body))
         candidate = self.candidate(field="counterparty_account", operator="equals", value=formatted_bban)
         preview = self.store.preview_rule("owner", candidate)
         self.assertEqual(preview["affected_count"], 1)
         saved = self.store.save_rule("owner", preview["preview_id"])
         row = self.store.transactions("owner", "2026")["transactions"][0]
+        self.assertEqual(row["counterparty_account_key"], saved["counterparty_account_key"])
         self.assertEqual((row["effective"]["source"], row["effective"]["rule_id"]), ("rule", saved["id"]))
 
     def test_key_creation_multi_account_privacy_and_secret_rotation(self):
@@ -432,6 +448,8 @@ class CounterpartyAccountProjectionTests(ProjectionCase):
     def test_validation_and_malformed_storage_fail_closed(self):
         invalid = (
             self.candidate(field="counterparty_account", operator="contains", value=SYNTHETIC_IBAN),
+            self.candidate(field="counterparty_account", operator="equals", value=None),
+            self.candidate(field="counterparty_account", operator="equals", value="A" * 257),
             self.candidate(field="counterparty_account", operator="equals", value="x"),
             self.candidate(field="counterparty_account", operator="equals",
                            value=counterparty_rule_from_identification(SYNTHETIC_IBAN, SECRET, owner="owner")),
@@ -458,6 +476,100 @@ class CounterpartyAccountProjectionTests(ProjectionCase):
         with self.assertRaises(AnalyticsError) as malformed:
             self.store.rules("owner")
         self.assertEqual(malformed.exception.status, 500)
+
+    def test_leading_whitespace_cannot_smuggle_a_stored_account_value(self):
+        missing = analytics_views.BudgetAnalyticsViews(
+            self.sessions, clock=lambda: self.now, cursor_secret=b"session-one",
+            rule_key_file=str(self.path.parent / "missing-rule.key"))
+        forged = counterparty_rule_value("ab" * 8, "cd" * 32, "PL** … 9999")
+        for prefix in (" ", "\t"):
+            with self.subTest(prefix=prefix):
+                with self.assertRaises(AnalyticsError) as raised:
+                    missing.preview_rule("owner", self.candidate(
+                        field="counterparty_account", operator="equals", value=prefix + forged))
+                self.assertEqual(raised.exception.status, 400)
+        self.assertEqual(self.rows(db.BudgetRule), [])
+        self.assertEqual(self.rows(db.BudgetRulePreview), [])
+
+    def save_account_edit(self, current, *, store=None, **changes):
+        store = self.store if store is None else store
+        candidate = self.candidate(
+            rule_id=current["id"], expected_version=current["version"], field="counterparty_account",
+            operator="equals", value=current["value"], counterparty_account_key=current["counterparty_account_key"],
+            category_id=current["category_id"], kind=current["kind"], priority=current["priority"],
+            enabled=current["enabled"])
+        candidate.update(changes)
+        return store.save_rule("owner", store.preview_rule("owner", candidate)["preview_id"])
+
+    def test_inert_account_rules_can_be_disabled_and_edited(self):
+        self.add_transaction("a", "debit")
+        self.metadata_for("a", "debit", "creditor_accounts", SYNTHETIC_IBAN)
+        category = self.store.create_category("owner", "Synthetic Kept")["id"]
+
+        def create(priority):
+            preview = self.store.preview_rule("owner", self.candidate(
+                field="counterparty_account", operator="equals", value=SYNTHETIC_IBAN, kind="expense",
+                priority=priority))
+            return self.store.save_rule("owner", preview["preview_id"])
+
+        rotated_rule = create(10)
+        unavailable_rule = create(11)
+        stored = {row.id: row.value for row in self.rows(db.BudgetRule)}
+        with self.sessions.begin() as session:
+            metadata = session.get(db.BudgetTransactionMetadata, (self.accounts["a"], "debit"))
+            metadata.payload_json = json.dumps({"creditor_accounts": []})
+        unmatched = self.save_account_edit(unavailable_rule, priority=4)
+        self.assertEqual(unmatched["priority"], 4)
+        self.assertEqual(unmatched["counterparty_account_key"], unavailable_rule["counterparty_account_key"])
+        self.assertNotIn("inactive_reason", self.store.rules("owner")[0])
+
+        self.rule_key_file.chmod(0o600)
+        self.rule_key_file.write_bytes(b"another-synthetic-persistent-key-32b")
+        self.rule_key_file.chmod(0o400)
+        reprioritised = self.save_account_edit(unmatched, priority=3, category_id=category)
+        self.assertEqual(reprioritised["category_id"], category)
+        self.assertEqual(reprioritised["priority"], 3)
+        disabled = self.save_account_edit(rotated_rule, enabled=False)
+        self.assertFalse(disabled["enabled"])
+        listed = {row["id"]: row for row in self.store.rules("owner")}
+        self.assertEqual(listed[disabled["id"]]["inactive_reason"], "rule_key_rotated")
+        self.assertFalse(listed[disabled["id"]]["enabled"])
+        self.assertEqual(listed[reprioritised["id"]]["inactive_reason"], "rule_key_rotated")
+        self.assertEqual({row.id: row.value for row in self.rows(db.BudgetRule)}, stored)
+
+        missing = analytics_views.BudgetAnalyticsViews(
+            self.sessions, clock=lambda: self.now, cursor_secret=b"session-one",
+            rule_key_file=str(self.path.parent / "missing-rule.key"))
+        unavailable = self.save_account_edit(reprioritised, store=missing, enabled=False)
+        self.assertFalse(unavailable["enabled"])
+        listed = {row["id"]: row for row in missing.rules("owner")}
+        self.assertEqual(listed[unavailable["id"]]["inactive_reason"], "rule_key_unavailable")
+        self.assertEqual(listed[disabled["id"]]["inactive_reason"], "rule_key_unavailable")
+        self.assertEqual({row.id: row.value for row in self.rows(db.BudgetRule)}, stored)
+        with self.assertRaises(AnalyticsError) as changed_account:
+            missing.preview_rule("owner", self.candidate(
+                rule_id=unavailable["id"], expected_version=unavailable["version"], field="counterparty_account",
+                operator="equals", value=OTHER_IBAN, category_id=category, kind="expense", priority=3, enabled=False))
+        self.assertEqual((changed_account.exception.code, changed_account.exception.status),
+                         ("budget_analytics_rule_key_unavailable", 400))
+        with self.assertRaises(AnalyticsError) as changed_key:
+            missing.preview_rule("owner", self.candidate(
+                rule_id=unavailable["id"], expected_version=unavailable["version"], field="counterparty_account",
+                operator="equals", value=unavailable["value"], counterparty_account_key="ab" * 32,
+                category_id=category, kind="expense", priority=3, enabled=False))
+        self.assertEqual(changed_key.exception.status, 400)
+        self.assertEqual({row.id: row.value for row in self.rows(db.BudgetRule)}, stored)
+        self.assertEqual({row.id: row.enabled for row in self.rows(db.BudgetRule)},
+                         {disabled["id"]: False, unavailable["id"]: False})
+
+    def test_description_rule_can_become_an_account_rule(self):
+        self.add_transaction("a", "debit")
+        self.metadata_for("a", "debit", "creditor_accounts", SYNTHETIC_IBAN)
+        description = self.store.save_rule("owner", self.store.preview_rule("owner", self.candidate())["preview_id"])
+        account_key = self.store.transactions("owner", "2026")["transactions"][0]["counterparty_account_key"]
+        saved = self.save_account_edit(description | {"value": "PL** … 1234", "counterparty_account_key": account_key,
+                                                      "operator": "equals"}, field="counterparty_account")
+        self.assertEqual((saved["field"], saved["counterparty_account_key"]), ("counterparty_account", account_key))
 
     def test_batch_of_one_hundred_previews_saves_and_replays(self):
         candidates = [self.candidate(field="counterparty_account", operator="equals", value=spaced(SYNTHETIC_IBAN),
