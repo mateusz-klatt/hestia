@@ -16,7 +16,7 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 from hestia.budget import gmail_worker as worker
-from hestia.budget.gmail_invoice import ImportedInvoice, _safe_field, extract_invoice
+from hestia.budget.gmail_invoice import ImportedInvoice, _safe_field, extract_invoice, has_provider_invoice_number
 
 
 _FIXTURES = Path(__file__).parent / "fixtures" / "gmail"
@@ -55,6 +55,9 @@ class TestGmailInvoice(unittest.TestCase):
                             kind = "html" if name.endswith(".html") else "text"
                             parsed = client.parse(kind, (_FIXTURES / name).read_bytes())
                             self.assertEqual(extract_invoice(parsed), expected)
+                            self.assertTrue(has_provider_invoice_number(parsed))
+                            self.assertFalse(has_provider_invoice_number(parsed.replace(expected.invoice_number,
+                                                                                        "unexpected-format")))
                     with self.assertRaises(worker.PDFUnsupported):
                         client.parse("pdf", b"%PDF-synthetic")
                     with self.assertRaises(worker.WorkerRejected):
