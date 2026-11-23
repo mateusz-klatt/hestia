@@ -761,6 +761,34 @@ NR KARTY ****5555
         self.assertEqual(parsed["total_amount"], "246.9134")
         self.assertEqual(parsed["math_delta"], "0")
 
+    def test_bare_karta_line_keeps_following_date_and_total(self):
+        text = (
+            "BIEDRONKA\nNIP 7791011327\nPARAGON FISKALNY\n"
+            "KARTA\n2026-11-22 14:35\n"
+            "MLEKO 1 x 12,99 12,99 A\n"
+            "KARTA\nSUMA PLN 12,99\n"
+        )
+        redacted = redact_pan(text)
+        self.assertIn("KARTA\n2026-11-22 14:35", redacted)
+        self.assertIn("KARTA\nSUMA PLN 12,99", redacted)
+        self.assertNotIn("[usunięto]", redacted)
+        parsed = parse_receipt(text)
+        self.assertEqual(parsed["receipt_date"], "2026-11-22")
+        self.assertEqual(parsed["receipt_time"], "14:35")
+        self.assertEqual(parsed["total_amount"], "12.99")
+        self.assertEqual(parsed["payment_method"], "card")
+        self.assertEqual(parsed["lines"][0]["gross_line_total"], "12.99")
+        self.assertEqual(parsed["math_delta"], "0")
+        draft = self.receipts.parse_text("owner", text)
+        self.assertEqual(draft["draft"]["receipt_date"], "2026-11-22")
+        self.assertEqual(draft["draft"]["total_amount"], "12.99")
+        saved = self.receipts.confirm("owner", confirm_values(draft))["receipt"]
+        self.assertEqual(saved["receipt_date"], "2026-11-22")
+        self.assertEqual(saved["total_amount"], "12.99")
+        row = self.receipt_row(draft["receipt_id"])
+        self.assertEqual(row.receipt_date, "2026-11-22")
+        self.assertEqual(row.total_amount, "12.99")
+
     def test_pan_scan_is_bounded_before_a_long_mask_run(self):
         import time
         started = time.perf_counter()
