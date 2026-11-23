@@ -11,6 +11,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 import hashlib
 import hmac
+import json
 import logging
 import math
 import os
@@ -25,7 +26,7 @@ from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from sqlalchemy import case, func, select, update
 from sqlalchemy.exc import IntegrityError
 
-from ..db import Audit
+from ..db import BudgetAnalyticsAudit
 from ..db import BudgetReceiptDeviceToken as DeviceToken
 from ..db import BudgetReceiptPairCode as PairCode
 from ..db import BudgetReceiptPairLock as PairLock
@@ -247,6 +248,14 @@ def json_error(decision):
 
 def disabled_response():
     return json_error({"status": 404, "code": "budget_receipts_disabled"})
+
+
+def write_device_audit(session, owner, token_id, action, moment):
+    """Record device activity in the owner's budget audit."""
+    session.add(BudgetAnalyticsAudit(
+        owner=owner, subject_type="receipt_device_token", subject_id=token_id, action=action,
+        before_json="null", after_json=json.dumps({"actor": "device:" + token_id}), changed_at=moment,
+    ))
 
 
 def revoke_owner_tokens(session, owner, moment=None):
@@ -507,7 +516,6 @@ class DeviceTokenStore:
                 if actor_token_id is not None:
                     if moment >= min(row.expires_at, row.hard_expires_at):
                         raise DeviceTokenError(401, "device_token_expired")
-                    session.add(Audit(ts=moment, actor="device:" + token_id,
-                                      action="receipt_device_revoke", target=token_id, result="ok"))
+                    write_device_audit(session, owner, token_id, "receipt_device_revoke", moment)
                 row.revoked_at = moment
             return {"ok": True}

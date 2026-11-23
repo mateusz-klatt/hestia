@@ -188,6 +188,20 @@ _ROUTE_MIN_ROLE = {
     ("GET", "/api/budget/analytics/forecast"): _ADMIN,
     ("GET", "/api/budget/analytics/monthly-budget"): _ADMIN,
     ("GET", "/api/budget/analytics/monthly-budget/charts"): _ADMIN,
+    ("GET", "/api/budget/household/access"): _VIEWER,
+    ("GET", "/api/budget/household/report-accounts"): _VIEWER,
+    ("GET", "/api/budget/household/monthly-budget"): _VIEWER,
+    ("GET", "/api/budget/household/overview"): _VIEWER,
+    ("GET", "/api/budget/household/transactions"): _VIEWER,
+    ("GET", "/api/budget/household/categories"): _VIEWER,
+    ("GET", "/api/budget/household/rules"): _VIEWER,
+    ("GET", "/api/budget/household/transfers"): _VIEWER,
+    ("GET", "/api/budget/household/spending-limits"): _VIEWER,
+    ("GET", "/api/budget/household/recurring"): _VIEWER,
+    ("GET", "/api/budget/household/mortgages"): _VIEWER,
+    ("GET", "/api/budget/household/inbox"): _VIEWER,
+    ("GET", "/api/budget/household/quarantine"): _VIEWER,
+    ("GET", "/api/budget/household/monthly-budget-settings"): _VIEWER,
     ("POST", "/api/budget/analytics/category-create"): _ADMIN,
     ("POST", "/api/budget/analytics/category-update"): _ADMIN,
     ("POST", "/api/budget/analytics/annotation"): _ADMIN,
@@ -261,14 +275,11 @@ _MUTATING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 
 
 def _required_role(method: str, path: str) -> str:
-    """The minimum role for a non-public route. Fail-closed: an UNclassified mutating method → admin (a
-    new write route stays locked down until explicitly classified); any other unclassified method
-    (GET/HEAD) → viewer. ``test_every_route_is_classified`` keeps the map complete, so the fallbacks are
-    a backstop, not the normal path."""
-    floor = _ROUTE_MIN_ROLE.get((method, path))
-    if floor is not None:
-        return floor
-    return _ADMIN if method in _MUTATING_METHODS else _VIEWER
+    """The minimum role for a non-public route. Fail-closed: an unclassified route is admin, including
+    GET and HEAD, so a new read cannot become viewer-readable until it is explicitly classified.
+    ``test_every_registered_route_is_public_or_classified`` keeps the map complete; this fallback is
+    the backstop."""
+    return _ROUTE_MIN_ROLE.get((method, path), _ADMIN)
 
 
 def _role_allows(role, floor: str) -> bool:
@@ -321,16 +332,24 @@ async def _auth_middleware(request, handler):
                 and authorization.startswith(_BEARER_PREFIX)
                 and auth.verify_session(authorization[len(_BEARER_PREFIX):], now=_now(), secret=_SESSION_SECRET)):
             return device_token.json_error({"status": 403, "code": "budget_browser_session_required"})
-    if not _AUTH_ENABLED or _is_public_route(request.method, request.path):
+    public = _is_public_route(request.method, request.path)
+    # A redeem request carrying a browser session must also clear the owner
+    # role floor. The handler returns the generic rejection for any cookie.
+    redeem_cookie = public and request.path == device_token.REDEEM_PATH and _SESSION_COOKIE in request.cookies
+    if not _AUTH_ENABLED or (public and not redeem_cookie):
         return await handler(request)
     user = auth.verify_session(_request_token(request), now=_now(), secret=_SESSION_SECRET)
     if user is None:
+        if redeem_cookie:
+            return await handler(request)
         return _empty(HTTPStatus.UNAUTHORIZED)
     # Resolve the role fresh on EVERY authenticated request (offloaded off the loop): a demotion or a
     # removed account takes effect immediately, instead of living on in the 30-day signed cookie.
     role = await asyncio.get_running_loop().run_in_executor(
         None, lambda: store_sql.current_user_role(user))
     if role is None:                              # the account is gone → the still-signed cookie is moot
+        if redeem_cookie:
+            return await handler(request)
         return _empty(HTTPStatus.UNAUTHORIZED)
     request[_USER_KEY] = user                     # for /api/whoami + the audit actor
     request[_ROLE_KEY] = role                     # for /api/whoami + the floor check below

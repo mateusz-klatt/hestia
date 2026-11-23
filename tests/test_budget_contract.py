@@ -184,9 +184,10 @@ class BudgetOpenApiTests(unittest.TestCase):
         posts = ("account-selection", "account-kind", "connection-state", "background-selection", "refresh")
         consent = {path: methods for path, methods in budget.items() if "/consent/" in path or "/enable-banking/" in path}
         analytics = {path: methods for path, methods in budget.items() if "/analytics/" in path}
+        household = {path: methods for path, methods in budget.items() if "/household/" in path}
         receipts = {path: methods for path, methods in budget.items() if "/receipts/" in path}
         stored = {path: methods for path, methods in budget.items()
-                  if path not in consent and path not in analytics and path not in receipts}
+                  if path not in consent and path not in analytics and path not in household and path not in receipts}
         self.assertEqual({path.rsplit("/", 1)[1] for path in stored},
                          {"connections", "accounts", "status", "transactions", "balances", "limits", "jobs", *posts})
         for path, methods in stored.items():
@@ -213,6 +214,20 @@ class BudgetOpenApiTests(unittest.TestCase):
             self.assertEqual(set(methods), {method})
             self.assertEqual(methods[method]["x-required-role"], "admin")
             self.assertIn("413", methods[method]["responses"])
+        household_reads = {"access", "report-accounts", "monthly-budget", "overview", "transactions", "categories",
+                           "rules", "transfers", "spending-limits", "recurring", "mortgages", "inbox", "quarantine",
+                           "monthly-budget-settings"}
+        self.assertEqual(set(household), {"/api/budget/household/" + name for name in household_reads})
+        for path, methods in household.items():
+            self.assertEqual(set(methods), {"get"})
+            self.assertEqual(methods["get"]["x-required-role"], "viewer")
+            self.assertIn("413", methods["get"]["responses"])
+            names = [param["name"] for param in methods["get"].get("parameters", [])]
+            if path.endswith("/access"):
+                self.assertNotIn("X-Budget-Grant", names)
+            else:
+                self.assertEqual(names[0], "X-Budget-Grant")
+                self.assertTrue(methods["get"]["parameters"][0]["required"])
         self.assertEqual(set(receipts), {"/api/budget/receipts/" + name for name in
                          ("parse-text", "confirm", "list", "search", "detail", "image", "delete",
                           "device-token/pair-code", "device-token/redeem", "device-token/list",
@@ -261,9 +276,12 @@ class BudgetOpenApiTests(unittest.TestCase):
         receipt_schemas = document["components"]["schemas"]
         self.assertEqual(receipt_schemas["BudgetReceiptDeviceRedeemResult"]["properties"]["expires_at"]["format"],
                          "date-time")
-        source_kind = receipt_schemas["BudgetReceiptParseTextRequest"]["properties"]["source_kind"]
+        parse_schema = receipt_schemas["BudgetReceiptParseTextRequest"]
+        source_kind = parse_schema["properties"]["source_kind"]
         self.assertEqual(source_kind["enum"], ["paste", "local_ocr"])
-        self.assertEqual(source_kind["default"], "paste")
+        self.assertNotIn("source_kind", parse_schema["required"])
+        self.assertNotIn("default", source_kind)  # The TS generator keeps it optional.
+        self.assertEqual(contract.BudgetReceiptParseTextRequest(text="test").source_kind, "paste")
         detail = receipts["/api/budget/receipts/detail"]["get"]
         self.assertNotIn("raw text", detail["summary"])
         confirm = receipts["/api/budget/receipts/confirm"]["post"]

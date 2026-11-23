@@ -19,12 +19,12 @@ from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from sqlalchemy import delete, exists, func, literal_column, or_, select
 from sqlalchemy.exc import IntegrityError
 
-from ..db import (Audit as HouseAudit, BudgetAccount as Account, BudgetConnection as Connection,
-                  BudgetReceipt as Receipt, BudgetReceiptDeviceToken as DeviceToken, BudgetReceiptLine as Line,
-                  BudgetShop as Shop, BudgetTransaction as Transaction, BudgetTransferLeg as Leg)
+from ..db import (BudgetAccount as Account, BudgetConnection as Connection, BudgetReceipt as Receipt,
+                  BudgetReceiptDeviceToken as DeviceToken, BudgetReceiptLine as Line, BudgetShop as Shop,
+                  BudgetTransaction as Transaction, BudgetTransferLeg as Leg)
 from .analytics_core import (AnalyticsError, canonical_money, compare_money, financial_fingerprint, negate_money,
                              sum_money)
-from .device_token import DeviceTokenError
+from .device_token import DeviceTokenError, write_device_audit
 from .receipt_parser import (CONFIRMED_TEXT_TTL_SECONDS, DRAFT_TTL_SECONDS, MAX_RECEIPT_LINES, ReceiptError,
                              merchant_tokens, normalize_shop_name, parse_receipt, redact_digit_field,
                              validate_confirm)
@@ -681,10 +681,8 @@ class BudgetReceiptStore(BudgetHTTPStore):
             session.execute(delete(Line).where(Line.receipt_id == row.id, Line.owner == owner))
             erase_receipt_audit(session, owner, row.id)
             session.delete(row)
-            if self._actor is not None:
-                session.add(HouseAudit(
-                    ts=now, actor=self._actor, action="receipt_delete", target=row.id, result="ok",
-                ))
+            if self._device_id is not None:
+                write_device_audit(session, owner, self._device_id, "receipt_delete", now)
             session.flush()
             return {"ok": True, "deleted": True}
 

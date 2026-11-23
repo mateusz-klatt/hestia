@@ -1,15 +1,15 @@
 """Receipt device tokens and one-time pairing codes. HMAC columns only.
 
-Revision ID: 0023
-Revises: 0022
+Revision ID: 0024
+Revises: 0023
 
-Downgrade drops these tables only. Receipt rows from 0022 stay.
+Downgrade drops these tables and device-token audit entries. Receipt and household rows stay.
 """
 from alembic import op
 import sqlalchemy as sa
 
-revision = "0023"
-down_revision = "0022"
+revision = "0024"
+down_revision = "0023"
 branch_labels = None
 depends_on = None
 
@@ -67,6 +67,7 @@ def upgrade():
 
 
 def downgrade():
+    op.execute("DELETE FROM budget_analytics_audit WHERE subject_type = 'receipt_device_token'")
     op.drop_index(_IX_CODES, table_name=_CODES)
     op.drop_index(_IX_TOKENS, table_name=_TOKENS)
     op.drop_table(_LOCKS)

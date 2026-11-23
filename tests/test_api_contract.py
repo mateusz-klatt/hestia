@@ -56,10 +56,13 @@ class OpenApiArtifactTests(unittest.TestCase):
         )
 
     def test_monthly_budget_contract_chain_from_0_27_0(self):
-        """0.39.0 adds receipts device tokens on top of 0.36.0 receipts, which sit on 0.35.0.
-        Earlier steps stay as published."""
+        """0.39.0 adds device tokens after 0.37.0 household reads and 0.36.0 receipts."""
         document = api_contract.build_openapi()
         self.assertEqual(document["info"]["version"], "0.39.0")
+        for path in [key for key in document["paths"] if key.startswith("/api/budget/household/")]:
+            del document["paths"][path]
+        for name in [key for key in document["components"]["schemas"] if key.startswith("BudgetHousehold")]:
+            del document["components"]["schemas"][name]
         for path in [path for path in document["paths"] if path.startswith("/api/budget/receipts/")]:
             del document["paths"][path]
         for name in [name for name in document["components"]["schemas"] if name.startswith("BudgetReceipt")]:

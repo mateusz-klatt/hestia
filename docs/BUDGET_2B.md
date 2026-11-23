@@ -93,7 +93,7 @@ An administrator cannot read or modify another administrator's budget.
 | Feature explicitly disabled | Stored budget API: `404`. Unavailable private consent service: `503`; callback failures still use the clean `303` redirect. No activation through a request. |
 
 Classify every non-public route as admin in both `web._ROUTE_MIN_ROLE` and
-`api_contract._PATH_ROLES`; unclassified GET routes currently default to viewer.
+`api_contract._PATH_ROLES`; an unclassified route defaults to admin.
 Preserve existing empty middleware `401/403` responses. Handler errors use fixed
 `{ok:false,error:code}` values, never arbitrary exception/provider text.
 

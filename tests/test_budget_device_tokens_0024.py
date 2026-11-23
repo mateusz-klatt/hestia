@@ -1,4 +1,4 @@
-"""Migration 0023 device-token schema. HMAC columns only, owner foreign keys, reversible."""
+"""Migration 0024 device-token schema. HMAC columns only, owner foreign keys, reversible."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -16,12 +16,12 @@ _TABLES = {"budget_receipt_device_tokens", "budget_receipt_pair_codes", "budget_
 _HEX = "ab" * 32
 
 
-class DeviceTokenMigration0023Tests(unittest.TestCase):
+class DeviceTokenMigration0024Tests(unittest.TestCase):
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
         self.addCleanup(db.reset_engine_cache)
-        self.path = Path(self.directory.name) / "device-tokens-0023.db"
+        self.path = Path(self.directory.name) / "device-tokens-0024.db"
 
     def _revision(self, engine):
         with engine.connect() as conn:
@@ -49,7 +49,7 @@ class DeviceTokenMigration0023Tests(unittest.TestCase):
     def test_upgrade_downgrade_and_metadata_match(self):
         engine, _ = db.init_db(self.path)
         self._assert_clean(engine)
-        self.assertEqual(self._revision(engine), "0023")
+        self.assertEqual(self._revision(engine), "0024")
         self.assertTrue(_TABLES <= set(inspect(engine).get_table_names()))
         self.assertFalse({"token", "code", "token_hash", "code_hash"} & self._columns(engine, "budget_receipt_device_tokens"))
         self.assertIn("token_hmac", self._columns(engine, "budget_receipt_device_tokens"))
@@ -64,6 +64,10 @@ class DeviceTokenMigration0023Tests(unittest.TestCase):
         self.assertTrue(all(row[2] == "users" for row in (*fks, *code_fks, *lock_fks)))
         with engine.begin() as conn:
             conn.exec_driver_sql("INSERT INTO users (username, password_hash, role) VALUES ('owner', 'h', 'admin')")
+            conn.exec_driver_sql("INSERT INTO users (username, password_hash, role) VALUES ('member', 'h', 'viewer')")
+            conn.exec_driver_sql(
+                "INSERT INTO budget_household_members (member_username, owner, grant_id) VALUES ('member', 'owner', ?)",
+                (_HEX,))
             conn.exec_driver_sql(
                 "INSERT INTO budget_receipts (id, owner, status, source_kind, version, created_at, updated_at) "
                 "VALUES ('11111111-1111-4111-8111-111111111111', 'owner', 'draft', 'live_text', 1, 1.0, 1.0)")
@@ -102,18 +106,35 @@ class DeviceTokenMigration0023Tests(unittest.TestCase):
                 "INSERT INTO budget_receipt_device_tokens (id, owner, device_name, token_hmac, created_at, "
                 "expires_at, hard_expires_at, sliding_written_at) VALUES ('t', 'owner', 'Vesta', ?, 1, 2, 3, 1)",
                 (_HEX,))
-        db.downgrade_db(self.path, "0022")
+            conn.exec_driver_sql(
+                "INSERT INTO budget_analytics_audit "
+                "(owner, subject_type, subject_id, action, before_json, after_json, changed_at) "
+                "VALUES ('owner', ?, ?, ?, 'null', '{}', 1)",
+                [
+                    ("category", "category-01", "create"),
+                    ("receipt", "11111111-1111-4111-8111-111111111111", "create"),
+                    ("receipt_device_token", "t", "delete"),
+                ],
+            )
+        db.downgrade_db(self.path, "0023")
         engine = self._open()
         self._assert_clean(engine)
-        self.assertEqual(self._revision(engine), "0022")
+        self.assertEqual(self._revision(engine), "0023")
         self.assertFalse(_TABLES & set(inspect(engine).get_table_names()))
         with engine.connect() as conn:
             self.assertEqual(conn.exec_driver_sql("SELECT id FROM budget_receipts").scalar(),
                              "11111111-1111-4111-8111-111111111111")
+            self.assertEqual(conn.exec_driver_sql(
+                "SELECT member_username, owner FROM budget_household_members").all(), [("member", "owner")])
+            self.assertEqual(conn.exec_driver_sql(
+                "SELECT subject_type, subject_id FROM budget_analytics_audit ORDER BY subject_type"
+            ).all(), [("category", "category-01"), ("receipt", "11111111-1111-4111-8111-111111111111")])
         engine, _ = db.init_db(self.path)
         self._assert_clean(engine)
-        self.assertEqual(self._revision(engine), "0023")
+        self.assertEqual(self._revision(engine), "0024")
         with engine.connect() as conn:
             self.assertEqual(compare_metadata(MigrationContext.configure(conn), db.Base.metadata), [])
             self.assertEqual(conn.exec_driver_sql("SELECT id FROM budget_receipts").scalar(),
                              "11111111-1111-4111-8111-111111111111")
+            self.assertEqual(conn.exec_driver_sql(
+                "SELECT member_username, owner FROM budget_household_members").all(), [("member", "owner")])

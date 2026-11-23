@@ -932,6 +932,7 @@ def _evaluate_monthly_budget_core(
     settings: MonthBudgetSettings | None,
     history: int | None,
     one_off_secret: bytes | None = None,
+    household_daily: bool = False,
 ) -> tuple[dict, dict | None]:
     requested_period, target_currency = validate_monthly_budget_query(period, currency)
     evaluation_date, current_month = warsaw_date(evaluated_at)
@@ -967,6 +968,9 @@ def _evaluate_monthly_budget_core(
 
     configured = settings is not None
     include_series = configured and history is not None
+    # Household reads ask for the selected month's daily totals without the chart window.
+    # Unconfigured months stay zero-filled so the series does not publish a withheld summary.
+    track_selected_daily = include_series or (household_daily and configured)
     window_periods = _chart_periods(effective_period, history) if include_series else [effective_period]
     buckets: dict[str, _BucketAccum] = {}
     for p in window_periods:
@@ -1052,7 +1056,7 @@ def _evaluate_monthly_budget_core(
                         cal_bucket.ordinary_expenses[cat_id].append(amount)
                         _note_one_off(cal_bucket, row["annotation"], cat_id, amount, refund=False,
                                       account_id=acct_id, entry_reference=row["entry_reference"])
-                        if include_series and cal_period == effective_period:
+                        if track_selected_daily and cal_period == effective_period:
                             ordinary_by_date[report_date].append(amount)
                 elif direction == "CRDT":
                     if kind == "refund":
@@ -1069,7 +1073,7 @@ def _evaluate_monthly_budget_core(
                             cal_bucket.ordinary_refunds[cat_id].append(amount)
                             _note_one_off(cal_bucket, row["annotation"], cat_id, amount, refund=True,
                                           account_id=acct_id, entry_reference=row["entry_reference"])
-                            if include_series and cal_period == effective_period:
+                            if track_selected_daily and cal_period == effective_period:
                                 ordinary_by_date[report_date].append(core.negate_money(amount))
                     elif kind == "income" and rent_cat_id is not None and cat_id == rent_cat_id:
                         if nonzero:
@@ -1133,7 +1137,7 @@ def _evaluate_monthly_budget_core(
     }
 
     if not configured:
-        return {
+        unconfigured = {
             **envelope,
             "configuration": {"status": "unconfigured", "source": "none"},
             "summary": None,
@@ -1141,7 +1145,10 @@ def _evaluate_monthly_budget_core(
             "pace": None,
             "category_spend": [],
             "pass_through": None,
-        }, None
+        }
+        if household_daily:
+            unconfigured["_series_daily"] = _build_daily_series(start, cutoff, {}, {}, {})
+        return unconfigured, None
 
     pass_through_wire, adj_exp_dates, adj_ref_dates, selected_rows, start_budget, spent = _bucket_category_totals(
         selected_bucket, pass_through_cfg, extra_categories=set(active_limits),
@@ -1204,6 +1211,11 @@ def _evaluate_monthly_budget_core(
         "category_spend": category_spend,
         "pass_through": pass_through_wire,
     }
+    if household_daily:
+        points = _build_daily_series(start, cutoff, ordinary_by_date, adj_exp_dates, adj_ref_dates)
+        if points[-1]["cumulative_spent"] != spent:
+            raise MonthDataError()
+        budget_wire["_series_daily"] = points
     if not include_series:
         return budget_wire, None
 
@@ -1262,13 +1274,19 @@ def evaluate_monthly_budget(
     account_kinds: Mapping[str, str],
     settings: MonthBudgetSettings | None,
     one_off_secret: bytes | None = None,
+    include_series: bool = False,
 ) -> dict:
-    """Pure single-snapshot evaluation for ``GET /api/budget/analytics/monthly-budget``."""
+    """Pure single-snapshot evaluation for ``GET /api/budget/analytics/monthly-budget``.
+
+    ``include_series`` attaches a private ``_series_daily`` list for the household
+    serializer. The owner response omits it. The flag does not change any public field.
+    """
     budget, _ = _evaluate_monthly_budget_core(
         period=period, currency=currency, evaluated_at=evaluated_at, transactions=transactions,
         transfers=transfers, scan_limited=scan_limited, categories=categories, rules=rules,
         identities=identities, limits=limits, account_component_timestamps=account_component_timestamps,
         account_kinds=account_kinds, settings=settings, history=None, one_off_secret=one_off_secret,
+        household_daily=include_series,
     )
     return budget
 

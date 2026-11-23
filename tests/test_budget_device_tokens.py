@@ -277,9 +277,13 @@ class DeviceTokenStoreTests(unittest.TestCase):
         for _ in range(2):
             self.assertEqual(self.store.revoke("alice", token_id, actor_token_id=token_id), {"ok": True})
         with self.sessions() as session:
-            rows = list(session.scalars(select(db.Audit)))
-        self.assertEqual([(row.actor, row.action, row.target) for row in rows],
-                         [("device:" + token_id, "receipt_device_revoke", token_id)])
+            rows = list(session.scalars(select(db.BudgetAnalyticsAudit)))
+            self.assertIsNone(session.scalar(select(db.Audit)))
+        self.assertEqual(len(rows), 1)
+        row = rows[0]
+        self.assertEqual((row.owner, row.subject_type, row.subject_id, row.action),
+                         ("alice", "receipt_device_token", token_id, "receipt_device_revoke"))
+        self.assertEqual(json.loads(row.after_json), {"actor": "device:" + token_id})
 
     def test_expired_token_cannot_revoke_itself(self):
         paired = self.store.issue_code("alice")
@@ -520,8 +524,16 @@ class DeviceTokenHTTPTests(fixture.unittest.IsolatedAsyncioTestCase):
                                    self._auth(device))
         _status(removed, 200)
         with self.sessions() as session:
-            house = [item for item in session.scalars(select(db.Audit)) if item.action == "receipt_delete"]
-        self.assertEqual(house[0].actor, "device:" + device["token_id"])
+            deleted = session.scalar(select(db.BudgetAnalyticsAudit).where(
+                db.BudgetAnalyticsAudit.subject_type == "receipt_device_token",
+                db.BudgetAnalyticsAudit.action == "receipt_delete",
+            ))
+            self.assertEqual((deleted.owner, deleted.subject_id), ("alice", device["token_id"]))
+            self.assertEqual(json.loads(deleted.after_json), {"actor": "device:" + device["token_id"]})
+            self.assertIsNone(session.scalar(select(db.BudgetAnalyticsAudit).where(
+                db.BudgetAnalyticsAudit.subject_id == receipt["receipt_id"],
+            )))
+            self.assertIsNone(session.scalar(select(db.Audit).where(db.Audit.action == "receipt_delete")))
         found = await self._post(receipt_api.PREFIX + "/list", {}, self._auth(device))
         _status(found, 200)
         searched = await self._post(receipt_api.PREFIX + "/search", {"query": "mleko"}, self._auth(device))
