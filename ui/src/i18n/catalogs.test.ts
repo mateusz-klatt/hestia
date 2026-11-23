@@ -80,6 +80,42 @@ const identicalStrings: Partial<Record<MessageKey, IdenticalString>> = {
   "rule.phNode": { value: "node", locales: ["da", "fil", "no"] },
   "rule.errGeneric": { value: "error", locales: ["es", "fil"] },
 
+  "budget.rules.edit": { value: "Edit", locales: ["id", "ms"] },
+
+  "budget.limits.edit": { value: "Edit", locales: ["id", "ms"] },
+
+  "budget.mortgages.edit": { value: "Edit", locales: ["id", "ms"] },
+
+  "budget.main.account": { value: "Account", locales: ["fil"] },
+
+  "budget.main.kinds.savings": { value: "Savings", locales: ["fil"] },
+
+  "budget.main.kinds.credit_card": { value: "Credit card", locales: ["fil"] },
+
+  "budget.overview.account": { value: "Account", locales: ["fil"] },
+
+  "budget.transfers.account": { value: "Account", locales: ["fil"] },
+
+  "budget.transactions.kinds.refund": { value: "Refund", locales: ["fil"] },
+
+  "budget.transactions.account": { value: "Account", locales: ["fil"] },
+
+  "budget.export.accountFallback": { value: "Account", locales: ["fil"] },
+
+  "budget.export.colAccount": { value: "Account", locales: ["fil"] },
+
+  "budget.export.types.refund": { value: "refund", locales: ["fil"] },
+
+  "budget.rules.kinds.refund": { value: "Refund", locales: ["fil"] },
+
+  "budget.rules.account": { value: "Account", locales: ["fil"] },
+
+  "budget.recurring.account": { value: "Account", locales: ["fil"] },
+
+  "budget.quarantine.account": { value: "Account", locales: ["fil"] },
+
+  "budget.forecast.account": { value: "Account", locales: ["fil"] },
+
   // PHASE-2: add other locales once budget.* is translated if legitimately identical in those languages.
   "budget.main.scopeWithState": { value: "{scope}: {state}", locales: ["pl", "it", "da", "de", "fr", "es", "pt", "nl", "sv", "no", "fi", "is"] },
   "budget.year.noData": { value: "—", locales: ["pl", "it", "da", "de", "fr", "es", "pt", "nl", "sv", "no", "fi", "is"] },
