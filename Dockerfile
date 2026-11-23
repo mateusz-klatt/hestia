@@ -1,3 +1,11 @@
+FROM python:3.14-slim AS receipt-parser
+
+COPY hestia/budget/gmail_worker.py /app/hestia/budget/gmail_worker.py
+RUN install -d -m 0700 -o 1000 -g 1000 /run/hestia-receipt-parser
+USER 1000:1000
+CMD ["python", "-I", "-B", "/app/hestia/budget/gmail_worker.py"]
+
+
 FROM node:22-bookworm-slim AS ui-build
 
 WORKDIR /app/ui
@@ -43,7 +51,8 @@ COPY tools/klima.ir ./tools/klima.ir
 # would otherwise replace the UTC zone database with the host's local zone.
 # A volume mounts over /data at runtime; keep it writable by the non-root uid.
 RUN cp --remove-destination /usr/share/zoneinfo/Etc/UTC /etc/localtime \
-    && mkdir -p /data && chown 1000:1000 /data
+    && mkdir -p /data && chown 1000:1000 /data \
+    && install -d -m 0700 -o 1000 -g 1000 /run/hestia-receipt-parser
 
 # Cosmetic under network_mode: host (EXPOSE is a no-op there) — documents the
 # ports: 8925 device-facing, 8926 control (loopback), 8927 web UI (loopback).

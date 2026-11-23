@@ -45,3 +45,33 @@ services:
       - ./data:/data          # rw runtime state (registry.json + automations.json); gitignored
       - /etc/localtime:/etc/localtime:ro   # inherit the HOST timezone — the slim base is UTC, which would
                                            # shift time/cron rules off local (presence/sun are TZ-independent)
+      - receipt-parser-socket:/run/hestia-receipt-parser:ro
+
+  receipt-parser:
+    # Start with `docker compose --profile receipt-parser up -d --build` before
+    # enabling Gmail import in the Hestia service's environment.
+    profiles: [receipt-parser]
+    build:
+      context: .
+      target: receipt-parser
+    init: true
+    user: "1000:1000"
+    network_mode: none
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 256m
+    pids_limit: 32
+    cpus: 0.5
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=32m
+    volumes:
+      - receipt-parser-socket:/run/hestia-receipt-parser
+    healthcheck:
+      test: [CMD, python, -I, -B, /app/hestia/budget/gmail_worker.py, --probe]
+      interval: 30s
+      timeout: 6s
+    restart: unless-stopped
+
+volumes:
+  receipt-parser-socket:
