@@ -50,6 +50,7 @@ const forecastLabels = {
     matchedDue: (date: string) => `Instalment due ${date}`,
     lastObserved: (date: string) => `Last observed ${date}`,
     baselineConflict: (names: string) => `Skipped the estimate for: ${names} (already forecast as a fixed payment)`,
+    baselineConflictUnnamed: "another category",
     baselineConflictUnknown: "Skipped an estimate for a category that is already forecast as a fixed payment",
   },
   pl: {
@@ -91,6 +92,7 @@ const forecastLabels = {
     matchedDue: (date: string) => `Termin raty: ${date}`,
     lastObserved: (date: string) => `Ostatnia obserwacja: ${date}`,
     baselineConflict: (names: string) => `Pominięto szacunek dla: ${names} (już prognozowane jako stała płatność)`,
+    baselineConflictUnnamed: "inna kategoria",
     baselineConflictUnknown: "Pominięto szacunek dla kategorii, która jest już prognozowana jako stała płatność",
   },
 };
@@ -112,17 +114,20 @@ function currencyOptions(codes: readonly string[]): string[] {
 }
 
 function baselineConflictNote(data: AnalyticsForecast, names: CategoryNames, text: ForecastLabels, locale: string): string | null {
-  const conflicts = data.summary.baseline_conflicts;
+  const conflicts = data.summary.baseline_conflicts ?? [];
   if (conflicts.length === 0 || names === "loading") return null;
   if (names === "error") return text.baselineConflictUnknown;
   const seen = new Set<string>();
   const labels: string[] = [];
+  let unnamed = false;
   for (const row of conflicts) {
     if (seen.has(row.category_id)) continue;
     seen.add(row.category_id);
-    const name = names.get(row.category_id);
-    if (name !== undefined && name.trim() !== "") labels.push(name);
+    const name = names.get(row.category_id)?.trim() ?? "";
+    if (name !== "") labels.push(name);
+    else unnamed = true;
   }
+  if (unnamed) labels.push(text.baselineConflictUnnamed);
   if (labels.length === 0) return text.baselineConflictUnknown;
   labels.sort((left, right) => left.localeCompare(right, locale));
   return text.baselineConflict(labels.join(", "));
@@ -284,7 +289,7 @@ export function ForecastView({ api, accounts, connections = [], locale, revision
         setDiscovered((previous) => currencyOptions([
           ...previous, ...data.totals.map((total) => total.currency), ...data.deduplications.map((item) => item.currency),
         ]));
-        const conflicts = data.summary.baseline_conflicts;
+        const conflicts = data.summary.baseline_conflicts ?? [];
         setCategoryNames(conflicts.length > 0 ? "loading" : new Map());
         setShown({ state: "ready", data });
         if (conflicts.length > 0) {

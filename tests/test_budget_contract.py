@@ -250,7 +250,8 @@ class BudgetOpenApiTests(unittest.TestCase):
                    "including stored-data helper errors mapped to 500 after forecast query validation, or unexpected "
                    "internal failure (`budget_internal_error`).",
             "503": "Analytics storage or budget configuration unavailable (`budget_analytics_unavailable` or "
-                   "`budget_unavailable`).",
+                   "`budget_unavailable`). budget_forecast_config_conflict (0.31–0.32) wycofany w 0.33; "
+                   "konflikt to teraz 200 + summary.baseline_conflicts.",
         }.items():
             with self.subTest(code=code):
                 self.assertEqual(responses[code]["description"], description)
@@ -261,7 +262,7 @@ class BudgetOpenApiTests(unittest.TestCase):
 
     def test_forecast_schemas_pin_wire_fields_and_bounds(self):
         schemas = contract.build_openapi()["components"]["schemas"]
-        optional_keys = {}
+        optional_keys = {"Summary": {"baseline_conflicts"}}
         for suffix, keys in {
             "": {"evaluation_date", "evaluation_timezone", "horizon_months", "start_month", "end_month",
                  "ledger_as_of", "freshness_stale", "stale_account_ids", "stale_account_ids_truncated",
@@ -275,6 +276,7 @@ class BudgetOpenApiTests(unittest.TestCase):
             "Month": {"month", "currencies", "items"},
             "Item": {"source", "schedule_id", "label", "amount", "currency", "expected_date", "confidence",
                      "past_due", "account_stale"},
+            "BaselineConflict": {"category_id", "reason"},
         }.items():
             with self.subTest(schema=suffix):
                 schema = schemas["BudgetAnalyticsForecast" + suffix]

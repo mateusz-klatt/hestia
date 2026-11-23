@@ -1,6 +1,8 @@
 # Budget Forecast: Upcoming Commitments Estimate (Design Proposal)
 
-> **Status:** Revised design proposal v4 (Round-3 review fixes applied; owner decisions **Q1–Q6** and **(a)–(c)** all decided; target: OpenAPI `0.26.0`, zero schema migration in v1).  
+> **Status:** Revised design proposal v4 (Round-3 review fixes applied; owner decisions **Q1–Q6** and **(a)–(c)** all decided; target: OpenAPI `0.26.0`, zero schema migration in v1).
+>
+> **Compatibility (OpenAPI 0.33.0):** budget_forecast_config_conflict (0.31–0.32) wycofany w 0.33; konflikt to teraz 200 + summary.baseline_conflicts. `summary.baseline_conflicts` is optional. 0.33.0 is not a strictly additive change.  
 > **Baseline:** `master` at `dc03790` (schema `0019`, OpenAPI `0.25.0` at `hestia/api_contract.py:76` with `GET /api/budget/analytics/quarantine`).
 
 ## 1. Summary & Principles
@@ -240,7 +242,7 @@ Compare strictly against direct predecessor `0.25.0` at `dc03790`: register `"fo
   - `409 budget_requires_sqlite_users`: `"SQLite backend required: forecast requires HESTIA_PERSIST=sqlite."` `_principal` raises `BudgetUsersBackendRequired` when persist is not SQLite (`api.py:61-62`). The analytics handler forwards that exception to `api._failure` (`analytics_api.py:124-125`), which returns `409 budget_requires_sqlite_users` (`api.py:198-199`). This description is on the forecast operation. Shared analytics responses keep the `409` text at `api_contract.py:2993`.
   - `413 budget_analytics_limit`: `"Forecast limit exceeded (>100,000 selected rows, >100 schedules, >1,200 paid marks per schedule, >200 active currency-filtered hints, >64 category baselines, >4,368 projected items, or >4 MiB UTF-8 JSON payload); zero partial totals returned."` Explicit limit errors stay `413`, including `AnalyticsError("budget_analytics_limit", 413)` at `analytics_views.py:227`.
   - **Stored-data mapping (forecast read, after query validation):** Helpers that reject stored rows raise a bare `AnalyticsError()`, which today is status `400` / `budget_analytics_invalid_request` (`analytics_core.py:24`). `_json` does so at `hestia/budget/analytics_views.py:60-66` (the `raise` is line 66) when stored JSON fails to parse as the expected value. Map those stored-data validation errors to `500 budget_analytics_data_error` at the forecast read boundary. A bad query still returns `400`. Bad stored data returns `500`. Limit errors (`413`) and authorization errors (`401`, `403`, `404`, `409`) keep the status and code they already have. Other analytics routes continue to see the helper's default `400`.
-  - `500 budget_analytics_data_error` / `budget_internal_error`: `"Stored mortgage schedule, ledger, or metadata integrity check failed (`budget_analytics_data_error`), including stored-data helper errors mapped to 500 after forecast query validation, or unexpected internal failure (`budget_internal_error`)."`, `503 budget_analytics_unavailable` / `budget_unavailable`.
+  - `500 budget_analytics_data_error` / `budget_internal_error`: `"Stored mortgage schedule, ledger, or metadata integrity check failed (`budget_analytics_data_error`), including stored-data helper errors mapped to 500 after forecast query validation, or unexpected internal failure (`budget_internal_error`)."`, `503 budget_analytics_unavailable` / `budget_unavailable`. budget_forecast_config_conflict (0.31–0.32) wycofany w 0.33; konflikt to teraz 200 + summary.baseline_conflicts.
 
 ## 8. UI Sketch, Estimate Disclaimer & Legal Review
 

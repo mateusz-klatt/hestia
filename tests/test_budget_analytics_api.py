@@ -1018,6 +1018,55 @@ class BudgetAnalyticsAPITests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual([item["currency"] for item in scoped_body["months"][0]["items"]
                               if item["source"] == "category_baseline"], ["EUR"])
 
+    async def test_forecast_hint_conflict_returns_200_and_unknown_category_returns_503(self):
+        now = datetime(2026, 11, 22, tzinfo=timezone.utc).timestamp()
+        created = await self.post("category-create", {"name": "Synthetic streaming"})
+        self.assertEqual(created.status, 200)
+        category_id = (await created.json())["category"]["id"]
+
+        def insert(reference, day):
+            payload = transaction(reference, amount="29.99", currency="PLN", booking_date=day,
+                                  remittance_information=["Synthetic Streaming"])
+            with self.sessions.begin() as session:
+                session.add(db.BudgetTransaction(account_id=self.alice_id, entry_reference=reference,
+                            payload_json=json.dumps(payload), observed_at=now, source="api", uncertain=False))
+            return payload
+
+        async def categorise(payload):
+            response = await self.post("annotation", self.annotation(
+                entry_reference=payload["entry_reference"], category_id=category_id, kind="expense",
+                expected_fingerprint=financial_fingerprint(payload)))
+            self.assertEqual(response.status, 200, await response.text())
+
+        for day in ("2026-09-10", "2026-10-10", "2026-11-10"):
+            await categorise(insert(f"stream-{day}", day))
+
+        hinted = json.dumps({"alice": {"category_ids": [category_id], "history_months": 6, "estimator": "median"}})
+        unknown = json.dumps({"alice": {"category_ids": ["missing-category"], "history_months": 6,
+                                         "estimator": "median"}})
+        with mock.patch.object(analytics_views.BudgetAnalyticsViews, "_now", return_value=now):
+            with mock.patch.dict(os.environ, {forecast.FORECAST_CONFIG_ENV: hinted}):
+                conflict = await self.get("forecast", params={"months": "2"})
+            conflict_text = await conflict.text()
+            self.assertEqual(conflict.status, 200, conflict_text)
+            self.assert_private_headers(conflict)
+            body = json.loads(conflict_text)
+            api_contract.BudgetAnalyticsForecast.model_validate(body)
+            self.assertEqual(body["summary"]["baseline_conflicts"],
+                             [{"category_id": category_id, "reason": "recurring"}])
+            self.assertNotIn("amount", body["summary"]["baseline_conflicts"][0])
+            items = [item for month in body["months"] for item in month["items"]]
+            self.assertFalse(any(item["source"] == "category_baseline" for item in items))
+            self.assertTrue(any(item["source"] == "recurring" and item["label"] == "Synthetic Streaming" for item in items), items)
+
+            with mock.patch.dict(os.environ, {forecast.FORECAST_CONFIG_ENV: unknown}):
+                missing = await self.get("forecast", params={"months": "1"})
+            text = await missing.text()
+            self.assertEqual(missing.status, 503)
+            self.assertEqual(json.loads(text), {"ok": False, "error": "budget_unavailable"})
+            self.assertNotIn("budget_forecast_config_conflict", text)
+            self.assert_private_headers(missing)
+
 
 if __name__ == "__main__":
     unittest.main()

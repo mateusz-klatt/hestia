@@ -2032,7 +2032,7 @@ export interface components {
         /** BudgetAnalyticsForecastSummary */
         BudgetAnalyticsForecastSummary: {
             /** Baseline Conflicts */
-            baseline_conflicts: components["schemas"]["BudgetAnalyticsForecastBaselineConflict"][];
+            baseline_conflicts?: components["schemas"]["BudgetAnalyticsForecastBaselineConflict"][];
             /** Deduped Recurring Count */
             deduped_recurring_count: number;
             /** Excluded Accounts */
@@ -6239,7 +6239,7 @@ export interface operations {
                     "application/json": components["schemas"]["BudgetError"];
                 };
             };
-            /** @description Analytics storage or budget configuration unavailable (`budget_analytics_unavailable` or `budget_unavailable`). */
+            /** @description Analytics storage or budget configuration unavailable (`budget_analytics_unavailable` or `budget_unavailable`). budget_forecast_config_conflict (0.31–0.32) wycofany w 0.33; konflikt to teraz 200 + summary.baseline_conflicts. */
             503: {
                 headers: {
                     [name: string]: unknown;

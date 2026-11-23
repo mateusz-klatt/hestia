@@ -392,11 +392,11 @@ describe("ForecastView", () => {
   it.each([
     {
       locale: "en-US",
-      note: "Skipped the estimate for: Synthetic Food (already forecast as a fixed payment)",
+      note: "Skipped the estimate for: another category, Synthetic Food (already forecast as a fixed payment)",
     },
     {
       locale: "pl-PL",
-      note: "Pominięto szacunek dla: Synthetic Food (już prognozowane jako stała płatność)",
+      note: "Pominięto szacunek dla: inna kategoria, Synthetic Food (już prognozowane jako stała płatność)",
     },
   ])("names a skipped category baseline in $locale", async ({ locale, note }) => {
     const api = fakeApi();
@@ -418,6 +418,33 @@ describe("ForecastView", () => {
     expect(host.textContent).not.toContain("cat-food");
     expect(host.textContent).not.toContain("cat-missing");
     expect(host.textContent).not.toContain("Synthetic Old");
+  });
+
+  it("keeps an unrecognised category in the note as a generic entry", async () => {
+    const api = fakeApi();
+    const base = forecastOf();
+    api.forecast.mockResolvedValue(ok(forecastOf({
+      summary: { ...base.summary, baseline_conflicts: [{ category_id: "cat-missing", reason: "mortgage" }] },
+    })));
+    await show(api);
+
+    expect(host.textContent).toContain(
+      "Skipped the estimate for: another category (already forecast as a fixed payment)",
+    );
+    expect(host.textContent).not.toContain("cat-missing");
+  });
+
+  it("treats a missing baseline_conflicts list as empty", async () => {
+    const api = fakeApi();
+    const base = forecastOf();
+    const summary = { ...base.summary };
+    delete summary.baseline_conflicts;
+    api.forecast.mockResolvedValue(ok(forecastOf({ summary })));
+    await show(api);
+
+    expect(api.categories).not.toHaveBeenCalled();
+    expect(host.textContent).not.toContain("Skipped the estimate");
+    expect(host.textContent).not.toContain("Pominięto szacunek");
   });
 
   it("notes a skipped baseline without a category id when names cannot be loaded", async () => {

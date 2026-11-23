@@ -5,7 +5,8 @@ Contract guarantees:
      ``python -m hestia.api_contract``).
   2. Each request DTO accepts/rejects exactly what the authoritative runtime validator does, so the
      generated client types can never lie about what the server will accept.
-  3. Each monthly budget addition leaves the preceding OpenAPI contract structurally intact.
+  3. Monthly-budget additions from 0.27.0 through 0.32.0 leave the preceding OpenAPI contract
+     structurally intact. 0.33.0 is not strictly additive: it withdraws ``budget_forecast_config_conflict``.
 """
 from __future__ import annotations
 
@@ -54,15 +55,30 @@ class OpenApiArtifactTests(unittest.TestCase):
             "docs/api/openapi.json is stale — run `python -m hestia.api_contract`",
         )
 
-    def test_monthly_budget_contract_is_strictly_additive_from_0_27_0(self):
+    def test_monthly_budget_contract_chain_from_0_27_0(self):
+        """0.27.0 through 0.32.0 stay strictly additive. 0.33.0 withdraws a 503 code."""
         document = api_contract.build_openapi()
         self.assertEqual(document["info"]["version"], "0.33.0")
-        # Strip the per-category conflict note and compare with the 0.32.0 contract.
-        summary = document["components"]["schemas"]["BudgetAnalyticsForecastSummary"]
-        del summary["properties"]["baseline_conflicts"]
-        summary["required"].remove("baseline_conflicts")
-        del document["components"]["schemas"]["BudgetAnalyticsForecastBaselineConflict"]
         forecast_get = document["paths"]["/api/budget/analytics/forecast"]["get"]
+        withdrawn = (
+            "budget_forecast_config_conflict (0.31–0.32) wycofany w 0.33; "
+            "konflikt to teraz 200 + summary.baseline_conflicts"
+        )
+        description_503 = forecast_get["responses"]["503"]["description"]
+        self.assertIn(withdrawn, description_503)
+        self.assertEqual(description_503.count("budget_forecast_config_conflict"), 1)
+        self.assertNotIn("`budget_forecast_config_conflict`", description_503)
+        self.assertIn("summary.baseline_conflicts", forecast_get["description"])
+        self.assertNotIn("is rejected", forecast_get["description"])
+        # Optional note: absent from required, unlike a strictly additive required field.
+        summary = document["components"]["schemas"]["BudgetAnalyticsForecastSummary"]
+        self.assertIn("baseline_conflicts", summary["properties"])
+        self.assertNotIn("baseline_conflicts", summary["required"])
+        del summary["properties"]["baseline_conflicts"]
+        del document["components"]["schemas"]["BudgetAnalyticsForecastBaselineConflict"]
+        # Restore the 0.32.0 forecast description and the withdrawn 503 wording so the
+        # predecessor hash can be checked. This restoration states the removal; it does
+        # not treat 0.33.0 as strictly additive.
         forecast_get["description"] = (
             "Read-only evaluation of unmarked mortgage instalments and active recurring charges from one local "
             "snapshot using the server UTC date. Matches recurring hints to individual scheduled instalments to "

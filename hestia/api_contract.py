@@ -84,7 +84,8 @@ from pydantic.json_schema import models_json_schema
 # 0.32.0: additive coverage.pending_row_keys / pending_row_keys_truncated and POST
 #         transactions-by-keys endpoint (zero migration).
 # 0.33.0: a category-baseline conflict skips only that category and lists it on
-#         summary.baseline_conflicts (zero migration). budget_forecast_config_conflict is retired.
+#         summary.baseline_conflicts (optional, zero migration). Not strictly additive:
+#         budget_forecast_config_conflict (0.31–0.32) is withdrawn; a conflict is HTTP 200.
 CONTRACT_VERSION = "0.33.0"
 OPENAPI_PATH = Path(__file__).resolve().parent.parent / "docs" / "api" / "openapi.json"
 
@@ -2334,7 +2335,8 @@ class BudgetAnalyticsForecastSummary(BaseModel):
     lapsed_recurring_count: int
     deduped_recurring_count: int
     stale_recurring_count: int
-    baseline_conflicts: Annotated[list[BudgetAnalyticsForecastBaselineConflict], Field(max_length=64)]
+    baseline_conflicts: Annotated[
+        list[BudgetAnalyticsForecastBaselineConflict], Field(default_factory=list, max_length=64)]
 
 
 class BudgetAnalyticsForecastCurrencyTotal(BaseModel):
@@ -3369,7 +3371,8 @@ def _analytics_paths():
                "including stored-data helper errors mapped to 500 after forecast query validation, or unexpected "
                "internal failure (`budget_internal_error`).",
         "503": "Analytics storage or budget configuration unavailable (`budget_analytics_unavailable` or "
-               "`budget_unavailable`).",
+               "`budget_unavailable`). budget_forecast_config_conflict (0.31–0.32) wycofany w 0.33; "
+               "konflikt to teraz 200 + summary.baseline_conflicts.",
     }
     for code, description in forecast_descriptions.items():
         forecast_responses[code]["description"] = description

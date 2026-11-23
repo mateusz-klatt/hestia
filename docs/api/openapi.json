@@ -1677,8 +1677,7 @@
           "overdue_mortgage_schedule_count",
           "lapsed_recurring_count",
           "deduped_recurring_count",
-          "stale_recurring_count",
-          "baseline_conflicts"
+          "stale_recurring_count"
         ],
         "title": "BudgetAnalyticsForecastSummary",
         "type": "object"
@@ -11856,7 +11855,7 @@
                 }
               }
             },
-            "description": "Analytics storage or budget configuration unavailable (`budget_analytics_unavailable` or `budget_unavailable`)."
+            "description": "Analytics storage or budget configuration unavailable (`budget_analytics_unavailable` or `budget_unavailable`). budget_forecast_config_conflict (0.31\u20130.32) wycofany w 0.33; konflikt to teraz 200 + summary.baseline_conflicts."
           }
         },
         "summary": "Read the owner-private upcoming commitments estimate",
