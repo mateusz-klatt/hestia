@@ -63,12 +63,21 @@ def tombstone_receipt(session, owner, receipt_id):
     ).values(receipt_id=None, outcome="deleted"))
 
 
+def _unconfirmed_import():
+    # Confirmation sets a payment method. Ledger drift can later return the receipt to review.
+    return or_(BudgetReceipt.status == "imported",
+               and_(BudgetReceipt.status == "needs_review", BudgetReceipt.forwarded_manually == 1,
+                    BudgetReceipt.payment_method.is_(None)))
+
+
 def _delete_imports(session, owner, expires_at=None):
-    receipts = select(BudgetReceipt.id).where(BudgetReceipt.status == "imported")
+    receipts = select(BudgetReceipt.id).where(_unconfirmed_import())
     if owner is not None:
         receipts = receipts.where(BudgetReceipt.owner == owner)
     if expires_at is not None:
-        receipts = receipts.where(BudgetReceipt.import_expires_at <= expires_at)
+        # Earlier manual-review rows had no explicit expiry.
+        deadline = func.coalesce(BudgetReceipt.import_expires_at, BudgetReceipt.created_at + IMPORT_TTL)
+        receipts = receipts.where(deadline <= expires_at)
         session.execute(update(BudgetGmailMessage).where(
             BudgetGmailMessage.receipt_id.in_(receipts),
         ).values(receipt_id=None, outcome="deleted"))
@@ -137,9 +146,7 @@ class GmailStore(BudgetStore):
     @staticmethod
     def _pending_count(session, owner):
         return session.scalar(select(func.count()).select_from(BudgetReceipt).where(
-            BudgetReceipt.owner == owner, or_(
-                BudgetReceipt.status == "imported",
-                and_(BudgetReceipt.status == "needs_review", BudgetReceipt.forwarded_manually == 1))))
+            BudgetReceipt.owner == owner, _unconfirmed_import()))
 
     def status(self, owner):
         with self.sessions() as session:
@@ -222,7 +229,7 @@ class GmailStore(BudgetStore):
             id=str(uuid.uuid4()), owner=owner, raw_shop_name="przekazane ręcznie",
             forwarded_sender_domain=item.sender_domain, forwarded_manually=1,
             status="needs_review", document_kind="invoice", source_kind=item.source_kind,
-            version=1, created_at=now, updated_at=now)
+            version=1, created_at=now, updated_at=now, import_expires_at=now + IMPORT_TTL)
         session.add(receipt)
         session.flush()
         return receipt.id

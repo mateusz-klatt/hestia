@@ -13,8 +13,9 @@ from sqlalchemy import select
 from hestia import db
 from hestia.budget import gmail_address, gmail_client as client_module, gmail_sync as sync_module
 from hestia.budget.gmail_client import GMAIL_API, TOKEN_URL, GmailClient, GmailCredentials, GmailError, RunLimit
-from hestia.budget.gmail_store import DAY, GMAIL_MESSAGE_DOMAIN, GmailStore, PendingMessage, digest
+from hestia.budget.gmail_store import DAY, GMAIL_MESSAGE_DOMAIN, IMPORT_TTL, GmailStore, PendingMessage, digest
 from hestia.budget.gmail_sync import GmailSettings, GmailSync
+from hestia.budget.receipt_reconcile import reconcile_receipt_links
 from hestia.budget.receipt_store import BudgetReceiptStore
 from hestia.calendar_sync.providers import HTTPResponse, ProviderError
 
@@ -280,6 +281,59 @@ class GmailSyncTests(TestCase):
         self.assertEqual([row.id for row in self.rows(db.BudgetReceipt)], [first.id])
         self.assertEqual([json.loads(row.after_json)["action"] for row in self.rows(db.BudgetAnalyticsAudit)],
                          ["enable", "disable", "revoke"])
+
+    def test_manual_review_expiry_cap_and_revoke_preserve_receipt_returned_to_review(self):
+        self.enable()
+        manual = PendingMessage("a" * 64, NOW, "owner_forward", "imported",
+                                forwarded_manually=True, sender_domain="vendor.test")
+        old_items = tuple(replace(manual, gmail_id_hmac=key * 64) for key in "abc")
+        self.assertEqual(self.store.commit(OWNER, 1, {}, old_items), (3, 0, True))
+        messages = {row.gmail_id_hmac[0]: row for row in self.rows(db.BudgetGmailMessage)}
+        with self.sessions.begin() as session:
+            legacy = session.get(db.BudgetReceipt, messages["b"].receipt_id)
+            legacy.import_expires_at = None
+            session.add(db.BudgetConnection(id="connection", owner=OWNER, application_id="fixture",
+                                            bank_name="Fixture", country="PL", enabled=True,
+                                            next_attempt=0, failures=0))
+            session.flush()
+            session.add(db.BudgetAccount(id="account", connection_id="connection", owner=OWNER,
+                                         identification_hash="fixture", enabled=True, balances_json="{}"))
+            session.flush()
+            session.add(db.BudgetTransaction(account_id="account", entry_reference="old-entry",
+                                             payload_json="{}", observed_at=NOW, uncertain=True))
+            session.flush()
+            confirmed = session.get(db.BudgetReceipt, messages["c"].receipt_id)
+            confirmed.status, confirmed.payment_method, confirmed.import_expires_at = "confirmed", "card", None
+            confirmed.receipt_date, confirmed.total_amount, confirmed.currency = "2026-11-21", "100", "PLN"
+            confirmed.linked_account_id, confirmed.linked_entry_ref = "account", "old-entry"
+            confirmed.linked_fingerprint, confirmed.linked_evidence = "prior-fingerprint", "{}"
+            self.assertEqual(reconcile_receipt_links(session, OWNER, NOW), 1)
+            self.assertEqual(confirmed.status, "needs_review")
+
+        self.assertEqual(self.store.status(OWNER)["pending_imported_count"], 2)
+        with mock.patch("hestia.budget.gmail_store.MAX_PENDING_IMPORTS", 2):
+            self.assertTrue(self.store.at_pending_cap(OWNER))
+        with mock.patch("hestia.budget.gmail_store.MAX_PENDING_IMPORTS", 3):
+            self.assertFalse(self.store.at_pending_cap(OWNER))
+
+        self.tick(IMPORT_TTL - 1)
+        self.store.retain(OWNER, 1)
+        self.assertEqual(len(self.rows(db.BudgetReceipt)), 3)
+        with self.sessions() as session:
+            self.assertEqual(session.get(db.BudgetReceipt, messages["a"].receipt_id).import_expires_at,
+                             NOW + IMPORT_TTL)
+        self.tick(1)
+        self.store.retain(OWNER, 1)
+        self.assertEqual([row.id for row in self.rows(db.BudgetReceipt)], [messages["c"].receipt_id])
+        tombstones = {row.gmail_id_hmac[0]: row for row in self.rows(db.BudgetGmailMessage)}
+        for key in "ab":
+            self.assertEqual((tombstones[key].outcome, tombstones[key].receipt_id), ("deleted", None))
+
+        fresh = replace(manual, gmail_id_hmac="d" * 64, internal_date=self.clock.now)
+        self.assertEqual(self.store.commit(OWNER, 1, {}, (fresh,)), (1, 0, True))
+        self.service.transition(OWNER, 2, "revoked")
+        self.assertEqual([row.id for row in self.rows(db.BudgetReceipt)], [messages["c"].receipt_id])
+        self.assertEqual(self.rows(db.BudgetGmailMessage), [])
 
     def test_bad_identity_on_enable_and_sync_never_persists_email(self):
         other = "wrong@example.test"
