@@ -15,7 +15,7 @@ import { ConsentHealthPanel } from "./consent_health";
 import { ForecastView } from "./analytics/forecast";
 import { InboxView } from "./analytics/inbox";
 import { MonthView, monthLabels } from "./analytics/month";
-import { MonthBudgetView, monthBudgetLabels } from "./analytics/month_budget";
+import { MonthBudgetView } from "./analytics/month_budget";
 import { MortgagesView } from "./analytics/mortgages";
 import { QuarantineView } from "./analytics/quarantine";
 import { RecurringView } from "./analytics/recurring";
@@ -124,12 +124,11 @@ const labels = {
 type Labels = typeof labels.en;
 
 function pick(): { text: Labels;
-  monthBudget: typeof monthBudgetLabels.en; month: typeof monthLabels.en; year: typeof yearLabels.en;
+  month: typeof monthLabels.en; year: typeof yearLabels.en;
   locale: string } {
   const locale = currentLocale();
   const pl = locale.startsWith("pl");
   return { text: pl ? labels.pl : labels.en,
-    monthBudget: pl ? monthBudgetLabels.pl : monthBudgetLabels.en,
     month: pl ? monthLabels.pl : monthLabels.en, year: pl ? yearLabels.pl : yearLabels.en,
     locale };
 }
@@ -179,7 +178,7 @@ export interface BudgetProps {
 
 export function Budget({ active, api = budgetApi, pollMs = 2000, principal,
   navigate = (url) => { window.location.assign(url); }, completeUrl = "/budget/connect/complete" }: BudgetProps) {
-  const { text, monthBudget: monthBudgetText, month: monthText,
+  const { text, month: monthText,
     year: yearText,
     locale } = pick();
   const [load, setLoad] = useState<Load>("loading");
@@ -480,7 +479,7 @@ export function Budget({ active, api = budgetApi, pollMs = 2000, principal,
         </div>
       ) : null}
       {shownView === "monthly_budget" ? (
-        <MonthBudgetView api={api} accounts={accounts} text={monthBudgetText} locale={locale} revision={revision}
+        <MonthBudgetView api={api} accounts={accounts} locale={locale} revision={revision}
           onAccessLoss={barrier} onOpenMonth={(month, serverCurrentMonth, options) => {
             setFocusMonth(month);
             setFocusToday(() => serverMonthToToday(serverCurrentMonth));

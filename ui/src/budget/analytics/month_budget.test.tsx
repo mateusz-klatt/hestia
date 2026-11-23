@@ -3,14 +3,17 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import type { Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { loadLocale, tPlural } from "../../i18n";
+import en from "../../i18n/locales/en";
+import pl from "../../i18n/locales/pl";
 import type { BudgetApi, BudgetResult } from "../api";
 import { account } from "../fixtures";
 import { categoryList, forecastItem, forecastOf, monthlyBudgetCategoryLimit, monthlyBudgetCategorySpend,
   monthlyBudgetChartsOf, monthlyBudgetExpectedIncome, monthlyBudgetPace, monthlyBudgetPassThrough,
   monthlyBudgetSeriesOf, mortgagesOf, recurringOf } from "./fixtures";
-import { ANALYTICS_ERROR } from "./model";
+import { ANALYTICS_ERROR, MONTH_BUDGET_CARD_STATUS_KEYS, MONTH_BUDGET_LIMIT_STATUS_KEYS } from "./model";
 import type { AnalyticsCategory, AnalyticsMonthlyBudgetCharts } from "./model";
-import { MonthBudgetView, monthBudgetLabels } from "./month_budget";
+import { MonthBudgetView } from "./month_budget";
 import { alignDecimals, buildCategoryChartModel, buildYScale, formatTickDecimal } from "./month_budget_charts";
 
 const accounts = [account({
@@ -58,6 +61,7 @@ beforeEach(() => {
 afterEach(async () => {
   await act(async () => { root.unmount(); await Promise.resolve(); });
   host.remove();
+  await loadLocale("en");
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
@@ -76,13 +80,12 @@ async function show(
   } = {},
 ): Promise<void> {
   const locale = options.locale ?? "en-US";
-  const text = locale.toLowerCase().startsWith("pl") ? monthBudgetLabels.pl : monthBudgetLabels.en;
+  await loadLocale(locale.toLowerCase().startsWith("pl") ? "pl" : "en");
   await act(async () => {
     root.render(
       <MonthBudgetView
         api={api}
         accounts={accounts}
-        text={text}
         locale={locale}
         revision={options.revision ?? 0}
         onAccessLoss={options.onAccessLoss ?? (() => false)}
@@ -183,31 +186,35 @@ function assertBoundedSvgCoordinates(svg: SVGSVGElement): void {
 }
 
 describe("MonthBudgetView", () => {
-  it("keeps identical i18n keys in English and Polish and pluralizes Polish counts", () => {
-    expect(Object.keys(monthBudgetLabels.pl).sort()).toEqual(Object.keys(monthBudgetLabels.en).sort());
-    expect(Object.keys(monthBudgetLabels.pl.limitStatuses).sort()).toEqual(Object.keys(monthBudgetLabels.en.limitStatuses).sort());
-    expect(Object.keys(monthBudgetLabels.pl.cardStatuses).sort()).toEqual(Object.keys(monthBudgetLabels.en.cardStatuses).sort());
+  it("keeps identical i18n keys in English and Polish and pluralizes Polish counts", async () => {
+    const budgetEnKeys = Object.keys(en).filter((k) => k.startsWith("budget.monthBudget.")).sort();
+    const budgetPlKeys = Object.keys(pl).filter((k) => k.startsWith("budget.monthBudget.")).sort();
+    expect(budgetPlKeys).toEqual(budgetEnKeys);
+    expect(Object.values(MONTH_BUDGET_LIMIT_STATUS_KEYS).every((k) => k in pl)).toBe(true);
+    expect(Object.values(MONTH_BUDGET_CARD_STATUS_KEYS).every((k) => k in pl)).toBe(true);
 
-    expect(monthBudgetLabels.en.staleAccounts(1)).toBe("1 stale account");
-    expect(monthBudgetLabels.en.staleAccounts(2)).toBe("2 stale accounts");
-    expect(monthBudgetLabels.en.pendingTransfers(1)).toContain("1 unverified transfer or classification candidate still affects");
-    expect(monthBudgetLabels.en.pendingTransfers(2)).toContain("2 unverified transfer or classification candidates still affect");
-    expect(monthBudgetLabels.en.purchaseDateFallback(1)).toBe("1 debit used posting date because purchase date was absent.");
-    expect(monthBudgetLabels.en.purchaseDateFallback(3)).toBe("3 debits used posting date because purchase date was absent.");
-    expect(monthBudgetLabels.en.historyMonths(6)).toBe("6 months");
+    await loadLocale("en");
+    expect(tPlural("budget.monthBudget.staleAccounts", 1)).toBe("1 stale account");
+    expect(tPlural("budget.monthBudget.staleAccounts", 2)).toBe("2 stale accounts");
+    expect(tPlural("budget.monthBudget.pendingTransfers", 1)).toContain("1 unverified transfer or classification candidate still affects");
+    expect(tPlural("budget.monthBudget.pendingTransfers", 2)).toContain("2 unverified transfer or classification candidates still affect");
+    expect(tPlural("budget.monthBudget.purchaseDateFallback", 1)).toBe("1 debit used posting date because purchase date was absent.");
+    expect(tPlural("budget.monthBudget.purchaseDateFallback", 3)).toBe("3 debits used posting date because purchase date was absent.");
+    expect(tPlural("budget.monthBudget.historyMonths", 6)).toBe("6 months");
 
-    expect(monthBudgetLabels.pl.staleAccounts(1)).toBe("1 nieaktualne konto");
-    expect(monthBudgetLabels.pl.staleAccounts(2)).toBe("2 nieaktualne konta");
-    expect(monthBudgetLabels.pl.staleAccounts(5)).toBe("5 nieaktualnych kont");
-    expect(monthBudgetLabels.pl.staleAccounts(12)).toBe("12 nieaktualnych kont");
-    expect(monthBudgetLabels.pl.staleAccounts(22)).toBe("22 nieaktualne konta");
-    expect(monthBudgetLabels.pl.pendingTransfers(1)).toContain("1 niepotwierdzony wpis lub przelew nadal wpływa");
-    expect(monthBudgetLabels.pl.pendingTransfers(2)).toContain("2 niepotwierdzone wpisy lub przelewy nadal wpływają");
-    expect(monthBudgetLabels.pl.pendingTransfers(5)).toContain("5 niepotwierdzonych wpisów lub przelewów nadal wpływa");
-    expect(monthBudgetLabels.pl.purchaseDateFallback(1)).toContain("1 wydatku");
-    expect(monthBudgetLabels.pl.purchaseDateFallback(2)).toContain("2 wydatków");
-    expect(monthBudgetLabels.pl.historyMonths(6)).toBe("6 miesięcy");
-    expect(monthBudgetLabels.pl.historyMonths(12)).toBe("12 miesięcy");
+    await loadLocale("pl");
+    expect(tPlural("budget.monthBudget.staleAccounts", 1)).toBe("1 nieaktualne konto");
+    expect(tPlural("budget.monthBudget.staleAccounts", 2)).toBe("2 nieaktualne konta");
+    expect(tPlural("budget.monthBudget.staleAccounts", 5)).toBe("5 nieaktualnych kont");
+    expect(tPlural("budget.monthBudget.staleAccounts", 12)).toBe("12 nieaktualnych kont");
+    expect(tPlural("budget.monthBudget.staleAccounts", 22)).toBe("22 nieaktualne konta");
+    expect(tPlural("budget.monthBudget.pendingTransfers", 1)).toContain("1 niepotwierdzony wpis lub przelew nadal wpływa");
+    expect(tPlural("budget.monthBudget.pendingTransfers", 2)).toContain("2 niepotwierdzone wpisy lub przelewy nadal wpływają");
+    expect(tPlural("budget.monthBudget.pendingTransfers", 5)).toContain("5 niepotwierdzonych wpisów lub przelewów nadal wpływa");
+    expect(tPlural("budget.monthBudget.purchaseDateFallback", 1)).toContain("1 wydatku");
+    expect(tPlural("budget.monthBudget.purchaseDateFallback", 2)).toContain("2 wydatków");
+    expect(tPlural("budget.monthBudget.historyMonths", 6)).toBe("6 miesięcy");
+    expect(tPlural("budget.monthBudget.historyMonths", 12)).toBe("12 miesięcy");
   });
 
   it.each([
@@ -242,7 +249,7 @@ describe("MonthBudgetView", () => {
     api.monthlyBudgetCharts.mockReturnValueOnce(pending.promise);
     await act(async () => {
       root.render(
-        <MonthBudgetView api={api} accounts={accounts} text={monthBudgetLabels.en} locale="en-US"
+        <MonthBudgetView api={api} accounts={accounts} locale="en-US"
           revision={0} onAccessLoss={() => false} onOpenMonth={() => undefined} />,
       );
       await Promise.resolve();
@@ -415,12 +422,12 @@ describe("MonthBudgetView", () => {
   });
 
   it.each([
-    { status: 400, error: ANALYTICS_ERROR.invalidRequest, alert: monthBudgetLabels.en.badRequest },
-    { status: 404, error: "budget_analytics_disabled", alert: monthBudgetLabels.en.error },
-    { status: 409, error: "budget_requires_sqlite_users", alert: monthBudgetLabels.en.error },
-    { status: 413, error: ANALYTICS_ERROR.limit, alert: monthBudgetLabels.en.limit },
-    { status: 500, error: "budget_internal_error", alert: monthBudgetLabels.en.error },
-    { status: 503, error: "budget_unavailable", alert: monthBudgetLabels.en.error },
+    { status: 400, error: ANALYTICS_ERROR.invalidRequest, alert: en["budget.monthBudget.badRequest"] },
+    { status: 404, error: "budget_analytics_disabled", alert: en["budget.monthBudget.error"] },
+    { status: 409, error: "budget_requires_sqlite_users", alert: en["budget.monthBudget.error"] },
+    { status: 413, error: ANALYTICS_ERROR.limit, alert: en["budget.monthBudget.limit"] },
+    { status: 500, error: "budget_internal_error", alert: en["budget.monthBudget.error"] },
+    { status: 503, error: "budget_unavailable", alert: en["budget.monthBudget.error"] },
   ])("clears stale loaded data and shows fixed alert on $status ($error)", async ({ status, error, alert }) => {
     const api = fakeApi();
     api.monthlyBudgetCharts
@@ -457,7 +464,7 @@ describe("MonthBudgetView", () => {
       const api = fakeApi();
       api.monthlyBudgetCharts.mockResolvedValueOnce({ ok: false, status, error });
       await show(api);
-      expect(host.querySelector('[role="alert"]')?.textContent).toBe(monthBudgetLabels.en.error);
+      expect(host.querySelector('[role="alert"]')?.textContent).toBe(en["budget.monthBudget.error"]);
       expect(host.textContent).not.toContain(error);
       expect(host.querySelector("table")).toBeNull();
     }
@@ -472,7 +479,7 @@ describe("MonthBudgetView", () => {
       .mockResolvedValueOnce(ok(monthlyBudgetChartsOf({ currency: "CHF", available_currencies: ["PLN", "CHF"] })));
     await show(api);
 
-    expect(host.querySelector('[role="alert"]')?.textContent).toBe(monthBudgetLabels.en.limit);
+    expect(host.querySelector('[role="alert"]')?.textContent).toBe(en["budget.monthBudget.limit"]);
     const form = host.querySelector<HTMLFormElement>("form.budget-rule-editor");
     const input = host.querySelector<HTMLInputElement>('input[name="manual_currency"]');
     if (form === null || input === null) throw new Error("Missing manual currency form");
@@ -496,7 +503,7 @@ describe("MonthBudgetView", () => {
 
     // Switching to 12 months hits 413 -> switching back to 6 recovers.
     await chooseHistory("12");
-    expect(host.querySelector('[role="alert"]')?.textContent).toBe(monthBudgetLabels.en.limit);
+    expect(host.querySelector('[role="alert"]')?.textContent).toBe(en["budget.monthBudget.limit"]);
     await chooseHistory("6");
     expect(api.monthlyBudgetCharts).toHaveBeenLastCalledWith(undefined, "CHF", 6);
     expect(host.querySelector('[role="alert"]')).toBeNull();
@@ -1195,7 +1202,7 @@ describe("MonthBudgetView", () => {
     })));
     await show(api);
     const spending = host.querySelector('section[aria-label="Spending and limits"]');
-    expect(spending?.textContent).toContain(monthBudgetLabels.en.categoriesLoading);
+    expect(spending?.textContent).toContain(en["budget.monthBudget.categoriesLoading"]);
     expect(spending?.querySelector("tbody")).toBeNull();
     expect(spending?.textContent).not.toContain("Synthetic Fuel");
     expect(spending?.textContent).not.toContain("Exceeded");
@@ -1235,7 +1242,7 @@ describe("MonthBudgetView", () => {
     })));
     await show(api);
     const spending = host.querySelector('section[aria-label="Spending and limits"]');
-    expect(spending?.textContent).toContain(monthBudgetLabels.en.categoriesError);
+    expect(spending?.textContent).toContain(en["budget.monthBudget.categoriesError"]);
     expect(spending?.querySelector("tbody")).toBeNull();
     expect(spending?.textContent).not.toContain("Synthetic Fuel");
     expect(spending?.textContent).not.toContain("0.00 PLN");
@@ -1369,7 +1376,7 @@ describe("MonthBudgetView", () => {
     expect(host.querySelector('[aria-label="Unpaid card spending"]')?.textContent).toContain("Unavailable");
     expect(host.querySelector('section[aria-label="Spending and limits"] tbody')).toBeNull();
     expect(host.querySelector('[aria-label="Charts"]')).toBeNull();
-    expect(host.textContent).toContain(monthBudgetLabels.en.categoriesError);
+    expect(host.textContent).toContain(en["budget.monthBudget.categoriesError"]);
   });
 
   it("shows a labelled amount on its own row beside the category, with the one-off tag", async () => {
@@ -1524,7 +1531,7 @@ describe("MonthBudgetView", () => {
       })));
     await act(async () => {
       root.render(
-        <MonthBudgetView api={api} accounts={accounts} text={monthBudgetLabels.en} locale="en-US"
+        <MonthBudgetView api={api} accounts={accounts} locale="en-US"
           revision={0} onAccessLoss={() => false} onOpenMonth={() => undefined} />,
       );
       await Promise.resolve();
@@ -1543,7 +1550,7 @@ describe("MonthBudgetView", () => {
     // Mismatched period response is treated as error.
     api.monthlyBudgetCharts.mockResolvedValueOnce(ok(monthlyBudgetChartsOf({ period: "2026-11", current_month: "2026-11" })));
     await click(labelledButton("Previous month"));
-    expect(host.querySelector('[role="alert"]')?.textContent).toBe(monthBudgetLabels.en.error);
+    expect(host.querySelector('[role="alert"]')?.textContent).toBe(en["budget.monthBudget.error"]);
     expect(host.textContent).not.toContain("999.00 EUR");
   });
 
@@ -1559,7 +1566,7 @@ describe("MonthBudgetView", () => {
     const barrier = vi.fn((result: AccessResult) => !result.ok && result.status === 401);
     await act(async () => {
       root.render(
-        <MonthBudgetView api={api} accounts={accounts} text={monthBudgetLabels.en} locale="en-US"
+        <MonthBudgetView api={api} accounts={accounts} locale="en-US"
           revision={0} onAccessLoss={barrier} onOpenMonth={() => undefined} />,
       );
       await Promise.resolve();

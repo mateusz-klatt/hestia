@@ -3,6 +3,7 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import type { Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { loadLocale } from "../../i18n";
 import { account } from "../fixtures";
 import { CategoryBadge, CategorySwatch } from "./category_badge";
 import {
@@ -43,7 +44,7 @@ import {
   recurringOf,
 } from "./fixtures";
 import type { AnalyticsCategory } from "./model";
-import { MonthBudgetView, monthBudgetLabels } from "./month_budget";
+import { MonthBudgetView } from "./month_budget";
 import { MonthBudgetCharts, buildCategoryChartModel } from "./month_budget_charts";
 import { TransactionsPanel, transactionLabels } from "./transactions";
 import { YearView, yearLabels } from "./year";
@@ -540,6 +541,7 @@ describe("CategorySwatch and CategoryBadge render", () => {
   afterEach(async () => {
     await act(async () => { root.unmount(); await Promise.resolve(); });
     host.remove();
+    await loadLocale("en");
   });
 
   it("renders a legend swatch with category colour and hatched pattern for Other/one-off", async () => {
@@ -658,7 +660,6 @@ describe("CategorySwatch and CategoryBadge render", () => {
           series={series}
           paceProjection={null}
           locale="en-US"
-          text={monthBudgetLabels.en}
           categories={categories}
         />,
       );
@@ -796,6 +797,7 @@ describe("CategorySwatch and CategoryBadge render", () => {
       },
     );
 
+    await loadLocale("pl");
     await act(async () => {
       root.render(
         <MonthBudgetView
@@ -807,7 +809,6 @@ describe("CategorySwatch and CategoryBadge render", () => {
             recurring: vi.fn(() => Promise.resolve({ ok: true as const, data: recurringOf() })),
           }}
           accounts={[account({ id: "acc-1" })]}
-          text={monthBudgetLabels.pl}
           locale="pl-PL"
           revision={0}
           onAccessLoss={() => false}
@@ -865,6 +866,7 @@ describe("CategorySwatch and CategoryBadge render", () => {
     const pln = makeProps("PLN");
     const eur = makeProps("EUR");
 
+    await loadLocale("en");
     await act(async () => {
       root.render(
         <div>
@@ -873,7 +875,6 @@ describe("CategorySwatch and CategoryBadge render", () => {
             series={pln.series}
             paceProjection={null}
             locale="en-US"
-            text={monthBudgetLabels.en}
             categories={categories}
           />
           <MonthBudgetCharts
@@ -881,7 +882,6 @@ describe("CategorySwatch and CategoryBadge render", () => {
             series={eur.series}
             paceProjection={null}
             locale="en-US"
-            text={monthBudgetLabels.en}
             categories={categories}
           />
         </div>,
