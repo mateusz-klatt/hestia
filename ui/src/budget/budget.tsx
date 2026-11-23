@@ -11,14 +11,14 @@ import { ACTIVE_JOB, KINDS, accountLabel, effectiveState, formatAmount, freshnes
 import type { BudgetAccount, BudgetBalances, BudgetCapabilities, BudgetConnection, BudgetJob, BudgetKind,
   BudgetConsent, BudgetConsentFlow, BudgetLimit, BudgetSharedLimit, BudgetTransaction, DateRange,
   LimitState } from "./model";
-import { ConsentHealthPanel, consentHealthLabels } from "./consent_health";
+import { ConsentHealthPanel } from "./consent_health";
 import { ForecastView } from "./analytics/forecast";
 import { InboxView } from "./analytics/inbox";
 import { MonthView, monthLabels } from "./analytics/month";
 import { MonthBudgetView, monthBudgetLabels } from "./analytics/month_budget";
 import { MortgagesView, mortgagesLabels } from "./analytics/mortgages";
-import { QuarantineView, quarantineLabels } from "./analytics/quarantine";
-import { RecurringView, recurringLabels } from "./analytics/recurring";
+import { QuarantineView } from "./analytics/quarantine";
+import { RecurringView } from "./analytics/recurring";
 import { CategoriesView, rulesLabels } from "./analytics/rules";
 import { SpendingLimitsView, spendingLimitsLabels } from "./analytics/spending_limits";
 import { YearView, yearLabels } from "./analytics/year";
@@ -123,19 +123,18 @@ const labels = {
 };
 type Labels = typeof labels.en;
 
-function pick(): { text: Labels; consentHealth: typeof consentHealthLabels.en;
+function pick(): { text: Labels;
   monthBudget: typeof monthBudgetLabels.en; month: typeof monthLabels.en; year: typeof yearLabels.en;
-  limits: typeof spendingLimitsLabels.en; recurring: typeof recurringLabels.en;
-  mortgages: typeof mortgagesLabels.en; quarantine: typeof quarantineLabels.en; rules: typeof rulesLabels.en; locale: string } {
+  limits: typeof spendingLimitsLabels.en;
+  mortgages: typeof mortgagesLabels.en; rules: typeof rulesLabels.en; locale: string } {
   const locale = currentLocale();
   const pl = locale.startsWith("pl");
-  return { text: pl ? labels.pl : labels.en, consentHealth: pl ? consentHealthLabels.pl : consentHealthLabels.en,
+  return { text: pl ? labels.pl : labels.en,
     monthBudget: pl ? monthBudgetLabels.pl : monthBudgetLabels.en,
     month: pl ? monthLabels.pl : monthLabels.en, year: pl ? yearLabels.pl : yearLabels.en,
     limits: pl ? spendingLimitsLabels.pl : spendingLimitsLabels.en,
-    recurring: pl ? recurringLabels.pl : recurringLabels.en,
     mortgages: pl ? mortgagesLabels.pl : mortgagesLabels.en,
-    quarantine: pl ? quarantineLabels.pl : quarantineLabels.en, rules: pl ? rulesLabels.pl : rulesLabels.en, locale };
+    rules: pl ? rulesLabels.pl : rulesLabels.en, locale };
 }
 
 type View = "monthly_budget" | "accounts" | "inbox" | "month" | "year" | "limits" | "recurring" | "mortgages" | "forecast" | "quarantine" | "rules";
@@ -183,8 +182,8 @@ export interface BudgetProps {
 
 export function Budget({ active, api = budgetApi, pollMs = 2000, principal,
   navigate = (url) => { window.location.assign(url); }, completeUrl = "/budget/connect/complete" }: BudgetProps) {
-  const { text, consentHealth: consentHealthText, monthBudget: monthBudgetText, month: monthText,
-    year: yearText, limits: limitsText, recurring: recurringText, mortgages: mortgagesText, quarantine: quarantineText,
+  const { text, monthBudget: monthBudgetText, month: monthText,
+    year: yearText, limits: limitsText, mortgages: mortgagesText,
     rules: rulesText, locale } = pick();
   const [load, setLoad] = useState<Load>("loading");
   const [connections, setConnections] = useState<BudgetConnection[]>([]);
@@ -455,7 +454,7 @@ export function Budget({ active, api = budgetApi, pollMs = 2000, principal,
       {notice === null ? null : <p className="budget-notice" role="alert">{notice}</p>}
       {showLimits ? <p className="budget-muted">{text.limitsIntro}</p> : null}
       {showConsentHealth && consentEnabled ? (
-        <ConsentHealthPanel api={api} connections={connections} text={consentHealthText} locale={locale}
+        <ConsentHealthPanel api={api} connections={connections} locale={locale}
           revision={revision} onAccessLoss={barrier} />
       ) : null}
       {pending.length === 0 ? null : (
@@ -521,7 +520,7 @@ export function Budget({ active, api = budgetApi, pollMs = 2000, principal,
         <SpendingLimitsView api={api} accounts={accounts} text={limitsText} locale={locale} revision={revision}
           onAccessLoss={barrier} onOpenRules={() => { setView("rules"); }} />
       ) : shownView === "recurring" ? (
-        <RecurringView api={api} accounts={accounts} connections={connections} text={recurringText} locale={locale} revision={revision}
+        <RecurringView api={api} accounts={accounts} connections={connections} locale={locale} revision={revision}
           onAccessLoss={barrier} />
       ) : shownView === "mortgages" ? (
         <MortgagesView api={api} accounts={accounts} text={mortgagesText} locale={locale} revision={revision}
@@ -530,7 +529,7 @@ export function Budget({ active, api = budgetApi, pollMs = 2000, principal,
         <ForecastView api={api} accounts={accounts} connections={connections} locale={locale} revision={revision}
           onAccessLoss={barrier} onOpenMortgages={() => { setView("mortgages"); }} />
       ) : shownView === "quarantine" ? (
-        <QuarantineView api={api} accounts={accounts} connections={connections} text={quarantineText} revision={revision}
+        <QuarantineView api={api} accounts={accounts} connections={connections} revision={revision}
           onAccessLoss={barrier} />
       ) : shownView === "rules" ? (
         <CategoriesView api={api} accounts={accounts} connections={connections} text={rulesText} locale={locale} revision={revision}
