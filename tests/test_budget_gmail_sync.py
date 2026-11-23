@@ -732,7 +732,7 @@ class GmailSyncTests(TestCase):
                 self.sync(poll=True)
         state = self.store.state(OWNER)
         self.assertEqual((state.sync_phase, state.history_id, state.pending_history_id, state.run_requested),
-                         ("backfill", None, "100", 0))
+                         ("backfill", None, "100", 1))
         self.assertEqual(len(self.rows(db.BudgetReceipt)), 1)
         with sync_module._sync_lock(self.path):
             pass
@@ -864,3 +864,27 @@ class GmailSyncTests(TestCase):
         state = self.store.state(OWNER)
         self.assertIsNone(state.attention)
         self.assertEqual((state.sync_phase, state.run_requested, state.failures), ("idle", 0, 0))
+
+    def test_accepted_retry_survives_restart_with_attention_latched(self):
+        self.enable()
+        self.transport.routes[("/profile", None)] = response({}, 401)
+        with self.assertRaisesRegex(GmailError, "authorization"):
+            self.sync()
+        state = self.store.state(OWNER)
+        self.assertEqual(state.attention, "authorization")
+        self.clock.now = state.backoff_until
+        self.service.schedule(OWNER)
+
+        with mock.patch.object(self.processor, "ready", side_effect=RuntimeError("synthetic restart")):
+            with self.assertRaisesRegex(RuntimeError, "synthetic restart"):
+                self.sync(poll=True)
+        state = self.store.state(OWNER)
+        self.assertEqual((state.attention, state.run_requested), ("authorization", 1))
+
+        self.tick(60)
+        del self.transport.routes[("/profile", None)]
+        client = GmailClient(self.transport, monotonic=self.clock.monotonic, sleep=self.clock.sleep)
+        restarted = GmailSync(SETTINGS, self.store, client, self.processor, self.path)
+        self.assertTrue(restarted.sync(OWNER, poll=True)["ok"])
+        state = self.store.state(OWNER)
+        self.assertEqual((state.attention, state.run_requested), (None, 0))

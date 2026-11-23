@@ -199,7 +199,7 @@ class GmailSync:
     def _completion(self, state):
         now = self.store.clock()
         result = {**_PHASE_RESET, "history_id": state.pending_history_id, "sync_phase": "idle",
-                  "last_sync_at": now, "next_sync_at": now + self.settings.sync_interval_seconds,
+                  "last_sync_at": now, "next_sync_at": now + self.settings.sync_interval_seconds, "run_requested": 0,
                   "failures": 0, "backoff_until": 0, "attention": None, "last_http_status": None, "last_error": None}
         if state.sync_phase != "incremental":
             result["backfill_completed_at"] = now
@@ -344,7 +344,7 @@ class GmailSync:
         attention = error.attention
         if error.code == "daily_quota" or hint.suspended:
             attention = "quota"
-        self._commit(owner, progress, {"failures": failures, "backoff_until": deadline,
+        self._commit(owner, progress, {"failures": failures, "backoff_until": deadline, "run_requested": 0,
                                       "next_sync_at": max(deadline, now + self.settings.sync_interval_seconds),
                                       "attention": attention, "last_http_status": error.http_status,
                                       "last_error": error.code})
@@ -370,7 +370,7 @@ class GmailSync:
                 raise GmailError("budget_receipt_gmail_cooldown", 429)
             run = self.client.run(owner, generation, self.settings.credentials, lambda: self.store.fence(owner, generation))
             progress = _Progress(generation, run, terms=_terms(self.settings))
-            self._commit(owner, progress, {"last_attempt_at": now, "run_requested": 0})
+            self._commit(owner, progress, {"last_attempt_at": now})
             try:
                 if not self.processor.ready():
                     raise GmailError("parser_unavailable")
@@ -390,7 +390,7 @@ class GmailSync:
                     self._incremental(owner, progress, profile_history)
             except RunLimit:
                 self._commit(owner, progress, {"next_sync_at": self.store.clock() + self.settings.sync_interval_seconds,
-                                              "backoff_until": 0, "failures": 0, "attention": None,
+                                              "backoff_until": 0, "failures": 0, "attention": None, "run_requested": 0,
                                               "last_http_status": None, "last_error": None})
             except GmailError as error:
                 if error.code != "budget_receipt_gmail_disabled":
