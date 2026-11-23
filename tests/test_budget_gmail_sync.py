@@ -421,6 +421,45 @@ class GmailSyncTests(TestCase):
         receipts.purge_expired()
         self.assertEqual(self.rows(db.BudgetGmailMessage), [])
 
+    def test_manual_placeholder_and_authenticated_invoice_dedupe_independently_in_either_order(self):
+        self.enable()
+        for manual_id, direct_id, rfc, manual_first in (("a", "b", "e", True), ("c", "d", "f", False)):
+            with self.subTest(manual_first=manual_first):
+                manual = PendingMessage(manual_id * 64, NOW, "owner_forward", "imported", rfc * 64,
+                                        forwarded_manually=True, sender_domain="vendor.test")
+                direct = PendingMessage(direct_id * 64, NOW, "direct_allowlist", "imported", rfc * 64, INVOICE)
+                items = (manual, direct) if manual_first else (direct, manual)
+                self.assertEqual(self.store.commit(OWNER, 1, {}, items), (2, 0, True))
+                self.assertEqual(self.store.commit(OWNER, 1, {}, items), (0, 0, True))
+                with self.sessions() as session:
+                    review = session.get(db.BudgetGmailMessage, (OWNER, manual.gmail_id_hmac))
+                    invoice = session.get(db.BudgetGmailMessage, (OWNER, direct.gmail_id_hmac))
+                    self.assertIsNone(review.rfc_message_id_hmac)
+                    self.assertEqual(invoice.rfc_message_id_hmac, rfc * 64)
+                    self.assertEqual(session.get(db.BudgetReceipt, review.receipt_id).status, "needs_review")
+                    self.assertEqual(session.get(db.BudgetReceipt, invoice.receipt_id).status, "imported")
+
+    def test_legacy_linked_placeholder_hash_does_not_suppress_an_invoice(self):
+        self.enable()
+        for manual_id, direct_id, rfc, expire_first in (("a", "b", "e", False), ("c", "d", "f", True)):
+            with self.subTest(expire_first=expire_first):
+                now = self.clock.now
+                manual = PendingMessage(manual_id * 64, now, "spouse_forward", "imported",
+                                        forwarded_manually=True, sender_domain="vendor.test")
+                self.assertEqual(self.store.commit(OWNER, 1, {}, (manual,)), (1, 0, True))
+                with self.sessions.begin() as session:
+                    row = session.get(db.BudgetGmailMessage, (OWNER, manual.gmail_id_hmac))
+                    row.rfc_message_id_hmac = rfc * 64
+                if expire_first:
+                    self.tick(IMPORT_TTL)
+                    self.store.retain(OWNER, 1)
+                    with self.sessions() as session:
+                        row = session.get(db.BudgetGmailMessage, (OWNER, manual.gmail_id_hmac))
+                        self.assertEqual((row.outcome, row.rfc_message_id_hmac), ("deleted", None))
+                direct = PendingMessage(direct_id * 64, self.clock.now, "direct_allowlist", "imported",
+                                        rfc * 64, INVOICE)
+                self.assertEqual(self.store.commit(OWNER, 1, {}, (direct,)), (1, 0, True))
+
     def test_quota_delay_retains_backfill_page_and_honors_retry_after(self):
         self.enable()
         self.transport.routes[("/messages", None)] = response(page("mail-one", token="backfill-two"))

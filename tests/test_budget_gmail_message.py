@@ -219,10 +219,12 @@ class GmailMessageProcessorTests(unittest.TestCase):
         for rules in ((MERCHANT,), ("@respect.example",)):
             with self.subTest(rules=rules):
                 self.settings.sender_allowlist = rules
-                message = _email(SPOUSE, f"Begin forwarded message:\nFrom: other@respect.example\n\n{INVOICE}")
+                message = _email(
+                    SPOUSE, f"Begin forwarded message:\nFrom: other@respect.example\nMessage-ID: {RFC_ID}\n\n{INVOICE}")
                 pending = self._process(_metadata(message), _raw(message))
                 self.assertEqual((pending.outcome, pending.forwarded_manually, pending.sender_domain, pending.invoice),
                                  ("imported", True, "respect.example", None))
+                self.assertIsNone(pending.rfc_message_id_hmac)
         self.worker.parse.assert_not_called()
 
     def test_direct_sender_never_unwraps_nested_mail_and_unknown_forwards_are_not_imported(self):

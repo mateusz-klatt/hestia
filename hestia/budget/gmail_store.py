@@ -6,7 +6,7 @@ import hmac
 import json
 import uuid
 
-from sqlalchemy import and_, delete, func, or_, select, update
+from sqlalchemy import and_, case, delete, func, or_, select, update
 
 from ..db import BudgetAnalyticsAudit, BudgetGmailMessage, BudgetGmailState, BudgetReceipt, BudgetReceiptLine
 from .gmail_client import GmailError
@@ -57,10 +57,21 @@ class PendingMessage:
     sender_domain: str | None = None
 
 
+def _linked_manual_forward():
+    return select(BudgetReceipt.id).where(
+        BudgetReceipt.id == BudgetGmailMessage.receipt_id, BudgetReceipt.forwarded_manually == 1,
+    ).exists()
+
+
+def _tombstone_messages(session, *predicates):
+    session.execute(update(BudgetGmailMessage).where(*predicates).values(
+        receipt_id=None, outcome="deleted",
+        rfc_message_id_hmac=case((_linked_manual_forward(), None), else_=BudgetGmailMessage.rfc_message_id_hmac),
+    ))
+
+
 def tombstone_receipt(session, owner, receipt_id):
-    session.execute(update(BudgetGmailMessage).where(
-        BudgetGmailMessage.owner == owner, BudgetGmailMessage.receipt_id == receipt_id,
-    ).values(receipt_id=None, outcome="deleted"))
+    _tombstone_messages(session, BudgetGmailMessage.owner == owner, BudgetGmailMessage.receipt_id == receipt_id)
 
 
 def _unconfirmed_import():
@@ -78,9 +89,7 @@ def _delete_imports(session, owner, expires_at=None):
         # Earlier manual-review rows had no explicit expiry.
         deadline = func.coalesce(BudgetReceipt.import_expires_at, BudgetReceipt.created_at + IMPORT_TTL)
         receipts = receipts.where(deadline <= expires_at)
-        session.execute(update(BudgetGmailMessage).where(
-            BudgetGmailMessage.receipt_id.in_(receipts),
-        ).values(receipt_id=None, outcome="deleted"))
+        _tombstone_messages(session, BudgetGmailMessage.receipt_id.in_(receipts))
     session.execute(delete(BudgetReceiptLine).where(BudgetReceiptLine.receipt_id.in_(receipts)))
     session.execute(delete(BudgetReceipt).where(BudgetReceipt.id.in_(receipts)))
 
@@ -211,7 +220,7 @@ class GmailStore(BudgetStore):
     def _duplicate(session, owner, rfc_hmac):
         return rfc_hmac is not None and session.scalar(select(BudgetGmailMessage.gmail_id_hmac).where(
             BudgetGmailMessage.owner == owner, BudgetGmailMessage.rfc_message_id_hmac == rfc_hmac,
-            BudgetGmailMessage.outcome.in_(("imported", "deleted")),
+            BudgetGmailMessage.outcome.in_(("imported", "deleted")), ~_linked_manual_forward(),
         ).limit(1)) is not None
 
     @staticmethod
@@ -252,7 +261,9 @@ class GmailStore(BudgetStore):
                     continue
                 receipt_id = None
                 outcome = item.outcome
-                if self._duplicate(session, owner, item.rfc_message_id_hmac):
+                # Review placeholders are keyed by their outer Gmail ID.
+                rfc_hmac = None if item.forwarded_manually else item.rfc_message_id_hmac
+                if self._duplicate(session, owner, rfc_hmac):
                     outcome = "skipped_duplicate"
                 if outcome == "imported":
                     if self._pending_count(session, owner) >= MAX_PENDING_IMPORTS:
@@ -264,7 +275,7 @@ class GmailStore(BudgetStore):
                 else:
                     skipped += 1
                 session.add(BudgetGmailMessage(owner=owner, gmail_id_hmac=item.gmail_id_hmac,
-                                               rfc_message_id_hmac=item.rfc_message_id_hmac,
+                                               rfc_message_id_hmac=rfc_hmac,
                                                internal_date=item.internal_date, trust_path=item.trust_path,
                                                outcome=outcome, created_at=now, receipt_id=receipt_id))
             if row.sync_phase in ("backfill", "full_resync"):

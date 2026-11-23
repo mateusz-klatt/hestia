@@ -122,7 +122,6 @@ class GmailMessageProcessor:
             return replace(pending, outcome="skipped_non_receipt")
         attached = any(part.get_content_type() == "message/rfc822" for part in mime_parts(outer))
         return replace(pending, outcome="imported", invoice=None, forwarded_manually=True, sender_domain=domain,
-                       rfc_message_id_hmac=_rfc_message_hmac(inner, self.settings.hmac_secret),
                        source_kind="attachment" if attached else "email")
 
     def _invoice(self, message, pending):
