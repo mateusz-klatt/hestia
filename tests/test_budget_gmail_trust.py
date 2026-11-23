@@ -87,6 +87,35 @@ class GmailTrustTests(unittest.TestCase):
                 self.assertEqual(_classify(_headers(address)), expected)
         self.assertEqual(classify_sender(_headers(SPOUSE), (SPOUSE,), SPOUSES), "spouse_forward")
 
+    def test_allowlisted_senders_accept_parent_dkim_and_spf_domains(self):
+        accepted = (
+            ("twoja_f@ktura.t-mobile.pl", "@t-mobile.pl", "t-mobile.pl", "twoja_f@ktura.t-mobile.pl"),
+            ("e-faktura@pl.orange.com", "@orange.com", "orange.com", "bounce@orange.com"),
+        )
+        for address, rule, signing, mailfrom in accepted:
+            with self.subTest(address=address, signing=signing):
+                headers = _headers(address, dkim=f"dkim=pass header.d={signing}",
+                                   other=f"spf=pass smtp.mailfrom={mailfrom}")
+                self.assertEqual(classify_sender(headers, (rule,), ()), "direct_allowlist")
+        rejected = (
+            ("billing@evil-t-mobile.pl", "billing@evil-t-mobile.pl", "t-mobile.pl"),
+            ("billing@t-mobile.pl.evil.com", "@t-mobile.pl.evil.com", "t-mobile.pl"),
+            ("billing@shop.pl", "@shop.pl", "pl"),
+        )
+        for address, rule, signing in rejected:
+            with self.subTest(address=address, signing=signing):
+                headers = _headers(address, dkim=f"dkim=pass header.d={signing}",
+                                   other=f"spf=pass smtp.mailfrom={address}")
+                self.assertEqual(classify_sender(headers, (rule,), ()), "untrusted")
+        spouse = "forwarder@ktura.t-mobile.pl"
+        strict = _headers(spouse, dkim="dkim=pass header.d=t-mobile.pl",
+                          other=f"spf=pass smtp.mailfrom={spouse}")
+        self.assertEqual(classify_sender(strict, ("billing@merchant.example",), (spouse,)), "untrusted")
+        dmarc_parent = _headers(
+            "twoja_f@ktura.t-mobile.pl", dkim="dkim=pass header.d=evil.example",
+            other="dmarc=pass header.from=t-mobile.pl")
+        self.assertEqual(classify_sender(dmarc_parent, ("@t-mobile.pl",), ()), "untrusted")
+
     def test_spoofed_from_and_sender_mismatch(self):
         self.assertEqual(_classify(_headers() + [("Sender", "relay@merchant.example")]), "direct_allowlist")
         for headers in (

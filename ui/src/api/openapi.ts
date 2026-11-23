@@ -1314,7 +1314,7 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Run one bounded Gmail import batch
+         * Schedule one Gmail import for the background poller
          * @description Default-off with HESTIA_BUDGET_GMAIL_IMPORT_ENABLED. Requires an authenticated SQLite admin and a same-origin browser session. Send exact Origin and a JSON body of at most 4 KiB.
          */
         post: operations["syncBudgetReceiptGmail"];
@@ -5312,6 +5312,8 @@ export interface components {
             attention: ("authorization" | "configuration" | "identity_mismatch" | "quota") | null;
             /** Backoff Until */
             backoff_until: number;
+            /** Batch Processed Count */
+            batch_processed_count: number;
             /** Configured */
             configured: boolean;
             /** Enabled */
@@ -5363,26 +5365,18 @@ export interface components {
         };
         /** BudgetReceiptGmailSyncResult */
         BudgetReceiptGmailSyncResult: {
-            /** Attention */
-            attention: ("authorization" | "configuration" | "identity_mismatch" | "quota") | null;
-            /** Has More */
-            has_more: boolean;
-            /** Imported Count */
-            imported_count: number;
-            /** Next Sync At */
-            next_sync_at: number;
             /**
              * Ok
              * @constant
              */
             ok: true;
-            /** Skipped Count */
-            skipped_count: number;
             /**
              * Sync Phase
              * @enum {string}
              */
             sync_phase: "idle" | "backfill" | "incremental" | "full_resync";
+            /** Version */
+            version: number;
         };
         /** BudgetReceiptLine */
         BudgetReceiptLine: {
@@ -12984,8 +12978,8 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Run one bounded Gmail import batch */
-            200: {
+            /** @description Accepted. next_sync_at is now, and force_full_resync is persisted when requested. The background poller performs the import. */
+            202: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -13029,7 +13023,7 @@ export interface operations {
                     "application/json": components["schemas"]["BudgetError"];
                 };
             };
-            /** @description Grant is inactive, the sync is already running, or authoritative SQLite users are unavailable. */
+            /** @description Grant is inactive or authoritative SQLite users are unavailable. */
             409: {
                 headers: {
                     [name: string]: unknown;

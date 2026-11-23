@@ -178,7 +178,15 @@ def _pass_domain(method, properties, signatures):
     return address.rpartition("@")[2] if address else canonical_domain(value)
 
 
-def _gmail_authenticated(domain, results, signatures):
+def _domains_align(authenticated, domain, *, relaxed):
+    """Strict equality, or a From subdomain of a multi-label authenticated domain."""
+    if not authenticated or authenticated == domain:
+        return bool(authenticated) and authenticated == domain
+    return (relaxed and len(authenticated.split(".")) >= 2
+            and domain.endswith("." + authenticated))
+
+
+def _gmail_authenticated(domain, results, signatures, *, relaxed=False):
     if not results:
         return False
     # Gmail strips incoming Authentication-Results claiming its own authserv-id.
@@ -192,13 +200,17 @@ def _gmail_authenticated(domain, results, signatures):
             continue
         properties = _auth_properties(clause[result.end():])
         method = result[1].lower()
-        # Strict alignment requires the actual authenticated domain to match From.
-        if properties is not None and _pass_domain(method, properties, signatures) == domain:
+        # DMARC header.from stays an exact From-domain match. DKIM and SPF may use
+        # the allowlist's subdomain rule; everyone else stays strict.
+        if properties is not None and _domains_align(
+            _pass_domain(method, properties, signatures), domain,
+            relaxed=relaxed and method != "dmarc",
+        ):
             aligned.add(method)
     return "dkim" in aligned and bool(aligned & {"spf", "dmarc"})
 
 
-def classify_sender(headers, sender_allowlist, spouse_forward_senders):
+def classify_sender(headers, sender_allowlist, spouse_forward_senders, owner_mailbox=None):
     """Classify ordered outer headers, preserving duplicates and the topmost AR."""
     by_name = {}
     for name, value in headers:
@@ -214,8 +226,11 @@ def classify_sender(headers, sender_allowlist, spouse_forward_senders):
         if not sender or sender.rpartition("@")[2] != domain:
             return "untrusted"
     if not _gmail_authenticated(domain, by_name.get("authentication-results", ()),
-                               by_name.get("dkim-signature", ())):
+                               by_name.get("dkim-signature", ()),
+                               relaxed=_on_allowlist(address, sender_allowlist)):
         return "untrusted"
+    if owner_mailbox and address == owner_mailbox:
+        return "owner_forward"
     if address in spouse_forward_senders:
         return "spouse_forward"
     if _on_allowlist(address, sender_allowlist):
@@ -223,7 +238,7 @@ def classify_sender(headers, sender_allowlist, spouse_forward_senders):
     return "untrusted"
 
 
-def _inline_forward(text, sender_allowlist):
+def _inline_forward(text, sender_allowlist, *, require_receipt=True):
     lines = text.splitlines()
     markers = [i for i, line in enumerate(lines) if line.strip(" \t-:").casefold() in _FORWARD_MARKERS]
     if len(markers) != 1:
@@ -251,10 +266,11 @@ def _inline_forward(text, sender_allowlist):
     else:
         return None
     address = _mailbox(fields.get("from", ""))
-    if not address or not _on_allowlist(address, sender_allowlist):
+    if not address:
         return None
     body = "\n".join(lines[index:])
-    if not has_provider_invoice_number(body):
+    if require_receipt and (not _on_allowlist(address, sender_allowlist)
+                            or not has_provider_invoice_number(body)):
         return None
     original = EmailMessage()
     original["From"] = address
@@ -291,7 +307,7 @@ def mime_parts(message):
             parts.extend(reversed(list(part.iter_parts())))
 
 
-def _forwarded_original(message, sender_allowlist, render_html):
+def _forwarded_original(message, sender_allowlist, render_html, *, require_receipt=True):
     wrappers = [part for part in mime_parts(message) if part.get_content_type() == "message/rfc822"]
     if wrappers:
         if len(wrappers) != 1:
@@ -308,7 +324,7 @@ def _forwarded_original(message, sender_allowlist, render_html):
             return None
         return originals[0]
     text = _inline_body(message, render_html)
-    return _inline_forward(text, sender_allowlist) if text else None
+    return _inline_forward(text, sender_allowlist, require_receipt=require_receipt) if text else None
 
 
 def unwrap_forward(message, known_merchant_domains, require_known=True, *,
@@ -333,3 +349,47 @@ def unwrap_forward(message, known_merchant_domains, require_known=True, *,
         if not any(part.get_content_type() == "message/rfc822" for part in mime_parts(message)):
             return message
     return None
+
+
+def _hop_authorized(message, sender_allowlist, known_merchant_domains):
+    authors = [value for name, value in message.raw_items() if name.lower() == "from"]
+    address = _mailbox(authors[0]) if len(authors) == 1 else None
+    if not address:
+        return False
+    domain = address.rpartition("@")[2]
+    return (_on_allowlist(address, sender_allowlist)
+            or any(_domain_matches(domain, rule) for rule in known_merchant_domains))
+
+
+def forward_sender_domain(message):
+    """Return the inner From domain. Inner Authentication-Results are ignored."""
+    authors = [value for name, value in message.raw_items() if name.lower() == "from"]
+    address = _mailbox(authors[0]) if len(authors) == 1 else None
+    if not address:
+        return None
+    return address.rpartition("@")[2]
+
+
+def unwrap_trusted_forward(message, known_merchant_domains, *, sender_allowlist=(), render_html=None):
+    """Unwrap one owner or spouse forward, at most two levels.
+
+    Returns ``(message, manual)``. ``manual`` is true when a hop is outside the
+    allowlist and known merchant domains. A third forward, a malformed part, or
+    a message that is not a forward returns None. Inner authentication headers
+    are not consulted.
+    """
+    current = message
+    hops = []
+    for _depth in range(_MAX_FORWARD_DEPTH):
+        nxt = _forwarded_original(current, sender_allowlist, render_html, require_receipt=False)
+        if nxt is None:
+            break
+        hops.append(nxt)
+        current = nxt
+    if not hops:
+        return None
+    if len(hops) == _MAX_FORWARD_DEPTH and _forwarded_original(
+            current, sender_allowlist, render_html, require_receipt=False) is not None:
+        return None
+    manual = any(not _hop_authorized(hop, sender_allowlist, known_merchant_domains) for hop in hops)
+    return hops[-1], manual

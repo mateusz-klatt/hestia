@@ -378,6 +378,7 @@ class GmailSyncTests(TestCase):
                          (None, "100", "backfill-two"))
         self.assertEqual((state.backoff_until, state.next_sync_at, state.failures, state.last_http_status),
                          (NOW + 180, NOW + SETTINGS.sync_interval_seconds, 1, 429))
+        self.assertEqual(self.store.status(OWNER)["batch_processed_count"], 1)
         self.assertIsNone(self.sync(poll=True))
         with self.assertRaisesRegex(GmailError, "backoff"):
             self.sync()
@@ -713,3 +714,77 @@ class GmailSyncTests(TestCase):
         self.assertEqual(self.rows(db.BudgetReceipt), [])
         self.assertEqual(self.rows(db.BudgetGmailMessage), [])
         self.assertIsNone(self.store.state(OWNER).last_error)
+
+    def test_schedule_queues_a_poller_run_without_calling_gmail(self):
+        with self.assertRaisesRegex(GmailError, "disabled"):
+            self.service.schedule(OWNER)
+        with self.assertRaisesRegex(GmailError, "unconfigured"):
+            self.service.schedule("intruder")
+        self.enable()
+        calls = list(self.transport.calls)
+        queued = self.service.schedule(OWNER, force_full_resync=True)
+        state = self.store.state(OWNER)
+        self.assertEqual(self.transport.calls, calls)
+        self.assertEqual((queued["ok"], queued["sync_phase"], queued["version"]), (True, "idle", state.version))
+        self.assertEqual((state.run_requested, state.force_full_resync, state.next_sync_at), (1, 1, self.clock.now))
+        kept = self.service.schedule(OWNER, force_full_resync=False)
+        self.assertEqual(kept["version"], queued["version"] + 1)
+        self.assertEqual(self.store.state(OWNER).force_full_resync, 1)
+        with self.sessions.begin() as session:
+            session.get(db.BudgetGmailState, OWNER).attention = "identity_mismatch"
+        with self.assertRaisesRegex(GmailError, "mailbox_mismatch"):
+            self.service.schedule(OWNER)
+        self.assertEqual(self.store.state(OWNER).version, kept["version"])
+
+    def test_poller_consumes_a_scheduled_full_resync(self):
+        self.enable()
+        self.transport.routes[("/messages", None)] = response(page("mail-one"))
+        self.sync()
+        self.tick(60)
+        self.service.schedule(OWNER, force_full_resync=True)
+        before_messages = len(self.transport.requests("/messages"))
+        before_history = len(self.transport.requests("/history"))
+        self.sync(poll=True)
+        state = self.store.state(OWNER)
+        self.assertEqual((state.force_full_resync, state.run_requested, state.sync_phase), (0, 0, "idle"))
+        self.assertGreater(len(self.transport.requests("/messages")), before_messages)
+        self.assertEqual(len(self.transport.requests("/history")), before_history)
+
+    def test_poll_waits_out_cooldown_without_recording_a_failure(self):
+        self.enable()
+        self.transport.routes[("/messages", None)] = response(page("mail-one"))
+        self.sync()
+        with self.sessions.begin() as session:
+            row = session.get(db.BudgetGmailState, OWNER)
+            row.next_sync_at = self.clock.now
+            row.run_requested = 1
+        self.assertIsNone(self.sync(poll=True))
+        state = self.store.state(OWNER)
+        self.assertEqual((state.failures, state.run_requested), (0, 1))
+        with self.assertRaisesRegex(GmailError, "cooldown"):
+            self.service.schedule(OWNER)
+        self.assertEqual(self.store.state(OWNER).run_requested, 1)
+        self.tick(60)
+        self.sync(poll=True)
+        self.assertEqual(self.store.state(OWNER).run_requested, 0)
+        self.assertEqual(self.store.state(OWNER).failures, 0)
+
+    def test_scheduled_run_retries_after_quota_attention(self):
+        self.enable()
+        self.transport.routes[("/messages", None)] = response(
+            {"error": {"errors": [{"reason": "dailyLimitExceeded"}]}}, 403)
+        with self.assertRaisesRegex(GmailError, "quota"):
+            self.sync()
+        with self.assertRaisesRegex(GmailError, "backoff"):
+            self.service.schedule(OWNER)
+        state = self.store.state(OWNER)
+        self.assertEqual(state.attention, "quota")
+        self.assertEqual(state.run_requested, 0)
+        self.clock.now = state.backoff_until
+        self.assertIsNone(self.sync(poll=True))
+        self.transport.routes[("/messages", None)] = response(page())
+        self.assertEqual(self.service.schedule(OWNER)["ok"], True)
+        self.sync(poll=True)
+        state = self.store.state(OWNER)
+        self.assertIsNone(state.attention)
+        self.assertEqual((state.sync_phase, state.run_requested, state.failures), ("idle", 0, 0))

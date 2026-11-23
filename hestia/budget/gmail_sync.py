@@ -78,8 +78,9 @@ def _history_messages(page):
 
 
 def _terms(settings):
-    senders = sorted(set(settings.sender_allowlist + settings.spouse_forward_senders))
-    return tuple(f'from:"{sender.removeprefix("@")}"' for sender in senders)
+    senders = set(settings.sender_allowlist + settings.spouse_forward_senders)
+    senders.add(settings.owner_mailbox)
+    return tuple(f'from:"{sender.removeprefix("@")}"' for sender in sorted(senders))
 
 
 def _query(settings, terms, cutoff=None):
@@ -186,10 +187,13 @@ class GmailSync:
         if full:
             last_sync = state.last_sync_at if state.last_sync_at is not None else now
             cutoff = max(cutoff, last_sync - 7 * DAY)
-        self._commit(owner, progress, {
+        changes = {
             **_PHASE_RESET, "history_id": None, "pending_history_id": profile_history, "resume_cutoff_ts": cutoff,
             "sync_phase": "full_resync" if full else "backfill",
-        })
+        }
+        if full:
+            changes["force_full_resync"] = 0
+        self._commit(owner, progress, changes)
 
     def _completion(self, state):
         now = self.store.clock()
@@ -351,17 +355,21 @@ class GmailSync:
             generation = state.grant_generation
             self.store.fence(owner, generation)
             now = self.store.clock()
-            if poll and (state.attention is not None or state.next_sync_at > now):
+            if poll and state.attention == "identity_mismatch":
+                return None
+            if poll and not state.run_requested and (state.attention is not None or state.next_sync_at > now):
                 return None
             if state.attention == "identity_mismatch":
                 raise GmailError("mailbox_mismatch", 403, attention="identity_mismatch")
             if state.backoff_until > now:
                 raise GmailError("budget_receipt_gmail_backoff", 429)
             if state.last_attempt_at is not None and state.last_attempt_at + MANUAL_COOLDOWN > now:
+                if poll:
+                    return None
                 raise GmailError("budget_receipt_gmail_cooldown", 429)
             run = self.client.run(owner, generation, self.settings.credentials, lambda: self.store.fence(owner, generation))
             progress = _Progress(generation, run, terms=_terms(self.settings))
-            self._commit(owner, progress, {"last_attempt_at": now})
+            self._commit(owner, progress, {"last_attempt_at": now, "run_requested": 0})
             try:
                 if not self.processor.ready():
                     raise GmailError("parser_unavailable")
@@ -371,9 +379,11 @@ class GmailSync:
                 profile_history = self._profile(run, state.mailbox_hmac)
                 self.store.retain(owner, generation)
                 progress.label_id = self._label(run)
-                if force_full_resync or (state.history_id is None and state.pending_history_id is None):
-                    self._start_recovery(owner, progress, profile_history, state, full=force_full_resync)
-                if state.history_id is None or force_full_resync:
+                state = self.store.state(owner)
+                force = bool(force_full_resync or state.force_full_resync)
+                if force or (state.history_id is None and state.pending_history_id is None):
+                    self._start_recovery(owner, progress, profile_history, state, full=force)
+                if state.history_id is None or force:
                     self._backfill(owner, progress)
                 else:
                     self._incremental(owner, progress, profile_history)
@@ -390,3 +400,9 @@ class GmailSync:
             return {"ok": True, "sync_phase": state.sync_phase, "imported_count": progress.imported,
                     "skipped_count": progress.skipped, "has_more": state.sync_phase != "idle",
                     "attention": state.attention, "next_sync_at": state.next_sync_at}
+
+    def schedule(self, owner, *, force_full_resync=False):
+        """Record a due poller run. Import work stays on the background loop."""
+        self._require_owner(owner)
+        return self.store.schedule_sync(owner, now=self.store.clock(), force_full_resync=force_full_resync,
+                                        cooldown=MANUAL_COOLDOWN)

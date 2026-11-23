@@ -273,7 +273,13 @@ class BudgetOpenApiTests(unittest.TestCase):
             self.assertEqual(version["name"], "X-Hestia-Contract-Version")
             self.assertFalse(version["required"])
         self.assertNotIn("parameters", receipts["/api/budget/receipts/gmail-status"]["get"])
-        self.assertIn("429", receipts["/api/budget/receipts/gmail-sync"]["post"]["responses"])
+        sync_post = receipts["/api/budget/receipts/gmail-sync"]["post"]
+        self.assertIn("202", sync_post["responses"])
+        self.assertNotIn("200", sync_post["responses"])
+        self.assertIn("429", sync_post["responses"])
+        self.assertEqual(set(document["components"]["schemas"]["BudgetReceiptGmailSyncResult"]["required"]),
+                         {"ok", "sync_phase", "version"})
+        self.assertIn("batch_processed_count", document["components"]["schemas"]["BudgetReceiptGmailStatus"]["required"])
         batch = analytics["/api/budget/analytics/rule-batch-preview"]["post"]["description"]
         self.assertIn("1..100", batch)
         self.assertIn("All-or-nothing", batch)

@@ -6,7 +6,7 @@ import hmac
 import json
 import uuid
 
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import and_, delete, func, or_, select, update
 
 from ..db import BudgetAnalyticsAudit, BudgetGmailMessage, BudgetGmailState, BudgetReceipt, BudgetReceiptLine
 from .gmail_client import GmailError
@@ -32,10 +32,12 @@ GRANT_RESET = {
     **_PHASE_RESET, "history_id": None, "sync_phase": "idle", "mailbox_hmac": None,
     "last_sync_at": None, "last_attempt_at": None, "next_sync_at": 0, "backoff_until": 0, "failures": 0,
     "attention": None, "last_http_status": None, "last_error": None, "backfill_completed_at": None,
+    "run_requested": 0, "force_full_resync": 0,
 }
 
 STATUS_FIELDS = ("grant_status", "grant_generation", "version", "sync_phase", "attention", "last_sync_at",
-                 "next_sync_at", "backoff_until", "failures", "last_http_status", "last_error")
+                 "next_sync_at", "backoff_until", "failures", "last_http_status", "last_error",
+                 "batch_processed_count")
 
 
 def digest(secret, domain, value):
@@ -51,6 +53,8 @@ class PendingMessage:
     rfc_message_id_hmac: str | None = None
     invoice: object = None
     source_kind: str = "email"
+    forwarded_manually: bool = False
+    sender_domain: str | None = None
 
 
 def tombstone_receipt(session, owner, receipt_id):
@@ -106,13 +110,36 @@ class GmailStore(BudgetStore):
     def fence(self, owner, generation):
         self._active(self.state(owner), generation)
 
+    def schedule_sync(self, owner, *, now, force_full_resync, cooldown):
+        """Queue a poller run. The request does not fetch or parse mail."""
+        with self.transaction() as session:
+            BudgetHTTPStore._owner(session, owner)
+            row = self._state(session, owner)
+            if row.grant_status != "active":
+                raise GmailError("budget_receipt_gmail_disabled", 409)
+            if row.attention == "identity_mismatch":
+                raise GmailError("mailbox_mismatch", 403, attention="identity_mismatch")
+            if row.backoff_until > now:
+                raise GmailError("budget_receipt_gmail_backoff", 429)
+            if row.last_attempt_at is not None and row.last_attempt_at + cooldown > now:
+                raise GmailError("budget_receipt_gmail_cooldown", 429)
+            session.add(row)
+            row.next_sync_at = now
+            row.run_requested = 1
+            if force_full_resync:
+                row.force_full_resync = 1
+            row.version += 1
+            return {"ok": True, "sync_phase": row.sync_phase, "version": row.version}
+
     def check_version(self, owner, expected):
         self._version(self.state(owner), expected)
 
     @staticmethod
     def _pending_count(session, owner):
         return session.scalar(select(func.count()).select_from(BudgetReceipt).where(
-            BudgetReceipt.owner == owner, BudgetReceipt.status == "imported"))
+            BudgetReceipt.owner == owner, or_(
+                BudgetReceipt.status == "imported",
+                and_(BudgetReceipt.status == "needs_review", BudgetReceipt.forwarded_manually == 1))))
 
     def status(self, owner):
         with self.sessions() as session:
@@ -185,6 +212,18 @@ class GmailStore(BudgetStore):
         session.flush()
         return receipt.id
 
+    @staticmethod
+    def _manual(session, owner, item, now):
+        """A manual forward waits for the owner. No body, full address, or transaction link is stored."""
+        receipt = BudgetReceipt(
+            id=str(uuid.uuid4()), owner=owner, raw_shop_name="przekazane ręcznie",
+            forwarded_sender_domain=item.sender_domain, forwarded_manually=1,
+            status="needs_review", document_kind="invoice", source_kind=item.source_kind,
+            version=1, created_at=now, updated_at=now)
+        session.add(receipt)
+        session.flush()
+        return receipt.id
+
     def commit(self, owner, generation, changes, pending=()):
         """Commit up to one chunk; never advance a page past an uncommitted message."""
         imported = skipped = 0
@@ -205,7 +244,8 @@ class GmailStore(BudgetStore):
                     if self._pending_count(session, owner) >= MAX_PENDING_IMPORTS:
                         drained = False
                         break
-                    receipt_id = self._invoice(session, owner, item, now)
+                    receipt_id = (self._manual(session, owner, item, now) if item.forwarded_manually
+                                  else self._invoice(session, owner, item, now))
                     imported += 1
                 else:
                     skipped += 1

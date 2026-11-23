@@ -123,4 +123,4 @@ Enable, in this order:
 4. Set `HESTIA_BUDGET_GMAIL_IMPORT_ENABLED=1` in `.env` and recreate the `hestia` container.
 5. Smoke: the Gmail status route reports `configured=true`; no import has run yet unless triggered.
 
-To roll back, remove the flag from `.env` and recreate `hestia` (Gmail routes return 404 and the poller stops). Then run `docker compose --profile receipt-parser stop receipt-parser`. Disabling Gmail leaves migration `0024` applied. To revert the schema, stop the app and run `downgrade_db(path, "0023")`.
+To roll back, remove the flag from `.env` and recreate `hestia` (Gmail routes return 404 and the poller stops). Then run `docker compose --profile receipt-parser stop receipt-parser`. Disabling Gmail leaves migration `0025` applied. To revert the schema, stop the app and run `downgrade_db(path, "0023")` (that walks `0025` then `0024`).

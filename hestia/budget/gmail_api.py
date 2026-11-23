@@ -99,7 +99,7 @@ class _Runtime:
             if not self.worker.ready():
                 raise GmailError("parser_unavailable")
             return _grant_result(service.transition(owner, values["expected_version"], "active"))
-        return service.sync(owner, force_full_resync=values["force_full_resync"])
+        return service.schedule(owner, force_full_resync=values["force_full_resync"])
 
     def poll(self, auth_enabled, session_secret):
         if not _poll_enabled(auth_enabled):
@@ -148,7 +148,8 @@ def register(app, read_json_body, *, auth_enabled, session_secret):
                 owner, secret = _authorize(request, auth_enabled, session_secret)
             active_runtime = service_runtime()
             result = await api._settled_thread(lambda: active_runtime.run(owner, operation, values, secret))
-            return web.json_response(result, headers=api.PRIVATE_HEADERS)
+            status = 202 if operation == "gmail-sync" else 200
+            return web.json_response(result, status=status, headers=api.PRIVATE_HEADERS)
         except GmailError as error:
             code = error.code
             if not code.startswith("budget_receipt_gmail_"):

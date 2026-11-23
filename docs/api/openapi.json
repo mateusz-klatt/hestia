@@ -9796,6 +9796,10 @@
             "title": "Backoff Until",
             "type": "number"
           },
+          "batch_processed_count": {
+            "title": "Batch Processed Count",
+            "type": "integer"
+          },
           "configured": {
             "title": "Configured",
             "type": "boolean"
@@ -9902,6 +9906,7 @@
           "last_http_status",
           "last_error",
           "pending_imported_count",
+          "batch_processed_count",
           "google_revoke_url",
           "google_revoke_affects_calendar_sync"
         ],
@@ -9922,43 +9927,10 @@
       },
       "BudgetReceiptGmailSyncResult": {
         "properties": {
-          "attention": {
-            "anyOf": [
-              {
-                "enum": [
-                  "authorization",
-                  "configuration",
-                  "identity_mismatch",
-                  "quota"
-                ],
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Attention"
-          },
-          "has_more": {
-            "title": "Has More",
-            "type": "boolean"
-          },
-          "imported_count": {
-            "title": "Imported Count",
-            "type": "integer"
-          },
-          "next_sync_at": {
-            "title": "Next Sync At",
-            "type": "number"
-          },
           "ok": {
             "const": true,
             "title": "Ok",
             "type": "boolean"
-          },
-          "skipped_count": {
-            "title": "Skipped Count",
-            "type": "integer"
           },
           "sync_phase": {
             "enum": [
@@ -9969,16 +9941,16 @@
             ],
             "title": "Sync Phase",
             "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
           }
         },
         "required": [
           "ok",
           "sync_phase",
-          "imported_count",
-          "skipped_count",
-          "has_more",
-          "attention",
-          "next_sync_at"
+          "version"
         ],
         "title": "BudgetReceiptGmailSyncResult",
         "type": "object"
@@ -21491,7 +21463,7 @@
           "required": true
         },
         "responses": {
-          "200": {
+          "202": {
             "content": {
               "application/json": {
                 "schema": {
@@ -21499,7 +21471,7 @@
                 }
               }
             },
-            "description": "Run one bounded Gmail import batch"
+            "description": "Accepted. next_sync_at is now, and force_full_resync is persisted when requested. The background poller performs the import."
           },
           "400": {
             "content": {
@@ -21549,7 +21521,7 @@
                 }
               }
             },
-            "description": "Grant is inactive, the sync is already running, or authoritative SQLite users are unavailable."
+            "description": "Grant is inactive or authoritative SQLite users are unavailable."
           },
           "411": {
             "content": {
@@ -21612,7 +21584,7 @@
             "description": "budget configuration unavailable"
           }
         },
-        "summary": "Run one bounded Gmail import batch",
+        "summary": "Schedule one Gmail import for the background poller",
         "x-required-role": "admin"
       }
     },

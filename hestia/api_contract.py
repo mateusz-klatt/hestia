@@ -2775,11 +2775,7 @@ class BudgetReceiptGmailSyncResult(BaseModel):
     model_config = _READ
     ok: Literal[True]
     sync_phase: BudgetReceiptGmailSyncPhase
-    imported_count: int
-    skipped_count: int
-    has_more: bool
-    attention: BudgetReceiptGmailAttention | None
-    next_sync_at: float
+    version: int
 
 
 class BudgetReceiptGmailStatus(BaseModel):
@@ -2798,6 +2794,7 @@ class BudgetReceiptGmailStatus(BaseModel):
     last_http_status: int | None
     last_error: str | None
     pending_imported_count: int
+    batch_processed_count: int
     google_revoke_url: Literal["https://myaccount.google.com/linkedapps"]
     google_revoke_affects_calendar_sync: Literal[True]
 
@@ -3947,12 +3944,18 @@ def _gmail_receipt_paths():
         ("revoke", "revokeBudgetReceiptGmailGrant", "Revoke the local grant and purge unconfirmed imports",
          "BudgetReceiptGmailRevokeRequest", "BudgetReceiptGmailGrantResult",
          "Version conflict or a missing authoritative SQLite users backend."),
-        ("sync", "syncBudgetReceiptGmail", "Run one bounded Gmail import batch",
+        ("sync", "syncBudgetReceiptGmail", "Schedule one Gmail import for the background poller",
          "BudgetReceiptGmailSyncRequest", "BudgetReceiptGmailSyncResult",
-         "Grant is inactive, the sync is already running, or authoritative SQLite users are unavailable."),
+         "Grant is inactive or authoritative SQLite users are unavailable."),
     ):
         responses = _budget_responses(response_model)
-        responses["200"]["description"] = summary
+        if name == "sync":
+            accepted = responses.pop("200")
+            accepted["description"] = ("Accepted. next_sync_at is now, and force_full_resync is persisted when "
+                                       "requested. The background poller performs the import.")
+            responses["202"] = accepted
+        else:
+            responses["200"]["description"] = summary
         responses["409"] = _receipt_error(conflict)
         responses["411"] = _receipt_error("Content-Length is required.")
         responses["413"] = _receipt_error("JSON body exceeds 4096 bytes.")

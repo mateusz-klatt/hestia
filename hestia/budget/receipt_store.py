@@ -51,7 +51,7 @@ _SUMMARY_FIELDS = (
     "receipt_time", "total_amount", "currency", "payment_method", "status", "source_kind", "linked",
     "linked_account_id", "linked_entry_ref", "version", "created_at", "updated_at", "image_available",
     "image_expires_at", "raw_text_expires_at", "math_delta", "document_kind", "invoice_number", "due_date",
-    "import_expires_at",
+    "import_expires_at", "forwarded_manually", "forwarded_sender_domain",
 )
 
 
@@ -166,6 +166,8 @@ class BudgetReceiptStore(BudgetHTTPStore):
             "raw_text_expires_at": row.raw_text_expires_at, "math_delta": self._math_delta(session, row),
             "document_kind": row.document_kind, "invoice_number": redact_digit_field(row.invoice_number),
             "due_date": row.due_date, "import_expires_at": row.import_expires_at,
+            "forwarded_manually": bool(row.forwarded_manually),
+            "forwarded_sender_domain": row.forwarded_sender_domain,
         }
         return {key: values[key] for key in _SUMMARY_FIELDS}
 

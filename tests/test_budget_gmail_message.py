@@ -14,6 +14,7 @@ from hestia.budget.gmail_worker import PDFUnsupported, WorkerRejected, WorkerUna
 
 MERCHANT = "bills@respect.example"
 SPOUSE = "spouse@gmail.com"
+OWNER = "owner@gmail.com"
 MESSAGE_ID = "syntheticGmailId"
 GMAIL_HASH = "a" * 64
 SECRET = b"synthetic-key-for-rfc-message-dedupe-only"
@@ -60,6 +61,7 @@ class GmailMessageProcessorTests(unittest.TestCase):
         self.settings = SimpleNamespace(
             sender_allowlist=(MERCHANT,), spouse_forward_senders=(SPOUSE,), hmac_secret=SECRET,
             known_merchant_domains=("respect.example",), require_known_forwarded_merchant=True,
+            owner_mailbox=OWNER,
         )
         self.worker = Mock()
         self.worker.ready.return_value = True
@@ -179,29 +181,31 @@ class GmailMessageProcessorTests(unittest.TestCase):
         self.assertEqual(self.worker.parse.call_args_list, [call("html", html.encode()),
                                                             call("text", b"\n" + INVOICE.encode())])
 
-    def test_inline_merchant_marker_without_provider_invoice_pattern_is_not_imported(self):
+    def test_inline_merchant_without_provider_pattern_needs_review(self):
         for text in ("Please pay this bill", INVOICE.replace("RE/2026/00042", "FV/2026/11/42")):
             message = _email(SPOUSE, f"Begin forwarded message:\nFrom: {MERCHANT}\n\n{text}")
             pending = self._process(_metadata(message), _raw(message))
-            self.assertEqual(pending.outcome, "skipped_non_receipt")
+            self.assertEqual((pending.outcome, pending.forwarded_manually, pending.sender_domain),
+                             ("imported", True, "respect.example"))
             self.assertIsNone(pending.invoice)
-        self.worker.parse.assert_not_called()
 
-    def test_known_domain_alone_cannot_authorize_inline_forward(self):
+    def test_known_domain_with_provider_pattern_imports_inline_forward(self):
         message = _email(SPOUSE, f"Begin forwarded message:\nFrom: other@respect.example\n\n{INVOICE}")
-        self.assertEqual(self._process(_metadata(message), _raw(message)).outcome, "skipped_non_receipt")
-        self.worker.parse.assert_not_called()
+        pending = self._process(_metadata(message), _raw(message))
+        self.assertEqual((pending.outcome, pending.forwarded_manually, pending.invoice.invoice_number),
+                         ("imported", False, "RE/2026/00042"))
 
     def test_direct_sender_never_unwraps_nested_mail_and_unknown_forwards_are_not_imported(self):
         direct = _email(MERCHANT, "")
         inner = _email("attacker@evil.example")
         inner.add_attachment(b"%PDF-fixture", maintype="application", subtype="pdf")
         direct.add_attachment(inner)
-        unknown_forward = _email(SPOUSE, f"Begin forwarded message:\nFrom: attacker@evil.example\n\n{INVOICE}")
-        for message in (direct, unknown_forward):
-            with self.subTest(sender=message["From"]):
-                self.assertEqual(self._process(_metadata(message), _raw(message)).outcome, "skipped_non_receipt")
+        self.assertEqual(self._process(_metadata(direct), _raw(direct)).outcome, "skipped_non_receipt")
         self.worker.parse.assert_called_once_with("text", b"\n")
+        unknown_forward = _email(SPOUSE, f"Begin forwarded message:\nFrom: attacker@evil.example\n\n{INVOICE}")
+        pending = self._process(_metadata(unknown_forward), _raw(unknown_forward))
+        self.assertEqual((pending.outcome, pending.forwarded_manually, pending.sender_domain, pending.invoice),
+                         ("imported", True, "evil.example", None))
 
     def test_invalid_or_missing_rfc_message_ids_are_not_hashed(self):
         for rfc_id in (None, "no-brackets@respect.example", "<Invoice-42@local>", "< Invoice@respect.example>"):
@@ -266,3 +270,58 @@ class GmailMessageProcessorTests(unittest.TestCase):
         html_forward = _email(SPOUSE, "<body>forward fixture</body>", subtype="html")
         self.worker.parse.side_effect = WorkerRejected("synthetic parse detail")
         self.assertEqual(self._process(_metadata(html_forward), _raw(html_forward)).outcome, "parse_failed")
+
+    def test_owner_self_forward_imports_inline_and_attachment(self):
+        original = _email()
+        attached = _email(OWNER, "Forwarding my invoice", rfc_id="<owner-cover@gmail.com>")
+        attached.add_attachment(original)
+        inline = _email(OWNER, f"Przekazana wiadomość:\nOd: {MERCHANT}\nMessage-ID: {RFC_ID}\n\n{INVOICE}")
+        for message in (attached, inline):
+            with self.subTest(content_type=message.get_content_type()):
+                pending = self._process(_metadata(message), _raw(message))
+                self.assertEqual((pending.trust_path, pending.outcome, pending.forwarded_manually),
+                                 ("owner_forward", "imported", False))
+                self.assertEqual(pending.invoice.invoice_number, "RE/2026/00042")
+                self.assertIsNone(pending.sender_domain)
+
+    def test_spouse_forward_of_unknown_shop_needs_review(self):
+        shop = "billing@corner-shop.example"
+        inline = _email(SPOUSE, f"Begin forwarded message:\nFrom: {shop}\n\nPlease pay this shop bill")
+        original = _email(shop, "Please pay this shop bill", rfc_id="<shop-1@corner-shop.example>")
+        attached = _email(SPOUSE, "Forwarding a shop mail", rfc_id="<spouse-cover@gmail.com>")
+        attached.add_attachment(original)
+        for message, source in ((inline, "email"), (attached, "attachment")):
+            with self.subTest(source=source):
+                pending = self._process(_metadata(message), _raw(message))
+                self.assertEqual((pending.trust_path, pending.outcome, pending.forwarded_manually,
+                                  pending.sender_domain, pending.source_kind, pending.invoice),
+                                 ("spouse_forward", "imported", True, "corner-shop.example", source, None))
+
+    def test_untrusted_forwarder_is_rejected(self):
+        message = _email("intruder@evil.example", f"Begin forwarded message:\nFrom: {MERCHANT}\n\n{INVOICE}")
+        pending = self._process(_metadata(message))
+        self.assertEqual((pending.outcome, pending.trust_path), ("skipped_untrusted_sender", "untrusted"))
+        self.worker.parse.assert_not_called()
+
+    def test_forged_inner_authentication_results_are_ignored(self):
+        original = _email("attacker@evil.example", "Please pay this shop bill")
+        original["Authentication-Results"] = (
+            "mx.google.com; dkim=pass header.d=respect.example; dmarc=pass header.from=respect.example"
+        )
+        outer = _email(SPOUSE, "Forwarding", rfc_id="<spouse-cover@gmail.com>")
+        outer.add_attachment(original)
+        pending = self._process(_metadata(outer), _raw(outer))
+        self.assertEqual((pending.trust_path, pending.forwarded_manually, pending.sender_domain, pending.invoice),
+                         ("spouse_forward", True, "evil.example", None))
+
+    def test_depth_three_forward_is_rejected(self):
+        inner = _email(MERCHANT)
+        middle = _email("relay@example.test", "middle")
+        middle.add_attachment(inner)
+        outer_middle = _email("other-relay@example.test", "outer middle")
+        outer_middle.add_attachment(middle)
+        outer = _email(SPOUSE, "outer")
+        outer.add_attachment(outer_middle)
+        pending = self._process(_metadata(outer), _raw(outer))
+        self.assertEqual((pending.outcome, pending.forwarded_manually, pending.invoice),
+                         ("skipped_non_receipt", False, None))

@@ -1,15 +1,19 @@
 """Synthetic HTTP integration for the default-off Gmail receipt routes."""
 import asyncio
+import base64
 import json
 import os
+from email.message import EmailMessage
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import threading
+import time
 from types import SimpleNamespace
 from unittest import IsolatedAsyncioTestCase, mock
 
 from aiohttp import web as aio_web
 from aiohttp.test_utils import TestClient, TestServer
+from sqlalchemy import select
 
 from hestia import api_contract, auth, db, store_sql, web
 from hestia.budget import gmail_api, gmail_config, receipt_api
@@ -167,23 +171,26 @@ class GmailHTTPTests(IsolatedAsyncioTestCase):
         self.assertEqual((grant.grant_status, grant.grant_generation, grant.version), ("active", 1, 2))
         self.assertEqual([path for path, _params in self.transport.calls], ["token", "/profile"])
         synced = await self.call("gmail-sync", json={"force_full_resync": True})
-        self.assertEqual(synced.status, 200, await synced.text())
-        batch = api_contract.BudgetReceiptGmailSyncResult.model_validate(await synced.json())
-        self.assertEqual((batch.sync_phase, batch.imported_count, batch.skipped_count, batch.has_more), ("idle", 0, 0, False))
-        self.assertEqual((await self.call("gmail-sync", json={})).status, 429)
-        self.assertEqual(len(self.transport.requests("/profile")), 2)
+        self.assertEqual(synced.status, 202, await synced.text())
+        accepted = api_contract.BudgetReceiptGmailSyncResult.model_validate(await synced.json())
+        self.assertEqual((accepted.ok, accepted.sync_phase, accepted.version), (True, "idle", grant.version + 1))
+        self.assertEqual(len(self.transport.requests("/profile")), 1)
+        queued = await (await self.call("gmail-status")).json()
+        self.assertEqual((queued["sync_phase"], queued["batch_processed_count"], queued["next_sync_at"]),
+                         ("idle", 0, self.clock.now))
 
         self.settings.unlink()
         self.worker.ready.return_value = False
         calls = self.transport.calls[:]
-        paused = await self.call("gmail-grant", json={"action": "disable", "expected_version": grant.version})
+        paused = await self.call("gmail-grant", json={"action": "disable", "expected_version": accepted.version})
         self.assertEqual(paused.status, 200)
-        self.assertEqual((await paused.json())["version"], 3)
-        revoked = await self.call("gmail-revoke", json={"expected_version": 3})
+        self.assertEqual((await paused.json())["version"], accepted.version + 1)
+        revoked = await self.call("gmail-revoke", json={"expected_version": accepted.version + 1})
         self.assertEqual(revoked.status, 200)
         self.assertEqual((await revoked.json())["grant_status"], "revoked")
         body = await (await self.call("gmail-status")).json()
-        self.assertEqual((body["configured"], body["pending_imported_count"], body["version"]), (False, 0, 4))
+        self.assertEqual((body["configured"], body["pending_imported_count"], body["batch_processed_count"],
+                          body["version"]), (False, 0, 0, accepted.version + 2))
         self.assertEqual(self.transport.calls, calls)
 
     async def test_profile_mismatch_and_parser_unavailability_use_safe_errors(self):
@@ -254,6 +261,96 @@ class GmailHTTPTests(IsolatedAsyncioTestCase):
                          ("X-Hestia-Contract-Version", "0.40.0")]
         response = await self.client.post(receipt_api.PREFIX + "/list", json={}, headers=token_headers)
         self.assertEqual(response.status, 400)
+
+    async def test_sync_schedules_immediately_and_the_poller_imports(self):
+        os.environ[gmail_api.FLAG] = "1"
+        granted = await self.call("gmail-grant", json={"action": "enable", "expected_version": 1})
+        self.assertEqual(granted.status, 200, await granted.text())
+        message_id = "mail-scheduled"
+        message = _scheduled_invoice()
+        self.transport.routes[("/messages", None)] = response_json(page_ids(message_id))
+        self.transport.routes[("/messages/" + message_id, None)] = _provider_message(message_id, message)
+        parsed = []
+
+        def slow_parse(_kind, payload):
+            parsed.append(payload)
+            time.sleep(1.2)
+            return payload.decode("utf-8")
+
+        self.worker.parse.side_effect = slow_parse
+        profiles = len(self.transport.requests("/profile"))
+        started = time.perf_counter()
+        scheduled = await self.call("gmail-sync", json={})
+        elapsed = time.perf_counter() - started
+        self.assertEqual(scheduled.status, 202, await scheduled.text())
+        self.assertLess(elapsed, 1.0)
+        self.assertEqual(parsed, [])
+        self.assertEqual(len(self.transport.requests("/profile")), profiles)
+        body = api_contract.BudgetReceiptGmailSyncResult.model_validate(await scheduled.json())
+        self.assertEqual((body.ok, body.sync_phase), (True, "idle"))
+        progress = await (await self.call("gmail-status")).json()
+        self.assertEqual((progress["sync_phase"], progress["batch_processed_count"], progress["next_sync_at"]),
+                         ("idle", 0, self.clock.now))
+
+        gmail_api._Runtime().poll(lambda: True, lambda: _SESSION)
+        self.assertEqual(len(parsed), 1)
+        self.assertEqual((await self.call("gmail-sync", json={})).status, 429)
+        with self.sessions() as session:
+            receipt, = list(session.scalars(select(db.BudgetReceipt)))
+            self.assertEqual((receipt.status, receipt.invoice_number, receipt.raw_ocr_text),
+                             ("imported", "RE/2026/00042", None))
+            session.connection().exec_driver_sql("PRAGMA wal_checkpoint(TRUNCATE)")
+        stored = Path(self.env["HESTIA_DB"]).read_bytes()
+        self.assertNotIn(b"synthetic-body-only-marker", stored)
+        self.assertNotIn(b"billing@merchant.example.test", stored)
+        after = await (await self.call("gmail-status")).json()
+        self.assertEqual((after["sync_phase"], after["pending_imported_count"], after["batch_processed_count"]),
+                         ("idle", 1, 0))
+
+
+def _scheduled_invoice():
+    sender = "billing@merchant.example.test"
+    domain = "merchant.example.test"
+    body = (
+        "Wystawca: Respect Energy\n"
+        "Numer dokumentu: RE/2026/00042\n"
+        "Kwota: 123,45 PLN\n"
+        "Data wystawienia: 21.11.2026\n"
+        "Termin płatności: 2026-12-05\n"
+        "synthetic-body-only-marker\n"
+    )
+    message = EmailMessage()
+    message["From"] = sender
+    message["Authentication-Results"] = (
+        f"mx.google.com; dkim=pass header.d={domain}; dmarc=pass header.from={domain}"
+    )
+    message.set_content(body)
+    return message
+
+
+def page_ids(*ids, token=None):
+    return {"messages": [{"id": value} for value in ids], "nextPageToken": token}
+
+
+def response_json(data, status=200, headers=None):
+    from hestia.calendar_sync.providers import HTTPResponse
+    return HTTPResponse(status, headers or {}, json.dumps(data).encode())
+
+
+def _provider_message(message_id, message):
+    payload = message.as_bytes()
+    metadata = {"id": message_id, "sizeEstimate": len(payload), "internalDate": "1795566945123",
+                "payload": {"headers": [{"name": name, "value": value} for name, value in message.raw_items()
+                                        if name in {"From", "Sender", "Authentication-Results", "DKIM-Signature"}]}}
+    raw = {"id": message_id, "raw": base64.urlsafe_b64encode(payload).decode().rstrip("=")}
+
+    def select_response(params):
+        if params["format"] == ["metadata"]:
+            return response_json(metadata)
+        assert params["format"] == ["raw"]
+        return response_json(raw)
+
+    return select_response
 
 
 class GmailPollLifecycleTests(IsolatedAsyncioTestCase):
