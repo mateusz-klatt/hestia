@@ -7980,17 +7980,6 @@
             ],
             "title": "Raw Nip"
           },
-          "raw_ocr_text": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Raw Ocr Text"
-          },
           "raw_shop_name": {
             "anyOf": [
               {
@@ -8121,7 +8110,6 @@
           "image_expires_at",
           "raw_text_expires_at",
           "math_delta",
-          "raw_ocr_text",
           "lines"
         ],
         "title": "BudgetReceiptDetail",

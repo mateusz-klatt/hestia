@@ -2656,7 +2656,6 @@ class BudgetReceiptSummary(BaseModel):
 
 
 class BudgetReceiptDetail(BudgetReceiptSummary):
-    raw_ocr_text: str | None
     lines: list[BudgetReceiptLine]
 
 

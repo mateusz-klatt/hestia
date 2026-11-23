@@ -145,8 +145,7 @@ class BudgetReceiptStore(BudgetHTTPStore):
     def _detail(self, session, row):
         lines = session.scalars(select(Line).where(Line.receipt_id == row.id, Line.owner == row.owner)
                                 .order_by(Line.line_no))
-        return {**self._summary(session, row), "raw_ocr_text": row.raw_ocr_text,
-                "lines": [_line_dict(line) for line in lines]}
+        return {**self._summary(session, row), "lines": [_line_dict(line) for line in lines]}
 
     def _purge(self, session, owner, now):
         conditions = [Receipt.status == "draft",
@@ -201,7 +200,7 @@ class BudgetReceiptStore(BudgetHTTPStore):
                 receipt_time=parsed["receipt_time"], total_amount=parsed["total_amount"],
                 currency=parsed["currency"], payment_method=parsed["payment_method"], status="draft",
                 source_kind="live_text", image_relpath=None, image_expires_at=None,
-                raw_ocr_text=parsed["raw_ocr_text"], raw_text_expires_at=now + DRAFT_TTL_SECONDS,
+                raw_ocr_text=None, raw_text_expires_at=None,
                 linked_account_id=None, linked_entry_ref=None, linked_fingerprint=None, version=1,
                 created_at=now, updated_at=now,
             )
@@ -400,10 +399,7 @@ class BudgetReceiptStore(BudgetHTTPStore):
                 row.linked_fingerprint, row.linked_evidence = fingerprint
             row.status, row.version, row.updated_at = "confirmed", row.version + 1, now
             if row_was_draft:
-                deadline = now + CONFIRMED_TEXT_TTL_SECONDS
-                if row.raw_ocr_text is not None:
-                    row.raw_text_expires_at = deadline
-                row.image_expires_at = deadline
+                row.image_expires_at = now + CONFIRMED_TEXT_TTL_SECONDS
             try:
                 session.flush()
             except IntegrityError:
@@ -536,8 +532,6 @@ class BudgetReceiptStore(BudgetHTTPStore):
     @staticmethod
     def _matches(session, row, needle):
         if needle in fold_for_match(row.raw_shop_name or "") or needle in fold_for_match(row.raw_nip or ""):
-            return True
-        if row.raw_ocr_text is not None and needle in fold_for_match(row.raw_ocr_text):
             return True
         return session.scalar(select(Line.receipt_id).where(
             Line.receipt_id == row.id, Line.owner == row.owner,

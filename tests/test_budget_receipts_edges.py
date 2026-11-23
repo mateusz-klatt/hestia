@@ -31,43 +31,52 @@ def _line(**changes):
 
 
 class ParserEdgeTests(unittest.TestCase):
-    def test_separator_digit_and_gap_helpers(self):
-        self.assertFalse(receipt_parser._pan_separator("\n"))
-        self.assertEqual(receipt_parser._pan_digit("١"), "1")
-        with mock.patch("hestia.budget.receipt_parser.unicodedata.digit", side_effect=ValueError):
-            self.assertIsNone(receipt_parser._pan_digit("١"))
-            self.assertEqual(receipt_parser._normalize_receipt_text("١"), "")
-        symbols, candidates = receipt_parser._line_candidates("12!!34")
-        self.assertEqual(len(candidates), 2)
-        self.assertEqual(len(symbols), 4)
-        self.assertEqual(receipt_parser._flag_candidate("12", [], bytearray(), False), bytearray())
-        self.assertTrue(receipt_parser._ends_word("nr  ", "nr"))
-        self.assertTrue(receipt_parser._starts_word("  karty", "karty"))
-        self.assertFalse(receipt_parser._real_calendar_date("123", "11", "22"))
-
-    def test_stream_breaks_skip_non_overlapping_money_and_passed_joiners(self):
-        spans = receipt_parser._candidate_spans([(0, "d", "1")], bytearray(b"\x01"), [(10, 12), (20, 22)])
-        self.assertEqual(spans, [(0, 1)])
-        symbols = ([("d", "1")] * 4) + ([("m", "*")] * 4) + [("d", "5")]
-        flagged = receipt_parser._label_stream_flags(symbols)
-        self.assertEqual(list(flagged[:8]), [1] * 8)
-        self.assertEqual(flagged[8], 0)
-        window = ([("m", "*")] * 3) + [("d", "1")] + ([("m", "*")] * 4)
-        flags = receipt_parser._plain_window_flags(window)
-        self.assertEqual(list(flags[:4]), [0, 0, 0, 0])
-        self.assertEqual(list(flags[4:]), [1, 1, 1, 1])
-        self.assertEqual(receipt_parser._plain_window_flags([]), bytearray())
-        self.assertEqual(redact_pan("***1****"), "[REDACTED]")
-        with mock.patch.object(receipt_parser, "_STREAM_DATE") as stream:
-            stream.finditer.return_value = []
-            real, joiners = receipt_parser._date_break_and_joiner_spans("22.11.2026")
-        self.assertEqual((real, joiners), ([], []))
-        receipt_parser._plain_line_tokens("31.13.0000 .")
-        with mock.patch.object(receipt_parser, "_stream_break_ranges", return_value=([(0, 0)], [])):
-            receipt_parser._plain_line_tokens("1234")
-        with mock.patch.object(receipt_parser, "_stream_break_ranges", return_value=([(2, 4)], [])):
-            tokens = receipt_parser._plain_line_tokens("123456")
-        self.assertTrue(any(token is None for token in tokens))
+    def test_pesel_iban_and_normaliser_edges(self):
+        self.assertFalse(receipt_parser._pesel(""))
+        self.assertFalse(receipt_parser._pesel("4405140135"))
+        self.assertFalse(receipt_parser._pesel("44051401358"))
+        self.assertTrue(receipt_parser._pesel("44051401359"))
+        self.assertFalse(receipt_parser._iban_shape("PL6110901014"))
+        self.assertFalse(receipt_parser._iban_shape("GB" + "29" + "A" * 40))
+        self.assertFalse(receipt_parser._iban_shape("1B29NWBK60161331926819"))
+        self.assertFalse(receipt_parser._iban_shape("G129NWBK60161331926819"))
+        self.assertFalse(receipt_parser._iban_shape("GBX9NWBK60161331926819"))
+        self.assertFalse(receipt_parser._iban_shape("GB2XNWBK60161331926819"))
+        self.assertFalse(receipt_parser._iban_shape("GB29NWBK6016133192681!"))
+        self.assertTrue(receipt_parser._iban_shape("PL61109010140000071219812874"))
+        self.assertTrue(receipt_parser._iban_shape("GB29NWBK60161331926819"))
+        for error in (ValueError, TypeError):
+            with mock.patch("hestia.budget.receipt_parser.unicodedata.digit", side_effect=error):
+                self.assertEqual(receipt_parser._normalize_receipt_text("١"), "")
+        self.assertEqual(redact_pan("44051401359"), "[usunięto]")
+        self.assertEqual(redact_pan("44051401358"), "44051401358")
+        self.assertEqual(redact_pan("440514\n01359"), "[usunięto]\n[usunięto]")
+        self.assertEqual(redact_pan("PESEL 44051401359"), "[usunięto]")
+        self.assertEqual(redact_pan("PL61109010140000071219812874"), "[usunięto]")
+        self.assertEqual(redact_pan("PL61 1090 1014 0000 0712 1981 2874"), "[usunięto]")
+        self.assertEqual(redact_pan("PL61109010140000071219812874!"), "[usunięto]")
+        self.assertEqual(redact_pan("GB29 NWBK 6016 1331 9268 19"), "[usunięto]")
+        self.assertEqual(redact_pan("gb29 nwbk 6016 1331 9268 19"), "[usunięto]")
+        self.assertEqual(redact_pan("GB29 NWBK\n6016 1331 9268 19"), "[usunięto]\n[usunięto]")
+        self.assertEqual(redact_pan("PL61!123"), "PL61!123")
+        self.assertEqual(redact_pan("PL6110901014"), "PL6110901014")
+        glued = "GB29NWBK6016X1331X9268X19EXTRAEXTRAEXTRA"
+        self.assertEqual(redact_pan(glued), glued)
+        self.assertEqual(redact_pan("A12345"), "A12345")
+        self.assertEqual(redact_pan("A1234567890123456"), "[usunięto]")
+        self.assertEqual(redact_pan("ABXX12345678901"), "ABXX12345678901")
+        self.assertEqual(redact_pan("ABCX12345678901"), "ABCX12345678901")
+        self.assertEqual(redact_pan("***1****"), "***1****")
+        self.assertEqual(redact_pan("1GB29NWBK6016X1331"), "1GB29NWBK6016X1331")
+        with mock.patch.object(receipt_parser, "redact_pan", return_value=""):
+            with self.assertRaises(ReceiptError):
+                receipt_parser._clean_text("SKLEP", limit=16)
+        with mock.patch.object(receipt_parser, "redact_pan", return_value="A" * 20):
+            with self.assertRaises(ReceiptError):
+                receipt_parser._clean_text("SKLEP", limit=16)
+        with self.assertRaises(ReceiptError):
+            receipt_parser._bounded_money("99999999.9999")
+        self.assertEqual(receipt_parser._bounded_money("999999999.99"), "999999999.99")
 
     def test_parse_validation_and_defensive_text_checks(self):
         self.assertIn("market", merchant_tokens("ab polska market", None))
@@ -136,7 +145,7 @@ class ParserEdgeTests(unittest.TestCase):
         check(raw_shop_name="\ufeffSKLEP")
         check(raw_shop_name=1)
         check(raw_shop_name="   ")
-        check(raw_shop_name="****" + ("A" * 124))
+        check(raw_shop_name="A" * 129)
         check(lines="nope")
         check(lines=["nope"])
         check(lines=[{key: _line()[key] for key in _line() if key != "quantity"}])
@@ -401,7 +410,8 @@ class StoreEdgeTests(AnalyticsCase):
                 self.receipts.search("owner", values)
         self.assertTrue(self.receipts.list("owner", {"status": "draft"})["receipts"])
         self.assertEqual(self.receipts.search("owner", {"query": "zz%_\\nope"})["receipts"], [])
-        self.assertEqual(len(self.receipts.search("owner", {"query": "paragon"})["receipts"]), 1)
+        self.assertEqual(self.receipts.search("owner", {"query": "paragon"})["receipts"], [])
+        self.assertEqual(len(self.receipts.search("owner", {"query": "biedronka"})["receipts"]), 1)
         for values in ({"receipt_id": identifier}, {"receipt_id": identifier, "expected_version": 0},
                        {"receipt_id": identifier, "expected_version": True}):
             with self.subTest(values=values), self.assertRaises(ReceiptError):

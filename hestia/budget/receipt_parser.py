@@ -14,9 +14,14 @@ MAX_TEXT_BYTES = 32 * 1024
 MAX_TEXT_LINES = 500
 MAX_MONEY_INTEGER_DIGITS = 9
 MAX_MONEY_FRACTION_DIGITS = 4
-# Inclusive symbol counts for every Luhn window. Docs cite this same pair.
-PAN_WINDOW = (12, 19)
-PAN_MIN_SYMBOLS, PAN_MAX_SYMBOLS = PAN_WINDOW
+# Joined digits of this length are a secret, with or without a Luhn check.
+_SECRET_DIGITS = 12
+_REMOVED = "[usunięto]"
+# Spaces, dots, commas, hyphens, slashes and newlines join digits. Unicode dashes
+# survive NFKC, so they join too. Any other character ends the run.
+_JOIN_SEPARATORS = frozenset(" .,/-\n\t") | frozenset("‐‑‒–—―")
+_PESEL_WEIGHTS = (1, 3, 7, 9, 1, 3, 7, 9, 1, 3)
+_IBAN_MIN, _IBAN_MAX = 15, 34
 DRAFT_TTL_SECONDS = 48 * 60 * 60
 CONFIRMED_TEXT_TTL_SECONDS = 30 * 24 * 60 * 60
 
@@ -38,50 +43,12 @@ _NUMBER_RE = re.compile(_NUMBER, re.ASCII)
 _MONEY = re.compile(r"-?[0-9]+(?:\.[0-9]+)?\Z", re.ASCII)
 _DATE_ISO = re.compile(r"(?<![0-9])([0-9]{4})-([0-9]{2})-([0-9]{2})(?![0-9])", re.ASCII)
 _DATE_PL = re.compile(r"(?<![0-9])([0-9]{2})[-.]([0-9]{2})[-.]([0-9]{4})(?![0-9])", re.ASCII)
-# Stream breaks use one separator and a real calendar day. Mixed separators and
-# spaces are not dates. A two-digit year is only the dotted ``DD.MM.YY`` form.
-_STREAM_DATE = re.compile(
-    r"(?<![0-9])(?:"
-    r"(?P<iso_y>[0-9]{4})-(?P<iso_m>[0-9]{2})-(?P<iso_d>[0-9]{2})"
-    r"|(?P<dmy_d>[0-9]{2})-(?P<dmy_m>[0-9]{2})-(?P<dmy_y>[0-9]{4})"
-    r"|(?P<slash_d>[0-9]{2})/(?P<slash_m>[0-9]{2})/(?P<slash_y>[0-9]{4})"
-    r"|(?P<dot_d>[0-9]{2})\.(?P<dot_m>[0-9]{2})\.(?P<dot_y>[0-9]{4}|[0-9]{2})"
-    r")(?![0-9])",
-    re.ASCII,
-)
-_TIME = re.compile(r"(?<![0-9])((?:[01][0-9]|2[0-3]):[0-5][0-9])(?![0-9])", re.ASCII)
-_NIP = re.compile(r"\bNIP\s*:?\s*([0-9][0-9 -]{8,16}[0-9])\b", re.IGNORECASE | re.ASCII)
-# A candidate is digits and mask symbols on one line. Spaces, hyphens, dots and
-# commas stay inside it. A letter breaks it, as does a gap of two or more
-# characters that are not symbols or those separators. Near a card label every
-# PAN_WINDOW Luhn window is a PAN, prices included. Elsewhere a PAN uses only spaces
-# and hyphens, so a window that crosses a decimal price is left intact.
-# On the label line and the next two, every digit run of two or more is removed
-# except a quantity written ``\d+ ?(szt|kg|g|l|x)``. Those three lines also share
-# one digit stream, so a PAN wrapped across them is removed with every fragment
-# that contributed a digit or a mask.
-# Everywhere, each window of up to three lines joins digit runs that are
-# separated only by spaces, hyphens or the newline. A mask is tested before
-# the PAN_WINDOW length filter: two or more mask characters beside two or more
-# digits redact the whole joined run, and a mask run of 4–PAN_MAX_SYMBOLS
-# characters is card data on its own. A longer line of only masks is not a PAN.
-# Luhn still uses PAN_WINDOW. A price token breaks the stream. A date breaks it only
-# when it is a real calendar day in 2000–2099 written with one canonical
-# separator. Beside a card label a date does not break the stream.
-_PAN_NEWLINES = frozenset("\n\r\u2028\u2029")
-_PAN_DASHES = frozenset("-‐‑‒–—―")
-_PAN_MASKS = frozenset("*Xx•●#")
-_CARD_LABEL = re.compile(
-    r"(?i)(?:\bNR\s+KARTY\b|\bNUMER\s+KARTY\b|\bAID\b|\bPAN\b|\bCARD(?:\s+(?:NO|NUMBER))?\b|\bKARTA\b)"
-)
-_LABEL_QTY = re.compile(r"(?<![0-9])([0-9]+) ?(?:szt|kg|g|l|x)\b", re.IGNORECASE)
 _ITEM = re.compile(
     rf"^(?P<name>.+?)\s+(?:(?P<quantity>{_NUMBER})\s*(?P<unit>kg|g|dag|l|ml|szt|op)?"
     rf"\s*[x×*]\s*(?P<unit_price>{_NUMBER})\s*(?:=\s*)?)?"
     rf"(?P<gross>{_NUMBER})\s*(?:PLN\s*)?(?P<ptu>[A-G])?$",
     re.IGNORECASE | re.ASCII,
 )
-# ``1000 szt 3,49`` has no multiplication sign. The quantity is still multi-digit.
 _NAMED_UNIT = re.compile(
     rf"^(?P<name>.+?)\s+(?P<quantity>{_NUMBER})\s*(?P<unit>kg|g|dag|l|ml|szt|op)"
     rf"(?:\s*[x×*]\s*(?P<unit_price>{_NUMBER})\s*(?:=\s*)?)?"
@@ -101,11 +68,10 @@ _CALCULATION = re.compile(
 _DISCOUNT = re.compile(rf"^\s*(?:RABAT|OPUST)\b[^0-9+-]*(?P<amount>{_NUMBER})", re.IGNORECASE | re.ASCII)
 _UUID = re.compile(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\Z", re.ASCII)
 _CURRENCY = re.compile(r"[A-Z]{3}\Z", re.ASCII)
+_TIME = re.compile(r"(?<![0-9])((?:[01][0-9]|2[0-3]):[0-5][0-9])(?![0-9])", re.ASCII)
+_NIP = re.compile(r"\bNIP\s*:?\s*([0-9][0-9 -]{8,16}[0-9])\b", re.IGNORECASE | re.ASCII)
 _CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
-# ASCII controls still present after line terminators have become ``\n``.
 _ASCII_DROPPED = re.compile(r"[\x00-\x08\t\x0e-\x1f\x7f]")
-# Line terminators become ``\n`` before the control check, so a PAN split by
-# U+2028 or a vertical tab is one receipt, not rejected or left in one line.
 _LINE_BREAK = str.maketrans({
     "\r": "\n",
     "\v": "\n",
@@ -117,7 +83,6 @@ _LINE_BREAK = str.maketrans({
     "\u2028": "\n",
     "\u2029": "\n",
 })
-
 _CHAIN_NIPS = {
     "7791011327": "biedronka",
     "9370008168": "carrefour",
@@ -150,700 +115,123 @@ def fold_text(value):
                    if unicodedata.category(char) != "Mn").casefold()
 
 
-def _pan_separator(char):
-    """Space, hyphen, dot or comma. Letters and other gaps are not separators."""
-    if char in _PAN_NEWLINES:
+def _pesel(digits):
+    """True when ``digits`` is 11 characters and the PESEL checksum matches."""
+    if len(digits) != 11:
         return False
-    return char in ".," or char in _PAN_DASHES or char.isspace()
+    total = sum(int(digit) * weight for digit, weight in zip(digits, _PESEL_WEIGHTS))
+    return (10 - (total % 10)) % 10 == int(digits[10])
 
 
-def _pan_digit(char):
-    if "0" <= char <= "9":
-        return char
-    if unicodedata.category(char) == "Nd":
-        try:
-            return str(unicodedata.digit(char))
-        except (TypeError, ValueError):
-            return None
-    return None
-
-
-def _is_letter(char):
-    return unicodedata.category(char).startswith("L")
-
-
-def _luhn(digits):
-    """True when ``digits`` is a PAN_WINDOW length and passes the Luhn check."""
-    length = len(digits)
-    if length < PAN_MIN_SYMBOLS or length > PAN_MAX_SYMBOLS:
+def _iban_shape(token):
+    """PL + 26 digits, and the generic IBAN shape (2 letters, 2 check digits, 11–30 alnum)."""
+    length = len(token)
+    if length < _IBAN_MIN or length > _IBAN_MAX:
         return False
-    total = 0
-    double = False
-    for char in reversed(digits):
-        value = ord(char) - 48
-        if double:
-            value *= 2
-            if value > 9:
-                value -= 9
-        total += value
-        double = not double
-    return total % 10 == 0
+    if not (token[0].isalpha() and token[1].isalpha() and token[2].isdigit() and token[3].isdigit()):
+        return False
+    return all(char.isalnum() for char in token)
 
 
-def _money_ranges(text):
-    """ASCII ``\\d{1,6}[,.]\\d{2,4}`` spans. Neighbouring digits stay visible."""
-    found = []
+def _mark_digit_runs(text, bad):
+    """Mark every line that adds a digit to a 12+ run or to a checksum-valid PESEL.
+
+    Separators do not end the run, including a newline, so a PAN wrapped over
+    several lines is one run. A letter, a colon or any other non-separator ends it.
+    A price or a date stays only when its own digits are not in that run.
+    """
+    digits = []
+    lines = set()
+    line = 0
+
+    def flush():
+        if len(digits) >= _SECRET_DIGITS or _pesel("".join(digits)):
+            bad.update(lines)
+        digits.clear()
+        lines.clear()
+
+    for char in text:
+        if char == "\n":
+            line += 1
+            continue
+        if "0" <= char <= "9":
+            digits.append(char)
+            lines.add(line)
+            continue
+        if char in _JOIN_SEPARATORS:
+            continue
+        flush()
+    flush()
+
+
+def _mark_ibans(text, bad):
+    """Mark lines that contribute a character to a bounded IBAN.
+
+    Separators may sit between the IBAN characters. The match must end on a
+    boundary, so a longer word is not a prefix hit. Each start reads at most
+    ``_IBAN_MAX`` alphanumeric characters.
+    """
+    line_of = []
+    line = 0
+    for char in text:
+        line_of.append(line)
+        if char == "\n":
+            line += 1
     length = len(text)
     index = 0
     while index < length:
-        if not ("0" <= text[index] <= "9") or (index and "0" <= text[index - 1] <= "9"):
+        char = text[index]
+        if not char.isalpha() or (index and text[index - 1].isalnum()):
             index += 1
             continue
+        compact = []
+        positions = []
         cursor = index
-        digits = 0
-        while cursor < length and "0" <= text[cursor] <= "9":
-            digits += 1
-            cursor += 1
-        if 1 <= digits <= 6 and cursor < length and text[cursor] in ",.":
-            fraction = cursor + 1
-            frac_digits = 0
-            while fraction < length and "0" <= text[fraction] <= "9":
-                frac_digits += 1
-                fraction += 1
-            if 2 <= frac_digits <= 4 and (fraction == length or not ("0" <= text[fraction] <= "9")):
-                found.append((index, fraction))
-                index = fraction
+        matched_end = None
+        matched_len = 0
+        while cursor < length and len(compact) < _IBAN_MAX:
+            current = text[cursor]
+            if current.isalnum():
+                compact.append(current.upper())
+                positions.append(cursor)
+                cursor += 1
+                if _iban_shape("".join(compact)):
+                    look = cursor
+                    while look < length and text[look] in _JOIN_SEPARATORS:
+                        look += 1
+                    if look >= length or not text[look].isalnum():
+                        matched_end = look
+                        matched_len = len(compact)
                 continue
-        index = cursor if cursor > index else index + 1
-    return found
-
-
-def _line_candidates(line):
-    """Digit and mask symbols grouped into candidates. One forward pass.
-
-    Each symbol is ``(index, kind, value)`` with kind ``d`` or ``m``. A dot,
-    a comma, a space or a hyphen does not break the candidate. A letter does,
-    and so does a run of two or more other non-symbol characters.
-    """
-    symbols = []
-    candidates = []
-    length = len(line)
-    index = 0
-    start = None
-    while index < length:
-        digit = _pan_digit(line[index])
-        if digit is not None or line[index] in _PAN_MASKS:
-            if start is None:
-                start = len(symbols)
-            symbols.append((index, "d" if digit is not None else "m", digit if digit is not None else line[index]))
-            index += 1
-            continue
-        if start is None:
-            index += 1
-            continue
-        if _is_letter(line[index]):
-            candidates.append((start, len(symbols)))
-            start = None
-            index += 1
-            continue
-        gap = index
-        while (gap < length and _pan_digit(line[gap]) is None and line[gap] not in _PAN_MASKS
-                and not _is_letter(line[gap])):
-            gap += 1
-        other = sum(1 for cursor in range(index, gap) if not _pan_separator(line[cursor]))
-        if other >= 2:
-            candidates.append((start, len(symbols)))
-            start = None
-        index = gap
-    if start is not None:
-        candidates.append((start, len(symbols)))
-    return symbols, candidates
-
-
-def _mask_decision(kinds):
-    """Classify a symbol stream before the PAN_WINDOW length filter.
-
-    ``all`` means a mask sequence of two or more sits beside two or more
-    digits, so the whole joined run is card data. ``masks`` means a run of
-    4–PAN_MAX_SYMBOLS mask characters stands alone. A longer pure mask line
-    is left out: it is not a PAN, and the Luhn windows stay skipped.
-    """
-    runs = []
-    for kind in kinds:
-        if runs and runs[-1][0] == kind:
-            runs[-1][1] += 1
-        else:
-            runs.append([kind, 1])
-    beside = False
-    standalone = False
-    for index, (kind, length) in enumerate(runs):
-        if kind != "m":
-            continue
-        if 4 <= length <= PAN_MAX_SYMBOLS:
-            standalone = True
-        if length < 2:
-            continue
-        left = index and runs[index - 1][0] == "d" and runs[index - 1][1] >= 2
-        right = (index + 1 < len(runs) and runs[index + 1][0] == "d"
-                 and runs[index + 1][1] >= 2)
-        if left or right:
-            beside = True
-    if beside:
-        return "all", runs
-    if standalone:
-        return "masks", runs
-    return None, runs
-
-
-def _window_is_plain(line, symbols):
-    """True when every separator in the window is a space or a hyphen."""
-    start = symbols[0][0] + 1
-    end = symbols[-1][0]
-    for index in range(start, end):
-        char = line[index]
-        if _pan_digit(char) is not None or char in _PAN_MASKS:
-            continue
-        if char in _PAN_DASHES or (char.isspace() and char not in _PAN_NEWLINES):
-            continue
-        return False
-    return True
-
-
-def _digits_are_prices(symbols, cover):
-    saw = False
-    for index, kind, _ in symbols:
-        if kind != "d":
-            continue
-        saw = True
-        if not cover[index]:
-            return False
-    return saw
-
-
-def _flag_candidate(line, symbols, cover, label_context):
-    """Mark PAN symbols. The mask check comes before the PAN_WINDOW filter.
-
-    A mask sequence beside digits flags the whole candidate, as does a mask
-    run of 4–PAN_MAX_SYMBOLS characters. A Luhn window in PAN_WINDOW does too.
-    Away from a card
-    label the window may contain only spaces and hyphens: a decimal inside
-    ``\\d{1,6}[,.]\\d{2,4}`` means the window is a price. Beside a card label
-    that exemption is off, so price-shaped groups are still a PAN. The whole
-    candidate is the secret, which keeps a ``.00`` suffix from leaving the
-    last group visible.
-    """
-    count = len(symbols)
-    if not count:
-        return bytearray()
-    decision, _ = _mask_decision(kind for _, kind, _ in symbols)
-    if decision is not None:
-        return bytearray(b"\x01" * count)
-    if count < PAN_MIN_SYMBOLS or not any(kind == "d" for _, kind, _ in symbols):
-        return bytearray(count)
-    # Each decimal price holds at most 10 digits, so a PAN_WINDOW window in an
-    # all-price run always crosses a decimal. Skip the Luhn scan.
-    if not label_context and _digits_are_prices(symbols, cover):
-        return bytearray(count)
-    for length in range(PAN_MIN_SYMBOLS, min(PAN_MAX_SYMBOLS, count) + 1):
-        for start in range(count - length + 1):
-            window = symbols[start:start + length]
-            if not label_context and not _window_is_plain(line, window):
+            if current in _JOIN_SEPARATORS:
+                cursor += 1
                 continue
-            digits = "".join(value for _, kind, value in window if kind == "d")
-            if _luhn(digits):
-                return bytearray(b"\x01" * count)
-    return bytearray(count)
-
-
-def _candidate_spans(symbols, flagged, money_ranges):
-    spans = []
-    index = 0
-    count = len(symbols)
-    while index < count:
-        if not flagged[index]:
+            break
+        if matched_end is None:
             index += 1
             continue
-        end = index + 1
-        while end < count and flagged[end]:
-            end += 1
-        start_at = symbols[index][0]
-        end_at = symbols[end - 1][0] + 1
-        for money_start, money_end in money_ranges:
-            if money_start < end_at and money_end > start_at:
-                start_at = min(start_at, money_start)
-                end_at = max(end_at, money_end)
-        spans.append((start_at, end_at))
-        index = end
-    return spans
+        for pos in positions[:matched_len]:
+            bad.add(line_of[pos])
+        index = matched_end
 
 
-def _label_quantity_spans(line):
-    """Digit runs of ``\\d+ ?(szt|kg|g|l|x)``. The unit itself stays visible."""
-    return [(match.start(1), match.end(1)) for match in _LABEL_QTY.finditer(line)]
+def _secret_lines(text):
+    bad = set()
+    _mark_digit_runs(text, bad)
+    _mark_ibans(text, bad)
+    return bad
 
 
-def _label_digit_spans(line):
-    """Every digit run of 2 or more beside a card label.
-
-    A price is removed too: the card section is not an item line. The only
-    digits that stay are a quantity directly followed by a unit.
-    """
-    protected = bytearray(len(line))
-    for start, end in _label_quantity_spans(line):
-        protected[start:end] = b"\x01" * (end - start)
-    spans = []
-    index = 0
-    length = len(line)
-    while index < length:
-        if _pan_digit(line[index]) is None:
-            index += 1
-            continue
-        start = index
-        while index < length and _pan_digit(line[index]) is not None:
-            index += 1
-        if index - start >= 2 and not any(protected[cursor] for cursor in range(start, index)):
-            spans.append((start, index))
-    return spans
-
-
-def _symbol_fragments(line):
-    """Maximal digit or mask runs, each with ``(kind, value)`` symbols."""
-    fragments = []
-    length = len(line)
-    index = 0
-    while index < length:
-        if _pan_digit(line[index]) is None and line[index] not in _PAN_MASKS:
-            index += 1
-            continue
-        start = index
-        symbols = []
-        while index < length and (_pan_digit(line[index]) is not None or line[index] in _PAN_MASKS):
-            digit = _pan_digit(line[index])
-            if digit is not None:
-                symbols.append(("d", digit))
-            else:
-                symbols.append(("m", line[index]))
-            index += 1
-        fragments.append((start, index, symbols))
-    return fragments
-
-
-def _label_stream_flags(symbols):
-    """Luhn and mask flags for the digits of one label and the next two lines.
-
-    Luhn sees the digit stream only, so a mask or a dropped separator cannot
-    shift the window. A mask sequence beside digits flags that sequence and
-    the neighbouring digit run. Symbols outside a hit stay clear.
-    """
-    flagged = bytearray(len(symbols))
-    runs = []
-    for index, (kind, _) in enumerate(symbols):
-        if runs and runs[-1][0] == kind:
-            runs[-1][2] = index + 1
-        else:
-            runs.append([kind, index, index + 1])
-    for index, (kind, start, end) in enumerate(runs):
-        if kind != "m" or end - start < 2:
-            continue
-        if index and runs[index - 1][0] == "d" and runs[index - 1][2] - runs[index - 1][1] >= 2:
-            left = runs[index - 1][1]
-            flagged[left:end] = b"\x01" * (end - left)
-        if index + 1 < len(runs) and runs[index + 1][0] == "d" and runs[index + 1][2] - runs[index + 1][1] >= 2:
-            right = runs[index + 1][2]
-            flagged[start:right] = b"\x01" * (right - start)
-    digit_index = [index for index, (kind, _) in enumerate(symbols) if kind == "d"]
-    digit_count = len(digit_index)
-    if digit_count < PAN_MIN_SYMBOLS:
-        return flagged
-    digits = "".join(symbols[index][1] for index in digit_index)
-    for length in range(PAN_MIN_SYMBOLS, min(PAN_MAX_SYMBOLS, digit_count) + 1):
-        for start in range(digit_count - length + 1):
-            if not _luhn(digits[start:start + length]):
-                continue
-            for offset in range(length):
-                flagged[digit_index[start + offset]] = 1
-    return flagged
-
-
-def _label_stream_spans(fragments, first, limit, offsets):
-    """Redact each fragment that contributed a symbol to a flagged window."""
-    symbols = []
-    owners = []
-    for number in range(first, limit):
-        for start, end, frag_symbols in fragments[number]:
-            for kind, value in frag_symbols:
-                symbols.append((kind, value))
-                owners.append((number, start, end))
-    if not symbols:
-        return []
-    flagged = _label_stream_flags(symbols)
-    spans = []
-    seen = set()
-    for index, mark in enumerate(flagged):
-        if not mark:
-            continue
-        number, start, end = owners[index]
-        key = (number, start, end)
-        if key in seen:
-            continue
-        seen.add(key)
-        spans.append((offsets[number] + start, offsets[number] + end))
-    return spans
-
-
-def _line_secret_spans(line, label_context):
-    symbols, candidates = _line_candidates(line)
-    if not symbols:
-        return []
-    ranges = _money_ranges(line)
-    cover = bytearray(len(line))
-    for start, end in ranges:
-        cover[start:end] = b"\x01" * (end - start)
-    spans = []
-    for start, end in candidates:
-        window = symbols[start:end]
-        flagged = _flag_candidate(line, window, cover, label_context)
-        spans.extend(_candidate_spans(window, flagged, ranges))
-    return spans
-
-
-def _word_at(line, index, word):
-    end = index + len(word)
-    if end > len(line) or line[index:end].casefold() != word:
-        return False
-    before = index == 0 or not (line[index - 1].isalnum() or line[index - 1] == "_")
-    after = end == len(line) or not (line[end].isalnum() or line[end] == "_")
-    return before and after
-
-
-def _ends_word(line, word):
-    end = len(line)
-    while end and line[end - 1].isspace():
-        end -= 1
-    return _word_at(line, end - len(word), word) if end >= len(word) else False
-
-
-def _starts_word(line, word):
-    index = 0
-    length = len(line)
-    while index < length and line[index].isspace():
-        index += 1
-    return _word_at(line, index, word)
-
-
-def _split_card_label(line, nxt):
-    """NR/NUMER and KARTY land on adjacent OCR lines. ``\\s`` in the label covers that newline."""
-    return (_ends_word(line, "nr") or _ends_word(line, "numer")) and _starts_word(nxt, "karty")
-
-
-def _merge_spans(spans):
-    if not spans:
-        return []
-    ordered = sorted(spans)
-    merged = [ordered[0]]
-    for start, end in ordered[1:]:
-        if start <= merged[-1][1]:
-            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
-        else:
-            merged.append((start, end))
-    return merged
-
-
-def _stream_date_parts(match):
-    if match.group("iso_y") is not None:
-        return match.group("iso_y"), match.group("iso_m"), match.group("iso_d")
-    if match.group("dmy_y") is not None:
-        return match.group("dmy_y"), match.group("dmy_m"), match.group("dmy_d")
-    if match.group("slash_y") is not None:
-        return match.group("slash_y"), match.group("slash_m"), match.group("slash_d")
-    return match.group("dot_y"), match.group("dot_m"), match.group("dot_d")
-
-
-def _real_calendar_date(year, month, day):
-    """True when the parts are a real day and the year is 2000–2099.
-
-    A two-digit year is ``20xx``.
-    """
-    if len(year) == 2:
-        year = "20" + year
-    if len(year) != 4:
-        return False
-    try:
-        parsed = date(int(year), int(month), int(day))
-    except ValueError:
-        return False
-    return 2000 <= parsed.year <= 2099
-
-
-def _span_overlaps(span, others):
-    start, end = span
-    return any(start < other_end and end > other_start for other_start, other_end in others)
-
-
-def _covered_by(span, covers):
-    start, end = span
-    return any(cover_start <= start and end <= cover_end for cover_start, cover_end in covers)
-
-
-def _date_break_and_joiner_spans(line):
-    """Real canonical dates break the stream. Invalid date shapes do not.
-
-    A dotted invalid day such as ``31.13.0000`` would otherwise be dropped as
-    a date and as a price. Its separators join the digits instead, so a PAN
-    wrapped across the newline still meets the scanner.
-    """
-    real = []
-    joiners = []
-    for match in _STREAM_DATE.finditer(line):
-        year, month, day = _stream_date_parts(match)
-        span = (match.start(), match.end())
-        if _real_calendar_date(year, month, day):
-            real.append(span)
-        else:
-            joiners.append(span)
-    for match in _DATE_PL.finditer(line):
-        span = (match.start(), match.end())
-        if _covered_by(span, real):
-            continue
-        day, month, year = match.groups()
-        separators = {char for char in match.group(0) if char in ".-"}
-        if len(separators) == 1 and _real_calendar_date(year, month, day):
-            continue
-        joiners.append(span)
-    return real, joiners
-
-
-def _stream_break_ranges(line, *, break_dates=True):
-    """Price tokens, and receipt dates that are real calendar days.
-
-    A hyphenated date such as ``2026-11-20`` would otherwise join a NIP across
-    the newline, and that combined digit string can pass Luhn. An invalid
-    month or day is not a date, so those digits stay in the stream. Inside a
-    card-label window ``break_dates`` is false and a date exempts nothing.
-    """
-    real, joiners = _date_break_and_joiner_spans(line) if break_dates else ([], [])
-    ranges = [span for span in _money_ranges(line) if not _span_overlaps(span, joiners)]
-    ranges.extend(real)
-    return _merge_spans(ranges), _merge_spans(joiners)
-
-
-def _plain_line_tokens(line, *, break_dates=True):
-    """Digit and mask runs, with ``None`` where the plain stream must break.
-
-    Spaces and hyphens are skipped, so they join the runs on either side.
-    A dot, a comma, a letter or any other character breaks the stream.
-    A dot or slash inside an invalid date shape joins, same as a hyphen.
-    """
-    breaks, joiners = _stream_break_ranges(line, break_dates=break_dates)
-    tokens = []
-    length = len(line)
-    index = 0
-    break_at = 0
-    joiner_at = 0
-    joiner_count = len(joiners)
-
-    def in_joiner(at):
-        nonlocal joiner_at
-        while joiner_at < joiner_count and joiners[joiner_at][1] <= at:
-            joiner_at += 1
-        return joiner_at < joiner_count and joiners[joiner_at][0] <= at
-
-    while index < length:
-        if break_at < len(breaks) and breaks[break_at][1] <= index:
-            break_at += 1
-        if break_at < len(breaks) and breaks[break_at][0] <= index < breaks[break_at][1]:
-            tokens.append(None)
-            index = breaks[break_at][1]
-            break_at += 1
-            continue
-        digit = _pan_digit(line[index])
-        if digit is not None or line[index] in _PAN_MASKS:
-            start = index
-            kind = "d" if digit is not None else "m"
-            symbols = []
-            while index < length:
-                if break_at < len(breaks) and breaks[break_at][0] <= index < breaks[break_at][1]:
-                    break
-                digit = _pan_digit(line[index])
-                if digit is not None:
-                    this, value = "d", digit
-                elif line[index] in _PAN_MASKS:
-                    this, value = "m", line[index]
-                else:
-                    break
-                if this != kind:
-                    break
-                symbols.append((this, value))
-                index += 1
-            tokens.append((start, index, symbols))
-            continue
-        if line[index] in _PAN_DASHES or (line[index].isspace() and line[index] not in _PAN_NEWLINES):
-            index += 1
-            continue
-        if line[index] in "./" and in_joiner(index):
-            index += 1
-            continue
-        tokens.append(None)
-        index += 1
-    return tokens
-
-
-def _plain_window_flags(symbols):
-    """Flag a mask run first, then PAN_WINDOW Luhn windows.
-
-    Two or more mask characters beside two or more digits flag the whole
-    joined run, even when it is shorter than PAN_MIN_SYMBOLS. A mask run of
-    4–PAN_MAX_SYMBOLS characters is card data with no digits. A longer mask
-    line has no digit and skips the window loop.
-    """
-    count = len(symbols)
-    flagged = bytearray(count)
-    if not count:
-        return flagged
-    decision, runs = _mask_decision(kind for kind, _ in symbols)
-    if decision == "all":
-        return bytearray(b"\x01" * count)
-    has_digit = False
-    if decision == "masks":
-        cursor = 0
-        for kind, length in runs:
-            if kind == "d":
-                has_digit = True
-            elif 4 <= length <= PAN_MAX_SYMBOLS:
-                flagged[cursor:cursor + length] = b"\x01" * length
-            cursor += length
-    else:
-        has_digit = any(kind == "d" for kind, _ in runs)
-    if not has_digit or count < PAN_MIN_SYMBOLS:
-        return flagged
-    for length in range(PAN_MIN_SYMBOLS, min(PAN_MAX_SYMBOLS, count) + 1):
-        last = count - length + 1
-        for start in range(last):
-            window = symbols[start:start + length]
-            digits = "".join(value for kind, value in window if kind == "d")
-            if not _luhn(digits):
-                continue
-            flagged[start:start + length] = b"\x01" * length
-    return flagged
-
-
-def _flagged_fragment_spans(fragments):
-    """Redact each fragment that contributed a symbol to a flagged window."""
-    symbols = []
-    owners = []
-    for index, (_, _, frag_symbols) in enumerate(fragments):
-        for kind, value in frag_symbols:
-            symbols.append((kind, value))
-            owners.append(index)
-    flagged = _plain_window_flags(symbols)
-    spans = []
-    seen = set()
-    for index, mark in enumerate(flagged):
-        if not mark:
-            continue
-        owner = owners[index]
-        if owner in seen:
-            continue
-        seen.add(owner)
-        start, end, _ = fragments[owner]
-        spans.append((start, end))
-    return spans
-
-
-def _cross_line_plain_spans(lines, offsets, break_dates):
-    """Join plain groups across each window of up to three lines.
-
-    Each line is visited at most three times, and only PAN_WINDOW lengths
-    are tested, so the scan stays linear. ``break_dates`` is false on a card
-    label and the next two lines, where a date exempts nothing.
-    """
-    tokens = [
-        _plain_line_tokens(line, break_dates=break_dates[index])
-        for index, line in enumerate(lines)
-    ]
-    spans = []
-    total = len(lines)
-    for start in range(total):
-        limit = min(start + 3, total)
-        stream = []
-
-        def flush():
-            if stream:
-                spans.extend(_flagged_fragment_spans(stream))
-                stream.clear()
-
-        for number in range(start, limit):
-            for token in tokens[number]:
-                if token is None:
-                    flush()
-                    continue
-                local_start, local_end, symbols = token
-                stream.append((offsets[number] + local_start, offsets[number] + local_end, symbols))
-        flush()
-    return spans
-
-
-def _pan_spans(text):
-    """PAN windows per line, then label fragments, then plain groups across three lines.
-
-    A label line and the next two share one digit stream. Separately, every
-    window of up to three lines joins groups that use only spaces and hyphens.
-    A Luhn or mask hit removes each fragment that contributed.
-    """
-    lines = text.split("\n")
-    label = [False] * len(lines)
-    for number, line in enumerate(lines):
-        if _CARD_LABEL.search(line) is not None:
-            label[number] = True
-        if number + 1 < len(lines) and _split_card_label(line, lines[number + 1]):
-            label[number] = True
-            label[number + 1] = True
-    follow = [False] * len(lines)
-    for number, flagged in enumerate(label):
-        if not flagged:
-            continue
-        if number + 1 < len(lines):
-            follow[number + 1] = True
-        if number + 2 < len(lines):
-            follow[number + 2] = True
-    spans = []
-    offsets = []
-    offset = 0
-    for number, line in enumerate(lines):
-        offsets.append(offset)
-        context = label[number] or follow[number]
-        for start, end in _line_secret_spans(line, context):
-            spans.append((offset + start, offset + end))
-        if context:
-            for start, end in _label_digit_spans(line):
-                spans.append((offset + start, offset + end))
-        offset += len(line) + 1
-    if any(label):
-        fragments = [None] * len(lines)
-        for number, flagged in enumerate(label):
-            if not flagged:
-                continue
-            limit = min(number + 3, len(lines))
-            for index in range(number, limit):
-                if fragments[index] is None:
-                    fragments[index] = _symbol_fragments(lines[index])
-            spans.extend(_label_stream_spans(fragments, number, limit, offsets))
-    date_breaks = [not (label[number] or follow[number]) for number in range(len(lines))]
-    spans.extend(_cross_line_plain_spans(lines, offsets, date_breaks))
-    return _merge_spans(spans)
-
-
-def _redact_spans(text, spans):
-    if not spans:
+def _redact_normalized(text):
+    """Replace each tainted line entirely. Other lines stay, including their digits."""
+    bad = _secret_lines(text)
+    if not bad:
         return text
-    parts = []
-    cursor = 0
-    for start, end in spans:
-        parts.append(text[cursor:start])
-        parts.append("[REDACTED]")
-        cursor = end
-    parts.append(text[cursor:])
-    return "".join(parts)
+    return "\n".join(_REMOVED if number in bad else line for number, line in enumerate(text.split("\n")))
+
+
+def _contains_secret(value):
+    return bool(_secret_lines(value))
 
 
 def _normalize_receipt_text(text):
@@ -900,8 +288,7 @@ def _receipt_text(text):
 
 
 def redact_pan(text):
-    text = _receipt_text(text)
-    return _redact_spans(text, _pan_spans(text))
+    return _redact_normalized(_receipt_text(text))
 
 
 def valid_nip(value):
@@ -937,7 +324,8 @@ def _bounded_money(value, *, mismatch=False):
             raise ValueError
         integer, _, fraction = normalized.partition(".")
         if (len(integer.removeprefix("-")) > MAX_MONEY_INTEGER_DIGITS
-                or len(fraction) > MAX_MONEY_FRACTION_DIGITS):
+                or len(fraction) > MAX_MONEY_FRACTION_DIGITS
+                or _contains_secret(normalized)):
             raise ValueError
         return canonical_money(normalized)
     except (ValueError, AnalyticsError):
@@ -1105,7 +493,6 @@ def parse_receipt(text):
         "receipt_time": receipt_time, "total_amount": total, "currency": "PLN" if total is not None else None,
         "payment_method": payment, "lines": parsed_lines,
         "math_delta": math_delta,
-        "raw_ocr_text": text,
     }
 
 

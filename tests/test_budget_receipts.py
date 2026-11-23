@@ -6,7 +6,10 @@ from datetime import datetime, timezone
 import hashlib
 import json
 import os
+import random
 from unittest import mock
+
+from sqlalchemy import String
 
 from hestia import api_contract, db, web
 from hestia.budget import receipt_api
@@ -30,6 +33,53 @@ def receipt_text(*, total="100", day="2026-11-30", kind="purchase", payment="KAR
     return (f"{PRIVATE_SHOP}\nNIP 7791011327\nPARAGON FISKALNY{marker}\n{day} 12:34\n"
             f"{item} 1 x {total.replace('.', ',')} {total.replace('.', ',')} A\n"
             f"SUMA PLN {total.replace('.', ',')}\n{payment}\nNR KARTY {MASKED_PAN}\nAID {PAN}")
+
+
+_DIGIT_JOIN = frozenset(" .,/-\n\t") | frozenset("‐‑‒–—―")
+
+
+def _long_digit_runs(value):
+    runs, digits = [], []
+
+    def flush():
+        if len(digits) >= 12:
+            runs.append("".join(digits))
+        digits.clear()
+
+    for char in value:
+        if "0" <= char <= "9":
+            digits.append(char)
+        elif char in _DIGIT_JOIN:
+            continue
+        else:
+            flush()
+    flush()
+    return runs
+
+
+def _assert_no_pan_windows(test, value, windows):
+    if not isinstance(value, str):
+        return
+    for run in _long_digit_runs(value):
+        for index in range(len(run) - 11):
+            test.assertNotIn(run[index:index + 12], windows, value)
+
+
+def _walk_no_pan(test, value, windows):
+    if isinstance(value, str):
+        _assert_no_pan_windows(test, value, windows)
+    elif isinstance(value, dict):
+        for item in value.values():
+            _walk_no_pan(test, item, windows)
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            _walk_no_pan(test, item, windows)
+
+
+def _scan_text_columns(test, row, windows):
+    for column in row.__table__.columns:
+        if isinstance(column.type, String):
+            _assert_no_pan_windows(test, getattr(row, column.key), windows)
 
 
 def confirm_values(parsed, *, link=None, **changes):
@@ -97,9 +147,11 @@ NR KARTY ****5555
         self.assertEqual((deposit["net_line_total"], coupon["net_line_total"]), ("0.5", "-1"))
         self.assertEqual(parsed["raw_nip"], "7791011327")
         self.assertEqual(parsed["chain_key"], "biedronka")
+        self.assertNotIn("raw_ocr_text", parsed)
         redacted = redact_pan(text + PAN + "\n" + MASKED_PAN)
-        for secret in (PAN, MASKED_PAN, "****5555"):
+        for secret in (PAN, MASKED_PAN, "****5555", "5351005555555555"):
             self.assertNotIn(secret, redacted)
+        self.assertIn("[usunięto]", redacted)
         self.assertIn("7791011327", redacted)
         for invalid in ("", "x" * 32769, "line\n" * 501):
             with self.subTest(invalid_size=len(invalid)), self.assertRaises(ReceiptError):
@@ -111,41 +163,48 @@ NR KARTY ****5555
         for sep in ("\u00a0", "\u2007", "\u202f", "\u2009", "\u200a", "\u2000", "\u3000",
                     "\u2010", "\u2011", "\u2012", "\u2013", "\u2014", "\u2015", " ", "-", "\t"):
             sample = sep.join(groups)
-            self.assertEqual(redact_pan(sample), "[REDACTED]", sep.encode("unicode_escape"))
+            self.assertEqual(redact_pan(sample), "[usunięto]", sep.encode("unicode_escape"))
             self.assertNotIn(digits, redact_pan("prefix " + sample + " suffix"))
         nip = "779\u00a0101\u00a013\u00a027"
         self.assertEqual(redact_pan("NIP " + nip), "NIP 779 101 13 27")
         adjacent = "NIP 7791011327\n2026-11-20 12:34\n"
-        self.assertEqual(redact_pan(adjacent), adjacent)
+        self.assertEqual(redact_pan(adjacent), "[usunięto]\n[usunięto]\n")
+        self.assertNotRegex(redact_pan(adjacent), r"[0-9]")
         nbsp_pan = "\u00a0".join(groups)
-        text = ("BIEDRONKA\nNIP 7791011327\n2026-11-20 12:34\nMLEKO " + nbsp_pan
+        text = ("BIEDRONKA\nNIP 7791011327\nPARAGON FISKALNY\n2026-11-20 12:34\nMLEKO " + nbsp_pan
                 + "\n1 x 5,00 5,00 A\nSUMA PLN 5,00\n")
         parsed = parse_receipt(text)
-        self.assertIn("[REDACTED]", parsed["raw_ocr_text"])
-        self.assertNotIn(digits, parsed["raw_ocr_text"].replace("\u00a0", ""))
-        self.assertNotIn(nbsp_pan, parsed["raw_ocr_text"])
-        self.assertIn("7791011327", parsed["raw_ocr_text"])
+        self.assertNotIn("raw_ocr_text", parsed)
+        stored = json.dumps(parsed)
+        self.assertNotIn(digits, stored)
+        self.assertNotIn(nbsp_pan, stored)
+        self.assertIn("7791011327", stored)
+        self.assertEqual(parsed["raw_shop_name"], "BIEDRONKA")
         for line in parsed["lines"]:
             self.assertNotIn(digits, line["raw_name"].replace("\u00a0", ""))
             self.assertNotIn(nbsp_pan, line["raw_name"])
 
     def test_normalised_text_redacts_pans_hidden_by_unicode(self):
-        expected = "[REDACTED] [REDACTED]\n[REDACTED] [REDACTED]"
+        expected = "[usunięto]\n[usunięto]"
         for sep in ("\r\n", "\r", "\v", "\f", "\x1c", "\x1d", "\x1e", "\x85", "\u2028", "\u2029"):
             raw = f"4111 1111{sep}1111 1111"
             redacted = redact_pan(raw)
             self.assertEqual(redacted, expected, sep.encode("unicode_escape"))
-            self.assertEqual(parse_receipt(raw)["raw_ocr_text"], expected)
+            parsed = parse_receipt(raw)
+            self.assertNotIn("raw_ocr_text", parsed)
             self.assertNotRegex(redacted, r"[0-9]")
+            self.assertNotRegex(json.dumps(parsed), r"4111")
         zwsp = "\u200b".join("4111111111111111")
         mixed = "4111\u200b1111\u200c1111\u200d\ufeff\u2060\u00ad1111"
         fullwidth = "４１１１ １１１１ １１１１ １１１１"
         nbsp = "4111\u00a01111\u00a01111\u00a01111"
         for raw in (zwsp, mixed, fullwidth, nbsp):
             redacted = redact_pan(raw)
-            self.assertEqual(redacted, "[REDACTED]", raw.encode("unicode_escape"))
-            self.assertEqual(parse_receipt(raw)["raw_ocr_text"], "[REDACTED]")
+            self.assertEqual(redacted, "[usunięto]", raw.encode("unicode_escape"))
+            parsed = parse_receipt(raw)
+            self.assertNotIn("raw_ocr_text", parsed)
             self.assertNotRegex(redacted, r"[0-9]")
+            self.assertNotIn("4111111111111111", json.dumps(parsed))
 
     def test_allowlist_drops_marks_maps_indic_digits_and_keeps_polish(self):
         import unicodedata
@@ -154,18 +213,18 @@ NR KARTY ****5555
         raw = "".join(digit + marks[index % len(marks)] for index, digit in enumerate(digits[:-1])) + digits[-1]
         self.assertIn("\u034f", raw)
         redacted = redact_pan(raw)
-        self.assertEqual(redacted, "[REDACTED]")
-        self.assertEqual(parse_receipt(raw)["raw_ocr_text"], "[REDACTED]")
+        self.assertEqual(redacted, "[usunięto]")
+        self.assertNotIn("raw_ocr_text", parse_receipt(raw))
         self.assertNotIn("\u034f", redacted)
         self.assertNotRegex(redacted, r"[0-9\u0300-\u036f]")
         arabic = "".join(chr(0x0660 + int(ch)) for ch in digits)
-        self.assertEqual(redact_pan(arabic), "[REDACTED]")
-        self.assertEqual(parse_receipt(arabic)["raw_ocr_text"], "[REDACTED]")
+        self.assertEqual(redact_pan(arabic), "[usunięto]")
+        self.assertNotIn("raw_ocr_text", parse_receipt(arabic))
         spaced = " ".join(
             "".join(chr(0x0660 + int(ch)) for ch in group)
             for group in ("4111", "1111", "1111", "1111"))
-        self.assertEqual(redact_pan(spaced), "[REDACTED]")
-        self.assertEqual(parse_receipt(spaced)["raw_ocr_text"], "[REDACTED]")
+        self.assertEqual(redact_pan(spaced), "[usunięto]")
+        self.assertNotIn("raw_ocr_text", parse_receipt(spaced))
         for name in ("ŻÓŁTY SER", "ŚLIWKI", "MĄKA"):
             nfc = unicodedata.normalize("NFC", name)
             self.assertEqual(redact_pan(name).encode("utf-8"), nfc.encode("utf-8"))
@@ -178,14 +237,13 @@ NR KARTY ****5555
         parsed = parse_receipt(receipt)
         self.assertEqual([line["raw_name"] for line in parsed["lines"]], ["ŻÓŁTY SER", "ŚLIWKI", "MĄKA"])
         self.assertEqual(parsed["math_delta"], "0")
-        for name in ("ŻÓŁTY SER", "ŚLIWKI", "MĄKA"):
-            self.assertIn(name.encode("utf-8"), parsed["raw_ocr_text"].encode("utf-8"))
+        self.assertNotIn("raw_ocr_text", parsed)
 
     def test_confirm_redacts_pan_in_shop_name_and_line_name(self):
         parsed = self.draft()
         nbsp_pan = "5351\u00a00055\u00a05555\u00a05555"
         dash_pan = "5351\u20130055\u20135555\u20135555"
-        unit_pan = "****1234"
+        unit_pan = "411111111111"
         values = confirm_values(parsed, raw_shop_name=f"BIEDRONKA {nbsp_pan}")
         values["lines"][0]["raw_name"] = f"MLEKO {dash_pan}"
         values["lines"][0]["raw_unit"] = unit_pan
@@ -196,14 +254,16 @@ NR KARTY ****5555
             self.assertNotIn(secret, saved["raw_shop_name"])
             self.assertNotIn(secret, saved["lines"][0]["raw_name"])
             self.assertNotIn(secret, saved["lines"][0]["raw_name_key"])
-            self.assertNotIn(secret, saved["lines"][0]["raw_unit"])
+            self.assertNotIn(secret, saved["lines"][0]["raw_unit"] or "")
             self.assertNotIn(secret, row.raw_shop_name)
             self.assertNotIn(secret, line.raw_name)
             self.assertNotIn(secret, line.raw_name_key)
-            self.assertNotIn(secret, line.raw_unit)
-        self.assertEqual(row.raw_shop_name, "BIEDRONKA [REDACTED]")
+            self.assertNotIn(secret, line.raw_unit or "")
+        self.assertEqual(row.raw_shop_name, "[usunięto]")
         self.assertEqual((line.raw_name, line.raw_name_key, line.raw_unit),
-                         ("MLEKO [REDACTED]", "mleko [redacted]", "[REDACTED]"))
+                         ("[usunięto]", "[usunieto]", "[usunięto]"))
+        self.assertIsNone(row.raw_ocr_text)
+        self.assertNotIn("raw_ocr_text", saved)
         self.assertEqual(saved["raw_shop_name"], row.raw_shop_name)
         self.assertEqual(saved["lines"][0]["raw_name"], line.raw_name)
 
@@ -345,15 +405,22 @@ NR KARTY ****5555
     def test_receipt_retention_purge_48h_draft_and_30d_confirmed(self):
         confirmed_draft = self.draft()
         confirmed = self.receipts.confirm("owner", confirm_values(confirmed_draft))["receipt"]
-        self.assertIsNotNone(confirmed["raw_ocr_text"])
-        self.assertEqual(confirmed["raw_text_expires_at"], self.now + CONFIRMED_TEXT_TTL_SECONDS)
+        self.assertNotIn("raw_ocr_text", confirmed)
+        self.assertIsNone(confirmed["raw_text_expires_at"])
+        self.assertEqual(confirmed["image_expires_at"], self.now + CONFIRMED_TEXT_TTL_SECONDS)
+        self.assertIsNone(self.receipt_row(confirmed_draft["receipt_id"]).raw_ocr_text)
+        with self.sessions.begin() as session:
+            legacy = session.get(db.BudgetReceipt, confirmed_draft["receipt_id"])
+            legacy.raw_ocr_text = "legacy paste"
+            legacy.raw_text_expires_at = confirmed["image_expires_at"]
+            legacy.image_relpath = "legacy.webp"
         expired = self.draft(total="7")
         self.now += DRAFT_TTL_SECONDS + 1
         purged = self.receipts.purge_expired("owner")
         self.assertEqual(purged["drafts_purged"], 1)
         self.assertIsNone(self.receipt_row(expired["receipt_id"]))
-        self.assertIsNotNone(self.receipt_row(confirmed_draft["receipt_id"]).raw_ocr_text)
-        self.now = confirmed["raw_text_expires_at"]
+        self.assertEqual(self.receipt_row(confirmed_draft["receipt_id"]).raw_ocr_text, "legacy paste")
+        self.now = confirmed["image_expires_at"]
         purged = self.receipts.purge_expired("owner")
         self.assertEqual(purged["raw_texts_purged"], 1)
         row = self.receipt_row(confirmed_draft["receipt_id"])
@@ -376,8 +443,11 @@ NR KARTY ****5555
     def test_receipt_logs_contain_no_nip_pan_or_amounts(self):
         parsed = self.receipts.parse_text("owner", receipt_text() + "\n" + PAN)
         secret_values = (PRIVATE_SHOP, PRIVATE_ITEM, "7791011327", PAN, MASKED_PAN, "100")
-        self.assertNotIn(PAN, parsed["draft"]["raw_ocr_text"])
-        self.assertNotIn(MASKED_PAN, parsed["draft"]["raw_ocr_text"])
+        self.assertNotIn("raw_ocr_text", parsed["draft"])
+        body = json.dumps(parsed)
+        self.assertNotIn(PAN, body)
+        self.assertNotIn(MASKED_PAN, body)
+        self.assertNotIn("5351005555555555", body)
         with mock.patch("hestia.budget.api.log.error") as log:
             self.receipts.confirm("owner", confirm_values(parsed))
         log.assert_not_called()
@@ -501,110 +571,109 @@ NR KARTY ****5555
         doubled = "5351  0055  5555  5555"
         masked = "5351  ****  ****  5555"
         fullwidth = "５３５１００５５５５５５５５５５"
-        self.assertEqual(redact_pan(doubled), "[REDACTED]")
-        self.assertEqual(redact_pan(masked), "[REDACTED]")
-        self.assertEqual(redact_pan(fullwidth), "[REDACTED]")
-        self.assertNotIn("5351005555555555", redact_pan("pay " + doubled + " end").replace(" ", ""))
-        self.assertNotIn("5555", redact_pan(masked))
+        self.assertEqual(redact_pan(doubled), "[usunięto]")
+        self.assertEqual(redact_pan(masked), masked)
+        self.assertEqual(redact_pan(fullwidth), "[usunięto]")
+        self.assertNotIn("5351005555555555", redact_pan("pay " + doubled + " end"))
+        self.assertIn("5555", redact_pan(masked))
         continued = "NR KARTY\n5351  0055\n5555  5555\nSUMA PLN 5,00\nNIP 7791011327\n2026-11-20\n"
         redacted = redact_pan(continued)
         self.assertNotIn("5351", redacted)
         self.assertNotIn("0055", redacted)
         self.assertIn("SUMA PLN 5,00", redacted)
-        self.assertIn("7791011327", redacted)
-        self.assertIn("2026-11-20", redacted)
-        untouched = "NIP 7791011327\n2026-11-20\n"
-        self.assertEqual(redact_pan(untouched), untouched)
-        self.assertEqual(redact_pan("4111********1111"), "[REDACTED]")
-        self.assertEqual(redact_pan("4111XXXXXXXX1111"), "[REDACTED]")
-        self.assertEqual(redact_pan("411111******1111"), "[REDACTED]")
-        self.assertEqual(redact_pan("****1234"), "[REDACTED]")
-        self.assertEqual(redact_pan("1234****"), "[REDACTED]")
-        self.assertEqual(redact_pan("Ref 12345 4111 1111 1111 1111"), "Ref [REDACTED]")
-        self.assertEqual(redact_pan("4111 1111 1111 1111 Ref 98765"), "[REDACTED] Ref 98765")
-        self.assertEqual(redact_pan("123456 4111-1111-1111-1111"), "[REDACTED]")
-        self.assertEqual(redact_pan("4111********1111 998877"), "[REDACTED]")
-        self.assertEqual(redact_pan("4111111111111111 20261120"), "[REDACTED]")
+        self.assertNotIn("7791011327", redacted)
+        self.assertNotIn("2026-11-20", redacted)
+        self.assertEqual(redact_pan("NIP 7791011327\n2026-11-20\n"), "[usunięto]\n[usunięto]\n")
+        self.assertEqual(redact_pan("4111********1111"), "4111********1111")
+        self.assertEqual(redact_pan("4111XXXXXXXX1111"), "4111XXXXXXXX1111")
+        self.assertEqual(redact_pan("411111******1111"), "411111******1111")
+        self.assertEqual(redact_pan("****1234"), "****1234")
+        self.assertEqual(redact_pan("1234****"), "1234****")
+        self.assertEqual(redact_pan("Ref 12345 4111 1111 1111 1111"), "[usunięto]")
+        self.assertEqual(redact_pan("4111 1111 1111 1111 Ref 98765"), "[usunięto]")
+        self.assertEqual(redact_pan("123456 4111-1111-1111-1111"), "[usunięto]")
+        self.assertEqual(redact_pan("4111********1111 998877"), "4111********1111 998877")
+        self.assertEqual(redact_pan("4111111111111111 20261120"), "[usunięto]")
         self.assertEqual(redact_pan("12,99"), "12,99")
         self.assertEqual(redact_pan("2 x 3,50"), "2 x 3,50")
-        self.assertNotIn("5351", redact_pan("5351  0055  5555  5555 2026"))
+        self.assertEqual(redact_pan("5351  0055  5555  5555 2026"), "[usunięto]")
         split = "NR\nKARTY ****1234\n5351 0055\n5555 5555\nSUMA PLN 5,00\nNIP 7791011327\n"
         split_redacted = redact_pan(split)
+        self.assertEqual(
+            split_redacted,
+            "NR\n[usunięto]\n[usunięto]\n[usunięto]\nSUMA PLN 5,00\nNIP 7791011327\n",
+        )
         self.assertNotIn("1234", split_redacted)
-        self.assertNotIn("5351", split_redacted)
-        self.assertNotIn("0055", split_redacted)
-        self.assertNotIn("5555", split_redacted)
-        self.assertIn("KARTY", split_redacted)
         self.assertIn("SUMA PLN 5,00", split_redacted)
         self.assertIn("7791011327", split_redacted)
 
     def test_pan_table_keeps_prices_and_redacts_punctuated_cards(self):
         cases = {
-            ",4111 1111 1111 1111": ",[REDACTED]",
-            "Karta:4111111111111111": "Karta:[REDACTED]",
-            "KARTA\n12,99": "KARTA\n[REDACTED],[REDACTED]",
-            "NR\nKARTY ,4111\n,1111 ,1111": "NR\nKARTY ,[REDACTED]\n,[REDACTED] ,[REDACTED]",
+            ",4111 1111 1111 1111": "[usunięto]",
+            "Karta:4111111111111111": "[usunięto]",
+            "KARTA\n12,99": "KARTA\n12,99",
+            "NR\nKARTY ,4111\n,1111 ,1111": "NR\n[usunięto]\n[usunięto]",
             "2 x 3,50": "2 x 3,50",
             "12.99 15.49": "12.99 15.49",
             "MLEKO 3,49 2 szt": "MLEKO 3,49 2 szt",
-            "4111-1111-1111-1111": "[REDACTED]",
-            "****1234": "[REDACTED]",
-            "1234****": "[REDACTED]",
-            "4111 1111 1111 1111.00": "[REDACTED]",
-            "4111 1111 1111 1111,00": "[REDACTED]",
-            "NR\nKARTY ,41\n,111 ,1111": "NR\nKARTY ,[REDACTED]\n,[REDACTED] ,[REDACTED]",
-            "KARTA\n1000 szt 3,49": "KARTA\n1000 szt 3,[REDACTED]",
-            "KARTA\n12 x 3,50": "KARTA\n12 x 3,[REDACTED]",
+            "4111-1111-1111-1111": "[usunięto]",
+            "****1234": "****1234",
+            "1234****": "1234****",
+            "4111 1111 1111 1111.00": "[usunięto]",
+            "4111 1111 1111 1111,00": "[usunięto]",
+            "NR\nKARTY ,41\n,111 ,1111": "NR\nKARTY ,41\n,111 ,1111",
+            "KARTA\n1000 szt 3,49": "KARTA\n1000 szt 3,49",
+            "KARTA\n12 x 3,50": "KARTA\n12 x 3,50",
             "1,2345 2,3456": "1,2345 2,3456",
-            "123.4567 246.9134": "123.4567 246.9134",
-            "CARD NUMBER\n4111.11 11.11 1111.11": "CARD NUMBER\n[REDACTED]",
-            "CARD NUMBER\n4111.11 11.11\n1111.11": (
-                "CARD NUMBER\n[REDACTED].[REDACTED] [REDACTED].[REDACTED]\n"
-                "[REDACTED].[REDACTED]"
-            ),
-            "4111.11 11.11\n1111.11": "4111.11 11.11\n1111.11",
+            "123.4567 246.9134": "[usunięto]",
+            "123.4567=246.9134": "123.4567=246.9134",
+            "CARD NUMBER\n4111.11 11.11 1111.11": "CARD NUMBER\n[usunięto]",
+            "CARD NUMBER\n4111.11 11.11\n1111.11": "CARD NUMBER\n[usunięto]\n[usunięto]",
+            "4111.11 11.11\n1111.11": "[usunięto]\n[usunięto]",
             "KARTA\nok\nok\n12,99": "KARTA\nok\nok\n12,99",
-            "KARTA 4111 1111 1111 1111": "KARTA [REDACTED]",
-            "4111 1111 1111 1111": "[REDACTED]",
-            "4111 1111\n1111 1111": "[REDACTED] [REDACTED]\n[REDACTED] [REDACTED]",
-            "4111 1111 1111\n1111": "[REDACTED] [REDACTED] [REDACTED]\n[REDACTED]",
-            "4111-1111\n1111-1111": "[REDACTED]-[REDACTED]\n[REDACTED]-[REDACTED]",
-            "4111 1111\n1111\n1111": "[REDACTED] [REDACTED]\n[REDACTED]\n[REDACTED]",
-            "4111\n1111\n1111\n1111": "4111\n1111\n1111\n1111",
+            "KARTA 4111 1111 1111 1111": "[usunięto]",
+            "4111 1111 1111 1111": "[usunięto]",
+            "4111 1111\n1111 1111": "[usunięto]\n[usunięto]",
+            "4111 1111 1111\n1111": "[usunięto]\n[usunięto]",
+            "4111-1111\n1111-1111": "[usunięto]\n[usunięto]",
+            "4111 1111\n1111\n1111": "[usunięto]\n[usunięto]\n[usunięto]",
+            "4111\n1111\n1111\n1111": "[usunięto]\n[usunięto]\n[usunięto]\n[usunięto]",
             "MLEKO 3,49\nCHLEB 4,99": "MLEKO 3,49\nCHLEB 4,99",
-            "41.11 1111.11 11.1111": "41.11 1111.11 11.1111",
+            "41.11 1111.11 11.1111": "[usunięto]",
         }
         for raw, expected in cases.items():
             with self.subTest(raw=raw):
                 self.assertEqual(redact_pan(raw), expected)
+                self.assertNotIn("raw_ocr_text", parse_receipt(raw))
         wrapped = "CARD NUMBER\n4111.11 11.11\n1111.11"
-        parsed = parse_receipt(wrapped)
-        self.assertEqual(parsed["raw_ocr_text"], cases[wrapped])
-        self.assertNotRegex(parsed["raw_ocr_text"], r"[0-9]")
-        bare = "4111 1111\n1111 1111"
-        self.assertEqual(parse_receipt(bare)["raw_ocr_text"], cases[bare])
-        self.assertNotRegex(parse_receipt("4111 1111 1111\n1111")["raw_ocr_text"], r"[0-9]")
+        self.assertNotRegex(redact_pan(wrapped), r"[0-9]")
+        self.assertNotRegex(redact_pan("4111 1111 1111\n1111"), r"[0-9]")
         split_digits = "CARD NUMBER 4 1 1\n1 1 1 1 1 1\n1 1 1 1 1 1 1"
         split_redacted = redact_pan(split_digits)
+        self.assertEqual(split_redacted, "[usunięto]\n[usunięto]\n[usunięto]")
         self.assertNotRegex(split_redacted, r"[0-9]")
-        self.assertEqual(split_redacted.count("[REDACTED]"), 16)
-        self.assertIn("CARD NUMBER", split_redacted)
-        self.assertEqual(redact_pan("KARTA\n****\n1234"), "KARTA\n[REDACTED]\n[REDACTED]")
+        self.assertEqual(redact_pan("KARTA\n****\n1234"), "KARTA\n****\n1234")
 
     def test_invalid_date_shape_does_not_hide_a_wrapped_pan(self):
-        wrapped = {
-            "4111-1111\n31-13-0000": "[REDACTED]-[REDACTED]\n[REDACTED]-[REDACTED]-[REDACTED]",
-            "4111-1111\n00-00-0002": "[REDACTED]-[REDACTED]\n[REDACTED]-[REDACTED]-[REDACTED]",
-            "4111-1111\n31.13.0000": "[REDACTED]-[REDACTED]\n[REDACTED].[REDACTED].[REDACTED]",
-            "4111-1111\n00.00.0002": "[REDACTED]-[REDACTED]\n[REDACTED].[REDACTED].[REDACTED]",
-            "4111-1111\n31.13-0000": "[REDACTED]-[REDACTED]\n[REDACTED].[REDACTED]-[REDACTED]",
-            "4111-1111\n00.00-0002": "[REDACTED]-[REDACTED]\n[REDACTED].[REDACTED]-[REDACTED]",
-        }
-        for raw, expected in wrapped.items():
+        removed = "[usunięto]\n[usunięto]"
+        for raw in (
+            "4111-1111\n31-13-0000",
+            "4111-1111\n00-00-0002",
+            "4111-1111\n31.13.0000",
+            "4111-1111\n00.00.0002",
+            "4111-1111\n31.13-0000",
+            "4111-1111\n00.00-0002",
+            "NIP 7791011327\n2026-11-22 14:35",
+            "NIP 7791011327\n22.11.2026",
+            "NIP 7791011327\n22.11.26",
+            "411111111111\n2026-11-22 14:35",
+            "22.11.2026\n411111111111",
+            "22.11.26\n411111111111",
+        ):
             with self.subTest(raw=raw):
-                self.assertEqual(redact_pan(raw), expected)
-                self.assertEqual(parse_receipt(raw)["raw_ocr_text"], expected)
-                self.assertNotRegex(expected, r"[0-9]")
+                self.assertEqual(redact_pan(raw), removed)
+                self.assertNotIn("raw_ocr_text", parse_receipt(raw))
+                self.assertNotRegex(redact_pan(raw), r"[0-9]")
         for kept in (
             "2026-11-22 14:35",
             "22.11.2026",
@@ -612,95 +681,81 @@ NR KARTY ****5555
             "22/11/2026",
             "29.02.2024",
             "22 11 2026",
-            "NIP 7791011327\n2026-11-22 14:35\n",
-            "NIP 7791011327\n22.11.2026\n",
-            "NIP 7791011327\n22.11.26\n",
-            "411111111111\n2026-11-22 14:35",
-            "22.11.2026\n411111111111",
-            "22.11.26\n411111111111",
             "KARTA\nok\nok\n2026-11-22 14:35",
+            "KARTA\n2026-11-22",
+            "KARTA\n22.11.2026",
         ):
             with self.subTest(kept=kept):
                 self.assertEqual(redact_pan(kept), kept)
-        self.assertEqual(redact_pan("KARTA\n2026-11-22"), "KARTA\n[REDACTED]-[REDACTED]-[REDACTED]")
-        self.assertEqual(redact_pan("KARTA\n22.11.2026"), "KARTA\n[REDACTED].[REDACTED].[REDACTED]")
         labelled = "KARTA\n4 1 1 1 1 1 1 1\n31-13-0000"
-        self.assertEqual(
-            redact_pan(labelled),
-            "KARTA\n[REDACTED] [REDACTED] [REDACTED] [REDACTED] "
-            "[REDACTED] [REDACTED] [REDACTED] [REDACTED]\n"
-            "[REDACTED]-[REDACTED]-[REDACTED]",
+        self.assertEqual(redact_pan(labelled), "KARTA\n[usunięto]\n[usunięto]")
+        self.assertNotRegex(json.dumps(parse_receipt(labelled)), r"4111|31-13")
+
+    def test_short_mask_run_split_by_a_newline_stays(self):
+        cases = (
+            "****\n1234",
+            "1234\n****",
+            "**** **** ****\n1234",
+            "XXXX\n1234",
+            "****",
+            "2 * 3,50",
         )
-        self.assertNotRegex(parse_receipt(labelled)["raw_ocr_text"], r"[0-9]")
-
-    def test_short_mask_run_split_by_a_newline_is_redacted(self):
-        cases = {
-            "****\n1234": "[REDACTED]\n[REDACTED]",
-            "1234\n****": "[REDACTED]\n[REDACTED]",
-            "**** **** ****\n1234": "[REDACTED]\n[REDACTED]",
-            "XXXX\n1234": "[REDACTED]\n[REDACTED]",
-            "****": "[REDACTED]",
-            "2 * 3,50": "2 * 3,50",
-        }
-        for raw, expected in cases.items():
+        for raw in cases:
             with self.subTest(raw=raw):
-                self.assertEqual(redact_pan(raw), expected)
-                stored = parse_receipt(raw)["raw_ocr_text"]
-                self.assertEqual(stored, expected)
-        self.assertNotRegex(parse_receipt("****\n1234")["raw_ocr_text"], r"[0-9*X]")
+                self.assertEqual(redact_pan(raw), raw)
+                self.assertNotIn("raw_ocr_text", parse_receipt(raw))
 
-    def test_luhn_valid_twelve_digit_run_is_redacted(self):
+    def test_twelve_digit_run_is_redacted_without_luhn(self):
         valid = "411111111117"
         invalid = "411111111110"
-        self.assertEqual(redact_pan(valid), "[REDACTED]")
-        self.assertEqual(parse_receipt(valid)["raw_ocr_text"], "[REDACTED]")
+        self.assertEqual(redact_pan(valid), "[usunięto]")
+        self.assertNotIn("raw_ocr_text", parse_receipt(valid))
         wrapped = "411111\n111117"
-        self.assertEqual(redact_pan(wrapped), "[REDACTED]\n[REDACTED]")
-        self.assertEqual(parse_receipt(wrapped)["raw_ocr_text"], "[REDACTED]\n[REDACTED]")
+        self.assertEqual(redact_pan(wrapped), "[usunięto]\n[usunięto]")
         self.assertNotRegex(redact_pan(wrapped), r"[0-9]")
-        self.assertEqual(redact_pan(invalid), invalid)
-        self.assertEqual(redact_pan("KARTA\n" + invalid), "KARTA\n[REDACTED]")
+        self.assertEqual(redact_pan(invalid), "[usunięto]")
+        self.assertEqual(redact_pan("KARTA\n" + invalid), "KARTA\n[usunięto]")
         nip = "527-26-01-234"
         self.assertEqual(redact_pan(nip), nip)
         self.assertEqual(redact_pan("NIP " + nip), "NIP " + nip)
-        self.assertEqual(parse_receipt("NIP " + nip + "\n")["raw_ocr_text"], "NIP " + nip + "\n")
+        parsed = parse_receipt("NIP " + nip + "\n")
+        self.assertNotIn("raw_ocr_text", parsed)
+        self.assertIsNone(parsed["raw_nip"])
 
     def test_item_three_lines_after_card_label_keeps_prices(self):
         text = (
-            "BIEDRONKA\nNIP 7791011327\n2026-11-30 12:34\n"
+            "BIEDRONKA\nNIP 7791011327\nPARAGON FISKALNY\n2026-11-30 12:34\n"
             "KARTA\npin ok\nterminal\n"
-            "MLEKO 1 x 123.4567 246.9134 A\nSUMA PLN 246.9134\n"
+            "MLEKO 1 x 123.4567=246.9134 A\nSUMA PLN 246.9134\n"
         )
         parsed = parse_receipt(text)
-        self.assertIn("MLEKO 1 x 123.4567 246.9134 A", parsed["raw_ocr_text"])
-        self.assertIn("246.9134", parsed["raw_ocr_text"])
+        self.assertNotIn("raw_ocr_text", parsed)
+        self.assertEqual(parsed["lines"][0]["raw_name"], "MLEKO")
         self.assertEqual(parsed["lines"][0]["unit_price_raw"], "123.4567")
         self.assertEqual(parsed["lines"][0]["gross_line_total"], "246.9134")
         self.assertEqual(parsed["total_amount"], "246.9134")
         self.assertEqual(parsed["math_delta"], "0")
-        self.assertEqual(redact_pan("KARTA\nok\n12,99"), "KARTA\nok\n[REDACTED],[REDACTED]")
+        self.assertEqual(redact_pan("KARTA\nok\n12,99"), "KARTA\nok\n12,99")
 
     def test_quantity_after_card_label_keeps_every_digit(self):
-        self.assertEqual(redact_pan("KARTA\n1000 szt 3,49"), "KARTA\n1000 szt 3,[REDACTED]")
+        self.assertEqual(redact_pan("KARTA\n1000 szt 3,49"), "KARTA\n1000 szt 3,49")
         text = (
-            "BIEDRONKA\nNIP 7791011327\n2026-11-30 12:34\n"
+            "BIEDRONKA\nNIP 7791011327\nPARAGON FISKALNY\n2026-11-30 12:34\n"
             "KARTA\nplatnosc\nok\n"
             "MLEKO 1000 szt 3,49 A\nSUMA PLN 3,49\n"
         )
         parsed = parse_receipt(text)
-        self.assertIn("1000", parsed["raw_ocr_text"])
+        self.assertNotIn("raw_ocr_text", parsed)
         self.assertEqual(parsed["lines"][0]["raw_name"], "MLEKO")
         self.assertEqual(parsed["lines"][0]["quantity"], "1000")
         self.assertEqual(parsed["lines"][0]["raw_unit"], "szt")
         self.assertEqual(parsed["lines"][0]["gross_line_total"], "3.49")
         self.assertEqual(parsed["math_delta"], "0")
         priced = (
-            "BIEDRONKA\nNIP 7791011327\n2026-11-30 12:34\n"
-            "MLEKO 1 x 123.4567 246.9134 A\nSUMA PLN 246.9134\n"
+            "BIEDRONKA\nNIP 7791011327\nPARAGON FISKALNY\n2026-11-30 12:34\n"
+            "MLEKO 1 x 123.4567=246.9134 A\nSUMA PLN 246.9134\n"
         )
         parsed = parse_receipt(priced)
-        self.assertIn("123.4567", parsed["raw_ocr_text"])
-        self.assertIn("246.9134", parsed["raw_ocr_text"])
         self.assertEqual(parsed["lines"][0]["unit_price_raw"], "123.4567")
         self.assertEqual(parsed["lines"][0]["gross_line_total"], "246.9134")
         self.assertEqual(parsed["total_amount"], "246.9134")
@@ -715,7 +770,7 @@ NR KARTY ****5555
         started = time.perf_counter()
         scanned = redact_pan("*" * (32 * 1024 - 1))
         self.assertLess(time.perf_counter() - started, 0.5)
-        self.assertNotIn("[REDACTED]", scanned)
+        self.assertEqual(scanned, "*" * (32 * 1024 - 1))
         for sample in ("\n" * 50_000, "\n" * (32 * 1024 - 1)):
             started = time.perf_counter()
             with self.assertRaises(ReceiptError):
@@ -725,30 +780,31 @@ NR KARTY ****5555
         started = time.perf_counter()
         scanned = redact_pan(many)
         self.assertLess(time.perf_counter() - started, 0.5)
-        self.assertEqual(scanned, many)
+        self.assertEqual(scanned, "[usunięto]")
 
     def test_money_magnitude_precision_and_folded_name_length_are_limited(self):
         def text(item):
-            return f"BIEDRONKA\nNIP 7791011327\n2026-11-30 12:34\n{item}\nSUMA PLN 5,00\n"
+            return f"BIEDRONKA\nNIP 7791011327\nPARAGON FISKALNY\n2026-11-30 12:34\n{item}\nSUMA PLN 5,00\n"
 
         hidden = parse_receipt(text("MLEKO 1 x 4111111111111111 5,00 A"))
-        self.assertNotIn("4111111111111111", hidden["raw_ocr_text"])
+        self.assertNotIn("4111111111111111", json.dumps(hidden))
+        self.assertNotIn("raw_ocr_text", hidden)
         for line in hidden["lines"]:
             self.assertNotIn("4111111111111111", str(line["unit_price_raw"]))
         with self.assertRaises(ReceiptError):
             parse_receipt(text("MLEKO 1 x 1,00000 5,00 A"))
         with self.assertRaises(ReceiptError):
-            parse_receipt(text("MLEKO 1 x 1000000000 5,00 A"))
+            parse_receipt(text("MLEKO 1 x 1000000000=5,00 A"))
         with self.assertRaises(ReceiptError):
             parse_receipt(
-                "BIEDRONKA\nNIP 7791011327\n2026-11-30 12:34\n"
-                "MLEKO 1 x 5,00 5,00 A\nRABAT 999999999,9999\nRABAT 999999999,9999\n"
+                "BIEDRONKA\nNIP 7791011327\nPARAGON FISKALNY\n2026-11-30 12:34\n"
+                "MLEKO 1 x 5,00 5,00 A\nRABAT 999999999,99\nRABAT 999999999,99\n"
                 "SUMA PLN 5,00\n")
         wide = parse_receipt(
-            "BIEDRONKA\nNIP 7791011327\n2026-11-30 12:34\n"
-            "MLEKO 1 x 999999999,9999 = 999999999,9999 A\nSUMA PLN 999999999,9999\n")
-        self.assertEqual(wide["lines"][0]["unit_price_raw"], "999999999.9999")
-        self.assertEqual(wide["total_amount"], "999999999.9999")
+            "BIEDRONKA\nNIP 7791011327\nPARAGON FISKALNY\n2026-11-30 12:34\n"
+            "MLEKO 1 x 999999999,99=999999999,99 A\nSUMA PLN 999999999,99\n")
+        self.assertEqual(wide["lines"][0]["unit_price_raw"], "999999999.99")
+        self.assertEqual(wide["total_amount"], "999999999.99")
         folded = "ß" * 128
         with self.assertRaises(ReceiptError):
             parse_receipt(text(f"{folded} 1 x 5,00 5,00 A"))
@@ -761,10 +817,64 @@ NR KARTY ****5555
         fraction["lines"][0]["quantity"] = "1.00000"
         with self.assertRaises(ReceiptError):
             validate_confirm(fraction)
+        secret_money = confirm_values(parsed)
+        secret_money["lines"][0]["quantity"] = "99999999.9999"
+        with self.assertRaises(ReceiptError):
+            validate_confirm(secret_money)
         long_name = confirm_values(parsed)
         long_name["lines"][0]["raw_name"] = folded
         with self.assertRaises(ReceiptError):
             validate_confirm(long_name)
+
+    def test_wrapped_pan_never_survives_storage_or_responses(self):
+        rng = random.Random(20261123)
+        separators = list(" .,/-")
+        items = ("MLEKO 1 x 3,50 3,50 A", "CHLEB 1 x 4,20 4,20 A")
+        for trial in range(24):
+            length = rng.randint(13, 19)
+            pan = "".join(str(rng.randrange(10)) for _ in range(length))
+            windows = {pan[index:index + 12] for index in range(length - 11)}
+            pieces = rng.randint(1, 6)
+            if pieces == 1:
+                cuts = []
+            else:
+                cuts = sorted(rng.sample(range(1, length), pieces - 1))
+            bounds = [0, *cuts, length]
+            pan_lines = []
+            for start, end in zip(bounds, bounds[1:]):
+                body = []
+                for offset, digit in enumerate(pan[start:end]):
+                    if offset:
+                        body.append(rng.choice(separators))
+                    body.append(digit)
+                pan_lines.append("".join(body))
+            pending = list(items)
+            sequence = []
+            for line in pan_lines:
+                if pending and rng.random() < 0.5:
+                    sequence.append(pending.pop(0))
+                sequence.append(line)
+            sequence.extend(pending)
+            text = "\n".join((
+                "BIEDRONKA", "NIP 7791011327", "PARAGON FISKALNY", "2026-11-20 12:34", "KARTA",
+                *sequence, "PIN OK", "SUMA PLN 7,70",
+            ))
+            with self.subTest(trial=trial, length=length, pieces=pieces):
+                parsed = self.receipts.parse_text("owner", text)
+                confirmed = self.receipts.confirm("owner", confirm_values(parsed))
+                detail = self.receipts.detail("owner", parsed["receipt_id"])
+                for body in (parsed, confirmed, detail):
+                    _walk_no_pan(self, body, windows)
+                    _assert_no_pan_windows(self, json.dumps(body), windows)
+                    self.assertNotIn("raw_ocr_text", json.dumps(body))
+                row = self.receipt_row(parsed["receipt_id"])
+                self.assertIsNone(row.raw_ocr_text)
+                _scan_text_columns(self, row, windows)
+                for line in self.rows(db.BudgetReceiptLine):
+                    if line.receipt_id == row.id:
+                        _scan_text_columns(self, line, windows)
+                self.assertEqual(confirmed["receipt"]["total_amount"], "7.7")
+                self.assertEqual(confirmed["receipt"]["receipt_date"], "2026-11-20")
 
     def test_confirm_is_bound_to_preview_evidence_and_reconcile_is_idempotent(self):
         from hestia.budget.receipt_reconcile import reconcile_receipt_links
@@ -909,10 +1019,12 @@ NR KARTY ****5555
         self.now += 5000
         edited = self.receipts.confirm("owner", confirm_values(
             parsed, expected_version=first["version"], receipt_time="18:01"))["receipt"]
-        self.assertEqual(edited["raw_text_expires_at"], first["raw_text_expires_at"])
+        self.assertIsNone(edited["raw_text_expires_at"])
+        self.assertIsNone(first["raw_text_expires_at"])
         self.assertEqual(edited["image_expires_at"], first["image_expires_at"])
-        self.assertEqual(first["raw_text_expires_at"], self.now - 5000 + CONFIRMED_TEXT_TTL_SECONDS)
-        self.assertIsNotNone(edited["raw_ocr_text"])
+        self.assertEqual(first["image_expires_at"], self.now - 5000 + CONFIRMED_TEXT_TTL_SECONDS)
+        self.assertNotIn("raw_ocr_text", edited)
+        self.assertIsNone(self.receipt_row(parsed["receipt_id"]).raw_ocr_text)
 
     def test_retain_expired_purges_drafts_when_the_flag_is_off(self):
         expired = self.draft(total="7")
@@ -926,8 +1038,10 @@ NR KARTY ****5555
         self.assertNotIn(expired["receipt_id"], json.dumps(result))
         self.assertIsNone(self.receipt_row(expired["receipt_id"]))
         row = self.receipt_row(kept["receipt_id"])
-        self.assertEqual(row.raw_text_expires_at, confirmed["raw_text_expires_at"])
-        self.assertIsNotNone(row.raw_ocr_text)
+        self.assertIsNone(row.raw_text_expires_at)
+        self.assertIsNone(confirmed["raw_text_expires_at"])
+        self.assertIsNone(row.raw_ocr_text)
+        self.assertEqual(row.image_expires_at, confirmed["image_expires_at"])
 
     def test_delete_and_draft_purge_erase_receipt_audit_rows(self):
         parsed = self.draft()
@@ -1098,7 +1212,8 @@ class ReceiptHTTPTests(fixture.unittest.IsolatedAsyncioTestCase):
         self.assertEqual(confirmed.status, 200, await confirmed.text())
         saved = (await confirmed.json())["receipt"]
         api_contract.BudgetReceiptConfirmResult.model_validate({"ok": True, "receipt": saved})
-        self.assertIsNotNone(saved["raw_ocr_text"])
+        self.assertNotIn("raw_ocr_text", saved)
+        self.assertIsNone(saved["raw_text_expires_at"])
         deleted = await self.post("delete", {"receipt_id": saved["receipt_id"],
                                               "expected_version": saved["version"]})
         self.assertEqual(deleted.status, 200)

@@ -4392,8 +4392,6 @@ export interface components {
             payment_method: string | null;
             /** Raw Nip */
             raw_nip: string | null;
-            /** Raw Ocr Text */
-            raw_ocr_text: string | null;
             /** Raw Shop Name */
             raw_shop_name: string | null;
             /** Raw Text Expires At */
