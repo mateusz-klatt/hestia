@@ -114,7 +114,7 @@ NR KARTY ****5555
             self.assertEqual(redact_pan(sample), "[REDACTED]", sep.encode("unicode_escape"))
             self.assertNotIn(digits, redact_pan("prefix " + sample + " suffix"))
         nip = "779\u00a0101\u00a013\u00a027"
-        self.assertEqual(redact_pan("NIP " + nip), "NIP " + nip)
+        self.assertEqual(redact_pan("NIP " + nip), "NIP 779 101 13 27")
         adjacent = "NIP 7791011327\n2026-11-20 12:34\n"
         self.assertEqual(redact_pan(adjacent), adjacent)
         nbsp_pan = "\u00a0".join(groups)
@@ -128,6 +128,24 @@ NR KARTY ****5555
         for line in parsed["lines"]:
             self.assertNotIn(digits, line["raw_name"].replace("\u00a0", ""))
             self.assertNotIn(nbsp_pan, line["raw_name"])
+
+    def test_normalised_text_redacts_pans_hidden_by_unicode(self):
+        expected = "[REDACTED] [REDACTED]\n[REDACTED] [REDACTED]"
+        for sep in ("\r\n", "\r", "\v", "\f", "\x1c", "\x1d", "\x1e", "\x85", "\u2028", "\u2029"):
+            raw = f"4111 1111{sep}1111 1111"
+            redacted = redact_pan(raw)
+            self.assertEqual(redacted, expected, sep.encode("unicode_escape"))
+            self.assertEqual(parse_receipt(raw)["raw_ocr_text"], expected)
+            self.assertNotRegex(redacted, r"[0-9]")
+        zwsp = "\u200b".join("4111111111111111")
+        mixed = "4111\u200b1111\u200c1111\u200d\ufeff\u2060\u00ad1111"
+        fullwidth = "４１１１ １１１１ １１１１ １１１１"
+        nbsp = "4111\u00a01111\u00a01111\u00a01111"
+        for raw in (zwsp, mixed, fullwidth, nbsp):
+            redacted = redact_pan(raw)
+            self.assertEqual(redacted, "[REDACTED]", raw.encode("unicode_escape"))
+            self.assertEqual(parse_receipt(raw)["raw_ocr_text"], "[REDACTED]")
+            self.assertNotRegex(redacted, r"[0-9]")
 
     def test_confirm_redacts_pan_in_shop_name_and_line_name(self):
         parsed = self.draft()

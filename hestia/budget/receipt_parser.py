@@ -84,6 +84,19 @@ _DISCOUNT = re.compile(rf"^\s*(?:RABAT|OPUST)\b[^0-9+-]*(?P<amount>{_NUMBER})", 
 _UUID = re.compile(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\Z", re.ASCII)
 _CURRENCY = re.compile(r"[A-Z]{3}\Z", re.ASCII)
 _CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+# Line terminators become ``\n`` before the control check, so a PAN split by
+# U+2028 or a vertical tab is one receipt, not rejected or left in one line.
+_LINE_BREAK = str.maketrans({
+    "\r": "\n",
+    "\v": "\n",
+    "\f": "\n",
+    "\x1c": "\n",
+    "\x1d": "\n",
+    "\x1e": "\n",
+    "\x85": "\n",
+    "\u2028": "\n",
+    "\u2029": "\n",
+})
 
 _CHAIN_NIPS = {
     "7791011327": "biedronka",
@@ -714,22 +727,44 @@ def _redact_spans(text, spans):
     return "".join(parts)
 
 
+def _normalize_receipt_text(text):
+    """One form before every scan. The stored OCR text is this form.
+
+    NFKC folds full-width and other compatibility digits to ASCII. Every line
+    terminator becomes ``\\n``. Format characters (ZWSP, ZWJ, ZWNJ, WJ, BOM,
+    soft hyphen) are removed. Other Unicode spaces become an ASCII space.
+    """
+    text = unicodedata.normalize("NFKC", text).replace("\r\n", "\n").translate(_LINE_BREAK)
+    if text.isascii():
+        return text
+    kept = []
+    for char in text:
+        category = unicodedata.category(char)
+        if category == "Cf":
+            continue
+        if category == "Zs" and char != " ":
+            kept.append(" ")
+            continue
+        kept.append(char)
+    return "".join(kept)
+
+
 def _receipt_text(text):
-    """Reject oversized, too-long or control-bearing input before any PAN scan."""
+    """Normalise, then reject oversized, too-long or control-bearing input before any PAN scan."""
     if not isinstance(text, str):
         raise ReceiptError()
     try:
         size = len(text.encode("utf-8"))
     except UnicodeEncodeError:
         raise ReceiptError() from None
-    if size < 1 or size > MAX_TEXT_BYTES or _CONTROL.search(text):
+    if size < 1 or size > MAX_TEXT_BYTES:
         raise ReceiptError()
-    text = unicodedata.normalize("NFC", text).replace("\r\n", "\n").replace("\r", "\n")
+    text = _normalize_receipt_text(text)
     try:
         size = len(text.encode("utf-8"))
     except UnicodeEncodeError:
         raise ReceiptError() from None
-    if size > MAX_TEXT_BYTES or _CONTROL.search(text) or text.count("\n") + 1 > MAX_TEXT_LINES:
+    if size < 1 or size > MAX_TEXT_BYTES or _CONTROL.search(text) or text.count("\n") + 1 > MAX_TEXT_LINES:
         raise ReceiptError()
     return text
 
