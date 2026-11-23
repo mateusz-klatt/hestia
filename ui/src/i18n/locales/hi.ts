@@ -861,7 +861,7 @@ const messages: Partial<Messages> = {
   "budget.quarantine.entries.other": "{n} प्रविष्टियाँ",
   "budget.quarantine.details": "प्रविष्टियों का विवरण ({count})",
   "budget.quarantine.truncatedShown.zero": "{total} में से नवीनतम {n} दिखाई गई हैं.",
-  "budget.quarantine.truncatedShown.one": "{total} में से नवीनतम {n} दिखाई गई हैं.",
+  "budget.quarantine.truncatedShown.one": "{total} में से नवीनतम {n} दिखाई गई है.",
   "budget.quarantine.truncatedShown.two": "{total} में से नवीनतम {n} दिखाई गई हैं.",
   "budget.quarantine.truncatedShown.few": "{total} में से नवीनतम {n} दिखाई गई हैं.",
   "budget.quarantine.truncatedShown.many": "{total} में से नवीनतम {n} दिखाई गई हैं.",
