@@ -225,10 +225,10 @@ def classify_sender(headers, sender_allowlist, spouse_forward_senders):
 
 def _inline_forward(text, sender_allowlist):
     lines = text.splitlines()
-    marker = next((i for i, line in enumerate(lines)
-                   if line.strip(" \t-:").casefold() in _FORWARD_MARKERS), None)
-    if marker is None:
+    markers = [i for i, line in enumerate(lines) if line.strip(" \t-:").casefold() in _FORWARD_MARKERS]
+    if len(markers) != 1:
         return None
+    marker = markers[0]
     fields = {}
     chars = 0
     end = min(len(lines), marker + 1 + _MAX_FORWARD_HEADER_LINES)

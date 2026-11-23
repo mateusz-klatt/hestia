@@ -289,6 +289,7 @@ class GmailTrustTests(unittest.TestCase):
         original = _message(SPOUSE, _inline())
         self.assertIsNone(unwrap_forward(original, KNOWN))
         for body in (_inline().replace("FV/2026/11/42", "arbitrary-number"),
-                     _inline().replace("Orange", "Play"), _inline().replace(INVOICE, "Please pay this bill")):
+                     _inline().replace("Orange", "Play"), _inline().replace(INVOICE, "Please pay this bill"),
+                     _inline().replace(INVOICE, _inline(sender="relay@evil.example"))):
             with self.subTest(body=body):
                 self.assertIsNone(unwrap_forward(_message(SPOUSE, body), KNOWN, sender_allowlist=DIRECT))
