@@ -1,6 +1,7 @@
 import type { Messages } from "./en";
 
 const messages: Partial<Messages> = {
+  "header.title": "hestia",
   "header.confirmed": "{confirmed}/{total} အတည်ပြုပြီး",
   "header.unknown": "{unknown} မသိ",
 
@@ -108,7 +109,12 @@ const messages: Partial<Messages> = {
   "rooms.editIcons": "အိုင်ကွန်များ ပြင်ဆင်ရန်",
   "rooms.editIconsDone": "ပြီးပါပြီ",
   "rooms.iconNone": "—",
-  "rooms.deviceCount.other": "{n} စက်ပစ္စည်း",
+  "rooms.deviceCount.zero": "စက်ပစ္စည်း {n} ခု",
+  "rooms.deviceCount.one": "စက်ပစ္စည်း {n} ခု",
+  "rooms.deviceCount.two": "စက်ပစ္စည်း {n} ခု",
+  "rooms.deviceCount.few": "စက်ပစ္စည်း {n} ခု",
+  "rooms.deviceCount.many": "စက်ပစ္စည်း {n} ခု",
+  "rooms.deviceCount.other": "စက်ပစ္စည်း {n} ခု",
 
   "ctl.on": "ဖွင့်",
   "ctl.off": "ပိတ်",
@@ -181,6 +187,7 @@ const messages: Partial<Messages> = {
   "auto.error": "အမှား {status}",
   "auto.trig.scene": "မြင်ကွင်း {id} @နိုဒ် {node}",
   "auto.trig.state": "နိုဒ် {node}{gang} {field} {op} {value}",
+  "auto.trig.stateGlobal": "{field} {op} {value}",
   "auto.trig.gang": " ခလုတ် {ep}",
   "auto.trig.time": "အချိန် {time}{days}",
   "auto.trig.cron": "cron {expr}",
@@ -196,7 +203,7 @@ const messages: Partial<Messages> = {
   "rule.wizardTitle": "စည်းမျဉ်း ဝစ်ဇတ်",
   "rule.id": "id",
   "rule.enabled": "ဖွင့်ထား",
-  "rule.debounce": "debounce s",
+  "rule.debounce": "လုပ်ဆောင်မှုများအကြား အနည်းဆုံးကြားချိန် s",
   "rule.trigger": "ထရစ်ဂါ",
   "rule.conditions": "အခြေအနေများ:",
   "rule.actions": "လုပ်ဆောင်ချက်များ:",
@@ -218,7 +225,7 @@ const messages: Partial<Messages> = {
   "rule.gang": "ခလုတ်",
   "rule.phRuleId": "စည်းမျဉ်း-id",
   "rule.phButton": "ခလုတ်",
-  "rule.phOffset": "offset min",
+  "rule.phOffset": "အချိန်ရွှေ့မှု min",
   "rule.phWindowStart": "HH:MM",
   "rule.phWindowEnd": "HH:MM",
   "rule.errNumberRequired": "{label}: နံပါတ် လိုအပ်သည်",

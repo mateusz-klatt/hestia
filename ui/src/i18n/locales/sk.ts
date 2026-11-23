@@ -1,6 +1,7 @@
 import type { Messages } from "./en";
 
 const messages: Partial<Messages> = {
+  "header.title": "hestia",
   "header.confirmed": "{confirmed}/{total} potvrdené",
   "header.unknown": "{unknown} neznáme",
 
@@ -108,7 +109,9 @@ const messages: Partial<Messages> = {
   "rooms.editIcons": "Upraviť ikony",
   "rooms.editIconsDone": "Hotovo",
   "rooms.iconNone": "—",
+  "rooms.deviceCount.zero": "{n} zariadení",
   "rooms.deviceCount.one": "{n} zariadenie",
+  "rooms.deviceCount.two": "{n} zariadení",
   "rooms.deviceCount.few": "{n} zariadenia",
   "rooms.deviceCount.many": "{n} zariadenia",
   "rooms.deviceCount.other": "{n} zariadení",
@@ -166,7 +169,7 @@ const messages: Partial<Messages> = {
 
   "mode.plain": "režim: {mode}",
   "mode.cloudFree": "režim: {mode} (bez cloudu)",
-  "mode.graduated": "režim: {mode} → standalone uložené — reštartujte hestiu",
+  "mode.graduated": "režim: {mode} → standalone uložené — reštartujte aplikáciu hestia",
   "mode.envPinned": "režim: {mode} (HESTIA_MODE={override} vynucuje režim; uložené: {target})",
   "discovery.loadError": "nepodarilo sa načítať /api/discovery",
   "adv.refresh": "Obnoviť",
@@ -184,6 +187,7 @@ const messages: Partial<Messages> = {
   "auto.error": "chyba {status}",
   "auto.trig.scene": "scéna {id} @uzol {node}",
   "auto.trig.state": "uzol {node}{gang} {field} {op} {value}",
+  "auto.trig.stateGlobal": "{field} {op} {value}",
   "auto.trig.gang": " klávesa {ep}",
   "auto.trig.time": "o {time}{days}",
   "auto.trig.cron": "cron {expr}",
@@ -199,7 +203,7 @@ const messages: Partial<Messages> = {
   "rule.wizardTitle": "Sprievodca pravidlom",
   "rule.id": "id",
   "rule.enabled": "povolené",
-  "rule.debounce": "debounce s",
+  "rule.debounce": "minimálny interval s",
   "rule.trigger": "spúšťač",
   "rule.conditions": "podmienky:",
   "rule.actions": "akcie:",
@@ -221,7 +225,7 @@ const messages: Partial<Messages> = {
   "rule.gang": "klávesa",
   "rule.phRuleId": "id-pravidla",
   "rule.phButton": "tlačidlo",
-  "rule.phOffset": "offset min",
+  "rule.phOffset": "posun min",
   "rule.phWindowStart": "HH:MM",
   "rule.phWindowEnd": "HH:MM",
   "rule.errNumberRequired": "{label}: vyžaduje sa číslo",

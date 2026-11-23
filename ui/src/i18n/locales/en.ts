@@ -1,7 +1,7 @@
-// English is the SOURCE catalog: every message key lives here. Other locales override a
-// subset and fall back to English for anything missing. Plural keys declare all CLDR
-// categories (zero/one/two/few/many/other) so any language can fill the ones it uses —
-// the active category is chosen at runtime via Intl.PluralRules (see tPlural).
+// English is the SOURCE catalog: every locale supplies every key (enforced by catalogs.test.ts).
+// Plural keys declare all CLDR categories (zero/one/two/few/many/other), including localized forms
+// for unused categories. Intl.PluralRules selects only that locale's categories at runtime
+// (see tPlural). English fallback remains a runtime safeguard for failed or incomplete loads.
 const en = {
   "header.title": "hestia",
   "header.confirmed": "{confirmed}/{total} confirmed",

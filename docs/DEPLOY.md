@@ -91,11 +91,29 @@ Then add `HESTIA_BUDGET_RULE_KEY_FILE=/data/secrets/budget-rule.key` (the **cont
 
 Default off (`HESTIA_BUDGET_GMAIL_IMPORT_ENABLED` unset). Invoice HTML/plain text is parsed only by the isolated `receipt-parser` service (`network_mode: none`, read-only root, `cap_drop: ALL`, `no-new-privileges`, UID 1000, 256 MiB / 32 pids / 0.5 CPU, noexec tmpfs). It is behind the compose profile `receipt-parser`, so an ordinary Hestia deploy does not start it. Hestia never falls back to in-process parsing: with the flag on and the service down, the Gmail routes return `503 budget_receipt_gmail_parser_unavailable` and no Gmail call is made.
 
-Secrets (both read via `config._read_secret`: regular file, owned by the container UID 1000, mode `0400`/`0600`, no symlink):
+The service reads all three files through `config._read_secret`. Each must be a regular file owned by container UID 1000 with mode `0400` or `0600`. Symlinks are rejected.
 
 - **Dedupe key** `HESTIA_BUDGET_RECEIPTS_HMAC_SECRET_FILE`: 32 random bytes, created like the rule key above, e.g. `./data/secrets/receipts-gmail-hmac.key` → `/data/secrets/receipts-gmail-hmac.key`. Keep it stable; rotating it makes previously imported messages look new.
 - **Gmail refresh token**: reuse the existing `gmail.readonly` token (no new grant). Write it into a `0400` file under `./data/secrets/` and point the config's `refresh_token_env` at the env var holding that container path.
-- **Config** `HESTIA_BUDGET_RECEIPTS_GMAIL_CONFIG`: the JSON (owner, mailbox, spouse forward senders, supplier allowlist, env-var names) is also a `0400`/`0600` file owned by UID 1000.
+- **Config** `HESTIA_BUDGET_RECEIPTS_GMAIL_CONFIG`: path to the JSON config, up to 16 KiB.
+
+`sender_allowlist` and `spouse_forward_senders` must both appear, and at least one must contain an entry. Environment variable names must match `[A-Z_][A-Z0-9_]{0,127}` and be set inside the container. The examples below are placeholders.
+
+| JSON key | Type | Meaning | Default or allowed values |
+| --- | --- | --- | --- |
+| `owner` | String | Hestia account that owns the Gmail import, such as `example-owner`. | Required. Nonblank UTF-8, up to 128 characters. |
+| `owner_mailbox` | String | Gmail mailbox the OAuth profile must match, such as `owner@example.test`. | Required. Bare ASCII mailbox address, compared case-insensitively. |
+| `client_id_env` | String | Name of the environment variable holding the OAuth client ID, such as `EXAMPLE_GMAIL_CLIENT_ID`. | Required. Environment variable name. |
+| `client_secret_env` | String | Name of the environment variable holding the OAuth client secret, such as `EXAMPLE_GMAIL_CLIENT_SECRET`. | Required. Environment variable name. |
+| `refresh_token_env` | String | Name of the environment variable holding the absolute container path to the refresh-token file, such as `EXAMPLE_GMAIL_REFRESH_TOKEN_FILE`. | Required. Environment variable name. |
+| `sender_allowlist` | Array of strings | Supplier rules for direct imports and inline forwards. | Required. Bare ASCII addresses or domain rules such as `billing@supplier.example.test` and `@supplier.example.test`. Domain rules include subdomains and exclude public webmail domains. |
+| `spouse_forward_senders` | Array of strings | Mailboxes allowed to send spouse forwards. | Required. Exact bare ASCII addresses such as `forwarder@example.test`. |
+| `known_merchant_domains` | Array of strings | Additional merchant domains allowed within attached forwards. The importer also derives merchant domains from non-public-webmail entries in `sender_allowlist`. | Defaults to `[]`. ASCII domains with an optional leading `@`, such as `supplier.example.test`. Public webmail domains are excluded. |
+| `require_known_forwarded_merchant` | Boolean | Legacy setting. The importer enforces its merchant checks for either value. | Defaults to `true`. |
+| `label_name` | String or `null` | Exact Gmail label used to scope imports, such as `Example Invoices`. | Defaults to `null` for no label filter. A string must be nonblank UTF-8, up to 225 characters. |
+| `backfill_days` | Integer | Number of days to look back during backfill. | Defaults to `365`. Range 1–365. |
+| `backfill_max_messages` | Integer | Number of messages the backfill processes before pausing to resume later. | Defaults to `500`. Range 1–500. |
+| `sync_interval_seconds` | Integer | Interval in seconds between scheduled syncs. | Defaults to `3600`. Range 3,600–9,007,199,254,740,992 (`2^53`). |
 
 Enable, in this order:
 
@@ -105,4 +123,4 @@ Enable, in this order:
 4. Set `HESTIA_BUDGET_GMAIL_IMPORT_ENABLED=1` in `.env` and recreate the `hestia` container.
 5. Smoke: the Gmail status route reports `configured=true`; no import has run yet unless triggered.
 
-Rollback: remove the flag from `.env` and recreate `hestia` (Gmail routes return 404, the poller stops), then `docker compose --profile receipt-parser stop receipt-parser`. Migration `0025` stays; downgrade only with `downgrade_db(path, "0023")` on a stopped app, as for every migration.
+To roll back, remove the flag from `.env` and recreate `hestia` (Gmail routes return 404 and the poller stops). Then run `docker compose --profile receipt-parser stop receipt-parser`. Disabling Gmail leaves migration `0024` applied. To revert the schema, stop the app and run `downgrade_db(path, "0023")`.

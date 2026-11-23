@@ -1,6 +1,7 @@
 import type { Messages } from "./en";
 
 const messages: Partial<Messages> = {
+  "header.title": "hestia",
   "header.confirmed": "{confirmed}/{total} megerősítve",
   "header.unknown": "{unknown} ismeretlen",
 
@@ -108,7 +109,11 @@ const messages: Partial<Messages> = {
   "rooms.editIcons": "Ikonok szerkesztése",
   "rooms.editIconsDone": "Kész",
   "rooms.iconNone": "—",
+  "rooms.deviceCount.zero": "{n} eszköz",
   "rooms.deviceCount.one": "{n} eszköz",
+  "rooms.deviceCount.two": "{n} eszköz",
+  "rooms.deviceCount.few": "{n} eszköz",
+  "rooms.deviceCount.many": "{n} eszköz",
   "rooms.deviceCount.other": "{n} eszköz",
 
   "ctl.on": "Be",
@@ -164,7 +169,7 @@ const messages: Partial<Messages> = {
 
   "mode.plain": "mód: {mode}",
   "mode.cloudFree": "mód: {mode} (felhő nélkül)",
-  "mode.graduated": "mód: {mode} → standalone mentve — indítsd újra a hestiát",
+  "mode.graduated": "mód: {mode} → standalone mentve — indítsd újra a hestia alkalmazást",
   "mode.envPinned": "mód: {mode} (HESTIA_MODE={override} kényszeríti a módot; mentett: {target})",
   "discovery.loadError": "nem sikerült betölteni: /api/discovery",
   "adv.refresh": "Frissítés",
@@ -182,6 +187,7 @@ const messages: Partial<Messages> = {
   "auto.error": "hiba {status}",
   "auto.trig.scene": "jelenet {id} @csomópont {node}",
   "auto.trig.state": "csomópont {node}{gang} {field} {op} {value}",
+  "auto.trig.stateGlobal": "{field} {op} {value}",
   "auto.trig.gang": " billentyű {ep}",
   "auto.trig.time": "ekkor {time}{days}",
   "auto.trig.cron": "cron {expr}",
@@ -197,7 +203,7 @@ const messages: Partial<Messages> = {
   "rule.wizardTitle": "Szabályvarázsló",
   "rule.id": "id",
   "rule.enabled": "engedélyezve",
-  "rule.debounce": "debounce s",
+  "rule.debounce": "minimális időköz a futtatások között s",
   "rule.trigger": "indító",
   "rule.conditions": "feltételek:",
   "rule.actions": "műveletek:",
@@ -219,9 +225,9 @@ const messages: Partial<Messages> = {
   "rule.gang": "billentyű",
   "rule.phRuleId": "szabály-id",
   "rule.phButton": "gomb",
-  "rule.phOffset": "offset min",
-  "rule.phWindowStart": "ÓÓ:PP",
-  "rule.phWindowEnd": "ÓÓ:PP",
+  "rule.phOffset": "eltolás min",
+  "rule.phWindowStart": "HH:MM",
+  "rule.phWindowEnd": "HH:MM",
   "rule.errNumberRequired": "{label}: szám szükséges",
   "rule.errInvalidNumber": "{label}: érvénytelen szám",
   "rule.errNoValue": "predikátum „{field}”: nincs érték",

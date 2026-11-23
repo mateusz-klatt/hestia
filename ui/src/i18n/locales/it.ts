@@ -1,6 +1,7 @@
 import type { Messages } from "./en";
 
 const messages: Partial<Messages> = {
+  "header.title": "hestia",
   "header.confirmed": "{confirmed}/{total} confermati",
   "header.unknown": "{unknown} sconosciuti",
 
@@ -108,7 +109,10 @@ const messages: Partial<Messages> = {
   "rooms.editIcons": "Modifica icone",
   "rooms.editIconsDone": "Fatto",
   "rooms.iconNone": "—",
+  "rooms.deviceCount.zero": "{n} dispositivi",
   "rooms.deviceCount.one": "{n} dispositivo",
+  "rooms.deviceCount.two": "{n} dispositivi",
+  "rooms.deviceCount.few": "{n} dispositivi",
   "rooms.deviceCount.many": "{n} dispositivi",
   "rooms.deviceCount.other": "{n} dispositivi",
 
@@ -183,6 +187,7 @@ const messages: Partial<Messages> = {
   "auto.error": "errore {status}",
   "auto.trig.scene": "scena {id} @nodo {node}",
   "auto.trig.state": "nodo {node}{gang} {field} {op} {value}",
+  "auto.trig.stateGlobal": "{field} {op} {value}",
   "auto.trig.gang": " tasto {ep}",
   "auto.trig.time": "alle {time}{days}",
   "auto.trig.cron": "cron {expr}",
@@ -198,7 +203,7 @@ const messages: Partial<Messages> = {
   "rule.wizardTitle": "Creazione guidata regola",
   "rule.id": "id",
   "rule.enabled": "abilitata",
-  "rule.debounce": "debounce s",
+  "rule.debounce": "intervallo minimo s",
   "rule.trigger": "trigger",
   "rule.conditions": "condizioni:",
   "rule.actions": "azioni:",
@@ -220,7 +225,7 @@ const messages: Partial<Messages> = {
   "rule.gang": "tasto",
   "rule.phRuleId": "id-regola",
   "rule.phButton": "pulsante",
-  "rule.phOffset": "offset min",
+  "rule.phOffset": "scostamento min",
   "rule.phWindowStart": "HH:MM",
   "rule.phWindowEnd": "HH:MM",
   "rule.errNumberRequired": "{label}: numero richiesto",

@@ -60,7 +60,7 @@ from ..db import AppMeta, BudgetHouseholdMember, User, make_engine
 log = logging.getLogger("hestia.budget.household")
 
 SCHEMA_REVISION = "0023"
-_SUPPORTED_REVISIONS = ((SCHEMA_REVISION,), ("0025",))
+_SUPPORTED_REVISIONS = ((SCHEMA_REVISION,), ("0024",))
 _GRANT_BYTES = 32
 _USERS_MARKER = "users_authoritative"
 _GRANT_ID = re.compile(r"[0-9a-f]{64}\Z", re.ASCII)

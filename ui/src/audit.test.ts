@@ -273,6 +273,10 @@ describe("formatAuditTarget", () => {
     expect(formatAuditTarget("7", "switch", devices)).toBe("light #7");
   });
 
+  it.each(["custom-sensor", "constructor", "toString", "__proto__"])("preserves the raw unknown device type %s", (type) => {
+    expect(formatAuditTarget("7", "switch", { "7": device({ type }) })).toBe(`${type} #7`);
+  });
+
   it("keeps the raw target for a non-device action (ir file / rule id)", () => {
     expect(formatAuditTarget("/ext/klima.ir", "ir", devices)).toBe("/ext/klima.ir");
     expect(formatAuditTarget("bedtime", "automation_set", devices)).toBe("bedtime");

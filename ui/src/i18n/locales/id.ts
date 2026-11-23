@@ -1,6 +1,7 @@
 import type { Messages } from "./en";
 
 const messages: Partial<Messages> = {
+  "header.title": "hestia",
   "header.confirmed": "{confirmed}/{total} dikonfirmasi",
   "header.unknown": "{unknown} tidak diketahui",
 
@@ -78,7 +79,7 @@ const messages: Partial<Messages> = {
   "audit.action.automation_delete": "Otomatisasi dihapus",
   "audit.action.settings": "Pengaturan diperbarui",
   "audit.action.room_icon": "Ikon ruangan",
-  "audit.action.login": "Login",
+  "audit.action.login": "Masuk",
   "audit.action.door": "Status pintu",
   "audit.action.endpoints": "Kanal",
   "audit.action.thermostat_on": "Status termostat",
@@ -108,6 +109,11 @@ const messages: Partial<Messages> = {
   "rooms.editIcons": "Edit ikon",
   "rooms.editIconsDone": "Selesai",
   "rooms.iconNone": "—",
+  "rooms.deviceCount.zero": "{n} perangkat",
+  "rooms.deviceCount.one": "{n} perangkat",
+  "rooms.deviceCount.two": "{n} perangkat",
+  "rooms.deviceCount.few": "{n} perangkat",
+  "rooms.deviceCount.many": "{n} perangkat",
   "rooms.deviceCount.other": "{n} perangkat",
 
   "ctl.on": "Nyala",
@@ -181,6 +187,7 @@ const messages: Partial<Messages> = {
   "auto.error": "kesalahan {status}",
   "auto.trig.scene": "skena {id} @simpul {node}",
   "auto.trig.state": "simpul {node}{gang} {field} {op} {value}",
+  "auto.trig.stateGlobal": "{field} {op} {value}",
   "auto.trig.gang": " tombol {ep}",
   "auto.trig.time": "pada {time}{days}",
   "auto.trig.cron": "cron {expr}",
@@ -196,7 +203,7 @@ const messages: Partial<Messages> = {
   "rule.wizardTitle": "Wizard aturan",
   "rule.id": "id",
   "rule.enabled": "aktif",
-  "rule.debounce": "debounce s",
+  "rule.debounce": "jeda minimum antar eksekusi s",
   "rule.trigger": "pemicu",
   "rule.conditions": "kondisi:",
   "rule.actions": "aksi:",
@@ -218,9 +225,9 @@ const messages: Partial<Messages> = {
   "rule.gang": "tombol",
   "rule.phRuleId": "id-aturan",
   "rule.phButton": "tombol",
-  "rule.phOffset": "offset min",
-  "rule.phWindowStart": "JJ:MM",
-  "rule.phWindowEnd": "JJ:MM",
+  "rule.phOffset": "selisih waktu min",
+  "rule.phWindowStart": "HH:MM",
+  "rule.phWindowEnd": "HH:MM",
   "rule.errNumberRequired": "{label}: angka wajib",
   "rule.errInvalidNumber": "{label}: angka tidak valid",
   "rule.errNoValue": "predikat “{field}”: tidak ada nilai",

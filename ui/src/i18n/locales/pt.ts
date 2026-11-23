@@ -1,6 +1,7 @@
 import type { Messages } from "./en";
 
 const messages: Partial<Messages> = {
+  "header.title": "hestia",
   "header.confirmed": "{confirmed}/{total} confirmados",
   "header.unknown": "{unknown} desconhecidos",
 
@@ -108,7 +109,10 @@ const messages: Partial<Messages> = {
   "rooms.editIcons": "Editar ícones",
   "rooms.editIconsDone": "Pronto",
   "rooms.iconNone": "—",
+  "rooms.deviceCount.zero": "{n} dispositivos",
   "rooms.deviceCount.one": "{n} dispositivo",
+  "rooms.deviceCount.two": "{n} dispositivos",
+  "rooms.deviceCount.few": "{n} dispositivos",
   "rooms.deviceCount.many": "{n} dispositivos",
   "rooms.deviceCount.other": "{n} dispositivos",
 
@@ -183,6 +187,7 @@ const messages: Partial<Messages> = {
   "auto.error": "erro {status}",
   "auto.trig.scene": "cena {id} @nó {node}",
   "auto.trig.state": "nó {node}{gang} {field} {op} {value}",
+  "auto.trig.stateGlobal": "{field} {op} {value}",
   "auto.trig.gang": " tecla {ep}",
   "auto.trig.time": "às {time}{days}",
   "auto.trig.cron": "cron {expr}",
@@ -198,7 +203,7 @@ const messages: Partial<Messages> = {
   "rule.wizardTitle": "Assistente de regra",
   "rule.id": "id",
   "rule.enabled": "ativada",
-  "rule.debounce": "debounce s",
+  "rule.debounce": "intervalo mínimo s",
   "rule.trigger": "gatilho",
   "rule.conditions": "condições:",
   "rule.actions": "ações:",
@@ -220,7 +225,7 @@ const messages: Partial<Messages> = {
   "rule.gang": "tecla",
   "rule.phRuleId": "id-regra",
   "rule.phButton": "botão",
-  "rule.phOffset": "offset min",
+  "rule.phOffset": "deslocamento min",
   "rule.phWindowStart": "HH:MM",
   "rule.phWindowEnd": "HH:MM",
   "rule.errNumberRequired": "{label}: número obrigatório",

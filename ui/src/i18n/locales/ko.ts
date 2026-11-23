@@ -1,6 +1,7 @@
 import type { Messages } from "./en";
 
 const messages: Partial<Messages> = {
+  "header.title": "hestia",
   "header.confirmed": "{confirmed}/{total} 확인됨",
   "header.unknown": "{unknown} 알 수 없음",
 
@@ -108,7 +109,12 @@ const messages: Partial<Messages> = {
   "rooms.editIcons": "아이콘 편집",
   "rooms.editIconsDone": "완료",
   "rooms.iconNone": "—",
-  "rooms.deviceCount.other": "{n}개 기기",
+  "rooms.deviceCount.zero": "기기 {n}대",
+  "rooms.deviceCount.one": "기기 {n}대",
+  "rooms.deviceCount.two": "기기 {n}대",
+  "rooms.deviceCount.few": "기기 {n}대",
+  "rooms.deviceCount.many": "기기 {n}대",
+  "rooms.deviceCount.other": "기기 {n}대",
 
   "ctl.on": "켜짐",
   "ctl.off": "꺼짐",
@@ -181,6 +187,7 @@ const messages: Partial<Messages> = {
   "auto.error": "오류 {status}",
   "auto.trig.scene": "씬 {id} @노드 {node}",
   "auto.trig.state": "노드 {node}{gang} {field} {op} {value}",
+  "auto.trig.stateGlobal": "{field} {op} {value}",
   "auto.trig.gang": " 버튼 {ep}",
   "auto.trig.time": "시각 {time}{days}",
   "auto.trig.cron": "cron {expr}",
@@ -196,7 +203,7 @@ const messages: Partial<Messages> = {
   "rule.wizardTitle": "규칙 마법사",
   "rule.id": "id",
   "rule.enabled": "활성화",
-  "rule.debounce": "debounce s",
+  "rule.debounce": "최소 실행 간격 s",
   "rule.trigger": "트리거",
   "rule.conditions": "조건:",
   "rule.actions": "작업:",
@@ -218,7 +225,7 @@ const messages: Partial<Messages> = {
   "rule.gang": "버튼",
   "rule.phRuleId": "규칙-id",
   "rule.phButton": "버튼",
-  "rule.phOffset": "offset min",
+  "rule.phOffset": "시간 오프셋 min",
   "rule.phWindowStart": "HH:MM",
   "rule.phWindowEnd": "HH:MM",
   "rule.errNumberRequired": "{label}: 숫자 필요",

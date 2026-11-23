@@ -96,7 +96,7 @@ from pydantic.json_schema import models_json_schema
 #         down_revision 0022). Owner routes stay admin. The one-off label is not on this API.
 # 0.38.0: counterparty-account rules store keyed digests and masked display values (zero migration).
 #         Optional inactive_reason on a rule when that key is missing or rotated (additive).
-# 0.40.0: separate Gmail receipt grant, status, sync and revocation (migration 0025).
+# 0.40.0: separate Gmail receipt grant, status, sync and revocation (migration 0024).
 CONTRACT_VERSION = "0.40.0"
 OPENAPI_PATH = Path(__file__).resolve().parent.parent / "docs" / "api" / "openapi.json"
 

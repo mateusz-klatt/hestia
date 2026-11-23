@@ -14,6 +14,7 @@ import type {
   UserAccount,
   UserSettings,
 } from "./types";
+import { t } from "../i18n";
 
 /**
  * The API root, derived from the page URL so it works at any mount point.
@@ -74,9 +75,9 @@ export async function postControl(op: ControlOp): Promise<ControlResult> {
     });
     const body = await readJsonBody(response);
     if (response.ok && body.ok === true) return { ok: true };
-    return { ok: false, error: body.error ?? `error ${String(response.status)}` };
+    return { ok: false, error: body.error ?? t("rule.error", { status: response.status }) };
   } catch {
-    return { ok: false, error: "błąd" };
+    return { ok: false, error: t("rule.errGeneric") };
   }
 }
 
@@ -90,9 +91,9 @@ export async function postIr(file: string, button: string): Promise<ControlResul
     });
     const body = await readJsonBody(response);
     if (response.ok && body.ok === true) return { ok: true };
-    return { ok: false, error: body.error ?? `error ${String(response.status)}` };
+    return { ok: false, error: body.error ?? t("rule.error", { status: response.status }) };
   } catch {
-    return { ok: false, error: "błąd" };
+    return { ok: false, error: t("rule.errGeneric") };
   }
 }
 
@@ -112,7 +113,7 @@ export async function postName(payload: NamePayload): Promise<NameResult> {
     });
     return { ok: response.ok, status: response.status, body: await response.text() };
   } catch {
-    return { ok: false, status: 0, body: "błąd" };
+    return { ok: false, status: 0, body: t("rule.errGeneric") };
   }
 }
 

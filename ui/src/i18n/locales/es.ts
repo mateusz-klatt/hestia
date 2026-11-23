@@ -1,6 +1,7 @@
 import type { Messages } from "./en";
 
 const messages: Partial<Messages> = {
+  "header.title": "hestia",
   "header.confirmed": "{confirmed}/{total} confirmados",
   "header.unknown": "{unknown} desconocidos",
 
@@ -108,7 +109,10 @@ const messages: Partial<Messages> = {
   "rooms.editIcons": "Editar iconos",
   "rooms.editIconsDone": "Hecho",
   "rooms.iconNone": "—",
+  "rooms.deviceCount.zero": "{n} dispositivos",
   "rooms.deviceCount.one": "{n} dispositivo",
+  "rooms.deviceCount.two": "{n} dispositivos",
+  "rooms.deviceCount.few": "{n} dispositivos",
   "rooms.deviceCount.many": "{n} dispositivos",
   "rooms.deviceCount.other": "{n} dispositivos",
 
@@ -183,6 +187,7 @@ const messages: Partial<Messages> = {
   "auto.error": "error {status}",
   "auto.trig.scene": "escena {id} @nodo {node}",
   "auto.trig.state": "nodo {node}{gang} {field} {op} {value}",
+  "auto.trig.stateGlobal": "{field} {op} {value}",
   "auto.trig.gang": " tecla {ep}",
   "auto.trig.time": "a las {time}{days}",
   "auto.trig.cron": "cron {expr}",
@@ -198,7 +203,7 @@ const messages: Partial<Messages> = {
   "rule.wizardTitle": "Asistente de regla",
   "rule.id": "id",
   "rule.enabled": "habilitada",
-  "rule.debounce": "debounce s",
+  "rule.debounce": "intervalo mínimo entre activaciones s",
   "rule.trigger": "disparador",
   "rule.conditions": "condiciones:",
   "rule.actions": "acciones:",
@@ -220,7 +225,7 @@ const messages: Partial<Messages> = {
   "rule.gang": "tecla",
   "rule.phRuleId": "id-regla",
   "rule.phButton": "botón",
-  "rule.phOffset": "offset min",
+  "rule.phOffset": "desfase min",
   "rule.phWindowStart": "HH:MM",
   "rule.phWindowEnd": "HH:MM",
   "rule.errNumberRequired": "{label}: se requiere número",
