@@ -114,10 +114,9 @@ def register(app, read_json_body, *, auth_enabled, session_secret):
         task = asyncio.create_task(sweep())
         yield
         task.cancel()
-        try:
-            await task
-        except asyncio.CancelledError:
-            pass
+        # The sweep task ends with CancelledError. Waiting through gather does not
+        # catch that exception here, so a cancellation of this cleanup still propagates.
+        await asyncio.gather(task, return_exceptions=True)
 
     app.cleanup_ctx.append(retention)
     for operation in READS:

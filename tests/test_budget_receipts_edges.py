@@ -78,6 +78,24 @@ class ParserEdgeTests(unittest.TestCase):
             receipt_parser._bounded_money("99999999.9999")
         self.assertEqual(receipt_parser._bounded_money("999999999.99"), "999999999.99")
 
+    def test_nip_scan_matches_the_bounded_span(self):
+        scan = receipt_parser._nip_candidate
+        self.assertEqual(scan("NIP: 7791011327"), "7791011327")
+        self.assertEqual(scan("NIP:7791011327"), "7791011327")
+        self.assertEqual(scan("NIP:\t779-101-13-27 tail"), "7791011327")
+        self.assertEqual(scan("NIP 7791011327 done"), "7791011327")
+        self.assertIsNone(scan("NIP"))
+        self.assertIsNone(scan("NIP:"))
+        self.assertIsNone(scan("NIP abc"))
+        self.assertIsNone(scan("NIP 7791011327X"))
+        self.assertIsNone(scan("NIP 7791011327_"))
+        self.assertEqual(scan("NIP 7791011327ł"), "7791011327")
+        self.assertIsNone(scan("NIP " + "1" * 20))
+        self.assertFalse(receipt_parser._ascii_word(" "))
+        self.assertTrue(receipt_parser._ascii_word("A"))
+        self.assertTrue(receipt_parser._ascii_word("_"))
+        self.assertFalse(receipt_parser._ascii_word("ł"))
+
     def test_parse_validation_and_defensive_text_checks(self):
         self.assertIn("market", merchant_tokens("ab polska market", None))
         self.assertNotIn("polska", merchant_tokens("ab polska market", None))

@@ -76,7 +76,9 @@ _DISCOUNT = re.compile(rf"^\s*(?:RABAT|OPUST)\b[^0-9+-]*(?P<amount>{_NUMBER})", 
 _UUID = re.compile(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\Z", re.ASCII)
 _CURRENCY = re.compile(r"[A-Z]{3}\Z", re.ASCII)
 _TIME = re.compile(r"(?<![0-9])((?:[01][0-9]|2[0-3]):[0-5][0-9])(?![0-9])", re.ASCII)
-_NIP = re.compile(r"\bNIP\s*:?\s*([0-9][0-9 -]{8,16}[0-9])\b", re.IGNORECASE | re.ASCII)
+_NIP_LABEL = re.compile(r"\bNIP", re.IGNORECASE | re.ASCII)
+_NIP_SPACE = " \t\r\f\v"
+_NIP_BODY = set("0123456789 -")
 _CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 _ASCII_DROPPED = re.compile(r"[\x00-\x08\t\x0e-\x1f\x7f]")
 _LINE_BREAK = str.maketrans({
@@ -298,6 +300,37 @@ def redact_pan(text):
     return _redact_normalized(_receipt_text(text))
 
 
+def _ascii_word(char):
+    return char.isascii() and (char.isalnum() or char == "_")
+
+
+def _nip_candidate(line):
+    """Digits from the first NIP body. The span is at most 18 characters and does not backtrack."""
+    found = _NIP_LABEL.search(line)
+    if found is None:
+        return None
+    index = found.end()
+    limit = len(line)
+    while index < limit and line[index] in _NIP_SPACE:
+        index += 1
+    if index < limit and line[index] == ":":
+        index += 1
+        while index < limit and line[index] in _NIP_SPACE:
+            index += 1
+    start = index
+    if start >= limit or line[start] not in "0123456789":
+        return None
+    end = start
+    cap = min(limit, start + 18)
+    while end < cap and line[end] in _NIP_BODY:
+        end += 1
+    while end - start >= 10:
+        if line[end - 1] in "0123456789" and (end == limit or not _ascii_word(line[end])):
+            return re.sub(r"[ -]", "", line[start:end])
+        end -= 1
+    return None
+
+
 def valid_nip(value):
     if not isinstance(value, str) or not re.fullmatch(r"[0-9]{10}", value, re.ASCII):
         return False
@@ -496,12 +529,10 @@ def parse_receipt(text):
         raise ReceiptError()
     nip = None
     for line in lines:
-        match = _NIP.search(line)
-        if match:
-            candidate = re.sub(r"[ -]", "", match[1])
-            if valid_nip(candidate):
-                nip = candidate
-                break
+        candidate = _nip_candidate(line)
+        if candidate and valid_nip(candidate):
+            nip = candidate
+            break
     shop_name = _shop_name(lines)
     receipt_date = None
     receipt_time = None
