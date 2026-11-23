@@ -522,15 +522,16 @@ def _line_kind(name, gross):
 
 
 def _make_line(name, match, line_no):
-    raw_name = redact_digit_field(" ".join(name.strip().split()))
+    original = " ".join(name.strip().split())
+    gross = _decimal(match["gross"])
+    kind = _line_kind(original, gross)
+    raw_name = redact_digit_field(original)
     raw_name_key = fold_text(raw_name)
     if (not raw_name or len(raw_name) > MAX_LINE_NAME_LEN or not raw_name_key
             or len(raw_name_key) > MAX_LINE_NAME_LEN or _CONTROL.search(raw_name)):
         raise ReceiptError()
-    gross = _decimal(match["gross"])
     quantity = _decimal(match["quantity"] or "1")
     unit_price = _decimal(match["unit_price"] or gross)
-    kind = _line_kind(raw_name, gross)
     return {
         "line_no": line_no, "line_kind": kind, "raw_name": raw_name, "raw_name_key": raw_name_key,
         "ptu_code": match["ptu"].upper() if match["ptu"] else None,

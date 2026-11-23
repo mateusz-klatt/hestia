@@ -848,6 +848,17 @@ NR KARTY ****5555
         self.assertEqual(scanned["lines"], [])
         self.assertIsNone(scanned["total_amount"])
 
+    def test_deposit_is_classified_before_the_name_is_redacted(self):
+        hidden = "KAUCJA " + "1A" * 12
+        stored = self.receipts.parse_text("owner", f"{hidden} 0,50\nSUMA PLN 0,50\n")
+        line = stored["draft"]["lines"][0]
+        self.assertEqual(line["line_kind"], "deposit")
+        self.assertEqual(line["raw_name"], "[usunięto]")
+        self.assertEqual(line["raw_name_key"], "[usunieto]")
+        self.assertEqual(line["gross_line_total"], "0.5")
+        row = next(item for item in self.rows(db.BudgetReceiptLine) if item.receipt_id == stored["receipt_id"])
+        self.assertEqual((row.line_kind, row.raw_name), ("deposit", "[usunięto]"))
+
     def test_combining_marks_are_capped_before_normalisation(self):
         import time
 
