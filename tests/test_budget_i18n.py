@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from contextlib import closing
 import json
+import os
 from pathlib import Path
 import sqlite3
 import tempfile
@@ -18,7 +19,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from hestia import api_contract, db
-from hestia.budget import analytics_api, household
+from hestia.budget import analytics_api, household, month_budget
 from hestia.budget.analytics_core import AnalyticsError, financial_fingerprint
 from hestia.budget.analytics_store import BudgetAnalyticsStore
 from hestia.budget.i18n import DisplayResolver, LANGUAGES, preferred_languages, translated, validate_languages
@@ -352,6 +353,50 @@ class TranslationAPITests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse((await repeated.json())["translation"]["changed"])
         unknown = await self.post("label-translation-set", set_body | {"entry_reference": "missing"})
         self.assertEqual(unknown.status, 404)
+
+    async def test_one_off_groups_use_only_their_own_annotation_translations(self):
+        first_payload = dict(self.debit)
+        first_payload.update(entry_reference="alice-first-one-off", booking_date="2026-11-19", amount="17.31",
+                             remittance_information=["One-off A"])
+        other_payload = dict(self.debit)
+        other_payload.update(entry_reference="alice-other-one-off", booking_date="2026-11-20", amount="23.47",
+                             remittance_information=["One-off B"])
+        with self.sessions.begin() as session:
+            source = session.get(db.BudgetTransaction, (self.alice_id, self.debit["entry_reference"]))
+            for payload in (first_payload, other_payload):
+                session.add(db.BudgetTransaction(
+                    account_id=self.alice_id, entry_reference=payload["entry_reference"],
+                    payload_json=json.dumps(payload), observed_at=source.observed_at,
+                    uncertain=False, source=source.source, api_observed_at=source.api_observed_at))
+        other_category = self.analytics.create_category("alice", "Other One-off Group")
+        for payload, category_id in ((first_payload, None), (other_payload, other_category["id"])):
+            response = await self.post("annotation", self.annotation(
+                entry_reference=payload["entry_reference"], category_id=category_id, label="ATM",
+                expected_fingerprint=financial_fingerprint(payload)))
+            self.assertEqual(response.status, 200, await response.text())
+        self.analytics.set_label_translation(
+            "alice", account_id=self.alice_id, entry_reference=first_payload["entry_reference"],
+            lang="de", label="Bankomat")
+        self.analytics.set_label_translation(
+            "alice", account_id=self.alice_id, entry_reference=other_payload["entry_reference"],
+            lang="de", label="Aaa Unrelated")
+        self.preferences(["de"])
+
+        def assert_group_labels(rows):
+            grouped = {row["category_id"]: row for row in rows if row.get("one_off") and row["name"] == "ATM"}
+            self.assertEqual(set(grouped), {None, other_category["id"]}, grouped)
+            self.assertEqual(grouped[None]["display_label"], "Bankomat")
+            self.assertEqual(grouped[other_category["id"]]["display_label"], "Aaa Unrelated")
+
+        overview = await (await self.get("overview")).json()
+        assert_group_labels(overview["categories"])
+        params = {"period": "2026-11", "currency": self.debit["currency"]}
+        config = json.dumps({"alice": {"income_category_ids": [other_category["id"]]}})
+        with mock.patch.dict(os.environ, {month_budget.MONTH_CONFIG_ENV: config}):
+            monthly = await (await self.get("monthly-budget", params=params)).json()
+            assert_group_labels(monthly["category_spend"])
+            charts = await (await self.get("monthly-budget/charts", params=params)).json()
+            assert_group_labels(charts["series"]["months"][-1]["categories"])
 
     async def test_bulk_import_validates_rows_independently(self):
         food = self.analytics.create_category("alice", "Row Validation Food")

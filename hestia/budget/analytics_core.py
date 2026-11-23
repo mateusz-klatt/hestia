@@ -161,6 +161,13 @@ _ONE_OFF_KEY_DOMAIN = b"hestia/budget/one-off-key/key/v1\0"
 _ONE_OFF_PAYLOAD_PREFIX = b"hestia/budget/one-off-key/v1\n"
 
 
+class _OneOffKey(str):
+    def __new__(cls, value, members=()):
+        instance = super().__new__(cls, value)
+        instance.members = tuple(members)
+        return instance
+
+
 def one_off_key(members, secret):
     """Row identity for a labelled group. The label text is never part of the key.
 
@@ -179,7 +186,8 @@ def one_off_key(members, secret):
     pairs.sort()
     raw = json.dumps(pairs, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
     key = hashlib.sha256(_ONE_OFF_KEY_DOMAIN + secret).digest()
-    return hmac.new(key, _ONE_OFF_PAYLOAD_PREFIX + raw, hashlib.sha256).hexdigest()
+    digest = hmac.new(key, _ONE_OFF_PAYLOAD_PREFIX + raw, hashlib.sha256).hexdigest()
+    return _OneOffKey(digest, pairs)
 
 
 _ACCOUNT_KEY_DOMAIN = b"hestia/budget/counterparty-account/key/v2\0"

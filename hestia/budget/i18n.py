@@ -76,8 +76,9 @@ class DisplayResolver:
     def label(self, key, canonical):
         return translated(canonical, self.labels.get(key, {}), self.preferences)
 
-    def grouped_label(self, canonical):
-        variants = self.label_variants.get(canonical, {})
+    def grouped_label(self, canonical, group_key=None):
+        members = set(getattr(group_key, "members", ()))
+        variants = {key: names for key, names in self.label_variants.get(canonical, {}).items() if key in members}
         for lang in self.preferences:
             values = sorted({names[lang] for _key, names in sorted(variants.items()) if lang in names})
             if values:
@@ -98,7 +99,7 @@ class DisplayResolver:
             if identifier is None and category_row:
                 identifier = node["id"]
             if "name" in node and node.get("one_off"):
-                result["display_label"] = self.grouped_label(node["name"])
+                result["display_label"] = self.grouped_label(node["name"], node.get("one_off_key"))
             elif "name" in node and ("category_id" in node or category_row):
                 result["display_name"] = self.category(identifier, node["name"])
                 if include_category_translations and category_row:
