@@ -81,18 +81,21 @@ const identicalStrings: Partial<Record<MessageKey, IdenticalString>> = {
   "rule.errGeneric": { value: "error", locales: ["es", "fil"] },
 
   // PHASE-2: add other locales once budget.* is translated if legitimately identical in those languages.
-  "budget.main.scopeWithState": { value: "{scope}: {state}", locales: ["pl", "cs", "sk", "hr", "bs", "sr", "lt", "lv", "uk", "ru", "hu"] },
-  "budget.year.noData": { value: "—", locales: ["pl", "cs", "sk", "hr", "bs", "sr", "lt", "lv", "uk", "ru", "hu"] },
-  "budget.export.xlsx": { value: "XLSX", locales: ["pl", "cs", "sk", "hr", "bs", "sr", "lt", "lv", "uk", "ru", "hu"] },
-  "budget.export.csv": { value: "CSV", locales: ["pl", "cs", "sk", "hr", "bs", "sr", "lt", "lv", "uk", "ru", "hu"] },
+  "budget.main.scopeWithState": { value: "{scope}: {state}", locales: ["pl", "cs", "sk", "hr", "bs", "sr", "lt", "lv", "hu", "uk", "ru", "ro"] },
+  "budget.year.noData": { value: "—", locales: ["pl", "cs", "sk", "hr", "bs", "sr", "lt", "lv", "hu", "uk", "ru", "ro"] },
+  "budget.export.xlsx": { value: "XLSX", locales: ["pl", "cs", "sk", "hr", "bs", "sr", "lt", "lv", "hu", "uk", "ru", "ro"] },
+  "budget.export.csv": { value: "CSV", locales: ["pl", "cs", "sk", "hr", "bs", "sr", "lt", "lv", "hu", "uk", "ru", "ro"] },
   "budget.export.colStatus": { value: "Status", locales: ["pl", "hr", "bs"] },
-  "budget.rules.conditionSummary": { value: "{field} {operator} „{value}”", locales: ["pl", "cs", "sk", "hr", "bs", "sr", "lt", "lv", "uk", "ru", "hu"] },
-  "budget.mortgages.windowRange": { value: "{start} – {end}", locales: ["pl", "cs", "sk", "hr", "bs", "sr", "lt", "lv", "uk", "ru", "hu"] },
+  "budget.rules.conditionSummary": { value: "{field} {operator} „{value}”", locales: ["pl", "cs", "sk", "hr", "bs", "sr", "lt", "lv", "hu", "uk", "ru", "ro"] },
+  "budget.mortgages.windowRange": { value: "{start} – {end}", locales: ["pl", "cs", "sk", "hr", "bs", "sr", "lt", "lv", "hu", "uk", "ru", "ro"] },
   "budget.monthBudget.limitColumn": { value: "Limit", locales: ["pl", "cs", "sk", "hr", "bs"] },
-  "budget.monthBudget.noLimit": { value: "—", locales: ["pl", "cs", "sk", "hr", "bs", "sr", "lt", "lv", "uk", "ru", "hu"] },
+  "budget.monthBudget.noLimit": { value: "—", locales: ["pl", "cs", "sk", "hr", "bs", "sr", "lt", "lv", "hu", "uk", "ru", "ro"] },
   "budget.monthBudget.statusColumn": { value: "Status", locales: ["pl", "hr", "bs"] },
-  "budget.monthBudget.noValue": { value: "—", locales: ["pl", "cs", "sk", "hr", "bs", "sr", "lt", "lv", "uk", "ru", "hu"] },
-  "budget.rules.value": { value: "text", locales: ["cs", "sk"] },
+  "budget.monthBudget.noValue": { value: "—", locales: ["pl", "cs", "sk", "hr", "bs", "sr", "lt", "lv", "hu", "uk", "ru", "ro"] },
+  "budget.rules.value": { value: "text", locales: ["cs", "sk", "ro"] },
+  "budget.quarantine.total": { value: "Total", locales: ["ro"] },
+  "budget.forecast.total": { value: "Total", locales: ["ro"] },
+  "budget.monthBudget.totalLabel": { value: "Total", locales: ["ro"] },
 };
 
 // PHASE-2: budget.* translations pending
