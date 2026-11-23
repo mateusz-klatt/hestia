@@ -1195,7 +1195,7 @@ export interface paths {
         put?: never;
         /**
          * Validate exact line and total identities, review an optional bank link; JSON body cap 128 KiB.
-         * @description Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Requires an authenticated SQLite admin owner, browser cookie and exact configured Origin before the body is read. 411 means Content-Length is required and 415 means Content-Type must be application/json.
+         * @description Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Requires a SQLite admin owner's browser cookie with exact Origin, or a receipts device token. Cookie plus Authorization returns 400 budget_auth_ambiguous. 411 means Content-Length is required and 415 means Content-Type must be application/json.
          */
         post: operations["confirmBudgetReceipt"];
         delete?: never;
@@ -1215,7 +1215,7 @@ export interface paths {
         put?: never;
         /**
          * Delete receipt lines before their owned receipt using expected_version CAS.
-         * @description Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Requires an authenticated SQLite admin owner, browser cookie and exact configured Origin before the body is read. 411 means Content-Length is required and 415 means Content-Type must be application/json.
+         * @description Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Requires a SQLite admin owner's browser cookie with exact Origin, or a receipts device token. Cookie plus Authorization returns 400 budget_auth_ambiguous. 411 means Content-Length is required and 415 means Content-Type must be application/json.
          */
         post: operations["deleteBudgetReceipt"];
         delete?: never;
@@ -1233,11 +1233,91 @@ export interface paths {
         };
         /**
          * Read one owned receipt and its structured lines.
-         * @description Default-off owner-private read. Unknown and foreign receipt IDs both return 404.
+         * @description Default-off owner-private read using a browser cookie or receipts device token. Unknown and foreign receipt IDs both return 404. Cookie plus Authorization returns 400 budget_auth_ambiguous.
          */
         get: operations["getBudgetReceiptDetail"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/budget/receipts/device-token/list": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * List the owner's unrevoked receipts device tokens.
+         * @description Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Cookie plus Authorization returns 400 budget_auth_ambiguous.  Browser cookie and exact Origin.
+         */
+        post: operations["listBudgetReceiptDevices"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/budget/receipts/device-token/pair-code": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Issue one 5-minute pairing code for the signed-in admin owner.
+         * @description Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Cookie plus Authorization returns 400 budget_auth_ambiguous.  Browser cookie and exact Origin. At most 3 active codes.
+         */
+        post: operations["pairBudgetReceiptDevice"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/budget/receipts/device-token/redeem": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Exchange a pairing code for a receipts-scoped bearer, once.
+         * @description Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Cookie plus Authorization returns 400 budget_auth_ambiguous. Send an application/json body of at most 4096 bytes without cookie or Authorization. Redemption attempts are subject to per-IP backoff and global throttling.
+         */
+        post: operations["redeemBudgetReceiptDevice"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/budget/receipts/device-token/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Revoke one receipts device token.
+         * @description Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Cookie plus Authorization returns 400 budget_auth_ambiguous.  The browser owner may revoke any of their tokens. A device token may revoke only itself; any other id is 403.
+         */
+        post: operations["revokeBudgetReceiptDevice"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1333,7 +1413,7 @@ export interface paths {
         };
         /**
          * Read one owned WebP image; v1a has no stored images and therefore returns 404.
-         * @description Default-off owner-private read. Unknown and foreign receipt IDs both return 404.
+         * @description Default-off owner-private read using a browser cookie or receipts device token. Unknown and foreign receipt IDs both return 404. Cookie plus Authorization returns 400 budget_auth_ambiguous.
          */
         get: operations["getBudgetReceiptImage"];
         put?: never;
@@ -1355,7 +1435,7 @@ export interface paths {
         put?: never;
         /**
          * Keyset-page owner receipts with filters in the JSON body, never URL query parameters.
-         * @description Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Requires an authenticated SQLite admin owner, browser cookie and exact configured Origin before the body is read. 411 means Content-Length is required and 415 means Content-Type must be application/json.
+         * @description Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Requires a SQLite admin owner's browser cookie with exact Origin, or a receipts device token. Cookie plus Authorization returns 400 budget_auth_ambiguous. 411 means Content-Length is required and 415 means Content-Type must be application/json.
          */
         post: operations["listBudgetReceipts"];
         delete?: never;
@@ -1375,7 +1455,7 @@ export interface paths {
         put?: never;
         /**
          * Paste Live Text, redact PAN data and create a 48-hour draft; JSON body cap 48 KiB.
-         * @description Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Requires an authenticated SQLite admin owner, browser cookie and exact configured Origin before the body is read. 411 means Content-Length is required and 415 means Content-Type must be application/json.
+         * @description Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Requires a SQLite admin owner's browser cookie with exact Origin, or a receipts device token. Cookie plus Authorization returns 400 budget_auth_ambiguous. 411 means Content-Length is required and 415 means Content-Type must be application/json.
          */
         post: operations["parseBudgetReceiptText"];
         delete?: never;
@@ -1395,7 +1475,7 @@ export interface paths {
         put?: never;
         /**
          * Search owner receipts with the query in the JSON body, never reverse-proxy URL logs.
-         * @description Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Requires an authenticated SQLite admin owner, browser cookie and exact configured Origin before the body is read. 411 means Content-Length is required and 415 means Content-Type must be application/json.
+         * @description Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Requires a SQLite admin owner's browser cookie with exact Origin, or a receipts device token. Cookie plus Authorization returns 400 budget_auth_ambiguous. 411 means Content-Length is required and 415 means Content-Type must be application/json.
          */
         post: operations["searchBudgetReceipts"];
         delete?: never;
@@ -5274,6 +5354,73 @@ export interface components {
             candidates?: components["schemas"]["BudgetReceiptCandidate"][] | null;
             receipt: components["schemas"]["BudgetReceiptDetail"];
         };
+        /**
+         * BudgetReceiptDeviceBrowserRequest
+         * @description Empty JSON object for pairing-code issuance and the device list.
+         */
+        BudgetReceiptDeviceBrowserRequest: Record<string, never>;
+        /** BudgetReceiptDevicePairResult */
+        BudgetReceiptDevicePairResult: {
+            /** Code */
+            code: string;
+            /** Expires At */
+            expires_at: number;
+            /** Qr Payload */
+            qr_payload: string;
+        };
+        /** BudgetReceiptDeviceRedeemRequest */
+        BudgetReceiptDeviceRedeemRequest: {
+            /**
+             * Code
+             * @description Eight Crockford base32 characters after uppercasing, stripping spaces and dashes, and mapping O to 0 and I or L to 1. U is rejected.
+             */
+            code: string;
+            /** Device Name */
+            device_name: string;
+        };
+        /** BudgetReceiptDeviceRedeemResult */
+        BudgetReceiptDeviceRedeemResult: {
+            /**
+             * Expires At
+             * Format: date-time
+             */
+            expires_at: string;
+            /**
+             * Scope
+             * @constant
+             */
+            scope: "receipts";
+            /** Token */
+            token: string;
+            /** Token Id */
+            token_id: string;
+        };
+        /** BudgetReceiptDeviceRevokeRequest */
+        BudgetReceiptDeviceRevokeRequest: {
+            /** Token Id */
+            token_id: string;
+        };
+        /** BudgetReceiptDeviceRevokeResult */
+        BudgetReceiptDeviceRevokeResult: {
+            /**
+             * Ok
+             * @constant
+             */
+            ok: true;
+        };
+        /** BudgetReceiptDeviceToken */
+        BudgetReceiptDeviceToken: {
+            /** Created At */
+            created_at: number;
+            /** Device Name */
+            device_name: string;
+            /** Expires At */
+            expires_at: number;
+            /** Last Used At */
+            last_used_at: number | null;
+            /** Token Id */
+            token_id: string;
+        };
         /** BudgetReceiptGmailGrantRequest */
         BudgetReceiptGmailGrantRequest: {
             /**
@@ -5500,6 +5647,12 @@ export interface components {
         };
         /** BudgetReceiptParseTextRequest */
         BudgetReceiptParseTextRequest: {
+            /**
+             * Source Kind
+             * @description Defaults to paste, stored as live_text. local_ocr is stored as local_ocr.
+             * @enum {string}
+             */
+            source_kind?: "paste" | "local_ocr";
             /**
              * Text
              * @description UTF-8 text is additionally capped at 32 KiB and 500 lines.
@@ -12365,7 +12518,7 @@ export interface operations {
                     "application/json": components["schemas"]["BudgetError"];
                 };
             };
-            /** @description session required; middleware may return an empty body */
+            /** @description A missing or invalid credential, device_token_expired, or device_token_revoked. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -12479,7 +12632,7 @@ export interface operations {
                     "application/json": components["schemas"]["BudgetError"];
                 };
             };
-            /** @description session required; middleware may return an empty body */
+            /** @description A missing or invalid credential, device_token_expired, or device_token_revoked. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -12595,7 +12748,7 @@ export interface operations {
                     "application/json": components["schemas"]["BudgetError"];
                 };
             };
-            /** @description session required; middleware may return an empty body */
+            /** @description A missing or invalid credential, device_token_expired, or device_token_revoked. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -12624,6 +12777,424 @@ export interface operations {
             };
             /** @description SQLite users backend is required (budget_requires_sqlite_users). This read does not accept a JSON body. */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description budget configuration unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+        };
+    };
+    listBudgetReceiptDevices: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BudgetReceiptDeviceBrowserRequest"];
+            };
+        };
+        responses: {
+            /** @description Unrevoked device tokens for the owner, including expired ones. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetReceiptDeviceToken"][];
+                };
+            };
+            /** @description invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description session required; middleware may return an empty body */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description admin owner or browser-origin requirement failed; middleware may return an empty body */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description unknown, disabled or foreign resource */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description SQLite session users required */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Content-Length is required. */
+            411: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description JSON body exceeds 4096 bytes. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Content-Type must be application/json. */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description budget configuration unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+        };
+    };
+    pairBudgetReceiptDevice: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BudgetReceiptDeviceBrowserRequest"];
+            };
+        };
+        responses: {
+            /** @description One-time pairing code. The raw code is not stored. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetReceiptDevicePairResult"];
+                };
+            };
+            /** @description invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description session required; middleware may return an empty body */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description admin owner or browser-origin requirement failed; middleware may return an empty body */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description unknown, disabled or foreign resource */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description The owner already has 3 active pairing codes (device_pair_limit), or SQLite users are required. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Content-Length is required. */
+            411: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description JSON body exceeds 4096 bytes. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Content-Type must be application/json. */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description budget configuration unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+        };
+    };
+    redeemBudgetReceiptDevice: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BudgetReceiptDeviceRedeemRequest"];
+            };
+        };
+        responses: {
+            /** @description One-time receipt device token with a sliding 90-day TTL and a 180-day hard cap. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetReceiptDeviceRedeemResult"];
+                };
+            };
+            /** @description Generic device_token_rejected for invalid framing, input or pairing state. Cookie plus Authorization returns 400 budget_auth_ambiguous. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description A browser session below the admin role floor is forbidden. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Receipts are disabled. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Rate limited per IP and globally (Retry-After). The error is device_token_rejected. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Internal error. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Budget configuration unavailable. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+        };
+    };
+    revokeBudgetReceiptDevice: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BudgetReceiptDeviceRevokeRequest"];
+            };
+        };
+        responses: {
+            /** @description Idempotent. An unknown id for this owner is still ok. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetReceiptDeviceRevokeResult"];
+                };
+            };
+            /** @description invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description A missing or invalid credential, device_token_expired, or device_token_revoked. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description admin owner or browser-origin requirement failed; middleware may return an empty body */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description unknown, disabled or foreign resource */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description SQLite session users required */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Content-Length is required. */
+            411: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description JSON body exceeds 4096 bytes. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Content-Type must be application/json. */
+            415: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -13124,7 +13695,7 @@ export interface operations {
                     "application/json": components["schemas"]["BudgetError"];
                 };
             };
-            /** @description session required; middleware may return an empty body */
+            /** @description A missing or invalid credential, device_token_expired, or device_token_revoked. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -13214,7 +13785,7 @@ export interface operations {
                     "application/json": components["schemas"]["BudgetError"];
                 };
             };
-            /** @description session required; middleware may return an empty body */
+            /** @description A missing or invalid credential, device_token_expired, or device_token_revoked. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -13331,7 +13902,7 @@ export interface operations {
                     "application/json": components["schemas"]["BudgetError"];
                 };
             };
-            /** @description session required; middleware may return an empty body */
+            /** @description A missing or invalid credential, device_token_expired, or device_token_revoked. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -13394,6 +13965,15 @@ export interface operations {
                     "application/json": components["schemas"]["BudgetError"];
                 };
             };
+            /** @description A receipts device token is limited to 30 parse-text requests per minute (Retry-After). Browser cookie requests are not limited here. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
             /** @description internal error */
             500: {
                 headers: {
@@ -13448,7 +14028,7 @@ export interface operations {
                     "application/json": components["schemas"]["BudgetError"];
                 };
             };
-            /** @description session required; middleware may return an empty body */
+            /** @description A missing or invalid credential, device_token_expired, or device_token_revoked. */
             401: {
                 headers: {
                     [name: string]: unknown;

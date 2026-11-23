@@ -230,9 +230,25 @@ class BudgetOpenApiTests(unittest.TestCase):
                 self.assertTrue(methods["get"]["parameters"][0]["required"])
         self.assertEqual(set(receipts), {"/api/budget/receipts/" + name for name in
                          ("parse-text", "confirm", "list", "search", "detail", "image", "delete",
-                          "gmail-status", "gmail-grant", "gmail-sync", "gmail-revoke")})
+                          "device-token/pair-code", "device-token/redeem", "device-token/list",
+                          "device-token/revoke", "gmail-status", "gmail-grant", "gmail-sync", "gmail-revoke")})
         for path, methods in receipts.items():
             name = path.rsplit("/", 1)[1]
+            if path.startswith("/api/budget/receipts/device-token/"):
+                self.assertEqual(set(methods), {"post"})
+                expected = "public" if name == "redeem" else "admin"
+                self.assertEqual(methods["post"]["x-required-role"], expected)
+                self.assertIn("requestBody", methods["post"])
+                responses = methods["post"]["responses"]
+                if name == "redeem":
+                    self.assertNotIn("415", responses)
+                    self.assertIn("device_token_rejected", responses["400"]["description"])
+                    self.assertIn("Retry-After", responses["429"]["description"])
+                else:
+                    self.assertIn("Content-Length", responses["411"]["description"])
+                    self.assertIn("application/json", responses["415"]["description"])
+                    self.assertIn("bytes", responses["413"]["description"])
+                continue
             method = "get" if name in ("detail", "image", "gmail-status") else "post"
             self.assertEqual(set(methods), {method})
             self.assertEqual(methods[method]["x-required-role"], "admin")
@@ -257,6 +273,15 @@ class BudgetOpenApiTests(unittest.TestCase):
         self.assertIn("131072", receipts["/api/budget/receipts/confirm"]["post"]["responses"]["413"]["description"])
         self.assertIn("16384", receipts["/api/budget/receipts/list"]["post"]["responses"]["413"]["description"])
         self.assertEqual(document["info"]["version"], "0.40.0")
+        receipt_schemas = document["components"]["schemas"]
+        self.assertEqual(receipt_schemas["BudgetReceiptDeviceRedeemResult"]["properties"]["expires_at"]["format"],
+                         "date-time")
+        parse_schema = receipt_schemas["BudgetReceiptParseTextRequest"]
+        source_kind = parse_schema["properties"]["source_kind"]
+        self.assertEqual(source_kind["enum"], ["paste", "local_ocr"])
+        self.assertNotIn("source_kind", parse_schema["required"])
+        self.assertNotIn("default", source_kind)  # The TS generator keeps it optional.
+        self.assertEqual(contract.BudgetReceiptParseTextRequest(text="test").source_kind, "paste")
         detail = receipts["/api/budget/receipts/detail"]["get"]
         self.assertNotIn("raw text", detail["summary"])
         confirm = receipts["/api/budget/receipts/confirm"]["post"]
@@ -572,7 +597,8 @@ class BudgetOpenApiTests(unittest.TestCase):
                               "BudgetAnalyticsTransactionsByKeysRequest",
                               "BudgetReceiptParseTextRequest", "BudgetReceiptConfirmRequest", "BudgetReceiptLineInput",
                               "BudgetReceiptLinkRequest", "BudgetReceiptListRequest", "BudgetReceiptSearchRequest",
-                              "BudgetReceiptDeleteRequest", "BudgetReceiptGmailGrantRequest",
+                              "BudgetReceiptDeleteRequest", "BudgetReceiptDeviceBrowserRequest",
+                              "BudgetReceiptDeviceRedeemRequest", "BudgetReceiptDeviceRevokeRequest", "BudgetReceiptGmailGrantRequest",
                               "BudgetReceiptGmailRevokeRequest", "BudgetReceiptGmailSyncRequest"})
         for name, schema in schemas.items():
             if name in request_names:

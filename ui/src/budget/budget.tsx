@@ -24,6 +24,7 @@ import { SpendingLimitsView, spendingLimitsLabels } from "./analytics/spending_l
 import { YearView, yearLabels } from "./analytics/year";
 import { hasAnalytics } from "./analytics/model";
 import type { RuleCandidate } from "./analytics/model";
+import { ReceiptDevices } from "./devices";
 import "./budget.css";
 
 const labels = {
@@ -530,6 +531,7 @@ export function Budget({ active, api = budgetApi, pollMs = 2000, principal,
           onAccessLoss={barrier} initialRule={focusRule ?? null} />
       ) : (
         <>
+        <ReceiptDevices key={principal ?? ""} api={api} locale={locale} revision={revision} onAccessLoss={barrier} />
         {connections.length === 0 ? <p className="budget-status">{text.empty}</p> : null}
         {connections.map((connection) => {
           const job = latestJob(jobs, connection.id);

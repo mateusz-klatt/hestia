@@ -9700,6 +9700,168 @@
         "title": "BudgetReceiptDetailResult",
         "type": "object"
       },
+      "BudgetReceiptDeviceBrowserRequest": {
+        "additionalProperties": false,
+        "description": "Empty JSON object for pairing-code issuance and the device list.",
+        "properties": {},
+        "title": "BudgetReceiptDeviceBrowserRequest",
+        "type": "object"
+      },
+      "BudgetReceiptDevicePairResult": {
+        "properties": {
+          "code": {
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{8}$",
+            "title": "Code",
+            "type": "string"
+          },
+          "expires_at": {
+            "title": "Expires At",
+            "type": "number"
+          },
+          "qr_payload": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Qr Payload",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "expires_at",
+          "qr_payload"
+        ],
+        "title": "BudgetReceiptDevicePairResult",
+        "type": "object"
+      },
+      "BudgetReceiptDeviceRedeemRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "description": "Eight Crockford base32 characters after uppercasing, stripping spaces and dashes, and mapping O to 0 and I or L to 1. U is rejected.",
+            "maxLength": 4096,
+            "minLength": 8,
+            "title": "Code",
+            "type": "string"
+          },
+          "device_name": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Device Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "device_name"
+        ],
+        "title": "BudgetReceiptDeviceRedeemRequest",
+        "type": "object"
+      },
+      "BudgetReceiptDeviceRedeemResult": {
+        "properties": {
+          "expires_at": {
+            "format": "date-time",
+            "title": "Expires At",
+            "type": "string"
+          },
+          "scope": {
+            "const": "receipts",
+            "title": "Scope",
+            "type": "string"
+          },
+          "token": {
+            "maxLength": 43,
+            "minLength": 43,
+            "title": "Token",
+            "type": "string"
+          },
+          "token_id": {
+            "pattern": "^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$",
+            "title": "Token Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "token",
+          "token_id",
+          "scope",
+          "expires_at"
+        ],
+        "title": "BudgetReceiptDeviceRedeemResult",
+        "type": "object"
+      },
+      "BudgetReceiptDeviceRevokeRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "token_id": {
+            "pattern": "^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$",
+            "title": "Token Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "token_id"
+        ],
+        "title": "BudgetReceiptDeviceRevokeRequest",
+        "type": "object"
+      },
+      "BudgetReceiptDeviceRevokeResult": {
+        "properties": {
+          "ok": {
+            "const": true,
+            "title": "Ok",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "title": "BudgetReceiptDeviceRevokeResult",
+        "type": "object"
+      },
+      "BudgetReceiptDeviceToken": {
+        "properties": {
+          "created_at": {
+            "title": "Created At",
+            "type": "number"
+          },
+          "device_name": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Device Name",
+            "type": "string"
+          },
+          "expires_at": {
+            "title": "Expires At",
+            "type": "number"
+          },
+          "last_used_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Used At"
+          },
+          "token_id": {
+            "pattern": "^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$",
+            "title": "Token Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "token_id",
+          "device_name",
+          "created_at",
+          "last_used_at",
+          "expires_at"
+        ],
+        "title": "BudgetReceiptDeviceToken",
+        "type": "object"
+      },
       "BudgetReceiptGmailGrantRequest": {
         "additionalProperties": false,
         "properties": {
@@ -10389,6 +10551,15 @@
       "BudgetReceiptParseTextRequest": {
         "additionalProperties": false,
         "properties": {
+          "source_kind": {
+            "description": "Defaults to paste, stored as live_text. local_ocr is stored as local_ocr.",
+            "enum": [
+              "paste",
+              "local_ocr"
+            ],
+            "title": "Source Kind",
+            "type": "string"
+          },
           "text": {
             "description": "UTF-8 text is additionally capped at 32 KiB and 500 lines.",
             "maxLength": 32768,
@@ -20734,7 +20905,7 @@
     },
     "/api/budget/receipts/confirm": {
       "post": {
-        "description": "Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Requires an authenticated SQLite admin owner, browser cookie and exact configured Origin before the body is read. 411 means Content-Length is required and 415 means Content-Type must be application/json.",
+        "description": "Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Requires a SQLite admin owner's browser cookie with exact Origin, or a receipts device token. Cookie plus Authorization returns 400 budget_auth_ambiguous. 411 means Content-Length is required and 415 means Content-Type must be application/json.",
         "operationId": "confirmBudgetReceipt",
         "parameters": [
           {
@@ -20787,7 +20958,7 @@
                 }
               }
             },
-            "description": "session required; middleware may return an empty body"
+            "description": "A missing or invalid credential, device_token_expired, or device_token_revoked."
           },
           "403": {
             "content": {
@@ -20876,7 +21047,7 @@
     },
     "/api/budget/receipts/delete": {
       "post": {
-        "description": "Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Requires an authenticated SQLite admin owner, browser cookie and exact configured Origin before the body is read. 411 means Content-Length is required and 415 means Content-Type must be application/json.",
+        "description": "Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Requires a SQLite admin owner's browser cookie with exact Origin, or a receipts device token. Cookie plus Authorization returns 400 budget_auth_ambiguous. 411 means Content-Length is required and 415 means Content-Type must be application/json.",
         "operationId": "deleteBudgetReceipt",
         "requestBody": {
           "content": {
@@ -20917,7 +21088,7 @@
                 }
               }
             },
-            "description": "session required; middleware may return an empty body"
+            "description": "A missing or invalid credential, device_token_expired, or device_token_revoked."
           },
           "403": {
             "content": {
@@ -21006,7 +21177,7 @@
     },
     "/api/budget/receipts/detail": {
       "get": {
-        "description": "Default-off owner-private read. Unknown and foreign receipt IDs both return 404.",
+        "description": "Default-off owner-private read using a browser cookie or receipts device token. Unknown and foreign receipt IDs both return 404. Cookie plus Authorization returns 400 budget_auth_ambiguous.",
         "operationId": "getBudgetReceiptDetail",
         "parameters": [
           {
@@ -21059,7 +21230,7 @@
                 }
               }
             },
-            "description": "session required; middleware may return an empty body"
+            "description": "A missing or invalid credential, device_token_expired, or device_token_revoked."
           },
           "403": {
             "content": {
@@ -21113,6 +21284,482 @@
           }
         },
         "summary": "Read one owned receipt and its structured lines.",
+        "x-required-role": "admin"
+      }
+    },
+    "/api/budget/receipts/device-token/list": {
+      "post": {
+        "description": "Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Cookie plus Authorization returns 400 budget_auth_ambiguous.  Browser cookie and exact Origin.",
+        "operationId": "listBudgetReceiptDevices",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BudgetReceiptDeviceBrowserRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/BudgetReceiptDeviceToken"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Unrevoked device tokens for the owner, including expired ones."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "session required; middleware may return an empty body"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "admin owner or browser-origin requirement failed; middleware may return an empty body"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "unknown, disabled or foreign resource"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "SQLite session users required"
+          },
+          "411": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Content-Length is required."
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "JSON body exceeds 4096 bytes."
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Content-Type must be application/json."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "budget configuration unavailable"
+          }
+        },
+        "summary": "List the owner's unrevoked receipts device tokens.",
+        "x-required-role": "admin"
+      }
+    },
+    "/api/budget/receipts/device-token/pair-code": {
+      "post": {
+        "description": "Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Cookie plus Authorization returns 400 budget_auth_ambiguous.  Browser cookie and exact Origin. At most 3 active codes.",
+        "operationId": "pairBudgetReceiptDevice",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BudgetReceiptDeviceBrowserRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetReceiptDevicePairResult"
+                }
+              }
+            },
+            "description": "One-time pairing code. The raw code is not stored."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "session required; middleware may return an empty body"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "admin owner or browser-origin requirement failed; middleware may return an empty body"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "unknown, disabled or foreign resource"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "The owner already has 3 active pairing codes (device_pair_limit), or SQLite users are required."
+          },
+          "411": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Content-Length is required."
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "JSON body exceeds 4096 bytes."
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Content-Type must be application/json."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "budget configuration unavailable"
+          }
+        },
+        "summary": "Issue one 5-minute pairing code for the signed-in admin owner.",
+        "x-required-role": "admin"
+      }
+    },
+    "/api/budget/receipts/device-token/redeem": {
+      "post": {
+        "description": "Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Cookie plus Authorization returns 400 budget_auth_ambiguous. Send an application/json body of at most 4096 bytes without cookie or Authorization. Redemption attempts are subject to per-IP backoff and global throttling.",
+        "operationId": "redeemBudgetReceiptDevice",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BudgetReceiptDeviceRedeemRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetReceiptDeviceRedeemResult"
+                }
+              }
+            },
+            "description": "One-time receipt device token with a sliding 90-day TTL and a 180-day hard cap."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Generic device_token_rejected for invalid framing, input or pairing state. Cookie plus Authorization returns 400 budget_auth_ambiguous."
+          },
+          "403": {
+            "description": "A browser session below the admin role floor is forbidden."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Receipts are disabled."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Rate limited per IP and globally (Retry-After). The error is device_token_rejected."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Internal error."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Budget configuration unavailable."
+          }
+        },
+        "summary": "Exchange a pairing code for a receipts-scoped bearer, once.",
+        "x-required-role": "public"
+      }
+    },
+    "/api/budget/receipts/device-token/revoke": {
+      "post": {
+        "description": "Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Cookie plus Authorization returns 400 budget_auth_ambiguous.  The browser owner may revoke any of their tokens. A device token may revoke only itself; any other id is 403.",
+        "operationId": "revokeBudgetReceiptDevice",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BudgetReceiptDeviceRevokeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetReceiptDeviceRevokeResult"
+                }
+              }
+            },
+            "description": "Idempotent. An unknown id for this owner is still ok."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "A missing or invalid credential, device_token_expired, or device_token_revoked."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "admin owner or browser-origin requirement failed; middleware may return an empty body"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "unknown, disabled or foreign resource"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "SQLite session users required"
+          },
+          "411": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Content-Length is required."
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "JSON body exceeds 4096 bytes."
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Content-Type must be application/json."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "budget configuration unavailable"
+          }
+        },
+        "summary": "Revoke one receipts device token.",
         "x-required-role": "admin"
       }
     },
@@ -21618,7 +22265,7 @@
     },
     "/api/budget/receipts/image": {
       "get": {
-        "description": "Default-off owner-private read. Unknown and foreign receipt IDs both return 404.",
+        "description": "Default-off owner-private read using a browser cookie or receipts device token. Unknown and foreign receipt IDs both return 404. Cookie plus Authorization returns 400 budget_auth_ambiguous.",
         "operationId": "getBudgetReceiptImage",
         "parameters": [
           {
@@ -21662,7 +22309,7 @@
                 }
               }
             },
-            "description": "session required; middleware may return an empty body"
+            "description": "A missing or invalid credential, device_token_expired, or device_token_revoked."
           },
           "403": {
             "content": {
@@ -21721,7 +22368,7 @@
     },
     "/api/budget/receipts/list": {
       "post": {
-        "description": "Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Requires an authenticated SQLite admin owner, browser cookie and exact configured Origin before the body is read. 411 means Content-Length is required and 415 means Content-Type must be application/json.",
+        "description": "Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Requires a SQLite admin owner's browser cookie with exact Origin, or a receipts device token. Cookie plus Authorization returns 400 budget_auth_ambiguous. 411 means Content-Length is required and 415 means Content-Type must be application/json.",
         "operationId": "listBudgetReceipts",
         "parameters": [
           {
@@ -21774,7 +22421,7 @@
                 }
               }
             },
-            "description": "session required; middleware may return an empty body"
+            "description": "A missing or invalid credential, device_token_expired, or device_token_revoked."
           },
           "403": {
             "content": {
@@ -21863,7 +22510,7 @@
     },
     "/api/budget/receipts/parse-text": {
       "post": {
-        "description": "Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Requires an authenticated SQLite admin owner, browser cookie and exact configured Origin before the body is read. 411 means Content-Length is required and 415 means Content-Type must be application/json.",
+        "description": "Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Requires a SQLite admin owner's browser cookie with exact Origin, or a receipts device token. Cookie plus Authorization returns 400 budget_auth_ambiguous. 411 means Content-Length is required and 415 means Content-Type must be application/json.",
         "operationId": "parseBudgetReceiptText",
         "parameters": [
           {
@@ -21916,7 +22563,7 @@
                 }
               }
             },
-            "description": "session required; middleware may return an empty body"
+            "description": "A missing or invalid credential, device_token_expired, or device_token_revoked."
           },
           "403": {
             "content": {
@@ -21978,6 +22625,16 @@
             },
             "description": "Content-Type must be application/json."
           },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "A receipts device token is limited to 30 parse-text requests per minute (Retry-After). Browser cookie requests are not limited here."
+          },
           "500": {
             "content": {
               "application/json": {
@@ -22005,7 +22662,7 @@
     },
     "/api/budget/receipts/search": {
       "post": {
-        "description": "Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Requires an authenticated SQLite admin owner, browser cookie and exact configured Origin before the body is read. 411 means Content-Length is required and 415 means Content-Type must be application/json.",
+        "description": "Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Requires a SQLite admin owner's browser cookie with exact Origin, or a receipts device token. Cookie plus Authorization returns 400 budget_auth_ambiguous. 411 means Content-Length is required and 415 means Content-Type must be application/json.",
         "operationId": "searchBudgetReceipts",
         "parameters": [
           {
@@ -22058,7 +22715,7 @@
                 }
               }
             },
-            "description": "session required; middleware may return an empty body"
+            "description": "A missing or invalid credential, device_token_expired, or device_token_revoked."
           },
           "403": {
             "content": {

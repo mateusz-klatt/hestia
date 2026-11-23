@@ -20,10 +20,11 @@ from sqlalchemy import delete, exists, func, literal_column, or_, select
 from sqlalchemy.exc import IntegrityError
 
 from ..db import (BudgetAccount as Account, BudgetConnection as Connection, BudgetReceipt as Receipt,
-                  BudgetReceiptLine as Line, BudgetShop as Shop, BudgetTransaction as Transaction,
-                  BudgetTransferLeg as Leg)
+                  BudgetReceiptDeviceToken as DeviceToken, BudgetReceiptLine as Line, BudgetShop as Shop,
+                  BudgetTransaction as Transaction, BudgetTransferLeg as Leg)
 from .analytics_core import (AnalyticsError, canonical_money, compare_money, financial_fingerprint, negate_money,
                              sum_money)
+from .device_token import DeviceTokenError, write_device_audit
 from .gmail_store import retain_imports, tombstone_receipt
 from .receipt_parser import (CONFIRMED_TEXT_TTL_SECONDS, DRAFT_TTL_SECONDS, MAX_RECEIPT_LINES, ReceiptError,
                              merchant_tokens, normalize_shop_name, parse_receipt, redact_digit_field,
@@ -106,12 +107,27 @@ def _line_dict(row):
 _DIGEST_HEX = re.compile(r"[0-9a-f]{64}")
 
 class BudgetReceiptStore(BudgetHTTPStore):
-    def __init__(self, sessions, *, clock, cursor_secret):
+    def __init__(self, sessions, *, clock, cursor_secret, device_id=None):
         super().__init__(sessions, clock=clock, cursor_secret=cursor_secret)
+        self._device_id = device_id
+        self._actor = f"device:{device_id}" if device_id is not None else None
         self._receipt_cursor_key = hashlib.sha256(_CURSOR_DOMAIN + b"\0" + cursor_secret).digest()
         material = hashlib.sha256(_CANDIDATE_DOMAIN + b"\0" + cursor_secret).digest()
         self._token_key = _subkey(material, _TOKEN_INFO)
         self._evidence_key = _subkey(material, _EVIDENCE_INFO)
+
+    def _owner(self, session, owner):
+        # The middleware authenticates before any body read. Check the token's
+        # current state again under the receipt operation's transaction.
+        if self._device_id is not None:
+            token = session.get(DeviceToken, self._device_id)
+            if token is None or token.owner != owner:
+                raise DeviceTokenError(401, "device_token_invalid")
+            if token.revoked_at is not None:
+                raise DeviceTokenError(401, "device_token_revoked")
+            if self._now() >= min(token.expires_at, token.hard_expires_at):
+                raise DeviceTokenError(401, "device_token_expired")
+        super()._owner(session, owner)
 
     def _now(self):
         now = self.clock()
@@ -210,7 +226,10 @@ class BudgetReceiptStore(BudgetHTTPStore):
             retain_imports(session, owner, now)
             return self._purge(session, owner, now)
 
-    def parse_text(self, owner, text):
+    def parse_text(self, owner, text, *, source_kind="paste"):
+        stored_kind = {"paste": "live_text", "local_ocr": "local_ocr"}.get(source_kind)
+        if stored_kind is None:
+            raise ReceiptError()
         parsed = parse_receipt(text)
         candidates = self._read_candidates(owner, parsed)
         with self.transaction() as session:
@@ -228,7 +247,7 @@ class BudgetReceiptStore(BudgetHTTPStore):
                 receipt_kind=parsed["receipt_kind"], receipt_date=parsed["receipt_date"],
                 receipt_time=parsed["receipt_time"], total_amount=parsed["total_amount"],
                 currency=parsed["currency"], payment_method=parsed["payment_method"], status="draft",
-                source_kind="live_text", image_relpath=None, image_expires_at=None,
+                source_kind=stored_kind, image_relpath=None, image_expires_at=None,
                 raw_ocr_text=None, raw_text_expires_at=None,
                 linked_account_id=None, linked_entry_ref=None, linked_fingerprint=None, version=1,
                 created_at=now, updated_at=now,
@@ -240,7 +259,7 @@ class BudgetReceiptStore(BudgetHTTPStore):
                     key: value for key, value in values.items() if key != "line_no"
                 }, line_no=values["line_no"]))
             session.flush()
-            write_audit(session, owner, row, "create", None, audit_payload(row, "create"), now)
+            write_audit(session, owner, row, "create", None, audit_payload(row, "create", self._actor), now)
             detail = self._detail(session, row)
         return {"receipt_id": identifier, "draft": detail, "candidates": candidates, "version": 1}
 
@@ -495,7 +514,7 @@ class BudgetReceiptStore(BudgetHTTPStore):
                 session.flush()
             except IntegrityError:
                 raise ReceiptError("budget_receipt_tx_already_linked", 409) from None
-            write_audit(session, owner, row, "confirm", before, audit_payload(row, "confirm"), now)
+            write_audit(session, owner, row, "confirm", before, audit_payload(row, "confirm", self._actor), now)
             return {"ok": True, "receipt": self._detail(session, row)}
 
     def _encode_cursor(self, owner, context, row):
@@ -678,6 +697,8 @@ class BudgetReceiptStore(BudgetHTTPStore):
             session.execute(delete(Line).where(Line.receipt_id == row.id, Line.owner == owner))
             erase_receipt_audit(session, owner, row.id)
             session.delete(row)
+            if self._device_id is not None:
+                write_device_audit(session, owner, self._device_id, "receipt_delete", now)
             session.flush()
             return {"ok": True, "deleted": True}
 

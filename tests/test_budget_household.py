@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import asyncio
-from contextlib import redirect_stderr, redirect_stdout
+from contextlib import closing, redirect_stderr, redirect_stdout
 import io
 import json
 import logging
@@ -14,13 +14,14 @@ import unittest
 from unittest import mock
 
 from alembic import command
+from alembic.script import ScriptDirectory
 from multidict import MultiDict
 from sqlalchemy import event, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from hestia import auth, db, store_sql, web
-from hestia.budget import analytics_api, household, household_api, household_views, month_budget
+from hestia.budget import analytics_api, device_token, household, household_api, household_views, month_budget
 from hestia.proxy import EventBus
 from hestia.budget.analytics_core import AnalyticsError, counterparty_rule_value
 from hestia.budget.analytics_store import BudgetAnalyticsStore
@@ -44,8 +45,12 @@ PYTHON = None  # tests invoke library functions directly; the fleet command is r
 
 
 def _versions(path):
-    with sqlite3.connect(path) as conn:
+    with closing(sqlite3.connect(path)) as conn:
         return [row[0] for row in conn.execute("SELECT version_num FROM alembic_version")]
+
+
+def _head_revision():
+    return ScriptDirectory.from_config(db._alembic_config(None)).get_current_head()
 
 
 def _mapping_keys(value):
@@ -61,7 +66,7 @@ def _mapping_keys(value):
 
 
 def _tables(path):
-    with sqlite3.connect(path) as conn:
+    with closing(sqlite3.connect(path)) as conn:
         return {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
 
 
@@ -91,7 +96,7 @@ class HouseholdCommandTests(unittest.TestCase):
         return code, stdout.getvalue(), stderr.getvalue(), "\n".join(logs.output)
 
     def test_grant_is_idempotent_conflict_revoke_and_regrant_are_exact(self):
-        self._ready()
+        _engine, sessions = self._ready()
         statements = []
         real = household._immediate_engine
 
@@ -134,7 +139,7 @@ class HouseholdCommandTests(unittest.TestCase):
         self.assertEqual(err.strip(), "household_grant_mismatch")
         code, _out, err, _logged = self._run("revoke", "viewer", "bob", first["grant_id"])
         self.assertEqual(err.strip(), "household_grant_mismatch")
-        with Session(db.make_engine(self.path)) as session:
+        with sessions() as session:
             self.assertEqual(session.get(db.BudgetHouseholdMember, "viewer").grant_id, first["grant_id"])
 
         code, out, err, _logged = self._run("revoke", "viewer", "alice", first["grant_id"])
@@ -165,7 +170,7 @@ class HouseholdCommandTests(unittest.TestCase):
             session.get(db.User, "alice").disabled = True
         code, _out, err, _logged = self._run("grant", "viewer", "alice")
         self.assertEqual(err.strip(), "household_owner_invalid")
-        with Session(db.make_engine(self.path)) as session:
+        with sessions() as session:
             self.assertEqual(session.get(db.BudgetHouseholdMember, "viewer").grant_id, granted["grant_id"])
 
     def test_missing_database_is_not_created_and_old_schema_is_not_upgraded(self):
@@ -191,12 +196,21 @@ class HouseholdCommandTests(unittest.TestCase):
         db.init_db(self.path)
         code, _out, err, _logged = self._run("grant", "viewer", "alice")
         self.assertEqual((code, err.strip()), (2, "household_users_required"))
-        self.assertEqual(_versions(self.path), ["0024"])
-        with sqlite3.connect(self.path) as conn:
+        self.assertEqual(_versions(self.path), [_head_revision()])
+        with closing(sqlite3.connect(self.path)) as conn:
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM budget_household_members").fetchone()[0], 0)
 
+    def test_grant_and_revoke_work_at_household_revision_without_upgrade(self):
+        self._ready()
+        db.downgrade_db(self.path, "0023")
+        with mock.patch("hestia.db.init_db", side_effect=AssertionError("init_db")):
+            grant = household.grant_member("viewer", "alice", path=str(self.path))
+            revoked = household.revoke_grant("viewer", "alice", grant["grant_id"], path=str(self.path))
+        self.assertEqual(revoked, {"ok": True, "status": "revoked"})
+        self.assertEqual(_versions(self.path), ["0023"])
+
     def _assert_migration_clean(self):
-        with sqlite3.connect(self.path) as raw:
+        with closing(sqlite3.connect(self.path)) as raw:
             self.assertEqual([row[0] for row in raw.execute("PRAGMA integrity_check")], ["ok"])
             self.assertEqual(raw.execute("PRAGMA foreign_key_check").fetchall(), [])
             leftovers = [row[0] for row in raw.execute(
@@ -205,7 +219,7 @@ class HouseholdCommandTests(unittest.TestCase):
             self.assertEqual(leftovers, [])
 
     def test_downgrade_roundtrip_keeps_owner_rows_and_empties_grants(self):
-        """0021 → init_db (0024) → downgrade_db (0022) → init_db (0024).
+        """0021 → init_db (head) → downgrade_db (0022) → init_db (head).
 
         Each step goes through the production runner. Receipt rows, category parents,
         the one-off label column, and owner rows survive. Grants do not.
@@ -232,7 +246,7 @@ class HouseholdCommandTests(unittest.TestCase):
         upgraded, sessions = db.init_db(self.path)
         self._assert_migration_clean()
         with upgraded.connect() as conn:
-            self.assertEqual(conn.exec_driver_sql("SELECT version_num FROM alembic_version").scalar(), "0024")
+            self.assertEqual(conn.exec_driver_sql("SELECT version_num FROM alembic_version").scalar(), _head_revision())
         with sessions.begin() as session:
             session.add(db.BudgetHouseholdMember(member_username="viewer", owner="alice", grant_id="cd" * 32))
         with self.assertRaises(IntegrityError):
@@ -249,7 +263,7 @@ class HouseholdCommandTests(unittest.TestCase):
 
         db.downgrade_db(self.path, "0022")
         self._assert_migration_clean()
-        with sqlite3.connect(self.path) as raw:
+        with closing(sqlite3.connect(self.path)) as raw:
             names = {row[0] for row in raw.execute("SELECT name FROM sqlite_master")}
             self.assertEqual(raw.execute("SELECT version_num FROM alembic_version").fetchone()[0], "0022")
             self.assertNotIn("budget_household_members", names)
@@ -266,7 +280,7 @@ class HouseholdCommandTests(unittest.TestCase):
         again, _sessions = db.init_db(self.path)
         self._assert_migration_clean()
         with again.connect() as conn:
-            self.assertEqual(conn.exec_driver_sql("SELECT version_num FROM alembic_version").scalar(), "0024")
+            self.assertEqual(conn.exec_driver_sql("SELECT version_num FROM alembic_version").scalar(), _head_revision())
             self.assertEqual(conn.exec_driver_sql("SELECT COUNT(*) FROM budget_household_members").scalar(), 0)
             self.assertEqual(conn.exec_driver_sql(
                 "SELECT name FROM budget_categories WHERE id='cat-salary'").scalar(), SALARY_NAME)
@@ -736,7 +750,8 @@ class HouseholdAPITests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(role, "admin", path)
         for (method, path), role in api_contract._PATH_ROLES.items():
             if path.startswith("/api/budget/") and "/household/" not in path and not path.endswith("/callback"):
-                self.assertEqual(role, "admin", path)
+                expected = "public" if (method, path) == ("POST", device_token.REDEEM_PATH) else "admin"
+                self.assertEqual(role, expected, path)
 
     async def test_owner_series_flag_stays_off_the_owner_response(self):
         response = await self.client.get("/api/budget/analytics/monthly-budget", headers=self.headers("alice"))

@@ -232,6 +232,9 @@ class ConsentAPITests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status, 401); await response.read()
         response = await self.get("pending", headers=self.headers(bearer=True))
         self.assertEqual(response.status, 403); await response.read()
+        response = await self.get("pending", headers=self.headers() | {"Authorization": "Basic placeholder"})
+        self.assertEqual(response.status, 403)
+        self.assertEqual((await response.json())["error"], "budget_browser_session_required")
         for headers in (self.headers(origin=False), {**self.headers(), "Origin": "https://outside.invalid"},
                         self.headers(bearer=True)):
             response = await self.post("start", {"connection_id": "bank", "expected_version": 1, "intent": "connect"}, headers=headers)
