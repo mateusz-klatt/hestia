@@ -13,6 +13,7 @@ from hestia import db
 from hestia.budget import normalize, runtime
 from hestia.budget.client import BudgetAPIError
 from hestia.budget.normalize import AccountFailure, AccountSnapshot, Snapshot
+from hestia.budget.rate_limit import RateScope
 from hestia.budget.scheduler import BudgetScheduler
 from hestia.budget.store import BudgetStore, BudgetStoreError, OPERATIONS, STALE_AFTER
 from tests.test_budget_store import APP, configuration, prepare_selected, snapshot, transaction
@@ -593,3 +594,45 @@ class ComponentRuntimeTests(ComponentCase):
         self.assertEqual(len(self.rows(db.BudgetTransaction)), 1)
         self.assertTrue(all(part["attempt_id"] is None for part in self.components().values()))
         self.assertTrue(all(part["last_success"] == self.now for part in self.components().values()))
+
+    def test_suspended_component_with_last_error_blocks_connection_last_success_even_when_siblings_succeed(self):
+        self.config = configuration(accounts=("synthetic-hash", "second-hash"))
+        prepare_selected(self.store, self.config)
+        self.assertEqual(self.acquire(SyntheticBank(self.config))["results"], [{"connection": "bank", "state": "updated"}])
+        seed_time = self.state()["last_success"]
+        second_observed = self.account("second-hash").observed_at
+        self.assertIsNotNone(seed_time)
+
+        # Second account's transactions endpoint hits a suspended 429; the other three components succeed.
+        self.now += 43200
+        limited = SyntheticBank(self.config)
+        real_get = limited.get
+
+        def suspend_second_tx(path, query=None):
+            if path == f"/accounts/{SECOND_UID}/transactions":
+                limited.calls.append((path, query))
+                raise BudgetAPIError(
+                    429, "rate_limit", True,
+                    provider_code="ASPSP_RATE_LIMIT_EXCEEDED",
+                    retry_suspended=True, rate_scope=RateScope.ACCOUNT_ENDPOINT,
+                )
+            return real_get(path, query)
+
+        limited.get = suspend_second_tx
+        self.assertEqual(self.acquire(limited)["results"], [{"connection": "bank", "state": "partial"}])
+        part = self.components("second-hash")["transactions"]
+        self.assertTrue(part["suspended"])
+        self.assertEqual(part["last_error"], "rate_limit")
+        self.assertEqual(self.state()["last_success"], seed_time)
+
+        # Next cycle: the suspended component is skipped without HTTP while every other component succeeds.
+        self.now += 43200
+        followup = SyntheticBank(self.config)
+        self.assertEqual(self.acquire(followup)["results"], [{"connection": "bank", "state": "partial"}])
+        self.assertNotIn(f"/accounts/{SECOND_UID}/transactions", [path for path, _ in followup.calls])
+        self.assertEqual(self.components("synthetic-hash")["transactions"]["last_success"], self.now)
+        self.assertEqual(self.components("synthetic-hash")["balances"]["last_success"], self.now)
+        self.assertEqual(self.components("second-hash")["balances"]["last_success"], self.now)
+        self.assertEqual(self.state()["last_success"], seed_time)
+        self.assertEqual(self.state()["last_error"], "partial_data")
+        self.assertEqual(self.account("second-hash").observed_at, second_observed)
