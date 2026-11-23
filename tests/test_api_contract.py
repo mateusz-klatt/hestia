@@ -58,7 +58,7 @@ class OpenApiArtifactTests(unittest.TestCase):
     def test_monthly_budget_contract_chain_from_0_27_0(self):
         """Remove each additive surface before verifying earlier contract snapshots."""
         document = api_contract.build_openapi()
-        self.assertEqual(document["info"]["version"], "0.43.0")
+        self.assertEqual(document["info"]["version"], "0.45.0")
         schemas = document["components"]["schemas"]
         for operation in ("category-translation-set", "category-translation-delete", "label-translation-set",
                           "label-translation-delete", "translation-import"):
@@ -86,7 +86,7 @@ class OpenApiArtifactTests(unittest.TestCase):
             schemas[schema]["properties"].pop(field)
             if field in schemas[schema].get("required", []):
                 schemas[schema]["required"].remove(field)
-        document["info"]["version"] = "0.42.0"
+        document["info"]["version"] = "0.44.0"
         schemas["Settings"]["description"] = (
             "GET /api/settings — the logged-in user's UI prefs. All three keys are ALWAYS present, null when\n"
             "unset (an unauthenticated / no-row request returns all-null, never an error)."
@@ -95,6 +95,15 @@ class OpenApiArtifactTests(unittest.TestCase):
             "POST /api/settings — a PARTIAL update: only the keys present are persisted (absent keys are left\n"
             "untouched). null clears a field. temp_scale ∈ {C,F,K}. locale ≤ 35 chars."
         )
+        # 0.44.0 device login and alerts precede the translation surface.
+        del document["paths"]["/api/login"]["post"]["responses"]["429"]
+        for name in ("BudgetAnalyticsInboxDeviceItem", "BudgetAnalyticsInboxDeviceParams", "BudgetAnalyticsInboxDeviceRef"):
+            del schemas[name]
+        inbox_items = schemas["BudgetAnalyticsInbox"]["properties"]["items"]["items"]
+        del inbox_items["discriminator"]["mapping"]["device_added"]
+        inbox_items["oneOf"].remove({"$ref": "#/components/schemas/BudgetAnalyticsInboxDeviceItem"})
+        schemas["BudgetAnalyticsInboxKeyRequest"]["properties"]["kind"]["enum"].remove("device_added")
+        document["info"]["version"] = "0.42.0"
         # 0.42.0 Gmail queue/review metadata precedes the 0.41.0 category hues.
         for name, field in (
             ("BudgetReceiptSummary", "forwarded_manually"),
@@ -724,7 +733,7 @@ class TolerantResponseContractTests(unittest.TestCase):
         "BudgetReceiptLineInput", "BudgetReceiptLinkRequest", "BudgetReceiptListRequest",
         "BudgetReceiptSearchRequest", "BudgetReceiptDeleteRequest",
         "BudgetReceiptDeviceBrowserRequest", "BudgetReceiptDeviceRedeemRequest",
-        "BudgetReceiptDeviceRevokeRequest",
+        "BudgetReceiptDeviceRevokeRequest", "BudgetReceiptDeviceCancelRequest", "BudgetReceiptDeviceLoginRequest",
         "BudgetReceiptGmailGrantRequest", "BudgetReceiptGmailRevokeRequest", "BudgetReceiptGmailSyncRequest",
         "AddUserRequest", "ChangePasswordRequest", "ControlCover", "ControlLevel", "ControlRequest",
         "ControlSwitch", "ControlThermostat", "ControlThermostatPower", "IrRequest", "LoginRequest",

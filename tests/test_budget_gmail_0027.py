@@ -9,6 +9,7 @@ from tests.migration_head import HEAD
 
 from hestia import db
 from hestia.budget.gmail_store import GmailStore, PendingMessage
+from tests.migration_head import HEAD
 
 
 class GmailScheduleMigrationTests(unittest.TestCase):

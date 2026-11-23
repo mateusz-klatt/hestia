@@ -768,10 +768,13 @@ class HouseholdAPITests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(api_contract._PATH_ROLES[("GET", path)], "viewer")
         for (method, path), role in web._ROUTE_MIN_ROLE.items():
             if path.startswith("/api/budget/") and "/household/" not in path:
-                self.assertEqual(role, "admin", path)
+                expected = "public" if method == "POST" and path in (
+                    device_token.REDEEM_PATH, device_token.LOGIN_PATH) else "admin"
+                self.assertEqual(role, expected, path)
         for (method, path), role in api_contract._PATH_ROLES.items():
             if path.startswith("/api/budget/") and "/household/" not in path and not path.endswith("/callback"):
-                expected = "public" if (method, path) == ("POST", device_token.REDEEM_PATH) else "admin"
+                expected = "public" if method == "POST" and path in (
+                    device_token.REDEEM_PATH, device_token.LOGIN_PATH) else "admin"
                 self.assertEqual(role, expected, path)
 
     async def test_owner_series_flag_stays_off_the_owner_response(self):

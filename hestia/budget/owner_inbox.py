@@ -1,13 +1,13 @@
 """Pure owner-private live inbox projection helpers (Budget 2D, Variant D).
 
 Computes stable local opaque subject IDs, generation/expiry-aware milestones,
-strictly allowlisted live alert params (zero provider IDs, labels, amounts or
-error text), deterministic ordering without ``created_at`` and anti-ABA CAS
+strictly allowlisted alert params, deterministic ordering without ``created_at`` and anti-ABA CAS
 read-marker digests. Performs no SQLite, network or filesystem I/O.
 """
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
+from datetime import datetime, timezone
 import hashlib
 import math
 import re
@@ -20,10 +20,12 @@ MAX_MARK_BATCH = 100
 KIND_CONSENT = "consent_renewal"
 KIND_MORTGAGE = "mortgage_due"
 KIND_SPENDING = "spending_limit"
-INBOX_KINDS = (KIND_CONSENT, KIND_MORTGAGE, KIND_SPENDING)
+KIND_DEVICE = "device_added"
+INBOX_KINDS = (KIND_DEVICE, KIND_CONSENT, KIND_MORTGAGE, KIND_SPENDING)
 
 _KIND_ORDER = {kind: index for index, kind in enumerate(INBOX_KINDS)}
 _SEVERITY_ORDER = {
+    KIND_DEVICE: {"added": 0},
     KIND_CONSENT: {"attention_required": 0, "expired": 1, "due_soon": 2},
     KIND_MORTGAGE: {"overdue": 0, "due_today": 1, "due_soon": 2},
     KIND_SPENDING: {"exceeded": 0, "at_limit": 1, "approaching": 2},
@@ -187,6 +189,24 @@ def spending_limit_params(*, status: str, period: str, currency: str,
         "currency": currency,
         "warning_percent": warning_percent,
         "percent_used_floor": percent_used_floor,
+    }
+
+
+def device_entry(owner: str, token_id: str, device_name: str, added_at: float) -> dict:
+    if not isinstance(device_name, str) or not 1 <= len(device_name) <= 64 or not device_name.isprintable():
+        raise OwnerInboxDataError()
+    try:
+        added_at = _non_negative_float(added_at)
+        date = datetime.fromtimestamp(added_at, timezone.utc).date().isoformat()
+    except (ValueError, OverflowError, OSError):
+        raise OwnerInboxDataError() from None
+    return {
+        "kind": KIND_DEVICE,
+        "subject_id": opaque_subject_id(owner, KIND_DEVICE, token_id),
+        "milestone": "added",
+        "ref": {"token_id": token_id},
+        "params": {"status": "added", "device_name": device_name,
+                   "date": date},
     }
 
 

@@ -15,8 +15,9 @@ from aiohttp.test_utils import TestClient, TestServer
 from sqlalchemy import select
 from yarl import URL
 
-from hestia import auth, db, store_sql, web
-from hestia.budget import api, consent_api, consent_context, device_token, receipt_api
+from hestia import api_contract, auth, db, store_sql, web
+from hestia.budget import (analytics_api, api, consent_api, consent_context, device_token, household, household_api,
+                           receipt_api)
 from hestia.budget.config import BudgetConfigError
 from hestia.budget.receipt_parser import ReceiptError
 from hestia.budget.views import BudgetUsersBackendRequired
@@ -26,6 +27,7 @@ from tests.test_budget_receipts import confirm_values, receipt_text
 SECRET = fixture.SECRET
 ORIGIN = fixture.ORIGIN
 RULE_KEY_FILE = "HESTIA_BUDGET_RULE_KEY_FILE"
+LOGIN_PASSWORD = "synthetic-device-login-test-password"
 
 
 def _make_rule_key(directory):
@@ -540,6 +542,318 @@ class DeviceTokenHTTPTests(fixture.unittest.IsolatedAsyncioTestCase):
         response = await self._post(device_token.REDEEM_PATH, {"code": code, "device_name": name}, headers or {})
         return response
 
+    def _set_login_passwords(self, *usernames):
+        password_hash = auth.hash_password(LOGIN_PASSWORD)
+        with self.sessions.begin() as session:
+            for username in usernames:
+                session.get(db.User, username).password_hash = password_hash
+        return password_hash
+
+    async def _login_device(self, username="alice", password=LOGIN_PASSWORD, name="Vesta", headers=None):
+        return await self._post(device_token.LOGIN_PATH, {
+            "username": username, "password": password, "device_name": name,
+        }, headers or {})
+
+    async def _logged_in_device(self, name="Vesta"):
+        response = await self._login_device(name=name)
+        _status(response, 200)
+        self.assert_private_headers(response)
+        self.assertNotIn("Set-Cookie", response.headers)
+        body = await response.json()
+        self.assertEqual(set(body), {"token", "token_id", "scope", "expires_at"})
+        self.assertEqual(body["scope"], "receipts")
+        self.assertEqual(datetime.fromisoformat(body["expires_at"]).tzinfo, timezone.utc)
+        return body
+
+    async def test_password_login_issues_a_new_device_and_rotates_the_same_name(self):
+        self._set_login_passwords("alice")
+        first = await self._logged_in_device()
+        second = await self._logged_in_device()
+        self.assertTrue(first["token"] != second["token"])
+        records = {row.id: row for row in self.rows(db.BudgetReceiptDeviceToken)}
+        self.assertIsNotNone(records[first["token_id"]].revoked_at)
+        self.assertIsNone(records[second["token_id"]].revoked_at)
+        receipts = await self._post(device_token.LIST_RECEIPTS_PATH, {}, self._auth(second))
+        _status(receipts, 200)
+        revoked = await self._post(device_token.LIST_RECEIPTS_PATH, {}, self._auth(first))
+        self.assertEqual((revoked.status, (await revoked.json())["error"]), (401, "device_token_revoked"))
+        audits = self.rows(db.BudgetAnalyticsAudit)
+        audit, = [row for row in audits if row.subject_id == first["token_id"]]
+        self.assertEqual((audit.owner, audit.subject_id, audit.action),
+                         ("alice", first["token_id"], device_token.NEW_DEVICE_LOGIN))
+        self.assertEqual(json.loads(audit.after_json), {"actor": "device:" + first["token_id"]})
+        self.assertEqual({row.action for row in audits if row.subject_id == second["token_id"]},
+                         {device_token.NEW_DEVICE_LOGIN, device_token.DEVICE_ROTATE})
+        stored = json.dumps(self._stored_text())
+        self.assertTrue(all(secret not in stored for secret in (LOGIN_PASSWORD, first["token"], second["token"])))
+
+    async def test_new_device_inbox_item_is_owner_private_and_can_be_marked_read(self):
+        self._set_login_passwords("alice")
+        grant = household.grant_member("viewer", "alice")["grant_id"]
+        inbox_path = analytics_api.PREFIX + "/inbox"
+        with mock.patch.dict(os.environ, {analytics_api.FLAG: "1"}):
+            device = await self._logged_in_device()
+            await self._logged_in_device()
+            response = await self.client.get(inbox_path, headers=self.headers())
+            _status(response, 200)
+            body = await response.json()
+            api_contract.BudgetAnalyticsInbox.model_validate(body)
+            item, = [entry for entry in body["items"] if entry["kind"] == "device_added"]
+            self.assertEqual(item["ref"], {"token_id": device["token_id"]})
+            row = next(row for row in self.rows(db.BudgetReceiptDeviceToken) if row.id == device["token_id"])
+            date = datetime.fromtimestamp(row.created_at, timezone.utc).date().isoformat()
+            self.assertEqual(item["params"], {"device_name": "Vesta", "status": "added", "date": date})
+            self.assertFalse(item["read"])
+            self.assertTrue(device["token"] not in json.dumps(body))
+            mark = await self._post(inbox_path + "-mark", {
+                "items": [{key: item[key] for key in ("kind", "subject_id", "milestone")}],
+                "read": True, "expected_reads_version": body["reads_version"],
+            }, self.headers(origin=True))
+            _status(mark, 200)
+            read = await self.client.get(inbox_path, headers=self.headers())
+            self.assertTrue((await read.json())["items"][0]["read"])
+            for path, headers in (
+                (inbox_path, self.headers("bob")),
+                (household_api.PREFIX + "/inbox", {**self.headers("viewer"), household_api.GRANT_HEADER: grant}),
+            ):
+                foreign = await self.client.get(path, headers=headers)
+                _status(foreign, 200)
+                self.assertFalse(any(entry["kind"] == "device_added" for entry in (await foreign.json())["items"]))
+
+    async def test_password_replacements_audit_and_alert_only_genuine_rotations(self):
+        self._set_login_passwords("alice")
+        with mock.patch.dict(os.environ, {analytics_api.FLAG: "1"}), mock.patch.object(auth, "LOGIN_ATTEMPTS", 30):
+            for case in ("password", "qr", "expired", "hard-expired", "revoked", "unaudited"):
+                with self.subTest(case=case):
+                    name = "device-" + case
+                    if case == "qr":
+                        code = await self._pair()
+                        response = await self._redeem(code["code"], name=name)
+                        _status(response, 200)
+                        previous = await response.json()
+                    else:
+                        previous = await self._logged_in_device(name=name)
+                        with self.sessions.begin() as session:
+                            row = session.get(db.BudgetReceiptDeviceToken, previous["token_id"])
+                            if case == "expired":
+                                row.expires_at = row.created_at
+                            elif case == "hard-expired":
+                                row.expires_at = row.created_at
+                                row.hard_expires_at = row.created_at
+                            elif case == "revoked":
+                                row.revoked_at = row.created_at
+                            elif case == "unaudited":
+                                for audit in session.scalars(select(db.BudgetAnalyticsAudit).where(
+                                        db.BudgetAnalyticsAudit.subject_id == row.id)):
+                                    session.delete(audit)
+                    replacement = await self._logged_in_device(name=name)
+                    actions = {row.action for row in self.rows(db.BudgetAnalyticsAudit)
+                               if row.subject_id == replacement["token_id"]}
+                    self.assertEqual(actions, {device_token.NEW_DEVICE_LOGIN, device_token.DEVICE_ROTATE}
+                                     if case == "password" else {device_token.NEW_DEVICE_LOGIN})
+                    inbox = await self.client.get(analytics_api.PREFIX + "/inbox", headers=self.headers())
+                    _status(inbox, 200)
+                    alerts = {item["ref"]["token_id"] for item in (await inbox.json())["items"]
+                              if item["kind"] == "device_added"}
+                    self.assertEqual(replacement["token_id"] in alerts, case != "password")
+                    if case == "password":
+                        again = await self._logged_in_device(name=name)
+                        inbox = await self.client.get(analytics_api.PREFIX + "/inbox", headers=self.headers())
+                        self.assertFalse(any(item["ref"].get("token_id") == again["token_id"]
+                                             for item in (await inbox.json())["items"]))
+
+    async def test_password_login_caps_tokens_across_issuance_methods_and_evicts_lru(self):
+        self._set_login_passwords("alice")
+        start = int(web._now())
+        with mock.patch.object(device_token, "now", side_effect=range(start, start + 20)):
+            devices = [await self._logged_in_device(name=f"Device {i}") for i in range(5)]
+            store = device_token.DeviceTokenStore(self.sessions, clock=lambda: start + 5)
+            self.assertEqual(store.identify(devices[0]["token"], slide=True)["status"], "ok")
+            paired = await self._device()
+        active = {row.id for row in self.rows(db.BudgetReceiptDeviceToken) if row.revoked_at is None}
+        self.assertEqual(active, {devices[i]["token_id"] for i in (0, 2, 3, 4)} | {paired["token_id"]})
+
+    async def test_password_login_failures_match_and_each_runs_one_password_check(self):
+        stored = self._set_login_passwords("alice", "bob", "viewer", "operator", "disabled")
+        with self.sessions.begin() as session:
+            session.add(db.User(username="no-budget", role="admin", password_hash=stored))
+            session.get(db.User, "bob").role = "viewer"
+        for user, correct in (("missing", True), ("alice", False), ("bob", True), ("viewer", True), ("operator", True),
+                              ("disabled", True), ("no-budget", True)):
+            with self.subTest(user=user), mock.patch.object(auth, "verify_password", wraps=auth.verify_password) as verify:
+                response = await self._login_device(user, LOGIN_PASSWORD if correct else "incorrect")
+                self.assertEqual((response.status, await response.json()),
+                                 (401, {"ok": False, "error": "device_token_rejected"}))
+                self.assert_private_headers(response)
+                self.assertEqual(verify.call_count, 1)
+                self.assertTrue(verify.call_args.args[1] == (auth._DUMMY_STORED if correct else stored))
+        self.assertEqual(self.rows(db.BudgetReceiptDeviceToken), [])
+
+    async def test_password_login_and_session_login_lock_out_each_other(self):
+        self._set_login_passwords("alice", "bob")
+        with mock.patch.object(auth, "LOGIN_ATTEMPTS", 1), mock.patch.object(web, "_audit"):
+            session = await self._post("/api/login", {"user": "alice", "password": "wrong"}, {})
+            _status(session, 401)
+            result = await self._login_device()
+            self.assertEqual((result.status, (await result.json())["error"]), (429, "device_token_rate_limited"))
+            self.assertGreater(int(result.headers["Retry-After"]), 0)
+            _status(await self._login_device("bob", "wrong"), 401)
+            result = await self._post("/api/login", {"user": "bob", "password": LOGIN_PASSWORD}, {})
+            _status(result, 429)
+            self.assertGreater(int(result.headers["Retry-After"]), 0)
+
+    async def test_unsupported_user_backend_does_not_consume_shared_login_budget(self):
+        self._set_login_passwords("alice")
+        with mock.patch.dict(os.environ, {"HESTIA_PERSIST": "json"}), \
+                mock.patch.object(auth.LoginLimiter, "take") as take:
+            for _ in range(auth.LOGIN_ATTEMPTS + 1):
+                response = await self._login_device()
+                self.assertEqual((response.status, (await response.json())["error"]),
+                                 (401, "device_token_rejected"))
+            take.assert_not_called()
+        with mock.patch.object(web, "_audit"):
+            response = await self._post("/api/login", {"user": "alice", "password": LOGIN_PASSWORD}, {})
+        _status(response, 200)
+
+    async def test_device_login_proxy_sources_reject_unresolved_chains_before_limiting(self):
+        self._set_login_passwords("alice")
+        form = {"username": "alice", "password": LOGIN_PASSWORD, "device_name": "Vesta"}
+        with mock.patch.dict(os.environ, {consent_context.TRUSTED_PROXY_ENV: "127.0.0.1/32,10.0.0.0/8"}), \
+                mock.patch.object(auth, "LOGIN_ATTEMPTS", 1):
+            for headers in ([], [("X-Forwarded-For", "bad")],
+                            [("X-Forwarded-For", "192.0.2.1"), ("X-Forwarded-For", "bad")]):
+                with mock.patch.object(auth.LoginLimiter, "take") as take:
+                    response = await self.client.post(device_token.LOGIN_PATH, json=form, headers=headers)
+                    self.assertEqual((response.status, (await response.json())["error"]),
+                                     (400, "budget_invalid_request"))
+                    take.assert_not_called()
+            for headers in ([('X-Forwarded-For', 'bad, 192.0.2.1, 10.0.0.1')],
+                            [('X-Forwarded-For', 'bad'), ('X-Forwarded-For', '192.0.2.2, 10.0.0.1')]):
+                response = await self.client.post(device_token.LOGIN_PATH, json=form, headers=headers)
+                _status(response, 200)
+            # Normal traffic keeps the shared /api/login lockout and response.
+            with mock.patch.object(web, "_audit"):
+                response = await self._post("/api/login", {"user": "alice", "password": LOGIN_PASSWORD},
+                                            {"X-Forwarded-For": "192.0.2.2, 10.0.0.1"})
+            _status(response, 429)
+            response = await self._login_device(headers={"X-Forwarded-For": "192.0.2.3"})
+            _status(response, 200)
+
+    async def test_session_login_resolves_proxy_sources_like_device_login(self):
+        self._set_login_passwords("alice")
+        body = {"user": "alice", "password": LOGIN_PASSWORD}
+        with mock.patch.dict(os.environ, {consent_context.TRUSTED_PROXY_ENV: "127.0.0.1/32,10.0.0.0/8"}), \
+                mock.patch.object(web, "_audit"):
+            for headers in ([], [("X-Forwarded-For", "bad")], [("X-Forwarded-For", "10.0.0.2")],
+                            [("X-Forwarded-For", "192.0.2.1"), ("X-Forwarded-For", "bad")]):
+                with mock.patch.object(auth.LoginLimiter, "take") as take:
+                    response = await self.client.post("/api/login", json=body, headers=headers)
+                    self.assertEqual((response.status, await response.json()),
+                                     (400, {"ok": False, "error": "invalid request"}))
+                    take.assert_not_called()
+            sources = []
+            real_take = auth.LoginLimiter.take
+
+            def record(limiter, user, source, now):
+                sources.append(source)
+                return real_take(limiter, user, source, now)
+            with mock.patch.object(auth.LoginLimiter, "take", record):
+                for headers in ([("X-Forwarded-For", "bad, 192.0.2.1, 10.0.0.1")],
+                                [("X-Forwarded-For", "bad"), ("X-Forwarded-For", "192.0.2.1, 10.0.0.1")]):
+                    _status(await self.client.post("/api/login", json=body, headers=headers), 200)
+            self.assertEqual(sources, ["192.0.2.1", "192.0.2.1"])
+        with mock.patch.dict(os.environ, {consent_context.TRUSTED_PROXY_ENV: "not-a-network"}), \
+                mock.patch.object(auth.LoginLimiter, "take") as take:
+            _status(await self.client.post("/api/login", json=body,
+                                           headers=[("X-Forwarded-For", "192.0.2.1")]), 400)
+            take.assert_not_called()
+
+    async def test_password_login_rejects_credentials_in_headers_and_honors_flags(self):
+        credentials = ({"Cookie": "unrelated=value"}, {"Cookie": ""}, {"Authorization": ""},
+                       self.headers(bearer=True), self.headers())
+        with mock.patch.object(device_token, "open_store") as open_store:
+            for headers in credentials:
+                response = await self._login_device(headers=headers)
+                self.assertEqual((response.status, (await response.json())["error"]), (400, "budget_auth_ambiguous"))
+            for flag in (device_token.FLAG, "HESTIA_BUDGET_HTTP_ENABLED"):
+                with mock.patch.dict(os.environ, {flag: "0"}):
+                    _status(await self._login_device(headers=self.headers(bearer=True)), 404)
+            with mock.patch.object(web, "_AUTH_ENABLED", False):
+                _status(await self._login_device(), 401)
+            open_store.assert_not_called()
+
+    async def test_password_login_rechecks_receipts_flag_before_issuance(self):
+        for values in ([False], [True, False]):
+            with self.subTest(values=values), \
+                    mock.patch.object(receipt_api, "enabled", side_effect=values), \
+                    mock.patch.object(device_token, "open_store") as open_store, \
+                    mock.patch.object(auth.LoginLimiter, "take") as take:
+                response = await self._login_device()
+                self.assertEqual((response.status, (await response.json())["error"]),
+                                 (404, "budget_receipts_disabled"))
+                open_store.assert_not_called()
+                take.assert_not_called()
+
+    async def test_password_login_rechecks_receipts_flag_after_reading_the_body(self):
+        with mock.patch.object(receipt_api, "enabled", side_effect=[True, False]), \
+                mock.patch.object(device_token, "open_store") as open_store:
+            response = await self._login_device()
+            self.assertEqual((response.status, (await response.json())["error"]),
+                             (404, "budget_receipts_disabled"))
+        open_store.assert_not_called()
+
+    async def test_password_login_framing_and_errors_do_not_log_a_password(self):
+        with mock.patch.object(device_token, "open_store", side_effect=RuntimeError(LOGIN_PASSWORD)), \
+                self.assertLogs("hestia.budget.api", "ERROR") as logs:
+            _status(await self._login_device(), 500)
+        self.assertTrue(LOGIN_PASSWORD not in "".join(logs.output))
+        with mock.patch.object(device_token, "open_store", side_effect=BudgetUsersBackendRequired):
+            _status(await self._login_device(), 401)
+        with mock.patch.object(device_token, "open_store", side_effect=device_token.DeviceTokenError(503, "unavailable")):
+            _status(await self._login_device(), 503)
+        with mock.patch.object(device_token, "open_store") as open_store:
+            _status(await self._login_device(name="\n"), 400)
+            _status(await self._login_device(name="x" * 65), 400)
+            _status(await self._login_device(username="\ud800"), 400)
+            _status(await self._login_device(password="x" * 4096), 413)
+            _status(await self._post(device_token.LOGIN_PATH, {"username": "alice"}, {}), 400)
+            _status(await self.client.post(device_token.LOGIN_PATH, data="{}"), 415)
+            _status(await self._post(device_token.LOGIN_PATH, {}, {"Content-Encoding": "identity"}), 415)
+            open_store.assert_not_called()
+
+    async def test_password_change_revokes_device_login_and_fences_in_flight_issuance(self):
+        self._set_login_passwords("alice")
+        device = await self._logged_in_device()
+        browser_device = await self._device()
+        authenticate = auth.authenticate
+
+        def reset_after_verify(*args):
+            ok = authenticate(*args)
+            store_sql.set_user_db("alice", auth.hash_password("replacement-test-password"), "admin")
+            return ok
+
+        with mock.patch.object(auth, "authenticate", side_effect=reset_after_verify):
+            _status(await self._login_device(name="During reset"), 401)
+        for issued in (device, browser_device):
+            response = await self._post(device_token.LIST_RECEIPTS_PATH, {}, self._auth(issued))
+            self.assertEqual((response.status, (await response.json())["error"]), (401, "device_token_revoked"))
+        self.assertEqual(len(self.rows(db.BudgetReceiptDeviceToken)), 2)
+
+    async def test_pair_code_cancel_is_owner_bound_and_idempotent(self):
+        pair = await self._pair()
+        target = {"code_id": pair["code_id"]}
+        for headers, expected in (({}, 401), (self.headers(), 403), (self.headers("viewer", origin=True), 403),
+                                  (self.headers(bearer=True), 403), (self.headers("bob", origin=True), 200)):
+            _status(await self._post(device_token.PAIR_CANCEL_PATH, target, headers), expected)
+        self.assertIsNone(self.rows(db.BudgetReceiptPairCode)[0].consumed_at)
+        owner = self.headers(origin=True)
+        _status(await self._post(device_token.PAIR_CANCEL_PATH, {"code_id": "invalid"}, owner), 400)
+        for _ in range(2):
+            _status(await self._post(device_token.PAIR_CANCEL_PATH, target, owner), 200)
+        _status(await self._redeem(pair["code"]), 400)
+        self.assertIsNotNone(self.rows(db.BudgetReceiptPairCode)[0].consumed_at)
+        self.assertEqual(self.rows(db.BudgetReceiptDeviceToken), [])
+
     async def _device(self):
         paired = await self._pair()
         response = await self._redeem(paired["code"])
@@ -714,7 +1028,7 @@ class DeviceTokenHTTPTests(fixture.unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(response.status, 303)
                 self.assertEqual(response.headers["Location"], consent_api.COMPLETE)
             else:
-                expected = 400 if path == device_token.REDEEM_PATH else 403
+                expected = 400 if path in (device_token.REDEEM_PATH, device_token.LOGIN_PATH) else 403
                 self.assertEqual(response.status, expected, f"{route.method} {path}")
             await response.read()
 
@@ -900,7 +1214,8 @@ class DeviceTokenHTTPTests(fixture.unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await browser_bad.json())["error"], "budget_invalid_request")
 
     async def test_route_map_rejects_a_device_token_off_the_allowlist(self):
-        device = await self._device()
+        self._set_login_passwords("alice")
+        device = await self._logged_in_device()
         routes = {(route.method, route.resource.canonical.replace("{path}", "asset.js"))
                   for route in self.client.server.app.router.routes()}
         allowed = {("POST", receipt_api.PREFIX + "/" + operation)
@@ -911,7 +1226,8 @@ class DeviceTokenHTTPTests(fixture.unittest.IsolatedAsyncioTestCase):
         with mock.patch.object(device_token, "open_store") as open_store:
             for method, path in sorted(routes - allowed):
                 response = await self.client.request(method, path, headers=self._auth(device), allow_redirects=False)
-                self.assertEqual(response.status, 403, f"{method} {path}")
+                expected = 400 if path == device_token.LOGIN_PATH else 403
+                self.assertEqual(response.status, expected, f"{method} {path}")
                 await response.read()
             open_store.assert_not_called()
 

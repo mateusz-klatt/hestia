@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { BudgetApi, BudgetResult, ReceiptDevice, ReceiptPair } from "./api";
 import { qrMatrix } from "./qr";
 
-type DeviceApi = Pick<BudgetApi, "receiptDevices" | "pairReceiptDevice" | "revokeReceiptDevice">;
+type DeviceApi = Pick<BudgetApi, "receiptDevices" | "pairReceiptDevice" | "cancelReceiptPairCode" | "revokeReceiptDevice">;
 type AccessBarrier = (result: { ok: boolean; status?: number; error?: string }) => boolean;
 
 const copyFor = (locale: string) => locale.startsWith("pl")
@@ -10,12 +10,14 @@ const copyFor = (locale: string) => locale.startsWith("pl")
       title: "Urządzenia", add: "Dodaj urządzenie", revoke: "Odwołaj", empty: "Brak urządzeń.",
       code: "Kod parowania", qr: "Kod QR parowania", unavailable: "Kod QR jest niedostępny. Wpisz kod w aplikacji.",
       expires: "Ważny do", remaining: "Pozostało", listError: "Nie udało się wczytać urządzeń.", close: "Zamknij",
+      cancel: "Anuluj kod", cancelError: "Nie udało się anulować kodu parowania.",
       pairError: "Nie udało się utworzyć kodu parowania.", revokeError: "Nie udało się odwołać urządzenia.",
     }
   : {
       title: "Devices", add: "Add device", revoke: "Revoke", empty: "No devices yet.",
       code: "Pairing code", qr: "Pairing QR code", unavailable: "A QR code is unavailable. Enter the code in the app.",
       expires: "Expires", remaining: "Remaining", listError: "Devices could not be loaded.", close: "Close",
+      cancel: "Cancel code", cancelError: "The pairing code could not be cancelled.",
       pairError: "The pairing code could not be created.", revokeError: "The device could not be revoked.",
     };
 
@@ -120,6 +122,11 @@ export function ReceiptDevices({ api, locale, revision, onAccessLoss, focusRevis
     else setError(message);
   };
 
+  const closePairing = () => {
+    setPairing(null);
+    setListRevision((current) => current + 1);
+  };
+
   if (hidden) return null;
   return (
     <section className="budget-devices" aria-label={text.title} ref={sectionRef}>
@@ -137,10 +144,12 @@ export function ReceiptDevices({ api, locale, revision, onAccessLoss, focusRevis
           <p className="budget-muted">
             {text.expires}: {formatExpiry(pairing.expires_at * 1000, now, locale)} · {text.remaining}: <span role="timer">{formatCountdown(pairing.expires_at * 1000, now)}</span>
           </p>
-          <button type="button" onClick={() => {
-            setPairing(null);
-            setListRevision((current) => current + 1);
-          }}>{text.close}</button>
+          <div className="budget-actions">
+            <button type="button" onClick={closePairing}>{text.close}</button>
+            <button type="button" disabled={busy} onClick={() => {
+              void run(() => api.cancelReceiptPairCode(pairing.code_id), closePairing, text.cancelError);
+            }}>{text.cancel}</button>
+          </div>
         </div>
       )}
       {devices.length === 0 ? <p className="budget-muted">{text.empty}</p> : (

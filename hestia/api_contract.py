@@ -106,9 +106,10 @@ from .budget.i18n import LANGUAGES, validate_languages
 # 0.41.0: persistent root-category hues and explicit even re-spreading (migration 0026, down_revision 0025).
 
 # 0.42.0: queue Gmail syncs and expose manual-forward review metadata (migration 0027, down_revision 0026).
-# 0.43.0: ordered per-user budget display languages, category and one-off label translations
-#         (migration 0028, down_revision 0027), resolved display fields and admin bulk import.
-CONTRACT_VERSION = "0.43.0"
+# 0.44.0: password-based receipt device login, pairing-code cancellation, and owner device alerts (migration 0028, down_revision 0027).
+# 0.45.0: ordered per-user budget display languages, category and one-off label translations
+#         (migration 0029, down_revision 0028), resolved display fields and admin bulk import.
+CONTRACT_VERSION = "0.45.0"
 OPENAPI_PATH = Path(__file__).resolve().parent.parent / "docs" / "api" / "openapi.json"
 
 # De-duplicated string literals (SonarPython S1192): the OpenAPI content-type, the paths reused
@@ -137,6 +138,10 @@ _P_BUDGET_REFRESH = _P_BUDGET + "refresh"
 _P_BUDGET_JOBS = _P_BUDGET + "jobs"
 _ADMIN_ROLE_DESC = "Requires the admin role."
 _NO_SUCH_USER = "no such user"
+_LOGIN_RETRY_HEADERS = {
+    "Retry-After": {"description": "Seconds until another password attempt is allowed.",
+                    "schema": {"type": "integer", "minimum": 1}},
+}
 
 # Strict, exactly like the aiohttp handlers: reject unknown fields, bool-as-int, and int-as-float — so a
 # payload the DTO accepts is one ``_validate_control_payload`` accepts (the binding test pins this).
@@ -2321,7 +2326,7 @@ class BudgetAnalyticsMortgages(BaseModel):
     reminders: list[BudgetAnalyticsMortgageReminder]
 
 
-BudgetAnalyticsInboxKind = Literal["consent_renewal", "mortgage_due", "spending_limit"]
+BudgetAnalyticsInboxKind = Literal["consent_renewal", "mortgage_due", "spending_limit", "device_added"]
 BudgetAnalyticsInboxMilestone = Annotated[str, Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9:_-]+$")]
 
 
@@ -2416,8 +2421,27 @@ class BudgetAnalyticsInboxSpendingLimitItem(BudgetAnalyticsInboxItemBase):
     params: BudgetAnalyticsInboxSpendingLimitParams
 
 
+class BudgetAnalyticsInboxDeviceParams(BaseModel):
+    model_config = _READ
+    status: Literal["added"]
+    device_name: Annotated[str, Field(min_length=1, max_length=64)]
+    date: Annotated[str, Field(pattern=r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$")]
+
+
+class BudgetAnalyticsInboxDeviceRef(BaseModel):
+    model_config = _READ
+    token_id: str
+
+
+class BudgetAnalyticsInboxDeviceItem(BudgetAnalyticsInboxItemBase):
+    kind: Literal["device_added"]
+    ref: BudgetAnalyticsInboxDeviceRef
+    params: BudgetAnalyticsInboxDeviceParams
+
+
 BudgetAnalyticsInboxItem = Annotated[
-    BudgetAnalyticsInboxConsentItem | BudgetAnalyticsInboxMortgageItem | BudgetAnalyticsInboxSpendingLimitItem,
+    BudgetAnalyticsInboxConsentItem | BudgetAnalyticsInboxMortgageItem | BudgetAnalyticsInboxSpendingLimitItem
+    | BudgetAnalyticsInboxDeviceItem,
     Field(discriminator="kind"),
 ]
 
@@ -2925,9 +2949,22 @@ class BudgetReceiptDeviceBrowserRequest(BaseModel):
 
 class BudgetReceiptDevicePairResult(BaseModel):
     model_config = _READ
+    code_id: BudgetReceiptId
     code: Annotated[str, Field(pattern=r"^[0-9A-HJKMNP-TV-Z]{8}$")]
     expires_at: float
     qr_payload: Annotated[str, Field(min_length=1, max_length=64)]
+
+
+class BudgetReceiptDeviceCancelRequest(BaseModel):
+    model_config = _STRICT
+    code_id: BudgetReceiptId
+
+
+class BudgetReceiptDeviceLoginRequest(BaseModel):
+    model_config = _STRICT
+    username: str
+    password: Annotated[str, Field(json_schema_extra={"format": "password", "writeOnly": True})]
+    device_name: Annotated[str, Field(min_length=1, max_length=64, description="Printable device name.")]
 
 
 class BudgetReceiptDeviceRedeemRequest(BaseModel):
@@ -3021,7 +3058,8 @@ _RECEIPT_MODELS = (
     BudgetReceiptParseTextRequest, BudgetReceiptConfirmRequest, BudgetReceiptListRequest,
     BudgetReceiptSearchRequest, BudgetReceiptDeleteRequest, BudgetReceiptParseResult,
     BudgetReceiptDetailResult, BudgetReceiptConfirmResult, BudgetReceiptListResult, BudgetReceiptDeleteResult,
-    BudgetReceiptDeviceBrowserRequest, BudgetReceiptDevicePairResult, BudgetReceiptDeviceRedeemRequest,
+    BudgetReceiptDeviceBrowserRequest, BudgetReceiptDevicePairResult, BudgetReceiptDeviceCancelRequest,
+    BudgetReceiptDeviceLoginRequest, BudgetReceiptDeviceRedeemRequest,
     BudgetReceiptDeviceRedeemResult, BudgetReceiptDeviceToken, BudgetReceiptDeviceRevokeRequest,
     BudgetReceiptDeviceRevokeResult,
 
@@ -3478,6 +3516,8 @@ _PATH_ROLES = {
     ("GET", "/api/budget/receipts/image"): "admin",
     ("POST", "/api/budget/receipts/delete"): "admin",
     ("POST", "/api/budget/receipts/device-token/pair-code"): "admin",
+    ("POST", "/api/budget/receipts/device-token/pair-code-cancel"): "admin",
+    ("POST", "/api/budget/receipts/device-token/login"): "public",
     ("POST", "/api/budget/receipts/device-token/redeem"): "public",
     ("POST", "/api/budget/receipts/device-token/list"): "admin",
     ("POST", "/api/budget/receipts/device-token/revoke"): "admin",
@@ -3771,6 +3811,8 @@ def build_openapi() -> dict:
                             "content": {_APP_JSON: {"schema": _ref("LoginSuccess")}},
                         },
                         "401": {"description": "invalid credentials", **err},
+                        "429": {"description": "Too many attempts. Shares the device login quota by username and IP.",
+                                "headers": _LOGIN_RETRY_HEADERS, **err},
                     },
                 }
             },
@@ -4105,11 +4147,11 @@ def _receipt_error(description):
 _RECEIPT_AMBIGUITY = "Cookie plus Authorization returns 400 budget_auth_ambiguous."
 _DEVICE_UNAUTHENTICATED = "A missing or invalid credential, device_token_expired, or device_token_revoked."
 _BUDGET_BROWSER_AUTH = (
-    "Every /api/budget/* route requires the browser hestia_session cookie and configured same-origin Origin. "
+    "Browser budget routes require the hestia_session cookie and configured same-origin Origin. "
     "A login/session Authorization: Bearer from /api/login returns 403 budget_browser_session_required on every "
-    "budget route, including GETs. The only bearer exception is a receipts-scoped device token obtained through "
-    "browser pairing: it is accepted only on receipts parse-text, confirm, list, search, delete, detail and image, "
-    "plus device-token/revoke for itself. Household viewer/operator access is browser-only too."
+    "browser budget route, including GETs. Device login rejects any Cookie or Authorization header. A receipts-scoped "
+    "device token obtained through browser pairing or password login is accepted only on receipts parse-text, confirm, "
+    "list, search, delete, detail and image, plus device-token/revoke for itself. Household access is browser-only."
 )
 
 
@@ -4201,7 +4243,7 @@ def _receipt_paths():
 
 
 def _device_token_paths():
-    """Pairing is browser-only. Redeem is public and returns one generic failure."""
+    """Browser pairing management and public device credential exchanges."""
     prefix = "/api/budget/receipts/device-token/"
     framing = {
         "411": _receipt_error("Content-Length is required."),
@@ -4222,6 +4264,9 @@ def _device_token_paths():
     revoke["401"] = _receipt_error(_DEVICE_UNAUTHENTICATED)
     revoke["200"] = {"description": "Idempotent. An unknown id for this owner is still ok.",
                      "content": {_APP_JSON: {"schema": _ref("BudgetReceiptDeviceRevokeResult")}}}
+    cancel = dict(browser)
+    cancel["200"] = {"description": "Idempotently cancel an unused code belonging to this owner.",
+                     "content": {_APP_JSON: {"schema": _ref("BudgetReceiptDeviceRevokeResult")}}}
     redeem_responses = {
         "200": {"description": "One-time receipt device token with a sliding 90-day TTL and a 180-day hard cap.",
                 "content": {_APP_JSON: {"schema": _ref("BudgetReceiptDeviceRedeemResult")}}},
@@ -4233,6 +4278,18 @@ def _device_token_paths():
         "500": _receipt_error("Internal error."),
         "503": _receipt_error("Budget configuration unavailable."),
     }
+    login = {
+        **framing,
+        "200": redeem_responses["200"],
+        "400": _receipt_error("Invalid JSON request or budget_auth_ambiguous if Cookie or Authorization is present."),
+        "401": _receipt_error("Generic device_token_rejected for invalid credentials or an ineligible account."),
+        "404": _receipt_error("Budget HTTP or receipts are disabled."),
+        "408": _receipt_error("Request body read timed out."),
+        "429": {**_receipt_error("Too many password attempts (device_token_rate_limited)."),
+                "headers": _LOGIN_RETRY_HEADERS},
+        "500": redeem_responses["500"],
+        "503": redeem_responses["503"],
+    }
     note = ("Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. " + _RECEIPT_AMBIGUITY + " ")
     return {
         prefix + "pair-code": {"post": {
@@ -4243,11 +4300,31 @@ def _device_token_paths():
                 "schema": _ref("BudgetReceiptDeviceBrowserRequest")}}},
             "responses": pair,
         }},
+        prefix + "pair-code-cancel": {"post": {
+            "operationId": "cancelBudgetReceiptDevicePairCode",
+            "summary": "Cancel an unused pairing code by its server-issued ID.",
+            "description": note + " Browser owner cookie and exact Origin. A used, expired, or foreign ID is a no-op.",
+            "requestBody": {"required": True, "content": {_APP_JSON: {
+                "schema": _ref("BudgetReceiptDeviceCancelRequest")}}},
+            "responses": cancel,
+        }},
+        prefix + "login": {"post": {
+            "operationId": "loginBudgetReceiptDevice",
+            "summary": "Issue a receipts-scoped device token using an enabled budget owner's password.",
+            "description": ("Requires budget HTTP and receipts. Send uncompressed application/json (at most 4096 bytes) "
+                            "without Cookie or Authorization. Shares the /api/login quota of 10 attempts per minute "
+                            "per username and IPv4 address or IPv6 /64. An unrevoked token with the same device name "
+                            "is rotated. At five active tokens, issuance revokes the least recently used token."),
+            "requestBody": {"required": True, "content": {_APP_JSON: {
+                "schema": _ref("BudgetReceiptDeviceLoginRequest")}}},
+            "responses": login,
+        }},
         prefix + "redeem": {"post": {
             "operationId": "redeemBudgetReceiptDevice",
             "summary": "Exchange a pairing code for a receipts-scoped bearer, once.",
             "description": (note + "Send an application/json body of at most 4096 bytes without cookie or "
-                            "Authorization. Redemption attempts are subject to per-IP backoff and global throttling."),
+                            "Authorization. Redemption has per-IP backoff and global throttling. At five active "
+                            "tokens, issuance revokes the least recently used token."),
             "requestBody": {"required": True, "content": {_APP_JSON: {
                 "schema": _ref("BudgetReceiptDeviceRedeemRequest")}}},
             "responses": redeem_responses,

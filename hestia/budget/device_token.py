@@ -27,7 +27,8 @@ from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 
-from ..db import BudgetAnalyticsAudit
+from .. import auth
+from ..db import BudgetAnalyticsAudit, BudgetConnection
 from ..db import BudgetReceiptDeviceToken as DeviceToken
 from ..db import BudgetReceiptPairCode as PairCode
 from ..db import User
@@ -41,7 +42,9 @@ PREFIX = "/api/budget/receipts"
 COOKIE = "hestia_session"
 REQUEST_KEY = "hestia_device_token"
 PAIR_PATH = PREFIX + "/device-token/pair-code"
+PAIR_CANCEL_PATH = PREFIX + "/device-token/pair-code-cancel"
 REDEEM_PATH = PREFIX + "/device-token/redeem"
+LOGIN_PATH = PREFIX + "/device-token/login"
 LIST_PATH = PREFIX + "/device-token/list"
 REVOKE_PATH = PREFIX + "/device-token/revoke"
 PARSE_PATH = PREFIX + "/parse-text"
@@ -65,6 +68,9 @@ ALLOWED = frozenset({
 
 PAIR_TTL = 300
 MAX_ACTIVE_CODES = 3
+MAX_ACTIVE_TOKENS = 5
+NEW_DEVICE_LOGIN = "receipt_device_login"
+DEVICE_ROTATE = "receipt_device_rotate"
 SLIDE_TTL = 90 * 86400
 HARD_TTL = 180 * 86400
 SLIDE_WRITE_INTERVAL = 3600
@@ -131,6 +137,13 @@ def client_ip(request):
         except BudgetConfigError:
             return remote
     return remote
+
+
+def _owner_password_hash(session, username):
+    return session.scalar(select(User.password_hash).where(
+        User.username == username, User.role == "admin", User.disabled.is_(False),
+        select(BudgetConnection.id).where(BudgetConnection.owner == username).exists(),
+    ))
 
 
 def _same(left, right):
@@ -322,7 +335,6 @@ def decide(method, path, headers, cookies, secret, moment):
     Login sessions pass through to the web session policy.
     Device-shaped credentials are forbidden outside the receipts allowlist.
     """
-    from .. import auth
     from .views import BudgetUsersBackendRequired
 
     receipts = receipts_path(path)
@@ -430,8 +442,32 @@ class DeviceTokenStore:
 
             row = _insert_unique(session, factory)
             code = issued["code"]
-            expires_at = row.expires_at
-        return {"code": code, "expires_at": expires_at, "qr_payload": "hestia-pair:" + code}
+            return {"code_id": row.id, "code": code, "expires_at": row.expires_at,
+                    "qr_payload": "hestia-pair:" + code}
+
+    def cancel_code(self, owner, code_id):
+        with self._transaction() as session:
+            self._require_owner(session, owner)
+            moment = self._moment()
+            session.execute(update(PairCode).where(
+                PairCode.id == code_id, PairCode.owner == owner,
+                PairCode.consumed_at.is_(None), PairCode.expires_at > moment,
+            ).values(consumed_at=moment))
+        return {"ok": True}
+
+    def login(self, username, password, name):
+        with self.sessions() as session:
+            stored = _owner_password_hash(session, username)
+        # Every valid-shaped attempt does one scrypt. Ineligible users take the
+        # same dummy-hash path as unknown users, even with a correct password.
+        if not auth.authenticate(username, password, {username: stored}):
+            return None
+        with self._transaction() as session:
+            # Recheck under the same write lock used for account mutations. A
+            # password reset or demotion during scrypt cannot issue a new token.
+            if _owner_password_hash(session, username) != stored:
+                return None
+            return self._issue_token(session, username, name, self._moment(), _rule_key(), rotate=True)
 
     def redeem(self, code, device_name):
         normalized = normalize_code(code)
@@ -449,12 +485,37 @@ class DeviceTokenStore:
             if not _accepted(None if row is None else row.code_hmac, digest):
                 return None
             row.consumed_at = moment
-            token, token_id, expires_at = self._issue_token(session, row.owner, name, moment, root)
-            expires_iso = datetime.fromtimestamp(expires_at, timezone.utc).isoformat(timespec="seconds")
-        return {"token": token, "token_id": token_id, "scope": "receipts",
-                "expires_at": expires_iso}
+            return self._issue_token(session, row.owner, name, moment, root)
 
-    def _issue_token(self, session, owner, name, moment, root):
+    def _make_token_room(self, session, owner, name, moment, *, rotate):
+        rotated = False
+        if rotate:
+            # A name alone is not proof of an existing password login. Pairing
+            # and expired credentials must still produce a new-device alert.
+            rotated = session.scalar(select(DeviceToken.id).where(
+                DeviceToken.owner == owner, DeviceToken.device_name == name, DeviceToken.revoked_at.is_(None),
+                DeviceToken.expires_at > moment, DeviceToken.hard_expires_at > moment,
+                select(BudgetAnalyticsAudit.id).where(
+                    BudgetAnalyticsAudit.owner == owner,
+                    BudgetAnalyticsAudit.subject_id == DeviceToken.id,
+                    BudgetAnalyticsAudit.subject_type == "receipt_device_token",
+                    BudgetAnalyticsAudit.action == NEW_DEVICE_LOGIN,
+                ).exists(),
+            ).limit(1)) is not None
+            session.execute(update(DeviceToken).where(
+                DeviceToken.owner == owner, DeviceToken.device_name == name, DeviceToken.revoked_at.is_(None),
+            ).values(revoked_at=moment))
+        overflow = session.scalars(select(DeviceToken).where(
+            DeviceToken.owner == owner, DeviceToken.revoked_at.is_(None),
+            DeviceToken.expires_at > moment, DeviceToken.hard_expires_at > moment,
+        ).order_by(func.coalesce(DeviceToken.last_used_at, DeviceToken.created_at).desc(),
+                   DeviceToken.created_at.desc(), DeviceToken.id).offset(MAX_ACTIVE_TOKENS - 1))
+        for row in overflow:
+            row.revoked_at = moment
+        return rotated
+
+    def _issue_token(self, session, owner, name, moment, root, *, rotate=False):
+        rotated = self._make_token_room(session, owner, name, moment, rotate=rotate)
         issued = {}
 
         def factory():
@@ -468,7 +529,12 @@ class DeviceTokenStore:
             )
 
         row = _insert_unique(session, factory)
-        return issued["token"], row.id, row.expires_at
+        if rotate:
+            write_device_audit(session, owner, row.id, NEW_DEVICE_LOGIN, moment)
+            if rotated:
+                write_device_audit(session, owner, row.id, DEVICE_ROTATE, moment)
+        expires_at = datetime.fromtimestamp(row.expires_at, timezone.utc).isoformat(timespec="seconds")
+        return {"token": issued["token"], "token_id": row.id, "scope": "receipts", "expires_at": expires_at}
 
     def identify(self, token, *, slide):
         canonical = _bearer_token(token)

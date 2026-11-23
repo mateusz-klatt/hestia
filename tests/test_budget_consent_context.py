@@ -17,6 +17,25 @@ def request(peer, *headers):
 
 
 class ConsentContextTests(unittest.TestCase):
+    def test_login_source_uses_rightmost_untrusted_hop_even_with_bad_prefix_or_duplicates(self):
+        policy = {module.TRUSTED_PROXY_ENV: "127.0.0.1/32,10.0.0.0/8"}
+        for headers in ((("X-Forwarded-For", "bad, 192.0.2.1, 10.0.0.1"),),
+                        (("X-Forwarded-For", "bad"), ("x-forwarded-for", "192.0.2.1, 10.0.0.1"))):
+            self.assertEqual(module.login_ip(request("127.0.0.1", *headers), environ=policy), "192.0.2.1")
+        self.assertEqual(module.login_ip(request("192.0.2.1", ("X-Forwarded-For", "bad")),
+                                         environ=policy), "192.0.2.1")
+        for peer, headers in ((None, ()), ("127.0.0.1", ()),
+                              ("127.0.0.1", (("X-Forwarded-For", ""),)),
+                              ("127.0.0.1", (("X-Forwarded-For", "192.0.2.1, bad"),)),
+                              ("127.0.0.1", (("X-Forwarded-For", "192.0.2.1"), ("X-Forwarded-For", "bad"))),
+                              ("127.0.0.1", (("X-Forwarded-For", "10.0.0.1"),)),
+                              ("127.0.0.1", (("X-Forwarded-For", "x" * 4097),)),
+                              ("127.0.0.1", (("X-Forwarded-For", "192.0.2.1\t"),)),
+                              ("127.0.0.1", (("X-Forwarded-For", "ż"),)),
+                              ("127.0.0.1", (("X-Forwarded-For", "192.0.2.1," * 32 + "192.0.2.1"),))):
+            with self.subTest(peer=peer, headers=headers), self.assertRaises(ValueError):
+                module.login_ip(request(peer, *headers), environ=policy)
+
     def context(self, peer, *headers, trusted=""):
         return module.psu_context(request(peer, *headers), environ={module.TRUSTED_PROXY_ENV: trusted})
 

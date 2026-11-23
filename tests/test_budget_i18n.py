@@ -25,6 +25,7 @@ from hestia.budget.i18n import DisplayResolver, LANGUAGES, preferred_languages, 
 from tests import test_budget_analytics_api as analytics_api_tests
 from tests.test_budget_analytics_store import AnalyticsCase
 from tests import test_budget_household as household_tests
+from tests.migration_head import HEAD
 
 GROCERIES = household_tests.GROCERIES
 SECRET = household_tests.SECRET
@@ -76,8 +77,8 @@ class TranslationMigrationTests(unittest.TestCase):
     def test_schema_constraints_cascade_and_downgrade_roundtrip(self):
         cfg = Config()
         cfg.set_main_option("script_location", str(db._MIGRATIONS_DIR))
-        revision = ScriptDirectory.from_config(cfg).get_revision("0028")
-        self.assertEqual(revision.down_revision, "0027")
+        revision = ScriptDirectory.from_config(cfg).get_revision(HEAD)
+        self.assertEqual(revision.down_revision, "0028")
         engine, sessions = db.init_db(self.path)
         with sessions.begin() as session:
             session.add(db.User(username="owner", password_hash="unused", role="admin"))

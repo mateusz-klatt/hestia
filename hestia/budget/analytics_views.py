@@ -28,6 +28,7 @@ from sqlalchemy import and_, case, func, or_, select
 
 from .. import db
 from . import analytics_core as core
+from . import device_token
 from . import forecast as forecast_mod
 from . import month_budget as month_budget_mod
 from . import owner_inbox as inbox_mod
@@ -1261,10 +1262,29 @@ class BudgetAnalyticsViews(BudgetAnalyticsStore):
             for item in evaluated if item.status != "within"
         ]
 
+    @staticmethod
+    def _inbox_device_entries(session, owner):
+        tokens = db.BudgetReceiptDeviceToken
+        audit = db.BudgetAnalyticsAudit
+        rows = session.execute(select(tokens.id, tokens.device_name, tokens.created_at).where(
+            tokens.owner == owner,
+            select(audit.id).where(
+                audit.owner == owner, audit.subject_id == tokens.id, audit.subject_type == "receipt_device_token",
+                audit.action == device_token.NEW_DEVICE_LOGIN,
+            ).exists(),
+            ~select(audit.id).where(
+                audit.owner == owner, audit.subject_id == tokens.id, audit.subject_type == "receipt_device_token",
+                audit.action == device_token.DEVICE_ROTATE,
+            ).exists(),
+        ))
+        return [inbox_mod.device_entry(owner, token_id, name, added_at) for token_id, name, added_at in rows]
+
     def _evaluate_active_inbox(self, session, owner, evaluated_at, evaluation_date, *, use_cache, kinds=None):
         selected = set(inbox_mod.INBOX_KINDS) if kinds is None else kinds
         entries = []
         try:
+            if inbox_mod.KIND_DEVICE in selected:
+                entries.extend(self._inbox_device_entries(session, owner))
             if inbox_mod.KIND_CONSENT in selected:
                 entries.extend(self._inbox_consent_entries(session, owner, evaluated_at))
             if inbox_mod.KIND_MORTGAGE in selected:
