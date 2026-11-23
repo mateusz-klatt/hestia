@@ -39,9 +39,9 @@ _TIME = re.compile(r"(?<![0-9])((?:[01][0-9]|2[0-3]):[0-5][0-9])(?![0-9])", re.A
 _NIP = re.compile(r"\bNIP\s*:?\s*([0-9][0-9 -]{8,16}[0-9])\b", re.IGNORECASE | re.ASCII)
 # A candidate is digits and mask symbols on one line. Spaces, hyphens, dots and
 # commas stay inside it. A letter breaks it, as does a gap of two or more
-# characters that are not symbols or those separators. Detection does not skip
-# prices: a ``.00`` glued to a PAN stays in the digit stream. A window is left
-# alone only when every digit in it already belongs to a short price.
+# characters that are not symbols or those separators. Near a card label every
+# 13–19 Luhn window is a PAN, prices included. Elsewhere a PAN uses only spaces
+# and hyphens, so a window that crosses a decimal price is left intact.
 _PAN_NEWLINES = frozenset("\n\r\u2028\u2029")
 _PAN_DASHES = frozenset("-‐‑‒–—―")
 _PAN_MASKS = frozenset("*Xx•●#")
@@ -150,7 +150,7 @@ def _luhn(digits):
 
 
 def _money_ranges(text):
-    """ASCII ``\\d{1,6}[,.]\\d{2}`` spans. Neighbouring digits stay visible."""
+    """ASCII ``\\d{1,6}[,.]\\d{2,4}`` spans. Neighbouring digits stay visible."""
     found = []
     length = len(text)
     index = 0
@@ -169,7 +169,7 @@ def _money_ranges(text):
             while fraction < length and "0" <= text[fraction] <= "9":
                 frac_digits += 1
                 fraction += 1
-            if frac_digits == 2 and (fraction == length or not ("0" <= text[fraction] <= "9")):
+            if 2 <= frac_digits <= 4 and (fraction == length or not ("0" <= text[fraction] <= "9")):
                 found.append((index, fraction))
                 index = fraction
                 continue
@@ -237,43 +237,61 @@ def _mask_next_to_digits(symbols):
     return False
 
 
-def _flag_candidate(symbols, cover):
+def _window_is_plain(line, symbols):
+    """True when every separator in the window is a space or a hyphen."""
+    start = symbols[0][0] + 1
+    end = symbols[-1][0]
+    for index in range(start, end):
+        char = line[index]
+        if _pan_digit(char) is not None or char in _PAN_MASKS:
+            continue
+        if char in _PAN_DASHES or (char.isspace() and char not in _PAN_NEWLINES):
+            continue
+        return False
+    return True
+
+
+def _digits_are_prices(symbols, cover):
+    saw = False
+    for index, kind, _ in symbols:
+        if kind != "d":
+            continue
+        saw = True
+        if not cover[index]:
+            return False
+    return saw
+
+
+def _flag_candidate(line, symbols, cover, label_context):
     """Mark PAN symbols. Lengths 13–19 only, so the scan stays linear.
 
-    A mask sequence beside digits flags the whole candidate. Otherwise a
-    window is a PAN when its digits pass Luhn. A window whose digits all sit
-    inside short prices is not a PAN, which keeps ``12,99`` runs intact. A
-    price suffix on a real PAN does not cover the groups in front of it.
+    A mask sequence beside digits always flags the candidate. A Luhn window
+    does too. Away from a card label the window may contain only spaces and
+    hyphens: a decimal inside ``\\d{1,6}[,.]\\d{2,4}`` means the window is a
+    price. Beside a card label that exemption is off, so price-shaped groups
+    are still a PAN. The whole candidate is the secret, which keeps a ``.00``
+    suffix from leaving the last group visible.
     """
     count = len(symbols)
     if not count:
         return bytearray()
     if _mask_next_to_digits(symbols):
         return bytearray(b"\x01" * count)
-    has_digit = False
-    priced = True
-    for index, kind, _ in symbols:
-        if kind != "d":
-            continue
-        has_digit = True
-        if not cover[index]:
-            priced = False
-    if not has_digit or priced or count < 13:
+    if count < 13 or not any(kind == "d" for _, kind, _ in symbols):
         return bytearray(count)
-    flagged = bytearray(count)
+    # Each decimal price holds at most 10 digits, so a 13-symbol window in an
+    # all-price run always crosses a decimal. Skip the Luhn scan.
+    if not label_context and _digits_are_prices(symbols, cover):
+        return bytearray(count)
     for length in range(13, min(19, count) + 1):
-        last = count - length
-        for start in range(last + 1):
+        for start in range(count - length + 1):
             window = symbols[start:start + length]
-            if all(cover[index] for index, kind, _ in window if kind == "d") and any(
-                    kind == "d" for _, kind, _ in window):
+            if not label_context and not _window_is_plain(line, window):
                 continue
             digits = "".join(value for _, kind, value in window if kind == "d")
             if _luhn(digits):
-                # The whole candidate is the secret. A shorter Luhn hit must not
-                # leave the tail of the same card run in the clear.
                 return bytearray(b"\x01" * count)
-    return flagged
+    return bytearray(count)
 
 
 def _candidate_spans(symbols, flagged, money_ranges):
@@ -364,7 +382,7 @@ def _label_digit_spans(line):
     return spans
 
 
-def _line_secret_spans(line):
+def _line_secret_spans(line, label_context):
     symbols, candidates = _line_candidates(line)
     if not symbols:
         return []
@@ -375,7 +393,8 @@ def _line_secret_spans(line):
     spans = []
     for start, end in candidates:
         window = symbols[start:end]
-        spans.extend(_candidate_spans(window, _flag_candidate(window, cover), ranges))
+        flagged = _flag_candidate(line, window, cover, label_context)
+        spans.extend(_candidate_spans(window, flagged, ranges))
     return spans
 
 
@@ -442,7 +461,7 @@ def _pan_spans(text):
     spans = []
     offset = 0
     for number, line in enumerate(lines):
-        for start, end in _line_secret_spans(line):
+        for start, end in _line_secret_spans(line, label[number] or follow[number]):
             spans.append((offset + start, offset + end))
         if label[number] or follow[number]:
             for start, end in _label_digit_spans(line):

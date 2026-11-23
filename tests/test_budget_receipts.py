@@ -503,6 +503,11 @@ NR KARTY ****5555
             "NR\nKARTY ,41\n,111 ,1111": "NR\nKARTY ,[REDACTED]\n,[REDACTED] ,[REDACTED]",
             "KARTA\n1000 szt 3,49": "KARTA\n1000 szt 3,49",
             "1,2345 2,3456": "1,2345 2,3456",
+            "123.4567 246.9134": "123.4567 246.9134",
+            "CARD NUMBER\n4111.11 11.11 1111.11": "CARD NUMBER\n[REDACTED]",
+            "KARTA 4111 1111 1111 1111": "KARTA [REDACTED]",
+            "4111 1111 1111 1111": "[REDACTED]",
+            "41.11 1111.11 11.1111": "41.11 1111.11 11.1111",
         }
         for raw, expected in cases.items():
             with self.subTest(raw=raw):
@@ -519,6 +524,17 @@ NR KARTY ****5555
         self.assertEqual(parsed["lines"][0]["quantity"], "1000")
         self.assertEqual(parsed["lines"][0]["raw_unit"], "szt")
         self.assertEqual(parsed["lines"][0]["gross_line_total"], "3.49")
+        self.assertEqual(parsed["math_delta"], "0")
+        priced = (
+            "BIEDRONKA\nNIP 7791011327\n2026-11-30 12:34\n"
+            "MLEKO 1 x 123.4567 246.9134 A\nSUMA PLN 246.9134\n"
+        )
+        parsed = parse_receipt(priced)
+        self.assertIn("123.4567", parsed["raw_ocr_text"])
+        self.assertIn("246.9134", parsed["raw_ocr_text"])
+        self.assertEqual(parsed["lines"][0]["unit_price_raw"], "123.4567")
+        self.assertEqual(parsed["lines"][0]["gross_line_total"], "246.9134")
+        self.assertEqual(parsed["total_amount"], "246.9134")
         self.assertEqual(parsed["math_delta"], "0")
 
     def test_pan_scan_is_bounded_before_a_long_mask_run(self):
