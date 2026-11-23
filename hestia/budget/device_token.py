@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import base64
 from contextlib import contextmanager
+from datetime import datetime, timezone
 import hashlib
 import hmac
 import logging
@@ -21,9 +22,10 @@ import uuid
 from aiohttp import web
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
-from sqlalchemy import func, select, update
+from sqlalchemy import case, func, select, update
 from sqlalchemy.exc import IntegrityError
 
+from ..db import Audit
 from ..db import BudgetReceiptDeviceToken as DeviceToken
 from ..db import BudgetReceiptPairCode as PairCode
 from ..db import BudgetReceiptPairLock as PairLock
@@ -44,6 +46,7 @@ CONFIRM_PATH = PREFIX + "/confirm"
 LIST_RECEIPTS_PATH = PREFIX + "/list"
 SEARCH_PATH = PREFIX + "/search"
 DETAIL_PATH = PREFIX + "/detail"
+IMAGE_PATH = PREFIX + "/image"
 DELETE_PATH = PREFIX + "/delete"
 
 ALLOWED = frozenset({
@@ -52,6 +55,7 @@ ALLOWED = frozenset({
     ("POST", LIST_RECEIPTS_PATH),
     ("POST", SEARCH_PATH),
     ("GET", DETAIL_PATH),
+    ("GET", IMAGE_PATH),
     ("POST", DELETE_PATH),
     ("POST", REVOKE_PATH),
 })
@@ -67,12 +71,12 @@ PARSE_WINDOW = 60
 REDEEM_IP_LIMIT = 10
 REDEEM_GLOBAL_LIMIT = 30
 REDEEM_WINDOW = 60
-WINDOW = 60
 _MAX_BUCKETS = 4096
 _INSERT_ATTEMPTS = 3
 _CODE_LENGTH = 8
 _TOKEN_BYTES = 32
 _ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
+_CODE_TRANSLATION = str.maketrans("ILO", "110", " -")
 _CODE_DOMAIN = b"hestia/budget/receipts/pair-code/v1"
 _TOKEN_DOMAIN = b"hestia/budget/receipts/device-token/v1"
 _BLANK = "0" * 64
@@ -120,15 +124,17 @@ def _same(left, right):
 
 def _accepted(stored, digest):
     """Timing-safe HMAC check. A missing row is compared against a fixed blank digest."""
-    if not isinstance(stored, str) or len(stored) != 64 or not isinstance(digest, str) or len(digest) != 64:
-        return _same(_BLANK, _BLANK)
+    if stored is None:
+        _same(_BLANK, digest)
+        return False
     return _same(stored, digest)
 
 
 def ids_match(left, right):
-    if not isinstance(left, str) or not isinstance(right, str) or len(left) != len(right) or not left:
+    if (not isinstance(left, str) or not isinstance(right, str) or not left
+            or not left.isascii() or not right.isascii()):
         return False
-    return _same(left.encode("utf-8"), right.encode("utf-8"))
+    return _same(left, right)
 
 
 def _mac(secret, domain, value):
@@ -142,18 +148,12 @@ def _pairing_code():
 
 
 def normalize_code(value):
-    if not isinstance(value, str) or len(value) != _CODE_LENGTH:
+    if not isinstance(value, str) or not value.isascii():
         return None
-    folded = []
-    for char in value.upper():
-        if char in ("I", "L"):
-            char = "1"
-        elif char == "O":
-            char = "0"
-        if char not in _ALPHABET:
-            return None
-        folded.append(char)
-    return "".join(folded)
+    folded = value.upper().translate(_CODE_TRANSLATION)
+    if len(folded) != _CODE_LENGTH or any(char not in _ALPHABET for char in folded):
+        return None
+    return folded
 
 
 def _bearer_token(value):
@@ -191,24 +191,31 @@ def _bearer(headers):
 
 
 def _charge(keys, moment, window):
-    """Record one hit on each key. Return the largest wait, or None when every key is under its limit."""
+    """Reserve all quota for one request or return the largest required wait."""
     with _bucket_lock:
+        if len(_buckets) + len(keys) > _MAX_BUCKETS:
+            stale_after = max(REDEEM_WINDOW, PARSE_WINDOW)
+            for key, stamps in tuple(_buckets.items()):
+                if moment - stamps[-1] >= stale_after:
+                    del _buckets[key]
         waits = []
         updated = {}
+        available = _MAX_BUCKETS - len(_buckets)
         for key, limit in keys:
+            if key not in _buckets:
+                if available <= 0:
+                    waits.append(window)
+                    continue
+                available -= 1
             stamps = [stamp for stamp in _buckets.get(key, ()) if moment - stamp < window]
-            if key not in _buckets and len(_buckets) >= _MAX_BUCKETS:
-                waits.append(window)
-                continue
             if len(stamps) >= limit:
                 waits.append(max(1, math.ceil(window - (moment - stamps[0]))))
             else:
-                stamps = [*stamps, moment]
-            updated[key] = stamps
+                updated[key] = [*stamps, moment]
+        if waits:
+            return max(waits)
         _buckets.update(updated)
-        if not waits:
-            return None
-        return max(waits)
+        return None
 
 
 def redeem_limited(ip, moment):
@@ -235,20 +242,15 @@ def disabled_response():
     return json_error({"status": 404, "code": "budget_receipts_disabled"})
 
 
-def status_response(found):
-    code = {
-        "revoked": "device_token_revoked",
-        "expired": "device_token_expired",
-    }.get(found.get("status"), "device_token_invalid")
-    return json_error({"status": 401, "code": code})
-
-
 def revoke_owner_tokens(session, owner, moment=None):
-    """Revoke every live device token for ``owner`` inside the caller's transaction."""
+    """Invalidate the owner's device credentials and pending pairing codes together."""
     when = time.time() if moment is None else moment
     session.execute(update(DeviceToken).where(
         DeviceToken.owner == owner, DeviceToken.revoked_at.is_(None),
     ).values(revoked_at=when))
+    session.execute(update(PairCode).where(
+        PairCode.owner == owner, PairCode.consumed_at.is_(None),
+    ).values(consumed_at=when))
 
 
 def open_store(secret, clock=None):
@@ -292,6 +294,10 @@ def decide(method, path, headers, cookies, secret, moment):
     if auth.verify_session(token, now=moment, secret=secret) is not None:
         return {"action": "pass"}
     allow = (method, path) in ALLOWED
+    if _bearer_token(token) is None:
+        if allow:
+            return {"action": "response", "status": 401, "code": "device_token_invalid"}
+        return {"action": "pass"}
     try:
         found = open_store(secret, clock=lambda: moment).identify(token, slide=allow)
     except (BudgetUsersBackendRequired, BudgetConfigError):
@@ -307,11 +313,11 @@ def decide(method, path, headers, cookies, secret, moment):
         return {"action": "pass"}
     if not allow:
         return {"action": "response", "status": 403, "code": "budget_forbidden"}
-    if found.get("status") == "revoked":
+    if found.get("status") == "revoked" and path != REVOKE_PATH:
         return {"action": "response", "status": 401, "code": "device_token_revoked"}
     if found.get("status") == "expired":
         return {"action": "response", "status": 401, "code": "device_token_expired"}
-    if found.get("status") != "ok" or not found.get("owner") or not found.get("token_id"):
+    if found.get("status") not in ("ok", "revoked") or not found.get("owner") or not found.get("token_id"):
         return {"action": "response", "status": 401, "code": "device_token_invalid"}
     return {"action": "accept", "owner": found["owner"], "token_id": found["token_id"]}
 
@@ -364,6 +370,11 @@ class DeviceTokenStore:
         with self._transaction() as session:
             self._require_owner(session, owner)
             moment = self._moment()
+            lock = session.get(PairLock, owner)
+            if lock is not None and lock.locked:
+                session.execute(update(PairCode).where(
+                    PairCode.owner == owner, PairCode.consumed_at.is_(None),
+                ).values(consumed_at=moment))
             active = session.scalar(select(func.count()).select_from(PairCode).where(
                 PairCode.owner == owner, PairCode.consumed_at.is_(None), PairCode.expires_at > moment,
             ))
@@ -380,7 +391,6 @@ class DeviceTokenStore:
                 )
 
             row = _insert_unique(session, factory)
-            lock = session.get(PairLock, owner)
             if lock is None:
                 session.add(PairLock(owner=owner, failures=0, locked=0))
             else:
@@ -391,37 +401,34 @@ class DeviceTokenStore:
         return {"code": code, "expires_at": expires_at, "qr_payload": "hestia-pair:" + code}
 
     def redeem(self, code, device_name):
-        normalized = normalize_code(code)
-        if normalized is None:
-            _accepted(None, None)
-            return None
         name = _device_name(device_name)
-        digest = _mac(self.secret, _CODE_DOMAIN, normalized)
+        if name is None:
+            return None
+        digest = _mac(self.secret, _CODE_DOMAIN, normalize_code(code) or "")
         with self._transaction() as session:
-            row = session.scalar(select(PairCode).where(PairCode.code_hmac == digest))
-            if not _accepted(None if row is None else row.code_hmac, digest):
-                return None
-            if name is None:
-                return None
             moment = self._moment()
-            lock = session.get(PairLock, row.owner)
-            locked = lock is not None and int(lock.locked) == 1
-            usable = (not locked and row.consumed_at is None and row.expires_at > moment
-                      and self._owner_ok(session, row.owner))
-            if not usable:
-                self._fail(session, row.owner, lock)
+            row = session.scalar(select(PairCode).join(PairLock, PairCode.owner == PairLock.owner)
+                                 .join(User, PairCode.owner == User.username).where(
+                PairCode.code_hmac == digest, PairCode.consumed_at.is_(None), PairCode.expires_at > moment,
+                PairLock.locked == 0, User.role == "admin", User.disabled.is_(False),
+            ))
+            if not _accepted(None if row is None else row.code_hmac, digest):
+                self._fail_pending_pairings(session, moment)
                 return None
             row.consumed_at = moment
             token, token_id, expires_at = self._issue_token(session, row.owner, name, moment)
-        return {"token": token, "token_id": token_id, "scope": "receipts", "expires_at": expires_at}
+            expires_iso = datetime.fromtimestamp(expires_at, timezone.utc).isoformat(timespec="seconds")
+        return {"token": token, "token_id": token_id, "scope": "receipts",
+                "expires_at": expires_iso}
 
-    def _fail(self, session, owner, lock):
-        if lock is None:
-            session.add(PairLock(owner=owner, failures=1, locked=0))
-            return
-        lock.failures = int(lock.failures) + 1
-        if lock.failures >= LOCK_AFTER:
-            lock.locked = 1
+    def _fail_pending_pairings(self, session, moment):
+        # Redeem is anonymous. Every bad code charges the same pending owners so
+        # observing lockout cannot disclose whether a rejected code ever existed.
+        pending = select(PairCode.owner).where(PairCode.consumed_at.is_(None), PairCode.expires_at > moment)
+        failures = PairLock.failures + 1
+        session.execute(update(PairLock).where(PairLock.owner.in_(pending), PairLock.locked == 0).values(
+            failures=failures, locked=case((failures >= LOCK_AFTER, 1), else_=0),
+        ))
 
     def _issue_token(self, session, owner, name, moment):
         issued = {}
@@ -442,7 +449,7 @@ class DeviceTokenStore:
     def identify(self, token, *, slide):
         canonical = _bearer_token(token)
         if canonical is None:
-            _accepted(None, None)
+            _accepted(None, _BLANK)
             return {"status": "unknown"}
         digest = _mac(self.secret, _TOKEN_DOMAIN, canonical)
         with self._transaction() as session:
@@ -450,14 +457,14 @@ class DeviceTokenStore:
             if not _accepted(None if row is None else row.token_hmac, digest):
                 return {"status": "unknown"}
             if row.revoked_at is not None:
-                return {"status": "revoked", "token_id": row.id}
+                return {"status": "revoked", "owner": row.owner, "token_id": row.id}
             moment = self._moment()
             if not self._owner_ok(session, row.owner):
                 row.revoked_at = moment
-                return {"status": "revoked", "token_id": row.id}
-            if moment >= row.expires_at or moment >= row.hard_expires_at:
+                return {"status": "revoked", "owner": row.owner, "token_id": row.id}
+            if moment >= min(row.expires_at, row.hard_expires_at):
                 return {"status": "expired", "token_id": row.id}
-            if slide and moment - row.sliding_written_at >= SLIDE_WRITE_INTERVAL:
+            if slide and (row.last_used_at is None or moment - row.sliding_written_at >= SLIDE_WRITE_INTERVAL):
                 row.expires_at = min(moment + SLIDE_TTL, row.hard_expires_at)
                 row.last_used_at = moment
                 row.sliding_written_at = moment
@@ -491,5 +498,11 @@ class DeviceTokenStore:
                     raise DeviceTokenError(403, "budget_forbidden")
                 return {"ok": True}
             if row.revoked_at is None:
-                row.revoked_at = self._moment()
+                moment = self._moment()
+                if actor_token_id is not None:
+                    if moment >= min(row.expires_at, row.hard_expires_at):
+                        raise DeviceTokenError(401, "device_token_expired")
+                    session.add(Audit(ts=moment, actor="device:" + token_id,
+                                      action="receipt_device_revoke", target=token_id, result="ok"))
+                row.revoked_at = moment
             return {"ok": True}

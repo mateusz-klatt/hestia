@@ -302,10 +302,12 @@ async def _auth_middleware(request, handler):
     from .budget import device_token
     if device_token.receipts_path(request.path) and not device_token.receipts_enabled():
         return device_token.disabled_response()
-    if _AUTH_ENABLED and device_token.receipts_enabled():
-        decision = device_token.decide(
+    authorization = request.headers.get("Authorization", "")
+    if _AUTH_ENABLED and "Authorization" in request.headers:
+        decision = await asyncio.to_thread(
+            device_token.decide,
             request.method, request.path, request.headers, request.cookies, _SESSION_SECRET,
-            device_token.now(),
+            _now(),
         )
         if decision["action"] == "response":
             return device_token.json_error(decision)
@@ -314,6 +316,11 @@ async def _auth_middleware(request, handler):
             request[_USER_KEY] = decision["owner"]
             request[_ROLE_KEY] = _ADMIN
             return await handler(request)
+        if (request.path.startswith("/api/budget/")
+                and request.path != device_token.REDEEM_PATH
+                and authorization.startswith(_BEARER_PREFIX)
+                and auth.verify_session(authorization[len(_BEARER_PREFIX):], now=_now(), secret=_SESSION_SECRET)):
+            return device_token.json_error({"status": 403, "code": "budget_browser_session_required"})
     if not _AUTH_ENABLED or _is_public_route(request.method, request.path):
         return await handler(request)
     user = auth.verify_session(_request_token(request), now=_now(), secret=_SESSION_SECRET)

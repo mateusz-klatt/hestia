@@ -57,7 +57,7 @@ class OpenApiArtifactTests(unittest.TestCase):
 
     def test_monthly_budget_contract_chain_from_0_27_0(self):
         """0.39.0 adds receipts device tokens on top of 0.36.0 receipts, which sit on 0.35.0.
-        Earlier steps stay as published. 0.39.0 and migration 0023 are temporary numbers."""
+        Earlier steps stay as published."""
         document = api_contract.build_openapi()
         self.assertEqual(document["info"]["version"], "0.39.0")
         for path in [path for path in document["paths"] if path.startswith("/api/budget/receipts/")]:

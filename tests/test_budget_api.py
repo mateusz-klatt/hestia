@@ -126,7 +126,7 @@ class BudgetAPITests(unittest.IsolatedAsyncioTestCase):
                 self.assertNotIn(self.bob_id, text)
                 self.assertNotIn("Bob private description", text)
             bearer = await self.get("connections", headers=self.headers(bearer=True))
-            self.assertEqual(bearer.status, 200)
+            self.assertEqual(bearer.status, 403)
         credentials.assert_not_called()
         http.assert_not_called()
         audit.assert_not_called()

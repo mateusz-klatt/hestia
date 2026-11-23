@@ -224,9 +224,15 @@ class BudgetOpenApiTests(unittest.TestCase):
                 expected = "public" if name == "redeem" else "admin"
                 self.assertEqual(methods["post"]["x-required-role"], expected)
                 self.assertIn("requestBody", methods["post"])
-                self.assertIn("Content-Length", methods["post"]["responses"]["411"]["description"])
-                self.assertIn("application/json", methods["post"]["responses"]["415"]["description"])
-                self.assertIn("bytes", methods["post"]["responses"]["413"]["description"])
+                responses = methods["post"]["responses"]
+                if name == "redeem":
+                    self.assertNotIn("415", responses)
+                    self.assertIn("device_token_rejected", responses["400"]["description"])
+                    self.assertIn("Retry-After", responses["429"]["description"])
+                else:
+                    self.assertIn("Content-Length", responses["411"]["description"])
+                    self.assertIn("application/json", responses["415"]["description"])
+                    self.assertIn("bytes", responses["413"]["description"])
                 continue
             method = "get" if name in ("detail", "image") else "post"
             self.assertEqual(set(methods), {method})
@@ -252,6 +258,12 @@ class BudgetOpenApiTests(unittest.TestCase):
         self.assertIn("131072", receipts["/api/budget/receipts/confirm"]["post"]["responses"]["413"]["description"])
         self.assertIn("16384", receipts["/api/budget/receipts/list"]["post"]["responses"]["413"]["description"])
         self.assertEqual(document["info"]["version"], "0.39.0")
+        receipt_schemas = document["components"]["schemas"]
+        self.assertEqual(receipt_schemas["BudgetReceiptDeviceRedeemResult"]["properties"]["expires_at"]["format"],
+                         "date-time")
+        source_kind = receipt_schemas["BudgetReceiptParseTextRequest"]["properties"]["source_kind"]
+        self.assertEqual(source_kind["enum"], ["paste", "local_ocr"])
+        self.assertEqual(source_kind["default"], "paste")
         detail = receipts["/api/budget/receipts/detail"]["get"]
         self.assertNotIn("raw text", detail["summary"])
         confirm = receipts["/api/budget/receipts/confirm"]["post"]
