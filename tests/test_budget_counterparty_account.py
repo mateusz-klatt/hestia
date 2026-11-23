@@ -164,6 +164,12 @@ class CounterpartyAccountProjectionTests(ProjectionCase):
             self.candidate(field="counterparty_account", operator="equals", value="not-an-iban"),
             self.candidate(field="counterparty_account", operator="equals", value="PL** … 1234",
                            counterparty_account_key="A" * 64),
+            self.candidate(field="counterparty_account", operator="equals",
+                           value=counterparty_rule_from_identification(SYNTHETIC_IBAN, SECRET),
+                           counterparty_account_key="0" * 64),
+            self.candidate(field="counterparty_account", operator="equals",
+                           value=counterparty_rule_from_identification(SYNTHETIC_IBAN, SECRET),
+                           counterparty_account_key=123),
             self.candidate(field="description", counterparty_account_key="a" * 64),
         )
         for candidate in invalid:

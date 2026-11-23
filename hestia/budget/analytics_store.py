@@ -525,7 +525,7 @@ class BudgetAnalyticsStore(BudgetHTTPStore):
             else:
                 value["value"] = counterparty_rule_from_identification(raw, self._cursor_secret)
         else:
-            if "counterparty_account_key" in value:
+            if value.pop("counterparty_account_key", None) is not None:
                 raise AnalyticsError()
             value["value"] = _text(value["value"], 256)
         row = None if value["rule_id"] is None else self._owned(session, Rule, owner, value["rule_id"])

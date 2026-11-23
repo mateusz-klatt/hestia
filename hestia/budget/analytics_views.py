@@ -2,7 +2,8 @@
 
 The same snapshot digest fences rule previews and encrypted pagination. Transfer
 matching always precedes period filtering; only current, accepted pairs affect
-totals. No configuration, provider, file, secret or acquisition operation runs here.
+totals. No configuration, provider, file, credential-loading or acquisition operation runs here.
+Counterparty digests use only the cursor secret already supplied to the store.
 
 Reads memoise the projection in process memory under a digest of every source row it
 can depend on, so any committed change yields a new key and nothing is ever invalidated

@@ -282,9 +282,9 @@ class MemoTests(CacheCase):
     def test_concurrent_readers_of_one_state_share_one_projection(self):
         original = views.projection_snapshot
 
-        def slow(session, owner):
+        def slow(session, owner, **kwargs):
             time.sleep(0.05)
-            return original(session, owner)
+            return original(session, owner, **kwargs)
 
         barrier, results, errors = threading.Barrier(3), {}, []
 
@@ -387,10 +387,10 @@ class SnapshotAndClockTests(CacheCase):
         entered, release, results = threading.Event(), threading.Event(), {}
         original = views.projection_snapshot
 
-        def held(session, owner):
+        def held(session, owner, **kwargs):
             entered.set()
             self.assertTrue(release.wait(10))
-            return original(session, owner)
+            return original(session, owner, **kwargs)
 
         def read():
             results["read"] = self.store.overview("owner", "2026")
