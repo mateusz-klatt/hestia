@@ -1,11 +1,12 @@
 """Synthetic counterparty-account rules; no real bank identifiers."""
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import json
 import unittest
 from unittest import mock
 
-from hestia import db
+from hestia import api_contract, db
 from hestia.budget import analytics_views
 from hestia.budget.analytics_core import (AnalyticsError, canonical_counterparty_account, compile_rules, counterparty_account_evidence,
     counterparty_account_key, counterparty_key_id, counterparty_rule_from_identification, counterparty_rule_parts,
@@ -113,10 +114,30 @@ class CounterpartyAccountCoreTests(unittest.TestCase):
         self.assertIs(first_matching_rule(compiled, debit, match_texts(debit, debit_metadata, account_secret=SECRET, owner="owner")), rule)
         with self.assertRaises(AnalyticsError):
             rule_matches(rule | {"operator": "contains"}, debit, debit_metadata, account_secret=SECRET, owner="owner")
-        with self.assertRaises(AnalyticsError) as missing_secret:
-            rule_matches(rule, debit, debit_metadata)
-        self.assertEqual((missing_secret.exception.code, missing_secret.exception.status),
-                         ("budget_analytics_rule_key_unavailable", 400))
+        self.assertFalse(rule_matches(rule, debit, debit_metadata))
+
+    def test_unavailable_or_rotated_key_does_not_match_and_scanning_continues(self):
+        account = account_rule()
+        description = {"enabled": True, "kind": "expense", "field": "description", "operator": "contains",
+                       "value": "shop", "id": "description"}
+        debit = payload()
+        metadata = {"creditor_accounts": [identity(SYNTHETIC_IBAN)]}
+        compiled, safe = compile_rules([account, description])
+        self.assertTrue(safe)
+        missing = match_texts(debit, metadata)
+        self.assertIsNone(missing["counterparty_account"])
+        self.assertIs(first_matching_rule(compiled, debit, missing), description)
+        self.assertFalse(rule_matches(account, debit, metadata))
+        rotated_secret = b"another-synthetic-persistent-key-32b"
+        rotated = match_texts(debit, metadata, account_secret=rotated_secret, owner="owner")
+        self.assertIs(first_matching_rule(compiled, debit, rotated), description)
+        self.assertFalse(rule_matches(account, debit, metadata, account_secret=rotated_secret, owner="owner"))
+        stored_key = counterparty_rule_parts(account["value"])[1]
+        forged = dict(rotated)
+        forged["counterparty_account"] = ("f" * 16, frozenset({stored_key}))
+        self.assertIs(first_matching_rule(compiled, debit, forged), description)
+        present = match_texts(debit, metadata, account_secret=SECRET, owner="owner")
+        self.assertIs(first_matching_rule(compiled, debit, present), account)
 
     def test_matching_uses_any_valid_account_and_ignores_non_iban_like_identifiers(self):
         metadata = {"creditor_accounts": [identity("x"), identity(OTHER_IBAN), identity(SYNTHETIC_IBAN)]}
@@ -266,11 +287,119 @@ class CounterpartyAccountProjectionTests(ProjectionCase):
             self.store.save_rule("owner", stale["preview_id"])
         self.assertEqual((stale_save.exception.code, stale_save.exception.status),
                          ("budget_analytics_stale_preview", 409))
-        with self.assertRaises(AnalyticsError) as mismatched:
-            self.store.transactions("owner", "2026")
-        self.assertEqual((mismatched.exception.code, mismatched.exception.status),
-                         ("budget_analytics_rule_key_unavailable", 400))
+        body = self.store.transactions("owner", "2026")
+        self.assertEqual(body["transactions"][0]["effective"]["source"], "default")
+        self.assertIsNone(body["transactions"][0]["effective"]["rule_id"])
+        self.assertEqual(self.store.rules("owner")[0]["inactive_reason"], "rule_key_rotated")
+        self.assertEqual(self.store.overview("owner", "2026")["period"], "2026")
+        self.assertIn("period", self.store.monthly_budget("owner"))
         self.assertEqual(saved["value"], "PL** … 1234")
+
+    def test_missing_or_rotated_key_degrades_only_account_rules(self):
+        when = datetime(2026, 11, 30, 12, tzinfo=timezone.utc).timestamp()
+        for reference, remittance in (
+                ("by-description", ["marker only"]), ("by-name", ["plain text"]), ("by-mcc", ["plain text"]),
+                ("by-account", ["plain text"]), ("both", ["marker transfer"])):
+            self.add_transaction("a", reference, remittance_information=remittance, booking_date="2026-11-15")
+        self.metadata("a", "by-name", {"creditor_name": "Synthetic Counterparty"})
+        self.metadata("a", "by-mcc", {"mcc": "5411"})
+        self.metadata("a", "by-account", {"creditor_accounts": [identity(SYNTHETIC_IBAN)]})
+        self.metadata("a", "both", {"creditor_accounts": [identity(SYNTHETIC_IBAN)]})
+        description_category = self.store.create_category("owner", "Synthetic Description")["id"]
+        name_category = self.store.create_category("owner", "Synthetic Name")["id"]
+        mcc_category = self.store.create_category("owner", "Synthetic Mcc")["id"]
+        account_category = self.store.create_category("owner", "Synthetic Account")["id"]
+
+        def save(**changes):
+            preview = self.store.preview_rule("owner", self.candidate(**changes))
+            saved = self.store.save_rule("owner", preview["preview_id"])
+            self.assertNotIn("inactive_reason", saved)
+            return saved
+
+        account = save(field="counterparty_account", operator="equals", value=SYNTHETIC_IBAN,
+                       category_id=account_category, kind="expense", priority=1)
+        description = save(field="description", operator="contains", value="marker",
+                           category_id=description_category, kind="expense", priority=20)
+        name = save(field="counterparty_name", operator="equals", value="Synthetic Counterparty",
+                    category_id=name_category, kind="expense", priority=30)
+        mcc = save(field="mcc", operator="equals", value="5411", category_id=mcc_category, kind="expense", priority=40)
+        self.assertTrue(all("inactive_reason" not in row for row in self.store.rules("owner")))
+        with_key = {row["entry_reference"]: row["effective"]["rule_id"]
+                    for row in self.store.transactions("owner", "2026-11")["transactions"]}
+        self.assertEqual(with_key["by-account"], account["id"])
+        self.assertEqual(with_key["both"], account["id"])
+        self.assertEqual(with_key["by-description"], description["id"])
+        self.assertEqual(with_key["by-name"], name["id"])
+        self.assertEqual(with_key["by-mcc"], mcc["id"])
+
+        def open_views(path):
+            return analytics_views.BudgetAnalyticsViews(
+                self.sessions, clock=lambda: when, cursor_secret=b"synthetic-only", rule_key_file=str(path))
+
+        def assert_degraded(store, reason):
+            overview = store.overview("owner", "2026-11")
+            transactions = store.transactions("owner", "2026-11")
+            budget = store.monthly_budget("owner", period="2026-11")
+            forecast = store.forecast("owner", months="1")
+            api_contract.BudgetAnalyticsOverview.model_validate(overview)
+            api_contract.BudgetAnalyticsTransactions.model_validate(transactions)
+            api_contract.BudgetAnalyticsMonthlyBudget.model_validate(budget)
+            api_contract.BudgetAnalyticsForecast.model_validate(forecast)
+            self.assertEqual((overview["period"], budget["period"], forecast["horizon_months"]), ("2026-11", "2026-11", 1))
+            by_ref = {row["entry_reference"]: row["effective"] for row in transactions["transactions"]}
+            self.assertEqual(by_ref["by-description"]["rule_id"], description["id"])
+            self.assertEqual(by_ref["by-name"]["rule_id"], name["id"])
+            self.assertEqual(by_ref["by-mcc"]["rule_id"], mcc["id"])
+            self.assertEqual(by_ref["both"]["rule_id"], description["id"])
+            self.assertEqual((by_ref["by-account"]["source"], by_ref["by-account"]["rule_id"]), ("default", None))
+            self.assertEqual({row["category_id"] for row in overview["categories"]},
+                             {description_category, name_category, mcc_category, None})
+            listed = store.rules("owner")
+            api_contract.BudgetAnalyticsRules.model_validate({"rules": listed})
+            self.assertNotIn(SYNTHETIC_IBAN, json.dumps(listed))
+            rows = {row["id"]: row for row in listed}
+            self.assertEqual(rows[account["id"]]["inactive_reason"], reason)
+            self.assertTrue(rows[account["id"]]["enabled"])
+            for saved_rule in (description, name, mcc):
+                self.assertNotIn("inactive_reason", rows[saved_rule["id"]])
+            return listed
+
+        missing = open_views(self.path.parent / "missing-rule.key")
+        assert_degraded(missing, "rule_key_unavailable")
+        with self.assertRaises(AnalyticsError) as unavailable:
+            missing.preview_rule("owner", self.candidate(field="counterparty_account", operator="equals",
+                                                         value=SYNTHETIC_IBAN, category_id=account_category,
+                                                         kind="expense", priority=2))
+        self.assertEqual((unavailable.exception.code, unavailable.exception.status),
+                         ("budget_analytics_rule_key_unavailable", 400))
+        other = missing.preview_rule("owner", self.candidate(field="description", operator="contains", value="marker",
+                                                            category_id=description_category, kind="expense",
+                                                            priority=80))
+        self.assertIn("preview_id", other)
+
+        rotated_path = self.path.parent / "rotated-rule.key"
+        rotated_path.write_bytes(b"another-synthetic-persistent-key-32b")
+        rotated_path.chmod(0o400)
+        rotated = open_views(rotated_path)
+        assert_degraded(rotated, "rule_key_rotated")
+        preview = rotated.preview_rule("owner", self.candidate(
+            field="counterparty_account", operator="equals", value=SYNTHETIC_IBAN, category_id=account_category,
+            kind="expense", priority=2))
+        self.assertEqual(preview["affected_count"], 2)
+        created = rotated.save_rule("owner", preview["preview_id"])
+        self.assertNotIn("inactive_reason", created)
+        fresh = {row["entry_reference"]: row["effective"]["rule_id"]
+                 for row in rotated.transactions("owner", "2026-11")["transactions"]}
+        self.assertEqual(fresh["by-account"], created["id"])
+        self.assertEqual(fresh["both"], created["id"])
+        self.assertEqual(fresh["by-description"], description["id"])
+        self.assertEqual(fresh["by-name"], name["id"])
+        self.assertEqual(fresh["by-mcc"], mcc["id"])
+        listed = {row["id"]: row for row in rotated.rules("owner")}
+        self.assertEqual(listed[account["id"]]["inactive_reason"], "rule_key_rotated")
+        self.assertNotIn("inactive_reason", listed[created["id"]])
+        self.assertEqual({row["category_id"] for row in rotated.overview("owner", "2026-11")["categories"]},
+                         {description_category, name_category, mcc_category, account_category})
 
     def test_classify_false_skips_evidence_and_fallbacks_use_dedicated_context(self):
         self.add_transaction("a", "debit")

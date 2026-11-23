@@ -3025,6 +3025,11 @@ export interface components {
             field: string;
             /** Id */
             id: string;
+            /**
+             * Inactive Reason
+             * @description Set when a counterparty-account rule cannot match because its key is missing or was rotated.
+             */
+            inactive_reason?: ("rule_key_unavailable" | "rule_key_rotated") | null;
             /** Kind */
             kind: string;
             /** Operator */
@@ -3132,6 +3137,11 @@ export interface components {
             field: string;
             /** Id */
             id: string;
+            /**
+             * Inactive Reason
+             * @description Set when a counterparty-account rule cannot match because its key is missing or was rotated.
+             */
+            inactive_reason?: ("rule_key_unavailable" | "rule_key_rotated") | null;
             /** Kind */
             kind: string;
             /** Operator */

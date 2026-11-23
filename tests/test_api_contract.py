@@ -59,6 +59,12 @@ class OpenApiArtifactTests(unittest.TestCase):
         """0.38.0 adds counterparty accounts on top of the published contract chain."""
         document = api_contract.build_openapi()
         self.assertEqual(document["info"]["version"], "0.38.0")
+        for name in ("BudgetAnalyticsRule", "BudgetAnalyticsRuleSaved"):
+            schema = document["components"]["schemas"][name]
+            self.assertNotIn("inactive_reason", schema["required"])
+            reason = schema["properties"].pop("inactive_reason")
+            enums = [item for arm in reason.get("anyOf", [reason]) for item in arm.get("enum", [])]
+            self.assertEqual(enums, ["rule_key_unavailable", "rule_key_rotated"])
         for schema, field in (
             ("BudgetAnalyticsRulePreviewRequest", "counterparty_account_key"),
             ("BudgetAnalyticsRule", "counterparty_account_key"),

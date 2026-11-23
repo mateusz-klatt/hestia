@@ -192,6 +192,24 @@ describe("categories", () => {
 });
 
 describe("rules", () => {
+  it("shows a Polish note when an account rule key is missing or rotated", async () => {
+    const api = fakeApi();
+    api.rules.mockImplementation(() => ok({ rules: [
+      { ...rule, id: "plain", field: "description", operator: "contains", value: "Synthetic Shop", enabled: true },
+      { ...rule, id: "missing", field: "counterparty_account", operator: "equals", value: "PL** … 1234", enabled: true,
+        inactive_reason: "rule_key_unavailable" },
+      { ...rule, id: "rotated", field: "counterparty_account", operator: "equals", value: "PL** … 5678", enabled: true,
+        inactive_reason: "rule_key_rotated" },
+    ] }));
+    await show(api, { text: rulesLabels.pl, locale: "pl" });
+    const panel = section("Reguły");
+    expect(panel.textContent).toContain("Nieaktywna: brak klucza");
+    expect(panel.textContent).toContain("Nieaktywna: zmieniony klucz – utwórz regułę ponownie");
+    expect(panel.textContent.match(/Nieaktywna/g)).toHaveLength(2);
+    expect(rulesLabels.en.inactiveKeyMissing).toBe("Inactive: missing key");
+    expect(rulesLabels.en.inactiveKeyRotated).toBe("Inactive: key changed – create the rule again");
+  });
+
   it("describes each rule and says manual choices win", async () => {
     await show(fakeApi());
     const panel = section("Rules");

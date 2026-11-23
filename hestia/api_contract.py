@@ -91,6 +91,7 @@ from pydantic.json_schema import models_json_schema
 # 0.35.0: additive one-off label on a budget annotation (migration 0021, down_revision 0020).
 #         Charts and category summaries can report that label as its own entry.
 # 0.38.0: counterparty-account rules store keyed digests and masked display values (zero migration).
+#         Optional inactive_reason on a rule when that key is missing or rotated (additive).
 CONTRACT_VERSION = "0.38.0"
 OPENAPI_PATH = Path(__file__).resolve().parent.parent / "docs" / "api" / "openapi.json"
 
@@ -1682,6 +1683,13 @@ class BudgetAnalyticsRule(BaseModel):
     operator: str
     value: str
     counterparty_account_key: Annotated[str | None, Field(pattern=r"^[0-9a-f]{64}$", json_schema_extra=_OMIT)] = None
+    inactive_reason: Annotated[
+        Literal["rule_key_unavailable", "rule_key_rotated"] | None,
+        Field(
+            description="Set when a counterparty-account rule cannot match because its key is missing or was rotated.",
+            json_schema_extra=_OMIT,
+        ),
+    ] = None
     category_id: str | None
     kind: str
     priority: int

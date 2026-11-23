@@ -4460,6 +4460,22 @@
             "title": "Id",
             "type": "string"
           },
+          "inactive_reason": {
+            "anyOf": [
+              {
+                "enum": [
+                  "rule_key_unavailable",
+                  "rule_key_rotated"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Set when a counterparty-account rule cannot match because its key is missing or was rotated.",
+            "title": "Inactive Reason"
+          },
           "kind": {
             "title": "Kind",
             "type": "string"
@@ -4759,6 +4775,22 @@
           "id": {
             "title": "Id",
             "type": "string"
+          },
+          "inactive_reason": {
+            "anyOf": [
+              {
+                "enum": [
+                  "rule_key_unavailable",
+                  "rule_key_rotated"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Set when a counterparty-account rule cannot match because its key is missing or was rotated.",
+            "title": "Inactive Reason"
           },
           "kind": {
             "title": "Kind",

@@ -422,8 +422,10 @@ def _rule_value_matches(field, operator, needle, text):
     if field == "counterparty_account":
         if operator != "equals" or needle is None:
             raise AnalyticsError()
+        # No usable key, or the stored key id is not the current one: do not match and do not
+        # abort the scan. The digest is compared only under the key id that produced it.
         if text is None or text[0] != needle[0]:
-            raise AnalyticsError("budget_analytics_rule_key_unavailable", 400)
+            return False
         return needle[1] in text[1]
     return needle == text if operator == "equals" else needle in text
 

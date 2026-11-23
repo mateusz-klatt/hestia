@@ -23,7 +23,10 @@ export const rulesLabels = {
     operators: { contains: "contains", equals: "equals" },
     category: "Category", keep: "No category change", kind: "Type",
     kinds: { auto: "No type change", expense: "Expense", income: "Income", refund: "Refund", excluded: "Leave out of the budget" },
-    priority: "Priority", enabled: "Enabled", disabled: "disabled", preview: "Preview", back: "Change the rule",
+    priority: "Priority", enabled: "Enabled", disabled: "disabled",
+    inactiveKeyMissing: "Inactive: missing key",
+    inactiveKeyRotated: "Inactive: key changed – create the rule again",
+    preview: "Preview", back: "Change the rule",
     saveRule: "Save rule", affects: (count: number) => `This rule would apply to ${String(count)} entries, for example:`,
     reference: "entry", account: "Account",
     nothingToDo: "Choose a category or a type for the rule.",
@@ -42,7 +45,10 @@ export const rulesLabels = {
     operators: { contains: "zawiera", equals: "równa się" },
     category: "Kategoria", keep: "Bez zmiany kategorii", kind: "Rodzaj",
     kinds: { auto: "Bez zmiany rodzaju", expense: "Wydatek", income: "Wpływ", refund: "Zwrot", excluded: "Pomiń w budżecie" },
-    priority: "Priorytet", enabled: "Włączona", disabled: "wyłączona", preview: "Podgląd", back: "Popraw regułę",
+    priority: "Priorytet", enabled: "Włączona", disabled: "wyłączona",
+    inactiveKeyMissing: "Nieaktywna: brak klucza",
+    inactiveKeyRotated: "Nieaktywna: zmieniony klucz – utwórz regułę ponownie",
+    preview: "Podgląd", back: "Popraw regułę",
     saveRule: "Zapisz regułę", affects: (count: number) => `Reguła obejmie pozycji: ${String(count)}, na przykład:`,
     reference: "pozycja", account: "Konto",
     nothingToDo: "Wybierz kategorię albo rodzaj dla reguły.",
@@ -115,6 +121,12 @@ export function CategoriesView({ api, accounts, connections = [], text, locale =
 type Run = <T>(action: () => Promise<BudgetResult<T>>) => Promise<BudgetResult<T> | null>;
 
 const PREVIEW_GONE: ReadonlySet<string> = new Set([ANALYTICS_ERROR.previewExpired, ANALYTICS_ERROR.stalePreview]);
+
+function inactiveKeyNote(text: RulesLabels, reason: string | null | undefined): string | null {
+  if (reason === "rule_key_unavailable") return text.inactiveKeyMissing;
+  if (reason === "rule_key_rotated") return text.inactiveKeyRotated;
+  return null;
+}
 
 function failure(text: RulesLabels, error: string): string {
   if (RELOAD_ERRORS.has(error)) return text.conflict;
@@ -340,6 +352,7 @@ function RulesPanel({ rules, categories, accounts, connections, api, run, text, 
         <ul className="budget-entry-list">
           {rules.map((rule) => {
             const ruleCategory = categoryName(rule.category_id);
+            const keyNote = inactiveKeyNote(text, rule.inactive_reason);
             return (
               <li key={rule.id} className="budget-entry budget-rule">
                 <div className="budget-entry-facts">
@@ -351,6 +364,7 @@ function RulesPanel({ rules, categories, accounts, connections, api, run, text, 
                   {rule.kind === "auto" ? null : <span className="budget-chip">{labelOf(text.kinds, rule.kind)}</span>}
                   <span>{text.priority} {rule.priority}</span>
                   {rule.enabled ? null : <span className="budget-warn">{text.disabled}</span>}
+                  {keyNote === null ? null : <span className="budget-muted">{keyNote}</span>}
                   <button type="button" disabled={busy || editing !== null} onClick={() => { open(rule); }}>{text.edit}</button>
                 </div>
               </li>

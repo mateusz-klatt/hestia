@@ -42,6 +42,7 @@ _RULE_FIELDS = frozenset({"rule_id", "expected_version", "field", "operator", "v
 _CATEGORY_FIELDS = ("id", "name", "archived", "version", "created_at", "updated_at", "parent_id")
 _MAX_CATEGORY_DEPTH = 3
 _UNSET = object()
+_RULE_KEY_UNCHECKED = object()
 _CATEGORY_LIMIT_FIELDS = ("id", "category_id", "currency", "monthly_limit", "warning_percent", "enabled",
                           "version", "created_at", "updated_at")
 _MORTGAGE_SCHEDULE_FIELDS = ("id", "label", "amount", "currency", "due_day", "start_date", "end_date",
@@ -60,15 +61,28 @@ def _dict(row, fields):
     return {key: getattr(row, key) for key in fields}
 
 
-def _rule_wire(row):
+def _account_rule_inactive_reason(stored_key_id, key_context):
+    """``key_context`` is ``None`` when the rule key is missing or unsafe, else ``(secret, key id)``."""
+    if key_context is None:
+        return "rule_key_unavailable"
+    if key_context[1] != stored_key_id:
+        return "rule_key_rotated"
+    return None
+
+
+def _rule_wire(row, *, key_context=_RULE_KEY_UNCHECKED):
     result = _dict(row, _RULE_OUTPUT)
     if result["field"] == "counterparty_account":
         try:
-            _key_id, key, masked = counterparty_rule_parts(result["value"])
+            key_id, key, masked = counterparty_rule_parts(result["value"])
         except AnalyticsError:
             raise AnalyticsError("budget_analytics_data_error", 500) from None
         result["value"] = masked
         result["counterparty_account_key"] = key
+        if key_context is not _RULE_KEY_UNCHECKED:
+            reason = _account_rule_inactive_reason(key_id, key_context)
+            if reason is not None:
+                result["inactive_reason"] = reason
     return result
 
 
@@ -517,9 +531,11 @@ class BudgetAnalyticsStore(BudgetHTTPStore):
             return {**result, "changed": True}
 
     def rules(self, owner):
+        key_context = self._rule_key_context(required=False)
         with self._read(owner) as session:
-            return [_rule_wire(row) for row in session.scalars(select(Rule).where(Rule.owner == owner)
-                                                               .order_by(Rule.priority, Rule.id))]
+            return [_rule_wire(row, key_context=key_context)
+                    for row in session.scalars(select(Rule).where(Rule.owner == owner)
+                                              .order_by(Rule.priority, Rule.id))]
 
     def _counterparty_mask(self, session, owner, key):
         if not isinstance(key, str) or _HASH.fullmatch(key) is None:
