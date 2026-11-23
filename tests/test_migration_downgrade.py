@@ -6,9 +6,21 @@ import tempfile
 import unittest
 
 from alembic.autogenerate import compare_metadata
+from alembic.config import Config
 from alembic.runtime.migration import MigrationContext
+from alembic.script import ScriptDirectory
 
 from hestia import db
+
+
+def _head_revision():
+    cfg = Config()
+    cfg.set_main_option("script_location", str(db._MIGRATIONS_DIR))
+    (head,) = ScriptDirectory.from_config(cfg).get_heads()
+    return int(head)
+
+
+HEAD = _head_revision()
 
 
 # Creation revision, table, and durable fields (columns intentionally removed by
@@ -88,7 +100,7 @@ class MigrationDowngradeTests(unittest.TestCase):
                     columns = ", ".join(f'"{column}"' for column in values)
                     rows = connection.execute(f'SELECT {columns} FROM "{table}"').fetchall()
                     expected = [tuple(values.values())] if created <= surviving_revision else []
-                    if table == "budget_analytics_audit" and surviving_revision == 22:
+                    if table == "budget_analytics_audit" and surviving_revision >= 22:
                         expected.append(("alice", "receipt", "receipt", "confirm", "null", "{}", 1))
                     self.assertCountEqual(rows, expected)
             user_columns = {row[1] for row in connection.execute("PRAGMA table_info(users)")}
@@ -105,13 +117,13 @@ class MigrationDowngradeTests(unittest.TestCase):
                 self.assertEqual("label" in annotation_columns, revision >= 21)
 
     def test_populated_head_downgrades_stepwise_to_0001_and_upgrades_again(self):
-        self._assert_database(22)
-        for revision in range(21, 0, -1):
+        self._assert_database(HEAD)
+        for revision in range(HEAD - 1, 0, -1):
             with self.subTest(revision=revision):
                 db.downgrade_db(self.path, f"{revision:04d}")
                 self._assert_database(revision)
         db.init_db(self.path)
-        self._assert_database(22, surviving_revision=1)
+        self._assert_database(HEAD, surviving_revision=1)
 
     def _leave_batch_table(self, table):
         with closing(sqlite3.connect(self.path)) as connection:
@@ -128,7 +140,7 @@ class MigrationDowngradeTests(unittest.TestCase):
         self._leave_batch_table("budget_categories")
         self._leave_batch_table("budget_annotations")
         engine, _ = db.init_db(self.path)
-        self._assert_database(22, surviving_revision=19)
+        self._assert_database(HEAD, surviving_revision=19)
         with engine.connect() as connection:
             self.assertIsNone(connection.exec_driver_sql("SELECT label FROM budget_annotations").scalar())
             self.assertEqual(compare_metadata(MigrationContext.configure(connection), db.metadata), [])

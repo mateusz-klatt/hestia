@@ -15,8 +15,10 @@ from pathlib import Path
 from unittest import mock
 
 from alembic import command
+from alembic.config import Config
 from alembic.autogenerate import compare_metadata
 from alembic.runtime.migration import MigrationContext
+from alembic.script import ScriptDirectory
 from sqlalchemy import inspect
 from sqlalchemy.dialects.sqlite.pysqlite import SQLiteDialect_pysqlite
 from sqlalchemy.exc import IntegrityError, OperationalError
@@ -25,6 +27,13 @@ from hestia import db
 
 ALL_TABLES = {"app_meta", "nodes", "automations", "users", "user_settings", "audit"}
 
+
+
+def _head_revision():
+    cfg = Config()
+    cfg.set_main_option("script_location", str(db._MIGRATIONS_DIR))
+    (head,) = ScriptDirectory.from_config(cfg).get_heads()
+    return head
 
 class DbPathTests(unittest.TestCase):
     def test_default_when_env_unset(self):
@@ -179,7 +188,7 @@ class DbSchemaTests(unittest.TestCase):
             self.assertIs(db.init_db(None)[0], env_engine)
             with env_engine.connect() as connection:
                 self.assertEqual(connection.exec_driver_sql(
-                    "SELECT version_num FROM alembic_version").scalar(), "0022")
+                    "SELECT version_num FROM alembic_version").scalar(), _head_revision())
 
     def test_commit_failure_rolls_back_and_restores_foreign_keys(self):
         setup_engine = db.make_engine(self.path)
