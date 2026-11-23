@@ -100,41 +100,6 @@ _ROLE_KEY = "hestia_role"          # the request's resolved RBAC role (set by th
 _now = time.time          # WALL clock for session expiry (must survive restarts, unlike _clock); rebindable for tests
 
 
-def _install_incomplete_body_eof() -> None:
-    """Let a handler answer 400 when the peer half-closes mid-body.
-
-    aiohttp's protocol treats TCP EOF as "close now", which drops the socket
-    before ``readexactly`` can turn the short read into a response. For our
-    app only, mark the payload EOF and keep the transport up long enough to
-    write that response, then do not keepalive the half-closed connection.
-    """
-    from aiohttp import web_protocol
-
-    handler = web_protocol.RequestHandler
-    if getattr(handler, "_hestia_body_eof", False):
-        return
-    original = handler.eof_received
-
-    def eof_received(self):
-        request = self._current_request
-        app = getattr(request, "app", None) if request is not None else None
-        if app is None or _RT_KEY not in app:
-            return original(self)
-        payload = request.content
-        if payload.is_eof():
-            return original(self)
-        payload.feed_eof()
-        self._keepalive = False
-        self._close = True
-        return True
-
-    handler.eof_received = eof_received
-    handler._hestia_body_eof = True
-
-
-_install_incomplete_body_eof()
-
-
 def _require_safe_web_bind(host: str) -> None:
     """Refuse to expose the unauthenticated web UI beyond loopback unless the
     operator explicitly opted in. Mirrors :func:`hestia.proxy._require_safe_control_bind`."""
@@ -951,7 +916,9 @@ async def _read_json_body(request, max_body=MAX_BODY, *, reject_duplicates=False
     (preserving the original ``/api/name`` contract); ``max_body`` caps the byte
     size per endpoint (names are small, rules larger). The declared length is
     read with ``readexactly`` under ``BODY_READ_TIMEOUT``: a stall is 408, and
-    a short read or a reset connection is 400 rather than a partial parse.
+    a short read or a reset connection is 400 rather than a partial parse. A
+    half-closed peer is already gone, so that 400 may never be written; the
+    handler still returns it instead of raising or waiting out the timeout.
 
     Requiring ``Content-Type: application/json`` is the CSRF guard for these
     device-controlling mutations: it is NOT a CORS "simple" content type, so a
@@ -977,6 +944,12 @@ async def _read_json_body(request, max_body=MAX_BODY, *, reject_duplicates=False
         body = b"" if cl <= 0 else await asyncio.wait_for(
             request.content.readexactly(cl), timeout=BODY_READ_TIMEOUT)
     except (asyncio.IncompleteReadError, ConnectionResetError):
+        # IncompleteReadError: payload ended early and the transport can still
+        # take a response. ConnectionResetError: the peer dropped the socket
+        # (including a TCP half-close), often after aiohttp has already closed
+        # the transport. Return 400 either way so the handler does not become
+        # a 500 or sit in the read until BODY_READ_TIMEOUT. Do not patch
+        # RequestHandler to keep a half-closed socket open.
         return _json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "incomplete body"}), True
     except asyncio.TimeoutError:
         return _json(HTTPStatus.REQUEST_TIMEOUT,
