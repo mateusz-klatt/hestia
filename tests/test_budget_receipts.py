@@ -147,6 +147,40 @@ NR KARTY ****5555
             self.assertEqual(parse_receipt(raw)["raw_ocr_text"], "[REDACTED]")
             self.assertNotRegex(redacted, r"[0-9]")
 
+    def test_allowlist_drops_marks_maps_indic_digits_and_keeps_polish(self):
+        import unicodedata
+        digits = "4111111111111111"
+        marks = "\u034f\u0308\u093e\u20dd"
+        raw = "".join(digit + marks[index % len(marks)] for index, digit in enumerate(digits[:-1])) + digits[-1]
+        self.assertIn("\u034f", raw)
+        redacted = redact_pan(raw)
+        self.assertEqual(redacted, "[REDACTED]")
+        self.assertEqual(parse_receipt(raw)["raw_ocr_text"], "[REDACTED]")
+        self.assertNotIn("\u034f", redacted)
+        self.assertNotRegex(redacted, r"[0-9\u0300-\u036f]")
+        arabic = "".join(chr(0x0660 + int(ch)) for ch in digits)
+        self.assertEqual(redact_pan(arabic), "[REDACTED]")
+        self.assertEqual(parse_receipt(arabic)["raw_ocr_text"], "[REDACTED]")
+        spaced = " ".join(
+            "".join(chr(0x0660 + int(ch)) for ch in group)
+            for group in ("4111", "1111", "1111", "1111"))
+        self.assertEqual(redact_pan(spaced), "[REDACTED]")
+        self.assertEqual(parse_receipt(spaced)["raw_ocr_text"], "[REDACTED]")
+        for name in ("ŻÓŁTY SER", "ŚLIWKI", "MĄKA"):
+            nfc = unicodedata.normalize("NFC", name)
+            self.assertEqual(redact_pan(name).encode("utf-8"), nfc.encode("utf-8"))
+            self.assertEqual(redact_pan(unicodedata.normalize("NFD", name)).encode("utf-8"), nfc.encode("utf-8"))
+        receipt = (
+            "BIEDRONKA\nNIP 7791011327\n2026-11-30 12:34\n"
+            "ŻÓŁTY SER 1 x 3,49 3,49 A\nŚLIWKI 1 x 4,99 4,99 A\nMĄKA 1 x 2,49 2,49 A\n"
+            "SUMA PLN 10,97\n"
+        )
+        parsed = parse_receipt(receipt)
+        self.assertEqual([line["raw_name"] for line in parsed["lines"]], ["ŻÓŁTY SER", "ŚLIWKI", "MĄKA"])
+        self.assertEqual(parsed["math_delta"], "0")
+        for name in ("ŻÓŁTY SER", "ŚLIWKI", "MĄKA"):
+            self.assertIn(name.encode("utf-8"), parsed["raw_ocr_text"].encode("utf-8"))
+
     def test_confirm_redacts_pan_in_shop_name_and_line_name(self):
         parsed = self.draft()
         nbsp_pan = "5351\u00a00055\u00a05555\u00a05555"

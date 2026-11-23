@@ -84,6 +84,8 @@ _DISCOUNT = re.compile(rf"^\s*(?:RABAT|OPUST)\b[^0-9+-]*(?P<amount>{_NUMBER})", 
 _UUID = re.compile(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\Z", re.ASCII)
 _CURRENCY = re.compile(r"[A-Z]{3}\Z", re.ASCII)
 _CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+# ASCII controls still present after line terminators have become ``\n``.
+_ASCII_DROPPED = re.compile(r"[\x00-\x08\t\x0e-\x1f\x7f]")
 # Line terminators become ``\n`` before the control check, so a PAN split by
 # U+2028 or a vertical tab is one receipt, not rejected or left in one line.
 _LINE_BREAK = str.maketrans({
@@ -582,7 +584,8 @@ def _plain_window_flags(symbols):
     """Flag symbols inside 13–19 windows that pass Luhn or sit beside a mask."""
     count = len(symbols)
     flagged = bytearray(count)
-    if count < 13:
+    # A mask run with no digits is not a PAN. Skip the 13–19 windows.
+    if count < 13 or not any(kind == "d" for kind, _ in symbols):
         return flagged
     for length in range(13, min(19, count) + 1):
         last = count - length + 1
@@ -728,24 +731,35 @@ def _redact_spans(text, spans):
 
 
 def _normalize_receipt_text(text):
-    """One form before every scan. The stored OCR text is this form.
+    """Allowlist after NFKC. The stored OCR text is this form.
 
-    NFKC folds full-width and other compatibility digits to ASCII. Every line
-    terminator becomes ``\\n``. Format characters (ZWSP, ZWJ, ZWNJ, WJ, BOM,
-    soft hyphen) are removed. Other Unicode spaces become an ASCII space.
+    NFKC first, so compatibility digits fold to ASCII and Polish letters
+    compose. Line terminators are already ``\\n``. One linear pass then keeps
+    letters, ASCII digits, punctuation, symbols, an ASCII space and ``\\n``.
+    A non-ASCII digit that NFKC left behind is mapped with ``unicodedata.digit``.
+    Marks, format characters, other spaces, and every other category are removed.
     """
     text = unicodedata.normalize("NFKC", text).replace("\r\n", "\n").translate(_LINE_BREAK)
-    if text.isascii():
+    if text.isascii() and _ASCII_DROPPED.search(text) is None:
         return text
     kept = []
     for char in text:
+        if char == " " or char == "\n" or "0" <= char <= "9":
+            kept.append(char)
+            continue
+        if ord(char) < 128:
+            if char.isalpha() or unicodedata.category(char)[0] in "PS":
+                kept.append(char)
+            continue
         category = unicodedata.category(char)
-        if category == "Cf":
+        if category[0] in "LPS":
+            kept.append(char)
             continue
-        if category == "Zs" and char != " ":
-            kept.append(" ")
-            continue
-        kept.append(char)
+        if category == "Nd":
+            try:
+                kept.append(str(unicodedata.digit(char)))
+            except (TypeError, ValueError):
+                continue
     return "".join(kept)
 
 
