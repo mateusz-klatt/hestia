@@ -99,6 +99,8 @@ from pydantic.json_schema import models_json_schema
 # 0.39.0: receipts device tokens and one-time pairing codes (migration 0025, down_revision 0024),
 #         plus optional parse-text source_kind.
 # 0.40.0: separate Gmail receipt grant, status, sync and revocation (migration 0024).
+# Documentation-only follow-up to 0.40.0: clarify the #262 budget browser-session requirement and the
+# receipts device-token exception. No schema or wire change.
 CONTRACT_VERSION = "0.40.0"
 OPENAPI_PATH = Path(__file__).resolve().parent.parent / "docs" / "api" / "openapi.json"
 
@@ -3922,6 +3924,13 @@ def _receipt_error(description):
 
 _RECEIPT_AMBIGUITY = "Cookie plus Authorization returns 400 budget_auth_ambiguous."
 _DEVICE_UNAUTHENTICATED = "A missing or invalid credential, device_token_expired, or device_token_revoked."
+_BUDGET_BROWSER_AUTH = (
+    "Every /api/budget/* route requires the browser hestia_session cookie and configured same-origin Origin. "
+    "A login/session Authorization: Bearer from /api/login returns 403 budget_browser_session_required on every "
+    "budget route, including GETs. The only bearer exception is a receipts-scoped device token obtained through "
+    "browser pairing: it is accepted only on receipts parse-text, confirm, list, search, delete, detail and image, "
+    "plus device-token/revoke for itself. Household viewer/operator access is browser-only too."
+)
 
 
 def _receipt_paths():
@@ -4049,7 +4058,7 @@ def _device_token_paths():
         prefix + "pair-code": {"post": {
             "operationId": "pairBudgetReceiptDevice",
             "summary": "Issue one 5-minute pairing code for the signed-in admin owner.",
-            "description": note + " Browser cookie and exact Origin. At most 3 active codes.",
+            "description": note + " Browser cookie and exact Origin. At most 3 active codes. " + _BUDGET_BROWSER_AUTH,
             "requestBody": {"required": True, "content": {_APP_JSON: {
                 "schema": _ref("BudgetReceiptDeviceBrowserRequest")}}},
             "responses": pair,

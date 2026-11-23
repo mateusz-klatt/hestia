@@ -422,6 +422,14 @@ class DeviceTokenStoreTests(unittest.TestCase):
         self.assertEqual(store_sql.set_user_disabled("alice", True, path=self.path), "last_admin")
         self.assertIsNone(next(row.revoked_at for row in self._tokens() if row.id == live["token_id"]))
 
+    def test_rate_limit_buckets_shrink_after_window(self):
+        moment = 1_000.0
+        self.assertIsNone(device_token.parse_limited("one", moment))
+        self.assertIsNone(device_token.parse_limited("two", moment))
+        self.assertEqual(len(device_token._buckets), 2)
+        self.assertIsNone(device_token.parse_limited("three", moment + device_token.PARSE_WINDOW))
+        self.assertEqual(set(device_token._buckets), {("parse", "three")})
+
     def test_rate_limit_windows_and_decide(self):
         device_token.reset_limits()
         with mock.patch.object(device_token, "PARSE_LIMIT", 1):

@@ -154,19 +154,27 @@ describe("period entries", () => {
     expect(host.textContent).toContain("3 entries");
   });
 
-  it("offers a recipient-account rule using only the opaque key and masked display", async () => {
+  it("offers a recipient-account rule in the row and editor using only the opaque key and masked display", async () => {
     const syntheticIban = `PL${"0".repeat(22)}1234`;
     const key = "a".repeat(64);
     const api = fakeApi([entry("account-row", { counterparty_account_key: key, counterparty_account: "PL** … 1234" })]);
     const { onCreateRule } = await show(api, { text: transactionLabels.pl, locale: "pl" });
-    await click(button("Zmień"));
-    const action = button("Utwórz regułę z konta odbiorcy");
-    expect(action.title).toBe("PL** … 1234");
-    await click(action);
-    expect(onCreateRule).toHaveBeenCalledWith({
+    const expected = {
       rule_id: null, expected_version: 0, field: "counterparty_account", operator: "equals", value: "PL** … 1234",
       counterparty_account_key: key, category_id: null, kind: "expense", priority: 100, enabled: true,
-    });
+    };
+    const rowAction = button("Utwórz regułę z konta odbiorcy");
+    expect(rowAction.closest(".budget-entry-facts")).not.toBeNull();
+    expect(rowAction.title).toBe("PL** … 1234");
+    await click(rowAction);
+    expect(onCreateRule).toHaveBeenCalledWith(expected);
+
+    onCreateRule.mockClear();
+    await click(button("Zmień"));
+    const editor = host.querySelector(".budget-entry-editor");
+    expect(editor).not.toBeNull();
+    await click(button("Utwórz regułę z konta odbiorcy", editor as HTMLElement));
+    expect(onCreateRule).toHaveBeenCalledWith(expected);
     expect(JSON.stringify(onCreateRule.mock.calls[0]?.[0])).not.toContain(syntheticIban);
   });
 
