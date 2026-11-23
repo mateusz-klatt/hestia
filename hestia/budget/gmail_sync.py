@@ -199,7 +199,7 @@ class GmailSync:
     def _completion(self, state):
         now = self.store.clock()
         result = {**_PHASE_RESET, "history_id": state.pending_history_id, "sync_phase": "idle",
-                  "last_sync_at": now, "next_sync_at": now + self.settings.sync_interval_seconds, "run_requested": 0,
+                  "last_sync_at": now, "next_sync_at": now + self.settings.sync_interval_seconds,
                   "failures": 0, "backoff_until": 0, "attention": None, "last_http_status": None, "last_error": None}
         if state.sync_phase != "incremental":
             result["backfill_completed_at"] = now
@@ -370,7 +370,7 @@ class GmailSync:
                 raise GmailError("budget_receipt_gmail_cooldown", 429)
             run = self.client.run(owner, generation, self.settings.credentials, lambda: self.store.fence(owner, generation))
             progress = _Progress(generation, run, terms=_terms(self.settings))
-            self._commit(owner, progress, {"last_attempt_at": now})
+            self._commit(owner, progress, {"last_attempt_at": now, "run_requested": 1})
             try:
                 if not self.processor.ready():
                     raise GmailError("parser_unavailable")
@@ -382,12 +382,17 @@ class GmailSync:
                 progress.label_id = self._label(run)
                 state = self.store.state(owner)
                 force = bool(force_full_resync or state.force_full_resync)
-                if force or (state.history_id is None and state.pending_history_id is None):
-                    self._start_recovery(owner, progress, profile_history, state, full=force)
-                if state.history_id is None or force:
-                    self._backfill(owner, progress)
-                else:
-                    self._incremental(owner, progress, profile_history)
+                while True:
+                    if force or (state.history_id is None and state.pending_history_id is None):
+                        self._start_recovery(owner, progress, profile_history, state, full=force)
+                    if state.history_id is None or force:
+                        self._backfill(owner, progress)
+                    else:
+                        self._incremental(owner, progress, profile_history)
+                    state = self.store.state(owner)
+                    if not (state.run_requested and state.force_full_resync):
+                        break
+                    force = True
             except RunLimit:
                 self._commit(owner, progress, {"next_sync_at": self.store.clock() + self.settings.sync_interval_seconds,
                                               "backoff_until": 0, "failures": 0, "attention": None, "run_requested": 0,

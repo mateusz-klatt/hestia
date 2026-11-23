@@ -852,13 +852,15 @@ class GmailSyncTests(TestCase):
             self.service.schedule("intruder")
         self.enable()
         calls = list(self.transport.calls)
-        queued = self.service.schedule(OWNER, force_full_resync=True)
+        queued = self.service.schedule(OWNER)
+        upgraded = self.service.schedule(OWNER, force_full_resync=True)
+        self.assertEqual(upgraded["version"], queued["version"])
         state = self.store.state(OWNER)
         self.assertEqual(self.transport.calls, calls)
         self.assertEqual((queued["ok"], queued["sync_phase"], queued["version"]), (True, "idle", state.version))
         self.assertEqual((state.run_requested, state.force_full_resync, state.next_sync_at), (1, 1, self.clock.now))
         kept = self.service.schedule(OWNER, force_full_resync=False)
-        self.assertEqual(kept["version"], queued["version"] + 1)
+        self.assertEqual(kept["version"], queued["version"])
         self.assertEqual(self.store.state(OWNER).force_full_resync, 1)
         with self.sessions.begin() as session:
             session.get(db.BudgetGmailState, OWNER).attention = "identity_mismatch"
@@ -891,8 +893,7 @@ class GmailSyncTests(TestCase):
         self.assertIsNone(self.sync(poll=True))
         state = self.store.state(OWNER)
         self.assertEqual((state.failures, state.run_requested), (0, 1))
-        with self.assertRaisesRegex(GmailError, "cooldown"):
-            self.service.schedule(OWNER)
+        self.assertEqual(self.service.schedule(OWNER)["version"], state.version)
         self.assertEqual(self.store.state(OWNER).run_requested, 1)
         self.tick(60)
         self.sync(poll=True)

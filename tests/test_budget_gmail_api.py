@@ -173,7 +173,7 @@ class GmailHTTPTests(IsolatedAsyncioTestCase):
         synced = await self.call("gmail-sync", json={"force_full_resync": True})
         self.assertEqual(synced.status, 202, await synced.text())
         accepted = api_contract.BudgetReceiptGmailSyncResult.model_validate(await synced.json())
-        self.assertEqual((accepted.ok, accepted.sync_phase, accepted.version), (True, "idle", grant.version + 1))
+        self.assertEqual((accepted.ok, accepted.sync_phase, accepted.version), (True, "idle", grant.version))
         self.assertEqual(len(self.transport.requests("/profile")), 0)
         queued = await (await self.call("gmail-status")).json()
         self.assertEqual((queued["sync_phase"], queued["batch_processed_count"], queued["next_sync_at"]),
@@ -296,6 +296,49 @@ class GmailHTTPTests(IsolatedAsyncioTestCase):
                          ("X-Hestia-Contract-Version", "0.40.0")]
         response = await self.client.post(receipt_api.PREFIX + "/list", json={}, headers=token_headers)
         self.assertEqual(response.status, 400)
+
+    async def test_overlapping_kicks_coalesce_into_the_running_round(self):
+        os.environ[gmail_api.FLAG] = "1"
+        granted = await self.call("gmail-grant", json={"action": "enable", "expected_version": 1})
+        self.assertEqual(granted.status, 200)
+        runtime = gmail_api._Runtime()
+        await asyncio.to_thread(runtime.poll, lambda: True, lambda: _SESSION)
+
+        self.clock.now += 60
+        scheduled = await self.call("gmail-sync", json={})
+        self.assertEqual(scheduled.status, 202)
+        version = (await scheduled.json())["version"]
+        started, release = threading.Event(), threading.Event()
+
+        def slow_history(_params):
+            started.set()
+            self.assertTrue(release.wait(5))
+            return response_json({"history": []})
+
+        self.transport.routes[("/history", None)] = slow_history
+        profiles = len(self.transport.requests("/profile"))
+        message_scans = len(self.transport.requests("/messages"))
+        polling = asyncio.create_task(asyncio.to_thread(runtime.poll, lambda: True, lambda: _SESSION))
+        try:
+            self.assertTrue(await asyncio.to_thread(started.wait, 3))
+            self.clock.now += 61
+            kicks = await asyncio.gather(*(self.call("gmail-sync", json=body) for body in (
+                {}, {"force_full_resync": True}, {},
+            )))
+            for kick in kicks:
+                self.assertEqual(kick.status, 202)
+                self.assertEqual((await kick.json())["version"], version)
+        finally:
+            release.set()
+            await polling
+
+        await asyncio.to_thread(runtime.poll, lambda: True, lambda: _SESSION)
+        self.assertEqual(len(self.transport.requests("/profile")), profiles + 1)
+        self.assertEqual(len(self.transport.requests("/history")), 1)
+        self.assertEqual(len(self.transport.requests("/messages")), message_scans + 1)
+        with self.sessions() as session:
+            state = session.get(db.BudgetGmailState, "alice")
+            self.assertEqual((state.run_requested, state.force_full_resync, state.version), (0, 0, version))
 
     async def test_sync_schedules_immediately_and_the_poller_imports(self):
         os.environ[gmail_api.FLAG] = "1"

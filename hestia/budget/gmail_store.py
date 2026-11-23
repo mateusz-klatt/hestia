@@ -130,6 +130,10 @@ class GmailStore(BudgetStore):
                 raise GmailError("mailbox_mismatch", 403, attention="identity_mismatch")
             if row.backoff_until > now:
                 raise GmailError("budget_receipt_gmail_backoff", 429)
+            if row.run_requested:
+                if force_full_resync and row.sync_phase != "full_resync":
+                    row.force_full_resync = 1
+                return {"ok": True, "sync_phase": row.sync_phase, "version": row.version}
             if row.last_attempt_at is not None and row.last_attempt_at + cooldown > now:
                 raise GmailError("budget_receipt_gmail_cooldown", 429)
             session.add(row)
@@ -268,6 +272,9 @@ class GmailStore(BudgetStore):
             if drained:
                 for key, value in changes.items():
                     setattr(row, key, value)
+                if changes.get("sync_phase") == "idle":
+                    # A force request may arrive after the worker chose what to scan.
+                    row.run_requested = int(bool(row.force_full_resync))
         return imported, skipped, drained
 
     def retain(self, owner, generation):
