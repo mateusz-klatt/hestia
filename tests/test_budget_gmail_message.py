@@ -181,6 +181,32 @@ class GmailMessageProcessorTests(unittest.TestCase):
         self.assertEqual(self.worker.parse.call_args_list, [call("html", html.encode()),
                                                             call("text", b"\n" + INVOICE.encode())])
 
+    def test_mixed_attached_and_inline_depth_two_imports_the_final_original(self):
+        relay = _email(MERCHANT, f"Begin forwarded message:\nFrom: {MERCHANT}\nMessage-ID: {RFC_ID}\n\n{INVOICE}")
+        outer = _email(SPOUSE, "Synthetic cover note")
+        outer.add_attachment(relay)
+        pending = self._process(_metadata(outer), _raw(outer))
+        self.assertEqual((pending.outcome, pending.forwarded_manually), ("imported", False))
+        self.assertEqual(pending.invoice.invoice_number, "RE/2026/00042")
+        self.assertEqual(pending.rfc_message_id_hmac, digest(SECRET, RFC_MESSAGE_DOMAIN, "Invoice-42@respect.example"))
+
+    def test_mixed_depth_three_and_ambiguous_or_malformed_inner_forwards_are_rejected(self):
+        inline = f"Begin forwarded message:\nFrom: {MERCHANT}\n\n{INVOICE}"
+        attached_relay = _email(MERCHANT, "Synthetic cover note")
+        attached_relay.add_attachment(_email(MERCHANT, inline))
+        for relay in (
+            attached_relay,
+            _email(MERCHANT, f"Begin forwarded message:\nFrom: {MERCHANT}\n\n{inline}"),
+            _email(MERCHANT, f"{INVOICE}\nBegin forwarded message:\nFrom:"),
+        ):
+            with self.subTest(relay=relay.get_content_type()):
+                outer = _email(SPOUSE, "Synthetic cover note")
+                outer.add_attachment(relay)
+                pending = self._process(_metadata(outer), _raw(outer))
+                self.assertEqual((pending.outcome, pending.forwarded_manually, pending.invoice),
+                                 ("skipped_non_receipt", False, None))
+        self.worker.parse.assert_not_called()
+
     def test_inline_merchant_without_provider_pattern_needs_review(self):
         for text in ("Please pay this bill", INVOICE.replace("RE/2026/00042", "FV/2026/11/42")):
             message = _email(SPOUSE, f"Begin forwarded message:\nFrom: {MERCHANT}\n\n{text}")
