@@ -42,13 +42,17 @@ _NIP = re.compile(r"\bNIP\s*:?\s*([0-9][0-9 -]{8,16}[0-9])\b", re.IGNORECASE | r
 # characters that are not symbols or those separators. Near a card label every
 # 13–19 Luhn window is a PAN, prices included. Elsewhere a PAN uses only spaces
 # and hyphens, so a window that crosses a decimal price is left intact.
+# On the label line and the next two, every digit run of two or more is removed
+# except a quantity written ``\d+ ?(szt|kg|g|l|x)``. Those three lines also share
+# one digit stream, so a PAN wrapped across them is removed with every fragment
+# that contributed a digit or a mask.
 _PAN_NEWLINES = frozenset("\n\r\u2028\u2029")
 _PAN_DASHES = frozenset("-‐‑‒–—―")
 _PAN_MASKS = frozenset("*Xx•●#")
-_QTY_UNITS = ("szt", "dag", "kg", "ml", "op", "g", "l")
 _CARD_LABEL = re.compile(
     r"(?i)(?:\bNR\s+KARTY\b|\bNUMER\s+KARTY\b|\bAID\b|\bPAN\b|\bCARD(?:\s+(?:NO|NUMBER))?\b|\bKARTA\b)"
 )
+_LABEL_QTY = re.compile(r"(?<![0-9])([0-9]+) ?(?:szt|kg|g|l|x)\b", re.IGNORECASE)
 _ITEM = re.compile(
     rf"^(?P<name>.+?)\s+(?:(?P<quantity>{_NUMBER})\s*(?P<unit>kg|g|dag|l|ml|szt|op)?"
     rf"\s*[x×*]\s*(?P<unit_price>{_NUMBER})\s*(?:=\s*)?)?"
@@ -316,56 +320,19 @@ def _candidate_spans(symbols, flagged, money_ranges):
     return spans
 
 
-def _unit_at(line, index):
-    """Quantity marker ``szt``, ``kg``, ``x`` and the other receipt units."""
-    if index >= len(line):
-        return False
-    folded = line.casefold()
-    for word in _QTY_UNITS:
-        end = index + len(word)
-        if end <= len(line) and folded.startswith(word, index) and (
-                end == len(line) or not (line[end].isalnum() or line[end] == "_")):
-            return True
-    if line[index] in "xX×*" and (index + 1 == len(line) or line[index + 1] not in _PAN_MASKS):
-        end = index + 1
-        return end == len(line) or not (line[end].isalnum() or line[end] == "_")
-    return False
-
-
-def _quantity_spans(line):
-    """Digit spans of a quantity that is followed by a unit or by ``x``."""
-    spans = []
-    length = len(line)
-    index = 0
-    while index < length:
-        if _pan_digit(line[index]) is None:
-            index += 1
-            continue
-        start = index
-        while index < length and _pan_digit(line[index]) is not None:
-            index += 1
-        number_end = index
-        if index < length and line[index] in ",.":
-            fraction = index + 1
-            if fraction < length and _pan_digit(line[fraction]) is not None:
-                while fraction < length and _pan_digit(line[fraction]) is not None:
-                    fraction += 1
-                number_end = fraction
-                index = fraction
-        cursor = number_end
-        while cursor < length and line[cursor].isspace():
-            cursor += 1
-        if _unit_at(line, cursor):
-            spans.append((start, number_end))
-    return spans
+def _label_quantity_spans(line):
+    """Digit runs of ``\\d+ ?(szt|kg|g|l|x)``. The unit itself stays visible."""
+    return [(match.start(1), match.end(1)) for match in _LABEL_QTY.finditer(line)]
 
 
 def _label_digit_spans(line):
-    """Digit runs of 2 or more on a card-label line, prices and quantities kept."""
+    """Every digit run of 2 or more beside a card label.
+
+    A price is removed too: the card section is not an item line. The only
+    digits that stay are a quantity directly followed by a unit.
+    """
     protected = bytearray(len(line))
-    for start, end in _money_ranges(line):
-        protected[start:end] = b"\x01" * (end - start)
-    for start, end in _quantity_spans(line):
+    for start, end in _label_quantity_spans(line):
         protected[start:end] = b"\x01" * (end - start)
     spans = []
     index = 0
@@ -379,6 +346,91 @@ def _label_digit_spans(line):
             index += 1
         if index - start >= 2 and not any(protected[cursor] for cursor in range(start, index)):
             spans.append((start, index))
+    return spans
+
+
+def _symbol_fragments(line):
+    """Maximal digit or mask runs, each with ``(kind, value)`` symbols."""
+    fragments = []
+    length = len(line)
+    index = 0
+    while index < length:
+        if _pan_digit(line[index]) is None and line[index] not in _PAN_MASKS:
+            index += 1
+            continue
+        start = index
+        symbols = []
+        while index < length and (_pan_digit(line[index]) is not None or line[index] in _PAN_MASKS):
+            digit = _pan_digit(line[index])
+            if digit is not None:
+                symbols.append(("d", digit))
+            else:
+                symbols.append(("m", line[index]))
+            index += 1
+        fragments.append((start, index, symbols))
+    return fragments
+
+
+def _label_stream_flags(symbols):
+    """Luhn and mask flags for the digits of one label and the next two lines.
+
+    Luhn sees the digit stream only, so a mask or a dropped separator cannot
+    shift the window. A mask sequence beside digits flags that sequence and
+    the neighbouring digit run. Symbols outside a hit stay clear.
+    """
+    flagged = bytearray(len(symbols))
+    runs = []
+    for index, (kind, _) in enumerate(symbols):
+        if runs and runs[-1][0] == kind:
+            runs[-1][2] = index + 1
+        else:
+            runs.append([kind, index, index + 1])
+    for index, (kind, start, end) in enumerate(runs):
+        if kind != "m" or end - start < 2:
+            continue
+        if index and runs[index - 1][0] == "d" and runs[index - 1][2] - runs[index - 1][1] >= 2:
+            left = runs[index - 1][1]
+            flagged[left:end] = b"\x01" * (end - left)
+        if index + 1 < len(runs) and runs[index + 1][0] == "d" and runs[index + 1][2] - runs[index + 1][1] >= 2:
+            right = runs[index + 1][2]
+            flagged[start:right] = b"\x01" * (right - start)
+    digit_index = [index for index, (kind, _) in enumerate(symbols) if kind == "d"]
+    digit_count = len(digit_index)
+    if digit_count < 13:
+        return flagged
+    digits = "".join(symbols[index][1] for index in digit_index)
+    for length in range(13, min(19, digit_count) + 1):
+        for start in range(digit_count - length + 1):
+            if not _luhn(digits[start:start + length]):
+                continue
+            for offset in range(length):
+                flagged[digit_index[start + offset]] = 1
+    return flagged
+
+
+def _label_stream_spans(fragments, first, limit, offsets):
+    """Redact each fragment that contributed a symbol to a flagged window."""
+    symbols = []
+    owners = []
+    for number in range(first, limit):
+        for start, end, frag_symbols in fragments[number]:
+            for kind, value in frag_symbols:
+                symbols.append((kind, value))
+                owners.append((number, start, end))
+    if not symbols:
+        return []
+    flagged = _label_stream_flags(symbols)
+    spans = []
+    seen = set()
+    for index, mark in enumerate(flagged):
+        if not mark:
+            continue
+        number, start, end = owners[index]
+        key = (number, start, end)
+        if key in seen:
+            continue
+        seen.add(key)
+        spans.append((offsets[number] + start, offsets[number] + end))
     return spans
 
 
@@ -441,7 +493,11 @@ def _merge_spans(spans):
 
 
 def _pan_spans(text):
-    """PAN windows per line, then 2-digit fragments on a label and the next two lines."""
+    """PAN windows per line, then every short digit run on a label and the next two lines.
+
+    The same three lines are checked again as one digit stream. A Luhn window or
+    a mask beside digits removes each original fragment that contributed.
+    """
     lines = text.split("\n")
     label = [False] * len(lines)
     for number, line in enumerate(lines):
@@ -459,14 +515,27 @@ def _pan_spans(text):
         if number + 2 < len(lines):
             follow[number + 2] = True
     spans = []
+    offsets = []
     offset = 0
     for number, line in enumerate(lines):
-        for start, end in _line_secret_spans(line, label[number] or follow[number]):
+        offsets.append(offset)
+        context = label[number] or follow[number]
+        for start, end in _line_secret_spans(line, context):
             spans.append((offset + start, offset + end))
-        if label[number] or follow[number]:
+        if context:
             for start, end in _label_digit_spans(line):
                 spans.append((offset + start, offset + end))
         offset += len(line) + 1
+    if any(label):
+        fragments = [None] * len(lines)
+        for number, flagged in enumerate(label):
+            if not flagged:
+                continue
+            limit = min(number + 3, len(lines))
+            for index in range(number, limit):
+                if fragments[index] is None:
+                    fragments[index] = _symbol_fragments(lines[index])
+            spans.extend(_label_stream_spans(fragments, number, limit, offsets))
     return _merge_spans(spans)
 
 

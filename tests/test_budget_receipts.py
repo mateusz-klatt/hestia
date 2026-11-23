@@ -490,7 +490,7 @@ NR KARTY ****5555
         cases = {
             ",4111 1111 1111 1111": ",[REDACTED]",
             "Karta:4111111111111111": "Karta:[REDACTED]",
-            "KARTA\n12,99": "KARTA\n12,99",
+            "KARTA\n12,99": "KARTA\n[REDACTED],[REDACTED]",
             "NR\nKARTY ,4111\n,1111 ,1111": "NR\nKARTY ,[REDACTED]\n,[REDACTED] ,[REDACTED]",
             "2 x 3,50": "2 x 3,50",
             "12.99 15.49": "12.99 15.49",
@@ -501,10 +501,17 @@ NR KARTY ****5555
             "4111 1111 1111 1111.00": "[REDACTED]",
             "4111 1111 1111 1111,00": "[REDACTED]",
             "NR\nKARTY ,41\n,111 ,1111": "NR\nKARTY ,[REDACTED]\n,[REDACTED] ,[REDACTED]",
-            "KARTA\n1000 szt 3,49": "KARTA\n1000 szt 3,49",
+            "KARTA\n1000 szt 3,49": "KARTA\n1000 szt 3,[REDACTED]",
+            "KARTA\n12 x 3,50": "KARTA\n12 x 3,[REDACTED]",
             "1,2345 2,3456": "1,2345 2,3456",
             "123.4567 246.9134": "123.4567 246.9134",
             "CARD NUMBER\n4111.11 11.11 1111.11": "CARD NUMBER\n[REDACTED]",
+            "CARD NUMBER\n4111.11 11.11\n1111.11": (
+                "CARD NUMBER\n[REDACTED].[REDACTED] [REDACTED].[REDACTED]\n"
+                "[REDACTED].[REDACTED]"
+            ),
+            "4111.11 11.11\n1111.11": "4111.11 11.11\n1111.11",
+            "KARTA\nok\nok\n12,99": "KARTA\nok\nok\n12,99",
             "KARTA 4111 1111 1111 1111": "KARTA [REDACTED]",
             "4111 1111 1111 1111": "[REDACTED]",
             "41.11 1111.11 11.1111": "41.11 1111.11 11.1111",
@@ -512,11 +519,38 @@ NR KARTY ****5555
         for raw, expected in cases.items():
             with self.subTest(raw=raw):
                 self.assertEqual(redact_pan(raw), expected)
+        wrapped = "CARD NUMBER\n4111.11 11.11\n1111.11"
+        parsed = parse_receipt(wrapped)
+        self.assertEqual(parsed["raw_ocr_text"], cases[wrapped])
+        self.assertNotRegex(parsed["raw_ocr_text"], r"[0-9]")
+        split_digits = "CARD NUMBER 4 1 1\n1 1 1 1 1 1\n1 1 1 1 1 1 1"
+        split_redacted = redact_pan(split_digits)
+        self.assertNotRegex(split_redacted, r"[0-9]")
+        self.assertEqual(split_redacted.count("[REDACTED]"), 16)
+        self.assertIn("CARD NUMBER", split_redacted)
+        self.assertEqual(redact_pan("KARTA\n****\n1234"), "KARTA\n[REDACTED]\n[REDACTED]")
 
-    def test_quantity_after_card_label_keeps_every_digit(self):
+    def test_item_three_lines_after_card_label_keeps_prices(self):
         text = (
             "BIEDRONKA\nNIP 7791011327\n2026-11-30 12:34\n"
-            "KARTA\nMLEKO 1000 szt 3,49 A\nSUMA PLN 3,49\n"
+            "KARTA\npin ok\nterminal\n"
+            "MLEKO 1 x 123.4567 246.9134 A\nSUMA PLN 246.9134\n"
+        )
+        parsed = parse_receipt(text)
+        self.assertIn("MLEKO 1 x 123.4567 246.9134 A", parsed["raw_ocr_text"])
+        self.assertIn("246.9134", parsed["raw_ocr_text"])
+        self.assertEqual(parsed["lines"][0]["unit_price_raw"], "123.4567")
+        self.assertEqual(parsed["lines"][0]["gross_line_total"], "246.9134")
+        self.assertEqual(parsed["total_amount"], "246.9134")
+        self.assertEqual(parsed["math_delta"], "0")
+        self.assertEqual(redact_pan("KARTA\nok\n12,99"), "KARTA\nok\n[REDACTED],[REDACTED]")
+
+    def test_quantity_after_card_label_keeps_every_digit(self):
+        self.assertEqual(redact_pan("KARTA\n1000 szt 3,49"), "KARTA\n1000 szt 3,[REDACTED]")
+        text = (
+            "BIEDRONKA\nNIP 7791011327\n2026-11-30 12:34\n"
+            "KARTA\nplatnosc\nok\n"
+            "MLEKO 1000 szt 3,49 A\nSUMA PLN 3,49\n"
         )
         parsed = parse_receipt(text)
         self.assertIn("1000", parsed["raw_ocr_text"])
