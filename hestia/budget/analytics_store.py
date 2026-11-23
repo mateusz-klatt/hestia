@@ -18,8 +18,9 @@ from ..db import BudgetMortgagePayment as MortgagePaymentRow, BudgetMortgageSche
 from ..db import BudgetConnection as Connection, BudgetRule as Rule, BudgetRulePreview as Preview
 from ..db import BudgetTransaction as Transaction, BudgetTransactionMetadata as Metadata
 from ..db import BudgetTransferDecision as Decision, BudgetTransferLeg as Leg
-from .analytics_core import (AnalyticsError, KINDS, clean_one_off_label, compare_money, compatible_kind,
-                             compile_rules, effective_date, financial_fingerprint, first_matching_rule,
+from .analytics_core import (AnalyticsError, KINDS, COUNTERPARTY_RULE_PREFIX, clean_one_off_label, compare_money,
+                             compatible_kind, compile_rules, counterparty_rule_from_identification, counterparty_rule_parts,
+                             counterparty_rule_value, effective_date, financial_fingerprint, first_matching_rule,
                              match_texts, pair_fingerprint)
 from .client import _reject_constant, _unique_error_fields
 from .mortgage_reminders import (MAX_PAID_MONTHS as MAX_MORTGAGE_PAID_MONTHS, MAX_SCHEDULES as MAX_MORTGAGE_SCHEDULES,
@@ -55,6 +56,18 @@ def _json(value):
 
 def _dict(row, fields):
     return {key: getattr(row, key) for key in fields}
+
+
+def _rule_wire(row):
+    result = _dict(row, _RULE_OUTPUT)
+    if result["field"] == "counterparty_account":
+        try:
+            key, masked = counterparty_rule_parts(result["value"])
+        except AnalyticsError:
+            raise AnalyticsError("budget_analytics_data_error", 500) from None
+        result["value"] = masked
+        result["counterparty_account_key"] = key
+    return result
 
 
 def _annotation_wire(row):
@@ -485,19 +498,36 @@ class BudgetAnalyticsStore(BudgetHTTPStore):
 
     def rules(self, owner):
         with self._read(owner) as session:
-            return [_dict(row, _RULE_OUTPUT) for row in session.scalars(select(Rule).where(Rule.owner == owner)
-                                                                       .order_by(Rule.priority, Rule.id))]
+            return [_rule_wire(row) for row in session.scalars(select(Rule).where(Rule.owner == owner)
+                                                               .order_by(Rule.priority, Rule.id))]
 
     def _rule_candidate(self, session, owner, value):
-        if not isinstance(value, dict) or set(value) != _RULE_FIELDS:
+        if not isinstance(value, dict) or set(value) not in (_RULE_FIELDS, _RULE_FIELDS | {"counterparty_account_key"}):
             raise AnalyticsError()
         value = dict(value)
-        if (value["field"] not in ("description", "counterparty_name", "mcc")
+        if (value["field"] not in ("description", "counterparty_name", "counterparty_account", "mcc")
                 or value["operator"] not in ("contains", "equals") or not isinstance(value["kind"], str) or value["kind"] not in KINDS
                 or type(value["priority"]) is not int or not 0 <= value["priority"] <= 10000
-                or type(value["enabled"]) is not bool):
+                or type(value["enabled"]) is not bool
+                or (value["field"] == "counterparty_account" and value["operator"] != "equals")):
             raise AnalyticsError()
-        value["value"] = _text(value["value"], 256)
+        if value["field"] == "counterparty_account":
+            key = value.pop("counterparty_account_key", None)
+            raw = _text(value["value"], 256)
+            if raw.startswith(COUNTERPARTY_RULE_PREFIX):
+                stored_key, masked = counterparty_rule_parts(raw)
+                if key is not None and (not isinstance(key, str) or _HASH.fullmatch(key) is None
+                                        or not hmac.compare_digest(stored_key, key)):
+                    raise AnalyticsError()
+                value["value"] = counterparty_rule_value(stored_key, masked)
+            elif key is not None:
+                value["value"] = counterparty_rule_value(key, raw)
+            else:
+                value["value"] = counterparty_rule_from_identification(raw, self._cursor_secret)
+        else:
+            if "counterparty_account_key" in value:
+                raise AnalyticsError()
+            value["value"] = _text(value["value"], 256)
         row = None if value["rule_id"] is None else self._owned(session, Rule, owner, value["rule_id"])
         _version(0 if row is None else row.version, value["expected_version"])
         if row is not None and not value["enabled"] and row.category_id == value["category_id"]:
@@ -507,11 +537,10 @@ class BudgetAnalyticsStore(BudgetHTTPStore):
             self._category(session, owner, value["category_id"])
         return value, row
 
-    @staticmethod
-    def _snapshot(session, owner):
+    def _snapshot(self, session, owner):
         # Import after module initialization: the read projection subclasses this store.
         from .analytics_views import projection_snapshot
-        return projection_snapshot(session, owner)
+        return projection_snapshot(session, owner, account_secret=self._cursor_secret)
 
     @staticmethod
     def _proposed(rows, rules, *, watch=None):
@@ -618,11 +647,11 @@ class BudgetAnalyticsStore(BudgetHTTPStore):
 
     def _snapshot_digest(self, session, owner):
         from .analytics_views import projection_snapshot
-        preview = projection_snapshot(session, owner, classify=False)
+        preview = projection_snapshot(session, owner, classify=False, account_secret=self._cursor_secret)
         _, safe = compile_rules(preview["rules"])
         if safe:
             return preview["digest"]
-        return projection_snapshot(session, owner)["digest"]
+        return projection_snapshot(session, owner, account_secret=self._cursor_secret)["digest"]
 
     def _apply_candidate(self, session, owner, candidate):
         proposed_id = candidate.pop("_proposed_id", None)
@@ -647,7 +676,7 @@ class BudgetAnalyticsStore(BudgetHTTPStore):
         result = _dict(row, _RULE_OUTPUT)
         if changed:
             self._analytics_audit(session, owner, "rule", row.id, "save", before, result)
-        return {**result, "changed": changed}
+        return {**_rule_wire(row), "changed": changed}
 
     def _saved_batch(self, session, owner, payload):
         rules = []
@@ -656,7 +685,7 @@ class BudgetAnalyticsStore(BudgetHTTPStore):
             if not isinstance(proposed_id, str) or not proposed_id:
                 raise AnalyticsError()
             row = self._owned(session, Rule, owner, proposed_id)
-            rules.append({**_dict(row, _RULE_OUTPUT), "changed": False})
+            rules.append({**_rule_wire(row), "changed": False})
         return {"rules": rules, "changed": False}
 
     def save_rule(self, owner, preview_id):
@@ -673,7 +702,7 @@ class BudgetAnalyticsStore(BudgetHTTPStore):
                 if isinstance(saved, dict) and saved.get("_batch"):
                     raise AnalyticsError()
                 row = self._owned(session, Rule, owner, preview.saved_rule_id)
-                return {**_dict(row, _RULE_OUTPUT), "changed": False}
+                return {**_rule_wire(row), "changed": False}
             if preview.expires_at <= self._now():
                 raise AnalyticsError("budget_analytics_preview_expired", 409)
             if preview.snapshot_digest != self._snapshot_digest(session, owner):

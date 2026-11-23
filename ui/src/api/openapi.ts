@@ -3015,6 +3015,8 @@ export interface components {
         BudgetAnalyticsRule: {
             /** Category Id */
             category_id: string | null;
+            /** Counterparty Account Key */
+            counterparty_account_key?: string | null;
             /** Created At */
             created_at: number;
             /** Enabled */
@@ -3072,6 +3074,8 @@ export interface components {
         BudgetAnalyticsRulePreviewRequest: {
             /** Category Id */
             category_id: string | null;
+            /** Counterparty Account Key */
+            counterparty_account_key?: string | null;
             /** Enabled */
             enabled: boolean;
             /** Expected Version */
@@ -3080,7 +3084,7 @@ export interface components {
              * Field
              * @enum {string}
              */
-            field: "description" | "counterparty_name" | "mcc";
+            field: "description" | "counterparty_name" | "counterparty_account" | "mcc";
             /**
              * Kind
              * @enum {string}
@@ -3118,6 +3122,8 @@ export interface components {
             category_id: string | null;
             /** Changed */
             changed: boolean;
+            /** Counterparty Account Key */
+            counterparty_account_key?: string | null;
             /** Created At */
             created_at: number;
             /** Enabled */
@@ -3295,6 +3301,10 @@ export interface components {
             api_observed_at: number | null;
             /** Booking Date */
             booking_date: string | null;
+            /** Counterparty Account */
+            counterparty_account?: string | null;
+            /** Counterparty Account Key */
+            counterparty_account_key?: string | null;
             /**
              * Credit Debit Indicator
              * @enum {string}

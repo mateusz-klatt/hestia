@@ -10,7 +10,7 @@ import unicodedata
 
 MAX_ROWS = 100_000
 KINDS = frozenset({"auto", "expense", "income", "refund", "excluded"})
-_FIELDS = frozenset({"description", "counterparty_name", "mcc"})
+_FIELDS = frozenset({"description", "counterparty_name", "counterparty_account", "mcc"})
 _MONEY = re.compile(r"-?[0-9]+(?:\.[0-9]+)?\Z", re.ASCII)
 _PERIOD = re.compile(r"([0-9]{4})(?:-([0-9]{2}))?\Z", re.ASCII)
 _CODES = frozenset({"budget_analytics_invalid_request", "budget_analytics_not_found", "budget_analytics_conflict",
@@ -182,6 +182,67 @@ def one_off_key(members, secret):
     return hmac.new(key, _ONE_OFF_PAYLOAD_PREFIX + raw, hashlib.sha256).hexdigest()
 
 
+_ACCOUNT_KEY_DOMAIN = b"hestia/budget/counterparty-account/key/v1\0"
+_ACCOUNT_PAYLOAD_PREFIX = b"hestia/budget/counterparty-account/v1\n"
+_ACCOUNT_IDENTIFICATION = re.compile(r"[A-Z0-9]{6,128}\Z", re.ASCII)
+_ACCOUNT_MASK = re.compile(r"[A-Z0-9]{2}\*\* … [A-Z0-9]{4}\Z", re.ASCII)
+COUNTERPARTY_RULE_PREFIX = "cpacct:v1:"
+_STORED_ACCOUNT = re.compile(r"cpacct:v1:([0-9a-f]{64}):([A-Z0-9]{2}\*\* … [A-Z0-9]{4})\Z", re.ASCII)
+
+
+def normalize_counterparty_account(value):
+    if not isinstance(value, str):
+        raise AnalyticsError()
+    normalized = "".join(value.split()).upper()
+    if _ACCOUNT_IDENTIFICATION.fullmatch(normalized) is None:
+        raise AnalyticsError()
+    return normalized
+
+
+def mask_counterparty_account(value):
+    normalized = normalize_counterparty_account(value)
+    return f"{normalized[:2]}** … {normalized[-4:]}"
+
+
+def counterparty_account_key(value, secret):
+    normalized = normalize_counterparty_account(value)
+    if not isinstance(secret, bytes) or not secret:
+        raise AnalyticsError("budget_analytics_data_error", 500)
+    key = hashlib.sha256(_ACCOUNT_KEY_DOMAIN + secret).digest()
+    return hmac.new(key, _ACCOUNT_PAYLOAD_PREFIX + normalized.encode("ascii"), hashlib.sha256).hexdigest()
+
+
+def counterparty_rule_value(key, masked):
+    if (not isinstance(key, str) or not re.fullmatch(r"[0-9a-f]{64}", key, re.ASCII)
+            or not isinstance(masked, str) or _ACCOUNT_MASK.fullmatch(masked) is None):
+        raise AnalyticsError()
+    return COUNTERPARTY_RULE_PREFIX + key + ":" + masked
+
+
+def counterparty_rule_parts(value):
+    match = _STORED_ACCOUNT.fullmatch(value) if isinstance(value, str) else None
+    if match is None:
+        raise AnalyticsError()
+    return match.group(1), match.group(2)
+
+
+def counterparty_rule_from_identification(value, secret):
+    normalized = normalize_counterparty_account(value)
+    return counterparty_rule_value(counterparty_account_key(normalized, secret), mask_counterparty_account(normalized))
+
+
+def counterparty_account_evidence(payload, metadata, secret):
+    field = "creditor_accounts" if payload.get("credit_debit_indicator") == "DBIT" else "debtor_accounts"
+    evidence = {}
+    for account in (metadata or {}).get(field, []):
+        try:
+            normalized = normalize_counterparty_account(account["identification"])
+        except AnalyticsError:
+            continue
+        evidence[counterparty_account_key(normalized, secret)] = mask_counterparty_account(normalized)
+    return tuple(sorted(evidence.items()))
+
+
 def effective_date(payload):
     value = payload.get("booking_date") or payload.get("value_date")
     if value is None:
@@ -274,15 +335,19 @@ def fold_text(text):
     return unicodedata.normalize("NFC", text).casefold()
 
 
-def match_texts(payload, metadata=None):
-    """The three rule fields, folded once per transaction rather than once per rule."""
+def match_texts(payload, metadata=None, *, account_secret=None, account_evidence=None):
+    """Fold text once and key only the direction's IBAN-like account identifications."""
     metadata = {} if metadata is None else metadata
     if payload.get("credit_debit_indicator") == "DBIT":
         counterparty = metadata.get("creditor_name") or ""
     else:
         counterparty = metadata.get("debtor_name") or ""
+    if account_evidence is None and account_secret is not None:
+        account_evidence = counterparty_account_evidence(payload, metadata, account_secret)
+    accounts = None if account_secret is None else frozenset(key for key, _ in account_evidence or ())
     return {"description": fold_text("\n".join(payload.get("remittance_information", []))),
-            "counterparty_name": fold_text(counterparty), "mcc": fold_text(metadata.get("mcc") or "")}
+            "counterparty_name": fold_text(counterparty), "mcc": fold_text(metadata.get("mcc") or ""),
+            "counterparty_account": accounts}
 
 
 def compile_rules(rules):
@@ -293,12 +358,29 @@ def compile_rules(rules):
         enabled = _value(rule, "enabled")
         kind, field, operator = _value(rule, "kind"), _value(rule, "field"), _value(rule, "operator")
         needle = None
-        if enabled and field in _FIELDS and operator in ("equals", "contains"):
-            needle = fold_text(_value(rule, "value"))
+        valid_operator = operator == "equals" if field == "counterparty_account" else operator in ("equals", "contains")
+        if enabled and field in _FIELDS and valid_operator:
+            if field == "counterparty_account":
+                try:
+                    needle = counterparty_rule_parts(_value(rule, "value"))[0]
+                except AnalyticsError:
+                    safe = False
+            else:
+                needle = fold_text(_value(rule, "value"))
         elif enabled:
             safe = False
         compiled.append((enabled, kind, field, operator, needle, rule))
     return compiled, safe
+
+
+def _rule_value_matches(field, operator, needle, text):
+    if field == "counterparty_account":
+        if operator != "equals" or needle is None:
+            raise AnalyticsError()
+        if text is None:
+            raise AnalyticsError("budget_analytics_data_error", 500)
+        return needle in text
+    return needle == text if operator == "equals" else needle in text
 
 
 def first_matching_rule(compiled, payload, texts):
@@ -317,18 +399,22 @@ def first_matching_rule(compiled, payload, texts):
             continue
         if field not in _FIELDS or operator not in ("equals", "contains"):
             raise AnalyticsError()
-        text = texts[field]
-        if needle == text if operator == "equals" else needle in text:
+        if _rule_value_matches(field, operator, needle, texts[field]):
             return rule
     return None
 
 
-def rule_matches(rule, payload, metadata=None):
+def rule_matches(rule, payload, metadata=None, *, account_secret=None):
     if not _value(rule, "enabled") or not compatible_kind(_value(rule, "kind"), payload):
         return False
     field, operator = _value(rule, "field"), _value(rule, "operator")
     if field not in _FIELDS or operator not in ("equals", "contains"):
         raise AnalyticsError()
-    texts = match_texts(payload, metadata)
-    needle = fold_text(_value(rule, "value"))
-    return needle == texts[field] if operator == "equals" else needle in texts[field]
+    if field == "counterparty_account":
+        if operator != "equals":
+            raise AnalyticsError()
+        needle = counterparty_rule_parts(_value(rule, "value"))[0]
+    else:
+        needle = fold_text(_value(rule, "value"))
+    texts = match_texts(payload, metadata, account_secret=account_secret)
+    return _rule_value_matches(field, operator, needle, texts[field])

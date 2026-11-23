@@ -781,6 +781,75 @@ class BudgetAnalyticsAPITests(unittest.IsolatedAsyncioTestCase):
             session.get(db.BudgetAccount, self.credit_id).enabled = False
         self.assertEqual((await self.post("rule-save", {"preview_id": stale["preview_id"]})).status, 409)
 
+    async def test_counterparty_account_rule_http_flow_never_returns_or_persists_raw_iban(self):
+        synthetic = "PL" + "0" * 22 + "1234"
+        other = "PL" + "0" * 22 + "5678"
+        spaced = " ".join(synthetic.lower()[index:index + 4] for index in range(0, len(synthetic), 4))
+        with self.sessions.begin() as session:
+            for account_id, transaction, identification in (
+                    (self.alice_id, self.debit, spaced), (self.credit_id, self.credit, other)):
+                session.add(db.BudgetTransactionMetadata(
+                    account_id=account_id, entry_reference=transaction["entry_reference"], owner="alice",
+                    ledger_fingerprint=financial_fingerprint(transaction),
+                    payload_json=json.dumps({"creditor_accounts" if transaction["credit_debit_indicator"] == "DBIT"
+                                             else "debtor_accounts": [{"scheme": "IBAN", "identification": identification}]}),
+                    source="api", observed_at=web._now(), version=1))
+        response = await self.get("transactions")
+        self.assertEqual(response.status, 200, await response.text())
+        transactions = await response.json()
+        serialized = json.dumps(transactions)
+        self.assertNotIn(synthetic, serialized)
+        self.assertNotIn(spaced, serialized)
+        rows = {row["entry_reference"]: row for row in transactions["transactions"]}
+        target = rows[self.debit["entry_reference"]]
+        self.assertEqual(target["counterparty_account"], "PL** … 1234")
+        self.assertRegex(target["counterparty_account_key"], r"^[0-9a-f]{64}$")
+
+        contains = await self.post("rule-preview", self.candidate(
+            field="counterparty_account", operator="contains", value=spaced))
+        self.assertEqual(contains.status, 400)
+        response = await self.post("rule-preview", self.candidate(
+            field="counterparty_account", operator="equals", value=spaced))
+        self.assertEqual(response.status, 200, await response.text())
+        preview_body = await response.json()
+        preview = preview_body["preview"]
+        self.assertEqual(preview["affected_count"], 1)
+        self.assertEqual(preview["examples"], [{"account_id": self.alice_id,
+                                               "entry_reference": self.debit["entry_reference"]}])
+        self.assertNotIn(synthetic, json.dumps(preview_body))
+        response = await self.post("rule-save", {"preview_id": preview["preview_id"]})
+        self.assertEqual(response.status, 200, await response.text())
+        saved_body = await response.json()
+        saved = saved_body["rule"]
+        self.assertEqual(saved["value"], "PL** … 1234")
+        self.assertEqual(saved["counterparty_account_key"], target["counterparty_account_key"])
+        self.assertNotIn(synthetic, json.dumps(saved_body))
+        api_contract.BudgetAnalyticsRuleSaved.model_validate(saved)
+
+        rules_response = await self.get("rules")
+        rules_body = await rules_response.json()
+        self.assertEqual(rules_response.status, 200)
+        self.assertNotIn(synthetic, json.dumps(rules_body))
+        self.assertNotIn(spaced, json.dumps(rules_body))
+        self.assertEqual(rules_body["rules"][0]["value"], "PL** … 1234")
+
+        response = await self.post("rule-preview", self.candidate(
+            field="counterparty_account", operator="equals", value=target["counterparty_account"],
+            counterparty_account_key=target["counterparty_account_key"], priority=11))
+        self.assertEqual(response.status, 200, await response.text())
+        keyed_preview = (await response.json())["preview"]
+        response = await self.post("rule-save", {"preview_id": keyed_preview["preview_id"]})
+        self.assertEqual(response.status, 200, await response.text())
+        keyed = (await response.json())["rule"]
+        self.assertEqual(keyed["counterparty_account_key"], target["counterparty_account_key"])
+        durable = []
+        for row in self.rows(db.BudgetRule) + self.rows(db.BudgetRulePreview) + self.rows(db.BudgetAnalyticsAudit):
+            durable.extend(value for value in (getattr(row, "value", None), getattr(row, "candidate_json", None),
+                                               getattr(row, "before_json", None), getattr(row, "after_json", None))
+                           if value is not None)
+        self.assertNotIn(synthetic, json.dumps(durable))
+        self.assertNotIn(spaced, json.dumps(durable))
+
     async def test_rule_batch_preview_and_save_are_atomic_and_admin_only(self):
         created = await self.post("rule-batch-preview", {"rules": [self.candidate(), self.candidate(value="other", priority=11)]})
         self.assertEqual(created.status, 200, await created.text())

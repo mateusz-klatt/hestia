@@ -90,7 +90,8 @@ from pydantic.json_schema import models_json_schema
 #         accept an optional parent_id: omit it on update to leave the parent, send null to detach.
 # 0.35.0: additive one-off label on a budget annotation (migration 0021, down_revision 0020).
 #         Charts and category summaries can report that label as its own entry.
-CONTRACT_VERSION = "0.35.0"
+# 0.38.0: counterparty-account rules store keyed digests and masked display values (zero migration).
+CONTRACT_VERSION = "0.38.0"
 OPENAPI_PATH = Path(__file__).resolve().parent.parent / "docs" / "api" / "openapi.json"
 
 # De-duplicated string literals (SonarPython S1192): the OpenAPI content-type, the paths reused
@@ -1595,9 +1596,10 @@ class BudgetAnalyticsRulePreviewRequest(BaseModel):
     model_config = _STRICT
     rule_id: BudgetId | None
     expected_version: BudgetAnalyticsVersion
-    field: Literal["description", "counterparty_name", "mcc"]
+    field: Literal["description", "counterparty_name", "counterparty_account", "mcc"]
     operator: Literal["contains", "equals"]
     value: Annotated[str, Field(min_length=1, max_length=256)]
+    counterparty_account_key: Annotated[str | None, Field(pattern=r"^[0-9a-f]{64}$", json_schema_extra=_OMIT)] = None
     category_id: BudgetId | None
     kind: BudgetAnalyticsKind
     priority: Annotated[int, Field(ge=0, le=10000)]
@@ -1679,6 +1681,7 @@ class BudgetAnalyticsRule(BaseModel):
     field: str
     operator: str
     value: str
+    counterparty_account_key: Annotated[str | None, Field(pattern=r"^[0-9a-f]{64}$", json_schema_extra=_OMIT)] = None
     category_id: str | None
     kind: str
     priority: int
@@ -1802,6 +1805,8 @@ class BudgetAnalyticsTransaction(BudgetTransaction):
     annotation: BudgetAnalyticsAnnotation
     effective: BudgetAnalyticsEffective
     metadata: BudgetAnalyticsMetadata | None
+    counterparty_account_key: Annotated[str | None, Field(pattern=r"^[0-9a-f]{64}$", json_schema_extra=_OMIT)] = None
+    counterparty_account: Annotated[str | None, Field(json_schema_extra=_OMIT)] = None
     transfer: BudgetAnalyticsTransactionTransfer
 
 

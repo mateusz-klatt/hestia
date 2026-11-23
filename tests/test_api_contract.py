@@ -56,9 +56,19 @@ class OpenApiArtifactTests(unittest.TestCase):
         )
 
     def test_monthly_budget_contract_chain_from_0_27_0(self):
-        """0.35.0 adds the one-off label on top of 0.34.0. Earlier steps stay as published."""
+        """0.38.0 adds counterparty accounts on top of the published contract chain."""
         document = api_contract.build_openapi()
-        self.assertEqual(document["info"]["version"], "0.35.0")
+        self.assertEqual(document["info"]["version"], "0.38.0")
+        for schema, field in (
+            ("BudgetAnalyticsRulePreviewRequest", "counterparty_account_key"),
+            ("BudgetAnalyticsRule", "counterparty_account_key"),
+            ("BudgetAnalyticsRuleSaved", "counterparty_account_key"),
+            ("BudgetAnalyticsTransaction", "counterparty_account_key"),
+            ("BudgetAnalyticsTransaction", "counterparty_account"),
+        ):
+            document["components"]["schemas"][schema]["properties"].pop(field)
+        rule_fields = document["components"]["schemas"]["BudgetAnalyticsRulePreviewRequest"]["properties"]["field"]
+        rule_fields["enum"].remove("counterparty_account")
         # 0.35.0 one-off label is additive over 0.34.0. Remove it before that digest.
         for schema, field in (
             ("BudgetAnalyticsAnnotationRequest", "label"),
