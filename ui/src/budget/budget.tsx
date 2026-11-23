@@ -13,7 +13,7 @@ import type { BudgetAccount, BudgetBalances, BudgetCapabilities, BudgetConnectio
   LimitState } from "./model";
 import { ConsentHealthPanel, consentHealthLabels } from "./consent_health";
 import { ForecastView } from "./analytics/forecast";
-import { InboxView, inboxLabels } from "./analytics/inbox";
+import { InboxView } from "./analytics/inbox";
 import { MonthView, monthLabels } from "./analytics/month";
 import { MonthBudgetView, monthBudgetLabels } from "./analytics/month_budget";
 import { MortgagesView, mortgagesLabels } from "./analytics/mortgages";
@@ -123,14 +123,13 @@ const labels = {
 };
 type Labels = typeof labels.en;
 
-function pick(): { text: Labels; consentHealth: typeof consentHealthLabels.en; inbox: typeof inboxLabels.en;
+function pick(): { text: Labels; consentHealth: typeof consentHealthLabels.en;
   monthBudget: typeof monthBudgetLabels.en; month: typeof monthLabels.en; year: typeof yearLabels.en;
   limits: typeof spendingLimitsLabels.en; recurring: typeof recurringLabels.en;
   mortgages: typeof mortgagesLabels.en; quarantine: typeof quarantineLabels.en; rules: typeof rulesLabels.en; locale: string } {
   const locale = currentLocale();
   const pl = locale.startsWith("pl");
   return { text: pl ? labels.pl : labels.en, consentHealth: pl ? consentHealthLabels.pl : consentHealthLabels.en,
-    inbox: pl ? inboxLabels.pl : inboxLabels.en,
     monthBudget: pl ? monthBudgetLabels.pl : monthBudgetLabels.en,
     month: pl ? monthLabels.pl : monthLabels.en, year: pl ? yearLabels.pl : yearLabels.en,
     limits: pl ? spendingLimitsLabels.pl : spendingLimitsLabels.en,
@@ -184,7 +183,7 @@ export interface BudgetProps {
 
 export function Budget({ active, api = budgetApi, pollMs = 2000, principal,
   navigate = (url) => { window.location.assign(url); }, completeUrl = "/budget/connect/complete" }: BudgetProps) {
-  const { text, consentHealth: consentHealthText, inbox: inboxText, monthBudget: monthBudgetText, month: monthText,
+  const { text, consentHealth: consentHealthText, monthBudget: monthBudgetText, month: monthText,
     year: yearText, limits: limitsText, recurring: recurringText, mortgages: mortgagesText, quarantine: quarantineText,
     rules: rulesText, locale } = pick();
   const [load, setLoad] = useState<Load>("loading");
@@ -498,7 +497,7 @@ export function Budget({ active, api = budgetApi, pollMs = 2000, principal,
             setView("month");
           }} />
       ) : shownView === "inbox" ? (
-        <InboxView api={api} connections={connections} consentEnabled={consentEnabled} text={inboxText} locale={locale}
+        <InboxView api={api} connections={connections} consentEnabled={consentEnabled} locale={locale}
           revision={revision} onAccessLoss={barrier}
           onOpenAccounts={(openConsentHealth) => {
             setView("accounts");
