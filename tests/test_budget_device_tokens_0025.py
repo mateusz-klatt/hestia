@@ -1,4 +1,4 @@
-"""Migration 0024 device-token schema. HMAC columns only, owner foreign keys, reversible."""
+"""Migration 0025 device-token schema. HMAC columns only, owner foreign keys, reversible."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -16,12 +16,12 @@ _TABLES = {"budget_receipt_device_tokens", "budget_receipt_pair_codes"}
 _HEX = "ab" * 32
 
 
-class DeviceTokenMigration0024Tests(unittest.TestCase):
+class DeviceTokenMigration0025Tests(unittest.TestCase):
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
         self.addCleanup(db.reset_engine_cache)
-        self.path = Path(self.directory.name) / "device-tokens-0024.db"
+        self.path = Path(self.directory.name) / "device-tokens-0025.db"
 
     def _revision(self, engine):
         with engine.connect() as conn:
@@ -49,7 +49,7 @@ class DeviceTokenMigration0024Tests(unittest.TestCase):
     def test_upgrade_downgrade_and_metadata_match(self):
         engine, _ = db.init_db(self.path)
         self._assert_clean(engine)
-        self.assertEqual(self._revision(engine), "0024")
+        self.assertEqual(self._revision(engine), "0025")
         self.assertTrue(_TABLES <= set(inspect(engine).get_table_names()))
         self.assertNotIn("budget_receipt_pair_locks", inspect(engine).get_table_names())
         self.assertFalse({"token", "code", "token_hash", "code_hash"} & self._columns(engine, "budget_receipt_device_tokens"))
@@ -65,6 +65,7 @@ class DeviceTokenMigration0024Tests(unittest.TestCase):
         with engine.begin() as conn:
             conn.exec_driver_sql("INSERT INTO users (username, password_hash, role) VALUES ('owner', 'h', 'admin')")
             conn.exec_driver_sql("INSERT INTO users (username, password_hash, role) VALUES ('member', 'h', 'viewer')")
+            conn.exec_driver_sql("INSERT INTO budget_gmail_state (owner) VALUES ('owner')")
             conn.exec_driver_sql(
                 "INSERT INTO budget_household_members (member_username, owner, grant_id) VALUES ('member', 'owner', ?)",
                 (_HEX,))
@@ -112,25 +113,27 @@ class DeviceTokenMigration0024Tests(unittest.TestCase):
                     ("receipt_device_token", "t", "delete"),
                 ],
             )
-        db.downgrade_db(self.path, "0023")
+        db.downgrade_db(self.path, "0024")
         engine = self._open()
         self._assert_clean(engine)
-        self.assertEqual(self._revision(engine), "0023")
+        self.assertEqual(self._revision(engine), "0024")
         self.assertFalse(_TABLES & set(inspect(engine).get_table_names()))
         with engine.connect() as conn:
             self.assertEqual(conn.exec_driver_sql("SELECT id FROM budget_receipts").scalar(),
                              "11111111-1111-4111-8111-111111111111")
             self.assertEqual(conn.exec_driver_sql(
                 "SELECT member_username, owner FROM budget_household_members").all(), [("member", "owner")])
+            self.assertEqual(conn.exec_driver_sql("SELECT owner FROM budget_gmail_state").all(), [("owner",)])
             self.assertEqual(conn.exec_driver_sql(
                 "SELECT subject_type, subject_id FROM budget_analytics_audit ORDER BY subject_type"
             ).all(), [("category", "category-01"), ("receipt", "11111111-1111-4111-8111-111111111111")])
         engine, _ = db.init_db(self.path)
         self._assert_clean(engine)
-        self.assertEqual(self._revision(engine), "0024")
+        self.assertEqual(self._revision(engine), "0025")
         with engine.connect() as conn:
             self.assertEqual(compare_metadata(MigrationContext.configure(conn), db.Base.metadata), [])
             self.assertEqual(conn.exec_driver_sql("SELECT id FROM budget_receipts").scalar(),
                              "11111111-1111-4111-8111-111111111111")
             self.assertEqual(conn.exec_driver_sql(
                 "SELECT member_username, owner FROM budget_household_members").all(), [("member", "owner")])
+            self.assertEqual(conn.exec_driver_sql("SELECT owner FROM budget_gmail_state").all(), [("owner",)])

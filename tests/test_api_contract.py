@@ -56,9 +56,9 @@ class OpenApiArtifactTests(unittest.TestCase):
         )
 
     def test_monthly_budget_contract_chain_from_0_27_0(self):
-        """0.39.0 adds device tokens after 0.38.0 counterparty accounts and 0.37.0 household reads."""
+        """Remove additive receipts and household surfaces before verifying earlier contract snapshots."""
         document = api_contract.build_openapi()
-        self.assertEqual(document["info"]["version"], "0.39.0")
+        self.assertEqual(document["info"]["version"], "0.40.0")
         for name in ("BudgetAnalyticsRule", "BudgetAnalyticsRuleSaved"):
             schema = document["components"]["schemas"][name]
             self.assertNotIn("inactive_reason", schema["required"])
@@ -660,6 +660,7 @@ class TolerantResponseContractTests(unittest.TestCase):
         "BudgetReceiptSearchRequest", "BudgetReceiptDeleteRequest",
         "BudgetReceiptDeviceBrowserRequest", "BudgetReceiptDeviceRedeemRequest",
         "BudgetReceiptDeviceRevokeRequest",
+        "BudgetReceiptGmailGrantRequest", "BudgetReceiptGmailRevokeRequest", "BudgetReceiptGmailSyncRequest",
         "AddUserRequest", "ChangePasswordRequest", "ControlCover", "ControlLevel", "ControlRequest",
         "ControlSwitch", "ControlThermostat", "ControlThermostatPower", "IrRequest", "LoginRequest",
         "NameRequest", "ResetPasswordRequest", "RoomIconRequest", "RuleInput", "SceneRequest",

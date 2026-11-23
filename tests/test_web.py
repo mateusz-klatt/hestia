@@ -2071,6 +2071,11 @@ SPOUSE_ROUTE_STATUS = {
     ("POST", "/api/budget/receipts/device-token/redeem"): 403,
     ("POST", "/api/budget/receipts/device-token/list"): 403,
     ("POST", "/api/budget/receipts/device-token/revoke"): 403,
+
+    ("GET", "/api/budget/receipts/gmail-status"): 403,
+    ("POST", "/api/budget/receipts/gmail-grant"): 403,
+    ("POST", "/api/budget/receipts/gmail-revoke"): 403,
+    ("POST", "/api/budget/receipts/gmail-sync"): 403,
     ("POST", "/api/budget/analytics/transfer-decision"): 403,
     ("POST", "/api/budget/background-selection"): 403,
     ("POST", "/api/budget/connection-state"): 403,

@@ -224,6 +224,11 @@ _ROUTE_MIN_ROLE = {
     ("POST", "/api/budget/receipts/device-token/pair-code"): _ADMIN,
     ("POST", "/api/budget/receipts/device-token/list"): _ADMIN,
     ("POST", "/api/budget/receipts/device-token/revoke"): _ADMIN,
+
+    ("POST", "/api/budget/receipts/gmail-grant"): _ADMIN,
+    ("POST", "/api/budget/receipts/gmail-revoke"): _ADMIN,
+    ("POST", "/api/budget/receipts/gmail-sync"): _ADMIN,
+    ("GET", "/api/budget/receipts/gmail-status"): _ADMIN,
     ("GET", "/api/budget/connections"): _ADMIN,
     ("GET", "/api/budget/accounts"): _ADMIN,
     ("GET", "/api/budget/status"): _ADMIN,

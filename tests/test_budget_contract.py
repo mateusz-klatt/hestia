@@ -231,7 +231,7 @@ class BudgetOpenApiTests(unittest.TestCase):
         self.assertEqual(set(receipts), {"/api/budget/receipts/" + name for name in
                          ("parse-text", "confirm", "list", "search", "detail", "image", "delete",
                           "device-token/pair-code", "device-token/redeem", "device-token/list",
-                          "device-token/revoke")})
+                          "device-token/revoke", "gmail-status", "gmail-grant", "gmail-sync", "gmail-revoke")})
         for path, methods in receipts.items():
             name = path.rsplit("/", 1)[1]
             if path.startswith("/api/budget/receipts/device-token/"):
@@ -249,7 +249,7 @@ class BudgetOpenApiTests(unittest.TestCase):
                     self.assertIn("application/json", responses["415"]["description"])
                     self.assertIn("bytes", responses["413"]["description"])
                 continue
-            method = "get" if name in ("detail", "image") else "post"
+            method = "get" if name in ("detail", "image", "gmail-status") else "post"
             self.assertEqual(set(methods), {method})
             self.assertEqual(methods[method]["x-required-role"], "admin")
             if method == "post":
@@ -272,7 +272,7 @@ class BudgetOpenApiTests(unittest.TestCase):
         self.assertIn("budget_receipt_quota_exceeded", parse_limit)
         self.assertIn("131072", receipts["/api/budget/receipts/confirm"]["post"]["responses"]["413"]["description"])
         self.assertIn("16384", receipts["/api/budget/receipts/list"]["post"]["responses"]["413"]["description"])
-        self.assertEqual(document["info"]["version"], "0.39.0")
+        self.assertEqual(document["info"]["version"], "0.40.0")
         receipt_schemas = document["components"]["schemas"]
         self.assertEqual(receipt_schemas["BudgetReceiptDeviceRedeemResult"]["properties"]["expires_at"]["format"],
                          "date-time")
@@ -292,6 +292,13 @@ class BudgetOpenApiTests(unittest.TestCase):
         detail_result = document["components"]["schemas"]["BudgetReceiptDetailResult"]
         self.assertNotIn("candidates", detail_result["required"])
         self.assertNotIn("default", detail_result["properties"]["candidates"])
+        for name in ("parse-text", "confirm", "list", "search", "detail"):
+            operation = next(iter(receipts["/api/budget/receipts/" + name].values()))
+            version, = [parameter for parameter in operation["parameters"] if parameter["in"] == "header"]
+            self.assertEqual(version["name"], "X-Hestia-Contract-Version")
+            self.assertFalse(version["required"])
+        self.assertNotIn("parameters", receipts["/api/budget/receipts/gmail-status"]["get"])
+        self.assertIn("429", receipts["/api/budget/receipts/gmail-sync"]["post"]["responses"])
         batch = analytics["/api/budget/analytics/rule-batch-preview"]["post"]["description"]
         self.assertIn("1..100", batch)
         self.assertIn("All-or-nothing", batch)
@@ -591,7 +598,8 @@ class BudgetOpenApiTests(unittest.TestCase):
                               "BudgetReceiptParseTextRequest", "BudgetReceiptConfirmRequest", "BudgetReceiptLineInput",
                               "BudgetReceiptLinkRequest", "BudgetReceiptListRequest", "BudgetReceiptSearchRequest",
                               "BudgetReceiptDeleteRequest", "BudgetReceiptDeviceBrowserRequest",
-                              "BudgetReceiptDeviceRedeemRequest", "BudgetReceiptDeviceRevokeRequest"})
+                              "BudgetReceiptDeviceRedeemRequest", "BudgetReceiptDeviceRevokeRequest", "BudgetReceiptGmailGrantRequest",
+                              "BudgetReceiptGmailRevokeRequest", "BudgetReceiptGmailSyncRequest"})
         for name, schema in schemas.items():
             if name in request_names:
                 self.assertIs(schema["additionalProperties"], False)
