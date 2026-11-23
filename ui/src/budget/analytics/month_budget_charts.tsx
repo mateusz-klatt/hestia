@@ -531,21 +531,34 @@ export function buildCategoryChartModel(
   return { scale, displayed, hasOtherPositive, hasOtherNegative, allCategories, oneOffs, byMonthAndCategory, stacks };
 }
 
-function chartPoint(entry: { category_id: string | null; net_spending: string }): {
-  category_id: string | null; net_spending: string; one_off: boolean; name: string | null;
+function chartPoint(entry: AnalyticsMonthlyBudgetSeriesMonth["categories"][number]): {
+  category_id: string | null;
+  net_spending: string;
+  one_off: boolean;
+  name: string | null;
+  one_off_key: string | null;
 } {
-  const extra = entry as { one_off?: boolean; name?: string | null };
-  const name = typeof extra.name === "string" && extra.name !== "" ? extra.name : null;
+  const name = typeof entry.name === "string" && entry.name !== "" ? entry.name : null;
+  const rawKey = entry.one_off_key;
+  const oneOffKey = typeof rawKey === "string" && rawKey !== "" ? rawKey : null;
+  const oneOff = entry.one_off === true && name !== null;
   return {
     category_id: entry.category_id,
     net_spending: entry.net_spending,
-    one_off: extra.one_off === true && name !== null,
+    one_off: oneOff,
     name,
+    one_off_key: oneOff ? oneOffKey : null,
   };
 }
 
-function seriesKeyOf(point: { category_id: string | null; one_off: boolean; name: string | null }): string {
-  return point.one_off ? `o:${point.category_id ?? ""}:${point.name ?? ""}` : `c:${point.category_id ?? ""}`;
+function seriesKeyOf(point: {
+  category_id: string | null;
+  one_off: boolean;
+  one_off_key: string | null;
+}): string {
+  // Regular rows stay c:<id> so the ranking can recover the category id. A one-off uses its hash.
+  if (point.one_off) return point.one_off_key ?? `one-off:${point.category_id ?? ""}`;
+  return `c:${point.category_id ?? ""}`;
 }
 
 function monthTickSuffix(month: AnalyticsMonthlyBudgetSeriesMonth): string {

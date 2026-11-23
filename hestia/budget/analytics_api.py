@@ -158,7 +158,9 @@ def register(app, read_json_body, *, auth_enabled, session_secret):
                 body, error = await read_json_body(request, max_bytes, reject_duplicates=True)
                 if error:
                     return body
-                values = WRITES[operation][0].model_validate(body).model_dump()
+                validated = WRITES[operation][0].model_validate(body)
+                # An omitted annotation label means "unchanged". Null and "" still arrive as set fields.
+                values = validated.model_dump(exclude_unset=(operation == "annotation"))
                 owner = api._principal(request, auth_enabled)
                 secret = api._secret(session_secret)
                 api._browser(request, owner, secret)

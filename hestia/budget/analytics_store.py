@@ -65,6 +65,9 @@ def _annotation_audit(row):
     return {**_dict(row, _ANNOTATION_FIELDS), "has_label": row.label is not None}
 
 
+_KEEP_LABEL = object()
+
+
 def _text(value, limit=80):
     if (not isinstance(value, str) or len(value) > limit
             or any(unicodedata.category(char) in ("Cc", "Cf", "Cs") for char in value)):
@@ -379,12 +382,12 @@ class BudgetAnalyticsStore(BudgetHTTPStore):
                 row, clean_month, paid, self._mortgage_paid_months(session, owner, row.id), True)
 
     def annotate(self, owner, account_id, entry_reference, *, mode, category_id, kind, expected_version,
-                 expected_fingerprint, label=None):
+                 expected_fingerprint, label=_KEEP_LABEL):
         if (mode not in ("auto", "manual") or not isinstance(kind, str) or kind not in KINDS
                 or (mode == "auto" and (category_id is not None or kind != "auto"))):
             raise AnalyticsError()
-        # Reject or clear before any write. Failures use a fixed code and never echo the text.
-        clean_label = clean_one_off_label(label)
+        # An omitted label is left alone. Null and blank clear. Failures use a fixed code and never echo the text.
+        clean_label = _KEEP_LABEL if label is _KEEP_LABEL else clean_one_off_label(label)
         with self.transaction() as session:
             self._owner(session, owner)
             _, payload, fingerprint = self._transaction(session, owner, account_id, entry_reference)
@@ -397,8 +400,9 @@ class BudgetAnalyticsStore(BudgetHTTPStore):
                 raise AnalyticsError("budget_analytics_not_found", 404)
             _version(0 if row is None else row.version, expected_version)
             before = None if row is None else _annotation_audit(row)
-            desired = mode, category_id, kind, fingerprint, clean_label
-            if row is None and mode == "auto" and clean_label is None:
+            next_label = (None if row is None else row.label) if clean_label is _KEEP_LABEL else clean_label
+            desired = mode, category_id, kind, fingerprint, next_label
+            if row is None and mode == "auto" and next_label is None:
                 return {"account_id": account_id, "entry_reference": entry_reference, "mode": "auto",
                         "category_id": None, "kind": "auto", "ledger_fingerprint": fingerprint, "version": 0,
                         "updated_at": None, "label": None, "changed": False}
@@ -406,10 +410,10 @@ class BudgetAnalyticsStore(BudgetHTTPStore):
                 return {**_annotation_wire(row), "changed": False}
             if row is None:
                 row = Annotation(account_id=account_id, entry_reference=entry_reference, owner=owner, version=0,
-                                 label=clean_label)
+                                 label=next_label)
                 session.add(row)
             row.mode, row.category_id, row.kind, row.ledger_fingerprint = desired[:4]
-            row.label = clean_label
+            row.label = next_label
             row.version += 1
             row.updated_at = self._now()
             session.flush()

@@ -323,7 +323,7 @@ class BudgetOpenApiTests(unittest.TestCase):
 
     def test_monthly_budget_schemas_pin_wire_fields_and_bounds(self):
         schemas = contract.build_openapi()["components"]["schemas"]
-        optional_keys = {"Configuration": {"income_window"}}
+        optional_keys = {"Configuration": {"income_window"}, "CategorySpend": {"one_off", "one_off_key"}}
         for suffix, keys in {
             "": {"period", "start", "end", "cutoff", "current_month", "evaluated_at", "evaluation_date",
                  "evaluation_timezone", "currency", "available_currencies", "configuration", "coverage",
@@ -339,7 +339,8 @@ class BudgetOpenApiTests(unittest.TestCase):
             "Pace": {"basis", "budget", "status", "daily_rate", "projected_month_spend", "exhaustion_day"},
             "CategoryLimit": {"monthly_limit", "remaining", "over_by", "percent_used_floor",
                               "warning_percent", "status"},
-            "CategorySpend": {"category_id", "name", "archived", "expenses", "refunds", "net_spending", "limit"},
+            "CategorySpend": {"category_id", "name", "archived", "expenses", "refunds", "net_spending", "limit",
+                              "one_off", "one_off_key"},
             "PassThrough": {"rent_category_id", "mortgage_category_id", "rent_received", "mortgage_debits",
                             "mortgage_refunds", "unapplied_mortgage_refunds", "matched", "unapplied_rent",
                             "uncovered_mortgage"},
@@ -383,10 +384,10 @@ class BudgetOpenApiTests(unittest.TestCase):
             self.assertIn("monthly-budget/charts", responses["409"]["description"])
 
         schemas = doc["components"]["schemas"]
-        optional = {"SeriesCategory": {"name", "one_off"}}
+        optional = {"SeriesCategory": {"name", "one_off", "one_off_key"}}
         for suffix, keys in {
             "DailyPoint": {"date", "cumulative_spent"},
-            "SeriesCategory": {"category_id", "net_spending", "name", "one_off"},
+            "SeriesCategory": {"category_id", "net_spending", "name", "one_off", "one_off_key"},
             "SeriesMonth": {"period", "has_activity", "is_current_month", "income_estimate_partial",
                             "provisional", "start_budget", "spent", "categories"},
             "CategoryLabel": {"category_id", "name", "archived"},

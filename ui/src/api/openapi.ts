@@ -1796,6 +1796,8 @@ export interface components {
             net_spending: string;
             /** One Off */
             one_off?: boolean;
+            /** One Off Key */
+            one_off_key?: string | null;
             /** Refunds */
             refunds: string;
         };
@@ -2377,6 +2379,10 @@ export interface components {
             name: string | null;
             /** Net Spending */
             net_spending: string;
+            /** One Off */
+            one_off?: boolean;
+            /** One Off Key */
+            one_off_key?: string | null;
             /** Refunds */
             refunds: string;
         };
@@ -2527,6 +2533,8 @@ export interface components {
             net_spending: string;
             /** One Off */
             one_off?: boolean;
+            /** One Off Key */
+            one_off_key?: string | null;
         };
         /** BudgetAnalyticsMonthlyBudgetSeriesMonth */
         BudgetAnalyticsMonthlyBudgetSeriesMonth: {

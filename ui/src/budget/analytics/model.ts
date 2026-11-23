@@ -120,6 +120,19 @@ export const UNCATEGORISED = "uncategorised";
 
 export type AnnotationRequest = Schemas["BudgetAnalyticsAnnotationRequest"];
 
+/** React key for one category row. A one-off uses one_off_key. The label text is never part of the key. */
+export function oneOffRowKey(
+  row: { one_off?: boolean; one_off_key?: string | null; category_id: string | null },
+  index: number,
+): string {
+  if (row.one_off === true) {
+    return row.one_off_key != null && row.one_off_key !== ""
+      ? row.one_off_key
+      : `one-off:${row.category_id ?? ""}:${String(index)}`;
+  }
+  return row.category_id ?? `uncategorised-${String(index)}`;
+}
+
 /** The owner's category choice in the editor: automatic (rules), explicitly none, or a category id. */
 export type CategoryChoice = { mode: "auto" } | { mode: "manual"; category_id: string | null };
 

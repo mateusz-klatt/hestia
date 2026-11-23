@@ -1086,6 +1086,18 @@
             "title": "One Off",
             "type": "boolean"
           },
+          "one_off_key": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "One Off Key"
+          },
           "refunds": {
             "title": "Refunds",
             "type": "string"
@@ -2689,6 +2701,22 @@
             "title": "Net Spending",
             "type": "string"
           },
+          "one_off": {
+            "title": "One Off",
+            "type": "boolean"
+          },
+          "one_off_key": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "One Off Key"
+          },
           "refunds": {
             "maxLength": 192,
             "title": "Refunds",
@@ -3153,6 +3181,18 @@
           "one_off": {
             "title": "One Off",
             "type": "boolean"
+          },
+          "one_off_key": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "One Off Key"
           }
         },
         "required": [

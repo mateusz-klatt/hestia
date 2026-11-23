@@ -153,6 +153,21 @@ def active_one_off_label(annotation, amount, *, minimum=ONE_OFF_MIN_ABS):
     return label
 
 
+def one_off_key(members):
+    """Row identity for a labelled group. The label text is never part of the key.
+
+    ``members`` are ``(account_id, entry_reference)`` pairs. Order does not matter.
+    """
+    pairs = []
+    for account_id, entry_reference in members:
+        if not isinstance(account_id, str) or not isinstance(entry_reference, str):
+            raise AnalyticsError()
+        pairs.append((account_id, entry_reference))
+    pairs.sort()
+    raw = json.dumps(pairs, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(b"hestia/budget/one-off-key/v1\n" + raw.encode("utf-8")).hexdigest()
+
+
 def effective_date(payload):
     value = payload.get("booking_date") or payload.get("value_date")
     if value is None:

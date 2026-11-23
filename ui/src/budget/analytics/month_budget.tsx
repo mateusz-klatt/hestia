@@ -6,7 +6,7 @@ import type { BudgetApi } from "../api";
 import { formatAmount, when } from "../model";
 import type { BudgetAccount } from "../model";
 import { clampPercentString, formatRatioHalfEven, isPositiveDecimal, isZero, labelOf,
-  monthLabel, monthlyBudgetCurrencies, pluralPl, ratioPercentFloor, shiftMonth, validCurrency } from "./model";
+  monthLabel, monthlyBudgetCurrencies, oneOffRowKey, pluralPl, ratioPercentFloor, shiftMonth, validCurrency } from "./model";
 import type { AnalyticsCategory, AnalyticsMonthlyBudget, AnalyticsMonthlyBudgetCharts,
   AnalyticsMonthlyBudgetExpectedIncome, AnalyticsMonthlyBudgetIncomeWindow, AnalyticsMonthlyBudgetPace,
   AnalyticsMonthlyBudgetPassThrough, AnalyticsMonthlyBudgetSeries } from "./model";
@@ -730,14 +730,18 @@ function ReadyDashboard({ data, series, categoryMap, text, locale, onOpenMonth }
                   </thead>
                   <tbody>
                     {data.category_spend.map((row, index) => {
-                      const label = row.category_id === null
-                        ? text.uncategorised
-                        : (row.name ?? categoryMap.get(row.category_id) ?? text.unknownCategory);
+                      const oneOff = row.one_off === true;
+                      const label = oneOff
+                        ? (row.name ?? text.uncategorised)
+                        : row.category_id === null
+                          ? text.uncategorised
+                          : (row.name ?? categoryMap.get(row.category_id) ?? text.unknownCategory);
                       return (
-                        <tr key={row.category_id ?? `uncategorised-${String(index)}`}
-                          className={row.category_id === null ? "is-uncategorised" : undefined}>
+                        <tr key={oneOffRowKey(row, index)}
+                          className={oneOff ? "budget-one-off" : row.category_id === null ? "is-uncategorised" : undefined}>
                           <th scope="row">
                             {label}
+                            {oneOff ? <small className="budget-one-off-tag">{text.oneOffTag}</small> : null}
                             {row.archived ? <small className="budget-muted"> ({text.archived})</small> : null}
                           </th>
                           <td>{money(row.expenses)}</td>

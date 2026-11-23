@@ -5,9 +5,13 @@ The label text is owner-private: these tests use synthetic phrases and never log
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
+import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
 
 from alembic import command
 from alembic.autogenerate import compare_metadata
@@ -18,12 +22,48 @@ from sqlalchemy.exc import IntegrityError
 from hestia import api_contract, db
 from hestia.budget import month_budget
 from hestia.budget.analytics_core import (
-    AnalyticsError, active_one_off_label, clean_one_off_label, stored_one_off_label, sum_money,
+    AnalyticsError, active_one_off_label, clean_one_off_label, one_off_key, stored_one_off_label, sum_money,
 )
 from tests import test_budget_analytics_api as analytics_api_tests
 from tests.test_budget_analytics_store import AnalyticsCase
 from tests.test_budget_analytics_views import ProjectionCase
-from tests.test_budget_month import _eval_charts, _tx
+from tests.test_budget_month import DEFAULT_SETTINGS, _eval_charts, _tx
+
+# One scenario for the overview and the chart series. A labelled mortgage leg stays in its category.
+_FOOD_LABEL = "Remont lazienki"
+_REFUND_LABEL = "Zwrot materialu"
+_HIDDEN_LABEL = "Ukryte"
+_MORTGAGE_LABEL = "Nie ruszaj"
+# role, reference, amount, direction, kind, label, stale
+ONE_OFF_FIXTURE = (
+    ("food", "food", "10", "DBIT", "expense", None, False),
+    ("food", "food-big", "40", "DBIT", "expense", _FOOD_LABEL, False),
+    ("none", "cash", "2000", "DBIT", "expense", _FOOD_LABEL, False),
+    ("none", "cash-2", "15", "DBIT", "expense", None, False),
+    ("none", "stale", "7", "DBIT", "expense", _HIDDEN_LABEL, True),
+    ("none", "refund", "5", "CRDT", "refund", _REFUND_LABEL, False),
+    ("none", "same", "3", "DBIT", "expense", _FOOD_LABEL, False),
+    ("mortgage", "mort", "500", "DBIT", "expense", _MORTGAGE_LABEL, False),
+)
+
+
+def _expected_split(ids):
+    """Nets after the shared split. Keys are (one_off, label or None, category id)."""
+    return {
+        (False, None, ids["food"]): "10",
+        (False, None, ids["none"]): "22",
+        (False, None, ids["mortgage"]): "500",
+        (True, _FOOD_LABEL, ids["food"]): "40",
+        (True, _FOOD_LABEL, ids["none"]): "2003",
+        (True, _REFUND_LABEL, ids["none"]): "-5",
+    }
+
+
+def _actual_split(rows):
+    return {
+        (row["one_off"], row["name"] if row["one_off"] else None, row["category_id"]): row["net_spending"]
+        for row in rows
+    }
 
 _INSERT = (
     "INSERT INTO budget_annotations (account_id, entry_reference, owner, mode, category_id, kind, "
@@ -64,7 +104,11 @@ class AnnotationLabelMigration0023Tests(unittest.TestCase):
             self.assertIn("label", columns)
             self.assertTrue(columns["label"]["nullable"])
             checks = inspect(engine).get_check_constraints("budget_annotations")
-            self.assertTrue(any("trim(label)" in (item.get("sqltext") or "") for item in checks))
+            sql = " ".join(item.get("sqltext") or "" for item in checks)
+            self.assertIn("trim(label)", sql)
+            self.assertIn("char(10)", sql)
+            self.assertIn("char(13)", sql)
+            self.assertIn("char(9)", sql)
 
             with engine.connect() as conn:
                 self.assertIsNone(conn.exec_driver_sql(
@@ -79,14 +123,15 @@ class AnnotationLabelMigration0023Tests(unittest.TestCase):
             insert("ok", "Remont lazienki")
             insert("eighty", "a" * 80)
             insert("blank-check", None)
-            # SQLite trim() strips spaces only, so a newline satisfies the CHECK. The app rejects it.
-            insert("newline", "line\n")
             for reference, label in (
                 ("empty", ""),
                 ("spaces", "  "),
                 ("lead", " padded"),
                 ("trail", "padded "),
                 ("long", "b" * 81),
+                ("newline", "line\n"),
+                ("cr", "line\r"),
+                ("tab", "line\t"),
             ):
                 with self.subTest(reference=reference), self.assertRaises(IntegrityError):
                     insert(reference, label)
@@ -150,6 +195,15 @@ class OneOffLabelCoreTests(unittest.TestCase):
         self.assertIsNone(active_one_off_label(fresh, "not-money", minimum="100"))
         self.assertIsNone(active_one_off_label(fresh, "10", minimum="not-money"))
 
+    def test_one_off_key_is_a_label_free_hash_of_the_member_transactions(self):
+        first = one_off_key([("acc-a", "cash"), ("acc-a", "same")])
+        self.assertEqual(first, one_off_key([("acc-a", "same"), ("acc-a", "cash")]))
+        self.assertEqual(len(first), 64)
+        self.assertNotIn(_FOOD_LABEL, first)
+        self.assertNotEqual(first, one_off_key([("acc-a", "food-big")]))
+        with self.assertRaises(AnalyticsError):
+            one_off_key([("acc-a", None)])
+
 
 class AnnotationLabelStoreTests(AnalyticsCase):
     def _audits(self):
@@ -194,115 +248,200 @@ class AnnotationLabelStoreTests(AnalyticsCase):
         self.assertTrue(any(row.entry_reference == "credit" and row.label == "Wyp\u0142ata"
                             for row in self.rows(db.BudgetAnnotation)))
 
+    def test_omitted_label_stays_and_null_clears_it(self):
+        phrase = "ATM"
+        saved = self.annotation(kind="expense", label=phrase)
+        self.assertEqual(saved["label"], phrase)
+        kept = self.annotation(kind="expense", expected_version=1)
+        self.assertEqual((kept["changed"], kept["label"], kept["version"]), (False, phrase, 1))
+        food = self.store.create_category("owner", "Synthetic Food")
+        moved = self.annotation(kind="expense", category_id=food["id"], expected_version=1)
+        self.assertEqual((moved["changed"], moved["label"], moved["category_id"]), (True, phrase, food["id"]))
+        cleared = self.annotation(kind="expense", category_id=food["id"], label=None, expected_version=2)
+        self.assertEqual((cleared["label"], cleared["category_id"]), (None, food["id"]))
+        self.assertIsNone(self.rows(db.BudgetAnnotation)[0].label)
+
+
+def _series_transactions(ids):
+    rows = []
+    for role, reference, amount, direction, kind, label, stale in ONE_OFF_FIXTURE:
+        category_id = ids[role]
+        rows.append(_tx(
+            "acc-a", reference, amount=amount, direction=direction, kind=kind, category_id=category_id,
+            source="manual", booking_date="2026-11-11" if direction == "CRDT" else "2026-11-10",
+            annotation={"version": 1, "mode": "manual", "category_id": category_id, "kind": kind,
+                        "stale": stale, "label": label},
+        ))
+    return rows
+
 
 class OneOffSeriesTests(unittest.TestCase):
     def test_labelled_rows_leave_their_category_without_changing_spent(self):
-        fresh = {"version": 1, "mode": "manual", "category_id": None, "kind": "expense", "stale": False}
-        food_plain = _tx("acc-a", "food", amount="10", category_id="cat-food", kind="expense", source="manual",
-                         annotation={**fresh, "category_id": "cat-food", "label": None})
-        food_labelled = _tx("acc-a", "food-big", amount="40", category_id="cat-food", kind="expense", source="manual",
-                            annotation={**fresh, "category_id": "cat-food", "label": "Remont \u0142azienki"})
-        cash = _tx("acc-a", "cash", amount="2000", kind="expense", source="manual",
-                   annotation={**fresh, "label": "Remont \u0142azienki"})
-        cash_same = _tx("acc-a", "cash-2", amount="15", kind="expense", source="manual",
-                        annotation={**fresh, "label": None})
-        stale = _tx("acc-a", "stale", amount="7", kind="expense", source="manual",
-                    annotation={**fresh, "label": "Ukryte", "stale": True})
-        refund = _tx("acc-a", "refund", amount="5", direction="CRDT", kind="refund", source="manual",
-                     booking_date="2026-11-11",
-                     annotation={**fresh, "kind": "refund", "label": "Zwrot materia\u0142u"})
-        same = _tx("acc-a", "same", amount="3", kind="expense", source="manual",
-                   annotation={**fresh, "label": "Remont \u0142azienki"})
-        mortgage = _tx("acc-a", "mortgage", amount="500", category_id="cat-mortgage", kind="expense", source="manual",
-                       annotation={**fresh, "category_id": "cat-mortgage", "label": "Nie ruszaj hipoteki"})
-        settings = month_budget.MonthBudgetSettings(
-            income_category_ids=("cat-salary", "cat-zus"),
-            pass_through=month_budget.PassThroughSettings("cat-rent", "cat-mortgage"),
-        )
-        charts = _eval_charts(transactions=[food_plain, food_labelled, cash, cash_same, stale, refund, same, mortgage],
-                              settings=settings)
+        ids = {"food": "cat-food", "none": None, "mortgage": "cat-mortgage"}
+        charts = _eval_charts(transactions=_series_transactions(ids), settings=DEFAULT_SETTINGS)
         budget = charts["budget"]
         series = charts["series"]["months"][-1]["categories"]
         spent = budget["summary"]["spent"]
+        expected = _expected_split(ids)
+        self.assertEqual(_actual_split(series), expected)
+        self.assertEqual(_actual_split(budget["category_spend"]), expected)
         self.assertEqual(month_budget.core.sum_money(row["net_spending"] for row in series), spent)
         self.assertEqual(month_budget.core.sum_money(row["net_spending"] for row in budget["category_spend"]), spent)
-        by_spend = {row["category_id"]: row["net_spending"] for row in budget["category_spend"]}
-        self.assertEqual(by_spend["cat-food"], "50")
-        self.assertEqual(by_spend[None], "2020")
-        self.assertEqual(by_spend["cat-mortgage"], "500")
-        regular = {(row["category_id"], row["one_off"]): row["net_spending"] for row in series if not row["one_off"]}
-        labelled = {(row["name"], row["category_id"]): row for row in series if row["one_off"]}
-        self.assertEqual(regular[("cat-food", False)], "10")
-        self.assertEqual(regular[(None, False)], "22")
-        self.assertEqual(regular[("cat-mortgage", False)], "500")
-        self.assertEqual(labelled[("Remont \u0142azienki", "cat-food")]["net_spending"], "40")
-        self.assertEqual(labelled[("Remont \u0142azienki", None)]["net_spending"], "2003")
-        self.assertEqual(labelled[("Zwrot materia\u0142u", None)]["net_spending"], "-5")
-        self.assertNotIn(("Ukryte", None), labelled)
-        self.assertNotIn(("Nie ruszaj hipoteki", "cat-mortgage"), labelled)
-        self.assertTrue(all(row["one_off"] is True and row["name"] for row in series if row["one_off"]))
+        self.assertEqual(budget["pace"]["daily_rate"]["numerator"], spent)
+        self.assertEqual(budget["pass_through"]["mortgage_debits"], "500")
+        labelled = [row for row in series if row["one_off"]]
+        self.assertTrue(all(row["name"] and row["one_off_key"] for row in labelled))
+        self.assertTrue(all(_FOOD_LABEL not in row["one_off_key"] and _MORTGAGE_LABEL not in row["one_off_key"]
+                            for row in labelled))
+        grouped = next(row for row in labelled if row["name"] == _FOOD_LABEL and row["category_id"] is None)
+        self.assertEqual(grouped["one_off_key"], one_off_key([("acc-a", "cash"), ("acc-a", "same")]))
+        self.assertIsNone(next(row["one_off_key"] for row in series
+                               if row["category_id"] == "cat-mortgage" and not row["one_off"]))
+        keys = [row["one_off_key"] or row["category_id"] for row in budget["category_spend"]]
+        self.assertEqual(len(keys), len(set(keys)))
 
 
 class OneOffOverviewTests(ProjectionCase):
     def test_labelled_amounts_leave_their_category_and_keep_the_currency_total(self):
         food = self.store.create_category("owner", "Synthetic Food")
         mortgage = self.store.create_category("owner", "Synthetic mortgage")
-        self.add_transaction("a", "food", amount="50")
-        self.annotation(reference="food", category_id=food["id"], kind="expense")
-        self.add_transaction("a", "reno", amount="2000")
-        self.annotation(reference="reno", category_id=food["id"], kind="expense", label="Remont lazienki")
-        self.add_transaction("a", "small", amount="15")
-        self.add_transaction("a", "atm", amount="100")
-        self.annotation(reference="atm", kind="expense", label="ATM")
-        self.add_transaction("a", "refund", amount="5", credit_debit_indicator="CRDT")
-        self.annotation(reference="refund", kind="refund", label="Zwrot materialu")
-        self.add_transaction("a", "stale", amount="7")
-        self.annotation(reference="stale", category_id=food["id"], kind="expense", label="Ukryte")
-        # The financial fingerprint covers the booking date, not the description.
-        self.change_transaction("a", "stale", booking_date="2026-11-29")
-        self.add_transaction("a", "mort", amount="500")
-        self.annotation(reference="mort", category_id=mortgage["id"], kind="expense", label="Nie ruszaj")
+        income = self.store.create_category("owner", "Synthetic Income")
+        rent = self.store.create_category("owner", "Synthetic Rent")
+        ids = {"food": food["id"], "none": None, "mortgage": mortgage["id"]}
+        for role, reference, amount, direction, kind, label, stale in ONE_OFF_FIXTURE:
+            changes = {"amount": amount, "booking_date": "2026-11-10"}
+            if direction != "DBIT":
+                changes["credit_debit_indicator"] = direction
+            self.add_transaction("a", reference, **changes)
+            if label is not None or ids[role] is not None or kind != "expense":
+                annotation = {"kind": kind}
+                if ids[role] is not None:
+                    annotation["category_id"] = ids[role]
+                if label is not None:
+                    annotation["label"] = label
+                self.annotation(reference=reference, **annotation)
+            if stale:
+                # The financial fingerprint covers the booking date, so the stored label no longer splits.
+                self.change_transaction("a", reference, booking_date="2026-11-12")
         self.store.save_spending_limit("owner", category_id=food["id"], currency="PLN", monthly_limit="9000",
                                        warning_percent=80, enabled=True, expected_version=0)
+        # Same pass-through rule as the chart series: a labelled mortgage leg stays in its category.
+        config = json.dumps({"owner": {
+            "income_category_ids": [income["id"]],
+            "pass_through": {"rent_category_id": rent["id"], "mortgage_category_id": mortgage["id"]},
+        }})
+        self.now = datetime(2026, 11, 22, 12, tzinfo=timezone.utc).timestamp()
+        with mock.patch.dict(os.environ, {"HESTIA_BUDGET_MONTH_CONFIG": config}):
+            overview = self.store.overview("owner", "2026-11")
+            budget = self.store.monthly_budget("owner", period="2026-11")
 
-        overview = self.store.overview("owner", "2026-11")
         api_contract.BudgetAnalyticsOverview.model_validate(overview)
+        api_contract.BudgetAnalyticsMonthlyBudget.model_validate(budget)
         pln = overview["currencies"][0]
         categories = overview["categories"]
+        expected = _expected_split(ids)
+        self.assertEqual(_actual_split(categories), expected)
+        self.assertEqual(_actual_split(budget["category_spend"]), expected)
         self.assertEqual(sum_money(row["net_spending"] for row in categories), pln["net_spending"])
+        self.assertEqual(pln["net_spending"], budget["summary"]["spent"])
+        self.assertEqual(budget["pace"]["daily_rate"]["numerator"], budget["summary"]["spent"])
+        self.assertEqual(budget["pass_through"]["mortgage_debits"], "500")
         seen_one_off = False
         for row in categories:
             if row["one_off"]:
                 seen_one_off = True
             elif seen_one_off:
                 self.fail("a regular category follows a one-off entry")
-        by_key = {(row["one_off"], row["name"], row["category_id"]): row["net_spending"] for row in categories}
-        # The stale manual category no longer applies, so that amount stays uncategorised.
-        self.assertEqual(by_key[(False, "Synthetic Food", food["id"])], "50")
-        self.assertEqual(by_key[(True, "Remont lazienki", food["id"])], "2000")
-        self.assertEqual(by_key[(False, None, None)], "22")
-        self.assertEqual(by_key[(True, "ATM", None)], "100")
-        self.assertEqual(by_key[(True, "Zwrot materialu", None)], "-5")
-        self.assertEqual(by_key[(True, "Nie ruszaj", mortgage["id"])], "500")
-        self.assertNotIn((False, "Synthetic mortgage", mortgage["id"]), by_key)
-        self.assertNotIn((True, "Ukryte", food["id"]), by_key)
+        labelled = [row for row in categories if row["one_off"]]
+        self.assertTrue(all(row["one_off_key"] and len(row["one_off_key"]) == 64 for row in labelled))
+        self.assertTrue(all(phrase not in (row["one_off_key"] or "")
+                            for row in categories for phrase in (_FOOD_LABEL, _MORTGAGE_LABEL, _HIDDEN_LABEL)))
+        grouped = next(row for row in labelled if row["name"] == _FOOD_LABEL and row["category_id"] is None)
+        account_id = self.accounts["a"]
+        self.assertEqual(grouped["one_off_key"], one_off_key([(account_id, "cash"), (account_id, "same")]))
+        mortgage_row = next(row for row in categories if row["category_id"] == mortgage["id"] and not row["one_off"])
+        self.assertIsNone(mortgage_row["one_off_key"])
+        keys = [row["one_off_key"] if row["one_off"] else f"cat:{row['category_id']}" for row in categories]
+        self.assertEqual(len(keys), len(set(keys)))
+        spend_keys = [row["one_off_key"] if row["one_off"] else f"cat:{row['category_id']}"
+                      for row in budget["category_spend"]]
+        self.assertEqual(len(spend_keys), len(set(spend_keys)))
         shown = self.output("stale", period="2026-11")
-        self.assertEqual((shown["annotation"]["stale"], shown["annotation"]["label"]), (True, "Ukryte"))
+        self.assertEqual((shown["annotation"]["stale"], shown["annotation"]["label"]), (True, _HIDDEN_LABEL))
         limits = self.store.spending_limits("owner", "2026-11")
         status = next(row for row in limits["statuses"] if row["category_id"] == food["id"])
-        self.assertEqual((status["expenses"], status["refunds"]), ("2050", "0"))
-        self.assertEqual(pln["net_spending"], "2667")
+        # The limit still counts the labelled food amount. The overview and the table do not.
+        self.assertEqual((status["expenses"], status["refunds"]), ("50", "0"))
+        self.assertEqual(pln["net_spending"], "2570")
 
-    def test_a_corrupt_stored_label_is_a_fixed_error(self):
+    def test_a_stored_format_character_is_a_fixed_error(self):
+        # The CHECK allows a format character. The reader still rejects it and does not echo it.
         self.add_transaction("a", "bad", amount="4")
         self.annotation(reference="bad", kind="expense", label="Ok")
         with self.sessions.begin() as session:
             row = session.get(db.BudgetAnnotation, (self.accounts["a"], "bad"))
-            row.label = "Ok\n"
+            row.label = "Ok\u200b"
         with self.assertRaises(AnalyticsError) as error:
             self.store.overview("owner", "2026-11")
         self.assertEqual(str(error.exception), "budget_analytics_invalid_request")
         self.assertNotIn("Ok", str(error.exception))
+
+
+class OneOffRecurringForecastTests(ProjectionCase):
+    def setUp(self):
+        super().setUp()
+        self.now = datetime(2026, 11, 22, 0, 1, tzinfo=timezone.utc).timestamp()
+
+    def _months(self, prefix, remittance, *, label=None, stale=False):
+        for month in (8, 9, 10):
+            reference = f"{prefix}-{month}"
+            self.add_transaction("a", reference, amount="15", booking_date=f"2026-{month:02d}-15",
+                                 remittance_information=[remittance])
+            if label is not None:
+                self.annotation(reference=reference, kind="expense", label=label)
+            if stale:
+                with self.sessions.begin() as session:
+                    row = session.get(db.BudgetAnnotation, (self.accounts["a"], reference))
+                    row.ledger_fingerprint = "0" * 64
+
+    def test_a_labelled_series_is_not_a_commitment_and_november_spend_still_counts_it(self):
+        self._months("stream", "Synthetic Stream")
+        self._months("labelled", "Synthetic Labelled", label="Wplata")
+        self._months("stale", "Synthetic Stale Stream", label="Wplata", stale=True)
+
+        recurring = self.store.recurring("owner")
+        api_contract.BudgetAnalyticsRecurring.model_validate(recurring)
+        labels = sorted(item["label"] for item in recurring["hints"])
+        self.assertEqual((recurring["total_hints"], labels), (2, ["Synthetic Stale Stream", "Synthetic Stream"]))
+        evidence = [item["entry_reference"] for hint in recurring["hints"] for item in hint["evidence"]]
+        self.assertTrue(all(not reference.startswith("labelled-") for reference in evidence))
+
+        forecast = self.store.forecast("owner")
+        api_contract.BudgetAnalyticsForecast.model_validate(forecast)
+        forecast_labels = {item["label"] for month in forecast["months"] for item in month["items"]}
+        self.assertIn("Synthetic Stream", forecast_labels)
+        self.assertIn("Synthetic Stale Stream", forecast_labels)
+        self.assertNotIn("Synthetic Labelled", forecast_labels)
+        self.assertNotIn("Wplata", forecast_labels)
+
+        self.add_transaction("a", "nov-labelled", amount="80", booking_date="2026-11-10",
+                             remittance_information=["November labelled"])
+        self.annotation(reference="nov-labelled", kind="expense", label="Wplata")
+        self.add_transaction("a", "nov-plain", amount="20", booking_date="2026-11-11",
+                             remittance_information=["November plain"])
+        income = self.store.create_category("owner", "Synthetic Income")
+        config = json.dumps({"owner": {"income_category_ids": [income["id"]]}})
+        with mock.patch.dict(os.environ, {"HESTIA_BUDGET_MONTH_CONFIG": config}):
+            budget = self.store.monthly_budget("owner", period="2026-11")
+        api_contract.BudgetAnalyticsMonthlyBudget.model_validate(budget)
+        spent = budget["summary"]["spent"]
+        self.assertEqual(spent, "100")
+        self.assertEqual(budget["pace"]["daily_rate"]["numerator"], spent)
+        self.assertEqual(_actual_split(budget["category_spend"]), {
+            (False, None, None): "20",
+            (True, "Wplata", None): "80",
+        })
+        self.assertEqual(sum_money(row["net_spending"] for row in budget["category_spend"]), spent)
 
 
 class OneOffLabelAPITests(unittest.IsolatedAsyncioTestCase):
@@ -332,6 +471,13 @@ class OneOffLabelAPITests(unittest.IsolatedAsyncioTestCase):
         api_contract.BudgetAnalyticsAnnotationResult.model_validate(body)
         self.assertEqual(body["annotation"]["label"], phrase)
         version = body["annotation"]["version"]
+        omitted = self.annotation(expected_version=version)
+        self.assertNotIn("label", omitted)
+        kept = await self.post("annotation", omitted)
+        self.assertEqual(kept.status, 200, await kept.text())
+        kept_body = await kept.json()
+        self.assertEqual((kept_body["annotation"]["changed"], kept_body["annotation"]["label"],
+                          kept_body["annotation"]["version"]), (False, phrase, version))
         audits = "".join((row.before_json or "") + (row.after_json or "") for row in self.rows(db.BudgetAnalyticsAudit))
         self.assertNotIn(phrase, audits)
         self.assertIn("has_label", audits)

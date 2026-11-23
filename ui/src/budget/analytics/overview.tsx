@@ -5,7 +5,7 @@ import type { ReactNode } from "react";
 import type { BudgetResult } from "../api";
 import type { BudgetAccount, BudgetConnection } from "../model";
 import { formatAmount } from "../model";
-import { accountName, isZero, staleAccounts } from "./model";
+import { accountName, isZero, oneOffRowKey, staleAccounts } from "./model";
 import type { AnalyticsCategoryTotal, AnalyticsOverview, AnalyticsTotals } from "./model";
 
 export const overviewLabels = {
@@ -195,11 +195,9 @@ function CurrencyCard({ total, categories, partial, text, locale }: CardProps) {
         <table className="budget-categories" aria-label={`${text.categories} ${total.currency}`}>
           <caption>{text.categories}</caption>
           <tbody>
-            {categories.map((item) => {
-              const oneOff = (item as { one_off?: boolean }).one_off === true;
-              const rowKey = oneOff
-                ? `one-off:${item.category_id ?? ""}:${item.name ?? ""}`
-                : (item.category_id ?? "uncategorised");
+            {categories.map((item, index) => {
+              const oneOff = item.one_off === true;
+              const rowKey = oneOffRowKey(item, index);
               const label = oneOff
                 ? (item.name ?? text.uncategorised)
                 : (item.category_id === null ? text.uncategorised : item.name ?? text.uncategorised);

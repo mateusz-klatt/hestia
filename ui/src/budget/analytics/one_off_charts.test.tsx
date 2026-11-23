@@ -14,8 +14,10 @@ function category(id: string, net: string): SeriesCategory {
   return { category_id: id, net_spending: net };
 }
 
-function oneOff(name: string, net: string): SeriesCategory {
-  return { category_id: null, net_spending: net, one_off: true, name };
+const ONE_OFF_KEY = "ab".repeat(32);
+
+function oneOff(name: string, net: string, key = ONE_OFF_KEY): SeriesCategory {
+  return { category_id: null, net_spending: net, one_off: true, name, one_off_key: key };
 }
 
 const options = { uncategorised: "Uncategorised", unknownCategory: "Category", otherCategory: "Other" };
@@ -40,9 +42,10 @@ describe("one-off chart entries", () => {
     expect(model.displayed.some((item) => item.oneOff)).toBe(false);
     const slices = model.stacks[0]?.slices ?? [];
     expect(slices.find((slice) => slice.key === "__other_pos__")?.value).toBe(10n);
-    expect(slices.find((slice) => slice.key.startsWith("o:"))).toMatchObject({
+    expect(slices.find((slice) => slice.key === ONE_OFF_KEY)).toMatchObject({
       label: "Remont łazienki", value: 5000n,
     });
+    expect(slices.some((slice) => slice.key.includes("Remont"))).toBe(false);
     expect(model.stacks[0]?.posTotal).toBe(5060n);
   });
 

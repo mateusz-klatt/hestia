@@ -6,8 +6,9 @@ Revises: 0019
 down_revision is 0019, the current master head. Re-parent this revision after
 0020, 0021 and 0022 at merge: those numbers are held by other pull requests.
 The label is owner-private display text. It is nullable, at most 80 characters,
-and stored without leading or trailing spaces. Control characters are rejected
-by the application before insert.
+and stored without leading or trailing spaces. The CHECK rejects C0 controls
+and DEL, including newline, carriage return and tab. The application also
+rejects format characters before insert.
 
 Downgrade drops the column. Take a SQLite backup first: saved one-off labels
 are removed; the rest of each annotation row stays.
@@ -15,14 +16,14 @@ are removed; the rest of each annotation row stays.
 from alembic import op
 import sqlalchemy as sa
 
+from hestia.db import annotation_label_check_sql
+
 revision = "0023"
 down_revision = "0019"
 branch_labels = None
 depends_on = None
 
-_LABEL_CHECK = (
-    "label IS NULL OR (length(label) >= 1 AND length(label) <= 80 AND label = trim(label))"
-)
+_LABEL_CHECK = annotation_label_check_sql()
 
 
 def upgrade():

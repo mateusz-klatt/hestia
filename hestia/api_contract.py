@@ -1560,7 +1560,8 @@ class BudgetAnalyticsAnnotationRequest(BaseModel):
     kind: BudgetAnalyticsKind
     expected_version: BudgetAnalyticsVersion
     expected_fingerprint: BudgetAnalyticsFingerprint
-    # Absent or null clears the label. The default stays out of the schema so generated clients treat it as optional.
+    # Omitted leaves the stored label unchanged. Null or blank clears it. The default stays out of the
+    # schema so generated clients treat the field as optional.
     label: Annotated[str | None, Field(max_length=80, json_schema_extra=_OMIT)] = None
 
 
@@ -1824,6 +1825,8 @@ class BudgetAnalyticsCategoryTotal(BaseModel):
     refunds: str
     net_spending: str
     one_off: Annotated[bool, Field(json_schema_extra=_OMIT)] = False
+    # Distinct from category_id. A short hash of the account and entry reference, never the label text.
+    one_off_key: Annotated[str | None, Field(pattern=r"^[0-9a-f]{64}$", json_schema_extra=_OMIT)] = None
 
 
 class BudgetAnalyticsFreshness(BaseModel):
@@ -2469,6 +2472,8 @@ class BudgetAnalyticsMonthlyBudgetCategorySpend(BaseModel):
     refunds: BudgetAnalyticsMonthlyBudgetMoney
     net_spending: BudgetAnalyticsMonthlyBudgetMoney
     limit: BudgetAnalyticsMonthlyBudgetCategoryLimit | None
+    one_off: Annotated[bool, Field(json_schema_extra=_OMIT)] = False
+    one_off_key: Annotated[str | None, Field(pattern=r"^[0-9a-f]{64}$", json_schema_extra=_OMIT)] = None
 
 
 class BudgetAnalyticsMonthlyBudgetPassThrough(BaseModel):
@@ -2525,6 +2530,7 @@ class BudgetAnalyticsMonthlyBudgetSeriesCategory(BaseModel):
     category_id: str | None
     name: Annotated[str | None, Field(json_schema_extra=_OMIT)] = None
     one_off: Annotated[bool, Field(json_schema_extra=_OMIT)] = False
+    one_off_key: Annotated[str | None, Field(pattern=r"^[0-9a-f]{64}$", json_schema_extra=_OMIT)] = None
     net_spending: BudgetAnalyticsMonthlyBudgetMoney
 
 

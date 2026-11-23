@@ -70,8 +70,12 @@ class OpenApiArtifactTests(unittest.TestCase):
             ("BudgetAnalyticsAnnotationSaved", "label"),
             ("BudgetAnalyticsAnnotation", "label"),
             ("BudgetAnalyticsCategoryTotal", "one_off"),
+            ("BudgetAnalyticsCategoryTotal", "one_off_key"),
             ("BudgetAnalyticsMonthlyBudgetSeriesCategory", "name"),
             ("BudgetAnalyticsMonthlyBudgetSeriesCategory", "one_off"),
+            ("BudgetAnalyticsMonthlyBudgetSeriesCategory", "one_off_key"),
+            ("BudgetAnalyticsMonthlyBudgetCategorySpend", "one_off"),
+            ("BudgetAnalyticsMonthlyBudgetCategorySpend", "one_off_key"),
         ):
             properties = document["components"]["schemas"][schema]["properties"]
             properties.pop(field, None)

@@ -960,6 +960,32 @@ describe("MonthBudgetView", () => {
     expect(host.querySelector('[aria-label="Unpaid card spending"]')?.textContent).toContain("Unavailable");
   });
 
+  it("shows a labelled amount on its own row beside the category, with the one-off tag", async () => {
+    const api = fakeApi();
+    const key = "ef".repeat(32);
+    api.monthlyBudgetCharts.mockResolvedValue(ok(monthlyBudgetChartsOf({
+      category_spend: [
+        monthlyBudgetCategorySpend({
+          category_id: "cat-food", name: "Synthetic Food", expenses: "10", refunds: "0", net_spending: "10",
+        }),
+        monthlyBudgetCategorySpend({
+          category_id: "cat-food", name: "Remont lazienki", expenses: "40", refunds: "0", net_spending: "40",
+          one_off: true, one_off_key: key,
+        }),
+      ],
+    })));
+    await show(api);
+    const table = host.querySelector(".budget-month-dashboard-table");
+    const rows = [...(table?.querySelectorAll("tbody tr") ?? [])];
+    expect(rows).toHaveLength(2);
+    expect(rows[0]?.textContent).toContain("Synthetic Food");
+    expect(rows[0]?.classList.contains("budget-one-off")).toBe(false);
+    expect(rows[1]?.textContent).toContain("Remont lazienki");
+    expect(rows[1]?.textContent).toContain("one-off");
+    expect(rows[1]?.classList.contains("budget-one-off")).toBe(true);
+    expect(rows[1]?.textContent).not.toContain(key);
+  });
+
   it("navigates months using server current_month, switches currencies and history, and links to Month view", async () => {
     const api = fakeApi();
     api.monthlyBudgetCharts.mockImplementation((period, currency = "PLN") => {
