@@ -56,7 +56,28 @@ class OpenApiArtifactTests(unittest.TestCase):
 
     def test_monthly_budget_contract_is_strictly_additive_from_0_27_0(self):
         document = api_contract.build_openapi()
-        self.assertEqual(document["info"]["version"], "0.30.0")
+        self.assertEqual(document["info"]["version"], "0.31.0")
+        # Strip the category-baseline addition and compare with the 0.30.0 forecast contract.
+        forecast_get = document["paths"]["/api/budget/analytics/forecast"]["get"]
+        forecast_get["description"] = (
+            "Read-only evaluation of unmarked mortgage instalments and active recurring charges from one local "
+            "snapshot using the server UTC date. Matches recurring hints to individual scheduled instalments to "
+            "suppress duplicate estimates. An optional currency filter scopes commitments, deduplications and "
+            "their summary counts. Snapshot metadata and account freshness cover all selected accounts. "
+            "The estimate excludes spending limits and makes no bank requests or stored changes."
+        )
+        forecast_get["responses"]["413"]["description"] = (
+            "Forecast limit exceeded (>100,000 selected rows, >100 schedules, >1,200 paid marks per schedule, "
+            ">200 active currency-filtered hints, >3,600 projected items, or >4 MiB UTF-8 JSON payload); "
+            "zero partial totals returned."
+        )
+        forecast_get["responses"]["503"]["description"] = (
+            "Analytics storage or budget configuration unavailable (`budget_analytics_unavailable` or "
+            "`budget_unavailable`)."
+        )
+        item_properties = document["components"]["schemas"]["BudgetAnalyticsForecastItem"]["properties"]
+        item_properties["source"]["enum"] = ["mortgage", "recurring"]
+        item_properties["confidence"]["enum"] = ["scheduled", "high", "medium"]
         # Strip this batch addition and compare with the 0.29.0 monthly-budget contract.
         for path in ("/api/budget/analytics/rule-batch-preview", "/api/budget/analytics/rule-batch-save"):
             del document["paths"][path]

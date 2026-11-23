@@ -873,6 +873,69 @@ class BudgetAnalyticsAPITests(unittest.IsolatedAsyncioTestCase):
         self.assertNotEqual(after["limits_version"], view["limits_version"])
         self.assertEqual(after["snapshot_digest"], view["snapshot_digest"])
 
+    async def test_forecast_category_baseline_returns_200_503_and_413(self):
+        now = datetime(2026, 11, 22, tzinfo=timezone.utc).timestamp()
+        created = await self.post("category-create", {"name": "Synthetic electricity"})
+        self.assertEqual(created.status, 200)
+        category_id = (await created.json())["category"]["id"]
+
+        def insert(reference, amount, day, currency="PLN"):
+            payload = transaction(reference, amount=amount, currency=currency, booking_date=day,
+                                  remittance_information=[f"Synthetic bill {reference}"])
+            with self.sessions.begin() as session:
+                session.add(db.BudgetTransaction(account_id=self.alice_id, entry_reference=reference,
+                            payload_json=json.dumps(payload), observed_at=now, source="api", uncertain=False))
+            return payload
+
+        async def categorise(payload):
+            response = await self.post("annotation", self.annotation(
+                entry_reference=payload["entry_reference"], category_id=category_id, kind="expense",
+                expected_fingerprint=financial_fingerprint(payload)))
+            self.assertEqual(response.status, 200, await response.text())
+
+        for month, amount in zip(range(5, 11), ("10", "20", "30", "40", "50", "60")):
+            await categorise(insert(f"power-{month}", amount, f"2026-{month:02d}-04"))
+        ready = json.dumps({"alice": {"category_ids": [category_id], "history_months": 6, "estimator": "median"}})
+        with mock.patch.object(analytics_views.BudgetAnalyticsViews, "_now", return_value=now), \
+             mock.patch.dict(os.environ, {forecast.FORECAST_CONFIG_ENV: ready}):
+            ok = await self.get("forecast", params={"months": "1"})
+            self.assertEqual(ok.status, 200, await ok.text())
+            self.assert_private_headers(ok)
+            body = await ok.json()
+            api_contract.BudgetAnalyticsForecast.model_validate(body)
+            baselines = [item for item in body["months"][0]["items"] if item["source"] == "category_baseline"]
+            self.assertEqual([(item["amount"], item["confidence"], item["schedule_id"], item["label"])
+                              for item in baselines], [("35", "estimated", None, "Synthetic electricity")])
+            self.assertFalse(any("baseline_category_id" in row for row in body["deduplications"]))
+
+            bad = json.dumps({"alice": {"category_ids": [category_id], "estimator": ["median"]}})
+            with mock.patch.dict(os.environ, {forecast.FORECAST_CONFIG_ENV: bad}):
+                unavailable = await self.get("forecast", params={"months": "1"})
+            self.assertEqual(unavailable.status, 503)
+            self.assertEqual(await unavailable.json(), {"ok": False, "error": "budget_unavailable"})
+            self.assert_private_headers(unavailable)
+
+            saved = await self.post("mortgage-save", self.bodies()["mortgage-save"] | {
+                "label": "Synthetic power mortgage", "amount": "10", "due_day": 4, "start_date": "2026-01-01"})
+            self.assertEqual(saved.status, 200, await saved.text())
+            conflict = await self.get("forecast", params={"months": "1", "currency": "EUR"})
+            self.assertEqual(conflict.status, 503)
+            self.assertEqual(await conflict.json(), {"ok": False, "error": "budget_forecast_config_conflict"})
+            self.assertNotIn(category_id, await conflict.text())
+            self.assert_private_headers(conflict)
+
+            with self.sessions.begin() as session:
+                session.query(db.BudgetMortgageSchedule).filter_by(owner="alice").delete()
+            for month in range(5, 11):
+                await categorise(insert(f"euro-{month}", "8", f"2026-{month:02d}-06", currency="EUR"))
+            with mock.patch.object(forecast, "MAX_BASELINE_SERIES", 1):
+                await self.assert_forecast_limit(params={"months": "1"})
+                scoped = await self.get("forecast", params={"months": "1", "currency": "EUR"})
+            self.assertEqual(scoped.status, 200, await scoped.text())
+            scoped_body = await scoped.json()
+            self.assertEqual([item["currency"] for item in scoped_body["months"][0]["items"]
+                              if item["source"] == "category_baseline"], ["EUR"])
+
 
 if __name__ == "__main__":
     unittest.main()

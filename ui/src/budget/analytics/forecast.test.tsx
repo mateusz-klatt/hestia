@@ -169,6 +169,46 @@ describe("ForecastView", () => {
     expect(details.querySelector("button, input, select")).toBeNull();
   });
 
+  it.each([
+    { locale: "en-US", badge: "≈ estimated", merged: "Merged with instalment" },
+    { locale: "pl-PL", badge: "≈ szacowane", merged: "Połączono z ratą" },
+  ])("shows a category baseline estimate badge in $locale", async ({ locale, badge, merged }) => {
+    const api = fakeApi();
+    const base = forecastOf();
+    const estimate = {
+      ...forecastItem({
+        schedule_id: null, label: "Electricity", amount: "180.5", currency: "PLN",
+        expected_date: "2026-11-28", past_due: false, account_stale: false,
+      }),
+      source: "category_baseline",
+      confidence: "estimated",
+    } as unknown as ReturnType<typeof forecastItem>;
+    const total = forecastCurrencyTotal({ currency: "PLN", total: "180.5", scheduled_total: "0", estimated_total: "180.5" });
+    api.forecast.mockResolvedValue(ok({
+      ...base,
+      totals: [total],
+      deduplications: [forecastDeduplication()],
+      months: base.months.map((month) => month.month === base.start_month
+        ? { ...month, items: [estimate], currencies: [total] }
+        : month),
+    }));
+    await show(api, locale);
+
+    const month = requireElement(host.querySelector("section.budget-month"), "month");
+    expect([...month.querySelectorAll(".budget-chip")].map((chip) => chip.textContent)).toEqual([badge]);
+    expect(month.textContent).toContain("Electricity");
+    expect(month.textContent).toContain("2026-11-28");
+    expect(host.textContent).not.toContain(locale === "pl-PL" ? "Korekty szacunku" : "Category estimate adjustments");
+    expect(host.textContent).not.toContain(locale === "pl-PL" ? "Uwzględniono" : "Counted on");
+
+    const mergedDetails = [...host.querySelectorAll("details")].find((item) => item.querySelector("summary")?.textContent === merged);
+    if (mergedDetails === undefined) throw new Error("Missing forecast details");
+    await update(() => { requireElement(mergedDetails.querySelector("summary"), merged).click(); });
+    expect(mergedDetails.open).toBe(true);
+    expect(mergedDetails.textContent).toContain("→");
+    expect(mergedDetails.textContent).toContain(locale === "pl-PL" ? "Termin raty" : "Instalment due");
+  });
+
   it("labels each currency chart and shows exact monthly totals in text tables", async () => {
     const api = fakeApi();
     api.forecast.mockResolvedValue(ok(populatedForecast()));

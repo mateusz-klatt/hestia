@@ -211,7 +211,7 @@ class BudgetOpenApiTests(unittest.TestCase):
             self.assertEqual(set(methods), {method})
             self.assertEqual(methods[method]["x-required-role"], "admin")
             self.assertIn("413", methods[method]["responses"])
-        self.assertEqual(document["info"]["version"], "0.30.0")
+        self.assertEqual(document["info"]["version"], "0.31.0")
         batch = analytics["/api/budget/analytics/rule-batch-preview"]["post"]["description"]
         self.assertIn("1..100", batch)
         self.assertIn("All-or-nothing", batch)
@@ -244,11 +244,13 @@ class BudgetOpenApiTests(unittest.TestCase):
                    "and unknown or duplicate parameters (including today) are rejected.",
             "409": "SQLite backend required: forecast requires HESTIA_PERSIST=sqlite.",
             "413": "Forecast limit exceeded (>100,000 selected rows, >100 schedules, >1,200 paid marks per schedule, "
-                   ">200 active currency-filtered hints, >3,600 projected items, or >4 MiB UTF-8 JSON payload); "
-                   "zero partial totals returned.",
+                   ">200 active currency-filtered hints, >64 category baselines, >4,368 projected items, or >4 MiB UTF-8 "
+                   "JSON payload); zero partial totals returned.",
             "500": "Stored mortgage schedule, ledger, or metadata integrity check failed (`budget_analytics_data_error`), "
                    "including stored-data helper errors mapped to 500 after forecast query validation, or unexpected "
                    "internal failure (`budget_internal_error`).",
+            "503": "Analytics storage or budget configuration unavailable (`budget_analytics_unavailable`, "
+                   "`budget_unavailable`, or `budget_forecast_config_conflict`).",
         }.items():
             with self.subTest(code=code):
                 self.assertEqual(responses[code]["description"], description)
@@ -259,6 +261,7 @@ class BudgetOpenApiTests(unittest.TestCase):
 
     def test_forecast_schemas_pin_wire_fields_and_bounds(self):
         schemas = contract.build_openapi()["components"]["schemas"]
+        optional_keys = {}
         for suffix, keys in {
             "": {"evaluation_date", "evaluation_timezone", "horizon_months", "start_month", "end_month",
                  "ledger_as_of", "freshness_stale", "stale_account_ids", "stale_account_ids_truncated",
@@ -275,12 +278,14 @@ class BudgetOpenApiTests(unittest.TestCase):
             with self.subTest(schema=suffix):
                 schema = schemas["BudgetAnalyticsForecast" + suffix]
                 self.assertEqual(set(schema["properties"]), keys)
-                self.assertEqual(set(schema["required"]), keys)
+                self.assertEqual(set(schema["required"]), keys - optional_keys.get(suffix, set()))
                 self.assertNotIn("additionalProperties", schema)
         forecast = schemas["BudgetAnalyticsForecast"]["properties"]
         item = schemas["BudgetAnalyticsForecastItem"]["properties"]
         dedup = schemas["BudgetAnalyticsForecastDeduplication"]["properties"]
         totals = schemas["BudgetAnalyticsForecastCurrencyTotal"]["properties"]
+        self.assertEqual(item["source"]["enum"], ["mortgage", "recurring", "category_baseline"])
+        self.assertEqual(item["confidence"]["enum"], ["scheduled", "high", "medium", "estimated"])
         self.assertEqual(forecast["evaluation_timezone"]["const"], "UTC")
         self.assertEqual(forecast["stale_account_ids"]["maxItems"], 200)
         for label in (item["label"], dedup["schedule_label"], dedup["recurring_label"]):

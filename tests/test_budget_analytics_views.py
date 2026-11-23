@@ -13,6 +13,7 @@ from sqlalchemy import delete, event, text
 
 from hestia import api_contract, db
 from hestia.budget import analytics_views as views
+from hestia.budget import forecast
 from hestia.budget import month_budget
 from hestia.budget.analytics_core import AnalyticsError
 from hestia.budget.analytics_views import BudgetAnalyticsViews, projection_snapshot
@@ -817,6 +818,82 @@ class ForecastProjectionTests(ProjectionCase):
                                  "WHERE account_id = :account_id AND operation = 'transactions'"),
                             {"account_id": self.accounts["a"]})
         self.assert_invalid(lambda: self.store.forecast("owner"), code="budget_analytics_data_error", status=500)
+
+    def _power_category(self, amounts, *, currency="PLN", prefix="power", category=None):
+        if category is None:
+            category = self.store.create_category("owner", f"Synthetic {prefix}")
+        for month, amount in amounts:
+            reference = f"{prefix}-{month}"
+            self.add_transaction("a", reference, amount=amount, currency=currency,
+                                 booking_date=f"2026-{month:02d}-04",
+                                 remittance_information=[f"Synthetic {prefix} {month}"])
+            self.annotation(account="a", reference=reference, category_id=category["id"], kind="expense")
+        return category
+
+    def test_forecast_category_baseline_is_added_from_one_snapshot(self):
+        category = self._power_category(tuple((month, str(amount)) for month, amount in
+                                              zip(range(5, 11), (10, 20, 30, 40, 50, 60))))
+        config = json.dumps({"owner": {"category_ids": [category["id"]], "history_months": 6, "estimator": "median"}})
+        statements = []
+
+        def capture(connection, cursor, statement, parameters, context, executemany):
+            statements.append(statement.split()[0].upper())
+
+        event.listen(self.engine, "before_cursor_execute", capture)
+        try:
+            with mock.patch.dict(os.environ, {forecast.FORECAST_CONFIG_ENV: config}):
+                result = self.store.forecast("owner", months="1")
+        finally:
+            event.remove(self.engine, "before_cursor_execute", capture)
+        self.assertEqual(statements.count("BEGIN"), 1)
+        self.assertEqual(set(statements), {"BEGIN", "SELECT"})
+        api_contract.BudgetAnalyticsForecast.model_validate(result)
+        item = result["months"][0]["items"][0]
+        self.assertEqual(item["source"], "category_baseline")
+        self.assertEqual(item["amount"], "35")
+        self.assertEqual(item["confidence"], "estimated")
+        self.assertIsNone(item["schedule_id"])
+        self.assertEqual(item["label"], "Synthetic power")
+        self.assertFalse(item["account_stale"])
+        self.assertEqual(result["deduplications"], [])
+        self.assertEqual(result["summary"]["deduped_recurring_count"], 0)
+        with self.sessions.begin() as session:
+            session.query(db.BudgetTransaction).filter_by(account_id=self.accounts["a"]).update(
+                {"observed_at": self.now - 60 * 86400})
+            component = session.get(db.BudgetComponent, (self.accounts["a"], "transactions"))
+            if component is not None:
+                component.last_success = self.now - 60 * 86400
+        with mock.patch.dict(os.environ, {forecast.FORECAST_CONFIG_ENV: config}):
+            stale = self.store.forecast("owner", months="1")
+        self.assertTrue(stale["months"][0]["items"][0]["account_stale"])
+
+    def test_forecast_category_baseline_conflict_and_estimator_and_series_cap(self):
+        category = self._power_category(tuple((month, str(amount)) for month, amount in
+                                              zip(range(5, 11), (10, 20, 30, 40, 50, 60))))
+        self._power_category(tuple((month, "8") for month in range(5, 11)), currency="EUR", prefix="euro",
+                             category=category)
+        bad = json.dumps({"owner": {"category_ids": [category["id"]], "estimator": ["median"]}})
+        with mock.patch.dict(os.environ, {forecast.FORECAST_CONFIG_ENV: bad}):
+            with self.assertRaises(BudgetConfigError) as unavailable:
+                self.store.forecast("owner")
+        self.assertNotIsInstance(unavailable.exception, forecast.ForecastConfigConflict)
+        self.assertEqual(getattr(unavailable.exception, "code", "budget_unavailable"), "budget_unavailable")
+
+        ready = json.dumps({"owner": {"category_ids": [category["id"]], "history_months": 6}})
+        with mock.patch.dict(os.environ, {forecast.FORECAST_CONFIG_ENV: ready}), \
+             mock.patch.object(forecast, "MAX_BASELINE_SERIES", 1):
+            self.assert_invalid(lambda: self.store.forecast("owner", months="1"),
+                                code="budget_analytics_limit", status=413)
+            scoped = self.store.forecast("owner", months="1", currency="EUR")
+        self.assertEqual([item["source"] for item in scoped["months"][0]["items"]], ["category_baseline"])
+        self.assertEqual(scoped["months"][0]["items"][0]["currency"], "EUR")
+
+        self.add_schedule("Synthetic power mortgage", amount="10", due_day=4, start_date="2026-01-01")
+        with mock.patch.dict(os.environ, {forecast.FORECAST_CONFIG_ENV: ready}):
+            with self.assertRaises(forecast.ForecastConfigConflict) as conflict:
+                self.store.forecast("owner", months="1", currency="EUR")
+        self.assertEqual(conflict.exception.code, "budget_forecast_config_conflict")
+        self.assertNotIn(category["id"], str(conflict.exception))
 
 
 class MonthlyBudgetProjectionTests(ProjectionCase):

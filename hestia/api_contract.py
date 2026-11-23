@@ -78,8 +78,10 @@ from pydantic.json_schema import models_json_schema
 # 0.28.0: additive optional income window on monthly-budget configuration (zero migration).
 # 0.29.0: read-only owner-private monthly budget charts (GET /api/budget/analytics/monthly-budget/charts, zero migration).
 # 0.30.0: batch rule preview and save (POST /api/budget/analytics/rule-batch-preview and rule-batch-save,
-#         zero migration). This branch merges first; the open follow-ups take 0.31.0 and 0.32.0.
-CONTRACT_VERSION = "0.30.0"
+#         zero migration).
+# 0.31.0: additive forecast source category_baseline and confidence estimated
+#         (HESTIA_BUDGET_FORECAST_CONFIG, zero migration). The open follow-up remains 0.32.0.
+CONTRACT_VERSION = "0.31.0"
 OPENAPI_PATH = Path(__file__).resolve().parent.parent / "docs" / "api" / "openapi.json"
 
 # De-duplicated string literals (SonarPython S1192): the OpenAPI content-type, the paths reused
@@ -2334,13 +2336,13 @@ class BudgetAnalyticsForecastDeduplication(BaseModel):
 
 class BudgetAnalyticsForecastItem(BaseModel):
     model_config = _READ
-    source: Literal["mortgage", "recurring"]
+    source: Literal["mortgage", "recurring", "category_baseline"]
     schedule_id: str | None
     label: BudgetAnalyticsForecastLabel
     amount: str
     currency: str
     expected_date: str
-    confidence: Literal["scheduled", "high", "medium"]
+    confidence: Literal["scheduled", "high", "medium", "estimated"]
     past_due: bool
     account_stale: bool
 
@@ -3294,9 +3296,14 @@ def _analytics_paths():
         "forecast": ("Read the owner-private upcoming commitments estimate", (
             "Read-only evaluation of unmarked mortgage instalments and active recurring charges from one local "
             "snapshot using the server UTC date. Matches recurring hints to individual scheduled instalments to "
-            "suppress duplicate estimates. An optional currency filter scopes commitments, deduplications and "
-            "their summary counts. Snapshot metadata and account freshness cover all selected accounts. "
-            "The estimate excludes spending limits and makes no bank requests or stored changes."
+            "suppress duplicate estimates. When HESTIA_BUDGET_FORECAST_CONFIG names categories, each month also "
+            "includes a category_baseline estimate (confidence estimated, schedule_id null, label is the category "
+            "name): the median or trimmed mean of net spending over prior complete months inside each account's "
+            "coverage window, including months with no spend. The current month subtracts net spending already "
+            "booked, floored at zero. A configured category already represented by an active recurring hint or an "
+            "enabled mortgage schedule is rejected. An optional currency filter scopes commitments, "
+            "deduplications and their summary counts. Snapshot metadata and account freshness cover all selected "
+            "accounts. The estimate excludes spending limits and makes no bank requests or stored changes."
         )),
         "monthly-budget": ("Read the owner-private monthly budget dashboard", (
             "Pure read-only single-snapshot monthly budget dashboard evaluated in Europe/Warsaw from one UTC instant. "
@@ -3321,13 +3328,13 @@ def _analytics_paths():
                "and unknown or duplicate parameters (including today) are rejected.",
         "409": "SQLite backend required: forecast requires HESTIA_PERSIST=sqlite.",
         "413": "Forecast limit exceeded (>100,000 selected rows, >100 schedules, >1,200 paid marks per schedule, "
-               ">200 active currency-filtered hints, >3,600 projected items, or >4 MiB UTF-8 JSON payload); "
-               "zero partial totals returned.",
+               ">200 active currency-filtered hints, >64 category baselines, >4,368 projected items, or >4 MiB UTF-8 "
+               "JSON payload); zero partial totals returned.",
         "500": "Stored mortgage schedule, ledger, or metadata integrity check failed (`budget_analytics_data_error`), "
                "including stored-data helper errors mapped to 500 after forecast query validation, or unexpected "
                "internal failure (`budget_internal_error`).",
-        "503": "Analytics storage or budget configuration unavailable (`budget_analytics_unavailable` or "
-               "`budget_unavailable`).",
+        "503": "Analytics storage or budget configuration unavailable (`budget_analytics_unavailable`, "
+               "`budget_unavailable`, or `budget_forecast_config_conflict`).",
     }
     for code, description in forecast_descriptions.items():
         forecast_responses[code]["description"] = description
