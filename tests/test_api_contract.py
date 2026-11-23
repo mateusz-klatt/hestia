@@ -56,7 +56,7 @@ class OpenApiArtifactTests(unittest.TestCase):
         )
 
     def test_monthly_budget_contract_chain_from_0_27_0(self):
-        """0.38.0 adds counterparty accounts on top of 0.36.0 receipts and the published chain."""
+        """0.38.0 adds counterparty accounts on top of 0.37.0 household reads and 0.36.0 receipts."""
         document = api_contract.build_openapi()
         self.assertEqual(document["info"]["version"], "0.38.0")
         for name in ("BudgetAnalyticsRule", "BudgetAnalyticsRuleSaved"):
@@ -78,6 +78,12 @@ class OpenApiArtifactTests(unittest.TestCase):
         rule_fields["enum"].remove("counterparty_account")
         rule_schema["required"].insert(4, "value")
         rule_schema["properties"]["value"]["minLength"] = 1
+        document["info"]["version"] = "0.37.0"
+        for path in [key for key in document["paths"] if key.startswith("/api/budget/household/")]:
+            del document["paths"][path]
+        for name in [key for key in document["components"]["schemas"] if key.startswith("BudgetHousehold")]:
+            del document["components"]["schemas"][name]
+        document["info"]["version"] = "0.36.0"
         for path in [path for path in document["paths"] if path.startswith("/api/budget/receipts/")]:
             del document["paths"][path]
         for name in [name for name in document["components"]["schemas"] if name.startswith("BudgetReceipt")]:

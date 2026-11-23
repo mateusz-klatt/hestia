@@ -187,6 +187,20 @@ _ROUTE_MIN_ROLE = {
     ("GET", "/api/budget/analytics/forecast"): _ADMIN,
     ("GET", "/api/budget/analytics/monthly-budget"): _ADMIN,
     ("GET", "/api/budget/analytics/monthly-budget/charts"): _ADMIN,
+    ("GET", "/api/budget/household/access"): _VIEWER,
+    ("GET", "/api/budget/household/report-accounts"): _VIEWER,
+    ("GET", "/api/budget/household/monthly-budget"): _VIEWER,
+    ("GET", "/api/budget/household/overview"): _VIEWER,
+    ("GET", "/api/budget/household/transactions"): _VIEWER,
+    ("GET", "/api/budget/household/categories"): _VIEWER,
+    ("GET", "/api/budget/household/rules"): _VIEWER,
+    ("GET", "/api/budget/household/transfers"): _VIEWER,
+    ("GET", "/api/budget/household/spending-limits"): _VIEWER,
+    ("GET", "/api/budget/household/recurring"): _VIEWER,
+    ("GET", "/api/budget/household/mortgages"): _VIEWER,
+    ("GET", "/api/budget/household/inbox"): _VIEWER,
+    ("GET", "/api/budget/household/quarantine"): _VIEWER,
+    ("GET", "/api/budget/household/monthly-budget-settings"): _VIEWER,
     ("POST", "/api/budget/analytics/category-create"): _ADMIN,
     ("POST", "/api/budget/analytics/category-update"): _ADMIN,
     ("POST", "/api/budget/analytics/annotation"): _ADMIN,
@@ -257,14 +271,11 @@ _MUTATING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 
 
 def _required_role(method: str, path: str) -> str:
-    """The minimum role for a non-public route. Fail-closed: an UNclassified mutating method → admin (a
-    new write route stays locked down until explicitly classified); any other unclassified method
-    (GET/HEAD) → viewer. ``test_every_route_is_classified`` keeps the map complete, so the fallbacks are
-    a backstop, not the normal path."""
-    floor = _ROUTE_MIN_ROLE.get((method, path))
-    if floor is not None:
-        return floor
-    return _ADMIN if method in _MUTATING_METHODS else _VIEWER
+    """The minimum role for a non-public route. Fail-closed: an unclassified route is admin, including
+    GET and HEAD, so a new read cannot become viewer-readable until it is explicitly classified.
+    ``test_every_registered_route_is_public_or_classified`` keeps the map complete; this fallback is
+    the backstop."""
+    return _ROUTE_MIN_ROLE.get((method, path), _ADMIN)
 
 
 def _role_allows(role, floor: str) -> bool:

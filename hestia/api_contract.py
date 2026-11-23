@@ -92,6 +92,8 @@ from pydantic.json_schema import models_json_schema
 #         Charts and category summaries can report that label as its own entry.
 # 0.36.0: default-off owner-private paste receipts and informational bank links (migration 0022,
 #         down_revision 0021).
+# 0.37.0: additive household read API (GET /api/budget/household/*, migration 0023,
+#         down_revision 0022). Owner routes stay admin. The one-off label is not on this API.
 # 0.38.0: counterparty-account rules store keyed digests and masked display values (zero migration).
 #         Optional inactive_reason on a rule when that key is missing or rotated (additive).
 CONTRACT_VERSION = "0.38.0"
@@ -2789,6 +2791,296 @@ class BudgetAnalyticsMonthlyBudgetCharts(BaseModel):
     series: BudgetAnalyticsMonthlyBudgetSeries | None
 
 
+
+_HouseholdGrantId = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$", min_length=64, max_length=64)]
+_HouseholdAlias = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$", min_length=64, max_length=64)]
+_HouseholdMoney = Annotated[str, Field(min_length=1, max_length=192)]
+
+
+class BudgetHouseholdAccess(BaseModel):
+    """Discovery. The only household read that does not take X-Budget-Grant."""
+    model_config = _READ
+    grant_id: _HouseholdGrantId
+
+
+class BudgetHouseholdAccount(BaseModel):
+    model_config = _READ
+    account_id: _HouseholdAlias
+    ordinal: Annotated[int, Field(ge=1)]
+
+
+class BudgetHouseholdAccounts(BaseModel):
+    model_config = _READ
+    grant_id: _HouseholdGrantId
+    accounts: list[BudgetHouseholdAccount]
+
+
+class BudgetHouseholdSeriesDay(BaseModel):
+    model_config = _READ
+    date: str
+    cumulative_spent: _HouseholdMoney
+
+
+class BudgetHouseholdSeriesCategory(BaseModel):
+    model_config = _READ
+    category_id: _HouseholdAlias | None
+    net_spending: _HouseholdMoney
+
+
+class BudgetHouseholdSeriesMonth(BaseModel):
+    model_config = _READ
+    period: str
+    has_activity: bool
+    is_current_month: bool
+    income_estimate_partial: bool
+    provisional: bool
+    start_budget: _HouseholdMoney
+    spent: _HouseholdMoney
+    categories: list[BudgetHouseholdSeriesCategory]
+
+
+class BudgetHouseholdCategoryLabel(BaseModel):
+    model_config = _READ
+    category_id: _HouseholdAlias
+    name: str
+    archived: bool
+
+
+class BudgetHouseholdSeries(BaseModel):
+    model_config = _READ
+    daily: list[BudgetHouseholdSeriesDay]
+    months: list[BudgetHouseholdSeriesMonth]
+    category_labels: list[BudgetHouseholdCategoryLabel]
+
+
+class BudgetHouseholdMonthlyBudget(BaseModel):
+    """Same calculations as the owner dashboard, with grant-scoped aliases and safe labels."""
+    model_config = _READ
+    grant_id: _HouseholdGrantId
+    budget: BudgetAnalyticsMonthlyBudget
+    series: BudgetHouseholdSeries
+
+
+class BudgetHouseholdMoney(BaseModel):
+    model_config = _READ
+    currency: str
+    expenses: _HouseholdMoney
+    refunds: _HouseholdMoney
+    income: _HouseholdMoney
+    net_spending: _HouseholdMoney
+
+
+class BudgetHouseholdOverviewMonth(BaseModel):
+    model_config = _READ
+    month: str
+    currencies: list[BudgetHouseholdMoney]
+
+
+class BudgetHouseholdOverviewCategory(BaseModel):
+    model_config = _READ
+    category_id: _HouseholdAlias | None
+    label: str | None
+    archived: bool
+    currency: str
+    expenses: _HouseholdMoney
+    refunds: _HouseholdMoney
+    income: _HouseholdMoney
+    net_spending: _HouseholdMoney
+
+
+class BudgetHouseholdOverview(BaseModel):
+    model_config = _READ
+    grant_id: _HouseholdGrantId
+    period: str
+    currencies: list[BudgetHouseholdMoney]
+    months: list[BudgetHouseholdOverviewMonth]
+    categories: list[BudgetHouseholdOverviewCategory]
+
+
+class BudgetHouseholdTransaction(BaseModel):
+    model_config = _READ
+    id: _HouseholdAlias
+    date: str
+    account_id: _HouseholdAlias
+    category_id: _HouseholdAlias | None
+    kind: Literal["expense", "income", "refund", "excluded", "unclassified_credit", "transfer"]
+    currency: str
+    amount: _HouseholdMoney
+    direction: Literal["DBIT", "CRDT"]
+
+
+class BudgetHouseholdTransactions(BaseModel):
+    model_config = _READ
+    grant_id: _HouseholdGrantId
+    transactions: list[BudgetHouseholdTransaction]
+    filtered_total: int
+    next_cursor: str | None
+
+
+class BudgetHouseholdCategory(BaseModel):
+    model_config = _READ
+    id: _HouseholdAlias
+    label: str
+    archived: bool
+
+
+class BudgetHouseholdCategories(BaseModel):
+    model_config = _READ
+    grant_id: _HouseholdGrantId
+    categories: list[BudgetHouseholdCategory]
+
+
+class BudgetHouseholdRule(BaseModel):
+    model_config = _READ
+    id: _HouseholdAlias
+    field: Literal["description", "counterparty_name", "mcc"]
+    operator: Literal["contains", "equals"]
+    category_id: _HouseholdAlias | None
+    kind: Literal["auto", "expense", "income", "refund", "excluded"]
+    priority: int
+    enabled: bool
+
+
+class BudgetHouseholdRules(BaseModel):
+    model_config = _READ
+    grant_id: _HouseholdGrantId
+    rules: list[BudgetHouseholdRule]
+
+
+class BudgetHouseholdTransferLeg(BaseModel):
+    model_config = _READ
+    account_id: _HouseholdAlias
+    date: str
+    amount: _HouseholdMoney
+    currency: str
+
+
+class BudgetHouseholdTransfer(BaseModel):
+    model_config = _READ
+    id: _HouseholdAlias
+    status: Literal["suggested", "accepted", "review", "boundary", "rejected", "undone"]
+    debit: BudgetHouseholdTransferLeg
+    credit: BudgetHouseholdTransferLeg
+
+
+class BudgetHouseholdTransfers(BaseModel):
+    model_config = _READ
+    grant_id: _HouseholdGrantId
+    transfers: list[BudgetHouseholdTransfer]
+    filtered_total: int
+    next_cursor: str | None
+
+
+class BudgetHouseholdSpendingLimit(BaseModel):
+    model_config = _READ
+    category_id: _HouseholdAlias
+    currency: str
+    monthly_limit: str
+    warning_percent: Annotated[int, Field(ge=1, le=99)]
+    status: Literal["within", "approaching", "at_limit", "exceeded"]
+    net_spending: _HouseholdMoney
+
+
+class BudgetHouseholdSpendingLimits(BaseModel):
+    model_config = _READ
+    grant_id: _HouseholdGrantId
+    limits: list[BudgetHouseholdSpendingLimit]
+
+
+class BudgetHouseholdRecurringHint(BaseModel):
+    model_config = _READ
+    ordinal: Annotated[int, Field(ge=1)]
+    amount: _HouseholdMoney
+    currency: str
+    cadence: str
+    first_date: str
+    last_date: str
+    occurrence_count: Annotated[int, Field(ge=0)]
+
+
+class BudgetHouseholdRecurring(BaseModel):
+    model_config = _READ
+    grant_id: _HouseholdGrantId
+    hints: list[BudgetHouseholdRecurringHint]
+
+
+class BudgetHouseholdMortgageSchedule(BaseModel):
+    model_config = _READ
+    id: _HouseholdAlias
+    ordinal: Annotated[int, Field(ge=1)]
+    currency: str
+    amount: _HouseholdMoney
+    enabled: bool
+    due_day: Annotated[int, Field(ge=1, le=31)]
+    start_date: str
+    end_date: str | None
+    paid_months: list[str]
+
+
+class BudgetHouseholdMortgageReminder(BaseModel):
+    model_config = _READ
+    schedule_id: _HouseholdAlias
+    due_date: str | None
+    status: Literal["overdue", "due_today", "due_soon", "upcoming", "completed"]
+
+
+class BudgetHouseholdMortgages(BaseModel):
+    model_config = _READ
+    grant_id: _HouseholdGrantId
+    evaluation_date: str
+    schedules: list[BudgetHouseholdMortgageSchedule]
+    reminders: list[BudgetHouseholdMortgageReminder]
+
+
+class BudgetHouseholdInboxItem(BaseModel):
+    model_config = _READ
+    id: _HouseholdAlias
+    kind: Literal["mortgage_due", "spending_limit"]
+    read: bool
+    status: str
+    schedule_id: _HouseholdAlias | None = None
+    due_date: str | None = None
+    category_id: _HouseholdAlias | None = None
+    currency: str | None = None
+    period: str | None = None
+
+
+class BudgetHouseholdInbox(BaseModel):
+    model_config = _READ
+    grant_id: _HouseholdGrantId
+    evaluation_date: str
+    unread_count: Annotated[int, Field(ge=0)]
+    items: list[BudgetHouseholdInboxItem]
+
+
+class BudgetHouseholdQuarantine(BaseModel):
+    model_config = _READ
+    grant_id: _HouseholdGrantId
+    uncertain_count: Annotated[int, Field(ge=0)]
+    unresolved_count: Annotated[int, Field(ge=0)]
+    import_unresolved_count: Annotated[int, Field(ge=0)]
+
+
+class BudgetHouseholdPassThrough(BaseModel):
+    model_config = _READ
+    rent_category_id: _HouseholdAlias
+    mortgage_category_id: _HouseholdAlias
+
+
+class BudgetHouseholdSettings(BaseModel):
+    """Bootstrap month config only. An absent owner entry is an empty income list and null pass-through."""
+    model_config = _READ
+    grant_id: _HouseholdGrantId
+    income_category_ids: list[_HouseholdAlias]
+    pass_through: BudgetHouseholdPassThrough | None
+
+
+_HOUSEHOLD_MODELS = (BudgetHouseholdAccess, BudgetHouseholdAccounts, BudgetHouseholdMonthlyBudget,
+                     BudgetHouseholdOverview, BudgetHouseholdTransactions, BudgetHouseholdCategories,
+                     BudgetHouseholdRules, BudgetHouseholdTransfers, BudgetHouseholdSpendingLimits,
+                     BudgetHouseholdRecurring, BudgetHouseholdMortgages, BudgetHouseholdInbox,
+                     BudgetHouseholdQuarantine, BudgetHouseholdSettings)
+
 _ANALYTICS_MODELS = (BudgetAnalyticsCategoryCreateRequest, BudgetAnalyticsCategoryUpdateRequest,
                      BudgetAnalyticsAnnotationRequest, BudgetAnalyticsTransactionsByKeysRequest,
                      BudgetAnalyticsRulePreviewRequest, BudgetAnalyticsRuleSaveRequest,
@@ -2844,6 +3136,20 @@ _PATH_ROLES = {
     ("GET", "/api/budget/analytics/forecast"): "admin",
     ("GET", "/api/budget/analytics/monthly-budget"): "admin",
     ("GET", "/api/budget/analytics/monthly-budget/charts"): "admin",
+    ("GET", "/api/budget/household/access"): "viewer",
+    ("GET", "/api/budget/household/report-accounts"): "viewer",
+    ("GET", "/api/budget/household/monthly-budget"): "viewer",
+    ("GET", "/api/budget/household/overview"): "viewer",
+    ("GET", "/api/budget/household/transactions"): "viewer",
+    ("GET", "/api/budget/household/categories"): "viewer",
+    ("GET", "/api/budget/household/rules"): "viewer",
+    ("GET", "/api/budget/household/transfers"): "viewer",
+    ("GET", "/api/budget/household/spending-limits"): "viewer",
+    ("GET", "/api/budget/household/recurring"): "viewer",
+    ("GET", "/api/budget/household/mortgages"): "viewer",
+    ("GET", "/api/budget/household/inbox"): "viewer",
+    ("GET", "/api/budget/household/quarantine"): "viewer",
+    ("GET", "/api/budget/household/monthly-budget-settings"): "viewer",
     ("POST", "/api/budget/analytics/category-create"): "admin",
     ("POST", "/api/budget/analytics/category-update"): "admin",
     ("POST", "/api/budget/analytics/annotation"): "admin",
@@ -2923,7 +3229,8 @@ def _component_schemas() -> dict:
         [(model, "validation")
          for model in (*_CONTROL_MODELS, ControlSuccess, ControlError, *_COMMAND_MODELS,
                        *_READ_MODELS, *_AUTH_MODELS, *_AUTOMATION_MODELS, *_EVENT_MODELS,
-                       *_USER_MODELS, *_CALENDAR_MODELS, *_BUDGET_MODELS, *_ANALYTICS_MODELS, *_RECEIPT_MODELS)],
+                       *_USER_MODELS, *_CALENDAR_MODELS, *_BUDGET_MODELS, *_ANALYTICS_MODELS,
+                       *_RECEIPT_MODELS, *_HOUSEHOLD_MODELS)],
         ref_template="#/components/schemas/{model}",
     )
     schemas = combined.get("$defs", {})
@@ -3469,6 +3776,7 @@ def _budget_paths():
     paths.update(_consent_paths())
     paths.update(_analytics_paths())
     paths.update(_receipt_paths())
+    paths.update(_household_paths())
     return paths
 
 
@@ -3544,6 +3852,100 @@ def _receipt_paths():
         }}
     return paths
 
+
+
+def _household_grant_header():
+    return {"name": "X-Budget-Grant", "in": "header", "required": True,
+            "schema": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+            "description": "Exactly one household grant id, as returned by discovery. A missing, duplicate or "
+                           "different value is rejected."}
+
+
+def _household_responses(model):
+    responses = _analytics_responses(model)
+    responses["200"]["description"] = (
+        "Household view. No bank request. The body is sent only after a fresh grant check commits in one "
+        "immediate transaction. A successful data read may write one sanitised analytics-audit row naming "
+        "the member, owner and view, at most once per 60 seconds. Discovery writes no audit row. A denial "
+        "writes nothing.")
+    responses["403"]["description"] = ("Stored role must be exactly an active viewer with a grant whose owner is an "
+                                       "active admin. Data reads also require exactly one matching X-Budget-Grant. "
+                                       "The viewer route floor admits higher roles; those roles are rejected here. "
+                                       "Middleware may return an empty body.")
+    responses["413"]["description"] = ("Household response exceeded 4 MiB of UTF-8 JSON, or a monthly-budget "
+                                       "processing cap was hit. No partial body is returned.")
+    return responses
+
+
+def _household_paths():
+    """P3 viewer reads. Existing owner routes stay admin. Settings reads the P1 bootstrap config only."""
+    prefix = "/api/budget/household/"
+    period = _budget_query("period", required=True, schema={"type": "string", "pattern": r"^[0-9]{4}(?:-[0-9]{2})?$"},
+                           description="Inclusive calendar month or year, 1900 through 9999.")
+    currency = _budget_query("currency", schema={"type": "string", "pattern": "^[A-Z]{3}$"})
+    month = _budget_query("period", required=True, schema={"type": "string", "pattern": r"^[0-9]{4}-[0-9]{2}$"},
+                          description="Inclusive calendar month YYYY-MM.")
+    page = [_budget_query("limit", schema={"type": "integer", "minimum": 1, "maximum": 200, "default": 50}),
+            _budget_query("cursor", schema={"type": "string", "minLength": 1, "maxLength": 8192},
+                          description="Opaque cursor bound to the viewer, owner, grant, route and safe rows.")]
+    month_optional = _budget_query(
+        "period", schema={"type": "string", "pattern": r"^[0-9]{4}-[0-9]{2}$"},
+        description="Optional calendar month YYYY-MM through the current Europe/Warsaw month. Defaults to that month.")
+    month_currency = _budget_query(
+        "currency", schema={"type": "string", "pattern": "^[A-Z]{3}$", "default": "PLN"},
+        description="Optional uppercase 3-letter ISO currency code. Defaults to PLN.")
+    alias = _budget_query("account_id", description="Grant-scoped alias of a selected account.")
+    category = _budget_query("category_id", description="Grant-scoped category alias. The owner token uncategorised is rejected.")
+    kind = _budget_query("kind", schema={"type": "string", "enum":
+        ["expense", "income", "refund", "excluded", "unclassified_credit", "transfer"]})
+    status = _budget_query("status", schema={"type": "string", "enum":
+        ["suggested", "accepted", "review", "boundary", "rejected", "undone"], "default": "suggested"})
+    reads = (
+        ("access", "getBudgetHouseholdAccess", "Discover the caller's household grant id", "BudgetHouseholdAccess", []),
+        ("report-accounts", "getBudgetHouseholdReportAccounts", "Selected accounts as grant-scoped aliases and ordinals",
+         "BudgetHouseholdAccounts", []),
+        ("monthly-budget", "getBudgetHouseholdMonthlyBudget", "Household monthly budget and series",
+         "BudgetHouseholdMonthlyBudget", [month_optional, month_currency]),
+        ("overview", "getBudgetHouseholdOverview", "Household selected-account totals",
+         "BudgetHouseholdOverview", [period, currency]),
+        ("transactions", "getBudgetHouseholdTransactions", "Household transactions without bank text",
+         "BudgetHouseholdTransactions", [period, currency, kind, alias, category, *page]),
+        ("categories", "getBudgetHouseholdCategories", "Household category aliases and safe labels",
+         "BudgetHouseholdCategories", []),
+        ("rules", "getBudgetHouseholdRules", "Household rules without literal operands",
+         "BudgetHouseholdRules", []),
+        ("transfers", "getBudgetHouseholdTransfers", "Household transfer pairs whose both legs are selected",
+         "BudgetHouseholdTransfers", [period, currency, status, *page]),
+        ("spending-limits", "getBudgetHouseholdSpendingLimits", "Enabled household spending limits",
+         "BudgetHouseholdSpendingLimits", [month, currency]),
+        ("recurring", "getBudgetHouseholdRecurring", "Household recurring hints with generic ordinals",
+         "BudgetHouseholdRecurring", [currency]),
+        ("mortgages", "getBudgetHouseholdMortgages", "Household mortgage schedules without labels",
+         "BudgetHouseholdMortgages", []),
+        ("inbox", "getBudgetHouseholdInbox", "Household mortgage and spending-limit inbox",
+         "BudgetHouseholdInbox", []),
+        ("quarantine", "getBudgetHouseholdQuarantine", "Household quarantine counts over selected accounts",
+         "BudgetHouseholdQuarantine", []),
+        ("monthly-budget-settings", "getBudgetHouseholdMonthlyBudgetSettings",
+         "Bootstrap monthly-budget settings with grant-scoped category ids",
+         "BudgetHouseholdSettings", []),
+    )
+    paths = {}
+    for name, operation, summary, model, parameters in reads:
+        entry = {"operationId": operation, "summary": summary,
+                 "description": "Requires an authenticated active viewer, both budget flags, SQLite users and a "
+                                "grant whose owner is an active admin. The grant header is 64 lowercase hex "
+                                "characters. Reads the same owner projection through a separate allowlist. No bank "
+                                "request. Data reads may write one sanitised internal analytics-audit row for the "
+                                "member, owner and view name, at most once per 60 seconds, in the same immediate "
+                                "transaction as the fresh grant check. Household audit rows older than 180 days are "
+                                "pruned on that write. GET /access returns only the member's grant id and writes no "
+                                "audit row. Failures write nothing. The row is not visible on /api/audit or the SSE "
+                                "stream. GET /monthly-budget-settings reads the P1 bootstrap config only.",
+                 "parameters": [] if name == "access" else [_household_grant_header(), *parameters],
+                 "responses": _household_responses(model)}
+        paths[prefix + name] = {"get": entry}
+    return paths
 
 def _analytics_paths():
     prefix = "/api/budget/analytics/"

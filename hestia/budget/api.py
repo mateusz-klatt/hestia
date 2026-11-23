@@ -246,9 +246,11 @@ def register(app, read_json_body, *, auth_enabled, session_secret, secure_cookie
             return _failure(exc, operation)
 
     app.on_response_prepare.append(private_headers)
+    from . import household_api
     consent_api.register(app, read_json_body, auth_enabled=auth_enabled, session_secret=session_secret,
                          secure_cookie=secure_cookie)
     analytics_api.register(app, read_json_body, auth_enabled=auth_enabled, session_secret=session_secret)
+    household_api.register(app, read_json_body, auth_enabled=auth_enabled, session_secret=session_secret)
     receipt_api.register(app, read_json_body, auth_enabled=auth_enabled, session_secret=session_secret)
     jobs.register(app, JOBS_KEY, auth_enabled=auth_enabled)
     for operation in READS:
