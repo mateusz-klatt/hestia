@@ -48,6 +48,17 @@ describe("budget api", () => {
     });
   });
 
+  it("posts the explicit category colour spread mutation", async () => {
+    const fetchMock = respond(200, { ok: true, categories: [] });
+    await budgetApi.spreadCategoryColors();
+    const { url, init } = sent(fetchMock);
+    expect(url.pathname).toBe("/api/budget/analytics/category-colors-spread");
+    expect(init).toEqual({
+      credentials: "same-origin", cache: "no-store", method: "POST",
+      headers: { "Content-Type": "application/json" }, body: "{}",
+    });
+  });
+
   it("passes an analytics page limit only when one is given", async () => {
     const fetchMock = respond(200, { period: "2026-11", transactions: [], filtered_total: 0, next_cursor: null });
     const filter = { currency: "PLN", category: "", kind: "", query: "" };

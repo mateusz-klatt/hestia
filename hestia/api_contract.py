@@ -101,7 +101,8 @@ from pydantic.json_schema import models_json_schema
 # 0.40.0: separate Gmail receipt grant, status, sync and revocation (migration 0024).
 # Documentation-only follow-up to 0.40.0: clarify the #262 budget browser-session requirement and the
 # receipts device-token exception. No schema or wire change.
-CONTRACT_VERSION = "0.40.0"
+# 0.41.0: persistent root-category hues and explicit even re-spreading (migration 0026, down_revision 0025).
+CONTRACT_VERSION = "0.41.0"
 OPENAPI_PATH = Path(__file__).resolve().parent.parent / "docs" / "api" / "openapi.json"
 
 # De-duplicated string literals (SonarPython S1192): the OpenAPI content-type, the paths reused
@@ -1554,6 +1555,7 @@ class BudgetConflict(BudgetError):
 
 # Owner-private analytics requests are strict; read values remain forward compatible.
 BudgetAnalyticsVersion = Annotated[int, Field(ge=0)]
+BudgetCategoryHue = Annotated[int, Field(ge=0, le=359)]
 BudgetAnalyticsFingerprint = Annotated[str, Field(pattern=r"^[a-f0-9]{64}$")]
 BudgetAnalyticsReference = Annotated[str, Field(min_length=1, max_length=1024)]
 _ROW_KEY_PATTERN = r"^[^/\x00-\x1f\x7f]{1,128}/[^\x00-\x1f\x7f]{1,1024}$"
@@ -1586,6 +1588,8 @@ class BudgetAnalyticsCategoryUpdateRequest(BudgetAnalyticsCategoryCreateRequest)
     category_id: BudgetId
     archived: bool
     expected_version: BudgetAnalyticsVersion
+    # Omitted keeps the current hue. Null selects the largest-gap automatic hue; only roots accept this field.
+    color_hue: Annotated[BudgetCategoryHue | None, Field(json_schema_extra=_OMIT)] = None
 
 
 class BudgetAnalyticsAnnotationRequest(BaseModel):
@@ -1648,6 +1652,7 @@ class BudgetAnalyticsCategory(BaseModel):
     created_at: float
     updated_at: float
     parent_id: str | None
+    color_hue: Annotated[BudgetCategoryHue | None, Field(json_schema_extra=_OMIT)] = None
 
 
 class BudgetAnalyticsCategorySaved(BudgetAnalyticsCategory):
@@ -1663,6 +1668,16 @@ class BudgetAnalyticsCategoryResult(BaseModel):
     model_config = _READ
     ok: Literal[True]
     category: BudgetAnalyticsCategorySaved
+
+
+class BudgetAnalyticsCategoryColorSpreadRequest(BaseModel):
+    model_config = _STRICT
+
+
+class BudgetAnalyticsCategoryColorSpreadResult(BaseModel):
+    model_config = _READ
+    ok: Literal[True]
+    categories: list[BudgetAnalyticsCategory]
 
 
 class BudgetAnalyticsAnnotationSaved(BaseModel):
@@ -2531,6 +2546,7 @@ class BudgetAnalyticsMonthlyBudgetCategorySpend(BaseModel):
     category_id: str | None
     name: str | None
     archived: bool
+    color_hue: Annotated[BudgetCategoryHue | None, Field(json_schema_extra=_OMIT)] = None
     expenses: BudgetAnalyticsMonthlyBudgetMoney
     refunds: BudgetAnalyticsMonthlyBudgetMoney
     net_spending: BudgetAnalyticsMonthlyBudgetMoney
@@ -2972,6 +2988,7 @@ class BudgetHouseholdCategoryLabel(BaseModel):
     category_id: _HouseholdAlias
     name: str
     archived: bool
+    color_hue: BudgetCategoryHue | None
 
 
 class BudgetHouseholdSeries(BaseModel):
@@ -3009,6 +3026,7 @@ class BudgetHouseholdOverviewCategory(BaseModel):
     category_id: _HouseholdAlias | None
     label: str | None
     archived: bool
+    color_hue: BudgetCategoryHue | None
     currency: str
     expenses: _HouseholdMoney
     refunds: _HouseholdMoney
@@ -3050,6 +3068,7 @@ class BudgetHouseholdCategory(BaseModel):
     id: _HouseholdAlias
     label: str
     archived: bool
+    color_hue: BudgetCategoryHue | None
 
 
 class BudgetHouseholdCategories(BaseModel):
@@ -3210,6 +3229,7 @@ _HOUSEHOLD_MODELS = (BudgetHouseholdAccess, BudgetHouseholdAccounts, BudgetHouse
                      BudgetHouseholdQuarantine, BudgetHouseholdSettings)
 
 _ANALYTICS_MODELS = (BudgetAnalyticsCategoryCreateRequest, BudgetAnalyticsCategoryUpdateRequest,
+                     BudgetAnalyticsCategoryColorSpreadRequest, BudgetAnalyticsCategoryColorSpreadResult,
                      BudgetAnalyticsAnnotationRequest, BudgetAnalyticsTransactionsByKeysRequest,
                      BudgetAnalyticsRulePreviewRequest, BudgetAnalyticsRuleSaveRequest,
                      BudgetAnalyticsTransferDecisionRequest, BudgetAnalyticsSpendingLimitSaveRequest,
@@ -3280,6 +3300,7 @@ _PATH_ROLES = {
     ("GET", "/api/budget/household/monthly-budget-settings"): "viewer",
     ("POST", "/api/budget/analytics/category-create"): "admin",
     ("POST", "/api/budget/analytics/category-update"): "admin",
+    ("POST", "/api/budget/analytics/category-colors-spread"): "admin",
     ("POST", "/api/budget/analytics/annotation"): "admin",
     ("POST", "/api/budget/analytics/rule-preview"): "admin",
     ("POST", "/api/budget/analytics/rule-save"): "admin",
@@ -4374,6 +4395,7 @@ def _analytics_paths():
     writes = (
         ("category-create", "createBudgetAnalyticsCategory", "BudgetAnalyticsCategoryCreateRequest", "BudgetAnalyticsCategoryResult"),
         ("category-update", "updateBudgetAnalyticsCategory", "BudgetAnalyticsCategoryUpdateRequest", "BudgetAnalyticsCategoryResult"),
+        ("category-colors-spread", "spreadBudgetAnalyticsCategoryColors", "BudgetAnalyticsCategoryColorSpreadRequest", "BudgetAnalyticsCategoryColorSpreadResult"),
         ("annotation", "annotateBudgetAnalyticsTransaction", "BudgetAnalyticsAnnotationRequest", "BudgetAnalyticsAnnotationResult"),
         ("rule-preview", "previewBudgetAnalyticsRule", "BudgetAnalyticsRulePreviewRequest", "BudgetAnalyticsPreviewResult"),
         ("rule-save", "saveBudgetAnalyticsRule", "BudgetAnalyticsRuleSaveRequest", "BudgetAnalyticsRuleResult"),

@@ -83,6 +83,7 @@ class BudgetAnalyticsAPITests(unittest.IsolatedAsyncioTestCase):
     def bodies(self):
         return {"category-create": {"name": "Synthetic groceries"},
                 "category-update": {"category_id": "unknown", "name": "Synthetic", "archived": False, "expected_version": 0},
+                "category-colors-spread": {},
                 "annotation": self.annotation(), "rule-preview": self.candidate(), "rule-save": {"preview_id": "unknown"},
                 "rule-batch-preview": {"rules": [self.candidate()]}, "rule-batch-save": {"preview_id": "unknown"},
                 "transfer-decision": {"action": "undo", "decision_id": "unknown", "expected_version": 1},
@@ -766,6 +767,33 @@ class BudgetAnalyticsAPITests(unittest.IsolatedAsyncioTestCase):
         cross = await self.post("category-create", {"name": "Cross",
                                "parent_id": (await foreign.json())["category"]["id"]})
         self.assertEqual(cross.status, 404)
+
+    async def test_category_hue_update_clear_and_explicit_spread_match_contract(self):
+        beta = (await (await self.post("category-create", {"name": "Beta"})).json())["category"]
+        alpha = (await (await self.post("category-create", {"name": "Alpha"})).json())["category"]
+        child = (await (await self.post("category-create", {"name": "Child", "parent_id": alpha["id"]})).json())["category"]
+        self.assertEqual((beta["color_hue"], alpha["color_hue"], child["color_hue"]), (20, 200, None))
+        changed = await self.post("category-update", {"category_id": beta["id"], "name": "Beta", "archived": False,
+                                                       "expected_version": 1, "color_hue": 300})
+        self.assertEqual(changed.status, 200, await changed.text())
+        self.assertEqual((await changed.json())["category"]["color_hue"], 300)
+        for invalid in (-1, 360, True, 1.5):
+            rejected = await self.post("category-update", {"category_id": beta["id"], "name": "Beta", "archived": False,
+                                                            "expected_version": 2, "color_hue": invalid})
+            self.assertEqual(rejected.status, 400)
+        non_root = await self.post("category-update", {"category_id": child["id"], "name": "Child", "archived": False,
+                                                        "expected_version": 1, "color_hue": 40})
+        self.assertEqual(non_root.status, 400)
+        cleared = await self.post("category-update", {"category_id": beta["id"], "name": "Beta", "archived": False,
+                                                       "expected_version": 2, "color_hue": None})
+        self.assertEqual((await cleared.json())["category"]["color_hue"], 20)
+        malformed = await self.post("category-colors-spread", {"unexpected": True})
+        self.assertEqual(malformed.status, 400)
+        spread = await self.post("category-colors-spread", {})
+        self.assertEqual(spread.status, 200, await spread.text())
+        body = await spread.json()
+        api_contract.BudgetAnalyticsCategoryColorSpreadResult.model_validate(body)
+        self.assertEqual([(row["name"], row["color_hue"]) for row in body["categories"]], [("Alpha", 20), ("Beta", 200)])
 
     async def test_rule_preview_save_replay_expiry_and_selection_change_are_fenced(self):
         response = await self.post("rule-preview", self.candidate())

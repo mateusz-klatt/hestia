@@ -78,6 +78,7 @@ function fakeApi(accounts: BudgetAccount[] = [account({ display })]) {
     decideTransfer: vi.fn<BudgetApi["decideTransfer"]>(),
     createCategory: vi.fn<BudgetApi["createCategory"]>(),
     updateCategory: vi.fn<BudgetApi["updateCategory"]>(),
+    spreadCategoryColors: vi.fn<BudgetApi["spreadCategoryColors"]>(),
     rules: vi.fn<BudgetApi["rules"]>(() => ok({ rules: [] })),
     previewRule: vi.fn<BudgetApi["previewRule"]>(),
     saveRule: vi.fn<BudgetApi["saveRule"]>(),

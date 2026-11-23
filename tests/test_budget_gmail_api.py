@@ -244,7 +244,9 @@ class GmailHTTPTests(IsolatedAsyncioTestCase):
                     self.assertEqual(receipt.get("due_date"), "2026-11-25" if native else None)
 
     async def test_receipt_version_is_validated_before_reading_body(self):
-        for version in ("bad", "1.0.0", "0.40.1", "0.040.0"):
+        major, minor, patch = (int(part) for part in api_contract.CONTRACT_VERSION.split("."))
+        newer = f"{major}.{minor}.{patch + 1}"  # one patch above the served contract
+        for version in ("bad", "1.0.0", newer, "0.040.0"):
             with self.subTest(version=version):
                 headers = self.headers() | {"X-Hestia-Contract-Version": version}
                 response = await self.client.post(receipt_api.PREFIX + "/parse-text", data="not JSON", headers=headers)

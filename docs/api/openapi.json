@@ -933,6 +933,19 @@
             "title": "Archived",
             "type": "boolean"
           },
+          "color_hue": {
+            "anyOf": [
+              {
+                "maximum": 359,
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Color Hue"
+          },
           "created_at": {
             "title": "Created At",
             "type": "number"
@@ -975,6 +988,34 @@
           "parent_id"
         ],
         "title": "BudgetAnalyticsCategory",
+        "type": "object"
+      },
+      "BudgetAnalyticsCategoryColorSpreadRequest": {
+        "additionalProperties": false,
+        "properties": {},
+        "title": "BudgetAnalyticsCategoryColorSpreadRequest",
+        "type": "object"
+      },
+      "BudgetAnalyticsCategoryColorSpreadResult": {
+        "properties": {
+          "categories": {
+            "items": {
+              "$ref": "#/components/schemas/BudgetAnalyticsCategory"
+            },
+            "title": "Categories",
+            "type": "array"
+          },
+          "ok": {
+            "const": true,
+            "title": "Ok",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "categories"
+        ],
+        "title": "BudgetAnalyticsCategoryColorSpreadResult",
         "type": "object"
       },
       "BudgetAnalyticsCategoryCreateRequest": {
@@ -1035,6 +1076,19 @@
           "changed": {
             "title": "Changed",
             "type": "boolean"
+          },
+          "color_hue": {
+            "anyOf": [
+              {
+                "maximum": 359,
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Color Hue"
           },
           "created_at": {
             "title": "Created At",
@@ -1166,6 +1220,19 @@
             "minLength": 1,
             "title": "Category Id",
             "type": "string"
+          },
+          "color_hue": {
+            "anyOf": [
+              {
+                "maximum": 359,
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Color Hue"
           },
           "expected_version": {
             "minimum": 0,
@@ -2758,6 +2825,19 @@
               }
             ],
             "title": "Category Id"
+          },
+          "color_hue": {
+            "anyOf": [
+              {
+                "maximum": 359,
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Color Hue"
           },
           "expenses": {
             "maxLength": 192,
@@ -7505,6 +7585,19 @@
             "title": "Archived",
             "type": "boolean"
           },
+          "color_hue": {
+            "anyOf": [
+              {
+                "maximum": 359,
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Color Hue"
+          },
           "id": {
             "maxLength": 64,
             "minLength": 64,
@@ -7520,7 +7613,8 @@
         "required": [
           "id",
           "label",
-          "archived"
+          "archived",
+          "color_hue"
         ],
         "title": "BudgetHouseholdCategory",
         "type": "object"
@@ -7538,6 +7632,19 @@
             "title": "Category Id",
             "type": "string"
           },
+          "color_hue": {
+            "anyOf": [
+              {
+                "maximum": 359,
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Color Hue"
+          },
           "name": {
             "title": "Name",
             "type": "string"
@@ -7546,7 +7653,8 @@
         "required": [
           "category_id",
           "name",
-          "archived"
+          "archived",
+          "color_hue"
         ],
         "title": "BudgetHouseholdCategoryLabel",
         "type": "object"
@@ -7966,6 +8074,19 @@
             ],
             "title": "Category Id"
           },
+          "color_hue": {
+            "anyOf": [
+              {
+                "maximum": 359,
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Color Hue"
+          },
           "currency": {
             "title": "Currency",
             "type": "string"
@@ -8010,6 +8131,7 @@
           "category_id",
           "label",
           "archived",
+          "color_hue",
           "currency",
           "expenses",
           "refunds",
@@ -14224,7 +14346,7 @@
   "info": {
     "description": "Local cloud-free smart-home control API. Generated from hestia/api_contract.py \u2014 do not edit by hand; run `python -m hestia.api_contract`.",
     "title": "hestia API",
-    "version": "0.40.0"
+    "version": "0.41.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -14899,6 +15021,116 @@
           }
         },
         "summary": "Read owner-private local budget analytics",
+        "x-required-role": "admin"
+      }
+    },
+    "/api/budget/analytics/category-colors-spread": {
+      "post": {
+        "description": "Requires the exact admin owner, browser cookie and configured HTTPS Origin. Version and source fingerprints prevent stale changes. No bank request is made.",
+        "operationId": "spreadBudgetAnalyticsCategoryColors",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BudgetAnalyticsCategoryColorSpreadRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetAnalyticsCategoryColorSpreadResult"
+                }
+              }
+            },
+            "description": "owner-scoped stored state; no bank request"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "session required; middleware may return an empty body"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "admin owner or browser-origin requirement failed; middleware may return an empty body"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "unknown, disabled or foreign resource"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Version, financial source, reserved transfer leg, preview or cursor changed; reload and review."
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Explicit analytics processing or owner configuration limit; no partial totals."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "budget configuration unavailable"
+          }
+        },
+        "summary": "Save an owner-private local classification",
         "x-required-role": "admin"
       }
     },
