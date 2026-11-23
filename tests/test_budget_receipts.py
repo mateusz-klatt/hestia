@@ -1242,6 +1242,10 @@ NR KARTY ****5555
             confirm({"account_id": account, "entry_reference": digest, "candidate_token": "a" * 43})
         with self.subTest(case="raw key"):
             confirm({"account_id": account, "entry_reference": "debit", "candidate_token": token}, lookup=True)
+        with self.subTest(case="non-ascii digest of digest length"):
+            confirm({"account_id": account, "entry_reference": "\u0105" * 64, "candidate_token": token}, lookup=True)
+        with self.subTest(case="uppercase digest"):
+            confirm({"account_id": account, "entry_reference": digest.upper(), "candidate_token": token}, lookup=True)
         with self.subTest(case="other account digest"):
             confirm({"account_id": account, "entry_reference": other_digest, "candidate_token": token}, lookup=True)
         with self.subTest(case="other account id"):

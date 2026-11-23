@@ -101,6 +101,8 @@ def _line_dict(row):
     }
 
 
+_DIGEST_HEX = re.compile(r"[0-9a-f]{64}")
+
 class BudgetReceiptStore(BudgetHTTPStore):
     def __init__(self, sessions, *, clock, cursor_secret):
         super().__init__(sessions, clock=clock, cursor_secret=cursor_secret)
@@ -430,7 +432,10 @@ class BudgetReceiptStore(BudgetHTTPStore):
         reference = transaction.entry_reference
         digest = entry_reference_digest(reference)
         presented = link["entry_reference"]
-        if len(presented) != len(digest) or not hmac.compare_digest(digest, presented):
+        # Only a lowercase ASCII sha256 hex can match; anything else (incl. non-ASCII, which would make
+        # compare_digest raise TypeError) is a client error, never a 500.
+        if not _DIGEST_HEX.fullmatch(presented) \
+                or not hmac.compare_digest(digest, presented):
             raise ReceiptError()
         try:
             payload = _json(transaction.payload_json)
