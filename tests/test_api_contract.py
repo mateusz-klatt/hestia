@@ -5,7 +5,8 @@ Contract guarantees:
      ``python -m hestia.api_contract``).
   2. Each request DTO accepts/rejects exactly what the authoritative runtime validator does, so the
      generated client types can never lie about what the server will accept.
-  3. Each monthly budget addition leaves the preceding OpenAPI contract structurally intact.
+  3. Monthly-budget additions from 0.27.0 through 0.32.0 leave the preceding OpenAPI contract
+     structurally intact. 0.33.0 is not strictly additive: it withdraws ``budget_forecast_config_conflict``.
 """
 from __future__ import annotations
 
@@ -54,18 +55,112 @@ class OpenApiArtifactTests(unittest.TestCase):
             "docs/api/openapi.json is stale — run `python -m hestia.api_contract`",
         )
 
-    def test_monthly_budget_contract_is_strictly_additive_from_0_27_0(self):
+    def test_monthly_budget_contract_chain_from_0_27_0(self):
+        """0.27.0 through 0.32.0 stay strictly additive. 0.33.0 withdraws a 503 code.
+        0.34.0 adds parent_id. 0.36.0 adds receipts and is strictly additive over 0.34.0.
+        0.35.0 is reserved for the one-off label (PR #251) and is not part of this chain."""
         document = api_contract.build_openapi()
-        self.assertEqual(document["info"]["version"], "0.31.0")
+        self.assertEqual(document["info"]["version"], "0.36.0")
         for path in [path for path in document["paths"] if path.startswith("/api/budget/receipts/")]:
             del document["paths"][path]
         for name in [name for name in document["components"]["schemas"] if name.startswith("BudgetReceipt")]:
             del document["components"]["schemas"][name]
+        document["info"]["version"] = "0.34.0"
+        canonical_0_34 = json.dumps(document, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        self.assertEqual(hashlib.sha256(canonical_0_34).hexdigest(),
+                         "90e6cb2e1dbf653df3b59bdaa0590740a738cb25c77f1334d3a5415662a3c6ca")
+        self.assertEqual(document["info"]["version"], "0.34.0")
+        # Strip the 0.34.0 category parent and compare with the published 0.33.0 document.
+        for name in ("BudgetAnalyticsCategory", "BudgetAnalyticsCategorySaved",
+                     "BudgetAnalyticsCategoryCreateRequest", "BudgetAnalyticsCategoryUpdateRequest"):
+            schema = document["components"]["schemas"][name]
+            schema.get("properties", {}).pop("parent_id", None)
+            if "required" in schema:
+                schema["required"] = [item for item in schema["required"] if item != "parent_id"]
+                if not schema["required"]:
+                    del schema["required"]
+        document["info"]["version"] = "0.33.0"
+        canonical_0_33 = json.dumps(document, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        self.assertEqual(hashlib.sha256(canonical_0_33).hexdigest(),
+                         "bc46ebfdcb8f5d49cfa751f369b786b045a8b013e89212680b2eb6fefa2fa8e6")
+        self.assertEqual(document["info"]["version"], "0.33.0")
+        forecast_get = document["paths"]["/api/budget/analytics/forecast"]["get"]
+        withdrawn = (
+            "budget_forecast_config_conflict (0.31–0.32) wycofany w 0.33; "
+            "konflikt to teraz 200 + summary.baseline_conflicts"
+        )
+        description_503 = forecast_get["responses"]["503"]["description"]
+        self.assertIn(withdrawn, description_503)
+        self.assertEqual(description_503.count("budget_forecast_config_conflict"), 1)
+        self.assertNotIn("`budget_forecast_config_conflict`", description_503)
+        self.assertIn("summary.baseline_conflicts", forecast_get["description"])
+        self.assertNotIn("is rejected", forecast_get["description"])
+        # Optional note: absent from required, unlike a strictly additive required field.
+        summary = document["components"]["schemas"]["BudgetAnalyticsForecastSummary"]
+        self.assertIn("baseline_conflicts", summary["properties"])
+        self.assertNotIn("baseline_conflicts", summary["required"])
+        del summary["properties"]["baseline_conflicts"]
+        del document["components"]["schemas"]["BudgetAnalyticsForecastBaselineConflict"]
+        # Restore the 0.32.0 forecast description and the withdrawn 503 wording so the
+        # predecessor hash can be checked. This restoration states the removal; it does
+        # not treat 0.33.0 as strictly additive.
+        forecast_get["description"] = (
+            "Read-only evaluation of unmarked mortgage instalments and active recurring charges from one local "
+            "snapshot using the server UTC date. Matches recurring hints to individual scheduled instalments to "
+            "suppress duplicate estimates. When HESTIA_BUDGET_FORECAST_CONFIG names categories, each month also "
+            "includes a category_baseline estimate (confidence estimated, schedule_id null, label is the category "
+            "name): the median or trimmed mean of net spending over prior complete months inside each account's "
+            "coverage window, including months with no spend. The current month subtracts net spending already "
+            "booked, floored at zero. A configured category already represented by an active recurring hint or an "
+            "enabled mortgage schedule is rejected. An optional currency filter scopes commitments, deduplications "
+            "and their summary counts. Snapshot metadata and account freshness cover all selected accounts. "
+            "The estimate excludes spending limits and makes no bank requests or stored changes."
+        )
+        forecast_get["responses"]["503"]["description"] = (
+            "Analytics storage or budget configuration unavailable (`budget_analytics_unavailable`, "
+            "`budget_unavailable`, or `budget_forecast_config_conflict`)."
+        )
+        document["info"]["version"] = "0.32.0"
+        canonical_0_32 = json.dumps(document, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        self.assertEqual(hashlib.sha256(canonical_0_32).hexdigest(),
+                         "1d45cf2d6b502b8ccaaedd4cdda8f88d085724918b9b7979785cffea58cc1428")
+        # Strip the pending_row_keys / pending_row_keys_truncated / transactions-by-keys additions
+        # and compare with the 0.31.0 forecast contract published by master.
+        coverage_props = document["components"]["schemas"]["BudgetAnalyticsMonthlyBudgetCoverage"]["properties"]
+        del coverage_props["pending_row_keys"]
+        del coverage_props["pending_row_keys_truncated"]
+        del document["paths"]["/api/budget/analytics/transactions-by-keys"]
+        del document["components"]["schemas"]["BudgetAnalyticsTransactionsByKeysRequest"]
+        document["info"]["version"] = "0.31.0"
+        canonical_0_31 = json.dumps(document, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        self.assertEqual(hashlib.sha256(canonical_0_31).hexdigest(),
+                         "9180a43e2a4e00edeece98e9adc5f1689bf440a52e5612e90bed68400de3c782")
+        # Strip the category-baseline addition and compare with the 0.30.0 forecast contract.
+        forecast_get = document["paths"]["/api/budget/analytics/forecast"]["get"]
+        forecast_get["description"] = (
+            "Read-only evaluation of unmarked mortgage instalments and active recurring charges from one local "
+            "snapshot using the server UTC date. Matches recurring hints to individual scheduled instalments to "
+            "suppress duplicate estimates. An optional currency filter scopes commitments, deduplications and "
+            "their summary counts. Snapshot metadata and account freshness cover all selected accounts. "
+            "The estimate excludes spending limits and makes no bank requests or stored changes."
+        )
+        forecast_get["responses"]["413"]["description"] = (
+            "Forecast limit exceeded (>100,000 selected rows, >100 schedules, >1,200 paid marks per schedule, "
+            ">200 active currency-filtered hints, >3,600 projected items, or >4 MiB UTF-8 JSON payload); "
+            "zero partial totals returned."
+        )
+        forecast_get["responses"]["503"]["description"] = (
+            "Analytics storage or budget configuration unavailable (`budget_analytics_unavailable` or "
+            "`budget_unavailable`)."
+        )
+        item_properties = document["components"]["schemas"]["BudgetAnalyticsForecastItem"]["properties"]
+        item_properties["source"]["enum"] = ["mortgage", "recurring"]
+        item_properties["confidence"]["enum"] = ["scheduled", "high", "medium"]
         document["info"]["version"] = "0.30.0"
         canonical_0_30 = json.dumps(document, sort_keys=True, separators=(",", ":")).encode("utf-8")
         self.assertEqual(hashlib.sha256(canonical_0_30).hexdigest(),
                          "896148e8965fdf4d10e9433f4b0145d2b440db22f3e98ae6a6f2f685d78d4e9b")
-        # Strip this batch addition and compare with the 0.29.0 monthly-budget contract.
+        # Strip the batch addition and compare with the 0.29.0 monthly-budget contract.
         for path in ("/api/budget/analytics/rule-batch-preview", "/api/budget/analytics/rule-batch-save"):
             del document["paths"][path]
         for name in ("BudgetAnalyticsRuleBatchPreviewRequest", "BudgetAnalyticsRuleBatchSaveRequest",
@@ -518,7 +613,8 @@ class TolerantResponseContractTests(unittest.TestCase):
         "BudgetAnalyticsTransferDecisionRequest", "BudgetAnalyticsLegRequest",
         "BudgetAnalyticsSpendingLimitSaveRequest", "BudgetAnalyticsMortgageSaveRequest",
         "BudgetAnalyticsMortgagePaymentSetRequest", "BudgetAnalyticsInboxKeyRequest",
-        "BudgetAnalyticsInboxMarkRequest", "BudgetReceiptParseTextRequest", "BudgetReceiptConfirmRequest",
+        "BudgetAnalyticsInboxMarkRequest", "BudgetAnalyticsTransactionsByKeysRequest",
+        "BudgetReceiptParseTextRequest", "BudgetReceiptConfirmRequest",
         "BudgetReceiptLineInput", "BudgetReceiptLinkRequest", "BudgetReceiptListRequest",
         "BudgetReceiptSearchRequest", "BudgetReceiptDeleteRequest",
         "AddUserRequest", "ChangePasswordRequest", "ControlCover", "ControlLevel", "ControlRequest",

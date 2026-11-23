@@ -1,13 +1,17 @@
 """Owner-private receipt drafts, structured lines and informational bank links.
 
-Revision ID: 0020
-Revises: 0019
+Revision ID: 0022
+Revises: 0020
+
+``down_revision`` is temporarily ``0020`` so this branch has a single head on
+current master. PR #251 lands migration 0021 first. Re-parent this revision to
+``0021`` when #251 merges. Holzera re-parents at merge.
 """
 from alembic import op
 import sqlalchemy as sa
 
-revision = "0020"
-down_revision = "0019"
+revision = "0022"
+down_revision = "0020"
 branch_labels = None
 depends_on = None
 
@@ -20,29 +24,7 @@ _UQ_RECEIPTS_TX_LINK = "uq_budget_receipts_tx_link"
 _UQ_ACCOUNTS_ID_OWNER = "uq_budget_accounts_id_owner"
 
 
-def _real_transaction():
-    """Open a real SQLite transaction before the first DDL statement.
-
-    ``env.py`` already does this for the whole revision, including Alembic's
-    version update. Repeating the request here keeps upgrade and downgrade
-    atomic when a caller reaches the revision without that wrapper: pysqlite
-    must be out of implicit-commit mode and ``BEGIN`` must already be open.
-    Assigning ``isolation_level`` commits a caller's open transaction, so that
-    case is refused. A transaction this migration already opened stays open so
-    the version update commits with the DDL.
-    """
-    connection = op.get_bind()
-    raw = connection.connection.dbapi_connection
-    if raw.in_transaction and raw.isolation_level is not None:
-        raise RuntimeError("refusing to migrate while a transaction is open")
-    if raw.isolation_level is not None:
-        raw.isolation_level = None
-    if not raw.in_transaction:
-        connection.exec_driver_sql("BEGIN")
-
-
 def upgrade():
-    _real_transaction()
     op.create_index(_UQ_ACCOUNTS_ID_OWNER, "budget_accounts", ["id", "owner"], unique=True)
     op.create_table(
         _SHOPS,
@@ -182,7 +164,6 @@ def upgrade():
 
 
 def downgrade():
-    _real_transaction()
     op.drop_index(_UQ_RECEIPTS_TX_LINK, table_name=_RECEIPTS)
     op.drop_index(_IX_RECEIPTS_OWNER_DATE, table_name=_RECEIPTS)
     op.drop_table(_LINES)

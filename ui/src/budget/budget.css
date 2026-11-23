@@ -26,6 +26,7 @@
 .budget-balances li { display: flex; justify-content: space-between; gap: 1rem; }
 .budget-range { display: flex; gap: .6rem; align-items: end; flex-wrap: wrap; margin-bottom: .6rem; }
 .budget-range label { display: grid; gap: .2rem; font-size: .8rem; color: var(--fg-soft); }
+.budget-range .budget-toggle { display: inline-flex; align-items: center; min-height: 2.4rem; }
 .budget-transactions { width: 100%; border-collapse: collapse; font-size: .85rem; }
 .budget-transactions td { padding: .35rem .3rem; border-top: 1px solid var(--border); vertical-align: top; overflow-wrap: anywhere; }
 .budget-transactions td:first-child { white-space: nowrap; color: var(--fg-soft); }
@@ -62,12 +63,13 @@
 .budget-total dt { color: var(--fg-soft); min-width: 0; hyphens: auto; overflow-wrap: anywhere; }
 .budget-total dd { margin: 0; text-align: end; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .budget-total small { color: var(--fg-soft); }
-/* Currency summaries: the label keeps a minimum width, a compound value may wrap between its amounts,
-   and each amount stays on one line unless an extreme value forces a break. Narrow cards stack the label above the value. */
+/* Currency summaries: the label keeps a minimum width, a compound value may wrap at the separator between pairs,
+   and each label + amount pair stays together unless an extreme value forces a break. Narrow cards stack the label above the value. */
 .budget-total-currency { container-type: inline-size; }
 .budget-total-currency dl { grid-template-columns: minmax(8rem, 1fr) minmax(0, 1fr); }
 .budget-total-currency dd { min-width: 0; white-space: normal; overflow-wrap: anywhere; }
 .budget-total-currency dd.budget-total-split { white-space: normal; overflow-wrap: anywhere; }
+.budget-total-part { display: inline-block; max-width: 100%; }
 .budget-amount { display: inline-block; max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
 @container (max-width: 22rem) {
   .budget-total-currency dl { grid-template-columns: minmax(0, 1fr); }
@@ -80,6 +82,11 @@
 .budget-categories th, .budget-categories td { padding: .3rem .25rem; border-top: 1px solid var(--border); text-align: start; font-weight: 400; overflow-wrap: anywhere; }
 .budget-categories td { text-align: end; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .budget-categories .is-uncategorised th { font-style: italic; }
+.budget-categories tr[data-depth="1"] > th { padding-inline-start: 1.25rem; }
+.budget-categories tr[data-depth="2"] > th { padding-inline-start: 2.5rem; }
+.budget-tree-toggle { border: 0; background: transparent; padding: 0 .3rem 0 0; min-height: 1.5rem; font: inherit; cursor: pointer; }
+.budget-entry.budget-category[data-depth="1"] { padding-inline-start: 1.25rem; }
+.budget-entry.budget-category[data-depth="2"] { padding-inline-start: 2.5rem; }
 .budget-entries { border: 1px solid var(--border); border-radius: .7rem; padding: .7rem 1rem; background: var(--surface); display: grid; gap: .5rem; }
 .budget-entries h4 { margin: 0; }
 .budget-sort { display: flex; flex-wrap: wrap; gap: .3rem; }
@@ -169,13 +176,24 @@
 .budget-chart-legend li { display: inline-flex; align-items: center; gap: .35rem; min-width: 0; overflow-wrap: anywhere; }
 .budget-chart-swatch { width: .85rem; height: .85rem; border-radius: .15rem; flex: 0 0 auto; border: 1px solid var(--fg); }
 .budget-chart-line-swatch { width: 1.1rem; height: 0; flex: 0 0 auto; border-top: 2px solid currentColor; }
+.budget-chart-step-swatch { display: inline-flex; align-items: center; justify-content: center; width: .85rem; height: .85rem; border-radius: 999px; flex: 0 0 auto; border: 2px solid currentColor; background: var(--surface); font-size: .65rem; font-weight: 700; line-height: 1; }
+.budget-chart-step-swatch[data-overdue="true"] { border-style: dashed; }
 .budget-month-dashboard-table { width: 100%; border-collapse: collapse; font-size: .85rem; }
 .budget-month-dashboard-table th, .budget-month-dashboard-table td { padding: .4rem .5rem; border-top: 1px solid var(--border); text-align: end; vertical-align: top; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .budget-month-dashboard-table th[scope="row"], .budget-month-dashboard-table thead th:first-child { text-align: start; white-space: normal; overflow-wrap: anywhere; }
 .budget-month-dashboard-table thead th { border-top: none; color: var(--fg-soft); font-weight: 500; }
 .budget-month-dashboard-table .is-uncategorised th { font-style: italic; }
+.budget-month-dashboard-table tbody tr[data-depth="1"] > th { padding-inline-start: 1.25rem; }
+.budget-month-dashboard-table tbody tr[data-depth="2"] > th { padding-inline-start: 2.5rem; }
 .budget-month-limit-cell { display: grid; gap: .25rem; text-align: start; min-width: 11rem; white-space: normal; }
+.budget-month-steps-cell { display: grid; gap: .2rem; text-align: start; min-width: 12rem; white-space: normal; }
 @media (max-width: 640px) {
+  .budget-categories { display: table; width: 100%; }
+  .budget-categories caption { display: table-caption; }
+  .budget-categories tbody { display: table-row-group; }
+  .budget-categories tbody tr { display: table-row; border: none; border-radius: 0; padding: 0; margin: 0; background: transparent; }
+  .budget-categories tbody td { display: table-cell; padding: .3rem .25rem; white-space: nowrap; }
+  .budget-categories tbody td::before { content: none; }
   .budget-month-dashboard .budget-totals { grid-template-columns: minmax(0, 1fr); }
   .budget-month-dashboard .budget-total, .budget-month-dashboard .budget-entries { min-width: 0; }
   .budget-month-dashboard-table { display: table; width: 100%; }

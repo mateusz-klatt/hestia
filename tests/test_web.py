@@ -23,6 +23,9 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
+from aiohttp.test_utils import TestClient, TestServer
+from aiohttp.web_middlewares import middleware
+
 from hestia import auth, db, proxy, store_sql, web
 from hestia.automations import AutomationEngine, AutomationStore, rule_vocab
 from hestia.protocol import Frame, build_frame, tlv
@@ -2229,6 +2232,246 @@ class UserMgmtTests(_WebTestBase):
             status, _, _ = _post(self.web.address, path, "x",
                                  headers={"Cookie": self.cookie, "Content-Type": "text/plain"})
             self.assertEqual(status, 415, path)
+
+
+def _declared_post(path, length):
+    return (
+        f"POST {path} HTTP/1.1\r\nHost: localhost\r\n"
+        f"Content-Type: application/json\r\nContent-Length: {length}\r\n"
+        f"Connection: close\r\n\r\n"
+    ).encode("ascii")
+
+
+async def _read_http_response(reader, *, allow_close=False, timeout=2.0):
+    """Read one response. Stop at Content-Length; do not wait for the server to close.
+
+    With ``allow_close``, a peer that drops the connection before a status line
+    returns ``(None, leftover)`` instead of parsing an empty buffer."""
+    buf = b""
+    while b"\r\n\r\n" not in buf:
+        chunk = await asyncio.wait_for(reader.read(4096), timeout=timeout)
+        if not chunk:
+            if allow_close:
+                return None, buf
+            break
+        buf += chunk
+    if allow_close and b"\r\n\r\n" not in buf:
+        return None, buf
+    head, _, rest = buf.partition(b"\r\n\r\n")
+    status = int(head.split(b"\r\n", 1)[0].split()[1])
+    length = 0
+    for line in head.split(b"\r\n")[1:]:
+        name, _, value = line.partition(b":")
+        if name.lower() == b"content-length":
+            length = int(value.strip())
+    while len(rest) < length:
+        chunk = await asyncio.wait_for(reader.read(length - len(rest)), timeout=timeout)
+        if not chunk:
+            break
+        rest += chunk
+    return status, rest[:length]
+
+
+async def _exchange(port, payload, *, shutdown_write=False, allow_close=False, timeout=2.0):
+    reader, writer = await asyncio.open_connection("127.0.0.1", port)
+    try:
+        writer.write(payload)
+        await writer.drain()
+        if shutdown_write:
+            writer.write_eof()
+        return await _read_http_response(reader, allow_close=allow_close, timeout=timeout)
+    finally:
+        writer.close()
+        try:
+            await writer.wait_closed()
+        except ConnectionError:
+            pass
+
+
+class _ProdLikeServer(TestServer):
+    """Production ``AppRunner`` does not cancel the handler when the peer drops."""
+
+    async def _make_runner(self, **kwargs):
+        kwargs["handler_cancellation"] = False
+        return await super()._make_runner(**kwargs)
+
+
+class JsonBodyFramingTests(unittest.IsolatedAsyncioTestCase):
+    """The shared reader bounds a stall, rejects a short body on an open socket,
+    and still accepts a full one. A half-close only has to finish cleanly."""
+
+    # Real BODY_READ_TIMEOUT stays 10s. A handler that waits it out misses this.
+    _FINISH_BOUND = 2.0
+
+    async def asyncSetUp(self):
+        self._auth = mock.patch.object(web, "_AUTH_ENABLED", False)
+        self._auth.start()
+        self._started = []
+        self._finished = []
+        app = web.make_app(SimpleNamespace())
+
+        @middleware
+        async def _watch(request, handler):
+            watched = request.path in ("/api/settings", "/api/login")
+            if watched:
+                self._started.append(request)
+            started = time.monotonic()
+            try:
+                response = await handler(request)
+            except asyncio.CancelledError:
+                if watched:
+                    self._finished.append((request.path, "cancelled", time.monotonic() - started))
+                raise
+            except Exception as exc:
+                if watched:
+                    self._finished.append((request.path, exc, time.monotonic() - started))
+                raise
+            else:
+                if watched:
+                    self._finished.append((request.path, response.status, time.monotonic() - started))
+                return response
+
+        app.middlewares.append(_watch)
+
+        async def _probe(request):
+            body, err = await web._read_json_body(request, 1024 * 1024)
+            if err:
+                return body
+            return web._json(200, {"ok": True, "n": len(body["pad"]), "tail": body["tail"]})
+
+        app.router.add_post("/api/body-chunk-probe", _probe)
+        self.client = TestClient(_ProdLikeServer(app))
+        await self.client.start_server()
+
+    async def asyncTearDown(self):
+        await self.client.close()
+        self._auth.stop()
+
+    async def _wait_started(self, path, prior):
+        deadline = time.monotonic() + self._FINISH_BOUND
+        while time.monotonic() < deadline:
+            for request in self._started[prior:]:
+                if request.path == path:
+                    return request
+            await asyncio.sleep(0.01)
+        self.fail(f"{path} handler did not start within {self._FINISH_BOUND}s")
+
+    async def _wait_finished(self, path, prior):
+        deadline = time.monotonic() + self._FINISH_BOUND
+        while time.monotonic() < deadline:
+            for item in self._finished[prior:]:
+                if item[0] == path:
+                    return item
+            await asyncio.sleep(0.01)
+        self.fail(f"{path} handler did not finish within {self._FINISH_BOUND}s")
+
+    def _exact_settings(self):
+        prefix, suffix = b'{"locale":null', b"}"
+        return prefix + b" " * (web.MAX_BODY - len(prefix) - len(suffix)) + suffix
+
+    async def _stall(self, path):
+        with mock.patch.object(web, "BODY_READ_TIMEOUT", 0.2):
+            status, body = await _exchange(self.client.port, _declared_post(path, 32) + b"{")
+        self.assertEqual(status, 408)
+        self.assertEqual(json.loads(body), {"ok": False, "error": "body read timed out"})
+
+    async def _half_close(self, path):
+        # The peer write-shuts down after a short body. It is already gone, so a
+        # status is not required. The handler must not 500 and must not sit in
+        # the 10s body read. BODY_READ_TIMEOUT is left at 10s so a stall fails.
+        prior = len(self._finished)
+        status, body = None, b""
+        try:
+            status, body = await _exchange(
+                self.client.port, _declared_post(path, 32) + b"{}",
+                shutdown_write=True, allow_close=True, timeout=self._FINISH_BOUND)
+        except TimeoutError:
+            self.fail(f"{path} half-close hung with the socket still open")
+        except ConnectionError:
+            pass
+        _path, outcome, elapsed = await self._wait_finished(path, prior)
+        self.assertLess(elapsed, self._FINISH_BOUND)
+        self.assertNotIsInstance(outcome, Exception)
+        self.assertNotEqual(outcome, 500)
+        if status is not None:
+            self.assertNotEqual(status, 500)
+            self.assertNotIn(b"Internal Server Error", body)
+
+    async def _truncate(self, path):
+        # "{}" is valid JSON and shorter than Content-Length. End the payload
+        # while the TCP socket is still open: that is a 400, not a parsed body
+        # (settings would otherwise 200, login would otherwise 401).
+        prior = len(self._started)
+
+        async def _send():
+            return await _exchange(self.client.port, _declared_post(path, 32) + b"{}")
+
+        task = asyncio.create_task(_send())
+        request = await self._wait_started(path, prior)
+        transport = request.transport
+        self.assertIsNotNone(transport)
+        self.assertFalse(transport.is_closing())
+        request.content.feed_eof()
+        status, body = await asyncio.wait_for(task, timeout=self._FINISH_BOUND)
+        self.assertEqual(status, 400)
+        self.assertEqual(json.loads(body), {"ok": False, "error": "incomplete body"})
+
+    async def test_slow_client_is_408(self):
+        await self._stall("/api/settings")
+
+    async def test_truncated_body_is_400(self):
+        await self._truncate("/api/settings")
+
+    async def test_half_close_finishes_cleanly(self):
+        await self._half_close("/api/settings")
+
+    async def test_login_slow_client_is_408(self):
+        await self._stall("/api/login")
+
+    async def test_login_truncated_body_is_400(self):
+        await self._truncate("/api/login")
+
+    async def test_login_half_close_finishes_cleanly(self):
+        await self._half_close("/api/login")
+
+    async def test_body_exactly_at_the_cap_passes(self):
+        body = self._exact_settings()
+        self.assertEqual(len(body), web.MAX_BODY)
+        response = await self.client.post(
+            "/api/settings", data=body, headers={"Content-Type": "application/json"})
+        self.assertEqual(response.status, 200, await response.text())
+        self.assertEqual(await response.json(), {"ok": True})
+
+    async def test_body_over_the_cap_is_413(self):
+        body = self._exact_settings() + b" "
+        self.assertEqual(len(body), web.MAX_BODY + 1)
+        response = await self.client.post(
+            "/api/settings", data=body, headers={"Content-Type": "application/json"})
+        self.assertEqual(response.status, 413)
+        self.assertEqual(await response.json(),
+                         {"ok": False, "error": f"body must be ≤ {web.MAX_BODY} bytes"})
+
+    async def test_multi_chunk_large_body_is_read_fully(self):
+        pad = "a" * (600 * 1024)
+        raw = json.dumps({"pad": pad, "tail": "END"}).encode()
+        self.assertGreaterEqual(len(raw), 600 * 1024)
+        head = _declared_post("/api/body-chunk-probe", len(raw))
+        reader, writer = await asyncio.open_connection("127.0.0.1", self.client.port)
+        try:
+            writer.write(head)
+            await writer.drain()
+            for offset in range(0, len(raw), 8192):
+                writer.write(raw[offset:offset + 8192])
+                await writer.drain()
+            status, body = await _read_http_response(reader)
+        finally:
+            writer.close()
+            try:
+                await writer.wait_closed()
+            except ConnectionError:
+                pass
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body), {"ok": True, "n": len(pad), "tail": "END"})
 
 
 if __name__ == "__main__":

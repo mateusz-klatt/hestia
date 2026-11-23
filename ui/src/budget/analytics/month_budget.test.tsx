@@ -5,9 +5,9 @@ import type { Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BudgetApi, BudgetResult } from "../api";
 import { account } from "../fixtures";
-import { categoryList, monthlyBudgetCategoryLimit, monthlyBudgetCategorySpend, monthlyBudgetChartsOf,
-  monthlyBudgetExpectedIncome, monthlyBudgetPace, monthlyBudgetPassThrough,
-  monthlyBudgetSeriesOf } from "./fixtures";
+import { categoryList, forecastItem, forecastOf, monthlyBudgetCategoryLimit, monthlyBudgetCategorySpend,
+  monthlyBudgetChartsOf, monthlyBudgetExpectedIncome, monthlyBudgetPace, monthlyBudgetPassThrough,
+  monthlyBudgetSeriesOf, mortgagesOf, recurringOf } from "./fixtures";
 import { ANALYTICS_ERROR } from "./model";
 import type { AnalyticsCategory, AnalyticsMonthlyBudgetCharts } from "./model";
 import { MonthBudgetView, monthBudgetLabels } from "./month_budget";
@@ -34,12 +34,15 @@ function fakeApi() {
     monthlyBudgetCharts: vi.fn<BudgetApi["monthlyBudgetCharts"]>().mockResolvedValue(ok(monthlyBudgetChartsOf())),
     categories: vi.fn<BudgetApi["categories"]>().mockResolvedValue(ok({ categories: [
       ...categoryList,
-      { id: "cat-salary", name: "Synthetic Salary", archived: false, version: 1, created_at: 1, updated_at: 1 },
-      { id: "cat-rent", name: "Synthetic Rent", archived: false, version: 1, created_at: 1, updated_at: 1 },
-      { id: "cat-mortgage", name: "Synthetic Mortgage", archived: false, version: 1, created_at: 1, updated_at: 1 },
-      { id: "cat-lookup", name: "Synthetic Lookup", archived: false, version: 1, created_at: 1, updated_at: 1 },
+      { id: "cat-salary", name: "Synthetic Salary", archived: false, version: 1, created_at: 1, updated_at: 1, parent_id: null },
+      { id: "cat-rent", name: "Synthetic Rent", archived: false, version: 1, created_at: 1, updated_at: 1, parent_id: null },
+      { id: "cat-mortgage", name: "Synthetic Mortgage", archived: false, version: 1, created_at: 1, updated_at: 1, parent_id: null },
+      { id: "cat-lookup", name: "Synthetic Lookup", archived: false, version: 1, created_at: 1, updated_at: 1, parent_id: null },
     ] })),
-  } satisfies Pick<BudgetApi, "monthlyBudgetCharts" | "categories">;
+    forecast: vi.fn<BudgetApi["forecast"]>().mockResolvedValue(ok(forecastOf())),
+    mortgages: vi.fn<BudgetApi["mortgages"]>().mockResolvedValue(ok(mortgagesOf())),
+    recurring: vi.fn<BudgetApi["recurring"]>().mockResolvedValue(ok(recurringOf())),
+  } satisfies Pick<BudgetApi, "monthlyBudgetCharts" | "categories" | "forecast" | "mortgages" | "recurring">;
 }
 
 let host: HTMLElement;
@@ -64,7 +67,7 @@ async function settle(): Promise<void> {
 }
 
 async function show(
-  api: Pick<BudgetApi, "monthlyBudgetCharts" | "categories">,
+  api: Pick<BudgetApi, "monthlyBudgetCharts" | "categories" | "forecast" | "mortgages" | "recurring">,
   options: {
     locale?: string;
     revision?: number;
@@ -252,6 +255,9 @@ describe("MonthBudgetView", () => {
     await settle();
     expect(host.querySelector('[role="status"]')).toBeNull();
     expect(host.querySelector(".budget-month-nav h3")?.textContent).toBe("November 2026");
+    expect(api.forecast).toHaveBeenCalledWith(2, "PLN");
+    expect(api.mortgages).toHaveBeenCalledWith();
+    expect(api.recurring).toHaveBeenCalledWith("PLN");
   });
 
   it("renders unconfigured state without summary, pace, category tables, or charts, and handles missing ledger timestamp", async () => {
@@ -498,7 +504,6 @@ describe("MonthBudgetView", () => {
 
   it("renders booked vs expected income, provisional warnings, partial income warnings, pace runs_out, and charts", async () => {
     const api = fakeApi();
-    const bigSpent = "12345678901234567890.05";
     api.monthlyBudgetCharts.mockResolvedValue(ok(monthlyBudgetChartsOf({
       evaluation_date: "2026-11-22",
       available_currencies: ["PLN", "EUR"],
@@ -524,7 +529,7 @@ describe("MonthBudgetView", () => {
         basis: "received_plus_expected",
         budget: "7500",
         status: "runs_out",
-        daily_rate: { numerator: bigSpent, denominator: 2 },
+        daily_rate: { numerator: "3500", denominator: 22 },
         projected_month_spend: { numerator: "6000", denominator: 1 },
         exhaustion_day: 27,
       }),
@@ -543,7 +548,7 @@ describe("MonthBudgetView", () => {
     expect(host.textContent).toContain("Budget received");
     expect(host.textContent).toContain("5,000.00 PLN");
     expect(host.textContent).toContain("Spent to date (Provisional totals)");
-    expect(host.textContent).toContain("Remaining (Provisional totals)");
+    expect(host.textContent).toContain("Remaining at month end (Provisional totals)");
     expect(host.querySelector("progress")?.value).toBe(70);
 
     const expectedCard = host.querySelector('[aria-label="Expected income"]');
@@ -561,8 +566,8 @@ describe("MonthBudgetView", () => {
     expect(paceCard?.textContent).toContain("Based on budget received + expected");
     expect(paceCard?.textContent).toContain("7,500.00 PLN");
     expect(paceCard?.textContent).toContain("At this pace the budget runs out around day 27.");
-    expect(paceCard?.textContent).toContain("6,172,839,450,617,283,945.02 PLN / day");
-    expect(paceCard?.textContent).toContain("6,000.00 PLN");
+    expect(paceCard?.textContent).toContain("159.09 PLN / day");
+    expect(paceCard?.textContent).toContain("4,772.73 PLN");
 
     // Chart 1 renders booked budget line, expected-inclusive budget line, pace extension, exhaustion marker, and refund dip!
     const dailyChart = host.querySelector('[aria-label="Cumulative spending · PLN"]');
@@ -579,6 +584,261 @@ describe("MonthBudgetView", () => {
     const incomeChart = host.querySelector('[aria-label="Income and spending · PLN"]');
     expect(incomeChart?.querySelector(".budget-chart-expected-bar")).not.toBeNull();
     expect(incomeChart?.textContent).toContain("Expected income: 2,500.00 PLN");
+  });
+
+  it("draws a scheduled mortgage step and uses it for projected spend and headroom", async () => {
+    const api = fakeApi();
+    api.forecast.mockResolvedValue(ok(forecastOf({
+      months: [{
+        month: "2026-12",
+        currencies: [],
+        items: [forecastItem({
+          label: "Kredyt hipoteczny – mieszkanie",
+          amount: "6286.90",
+          expected_date: "2026-12-05",
+          past_due: false,
+        })],
+      }],
+    })));
+    api.monthlyBudgetCharts.mockResolvedValue(ok(monthlyBudgetChartsOf({
+      period: "2026-12",
+      current_month: "2026-12",
+      start: "2026-12-01",
+      end: "2026-12-31",
+      cutoff: "2026-12-01",
+      evaluation_date: "2026-12-01",
+      summary: { start_budget: "10000", spent: "100", remaining: "9900" },
+      pace: monthlyBudgetPace({ budget: "10000" }),
+    }, {
+      daily: [{ date: "2026-12-01", cumulative_spent: "100" }],
+      months: [],
+      category_labels: [],
+    })));
+    await show(api, { locale: "pl-PL" });
+
+    expect(api.forecast).toHaveBeenCalledWith(2, "PLN");
+    const paceCard = host.querySelector('[aria-label="Tempo wydatków"]');
+    expect(paceCard?.textContent).toMatch(/9[\s\u00a0]386,90 PLN/);
+    const summaryCard = host.querySelector('[aria-label="Podsumowanie miesiąca"]');
+    expect(summaryCard?.textContent).toContain("Pozostało na koniec miesiąca");
+    expect(summaryCard?.textContent).toContain("613,10 PLN");
+    const marker = host.querySelector(".budget-chart-scheduled-step");
+    expect(marker).not.toBeNull();
+    expect(marker?.getAttribute("data-overdue")).toBe("false");
+    expect(marker?.querySelector("title")?.textContent).toMatch(
+      /5 gru · Kredyt hipoteczny – mieszkanie · 6[\s\u00a0]286,90 PLN · nadchodzące/,
+    );
+    const swatch = host.querySelector(".budget-chart-step-swatch");
+    expect(swatch).not.toBeNull();
+    expect(swatch?.getAttribute("data-overdue")).toBe("false");
+    expect(swatch?.textContent).toBe("");
+    expect(host.textContent).not.toContain("zaległe");
+
+    const dailyChart = host.querySelector('[aria-label="Wydatki narastająco · PLN"]');
+    const dailyTable = dailyChart?.querySelector("table");
+    expect(dailyTable?.textContent).toContain("Prognoza tempa");
+    expect(dailyTable?.textContent).toContain("Zaplanowane płatności");
+    expect(dailyTable?.textContent).toMatch(/9[\s\u00a0]386,90 PLN/);
+    expect(dailyTable?.textContent).toMatch(/5 gru · Kredyt hipoteczny – mieszkanie · 6[\s\u00a0]286,90 PLN · nadchodzące/);
+    for (const svg of host.querySelectorAll("svg")) assertBoundedSvgCoordinates(svg);
+  });
+
+  it("includes the Warsaw month from forecast(2) across midnight, formats overdue vs upcoming in EN, and omits zero-length pace lines on the last day", async () => {
+    const api = fakeApi();
+    api.forecast.mockResolvedValue(ok(forecastOf({
+      evaluation_date: "2026-11-30",
+      start_month: "2026-11",
+      end_month: "2026-12",
+      horizon_months: 2,
+      months: [
+        { month: "2026-11", currencies: [], items: [] },
+        {
+          month: "2026-12",
+          currencies: [],
+          items: [
+            forecastItem({
+              source: "mortgage", schedule_id: "mtg-overdue", label: "Overdue Loan",
+              amount: "1200", expected_date: "2026-12-03", past_due: true,
+            }),
+            forecastItem({
+              source: "recurring", schedule_id: null, confidence: "high", label: "Upcoming Fiber",
+              amount: "100", expected_date: "2026-12-20", past_due: false,
+            }),
+          ],
+        },
+      ],
+    })));
+    api.monthlyBudgetCharts.mockResolvedValue(ok(monthlyBudgetChartsOf({
+      period: "2026-12",
+      current_month: "2026-12",
+      start: "2026-12-01",
+      end: "2026-12-31",
+      cutoff: "2026-12-10",
+      evaluation_date: "2026-12-10",
+      summary: { start_budget: "5000", spent: "500", remaining: "4500" },
+      pace: monthlyBudgetPace({ budget: "5000" }),
+    }, {
+      daily: Array.from({ length: 10 }, (_, i) => ({
+        date: `2026-12-${String(i + 1).padStart(2, "0")}`,
+        cumulative_spent: String((i + 1) * 50),
+      })),
+      months: [],
+      category_labels: [],
+    })));
+    await show(api, { locale: "en-US" });
+
+    expect(api.forecast).toHaveBeenCalledWith(2, "PLN");
+    const markers = [...host.querySelectorAll(".budget-chart-scheduled-step")];
+    expect(markers).toHaveLength(2);
+    expect(markers[0]?.getAttribute("data-overdue")).toBe("true");
+    expect(markers[0]?.textContent).toContain("!");
+    expect(markers[0]?.querySelector("title")?.textContent).toBe("Dec 3 · Overdue Loan · 1,200.00 PLN · overdue");
+    expect(markers[1]?.getAttribute("data-overdue")).toBe("false");
+    expect(markers[1]?.textContent).not.toContain("!");
+    expect(markers[1]?.querySelector("title")?.textContent).toBe("Dec 20 · Upcoming Fiber · 100.00 PLN · upcoming");
+
+    const swatches = [...host.querySelectorAll(".budget-chart-step-swatch")];
+    expect(swatches).toHaveLength(2);
+    expect(swatches[0]?.getAttribute("data-overdue")).toBe("true");
+    expect(swatches[0]?.textContent).toBe("!");
+    expect(swatches[1]?.getAttribute("data-overdue")).toBe("false");
+    expect(swatches[1]?.textContent).toBe("");
+
+    const dailyTable = host.querySelector('[aria-label="Cumulative spending · PLN"] table');
+    expect(dailyTable?.textContent).toContain("Pace projection");
+    expect(dailyTable?.textContent).toContain("Scheduled payments");
+    expect(dailyTable?.textContent).toContain("Dec 3 · Overdue Loan · 1,200.00 PLN · overdue");
+    expect(dailyTable?.textContent).toContain("Dec 20 · Upcoming Fiber · 100.00 PLN · upcoming");
+
+    // On the last day of the month with no steps, no zero-length extension line is drawn.
+    api.forecast.mockResolvedValue(ok(forecastOf()));
+    api.monthlyBudgetCharts.mockResolvedValue(ok(monthlyBudgetChartsOf({
+      period: "2026-11",
+      current_month: "2026-11",
+      start: "2026-11-01",
+      end: "2026-11-30",
+      cutoff: "2026-11-30",
+      evaluation_date: "2026-11-30",
+      summary: { start_budget: "5000", spent: "1500", remaining: "3500" },
+      pace: monthlyBudgetPace({ budget: "5000" }),
+    }, {
+      daily: Array.from({ length: 30 }, (_, i) => ({
+        date: `2026-11-${String(i + 1).padStart(2, "0")}`,
+        cumulative_spent: String((i + 1) * 50),
+      })),
+      months: [],
+      category_labels: [],
+    })));
+    await show(api, { locale: "en-US", revision: 1 });
+    expect(host.querySelector(".budget-chart-pace-line")).toBeNull();
+
+    // On the last day with an overdue scheduled step, the vertical step line and marker do render.
+    api.forecast.mockResolvedValue(ok(forecastOf({
+      months: [{
+        month: "2026-11",
+        currencies: [],
+        items: [forecastItem({ label: "Late Loan", amount: "500", expected_date: "2026-11-20", past_due: true })],
+      }],
+    })));
+    await show(api, { locale: "en-US", revision: 2 });
+    const lastDayPaceLine = host.querySelector(".budget-chart-pace-line");
+    expect(lastDayPaceLine).not.toBeNull();
+    expect(host.querySelector(".budget-chart-scheduled-step")?.getAttribute("data-overdue")).toBe("true");
+    for (const svg of host.querySelectorAll("svg")) assertBoundedSvgCoordinates(svg);
+  });
+
+  it("shows pending state while schedule data load, error note on failure, and fires onAccessLoss per call", async () => {
+    const api = fakeApi();
+    const pendingForecast = deferred<ReturnType<typeof forecastOf>>();
+    const pendingMortgages = deferred<ReturnType<typeof mortgagesOf>>();
+    const pendingRecurring = deferred<ReturnType<typeof recurringOf>>();
+    api.forecast.mockReturnValueOnce(pendingForecast.promise);
+    api.mortgages.mockReturnValueOnce(pendingMortgages.promise);
+    api.recurring.mockReturnValueOnce(pendingRecurring.promise);
+    api.monthlyBudgetCharts.mockResolvedValue(ok(monthlyBudgetChartsOf({
+      period: "2026-12",
+      current_month: "2026-12",
+      start: "2026-12-01",
+      end: "2026-12-31",
+      cutoff: "2026-12-01",
+      evaluation_date: "2026-12-01",
+      summary: { start_budget: "10000", spent: "100", remaining: "9900" },
+      pace: monthlyBudgetPace({ budget: "10000" }),
+    }, {
+      daily: [{ date: "2026-12-01", cumulative_spent: "100" }],
+      months: [],
+      category_labels: [],
+    })));
+
+    await show(api, { locale: "pl-PL" });
+    const summaryCard = host.querySelector('[aria-label="Podsumowanie miesiąca"]');
+    expect(summaryCard?.textContent).toContain("Pozostało na koniec miesiąca");
+    expect(summaryCard?.textContent).toContain("Wczytywanie zaplanowanych płatności…");
+    expect(summaryCard?.textContent).not.toContain("6 900,00 PLN");
+    expect(host.querySelector('[aria-label="Tempo wydatków"] [role="status"]')?.textContent)
+      .toBe("Wczytywanie zaplanowanych płatności…");
+
+    // Resolving all three schedule calls replaces pending state with the stepped projection.
+    await act(async () => {
+      pendingForecast.resolve(ok(forecastOf({
+        months: [{
+          month: "2026-12",
+          currencies: [],
+          items: [forecastItem({ label: "Mortgage Step", amount: "6286.90", expected_date: "2026-12-05", past_due: false })],
+        }],
+      })));
+      pendingMortgages.resolve(ok(mortgagesOf()));
+      pendingRecurring.resolve(ok(recurringOf()));
+      await Promise.resolve();
+    });
+    await settle();
+    expect(host.querySelector('[role="status"]')).toBeNull();
+    expect(summaryCard?.textContent).toContain("613,10 PLN");
+
+    // Failing one schedule call immediately triggers the error fallback with an explicit note.
+    const errForecast = deferred<ReturnType<typeof forecastOf>>();
+    api.forecast.mockReturnValueOnce(errForecast.promise);
+    api.mortgages.mockResolvedValueOnce(ok(mortgagesOf()));
+    api.recurring.mockResolvedValueOnce(ok(recurringOf()));
+    await show(api, { locale: "pl-PL", revision: 1 });
+    await act(async () => {
+      errForecast.resolve(fail(500, "budget_internal_error"));
+      await Promise.resolve();
+    });
+    await settle();
+    const errorSummaryCard = host.querySelector('[aria-label="Podsumowanie miesiąca"]');
+    expect(errorSummaryCard?.textContent).toContain("Pozostało na koniec miesiąca (bez zaplanowanych płatności)");
+    expect(errorSummaryCard?.textContent).toMatch(/6[\s\u00a0]900,00 PLN/);
+    expect(host.querySelector('[aria-label="Tempo wydatków"] [role="note"]')?.textContent)
+      .toContain("bez zaplanowanych płatności");
+    expect(host.querySelector('[aria-label="Wydatki narastająco · PLN"] .budget-chart-legend')?.textContent)
+      .toContain("bez zaplanowanych płatności");
+
+    // English error state when mortgages fails while others succeed.
+    api.forecast.mockResolvedValueOnce(ok(forecastOf()));
+    api.mortgages.mockResolvedValueOnce(fail(500, "budget_internal_error"));
+    api.recurring.mockResolvedValueOnce(ok(recurringOf()));
+    await show(api, { locale: "en-US", revision: 2 });
+    expect(host.querySelector('[aria-label="Monthly summary"]')?.textContent)
+      .toContain("Remaining at month end (without scheduled payments)");
+    expect(host.querySelector('[aria-label="Spending pace"] [role="note"]')?.textContent)
+      .toContain("without scheduled payments");
+
+    // Access loss from one call triggers onAccessLoss immediately without waiting for slow siblings.
+    const slowMortgages = deferred<ReturnType<typeof mortgagesOf>>();
+    const slowRecurring = deferred<ReturnType<typeof recurringOf>>();
+    const fastDenied = deferred<ReturnType<typeof forecastOf>>();
+    api.forecast.mockReturnValueOnce(fastDenied.promise);
+    api.mortgages.mockReturnValueOnce(slowMortgages.promise);
+    api.recurring.mockReturnValueOnce(slowRecurring.promise);
+    const barrier = vi.fn((result: AccessResult) => !result.ok && result.status === 401);
+    await show(api, { locale: "en-US", revision: 3, onAccessLoss: barrier });
+    expect(barrier).not.toHaveBeenCalledWith(expect.objectContaining({ status: 401 }));
+
+    const denied = { ok: false as const, status: 401, error: "budget_http_401" };
+    await act(async () => { fastDenied.resolve(denied); await Promise.resolve(); });
+    await settle();
+    expect(barrier).toHaveBeenCalledWith(denied);
   });
 
   it("renders all expected income variants and all remaining pace variants", async () => {
@@ -666,6 +926,9 @@ describe("MonthBudgetView", () => {
     expect(host.textContent).not.toContain("Wydano do dziś");
     expect(host.textContent).toContain("Zamknięty miesiąc — tylko zaksięgowane wpływy.");
     expect(host.textContent).toContain("Zamknięty miesiąc — nie wylicza się prognozy tempa.");
+    expect(api.forecast).not.toHaveBeenCalled();
+    expect(api.mortgages).not.toHaveBeenCalled();
+    expect(api.recurring).not.toHaveBeenCalled();
     expect(host.querySelector(".budget-chart-pace-line")).toBeNull();
     expect(host.querySelector(".budget-chart-exhaustion")).toBeNull();
     expect(host.querySelector(".budget-chart-expected-line")).toBeNull();
@@ -834,6 +1097,130 @@ describe("MonthBudgetView", () => {
     expect(catModel.allCategories.map((c) => c.id)).toContain("c0-zero");
   });
 
+  it("rolls chart categories up to the top level when parents exist", () => {
+    const rolled = buildCategoryChartModel(
+      [{
+        period: "2026-10", has_activity: true, is_current_month: false, income_estimate_partial: false,
+        provisional: false, start_budget: "0", spent: "55",
+        categories: [
+          { category_id: "transport", net_spending: "10" },
+          { category_id: "fuel", net_spending: "40" },
+          { category_id: "food", net_spending: "5" },
+        ],
+      }],
+      [{ category_id: "fuel", name: "Synthetic Fuel", archived: false }],
+      { uncategorised: "Uncategorised", unknownCategory: "Category", otherCategory: "Other" },
+      [
+        { id: "transport", name: "Synthetic Transport", archived: false, parent_id: null },
+        { id: "fuel", name: "Synthetic Fuel", archived: false, parent_id: "transport" },
+        { id: "food", name: "Synthetic Food", archived: false, parent_id: null },
+      ],
+    );
+    expect(rolled.displayed.map((item) => item.id)).toEqual(["transport", "food"]);
+    expect(rolled.displayed[0]?.name).toBe("Synthetic Transport");
+    expect(rolled.byMonthAndCategory.get("2026-10")?.get("transport")).toBe("50");
+    expect(rolled.byMonthAndCategory.get("2026-10")?.has("fuel")).toBe(false);
+  });
+
+  it("rolls the month category list up, indents the child, and keeps the parent's limit", async () => {
+    const api = fakeApi();
+    api.categories.mockResolvedValue(ok({ categories: [
+      { id: "transport", name: "Synthetic Transport", archived: false, version: 1, created_at: 1, updated_at: 1, parent_id: null },
+      { id: "fuel", name: "Synthetic Fuel", archived: false, version: 1, created_at: 1, updated_at: 1, parent_id: "transport" },
+    ] }));
+    api.monthlyBudgetCharts.mockResolvedValue(ok(monthlyBudgetChartsOf({
+      category_spend: [
+        monthlyBudgetCategorySpend({
+          category_id: "transport", name: "Synthetic Transport", expenses: "0", refunds: "0", net_spending: "0",
+          limit: monthlyBudgetCategoryLimit({
+            monthly_limit: "30", remaining: "0", over_by: "10", percent_used_floor: "133", status: "exceeded",
+          }),
+        }),
+        monthlyBudgetCategorySpend({
+          category_id: "fuel", name: "Synthetic Fuel", expenses: "40", refunds: "0", net_spending: "40", limit: null,
+        }),
+      ],
+    })));
+    await show(api);
+    const rows = [...host.querySelectorAll('section[aria-label="Spending and limits"] tbody tr')];
+    expect(rows.map((row) => row.getAttribute("data-depth"))).toEqual(["0", "1"]);
+    expect(rows[0]?.textContent).toContain("40.00 PLN");
+    expect(rows[0]?.textContent).toContain("of 30.00 PLN (133%)");
+    expect(rows[1]?.textContent).toContain("Synthetic Fuel");
+    await click(labelledButton("Collapse Synthetic Transport"));
+    const after = [...host.querySelectorAll('section[aria-label="Spending and limits"] tbody tr')];
+    expect(after).toHaveLength(1);
+    expect(after[0]?.textContent).toContain("40.00 PLN");
+    expect(after[0]?.textContent).not.toContain("Synthetic Fuel");
+  });
+
+  it("hides spending and charts until categories load, then shows the rolled parent", async () => {
+    const pending = deferred<{ categories: AnalyticsCategory[] }>();
+    const api = fakeApi();
+    api.categories.mockReturnValueOnce(pending.promise);
+    api.monthlyBudgetCharts.mockResolvedValue(ok(monthlyBudgetChartsOf({
+      category_spend: [
+        monthlyBudgetCategorySpend({
+          category_id: "transport", name: "Synthetic Transport", expenses: "0", refunds: "0", net_spending: "0",
+          limit: monthlyBudgetCategoryLimit({
+            monthly_limit: "30", remaining: "0", over_by: "10", percent_used_floor: "133", status: "exceeded",
+          }),
+        }),
+        monthlyBudgetCategorySpend({
+          category_id: "fuel", name: "Synthetic Fuel", expenses: "40", refunds: "0", net_spending: "40", limit: null,
+        }),
+      ],
+    })));
+    await show(api);
+    const spending = host.querySelector('section[aria-label="Spending and limits"]');
+    expect(spending?.textContent).toContain(monthBudgetLabels.en.categoriesLoading);
+    expect(spending?.querySelector("tbody")).toBeNull();
+    expect(spending?.textContent).not.toContain("Synthetic Fuel");
+    expect(spending?.textContent).not.toContain("Exceeded");
+    expect(host.querySelector('[aria-label="Charts"]')).toBeNull();
+    expect(host.querySelector('[aria-label="Monthly summary"]')).not.toBeNull();
+
+    await act(async () => {
+      pending.resolve(ok({ categories: [
+        { id: "transport", name: "Synthetic Transport", archived: false, version: 1, created_at: 1, updated_at: 1, parent_id: null },
+        { id: "fuel", name: "Synthetic Fuel", archived: false, version: 1, created_at: 1, updated_at: 1, parent_id: "transport" },
+      ] }));
+      await Promise.resolve();
+    });
+    await settle();
+    const rows = [...host.querySelectorAll('section[aria-label="Spending and limits"] tbody tr')];
+    expect(rows.map((row) => row.getAttribute("data-depth"))).toEqual(["0", "1"]);
+    expect(rows[0]?.textContent).toContain("40.00 PLN");
+    expect(rows[0]?.textContent).toContain("Exceeded");
+    expect(host.querySelector('[aria-label="Charts"]')).not.toBeNull();
+  });
+
+  it("shows an error instead of direct spend when categories fail to load", async () => {
+    const api = fakeApi();
+    api.categories.mockResolvedValue(fail(500, "budget_internal_error"));
+    api.monthlyBudgetCharts.mockResolvedValue(ok(monthlyBudgetChartsOf({
+      category_spend: [
+        monthlyBudgetCategorySpend({
+          category_id: "transport", name: "Synthetic Transport", expenses: "0", refunds: "0", net_spending: "0",
+          limit: monthlyBudgetCategoryLimit({
+            monthly_limit: "30", remaining: "0", over_by: "10", percent_used_floor: "133", status: "exceeded",
+          }),
+        }),
+        monthlyBudgetCategorySpend({
+          category_id: "fuel", name: "Synthetic Fuel", expenses: "40", refunds: "0", net_spending: "40", limit: null,
+        }),
+      ],
+    })));
+    await show(api);
+    const spending = host.querySelector('section[aria-label="Spending and limits"]');
+    expect(spending?.textContent).toContain(monthBudgetLabels.en.categoriesError);
+    expect(spending?.querySelector("tbody")).toBeNull();
+    expect(spending?.textContent).not.toContain("Synthetic Fuel");
+    expect(spending?.textContent).not.toContain("0.00 PLN");
+    expect(host.querySelector('[aria-label="Charts"]')).toBeNull();
+    expect(host.querySelector('[aria-label="Monthly summary"]')).not.toBeNull();
+  });
+
   it("renders pass-through legs, uncovered mortgage, category limits table, and Unavailable card exposure in Polish and English", async () => {
     const api = fakeApi();
     api.monthlyBudgetCharts.mockResolvedValue(ok(monthlyBudgetChartsOf({
@@ -944,7 +1331,7 @@ describe("MonthBudgetView", () => {
     expect(progressBars[0]?.value).toBe(100);
     expect(progressBars[1]?.value).toBe(40);
 
-    // Also test pass-through when refunds=0 and categories fallback when categories() fails.
+    // Pass-through still renders when categories() fails. Spending and charts stay hidden.
     api.categories.mockResolvedValue(fail(500, "budget_internal_error"));
     api.monthlyBudgetCharts.mockResolvedValue(ok(monthlyBudgetChartsOf({
       pass_through: monthlyBudgetPassThrough(),
@@ -958,6 +1345,9 @@ describe("MonthBudgetView", () => {
     expect(passThroughEn?.textContent).toContain("Uncovered mortgage1,200.00 PLN");
     expect(passThroughEn?.textContent).not.toContain("Mortgage refunds");
     expect(host.querySelector('[aria-label="Unpaid card spending"]')?.textContent).toContain("Unavailable");
+    expect(host.querySelector('section[aria-label="Spending and limits"] tbody')).toBeNull();
+    expect(host.querySelector('[aria-label="Charts"]')).toBeNull();
+    expect(host.textContent).toContain(monthBudgetLabels.en.categoriesError);
   });
 
   it("navigates months using server current_month, switches currencies and history, and links to Month view", async () => {
@@ -1006,17 +1396,20 @@ describe("MonthBudgetView", () => {
     expect(replaceState).not.toHaveBeenCalled();
   });
 
-  it("opens Month view from the provisional pending-transfers review link", async () => {
+  it("opens Month view filtered to provisional entries from the provisional pending-transfers review link", async () => {
     const api = fakeApi();
     const onOpenMonth = vi.fn();
     api.monthlyBudgetCharts.mockResolvedValue(ok(monthlyBudgetChartsOf({
-      period: "2026-11",
-      cutoff: "2026-11-22",
+      period: "2026-10",
+      current_month: "2026-11",
+      cutoff: "2026-10-31",
+      currency: "EUR",
       coverage: {
         ledger_as_of: 1_795_345_200,
         stale_selected_accounts: 0,
         purchase_date_fallback_count: 0,
-        pending_transfer_rows: 1,
+        pending_transfer_rows: 4,
+        pending_row_keys: ["acc-1/p1", "acc-1/p2", "acc-1/p3", "acc-1/p4"],
         transfer_scan_limited: false,
         provisional: true,
         has_activity: true,
@@ -1025,8 +1418,51 @@ describe("MonthBudgetView", () => {
     await show(api, { onOpenMonth });
     const links = [...host.querySelectorAll("button")].filter((item) => item.textContent === "View transactions");
     expect(links).toHaveLength(2);
+    await click(links[0] as HTMLButtonElement);
+    expect(onOpenMonth).toHaveBeenNthCalledWith(1, "2026-10", "2026-11");
     await click(links[1] as HTMLButtonElement);
-    expect(onOpenMonth).toHaveBeenCalledWith("2026-11", "2026-11");
+    expect(onOpenMonth).toHaveBeenNthCalledWith(2, "2026-10", "2026-11", {
+      currency: "EUR",
+      provisionalKeys: ["acc-1/p1", "acc-1/p2", "acc-1/p3", "acc-1/p4"],
+      provisionalTotal: 4,
+      provisionalTruncated: false,
+    });
+    expect(host.textContent).not.toContain("Showing first");
+  });
+
+  it("shows a truncation note without leaking row keys when pending_row_keys is capped at 500", async () => {
+    const keys = Array.from({ length: 500 }, (_, idx) => `acc-secret-id/ref-secret-${String(idx)}`);
+    const api = fakeApi();
+    const onOpenMonth = vi.fn();
+    api.monthlyBudgetCharts.mockResolvedValue(ok(monthlyBudgetChartsOf({
+      period: "2026-11",
+      current_month: "2026-11",
+      currency: "PLN",
+      coverage: {
+        ledger_as_of: 1_795_345_200,
+        stale_selected_accounts: 0,
+        purchase_date_fallback_count: 0,
+        pending_transfer_rows: 505,
+        pending_row_keys: keys,
+        pending_row_keys_truncated: true,
+        transfer_scan_limited: false,
+        provisional: true,
+        has_activity: true,
+      },
+    })));
+    await show(api, { locale: "pl-PL", onOpenMonth });
+    expect(host.textContent).toContain("Pokazano pierwsze 500 z 505.");
+    expect(host.textContent).not.toContain("acc-secret-id");
+    expect(host.textContent).not.toContain("ref-secret-0");
+
+    const links = [...host.querySelectorAll("button")].filter((item) => item.textContent === "Zobacz transakcje");
+    await click(links[1] as HTMLButtonElement);
+    expect(onOpenMonth).toHaveBeenNthCalledWith(1, "2026-11", "2026-11", {
+      currency: "PLN",
+      provisionalKeys: keys,
+      provisionalTotal: 505,
+      provisionalTruncated: true,
+    });
   });
 
   it("drops stale responses and refuses mismatched period responses", async () => {
@@ -1111,10 +1547,10 @@ describe("MonthBudgetView", () => {
     const api = fakeApi();
     api.categories.mockResolvedValue(ok({
       categories: [
-        { id: secretRentId, name: "Synthetic Rent Name", archived: false, version: 1, created_at: 1, updated_at: 1 },
-        { id: secretMortgageId, name: "Synthetic Mortgage Name", archived: false, version: 1, created_at: 1, updated_at: 1 },
-        { id: secretSalaryId, name: "Synthetic Salary Name", archived: false, version: 1, created_at: 1, updated_at: 1 },
-        { id: secretSpendId, name: "Synthetic Spend Name", archived: false, version: 1, created_at: 1, updated_at: 1 },
+        { id: secretRentId, name: "Synthetic Rent Name", archived: false, version: 1, created_at: 1, updated_at: 1, parent_id: null },
+        { id: secretMortgageId, name: "Synthetic Mortgage Name", archived: false, version: 1, created_at: 1, updated_at: 1, parent_id: null },
+        { id: secretSalaryId, name: "Synthetic Salary Name", archived: false, version: 1, created_at: 1, updated_at: 1, parent_id: null },
+        { id: secretSpendId, name: "Synthetic Spend Name", archived: false, version: 1, created_at: 1, updated_at: 1, parent_id: null },
       ],
     }));
     api.monthlyBudgetCharts.mockResolvedValue(ok(monthlyBudgetChartsOf({

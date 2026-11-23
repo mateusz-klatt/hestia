@@ -37,7 +37,9 @@ MAX_BATCH_RULES = 100
 _HASH = re.compile(r"[a-f0-9]{64}\Z", re.ASCII)
 _CURRENCY = re.compile(r"[A-Z]{3}\Z", re.ASCII)
 _RULE_FIELDS = frozenset({"rule_id", "expected_version", "field", "operator", "value", "category_id", "kind", "priority", "enabled"})
-_CATEGORY_FIELDS = ("id", "name", "archived", "version", "created_at", "updated_at")
+_CATEGORY_FIELDS = ("id", "name", "archived", "version", "created_at", "updated_at", "parent_id")
+_MAX_CATEGORY_DEPTH = 3
+_UNSET = object()
 _CATEGORY_LIMIT_FIELDS = ("id", "category_id", "currency", "monthly_limit", "warning_percent", "enabled",
                           "version", "created_at", "updated_at")
 _MORTGAGE_SCHEDULE_FIELDS = ("id", "label", "amount", "currency", "due_day", "start_date", "end_date",
@@ -137,28 +139,84 @@ class BudgetAnalyticsStore(BudgetHTTPStore):
             return [_dict(row, _CATEGORY_FIELDS) for row in session.scalars(select(Category).where(Category.owner == owner)
                                                                            .order_by(Category.name_key, Category.id))]
 
-    def create_category(self, owner, name):
+    def _checked_parent(self, session, owner, parent_id, subject_id):
+        """Same-owner active parent, no cycle, and the moved subtree stays within depth 3."""
+        if parent_id is None:
+            return None
+        if not isinstance(parent_id, str) or not parent_id or parent_id == subject_id:
+            raise AnalyticsError()
+        parent = self._owned(session, Category, owner, parent_id)
+        if parent.archived:
+            raise AnalyticsError()
+        depth = 1
+        seen = {parent.id}
+        cursor = parent
+        while cursor.parent_id is not None:
+            if cursor.parent_id == subject_id or cursor.parent_id in seen:
+                raise AnalyticsError()
+            nxt = session.get(Category, cursor.parent_id)
+            if nxt is None or nxt.owner != owner:
+                raise AnalyticsError()
+            seen.add(nxt.id)
+            depth += 1
+            if depth > _MAX_CATEGORY_DEPTH:
+                raise AnalyticsError()
+            cursor = nxt
+        height = 0 if subject_id is None else self._subtree_height(session, owner, subject_id)
+        if depth + height > _MAX_CATEGORY_DEPTH - 1:
+            raise AnalyticsError()
+        return parent.id
+
+    @staticmethod
+    def _subtree_height(session, owner, category_id):
+        rows = session.execute(select(Category.id, Category.parent_id).where(Category.owner == owner)).all()
+        children = {}
+        for identifier, parent in rows:
+            if parent:
+                children.setdefault(parent, []).append(identifier)
+        height = 0
+        stack = [(child, 1) for child in children.get(category_id, ())]
+        seen = {category_id}
+        while stack:
+            node, dist = stack.pop()
+            if node in seen:
+                raise AnalyticsError()
+            seen.add(node)
+            if dist > height:
+                height = dist
+            for child in children.get(node, ()):
+                stack.append((child, dist + 1))
+        return height
+
+    def _has_children(self, session, owner, category_id):
+        child = session.scalar(select(Category.id).where(Category.owner == owner, Category.parent_id == category_id).limit(1))
+        return child is not None
+
+    def create_category(self, owner, name, parent_id=None):
         name = " ".join(_text(name).split())
         key = name.casefold()
         with self.transaction() as session:
             self._owner(session, owner)
             prior = session.scalar(select(Category).where(Category.owner == owner, Category.name_key == key))
             if prior is not None:
-                if prior.name != name:
+                # The same name and parent is an idempotent retry. A different parent must not
+                # look like success: the existing row would keep its parent and the form would clear.
+                if prior.name != name or prior.parent_id != parent_id:
                     raise AnalyticsError("budget_analytics_conflict", 409)
                 return {**_dict(prior, _CATEGORY_FIELDS), "changed": False}
             if session.scalar(select(func.count()).select_from(Category).where(Category.owner == owner)) >= 100:
                 raise AnalyticsError("budget_analytics_limit", 413)
+            parent_id = self._checked_parent(session, owner, parent_id, None)
             now = self._now()
             row = Category(id=str(uuid.uuid4()), owner=owner, name=name, name_key=key, archived=False, version=1,
-                           created_at=now, updated_at=now)
+                           created_at=now, updated_at=now, parent_id=parent_id)
             session.add(row)
             session.flush()
             result = _dict(row, _CATEGORY_FIELDS)
             self._analytics_audit(session, owner, "category", row.id, "create", None, result)
             return {**result, "changed": True}
 
-    def update_category(self, owner, identifier, *, name, archived, expected_version):
+    def update_category(self, owner, identifier, *, name, archived, expected_version, parent_id=_UNSET):
         name = " ".join(_text(name).split())
         if type(archived) is not bool:
             raise AnalyticsError()
@@ -170,10 +228,13 @@ class BudgetAnalyticsStore(BudgetHTTPStore):
                                                           Category.id != row.id))
             if other is not None:
                 raise AnalyticsError("budget_analytics_conflict", 409)
+            new_parent = row.parent_id if parent_id is _UNSET else self._checked_parent(session, owner, parent_id, row.id)
             before = _dict(row, _CATEGORY_FIELDS)
-            if (row.name, row.archived) == (name, archived):
+            if (row.name, row.archived, row.parent_id) == (name, archived, new_parent):
                 return {**before, "changed": False}
-            row.name, row.name_key, row.archived = name, name.casefold(), archived
+            if archived and self._has_children(session, owner, row.id):
+                raise AnalyticsError()
+            row.name, row.name_key, row.archived, row.parent_id = name, name.casefold(), archived, new_parent
             row.version += 1
             row.updated_at = self._now()
             result = _dict(row, _CATEGORY_FIELDS)

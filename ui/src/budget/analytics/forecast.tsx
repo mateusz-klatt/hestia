@@ -5,6 +5,8 @@ import type { BudgetAccount, BudgetConnection } from "../model";
 import { accountName, labelOf, monthLabel, mortgageCurrencies, pluralPl, validCurrency } from "./model";
 import type { AnalyticsForecast, AnalyticsForecastMonth } from "./model";
 
+type CategoryNames = ReadonlyMap<string, string> | "error" | "loading";
+
 const horizons = [1, 3, 6, 12] as const;
 type Horizon = typeof horizons[number];
 
@@ -41,12 +43,15 @@ const forecastLabels = {
     total: "Total",
     scheduledTotal: "Scheduled",
     estimatedTotal: "Estimated",
-    confidence: { scheduled: "Scheduled", high: "Estimated", medium: "Estimated" },
+    confidence: { scheduled: "Scheduled", high: "Estimated", medium: "Estimated", estimated: "≈ estimated" },
     unmarked: "Unmarked",
     accountStale: "Account not up to date",
     merged: "Merged with instalment",
     matchedDue: (date: string) => `Instalment due ${date}`,
     lastObserved: (date: string) => `Last observed ${date}`,
+    baselineConflict: (names: string) => `Skipped the estimate for: ${names} (already forecast as a fixed payment)`,
+    baselineConflictUnnamed: "another category",
+    baselineConflictUnknown: "Skipped an estimate for a category that is already forecast as a fixed payment",
   },
   pl: {
     title: "Prognoza",
@@ -80,19 +85,22 @@ const forecastLabels = {
     total: "Razem",
     scheduledTotal: "Zaplanowane",
     estimatedTotal: "Szacowane",
-    confidence: { scheduled: "Zaplanowana", high: "Szacowana", medium: "Szacowana" },
+    confidence: { scheduled: "Zaplanowana", high: "Szacowana", medium: "Szacowana", estimated: "≈ szacowane" },
     unmarked: "Nieoznaczona",
     accountStale: "Konto nieaktualne",
     merged: "Połączono z ratą",
     matchedDue: (date: string) => `Termin raty: ${date}`,
     lastObserved: (date: string) => `Ostatnia obserwacja: ${date}`,
+    baselineConflict: (names: string) => `Pominięto szacunek dla: ${names} (już prognozowane jako stała płatność)`,
+    baselineConflictUnnamed: "inna kategoria",
+    baselineConflictUnknown: "Pominięto szacunek dla kategorii, która jest już prognozowana jako stała płatność",
   },
 };
 type ForecastLabels = typeof forecastLabels.en;
 type Shown = { state: "loading" | "limit" | "error" } | { state: "ready"; data: AnalyticsForecast };
 
 interface ForecastViewProps {
-  api: Pick<BudgetApi, "forecast" | "mortgages">;
+  api: Pick<BudgetApi, "forecast" | "mortgages" | "categories">;
   accounts: readonly BudgetAccount[];
   connections?: readonly BudgetConnection[];
   locale: string;
@@ -105,16 +113,40 @@ function currencyOptions(codes: readonly string[]): string[] {
   return [...new Set(codes.filter(validCurrency).map((code) => code.trim().toUpperCase()))].sort();
 }
 
-function ForecastSummary({ data, accounts, connections, text, onOpenMortgages }: {
+function baselineConflictNote(data: AnalyticsForecast, names: CategoryNames, text: ForecastLabels, locale: string): string | null {
+  const conflicts = data.summary.baseline_conflicts ?? [];
+  if (conflicts.length === 0 || names === "loading") return null;
+  if (names === "error") return text.baselineConflictUnknown;
+  const seen = new Set<string>();
+  const labels: string[] = [];
+  let unnamed = false;
+  for (const row of conflicts) {
+    if (seen.has(row.category_id)) continue;
+    seen.add(row.category_id);
+    const name = names.get(row.category_id)?.trim() ?? "";
+    if (name !== "") labels.push(name);
+    else unnamed = true;
+  }
+  if (unnamed) labels.push(text.baselineConflictUnnamed);
+  if (labels.length === 0) return text.baselineConflictUnknown;
+  labels.sort((left, right) => left.localeCompare(right, locale));
+  return text.baselineConflict(labels.join(", "));
+}
+
+function ForecastSummary({ data, accounts, connections, text, locale, categoryNames, onOpenMortgages }: {
   data: AnalyticsForecast;
   accounts: readonly BudgetAccount[];
   connections: readonly BudgetConnection[];
   text: ForecastLabels;
+  locale: string;
+  categoryNames: CategoryNames;
   onOpenMortgages: () => void;
 }) {
   const { summary } = data;
+  const skipped = baselineConflictNote(data, categoryNames, text, locale);
   return (
     <>
+      {skipped === null ? null : <p className="budget-notice" role="note">{skipped}</p>}
       <ul className="budget-facts">
         <li>{text.evaluatedFor(data.evaluation_date, data.evaluation_timezone)}</li>
         <li>{text.ledgerAsOf(data.ledger_as_of)}</li>
@@ -242,11 +274,13 @@ export function ForecastView({ api, accounts, connections = [], locale, revision
   const [manualEnabled, setManualEnabled] = useState(false);
   const [manualCode, setManualCode] = useState("");
   const [shown, setShown] = useState<Shown>({ state: "loading" });
+  const [categoryNames, setCategoryNames] = useState<CategoryNames>(new Map());
   const generation = useRef(0);
 
   useEffect(() => {
     const token = ++generation.current;
     setShown({ state: "loading" });
+    setCategoryNames(new Map());
     void api.forecast(horizon, currency || undefined).then((result) => {
       // Superseded responses can still report access loss, so run the barrier first on both reads.
       if (onAccessLoss(result) || token !== generation.current) return;
@@ -255,7 +289,19 @@ export function ForecastView({ api, accounts, connections = [], locale, revision
         setDiscovered((previous) => currencyOptions([
           ...previous, ...data.totals.map((total) => total.currency), ...data.deduplications.map((item) => item.currency),
         ]));
+        const conflicts = data.summary.baseline_conflicts ?? [];
+        setCategoryNames(conflicts.length > 0 ? "loading" : new Map());
         setShown({ state: "ready", data });
+        if (conflicts.length > 0) {
+          void api.categories().then((categoriesResult) => {
+            if (onAccessLoss(categoriesResult) || token !== generation.current) return;
+            if (!categoriesResult.ok) {
+              setCategoryNames("error");
+              return;
+            }
+            setCategoryNames(new Map(categoriesResult.data.categories.map((item) => [item.id, item.name])));
+          });
+        }
         return;
       }
       if (result.status !== 413) {
@@ -319,7 +365,8 @@ export function ForecastView({ api, accounts, connections = [], locale, revision
       ) : null}
       {data === null ? null : (
         <>
-          <ForecastSummary data={data} accounts={accounts} connections={connections} text={text} onOpenMortgages={onOpenMortgages} />
+          <ForecastSummary data={data} accounts={accounts} connections={connections} text={text} locale={locale}
+            categoryNames={categoryNames} onOpenMortgages={onOpenMortgages} />
           {data.totals.length === 0 ? (
             <p className="budget-muted">{currency === "" ? text.empty : text.emptyForCurrency(currency)}</p>
           ) : (

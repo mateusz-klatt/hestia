@@ -411,6 +411,45 @@ class PollerTests(RunnerCase):
             self.assertTrue(all(sum(stamp <= value < stamp + DAY for value in stamps) <= 2 for stamp in stamps))
         self.assertEqual({row.status for row in self.rows(db.BudgetJob)}, {"updated"})
 
+    def test_poller_split_across_partial_jobs_advances_connection_last_success(self):
+        self.opt_in()
+        day1_start = self.now
+        real_get = self.bank.get
+
+        def slow_first_account(path, query=None):
+            result = real_get(path, query)
+            if path == f"/accounts/{ACCOUNT_UID}/balances":
+                # Simulate bank HTTP/pagination latency staggering hash-b past hash-a.
+                self.now += 10
+            return result
+
+        self.bank.get = slow_first_account
+        self.assertEqual(self.runner.poll(), 1)
+        initial = self.runner.step()
+        self.assertEqual((initial["source"], initial["status"], initial["error"]), ("poller", "updated", None))
+        self.bank.get = real_get
+        day1_success = self.connection().last_success
+        self.assertEqual(day1_success, day1_start + 13)
+
+        # Next 12h cycle: poll wakes after hash-a is due (+1s/+2s) but before hash-b (+12s/+13s).
+        self.now = day1_start + 43200 + 2
+        self.assertEqual(self.runner.poll(), 1)
+        part1 = self.runner.step()
+        self.assertEqual((part1["source"], part1["status"], part1["error"]), ("poller", "partial", None))
+        self.assertEqual(self.connection().last_success, day1_success, "hash-b has not succeeded yet")
+
+        # Next 60s poll tick runs the remaining hash-b components as a second partial job.
+        self.now += 60
+        self.assertEqual(self.runner.poll(), 1)
+        part2 = self.runner.step()
+        self.assertEqual((part2["source"], part2["status"], part2["error"]), ("poller", "partial", None))
+        connection = self.connection()
+        self.assertGreater(connection.last_success, day1_success)
+        self.assertGreaterEqual(connection.last_success, day1_start + 43200 + 2)
+        self.assertEqual((connection.last_error, connection.failures), (None, 0))
+        for account in self.rows(db.BudgetAccount):
+            self.assertGreater(account.observed_at, day1_success)
+
 
 class FakeRunner:
     def __init__(self):

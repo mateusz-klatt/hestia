@@ -142,6 +142,86 @@ def _subtract(left, right):
     return lc * (10 ** (scale - ls)) - rc * (10 ** (scale - rs)), scale
 
 
+def _add_amount(left, right):
+    lc, ls = left
+    rc, rs = right
+    scale = max(ls, rs)
+    return lc * (10 ** (scale - ls)) + rc * (10 ** (scale - rs)), scale
+
+
+def _parents(value, maximum):
+    """Map of category id to parent id. None means no tree. A category cannot parent itself."""
+    if value is None:
+        return None
+    if not isinstance(value, Mapping):
+        raise SpendingLimitInputError()
+    if len(value) > maximum:
+        raise SpendingLimitCapError()
+    cleaned = {}
+    for raw_id, raw_parent in value.items():
+        category_id = _category_id(raw_id)
+        if raw_parent is None:
+            parent_id = None
+        else:
+            parent_id = _category_id(raw_parent)
+            if parent_id == category_id:
+                raise SpendingLimitInputError()
+        cleaned[category_id] = parent_id
+    return cleaned
+
+
+def _descendant_amounts(totals, children, category_id, currency):
+    """Sum of descendant spending in one currency, or None when none of it is nonzero."""
+    expenses = refunds = None
+    stack = list(children.get(category_id, ()))
+    seen = {category_id}
+    while stack:
+        child = stack.pop()
+        if child in seen:
+            raise SpendingLimitInputError()
+        seen.add(child)
+        direct = totals.get((child, currency))
+        if direct is not None and (direct[0][0] or direct[1][0]):
+            expenses = direct[0] if expenses is None else _add_amount(expenses, direct[0])
+            refunds = direct[1] if refunds is None else _add_amount(refunds, direct[1])
+        stack.extend(children.get(child, ()))
+    if expenses is None:
+        return None
+    return expenses, refunds
+
+
+def _rollup(totals, parents):
+    """Add each category's own spending to every ancestor, per currency.
+
+    A category with no descendant spending keeps the original parsed row, so flat trees
+    format exactly as they did before parents existed. Uncategorised rows stay put.
+    """
+    if not parents:
+        return totals
+    children = {}
+    for category_id, parent_id in parents.items():
+        if parent_id is not None:
+            children.setdefault(parent_id, []).append(category_id)
+    if not children:
+        return totals
+    rolled = dict(totals)
+    currencies = {currency for _, currency in totals}
+    for currency in currencies:
+        for category_id in children:
+            extra = _descendant_amounts(totals, children, category_id, currency)
+            if extra is None:
+                continue
+            direct = totals.get((category_id, currency))
+            expenses, refunds = extra
+            archived = False
+            if direct is not None:
+                expenses = _add_amount(direct[0], expenses)
+                refunds = _add_amount(direct[1], refunds)
+                archived = direct[2]
+            rolled[(category_id, currency)] = (expenses, refunds, archived)
+    return rolled
+
+
 def _iterable(values):
     if not isinstance(values, Iterable) or isinstance(values, (str, bytes, Mapping)):
         raise SpendingLimitInputError()
@@ -236,16 +316,20 @@ def _evaluate_one(period, key, limit_amount, warning_percent, observed):
 def evaluate_spending_limits(owner: str, period: str, limits: Iterable[CategoryLimit],
                              spending: Iterable[CategorySpending], *,
                              max_limits: int = MAX_LIMITS,
-                             max_spending: int = MAX_SPENDING) -> tuple[CategoryLimitStatus, ...]:
+                             max_spending: int = MAX_SPENDING,
+                             parents: Mapping[str, str | None] | None = None) -> tuple[CategoryLimitStatus, ...]:
     """Evaluate active monthly category limits for ``period`` (YYYY-MM), deterministically ordered.
 
     Disabled limits are validated for owner scope, shape and duplicates, then excluded
     from output. Active limits without matching spending rows evaluate against zero.
     Uncategorised spending rows (``category_id=None``) never match a category limit.
+    When ``parents`` is given, a limit counts that category plus every descendant in the
+    same currency. Omit it, or pass only roots, and each limit counts its own category.
     """
     owner, period = _scope(owner, period, max_limits, max_spending)
     active = _validated_limits(owner, limits, max_limits)
     totals = _validated_spending(owner, spending, max_spending)
+    totals = _rollup(totals, _parents(parents, max_spending))
     results = [_evaluate_one(period, key, limit_amount, warning_percent, totals.get(key))
                for key, limit_amount, warning_percent in active]
     results.sort(key=lambda item: (item.currency, item.category_id))

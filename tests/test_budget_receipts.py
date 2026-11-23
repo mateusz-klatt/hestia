@@ -984,6 +984,49 @@ class ReceiptRetentionSweepTests(fixture.unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(StopAsyncIteration):
                 await context.__anext__()
 
+    async def test_sweep_reraises_when_the_task_is_cancelling(self):
+        from aiohttp import web as aio_web
+
+        async def settled(_function):
+            asyncio.current_task().cancel()
+            raise asyncio.CancelledError()
+
+        app = aio_web.Application()
+        with mock.patch("hestia.budget.api._settled_thread", settled):
+            receipt_api.register(app, lambda *_args, **_kwargs: None, auth_enabled=True, session_secret=None)
+            context = app.cleanup_ctx[-1](app).__aiter__()
+            await context.__anext__()
+            await asyncio.sleep(0)
+            with self.assertRaises(StopAsyncIteration):
+                await context.__anext__()
+
+    async def test_sweep_continues_after_a_failed_pass(self):
+        from aiohttp import web as aio_web
+
+        started = asyncio.Event()
+        calls = {"n": 0}
+
+        async def settled(_function):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise RuntimeError("sweep failed")
+            started.set()
+            await asyncio.Event().wait()
+
+        async def quick_sleep(_seconds):
+            return None
+
+        app = aio_web.Application()
+        with mock.patch("hestia.budget.receipt_api.asyncio.sleep", quick_sleep), \
+                mock.patch("hestia.budget.api._settled_thread", settled):
+            receipt_api.register(app, lambda *_args, **_kwargs: None, auth_enabled=True, session_secret=None)
+            context = app.cleanup_ctx[-1](app).__aiter__()
+            await context.__anext__()
+            await asyncio.wait_for(started.wait(), 2)
+            with self.assertRaises(StopAsyncIteration):
+                await context.__anext__()
+        self.assertGreaterEqual(calls["n"], 2)
+
 
 class ReceiptHTTPTests(fixture.unittest.IsolatedAsyncioTestCase):
     rows = fixture.BudgetAPITests.rows
@@ -1076,6 +1119,24 @@ class ReceiptHTTPTests(fixture.unittest.IsolatedAsyncioTestCase):
         bearer = await self.post("parse-text", {"text": "private"},
                                  headers=self.headers(bearer=True, origin=True))
         self.assertEqual(bearer.status, 403)
+        invalid_limit = await self.post("list", {"limit": 0})
+        self.assertEqual(invalid_limit.status, 400)
+        self.assertEqual((await invalid_limit.json())["error"], "budget_receipt_invalid_request")
+        seen = {"n": 0}
+
+        def enabled():
+            seen["n"] += 1
+            return seen["n"] == 1
+
+        with mock.patch.object(receipt_api, "enabled", enabled):
+            disabled = await self.post("list", {})
+        self.assertEqual(disabled.status, 404)
+        self.assertEqual((await disabled.json())["error"], "budget_receipts_disabled")
+        self.assertGreaterEqual(seen["n"], 2)
+        for params in ([("receipt_id", "a"), ("extra", "1")], [("receipt_id", "a"), ("receipt_id", "b")]):
+            rejected = await self.client.get(receipt_api.PREFIX + "/detail", params=params, headers=self.headers())
+            self.assertEqual(rejected.status, 400)
+            self.assertEqual((await rejected.json())["error"], "budget_receipt_invalid_request")
 
 
 if __name__ == "__main__":
