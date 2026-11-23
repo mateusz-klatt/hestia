@@ -4,6 +4,7 @@ import { createRoot } from "react-dom/client";
 import type { Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BudgetApi, BudgetResult } from "../api";
+import { buildCategoryColors, contrastRatio, parseHexColor } from "./category_colors";
 import { categoryList } from "./fixtures";
 import type { AnalyticsRule, RulePreview, RuleSaved } from "./model";
 import { account } from "../fixtures";
@@ -150,6 +151,13 @@ describe("categories", () => {
     if (parent === undefined || child === undefined) throw new Error("category rows missing");
     expect(items.map((item) => item.getAttribute("data-depth"))).toEqual(["0", "1"]);
     expect(parent.textContent).toContain("Synthetic Transport");
+    const expectedColors = buildCategoryColors([fuel, transport]);
+    const parentSwatch = parent.querySelector<HTMLElement>(".budget-cat-swatch");
+    const childSwatch = child.querySelector<HTMLElement>(".budget-cat-swatch");
+    expect(parentSwatch?.style.backgroundColor).toBeTruthy();
+    expect(childSwatch?.style.backgroundColor).toBeTruthy();
+    expect(parentSwatch?.style.backgroundColor).not.toBe(childSwatch?.style.backgroundColor);
+    expect(expectedColors.get("cat-fuel").oklch.l).toBeGreaterThan(expectedColors.get("cat-transport").oklch.l);
     expect(button("Archive", parent).disabled).toBe(true);
     expect(button("Archive", parent).title).toBe(rulesLabels.en.archiveBlocked);
     expect(button("Archive", child).disabled).toBe(false);
@@ -188,6 +196,14 @@ describe("rules", () => {
     const panel = section("Rules");
     expect(panel.textContent).toContain("Your own choice on an entry always wins");
     expect(panel.querySelector("li")?.textContent).toContain("counterparty contains „Synthetic Grocer”→Synthetic FoodExpensePriority 50disabled");
+    const badge = panel.querySelector<HTMLElement>(".budget-cat-badge");
+    expect(badge?.textContent).toBe("Synthetic Food");
+    const rgb = (value: string) => {
+      const m = /^rgb\(\s*(\d+),\s*(\d+),\s*(\d+)\s*\)$/i.exec(value.trim());
+      if (m !== null) return `#${[m[1], m[2], m[3]].map((n) => Number(n).toString(16).padStart(2, "0")).join("")}`;
+      return parseHexColor(value)?.hex ?? value;
+    };
+    expect(contrastRatio(rgb(badge?.style.backgroundColor ?? ""), rgb(badge?.style.color ?? ""))).toBeGreaterThanOrEqual(4.5);
   });
 
   it("saves only a fresh preview and drops it when the rule changes", async () => {

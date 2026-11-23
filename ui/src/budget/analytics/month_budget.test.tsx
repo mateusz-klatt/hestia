@@ -1095,6 +1095,20 @@ describe("MonthBudgetView", () => {
     expect(catModel.stacks[0]?.posTotal).toBe(550n);
     expect(catModel.stacks[0]?.negTotal).toBe(-70n);
     expect(catModel.allCategories.map((c) => c.id)).toContain("c0-zero");
+
+    const tied = buildCategoryChartModel(
+      [{
+        period: "2026-10", has_activity: true, is_current_month: false, income_estimate_partial: false,
+        provisional: false, start_budget: "0", spent: "20",
+        categories: [
+          { category_id: "c1", net_spending: "10" },
+          { category_id: null, net_spending: "10" },
+        ],
+      }],
+      [],
+      { uncategorised: "Uncategorised", unknownCategory: "Category", otherCategory: "Other" },
+    );
+    expect(tied.allCategories.map((item) => item.id)).toEqual(["c1", null]);
   });
 
   it("rolls chart categories up to the top level when parents exist", () => {

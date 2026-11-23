@@ -49,6 +49,41 @@ describe("one-off chart entries", () => {
     expect(model.stacks[0]?.posTotal).toBe(5060n);
   });
 
+  it("keeps a categorised one-off beside its category and falls back when the hash is missing", () => {
+    const model = buildCategoryChartModel(
+      [{
+        period: "2026-11", has_activity: true, is_current_month: true, income_estimate_partial: false,
+        provisional: false, start_budget: "0", spent: "8",
+        categories: [
+          { category_id: "food", net_spending: "10" },
+          { category_id: "food", net_spending: "-4", one_off: true, name: "Zwrot kaucji", one_off_key: null },
+          { category_id: null, net_spending: "2", one_off: true, name: "Alpha", one_off_key: "" },
+          { category_id: "food", net_spending: "1", one_off: true, name: "Alpha", one_off_key: "ff".repeat(32) },
+          { category_id: "misc", net_spending: "3", one_off: true, name: "", one_off_key: null },
+        ],
+      }],
+      [{ category_id: "food", name: "Food", archived: false }],
+      options,
+    );
+    const hash = "ff".repeat(32);
+    expect(model.oneOffs.map((item) => [item.name, item.seriesKey])).toEqual([
+      ["Alpha", hash],
+      ["Alpha", "one-off:"],
+      ["Zwrot kaucji", "one-off:food"],
+    ]);
+    const food = model.allCategories.find((item) => item.id === "food");
+    const labelled = model.oneOffs.find((item) => item.seriesKey === "one-off:food");
+    expect(labelled).toMatchObject({ id: "food", hatched: true, color: food?.color });
+    expect(food?.hatched).toBe(false);
+    expect(model.byMonthAndCategory.get("2026-11")?.get("food")).toBe("10");
+    expect(model.byMonthAndCategory.get("2026-11")?.get("one-off:food")).toBe("-4");
+    expect(model.displayed.some((item) => item.oneOff)).toBe(false);
+    expect(model.oneOffs.some((item) => item.id === "misc")).toBe(false);
+    const slices = model.stacks[0]?.slices ?? [];
+    expect(slices.find((slice) => slice.key === "one-off:food")).toMatchObject({ value: -4n, hatched: true });
+    expect(slices.find((slice) => slice.key === "one-off:")).toMatchObject({ value: 2n, hatched: true });
+  });
+
   let host: HTMLElement;
   let root: Root;
   beforeEach(() => {
