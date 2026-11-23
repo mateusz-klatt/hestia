@@ -12,7 +12,7 @@ from sqlalchemy.exc import IntegrityError
 
 from hestia import db
 
-_TABLES = {"budget_receipt_device_tokens", "budget_receipt_pair_codes", "budget_receipt_pair_locks"}
+_TABLES = {"budget_receipt_device_tokens", "budget_receipt_pair_codes"}
 _HEX = "ab" * 32
 
 
@@ -51,6 +51,7 @@ class DeviceTokenMigration0024Tests(unittest.TestCase):
         self._assert_clean(engine)
         self.assertEqual(self._revision(engine), "0024")
         self.assertTrue(_TABLES <= set(inspect(engine).get_table_names()))
+        self.assertNotIn("budget_receipt_pair_locks", inspect(engine).get_table_names())
         self.assertFalse({"token", "code", "token_hash", "code_hash"} & self._columns(engine, "budget_receipt_device_tokens"))
         self.assertIn("token_hmac", self._columns(engine, "budget_receipt_device_tokens"))
         self.assertIn("code_hmac", self._columns(engine, "budget_receipt_pair_codes"))
@@ -58,10 +59,9 @@ class DeviceTokenMigration0024Tests(unittest.TestCase):
         with engine.connect() as conn:
             fks = conn.exec_driver_sql("PRAGMA foreign_key_list(budget_receipt_device_tokens)").all()
             code_fks = conn.exec_driver_sql("PRAGMA foreign_key_list(budget_receipt_pair_codes)").all()
-            lock_fks = conn.exec_driver_sql("PRAGMA foreign_key_list(budget_receipt_pair_locks)").all()
             self.assertEqual(compare_metadata(MigrationContext.configure(conn), db.Base.metadata), [])
-        self.assertTrue(fks and code_fks and lock_fks)
-        self.assertTrue(all(row[2] == "users" for row in (*fks, *code_fks, *lock_fks)))
+        self.assertTrue(fks and code_fks)
+        self.assertTrue(all(row[2] == "users" for row in (*fks, *code_fks)))
         with engine.begin() as conn:
             conn.exec_driver_sql("INSERT INTO users (username, password_hash, role) VALUES ('owner', 'h', 'admin')")
             conn.exec_driver_sql("INSERT INTO users (username, password_hash, role) VALUES ('member', 'h', 'viewer')")
@@ -97,10 +97,6 @@ class DeviceTokenMigration0024Tests(unittest.TestCase):
             "INSERT INTO budget_receipt_device_tokens (id, owner, device_name, token_hmac, created_at, "
             "expires_at, hard_expires_at, sliding_written_at) VALUES ('t', 'owner', 'Vesta', ?, 1, 4, 3, 1)",
             (_HEX,))
-        rejected(
-            "INSERT INTO budget_receipt_pair_locks (owner, failures, locked) VALUES ('owner', -1, 0)")
-        rejected(
-            "INSERT INTO budget_receipt_pair_locks (owner, failures, locked) VALUES ('owner', 0, 2)")
         with engine.begin() as conn:
             conn.exec_driver_sql(
                 "INSERT INTO budget_receipt_device_tokens (id, owner, device_name, token_hmac, created_at, "

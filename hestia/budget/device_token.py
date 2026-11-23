@@ -11,6 +11,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 import hashlib
 import hmac
+import ipaddress
 import json
 import logging
 import math
@@ -70,7 +71,7 @@ SLIDE_WRITE_INTERVAL = 3600
 PARSE_LIMIT = 30
 PARSE_WINDOW = 60
 REDEEM_IP_LIMIT = 10
-REDEEM_GLOBAL_LIMIT = 30
+REDEEM_GLOBAL_LIMIT = 300
 REDEEM_WINDOW = 60
 REDEEM_BACKOFF_AFTER = 5
 _MAX_BACKOFF_EXPONENT = 5
@@ -249,13 +250,22 @@ def _charge(keys, moment, window):
 
 
 def redeem_limited(ip, moment):
-    # Admit attempts by source IP before looking at the body. This makes the
-    # delay independent of code validity and leaves rejected attempts out of global quota.
+    # Charge malformed input to its source too. IPv6 privacy addresses share
+    # the same /64 quota so rotating the host part cannot bypass the backoff.
+    try:
+        address = ipaddress.ip_address(ip)
+        ip = str(ipaddress.ip_network((address, 64), strict=False)) if address.version == 6 else str(address)
+    except ValueError:
+        pass
     return _charge(
-        ((("redeem", "ip", ip), REDEEM_IP_LIMIT, REDEEM_BACKOFF_AFTER),
-         (("redeem", "global"), REDEEM_GLOBAL_LIMIT, None)),
+        ((("redeem", "ip", ip), REDEEM_IP_LIMIT, REDEEM_BACKOFF_AFTER),),
         moment, REDEEM_WINDOW,
     )
+
+
+def redeem_global_limited(moment):
+    """Charge the shared quota only after the request's pairing code is well formed."""
+    return _charge(((("redeem", "global"), REDEEM_GLOBAL_LIMIT, None),), moment, REDEEM_WINDOW)
 
 
 def parse_limited(token_id, moment):

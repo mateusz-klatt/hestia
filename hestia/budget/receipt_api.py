@@ -130,8 +130,11 @@ def register(app, read_json_body, *, auth_enabled, session_secret):
             if not device_token.budget_http_enabled():
                 raise api._Rejected(404, "budget_disabled")
             code = device_token.normalize_code(body["code"])
-            if code is None:
+            if code is None or device_token._device_name(body["device_name"]) is None:
                 return _device_error(400, "device_token_rejected")
+            retry = device_token.redeem_global_limited(time.monotonic())
+            if retry is not None:
+                return _device_error(429, "device_token_rejected", retry)
             result = await api._settled_thread(
                 lambda: device_token.open_store().redeem(code, body["device_name"]))
             if result is None:

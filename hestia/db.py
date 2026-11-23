@@ -983,20 +983,6 @@ class BudgetReceiptPairCode(Base):
     consumed_at: Mapped[float | None]
 
 
-class BudgetReceiptPairLock(Base):
-    """Per-owner pairing lockout. A new pairing code clears it."""
-
-    __tablename__ = "budget_receipt_pair_locks"
-    __table_args__ = (
-        ForeignKeyConstraint(["owner"], ["users.username"]),
-        CheckConstraint("failures >= 0", name="ck_budget_receipt_pair_locks_failures"),
-        CheckConstraint("locked IN (0, 1)", name="ck_budget_receipt_pair_locks_locked"),
-    )
-    owner: Mapped[str] = mapped_column(primary_key=True)
-    failures: Mapped[int] = mapped_column(server_default=text("0"))
-    locked: Mapped[int] = mapped_column(server_default=text("0"))
-
-
 metadata = Base.metadata
 
 _MIGRATIONS_DIR = Path(__file__).resolve().parent / "migrations"

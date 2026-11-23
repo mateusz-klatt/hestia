@@ -15,7 +15,6 @@ depends_on = None
 
 _TOKENS = "budget_receipt_device_tokens"
 _CODES = "budget_receipt_pair_codes"
-_LOCKS = "budget_receipt_pair_locks"
 _IX_TOKENS = "ix_budget_receipt_device_tokens_owner"
 _IX_CODES = "ix_budget_receipt_pair_codes_owner"
 _HEX64 = "length({name}) = 64 AND {name} NOT GLOB '*[^0-9a-f]*'"
@@ -55,21 +54,11 @@ def upgrade():
         sa.CheckConstraint(_HEX64.format(name="code_hmac"), name="ck_budget_receipt_pair_codes_hmac"),
     )
     op.create_index(_IX_CODES, _CODES, ["owner"])
-    op.create_table(
-        _LOCKS,
-        sa.Column("owner", sa.String(), primary_key=True),
-        sa.Column("failures", sa.Integer(), nullable=False, server_default=sa.text("0")),
-        sa.Column("locked", sa.Integer(), nullable=False, server_default=sa.text("0")),
-        sa.ForeignKeyConstraint(["owner"], ["users.username"]),
-        sa.CheckConstraint("failures >= 0", name="ck_budget_receipt_pair_locks_failures"),
-        sa.CheckConstraint("locked IN (0, 1)", name="ck_budget_receipt_pair_locks_locked"),
-    )
 
 
 def downgrade():
     op.execute("DELETE FROM budget_analytics_audit WHERE subject_type = 'receipt_device_token'")
     op.drop_index(_IX_CODES, table_name=_CODES)
     op.drop_index(_IX_TOKENS, table_name=_TOKENS)
-    op.drop_table(_LOCKS)
     op.drop_table(_CODES)
     op.drop_table(_TOKENS)

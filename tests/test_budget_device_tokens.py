@@ -72,10 +72,6 @@ class DeviceTokenStoreTests(unittest.TestCase):
         with self.sessions() as session:
             return list(session.scalars(select(db.BudgetReceiptDeviceToken)))
 
-    def _lock(self, owner="alice"):
-        with self.sessions() as session:
-            return session.get(db.BudgetReceiptPairLock, owner)
-
     def _absent(self, secret):
         for row in self._codes():
             self.assertRegex(row.code_hmac, r"^[0-9a-f]{64}$")
@@ -95,7 +91,7 @@ class DeviceTokenStoreTests(unittest.TestCase):
         self.assertEqual(device_token.SLIDE_WRITE_INTERVAL, 3600)
         self.assertEqual((device_token.PARSE_LIMIT, device_token.PARSE_WINDOW), (30, 60))
         self.assertEqual((device_token.REDEEM_IP_LIMIT, device_token.REDEEM_GLOBAL_LIMIT, device_token.REDEEM_WINDOW),
-                         (10, 30, 60))
+                         (10, 300, 60))
         self.assertEqual(device_token.COOKIE, web._SESSION_COOKIE)
         folded = device_token.normalize_code(" iL-o O Ab -23 ")
         self.assertTrue(folded == "11" + "00" + "AB23")
@@ -135,7 +131,6 @@ class DeviceTokenStoreTests(unittest.TestCase):
         self.assertTrue(issued["qr_payload"] == "hestia-pair:" + issued["code"])
         self.assertEqual(len(issued["code"]), 8)
         self.assertEqual(issued["expires_at"], self.moment["now"] + device_token.PAIR_TTL)
-        self.assertIsNone(self._lock())
         self._absent(issued["code"])
         self.assertIsNone(self.store.redeem(issued["code"], "bad\nname"))
         self.assertIsNone(self._codes()[0].consumed_at)
@@ -234,8 +229,6 @@ class DeviceTokenStoreTests(unittest.TestCase):
         with self.assertRaises(device_token.DeviceTokenError) as limited:
             self.store.issue_code("alice")
         self.assertEqual((limited.exception.status, limited.exception.code), (409, "device_pair_limit"))
-        with self.sessions.begin() as session:
-            session.add(db.BudgetReceiptPairLock(owner="alice", failures=4, locked=0))
 
         with mock.patch.object(device_token.hmac, "compare_digest", wraps=device_token.hmac.compare_digest) as compare:
             for attempt in (expired["code"], "Z" * 8):
@@ -245,9 +238,6 @@ class DeviceTokenStoreTests(unittest.TestCase):
                 self.assertTrue(all(len(digest) == 64 for digest in compare.call_args.args))
         for _ in range(20):
             self.assertIsNone(self.store.redeem("Z" * 8, "Vesta"))
-        lock = self._lock()
-        self.assertEqual((lock.failures, lock.locked), (4, 0))
-        self.assertIsNone(self._lock("bob"))
         self.assertTrue(self.store.redeem(alice[0]["code"], "Vesta") is not None)
         self.assertTrue(self.store.redeem(bob["code"], "Vesta") is not None)
 
@@ -267,9 +257,29 @@ class DeviceTokenStoreTests(unittest.TestCase):
             self.assertIsNone(device_token.redeem_limited(ip, moment))
         self.assertGreater(device_token.redeem_limited(ip, moment), 0)
         device_token.reset_limits()
-        for i in range(device_token.REDEEM_GLOBAL_LIMIT):
-            self.assertIsNone(device_token.redeem_limited(f"198.51.100.{i + 1}", moment))
-        self.assertEqual(device_token.redeem_limited("203.0.113.1", moment), device_token.REDEEM_WINDOW)
+        for _ in range(device_token.REDEEM_GLOBAL_LIMIT):
+            self.assertIsNone(device_token.redeem_global_limited(moment))
+        self.assertEqual(device_token.redeem_global_limited(moment), device_token.REDEEM_WINDOW)
+
+    def test_ipv6_rotation_shares_prefix_backoff_and_limit(self):
+        moment = 100.0
+        for host in range(device_token.REDEEM_BACKOFF_AFTER):
+            self.assertIsNone(device_token.redeem_limited(f"2001:db8:1:2::{host:x}", moment))
+        self.assertEqual(device_token.redeem_limited("2001:db8:1:2::abcd", moment), 1)
+        self.assertIsNone(device_token.redeem_limited("2001:db8:1:3::1", moment))
+        device_token.reset_limits()
+        with mock.patch.object(device_token, "REDEEM_IP_LIMIT", 1):
+            self.assertIsNone(device_token.redeem_limited("2001:db8:1:2::1", moment))
+            self.assertEqual(device_token.redeem_limited("2001:db8:1:2::2", moment), device_token.REDEEM_WINDOW)
+        self.assertIsNone(device_token.redeem_limited("unknown", moment))
+
+    def test_six_ipv4_clients_at_five_attempts_leave_global_capacity(self):
+        moment = 100.0
+        for client in range(6):
+            for _ in range(5):
+                self.assertIsNone(device_token.redeem_limited(f"198.51.100.{client + 1}", moment))
+                self.assertIsNone(device_token.redeem_global_limited(moment))
+        self.assertIsNone(device_token.redeem_global_limited(moment))
 
     def test_owner_checks_revocation_and_expiry(self):
         with self.assertRaises(device_token.DeviceTokenError) as denied:
@@ -428,9 +438,9 @@ class DeviceTokenStoreTests(unittest.TestCase):
         device_token.reset_limits()
         with mock.patch.object(device_token, "REDEEM_IP_LIMIT", 10), \
                 mock.patch.object(device_token, "REDEEM_GLOBAL_LIMIT", 2):
-            self.assertIsNone(device_token.redeem_limited("198.51.100.2", 20.0))
-            self.assertIsNone(device_token.redeem_limited("198.51.100.3", 20.0))
-            self.assertGreaterEqual(device_token.redeem_limited("198.51.100.4", 20.0), 1)
+            self.assertIsNone(device_token.redeem_global_limited(20.0))
+            self.assertIsNone(device_token.redeem_global_limited(20.0))
+            self.assertGreaterEqual(device_token.redeem_global_limited(20.0), 1)
         device_token.reset_limits()
         device_token._buckets.update({("seed", index): (0.0,) for index in range(device_token._MAX_BUCKETS)})
         self.assertEqual(device_token.redeem_limited("198.51.100.9", 1.0), device_token.REDEEM_WINDOW)
@@ -762,7 +772,7 @@ class DeviceTokenHTTPTests(fixture.unittest.IsolatedAsyncioTestCase):
                 response = await self._redeem("Z" * 8, headers=attacker)
                 self.assertEqual(response.status, 400)
                 await response.read()
-            for _ in range(device_token.REDEEM_GLOBAL_LIMIT):
+            for _ in range(30):
                 response = await self._redeem("Z" * 8, headers=attacker)
                 self.assertEqual(response.status, 429)
                 self.assertEqual(response.headers["Retry-After"], "1")
@@ -777,6 +787,25 @@ class DeviceTokenHTTPTests(fixture.unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status, 400)
         self.assertEqual((await response.json())["error"], "device_token_rejected")
         open_store.assert_not_called()
+
+    async def test_malformed_codes_do_not_consume_global_quota(self):
+        with mock.patch.object(device_token, "REDEEM_GLOBAL_LIMIT", 1), \
+             mock.patch.object(device_token, "REDEEM_BACKOFF_AFTER", 10), \
+             mock.patch.object(device_token, "open_store") as store:
+            store.return_value.redeem.return_value = None
+            for body in ({"code": "U" * 8, "device_name": "Vesta"},
+                         {"code": "Z" * 8, "device_name": "\n"}, [], {}):
+                response = await self._post(device_token.REDEEM_PATH, body, {})
+                self.assertEqual(response.status, 400)
+                await response.read()
+            first = await self._redeem("Z" * 8)
+            self.assertEqual(first.status, 400)
+            await first.read()
+            limited = await self._redeem("Z" * 8)
+            self.assertEqual(limited.status, 429)
+            self.assertIn("Retry-After", limited.headers)
+            await limited.read()
+        self.assertEqual(store.call_count, 1)
 
     async def test_device_body_framing_and_operational_failures(self):
         rejected = {"ok": False, "error": "device_token_rejected"}
