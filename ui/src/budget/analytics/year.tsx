@@ -4,24 +4,29 @@ import { useCallback, useState } from "react";
 import type { BudgetApi } from "../api";
 import type { BudgetAccount, BudgetConnection } from "../model";
 import { formatAmount } from "../model";
-import { currentMonth, isZero } from "./model";
+import { ExportMenu } from "./export_menu";
+import { exportBasename, exportLabels, monthsOfYear } from "./export_rows";
+import type { ExportLabels } from "./export_rows";
+import { NO_FILTER, currentMonth, isZero } from "./model";
 import type { AnalyticsOverview } from "./model";
 import { OverviewPanel, overviewLabels } from "./overview";
 import type { OverviewLabels } from "./overview";
 
 export const yearLabels = {
   en: { previous: "Previous year", next: "Next year", months: "Months", month: "Month", spending: "Spending", income: "Income",
-    toClassify: "To classify", open: (month: string) => `Open ${month}`, noData: "—", overview: overviewLabels.en },
+    toClassify: "To classify", open: (month: string) => `Open ${month}`, noData: "—", overview: overviewLabels.en,
+    exportMenu: exportLabels.en },
   pl: { previous: "Poprzedni rok", next: "Następny rok", months: "Miesiące", month: "Miesiąc", spending: "Wydatki", income: "Wpływy",
-    toClassify: "Do sklasyfikowania", open: (month: string) => `Otwórz ${month}`, noData: "—", overview: overviewLabels.pl },
+    toClassify: "Do sklasyfikowania", open: (month: string) => `Otwórz ${month}`, noData: "—", overview: overviewLabels.pl,
+    exportMenu: exportLabels.pl },
 };
 export interface YearLabels {
   previous: string; next: string; months: string; month: string; spending: string; income: string; toClassify: string;
-  open: (month: string) => string; noData: string; overview: OverviewLabels;
+  open: (month: string) => string; noData: string; overview: OverviewLabels; exportMenu: ExportLabels;
 }
 
 export interface YearViewProps {
-  api: Pick<BudgetApi, "overview"> & Partial<Pick<BudgetApi, "categories">>;
+  api: Pick<BudgetApi, "overview" | "analyticsTransactions" | "categories">;
   accounts: readonly BudgetAccount[];
   connections?: readonly BudgetConnection[] | undefined;
   text: YearLabels;
@@ -44,8 +49,7 @@ export function YearView({ api, accounts, connections = [], text, locale, revisi
   const latest = currentMonth(today()).slice(0, 4);
   const [year, setYear] = useState(latest);
   const overview = useCallback((period: string) => api.overview(period), [api]);
-  const readCategories = api.categories;
-  const loadCategories = useCallback(() => readCategories?.() ?? Promise.resolve({ ok: true as const, data: { categories: [] } }), [readCategories]);
+  const loadCategories = useCallback(() => api.categories(), [api]);
   const details = useCallback((data: AnalyticsOverview) => (
     data.months.length === 0 ? null : data.currencies.map((total) => {
       const unclassified = data.months.some((item) => item.currencies.some((value) =>
@@ -88,9 +92,10 @@ export function YearView({ api, accounts, connections = [], text, locale, revisi
         <button type="button" aria-label={text.next} disabled={year >= latest}
           onClick={() => { setYear((value) => (value < latest ? String(Number(value) + 1).padStart(4, "0") : value)); }}>▶</button>
       </nav>
+      <ExportMenu text={text.exportMenu} filename={exportBasename(year)} periods={monthsOfYear(year)} filter={NO_FILTER}
+        accounts={accounts} connections={connections} api={api} onAccessLoss={onAccessLoss} />
       <OverviewPanel overview={overview} period={year} current={year === latest} accounts={accounts} connections={connections} text={text.overview}
-        locale={locale} revision={revision} onAccessLoss={onAccessLoss} details={details}
-        {...(readCategories === undefined ? {} : { loadCategories })} />
+        locale={locale} revision={revision} onAccessLoss={onAccessLoss} details={details} loadCategories={loadCategories} />
     </section>
   );
 }
