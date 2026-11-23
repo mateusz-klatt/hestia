@@ -86,3 +86,23 @@ Then add `HESTIA_BUDGET_RULE_KEY_FILE=/data/secrets/budget-rule.key` (the **cont
 **Missing or unsafe key:** startup is not affected. The key is loaded lazily; a missing, short (< 32 bytes), symlinked, group/world-readable or wrongly owned file makes only counterparty-account rules unavailable. Creating or previewing one returns `400 budget_analytics_rule_key_unavailable`. An existing one does not match, and the rules list marks it with `inactive_reason` `rule_key_unavailable` (Rules UI: „Nieaktywna: brak klucza”). Every other rule type keeps working, so overview, transactions, month budget, forecast and the other analytics reads stay successful. The key can be created after the deploy, but account rules only start working once it exists.
 
 **Rotation:** keep the key stable. Stored values carry a key id (`cpacct:v2:<kid>:…`), so after a rotation old account rules stop matching (fail-closed, never mismatch) until they are recreated, and previews created under the old key are rejected. The rules list marks those rules with `inactive_reason` `rule_key_rotated` (Rules UI: „Nieaktywna: zmieniony klucz – utwórz regułę ponownie”). Procedure: (1) list the owner's counterparty-account rules in the Rules UI and note their category/priority; (2) replace the file (same steps as above) and recreate the container; (3) recreate each rule via "Utwórz regułę z konta odbiorcy" on a matching transaction; (4) disable the old (now inactive) rules. Rotate only on suspected key exposure.
+
+## Gmail invoice import (receipts v1d-a)
+
+Default off (`HESTIA_BUDGET_GMAIL_IMPORT_ENABLED` unset). Invoice HTML/plain text is parsed only by the isolated `receipt-parser` service (`network_mode: none`, read-only root, `cap_drop: ALL`, `no-new-privileges`, UID 1000, 256 MiB / 32 pids / 0.5 CPU, noexec tmpfs). It is behind the compose profile `receipt-parser`, so an ordinary Hestia deploy does not start it. Hestia never falls back to in-process parsing: with the flag on and the service down, the Gmail routes return `503 budget_receipt_gmail_parser_unavailable` and no Gmail call is made.
+
+Secrets (both read via `config._read_secret`: regular file, owned by the container UID 1000, mode `0400`/`0600`, no symlink):
+
+- **Dedupe key** `HESTIA_BUDGET_RECEIPTS_HMAC_SECRET_FILE`: 32 random bytes, created like the rule key above, e.g. `./data/secrets/receipts-gmail-hmac.key` → `/data/secrets/receipts-gmail-hmac.key`. Keep it stable; rotating it makes previously imported messages look new.
+- **Gmail refresh token**: reuse the existing `gmail.readonly` token (no new grant). Write it into a `0400` file under `./data/secrets/` and point the config's `refresh_token_env` at the env var holding that container path.
+- **Config** `HESTIA_BUDGET_RECEIPTS_GMAIL_CONFIG`: the JSON (owner, mailbox, spouse forward senders, supplier allowlist, env-var names) is also a `0400`/`0600` file owned by UID 1000.
+
+Enable, in this order:
+
+1. Create the secret files above and add their container paths to `.env`.
+2. `docker compose --profile receipt-parser up -d --build receipt-parser`
+3. Wait until `docker compose ps receipt-parser` reports `healthy`.
+4. Set `HESTIA_BUDGET_GMAIL_IMPORT_ENABLED=1` in `.env` and recreate the `hestia` container.
+5. Smoke: the Gmail status route reports `configured=true`; no import has run yet unless triggered.
+
+Rollback: remove the flag from `.env` and recreate `hestia` (Gmail routes return 404, the poller stops), then `docker compose --profile receipt-parser stop receipt-parser`. Migration `0025` stays; downgrade only with `downgrade_db(path, "0023")` on a stopped app, as for every migration.
