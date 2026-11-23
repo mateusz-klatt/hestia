@@ -2077,6 +2077,8 @@ SPOUSE_ROUTE_STATUS = {
     ("GET", "/api/budget/receipts/image"): 403,
     ("POST", "/api/budget/receipts/delete"): 403,
     ("POST", "/api/budget/receipts/device-token/pair-code"): 403,
+    ("POST", "/api/budget/receipts/device-token/pair-code-cancel"): 403,
+    ("POST", "/api/budget/receipts/device-token/login"): 400,
     ("POST", "/api/budget/receipts/device-token/redeem"): 403,
     ("POST", "/api/budget/receipts/device-token/list"): 403,
     ("POST", "/api/budget/receipts/device-token/revoke"): 403,

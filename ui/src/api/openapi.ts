@@ -1284,6 +1284,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/budget/receipts/device-token/login": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Issue a receipts-scoped device token using an enabled budget owner's password.
+         * @description Requires budget HTTP and receipts. Send uncompressed application/json (at most 4096 bytes) without Cookie or Authorization. Shares the /api/login quota of 10 attempts per minute per username and IPv4 address or IPv6 /64. An active token with the same device name is rotated. At five active tokens, issuance revokes the least recently used token.
+         */
+        post: operations["loginBudgetReceiptDevice"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/budget/receipts/device-token/pair-code": {
         parameters: {
             query?: never;
@@ -1295,9 +1315,29 @@ export interface paths {
         put?: never;
         /**
          * Issue one 5-minute pairing code for the signed-in admin owner.
-         * @description Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Cookie plus Authorization returns 400 budget_auth_ambiguous.  Browser cookie and exact Origin. At most 3 active codes. Every /api/budget/* route requires the browser hestia_session cookie and configured same-origin Origin. A login/session Authorization: Bearer from /api/login returns 403 budget_browser_session_required on every budget route, including GETs. The only bearer exception is a receipts-scoped device token obtained through browser pairing: it is accepted only on receipts parse-text, confirm, list, search, delete, detail and image, plus device-token/revoke for itself. Household viewer/operator access is browser-only too.
+         * @description Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Cookie plus Authorization returns 400 budget_auth_ambiguous.  Browser cookie and exact Origin. At most 3 active codes. Browser budget routes require the hestia_session cookie and configured same-origin Origin. A login/session Authorization: Bearer from /api/login returns 403 budget_browser_session_required on every browser budget route, including GETs. Device login rejects any Cookie or Authorization header. A receipts-scoped device token obtained through browser pairing or password login is accepted only on receipts parse-text, confirm, list, search, delete, detail and image, plus device-token/revoke for itself. Household access is browser-only.
          */
         post: operations["pairBudgetReceiptDevice"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/budget/receipts/device-token/pair-code-cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Cancel an unused pairing code by its server-issued ID.
+         * @description Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Cookie plus Authorization returns 400 budget_auth_ambiguous.  Browser owner cookie and exact Origin. A used, expired, or foreign ID is a no-op.
+         */
+        post: operations["cancelBudgetReceiptDevicePairCode"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1315,7 +1355,7 @@ export interface paths {
         put?: never;
         /**
          * Exchange a pairing code for a receipts-scoped bearer, once.
-         * @description Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Cookie plus Authorization returns 400 budget_auth_ambiguous. Send an application/json body of at most 4096 bytes without cookie or Authorization. Redemption attempts are subject to per-IP backoff and global throttling.
+         * @description Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Cookie plus Authorization returns 400 budget_auth_ambiguous. Send an application/json body of at most 4096 bytes without cookie or Authorization. Redemption has per-IP backoff and global throttling. At five active tokens, issuance revokes the least recently used token.
          */
         post: operations["redeemBudgetReceiptDevice"];
         delete?: never;
@@ -5415,10 +5455,32 @@ export interface components {
          * @description Empty JSON object for pairing-code issuance and the device list.
          */
         BudgetReceiptDeviceBrowserRequest: Record<string, never>;
+        /** BudgetReceiptDeviceCancelRequest */
+        BudgetReceiptDeviceCancelRequest: {
+            /** Code Id */
+            code_id: string;
+        };
+        /** BudgetReceiptDeviceLoginRequest */
+        BudgetReceiptDeviceLoginRequest: {
+            /**
+             * Device Name
+             * @description Printable device name.
+             */
+            device_name: string;
+            /**
+             * Password
+             * Format: password
+             */
+            password: string;
+            /** Username */
+            username: string;
+        };
         /** BudgetReceiptDevicePairResult */
         BudgetReceiptDevicePairResult: {
             /** Code */
             code: string;
+            /** Code Id */
+            code_id: string;
             /** Expires At */
             expires_at: number;
             /** Qr Payload */
@@ -13074,6 +13136,122 @@ export interface operations {
             };
         };
     };
+    loginBudgetReceiptDevice: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BudgetReceiptDeviceLoginRequest"];
+            };
+        };
+        responses: {
+            /** @description One-time receipt device token with a sliding 90-day TTL and a 180-day hard cap. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetReceiptDeviceRedeemResult"];
+                };
+            };
+            /** @description Invalid JSON request or budget_auth_ambiguous if Cookie or Authorization is present. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Generic device_token_rejected for invalid credentials or an ineligible account. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Budget HTTP or receipts are disabled. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Request body read timed out. */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Content-Length is required. */
+            411: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description JSON body exceeds 4096 bytes. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Content-Type must be application/json. */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Too many password attempts (device_token_rate_limited). */
+            429: {
+                headers: {
+                    /** @description Seconds until another password attempt is allowed. */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Internal error. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Budget configuration unavailable. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+        };
+    };
     pairBudgetReceiptDevice: {
         parameters: {
             query?: never;
@@ -13133,6 +13311,120 @@ export interface operations {
                 };
             };
             /** @description The owner already has 3 active pairing codes (device_pair_limit), or SQLite users are required. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Content-Length is required. */
+            411: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description JSON body exceeds 4096 bytes. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Content-Type must be application/json. */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description budget configuration unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+        };
+    };
+    cancelBudgetReceiptDevicePairCode: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BudgetReceiptDeviceCancelRequest"];
+            };
+        };
+        responses: {
+            /** @description Idempotently cancel an unused code belonging to this owner. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetReceiptDeviceRevokeResult"];
+                };
+            };
+            /** @description invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description session required; middleware may return an empty body */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description admin owner or browser-origin requirement failed; middleware may return an empty body */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description unknown, disabled or foreign resource */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description SQLite session users required */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -14846,6 +15138,17 @@ export interface operations {
             /** @description invalid credentials */
             401: {
                 headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ControlError"];
+                };
+            };
+            /** @description Too many attempts. Shares the device login quota by username and IP. */
+            429: {
+                headers: {
+                    /** @description Seconds until another password attempt is allowed. */
+                    "Retry-After"?: number;
                     [name: string]: unknown;
                 };
                 content: {

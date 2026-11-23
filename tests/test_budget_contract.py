@@ -230,13 +230,14 @@ class BudgetOpenApiTests(unittest.TestCase):
                 self.assertTrue(methods["get"]["parameters"][0]["required"])
         self.assertEqual(set(receipts), {"/api/budget/receipts/" + name for name in
                          ("parse-text", "confirm", "list", "search", "detail", "image", "delete",
-                          "device-token/pair-code", "device-token/redeem", "device-token/list",
+                          "device-token/pair-code", "device-token/pair-code-cancel", "device-token/login",
+                          "device-token/redeem", "device-token/list",
                           "device-token/revoke", "gmail-status", "gmail-grant", "gmail-sync", "gmail-revoke")})
         for path, methods in receipts.items():
             name = path.rsplit("/", 1)[1]
             if path.startswith("/api/budget/receipts/device-token/"):
                 self.assertEqual(set(methods), {"post"})
-                expected = "public" if name == "redeem" else "admin"
+                expected = "public" if name in ("redeem", "login") else "admin"
                 self.assertEqual(methods["post"]["x-required-role"], expected)
                 self.assertIn("requestBody", methods["post"])
                 responses = methods["post"]["responses"]
@@ -248,6 +249,10 @@ class BudgetOpenApiTests(unittest.TestCase):
                     self.assertIn("Content-Length", responses["411"]["description"])
                     self.assertIn("application/json", responses["415"]["description"])
                     self.assertIn("bytes", responses["413"]["description"])
+                if name == "login":
+                    self.assertIn("budget_auth_ambiguous", responses["400"]["description"])
+                    self.assertIn("device_token_rejected", responses["401"]["description"])
+                    self.assertIn("Retry-After", responses["429"]["headers"])
                 continue
             method = "get" if name in ("detail", "image", "gmail-status") else "post"
             self.assertEqual(set(methods), {method})
@@ -272,7 +277,7 @@ class BudgetOpenApiTests(unittest.TestCase):
         self.assertIn("budget_receipt_quota_exceeded", parse_limit)
         self.assertIn("131072", receipts["/api/budget/receipts/confirm"]["post"]["responses"]["413"]["description"])
         self.assertIn("16384", receipts["/api/budget/receipts/list"]["post"]["responses"]["413"]["description"])
-        self.assertEqual(document["info"]["version"], "0.42.0")
+        self.assertEqual(document["info"]["version"], "0.44.0")
         receipt_schemas = document["components"]["schemas"]
         self.assertEqual(receipt_schemas["BudgetReceiptDeviceRedeemResult"]["properties"]["expires_at"]["format"],
                          "date-time")
@@ -629,6 +634,7 @@ class BudgetOpenApiTests(unittest.TestCase):
                               "BudgetReceiptParseTextRequest", "BudgetReceiptConfirmRequest", "BudgetReceiptLineInput",
                               "BudgetReceiptLinkRequest", "BudgetReceiptListRequest", "BudgetReceiptSearchRequest",
                               "BudgetReceiptDeleteRequest", "BudgetReceiptDeviceBrowserRequest",
+                              "BudgetReceiptDeviceCancelRequest", "BudgetReceiptDeviceLoginRequest",
                               "BudgetReceiptDeviceRedeemRequest", "BudgetReceiptDeviceRevokeRequest", "BudgetReceiptGmailGrantRequest",
                               "BudgetReceiptGmailRevokeRequest", "BudgetReceiptGmailSyncRequest"})
         for name, schema in schemas.items():

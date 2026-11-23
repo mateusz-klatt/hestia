@@ -31,11 +31,13 @@ describe("budget api", () => {
     const fetchMock = respond(200, {});
     await budgetApi.receiptDevices();
     await budgetApi.pairReceiptDevice();
+    await budgetApi.cancelReceiptPairCode("pair-code-id");
     await budgetApi.revokeReceiptDevice("paired-device");
 
     const requests = [
       { path: "list", body: {} },
       { path: "pair-code", body: {} },
+      { path: "pair-code-cancel", body: { code_id: "pair-code-id" } },
       { path: "revoke", body: { token_id: "paired-device" } },
     ];
     requests.forEach(({ path, body }, index) => {

@@ -81,6 +81,12 @@ def _device_error(status, code, retry=None):
 
 
 _DEVICE_BODY = 4096
+_DEVICE_BROWSER_REQUESTS = {
+    "pair-code": api_contract.BudgetReceiptDeviceBrowserRequest,
+    "pair-code-cancel": api_contract.BudgetReceiptDeviceCancelRequest,
+    "list": api_contract.BudgetReceiptDeviceBrowserRequest,
+    "revoke": api_contract.BudgetReceiptDeviceRevokeRequest,
+}
 
 
 def _native_contract(request, operation):
@@ -110,7 +116,7 @@ def _response(operation, result, native):
     return web.json_response(result, headers=api.PRIVATE_HEADERS)
 
 
-def register(app, read_json_body, *, auth_enabled, session_secret):
+def register(app, read_json_body, *, auth_enabled, session_secret, login_limiter):
     async def handle(request):
         device_id = request.get(device_token.REQUEST_KEY)
         operation = request.path.rsplit("/", 1)[-1]
@@ -186,6 +192,50 @@ def register(app, read_json_body, *, auth_enabled, session_secret):
         except Exception as exc:
             return api._failure(exc, "receipts_redeem")
 
+    def require_login_flags():
+        if not enabled():
+            raise api._Rejected(404, "budget_receipts_disabled")
+        if not device_token.budget_http_enabled():
+            raise api._Rejected(404, "budget_disabled")
+
+    async def login(request):
+        try:
+            require_login_flags()
+            if "Cookie" in request.headers or "Authorization" in request.headers:
+                return _device_error(400, "budget_auth_ambiguous")
+            if "Content-Encoding" in request.headers:
+                return _device_error(415, "budget_invalid_request")
+            body, error = await read_json_body(request, _DEVICE_BODY, reject_duplicates=True)
+            if error:
+                return body
+            require_login_flags()
+            form = api_contract.BudgetReceiptDeviceLoginRequest.model_validate(body)
+            # JSON escape sequences can produce lone UTF-16 surrogates, which
+            # cannot be passed to SQLite or the existing UTF-8 password hasher.
+            form.username.encode("utf-8")
+            form.password.encode("utf-8")
+            name = device_token._device_name(form.device_name)
+            if name is None:
+                return _device_error(400, "budget_invalid_request")
+            if not auth_enabled():
+                return _device_error(401, "device_token_rejected")
+            retry = login_limiter.take(form.username, device_token.client_ip(request), time.monotonic())
+            if retry is not None:
+                return _device_error(429, "device_token_rate_limited", retry)
+            result = await api._settled_thread(
+                lambda: device_token.open_store().login(form.username, form.password, name))
+            if result is None:
+                return _device_error(401, "device_token_rejected")
+            return web.json_response(result, headers=api.PRIVATE_HEADERS)
+        except (ValidationError, UnicodeEncodeError):
+            return _device_error(400, "budget_invalid_request")
+        except BudgetUsersBackendRequired:
+            return _device_error(401, "device_token_rejected")
+        except device_token.DeviceTokenError as exc:
+            return _device_error(exc.status, exc.code)
+        except Exception as exc:
+            return api._failure(exc, "receipts_device_login")
+
     async def browser_device(request):
         operation = request.path.rsplit("/", 1)[-1]
         device_id = request.get(device_token.REQUEST_KEY)
@@ -203,19 +253,21 @@ def register(app, read_json_body, *, auth_enabled, session_secret):
             secret = api._secret(session_secret)
             if not enabled():
                 raise api._Rejected(404, "budget_receipts_disabled")
+            code_id = None
             if device_id is not None:
                 token_id = body.get("token_id") if isinstance(body, dict) and set(body) == {"token_id"} else None
             else:
                 api._browser(request, owner, secret)
-                model = (api_contract.BudgetReceiptDeviceRevokeRequest if operation == "revoke"
-                         else api_contract.BudgetReceiptDeviceBrowserRequest)
-                values = model.model_validate(body).model_dump()
+                values = _DEVICE_BROWSER_REQUESTS[operation].model_validate(body).model_dump()
                 token_id = values.get("token_id")
+                code_id = values.get("code_id")
 
             def run():
                 store = device_token.open_store()
                 if operation == "pair-code":
                     return store.issue_code(owner)
+                if operation == "pair-code-cancel":
+                    return store.cancel_code(owner, code_id)
                 if operation == "list":
                     return store.list_tokens(owner)
                 return store.revoke(owner, token_id, actor_token_id=device_id)
@@ -251,10 +303,10 @@ def register(app, read_json_body, *, auth_enabled, session_secret):
         app.router.add_get(PREFIX + "/" + operation, handle, allow_head=False)
     for operation in WRITES:
         app.router.add_post(PREFIX + "/" + operation, handle)
-    app.router.add_post(PREFIX + "/device-token/pair-code", browser_device)
-    app.router.add_post(PREFIX + "/device-token/list", browser_device)
-    app.router.add_post(PREFIX + "/device-token/revoke", browser_device)
-    app.router.add_post(PREFIX + "/device-token/redeem", redeem)
+    for operation in _DEVICE_BROWSER_REQUESTS:
+        app.router.add_post(PREFIX + "/device-token/" + operation, browser_device)
+    app.router.add_post(device_token.REDEEM_PATH, redeem)
+    app.router.add_post(device_token.LOGIN_PATH, login)
 
 
 def _run_read(owner, operation, receipt_id, secret, device_id=None):

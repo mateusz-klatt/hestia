@@ -12,7 +12,7 @@ from unittest import mock
 
 from sqlalchemy import String
 
-from hestia import api_contract, db, web
+from hestia import api_contract, auth, db, web
 from hestia.budget import receipt_api
 from hestia.budget.analytics_views import BudgetAnalyticsViews
 from hestia.budget.import_file import parse_import
@@ -1424,7 +1424,8 @@ class ReceiptRetentionSweepTests(fixture.unittest.IsolatedAsyncioTestCase):
         with mock.patch.dict(os.environ, environ, clear=True), \
                 mock.patch("hestia.budget.api._secret", side_effect=AssertionError("browser secret")), \
                 mock.patch("hestia.budget.api._settled_thread", settled):
-            receipt_api.register(app, lambda *_args, **_kwargs: None, auth_enabled=True, session_secret=None)
+            receipt_api.register(app, lambda *_args, **_kwargs: None, auth_enabled=True, session_secret=None,
+                                 login_limiter=auth.LoginLimiter())
             context = app.cleanup_ctx[-1](app).__aiter__()
             await context.__anext__()
             await asyncio.wait_for(started.wait(), 2)
@@ -1440,7 +1441,8 @@ class ReceiptRetentionSweepTests(fixture.unittest.IsolatedAsyncioTestCase):
 
         app = aio_web.Application()
         with mock.patch("hestia.budget.api._settled_thread", settled):
-            receipt_api.register(app, lambda *_args, **_kwargs: None, auth_enabled=True, session_secret=None)
+            receipt_api.register(app, lambda *_args, **_kwargs: None, auth_enabled=True, session_secret=None,
+                                 login_limiter=auth.LoginLimiter())
             context = app.cleanup_ctx[-1](app).__aiter__()
             await context.__anext__()
             await asyncio.sleep(0)
@@ -1466,7 +1468,8 @@ class ReceiptRetentionSweepTests(fixture.unittest.IsolatedAsyncioTestCase):
         app = aio_web.Application()
         with mock.patch("hestia.budget.receipt_api.asyncio.sleep", quick_sleep), \
                 mock.patch("hestia.budget.api._settled_thread", settled):
-            receipt_api.register(app, lambda *_args, **_kwargs: None, auth_enabled=True, session_secret=None)
+            receipt_api.register(app, lambda *_args, **_kwargs: None, auth_enabled=True, session_secret=None,
+                                 login_limiter=auth.LoginLimiter())
             context = app.cleanup_ctx[-1](app).__aiter__()
             await context.__anext__()
             await asyncio.wait_for(started.wait(), 2)
