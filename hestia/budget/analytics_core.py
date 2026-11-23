@@ -186,9 +186,10 @@ _ACCOUNT_KEY_DOMAIN = b"hestia/budget/counterparty-account/key/v2\0"
 _ACCOUNT_KEY_ID_DOMAIN = b"hestia/budget/counterparty-account/key-id/v1\0"
 _ACCOUNT_PAYLOAD_PREFIX = b"hestia/budget/counterparty-account/v2\n"
 _ACCOUNT_IDENTIFICATION = re.compile(r"[A-Z0-9]{6,128}\Z", re.ASCII)
-_ACCOUNT_MASK = re.compile(r"[A-Z0-9]{2}\*\* … [A-Z0-9]{4}\Z", re.ASCII)
+_ACCOUNT_MASK_TEXT = r"(?:[A-Z0-9]{2}\*\* … [A-Z0-9]{4}|\*\* … [A-Z0-9]{2})"
+_ACCOUNT_MASK = re.compile(_ACCOUNT_MASK_TEXT + r"\Z", re.ASCII)
 COUNTERPARTY_RULE_PREFIX = "cpacct:v2:"
-_STORED_ACCOUNT = re.compile(r"cpacct:v2:([0-9a-f]{16}):([0-9a-f]{64}):([A-Z0-9]{2}\*\* … [A-Z0-9]{4})\Z", re.ASCII)
+_STORED_ACCOUNT = re.compile(r"cpacct:v2:([0-9a-f]{16}):([0-9a-f]{64}):(" + _ACCOUNT_MASK_TEXT + r")\Z", re.ASCII)
 
 
 def normalize_counterparty_account(value):
@@ -202,6 +203,8 @@ def normalize_counterparty_account(value):
 
 def mask_counterparty_account(value):
     normalized = normalize_counterparty_account(value)
+    if len(normalized) < 12:
+        return f"** … {normalized[-2:]}"
     return f"{normalized[:2]}** … {normalized[-4:]}"
 
 

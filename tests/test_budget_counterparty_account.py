@@ -43,6 +43,16 @@ class CounterpartyAccountCoreTests(unittest.TestCase):
         self.assertLessEqual(len(stored), 256)
         self.assertNotIn(SYNTHETIC_IBAN, stored)
 
+    def test_short_identification_masks_reveal_only_two_characters(self):
+        for length in range(6, 12):
+            value = "PL" + "0" * (length - 4) + "12"
+            with self.subTest(length=length):
+                self.assertEqual(len(value), length)
+                self.assertEqual(mask_counterparty_account(value), "** … 12")
+                stored = counterparty_rule_from_identification(value, SECRET)
+                self.assertEqual(counterparty_rule_parts(stored)[2], "** … 12")
+        self.assertEqual(mask_counterparty_account("PL" + "0" * 8 + "12"), "PL** … 0012")
+
     def test_helper_validation_is_fixed_and_value_free(self):
         for value in (None, "", "PL12", "PL-123456", "PL" + "0" * 130, 123456):
             with self.subTest(value=value), self.assertRaises(AnalyticsError) as raised:
