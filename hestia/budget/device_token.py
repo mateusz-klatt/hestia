@@ -31,7 +31,7 @@ from ..db import BudgetReceiptDeviceToken as DeviceToken
 from ..db import BudgetReceiptPairCode as PairCode
 from ..db import User
 from . import consent_context
-from .config import BudgetConfigError
+from .config import BudgetConfigError, _read_secret
 
 log = logging.getLogger("hestia.budget.device_token")
 
@@ -80,8 +80,10 @@ _CODE_LENGTH = 8
 _TOKEN_BYTES = 32
 _ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 _CODE_TRANSLATION = str.maketrans("ILO", "110", " -")
-_CODE_DOMAIN = b"hestia/budget/receipts/pair-code/v1"
-_TOKEN_DOMAIN = b"hestia/budget/receipts/device-token/v1"
+_RULE_KEY_FILE = "HESTIA_BUDGET_RULE_KEY_FILE"
+_RULE_KEY_BYTES = 32
+_CODE_DOMAIN = b"hestia/budget/receipt-device-token/pair-code/v1"
+_TOKEN_DOMAIN = b"hestia/budget/receipt-device-token/v1"
 _BLANK = "0" * 64
 _UUID = re.compile(r"^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$")
 _PRIVATE = {"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"}
@@ -145,9 +147,15 @@ def ids_match(left, right):
     return _same(left, right)
 
 
-def _mac(secret, domain, value):
-    material = hashlib.sha256(domain + b"\0" + secret).digest()
-    key = HKDF(algorithm=hashes.SHA256(), length=32, salt=None, info=domain).derive(material)
+def _rule_key():
+    root = _read_secret(os.environ.get(_RULE_KEY_FILE, ""), max_bytes=_RULE_KEY_BYTES)
+    if len(root) != _RULE_KEY_BYTES:
+        raise BudgetConfigError("The receipt device key must be 32 bytes")
+    return root
+
+
+def _mac(root, domain, value):
+    key = HKDF(algorithm=hashes.SHA256(), length=32, salt=None, info=domain).derive(root)
     return hmac.new(key, value.encode("utf-8"), hashlib.sha256).hexdigest()
 
 
@@ -282,7 +290,7 @@ def revoke_owner_tokens(session, owner, moment=None):
     ).values(consumed_at=when))
 
 
-def open_store(secret, clock=None):
+def open_store(*, clock=None):
     from .views import BudgetUsersBackendRequired
     from .. import store_sql
     from ..db import init_db
@@ -292,9 +300,7 @@ def open_store(secret, clock=None):
     engine, sessions = init_db()
     if not store_sql.is_users_db_authoritative(engine):
         raise BudgetUsersBackendRequired()
-    if not isinstance(secret, (bytes, bytearray)) or len(secret) == 0:
-        raise BudgetConfigError("Budget HTTP requires configured authentication")
-    return DeviceTokenStore(sessions, secret=bytes(secret), clock=clock or now)
+    return DeviceTokenStore(sessions, clock=clock or now)
 
 
 def decide(method, path, headers, cookies, secret, moment):
@@ -326,7 +332,7 @@ def decide(method, path, headers, cookies, secret, moment):
             return {"action": "response", "status": 401, "code": "device_token_invalid"}
         return {"action": "pass"}
     try:
-        found = open_store(secret, clock=lambda: moment).identify(token, slide=allow)
+        found = open_store(clock=lambda: moment).identify(token, slide=allow)
     except (BudgetUsersBackendRequired, BudgetConfigError):
         found = {"status": "unknown"}
     except Exception as exc:
@@ -365,9 +371,8 @@ def _insert_unique(session, factory):
 
 
 class DeviceTokenStore:
-    def __init__(self, sessions, *, secret, clock):
+    def __init__(self, sessions, *, clock):
         self.sessions = sessions
-        self.secret = secret
         self.clock = clock
 
     @contextmanager
@@ -394,6 +399,7 @@ class DeviceTokenStore:
         return user is not None and not user.disabled and user.role == "admin"
 
     def issue_code(self, owner):
+        root = _rule_key()
         with self._transaction() as session:
             self._require_owner(session, owner)
             moment = self._moment()
@@ -408,7 +414,7 @@ class DeviceTokenStore:
                 code = _pairing_code()
                 issued["code"] = code
                 return PairCode(
-                    id=str(uuid.uuid4()), owner=owner, code_hmac=_mac(self.secret, _CODE_DOMAIN, code),
+                    id=str(uuid.uuid4()), owner=owner, code_hmac=_mac(root, _CODE_DOMAIN, code),
                     created_at=moment, expires_at=moment + PAIR_TTL, consumed_at=None,
                 )
 
@@ -422,7 +428,8 @@ class DeviceTokenStore:
         name = _device_name(device_name)
         if normalized is None or name is None:
             return None
-        digest = _mac(self.secret, _CODE_DOMAIN, normalized)
+        root = _rule_key()
+        digest = _mac(root, _CODE_DOMAIN, normalized)
         with self._transaction() as session:
             moment = self._moment()
             row = session.scalar(select(PairCode).join(User, PairCode.owner == User.username).where(
@@ -432,12 +439,12 @@ class DeviceTokenStore:
             if not _accepted(None if row is None else row.code_hmac, digest):
                 return None
             row.consumed_at = moment
-            token, token_id, expires_at = self._issue_token(session, row.owner, name, moment)
+            token, token_id, expires_at = self._issue_token(session, row.owner, name, moment, root)
             expires_iso = datetime.fromtimestamp(expires_at, timezone.utc).isoformat(timespec="seconds")
         return {"token": token, "token_id": token_id, "scope": "receipts",
                 "expires_at": expires_iso}
 
-    def _issue_token(self, session, owner, name, moment):
+    def _issue_token(self, session, owner, name, moment, root):
         issued = {}
 
         def factory():
@@ -445,7 +452,7 @@ class DeviceTokenStore:
             issued["token"] = token
             return DeviceToken(
                 id=str(uuid.uuid4()), owner=owner, device_name=name,
-                token_hmac=_mac(self.secret, _TOKEN_DOMAIN, token),
+                token_hmac=_mac(root, _TOKEN_DOMAIN, token),
                 created_at=moment, expires_at=moment + SLIDE_TTL, hard_expires_at=moment + HARD_TTL,
                 sliding_written_at=moment, last_used_at=None, revoked_at=None,
             )
@@ -458,7 +465,7 @@ class DeviceTokenStore:
         if canonical is None:
             _accepted(None, _BLANK)
             return {"status": "unknown"}
-        digest = _mac(self.secret, _TOKEN_DOMAIN, canonical)
+        digest = _mac(_rule_key(), _TOKEN_DOMAIN, canonical)
         with self._transaction() as session:
             row = session.scalar(select(DeviceToken).where(DeviceToken.token_hmac == digest))
             if not _accepted(None if row is None else row.token_hmac, digest):

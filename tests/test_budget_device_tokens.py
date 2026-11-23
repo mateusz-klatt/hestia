@@ -24,6 +24,14 @@ from tests.test_budget_receipts import confirm_values, receipt_text
 
 SECRET = fixture.SECRET
 ORIGIN = fixture.ORIGIN
+RULE_KEY_FILE = "HESTIA_BUDGET_RULE_KEY_FILE"
+
+
+def _make_rule_key(directory):
+    path = directory / "budget-rule.key"
+    path.touch(mode=0o600)
+    path.write_bytes(os.urandom(32))
+    return path
 
 
 def _status(response, expected):
@@ -40,6 +48,7 @@ class DeviceTokenStoreTests(unittest.TestCase):
         self.path = Path(self.directory.name) / "tokens.db"
         self.env = mock.patch.dict(os.environ, {
             "HESTIA_DB": str(self.path), "HESTIA_PERSIST": "sqlite",
+            RULE_KEY_FILE: str(_make_rule_key(self.path.parent)),
             device_token.FLAG: "1", "HESTIA_BUDGET_HTTP_ENABLED": "1",
             "HESTIA_BUDGET_PUBLIC_ORIGIN": ORIGIN,
         })
@@ -52,8 +61,7 @@ class DeviceTokenStoreTests(unittest.TestCase):
             session.add(db.User(username="off", password_hash="h", role="admin", disabled=True))
         self.moment = {"now": 1_700_000_000.0}
         self.secret = b"synthetic-device-token-secret"
-        self.store = device_token.DeviceTokenStore(
-            self.sessions, secret=self.secret, clock=lambda: self.moment["now"])
+        self.store = device_token.DeviceTokenStore(self.sessions, clock=lambda: self.moment["now"])
 
     def _codes(self):
         with self.sessions() as session:
@@ -307,18 +315,14 @@ class DeviceTokenStoreTests(unittest.TestCase):
         self.assertEqual((expired.exception.status, expired.exception.code), (401, "device_token_expired"))
         self.assertIsNone(self._tokens()[0].revoked_at)
 
-    def test_open_store_requires_configured_sqlite_authentication(self):
+    def test_open_store_requires_an_authoritative_sqlite_backend(self):
         with mock.patch.dict(os.environ, {"HESTIA_PERSIST": "json"}):
             with self.assertRaises(BudgetUsersBackendRequired):
-                device_token.open_store(self.secret)
+                device_token.open_store()
         with mock.patch.object(store_sql, "is_users_db_authoritative", return_value=False):
             with self.assertRaises(BudgetUsersBackendRequired):
-                device_token.open_store(self.secret)
-        with self.assertRaises(BudgetConfigError):
-            device_token.open_store(b"")
-        with self.assertRaises(BudgetConfigError):
-            device_token.open_store(None)
-        self.assertGreater(device_token.open_store(self.secret).clock(), 0)
+                device_token.open_store()
+        self.assertGreater(device_token.open_store().clock(), 0)
 
     def test_unique_insert_retries_then_fails_closed(self):
         real = os.urandom
@@ -461,6 +465,10 @@ class DeviceTokenHTTPTests(fixture.unittest.IsolatedAsyncioTestCase):
         self.addCleanup(patch.stop)
         self.addCleanup(device_token.reset_limits)
         await fixture.BudgetAPITests.asyncSetUp(self)
+        self.rule_key = _make_rule_key(self.path.parent)
+        key_patch = mock.patch.dict(os.environ, {RULE_KEY_FILE: str(self.rule_key)})
+        key_patch.start()
+        self.addCleanup(key_patch.stop)
 
     async def _post(self, path, body, headers):
         return await self.client.post(path, data=json.dumps(body), headers={
@@ -497,6 +505,49 @@ class DeviceTokenHTTPTests(fixture.unittest.IsolatedAsyncioTestCase):
 
     def _auth(self, device):
         return {"Authorization": "Bearer " + device["token"]}
+
+    async def test_session_secret_rotation_preserves_device_credentials(self):
+        device = await self._device()
+        pending = await self._pair()
+        with mock.patch.object(web, "_SESSION_SECRET", os.urandom(32)):
+            _status(await self._post(device_token.LIST_RECEIPTS_PATH, {}, self._auth(device)), 200)
+            _status(await self._redeem(pending["code"]), 200)
+
+    async def test_rule_key_rotation_invalidates_device_credentials(self):
+        device = await self._device()
+        pending = await self._pair()
+        self.rule_key.write_bytes(os.urandom(32))
+        denied = await self._post(device_token.LIST_RECEIPTS_PATH, {}, self._auth(device))
+        _status(denied, 401)
+        self.assertEqual((await denied.json())["error"], "device_token_invalid")
+        stale_pair = await self._redeem(pending["code"])
+        _status(stale_pair, 400)
+        self.assertEqual((await stale_pair.json())["error"], "device_token_rejected")
+        fresh = await self._device()
+        _status(await self._post(device_token.LIST_RECEIPTS_PATH, {}, self._auth(fresh)), 200)
+
+    async def test_missing_or_unsafe_rule_key_fails_closed_for_device_auth(self):
+        device = await self._device()
+        pending = await self._pair()
+        short_key = self.path.parent / "short.key"
+        short_key.touch(mode=0o600)
+        short_key.write_bytes(os.urandom(31))
+        symlink = self.path.parent / "linked.key"
+        symlink.symlink_to(self.rule_key)
+        for key_path in ("", str(short_key), str(symlink)):
+            with mock.patch.dict(os.environ, {RULE_KEY_FILE: key_path}):
+                for response in (await self._post(device_token.PAIR_PATH, {}, self.headers(origin=True)),
+                                 await self._redeem(pending["code"])):
+                    _status(response, 503)
+                    self.assertEqual((await response.json())["error"], "budget_unavailable")
+                denied = await self._post(device_token.LIST_RECEIPTS_PATH, {}, self._auth(device))
+                _status(denied, 401)
+                self.assertEqual((await denied.json())["error"], "device_token_invalid")
+        with mock.patch.dict(os.environ, {RULE_KEY_FILE: ""}):
+            _status(await self.client.get(api.PREFIX + "/accounts", headers=self.headers()), 200)
+            _status(await self._post(device_token.LIST_PATH, {}, self.headers(origin=True)), 200)
+            _status(await self._post(device_token.REVOKE_PATH, {"token_id": device["token_id"]},
+                                     self.headers(origin=True)), 200)
 
     async def test_browser_pair_and_device_scope(self):
         device = await self._device()

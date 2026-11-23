@@ -120,7 +120,6 @@ def register(app, read_json_body, *, auth_enabled, session_secret):
             retry = device_token.redeem_limited(device_token.client_ip(request), time.monotonic())
             if retry is not None:
                 return _device_error(429, "device_token_rejected", retry)
-            secret = api._secret(session_secret)
             body, error = await read_json_body(request, _DEVICE_BODY, reject_duplicates=True)
             if error or not isinstance(body, dict) or set(body) != {"code", "device_name"}:
                 return _device_error(400, "device_token_rejected")
@@ -130,7 +129,7 @@ def register(app, read_json_body, *, auth_enabled, session_secret):
             if code is None:
                 return _device_error(400, "device_token_rejected")
             result = await api._settled_thread(
-                lambda: device_token.open_store(secret).redeem(code, body["device_name"]))
+                lambda: device_token.open_store().redeem(code, body["device_name"]))
             if result is None:
                 return _device_error(400, "device_token_rejected")
             return web.json_response(result, headers=api.PRIVATE_HEADERS)
@@ -168,7 +167,7 @@ def register(app, read_json_body, *, auth_enabled, session_secret):
                 token_id = values.get("token_id")
 
             def run():
-                store = device_token.open_store(secret)
+                store = device_token.open_store()
                 if operation == "pair-code":
                     return store.issue_code(owner)
                 if operation == "list":
