@@ -189,11 +189,15 @@ class GmailMessageProcessorTests(unittest.TestCase):
                              ("imported", True, "respect.example"))
             self.assertIsNone(pending.invoice)
 
-    def test_known_domain_with_provider_pattern_imports_inline_forward(self):
-        message = _email(SPOUSE, f"Begin forwarded message:\nFrom: other@respect.example\n\n{INVOICE}")
-        pending = self._process(_metadata(message), _raw(message))
-        self.assertEqual((pending.outcome, pending.forwarded_manually, pending.invoice.invoice_number),
-                         ("imported", False, "RE/2026/00042"))
+    def test_known_domain_with_provider_pattern_needs_review_without_exact_mailbox(self):
+        for rules in ((MERCHANT,), ("@respect.example",)):
+            with self.subTest(rules=rules):
+                self.settings.sender_allowlist = rules
+                message = _email(SPOUSE, f"Begin forwarded message:\nFrom: other@respect.example\n\n{INVOICE}")
+                pending = self._process(_metadata(message), _raw(message))
+                self.assertEqual((pending.outcome, pending.forwarded_manually, pending.sender_domain, pending.invoice),
+                                 ("imported", True, "respect.example", None))
+        self.worker.parse.assert_not_called()
 
     def test_direct_sender_never_unwraps_nested_mail_and_unknown_forwards_are_not_imported(self):
         direct = _email(MERCHANT, "")

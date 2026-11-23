@@ -49,7 +49,7 @@ def _inline(marker="---------- Forwarded message ---------", author_field="From"
 
 
 class GmailTrustTests(unittest.TestCase):
-    def test_normalize_rules_and_merge_domains(self):
+    def test_normalize_rules_without_deriving_domains_from_mailboxes(self):
         self.assertEqual(canonical_mailbox("  Billing+Demo@Merchant.Example\t"), "billing+demo@merchant.example")
         for value in (None, "local", "á@merchant.example", "a@merchant.example\n", "a..b@merchant.example",
                       "a@provider..example", "a@" + "sub." * 64 + "example", "a" * 65 + "@merchant.example"):
@@ -60,9 +60,9 @@ class GmailTrustTests(unittest.TestCase):
             ["Spouse@Gmail.COM"], [" @Supplier.Example "])
         self.assertEqual(direct, ("@provider.example", "billing@merchant.example", "vendor@gmail.com"))
         self.assertEqual(spouses, SPOUSES)
-        self.assertEqual(known, ("merchant.example", "provider.example", "supplier.example"))
+        self.assertEqual(known, ("provider.example", "supplier.example"))
         self.assertEqual(normalize_sender_rules([], SPOUSES, []), ((), SPOUSES, ()))
-        self.assertEqual(normalize_sender_rules(DIRECT, [], []), (DIRECT[::-1], (), KNOWN))
+        self.assertEqual(normalize_sender_rules(DIRECT, [], []), (DIRECT[::-1], (), ("provider.example",)))
 
     def test_invalid_rules_fail_closed(self):
         for direct, spouses, known in (
@@ -207,16 +207,17 @@ class GmailTrustTests(unittest.TestCase):
         root_rfc822 = EmailMessage()
         root_rfc822["From"] = SPOUSE
         root_rfc822.set_content(original)
+        exact_senders = (MERCHANT, "relay@provider.example", "relay2@provider.example")
         for outer in (root_rfc822, _forward(SPOUSE, original),
                       _forward(SPOUSE, _forward("relay@provider.example", original))):
             # Parse serialized fixture bytes as the Gmail import would.
             outer = BytesParser(policy=policy.default).parsebytes(outer.as_bytes())
-            selected = unwrap_forward(outer, KNOWN)
+            selected = unwrap_forward(outer, KNOWN, sender_allowlist=exact_senders)
             self.assertEqual(selected["Message-ID"], original["Message-ID"])
             self.assertEqual(selected.get_body().get_content(), INVOICE)
         self.assertIsNone(unwrap_forward(_forward(SPOUSE, _forward(
-            "relay@provider.example", _forward("relay2@provider.example", original))), KNOWN))
-        self.assertIsNone(unwrap_forward(_forward(SPOUSE, _forward("relay@evil.example", original)), KNOWN))
+            "relay@provider.example", _forward("relay2@provider.example", original))), KNOWN, sender_allowlist=exact_senders))
+        self.assertIsNone(unwrap_forward(_forward(SPOUSE, _forward("relay@evil.example", original)), KNOWN, sender_allowlist=exact_senders))
 
     def test_rfc822_wrapper_and_inner_body_have_independent_transfer_encodings(self):
         prefix = b"From: spouse@gmail.com\r\nContent-Type: message/rfc822\r\n"
@@ -228,7 +229,7 @@ class GmailTrustTests(unittest.TestCase):
                     original.set_content(INVOICE, cte=body_cte)
                     outer = BytesParser(policy=policy.default).parsebytes(prefix + wrapper_cte + b"\r\n"
                                                                            + original.as_bytes())
-                    self.assertEqual(unwrap_forward(outer, KNOWN).get_content(), INVOICE)
+                    self.assertEqual(unwrap_forward(outer, KNOWN, sender_allowlist=DIRECT).get_content(), INVOICE)
 
     def test_malformed_rfc822_wrappers_fail_closed(self):
         prefix = b"From: spouse@gmail.com\r\nContent-Type: message/rfc822\r\n"

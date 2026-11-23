@@ -64,9 +64,8 @@ def normalize_sender_rules(sender_allowlist, spouse_forward_senders, known_merch
     merchants = set(_normalize_rules(known_merchant_domains, _domain_rule))
     if not direct and not spouse:
         raise ValueError(_CONFIG_ERROR)
-    # An exact public-webmail rule remains exact even inside a forward.
-    merchants.update(rule.rpartition("@")[2] for rule in direct)
-    return direct, spouse, tuple(sorted(merchants - _PUBLIC_WEBMAIL))
+    merchants.update(rule[1:] for rule in direct if rule.startswith("@"))
+    return direct, spouse, tuple(sorted(merchants))
 
 
 def _mailbox(value):
@@ -338,27 +337,17 @@ def unwrap_forward(message, known_merchant_domains, require_known=True, *,
         message = _forwarded_original(message, sender_allowlist, render_html)
         if message is None:
             return None
-        authors = [value for name, value in message.raw_items() if name.lower() == "from"]
-        address = _mailbox(authors[0]) if len(authors) == 1 else None
-        if not address:
-            return None
-        domain = address.rpartition("@")[2]
-        if not (_on_allowlist(address, sender_allowlist)
-                or any(_domain_matches(domain, rule) for rule in known_merchant_domains)):
+        if not _hop_authorized(message, sender_allowlist):
             return None
         if not any(part.get_content_type() == "message/rfc822" for part in mime_parts(message)):
             return message
     return None
 
 
-def _hop_authorized(message, sender_allowlist, known_merchant_domains):
+def _hop_authorized(message, sender_allowlist):
     authors = [value for name, value in message.raw_items() if name.lower() == "from"]
     address = _mailbox(authors[0]) if len(authors) == 1 else None
-    if not address:
-        return False
-    domain = address.rpartition("@")[2]
-    return (_on_allowlist(address, sender_allowlist)
-            or any(_domain_matches(domain, rule) for rule in known_merchant_domains))
+    return address in sender_allowlist
 
 
 def forward_sender_domain(message):
@@ -370,11 +359,11 @@ def forward_sender_domain(message):
     return address.rpartition("@")[2]
 
 
-def unwrap_trusted_forward(message, known_merchant_domains, *, sender_allowlist=(), render_html=None):
+def unwrap_trusted_forward(message, *, sender_allowlist=(), render_html=None):
     """Unwrap one owner or spouse forward, at most two levels.
 
-    Returns ``(message, manual)``. ``manual`` is true when a hop is outside the
-    allowlist and known merchant domains. A third forward, a malformed part, or
+    Returns ``(message, manual)``. ``manual`` is true when a hop lacks an exact
+    mailbox match in the sender allowlist. A third forward, a malformed part, or
     a message that is not a forward returns None. Inner authentication headers
     are not consulted.
     """
@@ -391,5 +380,5 @@ def unwrap_trusted_forward(message, known_merchant_domains, *, sender_allowlist=
     if len(hops) == _MAX_FORWARD_DEPTH and _forwarded_original(
             current, sender_allowlist, render_html, require_receipt=False) is not None:
         return None
-    manual = any(not _hop_authorized(hop, sender_allowlist, known_merchant_domains) for hop in hops)
+    manual = any(not _hop_authorized(hop, sender_allowlist) for hop in hops)
     return hops[-1], manual

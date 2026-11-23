@@ -153,7 +153,7 @@ class GmailMessageProcessor:
             return replace(pending, outcome="parse_failed")
         if pending.trust_path in ("spouse_forward", "owner_forward"):
             selected = unwrap_trusted_forward(
-                message, self.settings.known_merchant_domains,
+                message,
                 sender_allowlist=self.settings.sender_allowlist,
                 render_html=lambda payload: self.worker.parse("html", payload),
             )
