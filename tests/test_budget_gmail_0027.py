@@ -7,6 +7,7 @@ from sqlalchemy.exc import IntegrityError
 
 from hestia import db
 from hestia.budget.gmail_store import GmailStore, PendingMessage
+from tests.migration_head import HEAD
 
 
 class GmailScheduleMigrationTests(unittest.TestCase):
@@ -82,7 +83,7 @@ class GmailScheduleMigrationTests(unittest.TestCase):
 
         before = snapshot(original)
         upgraded, _ = db.init_db(self.path)
-        self._assert_clean(upgraded, "0027")
+        self._assert_clean(upgraded, HEAD)
         self.assertEqual(snapshot(upgraded), before)
         with upgraded.begin() as connection:
             self.assertEqual(connection.exec_driver_sql(
@@ -153,4 +154,4 @@ class GmailScheduleMigrationTests(unittest.TestCase):
         with self._open().begin() as connection:
             connection.exec_driver_sql('CREATE TABLE "_alembic_tmp_budget_gmail_state" (id TEXT)')
         engine, _ = db.init_db(self.path)
-        self._assert_clean(engine, "0027")
+        self._assert_clean(engine, HEAD)

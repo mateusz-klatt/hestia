@@ -249,6 +249,37 @@ class OwnerInboxMigration0019Tests(unittest.TestCase):
         self.addCleanup(db.reset_engine_cache)
         self.path = Path(self.directory.name) / "m0019.db"
 
+    def test_0028_recovers_leftover_batch_table_in_both_directions(self):
+        engine, _ = db.init_db(self.path)
+        with engine.begin() as conn:
+            conn.exec_driver_sql("INSERT INTO users (username, password_hash) VALUES ('alice', 'h')")
+            conn.exec_driver_sql(
+                "INSERT INTO budget_owner_inbox_reads (owner, kind, subject_id, milestone, read_at) "
+                "VALUES ('alice', 'mortgage_due', ?, 'due', 100)", (HEX_A,))
+
+        for direction in ("downgrade", "upgrade"):
+            with self.subTest(direction=direction):
+                with engine.begin() as conn:
+                    conn.exec_driver_sql('CREATE TABLE "_alembic_tmp_budget_owner_inbox_reads" (stale TEXT)')
+                if direction == "downgrade":
+                    db.downgrade_db(self.path, "0027")
+                    expected = "0027"
+                else:
+                    engine, _ = db.init_db(self.path)
+                    expected = HEAD
+                with engine.connect() as conn:
+                    self.assertEqual(conn.exec_driver_sql("SELECT version_num FROM alembic_version").scalar(), expected)
+                    self.assertEqual(conn.exec_driver_sql(
+                        "SELECT name FROM sqlite_master WHERE name = '_alembic_tmp_budget_owner_inbox_reads'"
+                    ).all(), [])
+                    self.assertEqual(conn.exec_driver_sql(
+                        "SELECT owner, kind, subject_id, milestone, read_at FROM budget_owner_inbox_reads"
+                    ).one(), ("alice", "mortgage_due", HEX_A, "due", 100.0))
+                    self.assertEqual(conn.exec_driver_sql("PRAGMA integrity_check").all(), [("ok",)])
+                    self.assertEqual(conn.exec_driver_sql("PRAGMA foreign_key_check").all(), [])
+                    if direction == "upgrade":
+                        self.assertEqual(compare_metadata(MigrationContext.configure(conn), db.metadata), [])
+
     def test_device_markers_roundtrip_preserves_existing_reads(self):
         engine, _ = db.init_db(self.path)
         self.addCleanup(engine.dispose)
