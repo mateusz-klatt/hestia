@@ -56,13 +56,39 @@ class OpenApiArtifactTests(unittest.TestCase):
 
     def test_monthly_budget_contract_is_strictly_additive_from_0_27_0(self):
         document = api_contract.build_openapi()
-        self.assertEqual(document["info"]["version"], "0.31.0")
-        # Strip the pending_row_keys / pending_row_keys_truncated / transactions-by-keys additions and compare with 0.30.0.
+        self.assertEqual(document["info"]["version"], "0.32.0")
+        # Strip the pending_row_keys / pending_row_keys_truncated / transactions-by-keys additions
+        # and compare with the 0.31.0 forecast contract published by master.
         coverage_props = document["components"]["schemas"]["BudgetAnalyticsMonthlyBudgetCoverage"]["properties"]
         del coverage_props["pending_row_keys"]
         del coverage_props["pending_row_keys_truncated"]
         del document["paths"]["/api/budget/analytics/transactions-by-keys"]
         del document["components"]["schemas"]["BudgetAnalyticsTransactionsByKeysRequest"]
+        document["info"]["version"] = "0.31.0"
+        canonical_0_31 = json.dumps(document, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        self.assertEqual(hashlib.sha256(canonical_0_31).hexdigest(),
+                         "9180a43e2a4e00edeece98e9adc5f1689bf440a52e5612e90bed68400de3c782")
+        # Strip the category-baseline addition and compare with the 0.30.0 forecast contract.
+        forecast_get = document["paths"]["/api/budget/analytics/forecast"]["get"]
+        forecast_get["description"] = (
+            "Read-only evaluation of unmarked mortgage instalments and active recurring charges from one local "
+            "snapshot using the server UTC date. Matches recurring hints to individual scheduled instalments to "
+            "suppress duplicate estimates. An optional currency filter scopes commitments, deduplications and "
+            "their summary counts. Snapshot metadata and account freshness cover all selected accounts. "
+            "The estimate excludes spending limits and makes no bank requests or stored changes."
+        )
+        forecast_get["responses"]["413"]["description"] = (
+            "Forecast limit exceeded (>100,000 selected rows, >100 schedules, >1,200 paid marks per schedule, "
+            ">200 active currency-filtered hints, >3,600 projected items, or >4 MiB UTF-8 JSON payload); "
+            "zero partial totals returned."
+        )
+        forecast_get["responses"]["503"]["description"] = (
+            "Analytics storage or budget configuration unavailable (`budget_analytics_unavailable` or "
+            "`budget_unavailable`)."
+        )
+        item_properties = document["components"]["schemas"]["BudgetAnalyticsForecastItem"]["properties"]
+        item_properties["source"]["enum"] = ["mortgage", "recurring"]
+        item_properties["confidence"]["enum"] = ["scheduled", "high", "medium"]
         document["info"]["version"] = "0.30.0"
         canonical_0_30 = json.dumps(document, sort_keys=True, separators=(",", ":")).encode("utf-8")
         self.assertEqual(hashlib.sha256(canonical_0_30).hexdigest(),

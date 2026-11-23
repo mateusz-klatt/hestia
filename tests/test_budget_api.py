@@ -20,6 +20,8 @@ from sqlalchemy import select
 from hestia import api_contract, auth, db, store_sql, web
 from hestia.budget import api, config, runtime
 from hestia.budget.config import BudgetConfigError
+from hestia.budget.consent_files import ConsentFilesError
+from hestia.budget.forecast import ForecastConfigConflict
 from hestia.budget.store import BudgetStore
 from hestia.budget.views import BudgetHTTPStore
 from hestia.proxy import EventBus
@@ -536,6 +538,18 @@ class BudgetGuardTests(unittest.TestCase):
             with self.assertRaises(BudgetConfigError) as caught:
                 api._secret(lambda: secret)
             self.assertNotIn("PRIVATE", str(caught.exception))
+
+    def test_forecast_conflict_keeps_its_code_and_consent_files_stay_unavailable(self):
+        conflict = api._failure(ForecastConfigConflict(), "forecast")
+        consent = api._failure(ConsentFilesError(), "consent_start")
+        plain = api._failure(BudgetConfigError("PRIVATE-key/path"), "accounts")
+        self.assertEqual(conflict.status, 503)
+        self.assertEqual(json.loads(conflict.body), {"ok": False, "error": "budget_forecast_config_conflict"})
+        self.assertEqual(consent.status, 503)
+        self.assertEqual(json.loads(consent.body), {"ok": False, "error": "budget_unavailable"})
+        self.assertEqual(json.loads(plain.body), {"ok": False, "error": "budget_unavailable"})
+        self.assertNotIn(b"PRIVATE", plain.body)
+        self.assertNotIn(b"consent_files", consent.body)
 
     def test_query_parser_rejects_cursor_over_transport_limit_without_expanding_http_framing(self):
         request = SimpleNamespace(query=MultiDict({"account_id": "local", "cursor": "x" * 8193}))

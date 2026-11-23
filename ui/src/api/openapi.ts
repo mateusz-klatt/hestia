@@ -214,7 +214,7 @@ export interface paths {
         };
         /**
          * Read the owner-private upcoming commitments estimate
-         * @description Read-only evaluation of unmarked mortgage instalments and active recurring charges from one local snapshot using the server UTC date. Matches recurring hints to individual scheduled instalments to suppress duplicate estimates. An optional currency filter scopes commitments, deduplications and their summary counts. Snapshot metadata and account freshness cover all selected accounts. The estimate excludes spending limits and makes no bank requests or stored changes.
+         * @description Read-only evaluation of unmarked mortgage instalments and active recurring charges from one local snapshot using the server UTC date. Matches recurring hints to individual scheduled instalments to suppress duplicate estimates. When HESTIA_BUDGET_FORECAST_CONFIG names categories, each month also includes a category_baseline estimate (confidence estimated, schedule_id null, label is the category name): the median or trimmed mean of net spending over prior complete months inside each account's coverage window, including months with no spend. The current month subtracts net spending already booked, floored at zero. A configured category already represented by an active recurring hint or an enabled mortgage schedule is rejected. An optional currency filter scopes commitments, deduplications and their summary counts. Snapshot metadata and account freshness cover all selected accounts. The estimate excludes spending limits and makes no bank requests or stored changes.
          */
         get: operations["getBudgetAnalyticsForecast"];
         put?: never;
@@ -1988,7 +1988,7 @@ export interface components {
              * Confidence
              * @enum {string}
              */
-            confidence: "scheduled" | "high" | "medium";
+            confidence: "scheduled" | "high" | "medium" | "estimated";
             /** Currency */
             currency: string;
             /** Expected Date */
@@ -2003,7 +2003,7 @@ export interface components {
              * Source
              * @enum {string}
              */
-            source: "mortgage" | "recurring";
+            source: "mortgage" | "recurring" | "category_baseline";
         };
         /** BudgetAnalyticsForecastMonth */
         BudgetAnalyticsForecastMonth: {
@@ -6204,7 +6204,7 @@ export interface operations {
                     "application/json": components["schemas"]["BudgetError"];
                 };
             };
-            /** @description Forecast limit exceeded (>100,000 selected rows, >100 schedules, >1,200 paid marks per schedule, >200 active currency-filtered hints, >3,600 projected items, or >4 MiB UTF-8 JSON payload); zero partial totals returned. */
+            /** @description Forecast limit exceeded (>100,000 selected rows, >100 schedules, >1,200 paid marks per schedule, >200 active currency-filtered hints, >64 category baselines, >4,368 projected items, or >4 MiB UTF-8 JSON payload); zero partial totals returned. */
             413: {
                 headers: {
                     [name: string]: unknown;
@@ -6222,7 +6222,7 @@ export interface operations {
                     "application/json": components["schemas"]["BudgetError"];
                 };
             };
-            /** @description Analytics storage or budget configuration unavailable (`budget_analytics_unavailable` or `budget_unavailable`). */
+            /** @description Analytics storage or budget configuration unavailable (`budget_analytics_unavailable`, `budget_unavailable`, or `budget_forecast_config_conflict`). */
             503: {
                 headers: {
                     [name: string]: unknown;
