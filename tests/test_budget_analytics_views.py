@@ -592,9 +592,12 @@ class ValidationTests(ProjectionCase):
         )
 
         too_many = [f"{self.accounts['a']}/r{i}" for i in range(501)]
+        too_long = "a/" + ("b" * views.MAX_ROW_KEY_LENGTH)
         for bad in (None, [], "not-a-list", too_many, ["no-slash"], ["/ref"], ["acc/"], ["acc/bad\x00ref"],
-                    ["a" * 129 + "/ref"], ["acc/" + "r" * 1025]):
+                    ["a" * 129 + "/ref"], ["acc/" + "r" * 1025], ["ab"], [too_long], [None], [1]):
             self.assert_invalid(lambda: self.store.transactions_by_keys("owner", row_keys=bad))
+        # None is rejected before parsing; the helper still treats an omitted list as "no key filter".
+        self.assertIsNone(views._validate_row_keys(None))
 
     def test_corrupt_ledger_and_metadata_never_yield_partial_figures(self):
         self.add_transaction("a", "debit")
