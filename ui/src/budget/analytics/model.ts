@@ -109,6 +109,9 @@ export type TransferStatus = "suggested" | "accepted" | "review" | "boundary" | 
 export type AnalyticsTransaction = Schemas["BudgetAnalyticsTransaction"];
 
 export type AnalyticsTransactions = Schemas["BudgetAnalyticsTransactions"];
+type RawTransactionsByKeysRequest = Schemas["BudgetAnalyticsTransactionsByKeysRequest"];
+export type AnalyticsTransactionsByKeysRequest =
+  Pick<RawTransactionsByKeysRequest, "row_keys"> & Partial<Omit<RawTransactionsByKeysRequest, "row_keys">>;
 
 export type AnalyticsCategory = Schemas["BudgetAnalyticsCategory"];
 export type CategorySaved = Schemas["BudgetAnalyticsCategorySaved"];
@@ -607,4 +610,9 @@ export function monthlyBudgetCurrencies(available: readonly string[], accounts: 
   for (const code of [...extras].sort((a, b) => a.localeCompare(b))) add(code);
   if (ordered.length === 0) ordered.push("PLN");
   return ordered;
+}
+
+/** Stable identifier for an analytics transaction row, matching server `coverage.pending_row_keys`. */
+export function transactionRowKey(row: Pick<AnalyticsTransaction, "account_id" | "entry_reference">): string {
+  return `${row.account_id}/${row.entry_reference}`;
 }

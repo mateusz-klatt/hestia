@@ -49,6 +49,7 @@ log = logging.getLogger("hestia.web")
 
 MAX_BODY = 8192                                      # cap POST body size (bytes)
 MAX_RULE_BODY = 65536                                # larger cap for an automation rule
+BODY_READ_TIMEOUT = 10                               # seconds; a stalled Content-Length read must not pin the handler
 MAX_STRING = 256                                     # cap name / room length (chars)
 SSE_IDLE_TIMEOUT = _num_env("HESTIA_SSE_KEEPALIVE", 5.0, 1.0, 3600.0)  # idle→keepalive; also how fast a
 #       reloaded-away client's slot is reclaimed (write fails). Clamped ≥1s so a typo can't tight-loop.
@@ -174,6 +175,7 @@ _ROUTE_MIN_ROLE = {
     ("POST", "/api/budget/consent/cancel"): _ADMIN,
     ("GET", "/api/budget/analytics/overview"): _ADMIN,
     ("GET", "/api/budget/analytics/transactions"): _ADMIN,
+    ("POST", "/api/budget/analytics/transactions-by-keys"): _ADMIN,
     ("GET", "/api/budget/analytics/categories"): _ADMIN,
     ("GET", "/api/budget/analytics/rules"): _ADMIN,
     ("GET", "/api/budget/analytics/transfers"): _ADMIN,
@@ -912,7 +914,11 @@ async def _read_json_body(request, max_body=MAX_BODY, *, reject_duplicates=False
     content-type/framing/size/parse error this returns ``(response, True)``;
     on success returns ``(obj, False)``. A zero-length body parses to ``{}``
     (preserving the original ``/api/name`` contract); ``max_body`` caps the byte
-    size per endpoint (names are small, rules larger).
+    size per endpoint (names are small, rules larger). The declared length is
+    read with ``readexactly`` under ``BODY_READ_TIMEOUT``: a stall is 408, and
+    a short read or a reset connection is 400 rather than a partial parse. A
+    half-closed peer is already gone, so that 400 may never be written; the
+    handler still returns it instead of raising or waiting out the timeout.
 
     Requiring ``Content-Type: application/json`` is the CSRF guard for these
     device-controlling mutations: it is NOT a CORS "simple" content type, so a
@@ -932,7 +938,22 @@ async def _read_json_body(request, max_body=MAX_BODY, *, reject_duplicates=False
     if cl > max_body:
         return _json(HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
                      {"ok": False, "error": f"body must be ≤ {max_body} bytes"}), True
-    body = await request.content.read(cl) if cl > 0 else b""
+    # Content-Length 0 is an empty payload (EmptyStreamReader.readexactly raises).
+    # Keep the historical contract: a zero-length body parses as {}.
+    try:
+        body = b"" if cl <= 0 else await asyncio.wait_for(
+            request.content.readexactly(cl), timeout=BODY_READ_TIMEOUT)
+    except (asyncio.IncompleteReadError, ConnectionResetError):
+        # IncompleteReadError: payload ended early and the transport can still
+        # take a response. ConnectionResetError: the peer dropped the socket
+        # (including a TCP half-close), often after aiohttp has already closed
+        # the transport. Return 400 either way so the handler does not become
+        # a 500 or sit in the read until BODY_READ_TIMEOUT. Do not patch
+        # RequestHandler to keep a half-closed socket open.
+        return _json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "incomplete body"}), True
+    except asyncio.TimeoutError:
+        return _json(HTTPStatus.REQUEST_TIMEOUT,
+                     {"ok": False, "error": "body read timed out"}), True
     try:
         return (json.loads(body, object_pairs_hook=_unique_json_fields if reject_duplicates else None)
                 if body else {}), False

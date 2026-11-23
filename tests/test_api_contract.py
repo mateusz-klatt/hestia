@@ -56,12 +56,44 @@ class OpenApiArtifactTests(unittest.TestCase):
 
     def test_monthly_budget_contract_is_strictly_additive_from_0_27_0(self):
         document = api_contract.build_openapi()
-        self.assertEqual(document["info"]["version"], "0.32.0")
-        # Strip the per-category conflict note and compare with the 0.31.0 forecast contract.
+        self.assertEqual(document["info"]["version"], "0.33.0")
+        # Strip the per-category conflict note and compare with the 0.32.0 contract.
         summary = document["components"]["schemas"]["BudgetAnalyticsForecastSummary"]
         del summary["properties"]["baseline_conflicts"]
         summary["required"].remove("baseline_conflicts")
         del document["components"]["schemas"]["BudgetAnalyticsForecastBaselineConflict"]
+        forecast_get = document["paths"]["/api/budget/analytics/forecast"]["get"]
+        forecast_get["description"] = (
+            "Read-only evaluation of unmarked mortgage instalments and active recurring charges from one local "
+            "snapshot using the server UTC date. Matches recurring hints to individual scheduled instalments to "
+            "suppress duplicate estimates. When HESTIA_BUDGET_FORECAST_CONFIG names categories, each month also "
+            "includes a category_baseline estimate (confidence estimated, schedule_id null, label is the category "
+            "name): the median or trimmed mean of net spending over prior complete months inside each account's "
+            "coverage window, including months with no spend. The current month subtracts net spending already "
+            "booked, floored at zero. A configured category already represented by an active recurring hint or an "
+            "enabled mortgage schedule is rejected. An optional currency filter scopes commitments, deduplications "
+            "and their summary counts. Snapshot metadata and account freshness cover all selected accounts. "
+            "The estimate excludes spending limits and makes no bank requests or stored changes."
+        )
+        forecast_get["responses"]["503"]["description"] = (
+            "Analytics storage or budget configuration unavailable (`budget_analytics_unavailable`, "
+            "`budget_unavailable`, or `budget_forecast_config_conflict`)."
+        )
+        document["info"]["version"] = "0.32.0"
+        canonical_0_32 = json.dumps(document, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        self.assertEqual(hashlib.sha256(canonical_0_32).hexdigest(),
+                         "1d45cf2d6b502b8ccaaedd4cdda8f88d085724918b9b7979785cffea58cc1428")
+        # Strip the pending_row_keys / pending_row_keys_truncated / transactions-by-keys additions
+        # and compare with the 0.31.0 forecast contract published by master.
+        coverage_props = document["components"]["schemas"]["BudgetAnalyticsMonthlyBudgetCoverage"]["properties"]
+        del coverage_props["pending_row_keys"]
+        del coverage_props["pending_row_keys_truncated"]
+        del document["paths"]["/api/budget/analytics/transactions-by-keys"]
+        del document["components"]["schemas"]["BudgetAnalyticsTransactionsByKeysRequest"]
+        document["info"]["version"] = "0.31.0"
+        canonical_0_31 = json.dumps(document, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        self.assertEqual(hashlib.sha256(canonical_0_31).hexdigest(),
+                         "9180a43e2a4e00edeece98e9adc5f1689bf440a52e5612e90bed68400de3c782")
         # Strip the category-baseline addition and compare with the 0.30.0 forecast contract.
         forecast_get = document["paths"]["/api/budget/analytics/forecast"]["get"]
         forecast_get["description"] = (
@@ -83,7 +115,11 @@ class OpenApiArtifactTests(unittest.TestCase):
         item_properties = document["components"]["schemas"]["BudgetAnalyticsForecastItem"]["properties"]
         item_properties["source"]["enum"] = ["mortgage", "recurring"]
         item_properties["confidence"]["enum"] = ["scheduled", "high", "medium"]
-        # Strip this batch addition and compare with the 0.29.0 monthly-budget contract.
+        document["info"]["version"] = "0.30.0"
+        canonical_0_30 = json.dumps(document, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        self.assertEqual(hashlib.sha256(canonical_0_30).hexdigest(),
+                         "896148e8965fdf4d10e9433f4b0145d2b440db22f3e98ae6a6f2f685d78d4e9b")
+        # Strip the batch addition and compare with the 0.29.0 monthly-budget contract.
         for path in ("/api/budget/analytics/rule-batch-preview", "/api/budget/analytics/rule-batch-save"):
             del document["paths"][path]
         for name in ("BudgetAnalyticsRuleBatchPreviewRequest", "BudgetAnalyticsRuleBatchSaveRequest",
@@ -537,6 +573,7 @@ class TolerantResponseContractTests(unittest.TestCase):
         "BudgetAnalyticsSpendingLimitSaveRequest", "BudgetAnalyticsMortgageSaveRequest",
         "BudgetAnalyticsMortgagePaymentSetRequest", "BudgetAnalyticsInboxKeyRequest",
         "BudgetAnalyticsInboxMarkRequest",
+        "BudgetAnalyticsTransactionsByKeysRequest",
         "AddUserRequest", "ChangePasswordRequest", "ControlCover", "ControlLevel", "ControlRequest",
         "ControlSwitch", "ControlThermostat", "ControlThermostatPower", "IrRequest", "LoginRequest",
         "NameRequest", "ResetPasswordRequest", "RoomIconRequest", "RuleInput", "SceneRequest",

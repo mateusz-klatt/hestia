@@ -567,6 +567,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/budget/analytics/transactions-by-keys": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Read owner-private transactions matching exact row keys (pure read-only)
+         * @description Requires the exact admin owner, browser cookie and configured HTTPS Origin. Returns the same paginated BudgetAnalyticsTransactions shape as GET transactions for 1..500 exact <account_id>/<entry_reference> keys in the JSON body (<= 1 MiB) regardless of period, preventing oversized GET query strings and key leakage in access logs. Makes no bank requests and no database writes.
+         */
+        post: operations["listBudgetAnalyticsTransactionsByKeys"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/budget/analytics/transfer-decision": {
         parameters: {
             query?: never;
@@ -2417,6 +2437,10 @@ export interface components {
             has_activity: boolean;
             /** Ledger As Of */
             ledger_as_of: number | null;
+            /** Pending Row Keys */
+            pending_row_keys?: string[];
+            /** Pending Row Keys Truncated */
+            pending_row_keys_truncated?: boolean;
             /** Pending Transfer Rows */
             pending_transfer_rows: number;
             /** Provisional */
@@ -3297,6 +3321,41 @@ export interface components {
             start: string;
             /** Transactions */
             transactions: components["schemas"]["BudgetAnalyticsTransaction"][];
+        };
+        /** BudgetAnalyticsTransactionsByKeysRequest */
+        BudgetAnalyticsTransactionsByKeysRequest: {
+            /**
+             * Category Id
+             * @default null
+             */
+            category_id: string | null;
+            /**
+             * Currency
+             * @default null
+             */
+            currency: string | null;
+            /**
+             * Cursor
+             * @default null
+             */
+            cursor: string | null;
+            /**
+             * Kind
+             * @default null
+             */
+            kind: ("expense" | "income" | "refund" | "excluded" | "unclassified_credit" | "transfer") | null;
+            /**
+             * Limit
+             * @default 50
+             */
+            limit: number;
+            /**
+             * Query
+             * @default null
+             */
+            query: string | null;
+            /** Row Keys */
+            row_keys: string[];
         };
         /** BudgetAnalyticsTransfer */
         BudgetAnalyticsTransfer: {
@@ -7831,6 +7890,102 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            /** @description owner-scoped stored state; no bank request */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetAnalyticsTransactions"];
+                };
+            };
+            /** @description invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description session required; middleware may return an empty body */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description admin owner or browser-origin requirement failed; middleware may return an empty body */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description unknown, disabled or foreign resource */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Version, financial source, reserved transfer leg, preview or cursor changed; reload and review. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Explicit analytics processing or owner configuration limit; no partial totals. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description budget configuration unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+        };
+    };
+    listBudgetAnalyticsTransactionsByKeys: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BudgetAnalyticsTransactionsByKeysRequest"];
+            };
+        };
         responses: {
             /** @description owner-scoped stored state; no bank request */
             200: {

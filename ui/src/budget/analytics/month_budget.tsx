@@ -40,6 +40,7 @@ export const monthBudgetLabels = {
     provisional: "Provisional totals",
     pendingTransfers: (count: number) =>
       `Provisional totals: ${String(count)} unverified transfer or classification ${count === 1 ? "candidate still affects" : "candidates still affect"} totals.`,
+    provisionalTruncated: (shown: number, total: number) => `Showing first ${String(shown)} of ${String(total)}.`,
     transferScanLimited: "Own-transfer detection reached its scan limit; some transfer pairs may be missing.",
     purchaseDateBasis: (cutoff: string) => `Through ${cutoff} · expenses by purchase date`,
     purchaseDateFallback: (count: number) =>
@@ -179,6 +180,7 @@ export const monthBudgetLabels = {
     provisional: "Wynik wstępny",
     pendingTransfers: (count: number) =>
       `Wynik wstępny: ${String(count)} ${pluralPl(count, "niepotwierdzony wpis lub przelew nadal wpływa", "niepotwierdzone wpisy lub przelewy nadal wpływają", "niepotwierdzonych wpisów lub przelewów nadal wpływa")} na sumy.`,
+    provisionalTruncated: (shown: number, total: number) => `Pokazano pierwsze ${String(shown)} z ${String(total)}.`,
     transferScanLimited: "Wyszukiwanie przelewów własnych osiągnęło limit; części par może brakować.",
     purchaseDateBasis: (cutoff: string) => `Do ${cutoff} · wydatki według daty zakupu`,
     purchaseDateFallback: (count: number) =>
@@ -299,11 +301,19 @@ type Shown =
   | { state: "loading" | "badRequest" | "limit" | "error" }
   | { state: "ready"; data: AnalyticsMonthlyBudgetCharts };
 
+export interface OpenMonthOptions {
+  currency?: string;
+  provisionalKeys?: readonly string[];
+  provisionalTotal?: number;
+  provisionalTruncated?: boolean;
+}
+
 type PaceScheduleState =
   | { state: "idle" }
   | { state: "loading" }
   | { state: "error" }
   | { state: "ready"; data: MonthPaceScheduleData };
+
 
 export interface MonthBudgetViewProps {
   api: Pick<BudgetApi, "monthlyBudgetCharts" | "categories" | "forecast" | "mortgages" | "recurring">;
@@ -312,7 +322,7 @@ export interface MonthBudgetViewProps {
   locale: string;
   revision: number;
   onAccessLoss: (result: { ok: boolean; status?: number; error?: string }) => boolean;
-  onOpenMonth: (month: string, serverCurrentMonth: string) => void;
+  onOpenMonth: (month: string, serverCurrentMonth: string, options?: OpenMonthOptions) => void;
 }
 
 function incomeWindowLabel(incomeWindow: AnalyticsMonthlyBudgetIncomeWindow, locale: string): string {
@@ -683,7 +693,7 @@ function ReadyDashboard({ data, series, paceSchedule, categoryMap, text, locale,
   categoryMap: ReadonlyMap<string, string>;
   text: MonthBudgetLabels;
   locale: string;
-  onOpenMonth: (month: string, serverCurrentMonth: string) => void;
+  onOpenMonth: (month: string, serverCurrentMonth: string, options?: OpenMonthOptions) => void;
 }) {
   const money = (amount: string) => formatAmount(amount, data.currency, locale);
   const ledgerStamp = when(data.coverage.ledger_as_of, locale);
@@ -732,8 +742,19 @@ function ReadyDashboard({ data, series, paceSchedule, categoryMap, text, locale,
           {data.coverage.pending_transfer_rows > 0 ? (
             <p className="budget-notice" role="note">
               {text.pendingTransfers(data.coverage.pending_transfer_rows)}
+              {data.coverage.pending_row_keys_truncated === true
+                ? ` ${text.provisionalTruncated(data.coverage.pending_row_keys?.length ?? 500, data.coverage.pending_transfer_rows)}`
+                : ""}
               {" "}
-              <button type="button" className="budget-link" onClick={() => { onOpenMonth(data.period, data.current_month); }}>
+              <button type="button" className="budget-link"
+                onClick={() => {
+                  onOpenMonth(data.period, data.current_month, {
+                    currency: data.currency,
+                    provisionalKeys: data.coverage.pending_row_keys ?? [],
+                    provisionalTotal: data.coverage.pending_transfer_rows,
+                    provisionalTruncated: data.coverage.pending_row_keys_truncated === true,
+                  });
+                }}>
                 {text.viewTransactions}
               </button>
             </p>

@@ -201,8 +201,8 @@ class BudgetOpenApiTests(unittest.TestCase):
         analytics_reads = {"overview", "transactions", "categories", "rules", "transfers", "recurring",
                            "spending-limits", "mortgages", "inbox", "quarantine", "forecast",
                            "monthly-budget", "monthly-budget/charts"}
-        analytics_writes = {"category-create", "category-update", "annotation", "rule-preview", "rule-save",
-                            "rule-batch-preview", "rule-batch-save",
+        analytics_writes = {"transactions-by-keys", "category-create", "category-update", "annotation", "rule-preview",
+                            "rule-save", "rule-batch-preview", "rule-batch-save",
                             "transfer-decision", "spending-limit-save", "mortgage-save", "mortgage-payment-set",
                             "inbox-mark"}
         self.assertEqual(set(analytics), {"/api/budget/analytics/" + name for name in analytics_reads | analytics_writes})
@@ -211,7 +211,7 @@ class BudgetOpenApiTests(unittest.TestCase):
             self.assertEqual(set(methods), {method})
             self.assertEqual(methods[method]["x-required-role"], "admin")
             self.assertIn("413", methods[method]["responses"])
-        self.assertEqual(document["info"]["version"], "0.32.0")
+        self.assertEqual(document["info"]["version"], "0.33.0")
         batch = analytics["/api/budget/analytics/rule-batch-preview"]["post"]["description"]
         self.assertIn("1..100", batch)
         self.assertIn("All-or-nothing", batch)
@@ -337,7 +337,8 @@ class BudgetOpenApiTests(unittest.TestCase):
 
     def test_monthly_budget_schemas_pin_wire_fields_and_bounds(self):
         schemas = contract.build_openapi()["components"]["schemas"]
-        optional_keys = {"Configuration": {"income_window"}}
+        optional_keys = {"Configuration": {"income_window"},
+                         "Coverage": {"pending_row_keys", "pending_row_keys_truncated"}}
         for suffix, keys in {
             "": {"period", "start", "end", "cutoff", "current_month", "evaluated_at", "evaluation_date",
                  "evaluation_timezone", "currency", "available_currencies", "configuration", "coverage",
@@ -345,7 +346,8 @@ class BudgetOpenApiTests(unittest.TestCase):
             "Configuration": {"status", "source", "income_window"},
             "IncomeWindow": {"start", "end", "start_day"},
             "Coverage": {"ledger_as_of", "stale_selected_accounts", "purchase_date_fallback_count",
-                         "pending_transfer_rows", "transfer_scan_limited", "provisional", "has_activity"},
+                         "pending_transfer_rows", "pending_row_keys", "pending_row_keys_truncated",
+                         "transfer_scan_limited", "provisional", "has_activity"},
             "Summary": {"start_budget", "spent", "remaining"},
             "ExpectedIncome": {"status", "total", "items"},
             "ExpectedIncomeItem": {"category_id", "amount", "expected_date", "source"},
@@ -368,6 +370,50 @@ class BudgetOpenApiTests(unittest.TestCase):
         self.assertEqual(window["start_day"]["type"], "integer")
         self.assertEqual((window["start_day"]["minimum"], window["start_day"]["maximum"]), (1, 28))
         self.assertNotIn("income_window", schemas["BudgetAnalyticsMonthlyBudgetConfiguration"]["required"])
+        pending_row_keys = schemas["BudgetAnalyticsMonthlyBudgetCoverage"]["properties"]["pending_row_keys"]
+        self.assertEqual(pending_row_keys["type"], "array")
+        self.assertEqual(pending_row_keys["maxItems"], 500)
+        self.assertEqual(pending_row_keys["items"], {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 1153,
+            "pattern": contract._ROW_KEY_PATTERN,
+        })
+        self.assertNotIn("pending_row_keys", schemas["BudgetAnalyticsMonthlyBudgetCoverage"]["required"])
+        self.assertNotIn("pending_row_keys_truncated", schemas["BudgetAnalyticsMonthlyBudgetCoverage"]["required"])
+        self.assertEqual(
+            schemas["BudgetAnalyticsMonthlyBudgetCoverage"]["properties"]["pending_row_keys_truncated"]["type"],
+            "boolean",
+        )
+        tx_params = {
+            param["name"]: param
+            for param in contract.build_openapi()["paths"]["/api/budget/analytics/transactions"]["get"]["parameters"]
+        }
+        self.assertEqual(set(tx_params), {"period", "currency", "category_id", "kind", "query", "limit", "cursor"})
+        tx_by_keys = contract.build_openapi()["paths"]["/api/budget/analytics/transactions-by-keys"]["post"]
+        self.assertEqual(
+            tx_by_keys["requestBody"]["content"]["application/json"]["schema"],
+            {"$ref": "#/components/schemas/BudgetAnalyticsTransactionsByKeysRequest"},
+        )
+        self.assertEqual(
+            tx_by_keys["responses"]["200"]["content"]["application/json"]["schema"],
+            {"$ref": "#/components/schemas/BudgetAnalyticsTransactions"},
+        )
+        by_keys_req = schemas["BudgetAnalyticsTransactionsByKeysRequest"]
+        self.assertIs(by_keys_req["additionalProperties"], False)
+        self.assertEqual(by_keys_req["required"], ["row_keys"])
+        self.assertEqual(by_keys_req["properties"]["row_keys"]["minItems"], 1)
+        self.assertEqual(by_keys_req["properties"]["row_keys"]["maxItems"], 500)
+        self.assertEqual(by_keys_req["properties"]["row_keys"]["items"], {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 1153,
+            "pattern": contract._ROW_KEY_PATTERN,
+        })
+        self.assertEqual(
+            set(by_keys_req["properties"]),
+            {"row_keys", "cursor", "limit", "currency", "category_id", "kind", "query"},
+        )
         root = schemas["BudgetAnalyticsMonthlyBudget"]["properties"]
         self.assertEqual(root["evaluation_timezone"]["const"], "Europe/Warsaw")
         self.assertEqual(schemas["BudgetAnalyticsMonthlyBudgetCardExposure"]["properties"]["status"]["const"],
@@ -439,7 +485,8 @@ class BudgetOpenApiTests(unittest.TestCase):
                               "BudgetAnalyticsRuleBatchSaveRequest", "BudgetAnalyticsTransferDecisionRequest",
                               "BudgetAnalyticsLegRequest", "BudgetAnalyticsSpendingLimitSaveRequest",
                               "BudgetAnalyticsMortgageSaveRequest", "BudgetAnalyticsMortgagePaymentSetRequest",
-                              "BudgetAnalyticsInboxKeyRequest", "BudgetAnalyticsInboxMarkRequest"})
+                              "BudgetAnalyticsInboxKeyRequest", "BudgetAnalyticsInboxMarkRequest",
+                              "BudgetAnalyticsTransactionsByKeysRequest"})
         for name, schema in schemas.items():
             if name in request_names:
                 self.assertIs(schema["additionalProperties"], False)

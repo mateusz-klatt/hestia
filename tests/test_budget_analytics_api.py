@@ -89,7 +89,8 @@ class BudgetAnalyticsAPITests(unittest.IsolatedAsyncioTestCase):
                 "mortgage-payment-set": {"schedule_id": "unknown", "month": "2026-01", "paid": True,
                                          "expected_version": 1},
                 "inbox-mark": {"items": [{"kind": "consent_renewal", "subject_id": "a" * 64, "milestone": "g0:exp0:expired"}],
-                               "read": True, "expected_reads_version": "0" * 64}}
+                               "read": True, "expected_reads_version": "0" * 64},
+                "transactions-by-keys": {"row_keys": [f"{self.alice_id}/{self.debit['entry_reference']}"]}}
 
     async def test_all_twelve_reads_are_private_local_bounded_and_match_wire_models(self):
         models = {"overview": api_contract.BudgetAnalyticsOverview, "transactions": api_contract.BudgetAnalyticsTransactions,
@@ -872,6 +873,66 @@ class BudgetAnalyticsAPITests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((len(after["limits"]), after["statuses"]), (1, []))
         self.assertNotEqual(after["limits_version"], view["limits_version"])
         self.assertEqual(after["snapshot_digest"], view["snapshot_digest"])
+
+    async def test_transactions_by_keys_returns_adjacent_months_ignores_foreign_and_validates(self):
+        dec_tx = transaction("alice-dec", amount="42", booking_date="2026-12-03",
+                             transaction_date="2026-11-29", remittance_information=["Synthetic Dec"])
+        self.store.commit_snapshot("bank", Snapshot(web._now() + 31536000,
+            (AccountSnapshot(fixture.PRIVATE_A, (), (self.debit, dec_tx)),
+             AccountSnapshot("ALICE-SYNTHETIC-CREDIT", (), (self.credit,))), "2026-01-01", "2026-12-31"))
+
+        nov = await self.get("transactions", params=PERIOD)
+        self.assertEqual(nov.status, 200)
+        nov_refs = [row["entry_reference"] for row in (await nov.json())["transactions"]]
+        self.assertIn(self.debit["entry_reference"], nov_refs)
+        self.assertNotIn("alice-dec", nov_refs)
+        self.assertEqual((await self.get("transactions", params={**PERIOD, "row_keys": f"{self.alice_id}/alice-dec"})).status, 400)
+
+        payload = {"row_keys": [
+            f"{self.alice_id}/alice-dec",
+            f"{self.alice_id}/{self.debit['entry_reference']}",
+            f"{self.bob_id}/bob-entry",
+            f"{self.alice_id}/missing-ref",
+        ]}
+        response = await self.post("transactions-by-keys", payload)
+        self.assertEqual(response.status, 200, await response.text())
+        self.assert_private_headers(response)
+        body = await response.json()
+        api_contract.BudgetAnalyticsTransactions.model_validate(body)
+        self.assertEqual((body["period"], body["start"], body["end"]), ("", "", ""))
+        self.assertEqual(body["filtered_total"], 2)
+        self.assertEqual([row["entry_reference"] for row in body["transactions"]],
+                         ["alice-dec", self.debit["entry_reference"]])
+        self.assertNotIn("bob-entry", json.dumps(body))
+
+        max_keys = [f"{'a' * 128}/{i:03d}{'r' * 1021}" for i in range(500)]
+        self.assertEqual((len(max_keys), len(max_keys[0])), (500, 1153))
+        max_resp = await self.post("transactions-by-keys", {"row_keys": max_keys})
+        self.assertEqual(max_resp.status, 200, await max_resp.text())
+        api_contract.BudgetAnalyticsTransactions.model_validate(await max_resp.json())
+
+        oversized = json.dumps({"row_keys": [f"{self.alice_id}/r"],
+                                "query": "x" * analytics_api.MAX_TRANSACTIONS_BY_KEYS_BYTES})
+        self.assertGreater(len(oversized.encode("utf-8")), analytics_api.MAX_TRANSACTIONS_BY_KEYS_BYTES)
+        too_big = await self.client.post(PREFIX + "/transactions-by-keys", data=oversized,
+                                         headers={**self.headers(origin=True), "Content-Type": "application/json"})
+        self.assertEqual(too_big.status, 413)
+
+        for bad in (
+            {"row_keys": []},
+            {"row_keys": [""]},
+            {"row_keys": ["noslash"]},
+            {"row_keys": ["/ref"]},
+            {"row_keys": ["acc/"]},
+            {"row_keys": ["acc/bad\nref"]},
+            {"row_keys": [f"{self.alice_id}/r{i}" for i in range(501)]},
+            {"row_keys": [f"{self.alice_id}/" + "r" * 1025]},
+            {"row_keys": [f"{self.alice_id}/r"], "extra": True},
+        ):
+            res = await self.post("transactions-by-keys", bad)
+            self.assertEqual(res.status, 400, bad)
+
+        self.assertEqual(self.rows(db.BudgetAnalyticsAudit), [])
 
     async def test_forecast_category_baseline_returns_200_503_and_413(self):
         now = datetime(2026, 11, 22, tzinfo=timezone.utc).timestamp()
