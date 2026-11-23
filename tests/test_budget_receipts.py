@@ -649,6 +649,22 @@ NR KARTY ****5555
                 self.assertEqual(stored, expected)
         self.assertNotRegex(parse_receipt("****\n1234")["raw_ocr_text"], r"[0-9*X]")
 
+    def test_luhn_valid_twelve_digit_run_is_redacted(self):
+        valid = "411111111117"
+        invalid = "411111111110"
+        self.assertEqual(redact_pan(valid), "[REDACTED]")
+        self.assertEqual(parse_receipt(valid)["raw_ocr_text"], "[REDACTED]")
+        wrapped = "411111\n111117"
+        self.assertEqual(redact_pan(wrapped), "[REDACTED]\n[REDACTED]")
+        self.assertEqual(parse_receipt(wrapped)["raw_ocr_text"], "[REDACTED]\n[REDACTED]")
+        self.assertNotRegex(redact_pan(wrapped), r"[0-9]")
+        self.assertEqual(redact_pan(invalid), invalid)
+        self.assertEqual(redact_pan("KARTA\n" + invalid), "KARTA\n[REDACTED]")
+        nip = "527-26-01-234"
+        self.assertEqual(redact_pan(nip), nip)
+        self.assertEqual(redact_pan("NIP " + nip), "NIP " + nip)
+        self.assertEqual(parse_receipt("NIP " + nip + "\n")["raw_ocr_text"], "NIP " + nip + "\n")
+
     def test_item_three_lines_after_card_label_keeps_prices(self):
         text = (
             "BIEDRONKA\nNIP 7791011327\n2026-11-30 12:34\n"

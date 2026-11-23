@@ -14,6 +14,9 @@ MAX_TEXT_BYTES = 32 * 1024
 MAX_TEXT_LINES = 500
 MAX_MONEY_INTEGER_DIGITS = 9
 MAX_MONEY_FRACTION_DIGITS = 4
+# Inclusive symbol counts for every Luhn window. Docs cite this same pair.
+PAN_WINDOW = (12, 19)
+PAN_MIN_SYMBOLS, PAN_MAX_SYMBOLS = PAN_WINDOW
 DRAFT_TTL_SECONDS = 48 * 60 * 60
 CONFIRMED_TEXT_TTL_SECONDS = 30 * 24 * 60 * 60
 
@@ -51,7 +54,7 @@ _NIP = re.compile(r"\bNIP\s*:?\s*([0-9][0-9 -]{8,16}[0-9])\b", re.IGNORECASE | r
 # A candidate is digits and mask symbols on one line. Spaces, hyphens, dots and
 # commas stay inside it. A letter breaks it, as does a gap of two or more
 # characters that are not symbols or those separators. Near a card label every
-# 13–19 Luhn window is a PAN, prices included. Elsewhere a PAN uses only spaces
+# PAN_WINDOW Luhn window is a PAN, prices included. Elsewhere a PAN uses only spaces
 # and hyphens, so a window that crosses a decimal price is left intact.
 # On the label line and the next two, every digit run of two or more is removed
 # except a quantity written ``\d+ ?(szt|kg|g|l|x)``. Those three lines also share
@@ -59,10 +62,10 @@ _NIP = re.compile(r"\bNIP\s*:?\s*([0-9][0-9 -]{8,16}[0-9])\b", re.IGNORECASE | r
 # that contributed a digit or a mask.
 # Everywhere, each window of up to three lines joins digit runs that are
 # separated only by spaces, hyphens or the newline. A mask is tested before
-# the 13-symbol filter: two or more mask characters beside two or more digits
-# redact the whole joined run, and a mask run of 4–19 characters is card data
-# on its own. A longer line of only masks is not a PAN. Luhn still uses
-# windows of 13–19. A price token breaks the stream. A date breaks it only
+# the PAN_WINDOW length filter: two or more mask characters beside two or more
+# digits redact the whole joined run, and a mask run of 4–PAN_MAX_SYMBOLS
+# characters is card data on its own. A longer line of only masks is not a PAN.
+# Luhn still uses PAN_WINDOW. A price token breaks the stream. A date breaks it only
 # when it is a real calendar day in 2000–2099 written with one canonical
 # separator. Beside a card label a date does not break the stream.
 _PAN_NEWLINES = frozenset("\n\r\u2028\u2029")
@@ -170,9 +173,9 @@ def _is_letter(char):
 
 
 def _luhn(digits):
-    """True when ``digits`` is 13–19 characters and passes the Luhn check."""
+    """True when ``digits`` is a PAN_WINDOW length and passes the Luhn check."""
     length = len(digits)
-    if length < 13 or length > 19:
+    if length < PAN_MIN_SYMBOLS or length > PAN_MAX_SYMBOLS:
         return False
     total = 0
     double = False
@@ -258,12 +261,12 @@ def _line_candidates(line):
 
 
 def _mask_decision(kinds):
-    """Classify a symbol stream before any 13-symbol length filter.
+    """Classify a symbol stream before the PAN_WINDOW length filter.
 
     ``all`` means a mask sequence of two or more sits beside two or more
     digits, so the whole joined run is card data. ``masks`` means a run of
-    4–19 mask characters stands alone. A longer pure mask line is left out:
-    it is not a PAN, and the 13–19 windows stay skipped.
+    4–PAN_MAX_SYMBOLS mask characters stands alone. A longer pure mask line
+    is left out: it is not a PAN, and the Luhn windows stay skipped.
     """
     runs = []
     for kind in kinds:
@@ -276,7 +279,7 @@ def _mask_decision(kinds):
     for index, (kind, length) in enumerate(runs):
         if kind != "m":
             continue
-        if 4 <= length <= 19:
+        if 4 <= length <= PAN_MAX_SYMBOLS:
             standalone = True
         if length < 2:
             continue
@@ -318,10 +321,11 @@ def _digits_are_prices(symbols, cover):
 
 
 def _flag_candidate(line, symbols, cover, label_context):
-    """Mark PAN symbols. The mask check comes before the 13-symbol filter.
+    """Mark PAN symbols. The mask check comes before the PAN_WINDOW filter.
 
     A mask sequence beside digits flags the whole candidate, as does a mask
-    run of 4–19 characters. A Luhn window of 13–19 does too. Away from a card
+    run of 4–PAN_MAX_SYMBOLS characters. A Luhn window in PAN_WINDOW does too.
+    Away from a card
     label the window may contain only spaces and hyphens: a decimal inside
     ``\\d{1,6}[,.]\\d{2,4}`` means the window is a price. Beside a card label
     that exemption is off, so price-shaped groups are still a PAN. The whole
@@ -334,13 +338,13 @@ def _flag_candidate(line, symbols, cover, label_context):
     decision, _ = _mask_decision(kind for _, kind, _ in symbols)
     if decision is not None:
         return bytearray(b"\x01" * count)
-    if count < 13 or not any(kind == "d" for _, kind, _ in symbols):
+    if count < PAN_MIN_SYMBOLS or not any(kind == "d" for _, kind, _ in symbols):
         return bytearray(count)
-    # Each decimal price holds at most 10 digits, so a 13-symbol window in an
+    # Each decimal price holds at most 10 digits, so a PAN_WINDOW window in an
     # all-price run always crosses a decimal. Skip the Luhn scan.
     if not label_context and _digits_are_prices(symbols, cover):
         return bytearray(count)
-    for length in range(13, min(19, count) + 1):
+    for length in range(PAN_MIN_SYMBOLS, min(PAN_MAX_SYMBOLS, count) + 1):
         for start in range(count - length + 1):
             window = symbols[start:start + length]
             if not label_context and not _window_is_plain(line, window):
@@ -449,10 +453,10 @@ def _label_stream_flags(symbols):
             flagged[start:right] = b"\x01" * (right - start)
     digit_index = [index for index, (kind, _) in enumerate(symbols) if kind == "d"]
     digit_count = len(digit_index)
-    if digit_count < 13:
+    if digit_count < PAN_MIN_SYMBOLS:
         return flagged
     digits = "".join(symbols[index][1] for index in digit_index)
-    for length in range(13, min(19, digit_count) + 1):
+    for length in range(PAN_MIN_SYMBOLS, min(PAN_MAX_SYMBOLS, digit_count) + 1):
         for start in range(digit_count - length + 1):
             if not _luhn(digits[start:start + length]):
                 continue
@@ -685,12 +689,12 @@ def _plain_line_tokens(line, *, break_dates=True):
 
 
 def _plain_window_flags(symbols):
-    """Flag a mask run first, then 13–19 Luhn windows.
+    """Flag a mask run first, then PAN_WINDOW Luhn windows.
 
     Two or more mask characters beside two or more digits flag the whole
-    joined run, even when it is shorter than 13 symbols. A mask run of 4–19
-    characters is card data with no digits. A longer mask line has no digit
-    and skips the window loop.
+    joined run, even when it is shorter than PAN_MIN_SYMBOLS. A mask run of
+    4–PAN_MAX_SYMBOLS characters is card data with no digits. A longer mask
+    line has no digit and skips the window loop.
     """
     count = len(symbols)
     flagged = bytearray(count)
@@ -705,14 +709,14 @@ def _plain_window_flags(symbols):
         for kind, length in runs:
             if kind == "d":
                 has_digit = True
-            elif 4 <= length <= 19:
+            elif 4 <= length <= PAN_MAX_SYMBOLS:
                 flagged[cursor:cursor + length] = b"\x01" * length
             cursor += length
     else:
         has_digit = any(kind == "d" for kind, _ in runs)
-    if not has_digit or count < 13:
+    if not has_digit or count < PAN_MIN_SYMBOLS:
         return flagged
-    for length in range(13, min(19, count) + 1):
+    for length in range(PAN_MIN_SYMBOLS, min(PAN_MAX_SYMBOLS, count) + 1):
         last = count - length + 1
         for start in range(last):
             window = symbols[start:start + length]
@@ -749,7 +753,7 @@ def _flagged_fragment_spans(fragments):
 def _cross_line_plain_spans(lines, offsets, break_dates):
     """Join plain groups across each window of up to three lines.
 
-    Each line is visited at most three times, and only windows of 13–19 symbols
+    Each line is visited at most three times, and only PAN_WINDOW lengths
     are tested, so the scan stays linear. ``break_dates`` is false on a card
     label and the next two lines, where a date exempts nothing.
     """

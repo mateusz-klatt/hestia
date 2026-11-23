@@ -191,7 +191,7 @@ services:
 
 `hestia/budget/receipt_parser.py` (pure Python, zero network/DB):
 
-- **Unicode & PAN redaction:** Normalizes `NFC` and constructs a diacritic-folded lookup key (`ą→a, ć→c, ę→e, ł→l, ń→n, ó→o, ś→s, ź→z, ż→z`). Before persisting `raw_ocr_text` on any path (`live_text`, `local_ocr`, `cloud_ai`), applies a **PAN redactor** masking 12–19 digit sequences, masked card PANs (`****1234`, `5351********1234`), and `NR KARTY` / `AID` terminal blocks. Redacted `raw_ocr_text` expires on the same **30-day** post-confirm deadline as the image (not cleared on confirm; `§5.2`).
+- **Unicode & PAN redaction:** Normalizes `NFC` and constructs a diacritic-folded lookup key (`ą→a, ć→c, ę→e, ł→l, ń→n, ó→o, ś→s, ź→z, ż→z`). Before persisting `raw_ocr_text` on any path (`live_text`, `local_ocr`, `cloud_ai`), applies a **PAN redactor** masking digit sequences in `PAN_WINDOW` (`(12, 19)` in `hestia/budget/receipt_parser.py`, shared with every Luhn and mask window), masked card PANs (`****1234`, `5351********1234`), and `NR KARTY` / `AID` terminal blocks. Redacted `raw_ocr_text` expires on the same **30-day** post-confirm deadline as the image (not cleared on confirm; `§5.2`).
 - **Bounded inputs:** Caps receipts at **`MAX_RECEIPT_LINES = 300`**, **`MAX_LINE_NAME_LEN = 128`**, **`MAX_SHOP_NAME_LEN = 128`**, and pasted text at **`32 KiB` (`32,768` B) / `500` lines** inside a **`48 KiB` (`49,152` B)** `parse-text` JSON body.
 - **Disjoint line representation & strict `confirm` validation:**
   - `line_kind = 'item'`: `gross_line_total >= 0`, `discount_amount >= 0`, `net_line_total = gross_line_total - discount_amount >= 0` (item-level `Rabat`/`Opust` lives **only** in `discount_amount`).
