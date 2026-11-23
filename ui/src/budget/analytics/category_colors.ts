@@ -64,7 +64,12 @@ const DEPTH_LIGHTNESS_STEP = 0.11;
 const DARKEN_THRESHOLD_L = 0.65;
 const MIN_LIGHTNESS = 0.18;
 const MAX_LIGHTNESS = 0.90;
+const MAX_SHADE_DEPTH = 3;
+const MAX_WALK_DEPTH = 10_000;
 const CHROMA_SCALE_BY_DEPTH = [1, 0.86, 0.70] as const;
+// Alternates slightly inside the clamped depth-3 anchor so levels deeper than 3 remain distinct.
+const DEEP_LIGHTNESS_OFFSETS = [-0.04, -0.08, -0.025, -0.06] as const;
+const DEEP_HUE_OFFSETS = [4, -4, 7, -7] as const;
 const SIBLING_LIGHTNESS_OFFSETS = [-0.018, 0.018, -0.009, 0.009, 0] as const;
 const MAX_SIBLING_HUE_SHIFT_DEG = 14;
 const NEUTRAL_OKLCH: OklchColor = { l: 0.56, c: 0.015, h: 65 };
@@ -282,6 +287,10 @@ function siblingOffsets(index: number, count: number): { dH: number; dL: number 
   return { dH, dL: baseLight + extraLight };
 }
 
+function clampedLightness(rawL: number): number {
+  return Math.max(MIN_LIGHTNESS, Math.min(MAX_LIGHTNESS, rawL));
+}
+
 function shadeForDescendant(
   rootOklch: OklchColor,
   depth: number,
@@ -291,36 +300,41 @@ function shadeForDescendant(
 ): { oklch: OklchColor; background: string; hueOffset: number } {
   const direction = rootOklch.l <= DARKEN_THRESHOLD_L ? 1 : -1;
   const { dH, dL } = siblingOffsets(siblingIndex, siblingCount);
-  const rawL = rootOklch.l + direction * DEPTH_LIGHTNESS_STEP * depth + dL;
-  const l = Math.max(MIN_LIGHTNESS, Math.min(MAX_LIGHTNESS, rawL));
+  let baseL: number;
+  let deepHue = 0;
+  if (depth <= MAX_SHADE_DEPTH) {
+    baseL = clampedLightness(rootOklch.l + direction * DEPTH_LIGHTNESS_STEP * depth);
+  } else {
+    const anchorL = clampedLightness(rootOklch.l + direction * DEPTH_LIGHTNESS_STEP * MAX_SHADE_DEPTH);
+    const wrapIndex = (depth - MAX_SHADE_DEPTH - 1) % DEEP_LIGHTNESS_OFFSETS.length;
+    const wrapDelta = DEEP_LIGHTNESS_OFFSETS[wrapIndex] ?? -0.04;
+    baseL = anchorL + direction * wrapDelta;
+    deepHue = DEEP_HUE_OFFSETS[wrapIndex] ?? 0;
+  }
+  const l = clampedLightness(baseL + dL);
   const chromaScale = CHROMA_SCALE_BY_DEPTH[depth] ?? CHROMA_SCALE_BY_DEPTH[CHROMA_SCALE_BY_DEPTH.length - 1] ?? 0.70;
   const c = rootOklch.c * chromaScale;
   const hueOffset = branchHueBias * 0.6 + dH;
-  const h = normalizeHue(rootOklch.h + hueOffset);
+  const h = normalizeHue(rootOklch.h + hueOffset + deepHue);
   const oklch: OklchColor = { l, c, h };
   return { oklch, background: oklchToHex(l, c, h), hueOffset };
 }
 
-function fallbackRootColor(id: string, overrides?: CategoryColorOverrides): CategoryColor {
+function rootBaseColor(id: string, overrides?: CategoryColorOverrides): { oklch: OklchColor; background: string } {
   const override = parseOverrideColor(lookupOverride(overrides, id));
-  if (override !== null) {
-    return {
-      background: override.background,
-      text: accessibleBadgeText(override.background),
-      oklch: override.oklch,
-      depth: 0,
-      rootId: id,
-      neutral: false,
-      hatched: false,
-    };
-  }
+  if (override !== null) return override;
   const slot = fnv1a32(id) % CATEGORY_PALETTE.length;
   const swatch = CATEGORY_PALETTE[slot] ?? CATEGORY_PALETTE[0];
-  if (swatch === undefined) return { ...NEUTRAL_CATEGORY_COLOR, rootId: id, neutral: false };
+  if (swatch === undefined) return { oklch: NEUTRAL_OKLCH, background: NEUTRAL_BACKGROUND };
+  return { oklch: swatch.oklch, background: swatch.background };
+}
+
+function fallbackRootColor(id: string, overrides?: CategoryColorOverrides): CategoryColor {
+  const base = rootBaseColor(id, overrides);
   return {
-    background: swatch.background,
-    text: swatch.text,
-    oklch: swatch.oklch,
+    background: base.background,
+    text: accessibleBadgeText(base.background),
+    oklch: base.oklch,
     depth: 0,
     rootId: id,
     neutral: false,
@@ -328,11 +342,19 @@ function fallbackRootColor(id: string, overrides?: CategoryColorOverrides): Cate
   };
 }
 
+interface WalkFrame {
+  id: string;
+  depth: number;
+  hueBias: number;
+  siblingIndex: number;
+  siblingCount: number;
+}
+
 /**
  * Assign deterministic colours to a category tree:
- * - Roots (sorted by id) take curated hues by FNV-1a hash with collision probing.
- * - Descendants shade their parent's hue monotonically by depth with distinct sibling offsets.
- * - Valid optional overrides replace a root's base colour and propagate shades to its descendants.
+ * - Each root independently takes a curated hue via `fnv1a(root.id) % paletteSize` (stable across root additions/removals).
+ * - Descendants shade their parent's hue monotonically through level 3 and wrap alternation deeper down.
+ * - Valid optional overrides replace only their own root's base colour and propagate shades to its descendants.
  */
 export function buildCategoryColorMap(
   categories: readonly CategoryColorInput[],
@@ -359,91 +381,66 @@ export function buildCategoryColorMap(
   for (const list of children.values()) list.sort(compareIds);
 
   const resolved = new Map<string, CategoryColor>();
-  const paletteSize = CATEGORY_PALETTE.length;
-  const slotUsage = new Array<number>(paletteSize).fill(0);
 
-  const pickPaletteSlot = (id: string): PaletteSwatch => {
-    const preferred = fnv1a32(id) % paletteSize;
-    let minUsage = Number.POSITIVE_INFINITY;
-    for (const count of slotUsage) {
-      if (count < minUsage) minUsage = count;
-    }
-    let chosen = preferred;
-    for (let offset = 0; offset < paletteSize; offset += 1) {
-      const candidate = (preferred + offset) % paletteSize;
-      if ((slotUsage[candidate] ?? 0) === minUsage) {
-        chosen = candidate;
-        break;
-      }
-    }
-    slotUsage[chosen] = (slotUsage[chosen] ?? 0) + 1;
-    return CATEGORY_PALETTE[chosen] ?? CATEGORY_PALETTE[0] as PaletteSwatch;
-  };
-
-  for (const rootId of roots) {
-    const override = parseOverrideColor(lookupOverride(options?.overrides, rootId));
-    let rootOklch: OklchColor;
-    let rootBackground: string;
-    if (override !== null) {
-      rootOklch = override.oklch;
-      rootBackground = override.background;
-    } else {
-      const swatch = pickPaletteSlot(rootId);
-      rootOklch = swatch.oklch;
-      rootBackground = swatch.background;
-    }
-
-    const walk = (id: string, depth: number, hueBias: number, siblingIndex: number, siblingCount: number) => {
-      if (resolved.has(id)) return;
-      let nextHueBias = hueBias;
-      if (depth === 0) {
-        resolved.set(id, {
+  const walkComponent = (seedId: string) => {
+    if (resolved.has(seedId)) return;
+    const { oklch: rootOklch, background: rootBackground } = rootBaseColor(seedId, options?.overrides);
+    const stack: WalkFrame[] = [{ id: seedId, depth: 0, hueBias: 0, siblingIndex: 0, siblingCount: 1 }];
+    while (stack.length > 0) {
+      const frame = stack.pop();
+      if (frame === undefined || resolved.has(frame.id)) continue;
+      let nextHueBias = frame.hueBias;
+      if (frame.depth === 0) {
+        resolved.set(frame.id, {
           background: rootBackground,
           text: accessibleBadgeText(rootBackground),
           oklch: rootOklch,
           depth: 0,
-          rootId,
+          rootId: seedId,
           neutral: false,
           hatched: false,
         });
       } else {
-        const shaded = shadeForDescendant(rootOklch, depth, hueBias, siblingIndex, siblingCount);
+        const shaded = shadeForDescendant(
+          rootOklch,
+          frame.depth,
+          frame.hueBias,
+          frame.siblingIndex,
+          frame.siblingCount,
+        );
         nextHueBias = shaded.hueOffset;
-        resolved.set(id, {
+        resolved.set(frame.id, {
           background: shaded.background,
           text: accessibleBadgeText(shaded.background),
           oklch: shaded.oklch,
-          depth,
-          rootId,
+          depth: frame.depth,
+          rootId: seedId,
           neutral: false,
           hatched: false,
         });
       }
-      const kids = children.get(id) ?? [];
-      for (let idx = 0; idx < kids.length; idx += 1) {
+      if (frame.depth >= MAX_WALK_DEPTH) continue;
+      const kids = children.get(frame.id) ?? [];
+      for (let idx = kids.length - 1; idx >= 0; idx -= 1) {
         const childId = kids[idx];
-        if (childId !== undefined) walk(childId, depth + 1, nextHueBias, idx, kids.length);
+        if (childId !== undefined && !resolved.has(childId)) {
+          stack.push({
+            id: childId,
+            depth: frame.depth + 1,
+            hueBias: nextHueBias,
+            siblingIndex: idx,
+            siblingCount: kids.length,
+          });
+        }
       }
-    };
+    }
+  };
 
-    walk(rootId, 0, 0, 0, 1);
-  }
+  for (const rootId of roots) walkComponent(rootId);
 
-  // Defensive fallback for cyclic components whose nodes never reached a root.
+  // Cycle and depth-cap fallback: remaining nodes seed iteratively in sorted ID order.
   const remaining = [...byId.keys()].filter((id) => !resolved.has(id)).sort(compareIds);
-  for (const id of remaining) {
-    if (resolved.has(id)) continue;
-    const swatch = pickPaletteSlot(id);
-    resolved.set(id, {
-      background: swatch.background,
-      text: swatch.text,
-      oklch: swatch.oklch,
-      depth: 0,
-      rootId: id,
-      neutral: false,
-      hatched: false,
-    });
-  }
+  for (const id of remaining) walkComponent(id);
 
   return resolved;
 }

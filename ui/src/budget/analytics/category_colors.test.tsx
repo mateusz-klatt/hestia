@@ -15,6 +15,7 @@ import {
   contrastRatio,
   hatchedBadgeGradient,
   hexToOklch,
+  oklchToHex,
   oneOffCategoryColor,
   parseHexColor,
   relativeLuminance,
@@ -29,6 +30,9 @@ import {
   forecastOf,
   monthlyBudgetCategorySpend,
   monthlyBudgetChartsOf,
+  monthlyBudgetExpectedIncome,
+  monthlyBudgetOf,
+  monthlyBudgetPace,
   monthlyBudgetSeriesOf,
   mortgagesOf,
   overviewOf,
@@ -92,17 +96,31 @@ describe("category_colors", () => {
       expect(childrenFirst.get(item.id)).toEqual(base);
     }
 
-    // Distinct roots stay distinct up to palette size.
-    const rootColors = ["transport", "food", "housing"].map((id) => forward.get(id)?.background);
-    expect(new Set(rootColors).size).toBe(3);
+    // Roots that hash to distinct palette slots receive distinct colours; adding or removing roots never shifts other roots.
+    const baselineCategories: CategoryColorInput[] = [
+      ...Array.from({ length: 30 }, (_, idx) => ({ id: `cat-${String(idx)}`, parent_id: null }))
+        .filter((item) => item.id !== "cat-11"),
+      { id: "cat-24-child", parent_id: "cat-24" },
+      { id: "cat-24-grand", parent_id: "cat-24-child" },
+    ];
+    const withCat11 = [
+      ...baselineCategories,
+      { id: "cat-11", parent_id: null },
+      { id: "extra-root", parent_id: null },
+    ];
+    const baseMap = buildCategoryColorMap(baselineCategories);
+    const expandedMap = buildCategoryColorMap(withCat11);
+    expect(new Set([...baseMap.values()].filter((c) => c.depth === 0).map((c) => c.background)).size).toBeGreaterThanOrEqual(8);
+    for (const item of baselineCategories) {
+      expect(expandedMap.get(item.id)).toEqual(baseMap.get(item.id));
+    }
 
-    // Even 12 distinct roots get 12 distinct palette slots without collisions.
-    const twelveRoots: CategoryColorInput[] = Array.from({ length: 12 }, (_, idx) => ({
-      id: `root-${String(idx)}`,
-      parent_id: null,
-    }));
-    const twelveMap = buildCategoryColorMap(twelveRoots);
-    expect(new Set(twelveRoots.map((r) => twelveMap.get(r.id)?.background)).size).toBe(12);
+    // Removing an arbitrary root does not alter any remaining root's colour.
+    const reducedMap = buildCategoryColorMap(baselineCategories.filter((item) => item.id !== "cat-0" && item.id !== "cat-15"));
+    for (const item of baselineCategories) {
+      if (item.id === "cat-0" || item.id === "cat-15") continue;
+      expect(reducedMap.get(item.id)).toEqual(baseMap.get(item.id));
+    }
   });
 
   it("shades children from their parent's hue with monotonic lightness across depth", () => {
@@ -227,23 +245,24 @@ describe("category_colors", () => {
     }
   });
 
-  it("supports the optional per-root colour override hook and shades descendants from it", () => {
-    const colors = buildCategoryColors(
-      [
-        { id: "transport", parent_id: null },
-        { id: "fuel", parent_id: "transport" },
-        { id: "light-root", parent_id: null },
-        { id: "light-child", parent_id: "light-root" },
-        { id: "bad-override", parent_id: null },
-      ],
-      {
-        overrides: {
-          transport: "#1e88e5",
-          "light-root": "#eef480",
-          "bad-override": "not-a-color",
-        },
+  it("supports the optional per-root colour override hook without changing other roots", () => {
+    const items: CategoryColorInput[] = [
+      { id: "transport", parent_id: null },
+      { id: "fuel", parent_id: "transport" },
+      { id: "light-root", parent_id: null },
+      { id: "light-child", parent_id: "light-root" },
+      { id: "bad-override", parent_id: null },
+      ...Array.from({ length: 15 }, (_, idx) => ({ id: `cat-${String(idx)}`, parent_id: null })),
+      { id: "cat-6-child", parent_id: "cat-6" },
+    ];
+    const withoutOverrides = buildCategoryColors(items);
+    const colors = buildCategoryColors(items, {
+      overrides: {
+        transport: "#1e88e5",
+        "light-root": "#eef480",
+        "bad-override": "not-a-color",
       },
-    );
+    });
     expect(colors.get("transport").background).toBe("#1e88e5");
     expect(hueDistance(colors.get("fuel").oklch.h, hexToOklch("#1e88e5")?.h ?? 0)).toBeLessThanOrEqual(15);
     expect(relativeLuminance(colors.get("fuel").background)).toBeGreaterThan(relativeLuminance("#1e88e5"));
@@ -253,9 +272,145 @@ describe("category_colors", () => {
     expect(colors.get("light-root").text).toBe("#000000");
     expect(relativeLuminance(colors.get("light-child").background)).toBeLessThan(relativeLuminance("#eef480"));
 
-    // Invalid override falls back safely.
+    // Invalid override falls back safely, and all unrelated roots/descendants stay unchanged.
     expect(parseHexColor(colors.get("bad-override").background)).not.toBeNull();
     expect(resolveCategoryColor(colors.entries, "unlisted").background).toBeTruthy();
+    for (const item of items) {
+      if (item.id === "transport" || item.id === "fuel" || item.id === "light-root" || item.id === "light-child") continue;
+      expect(colors.get(item.id)).toEqual(withoutOverrides.get(item.id));
+    }
+  });
+
+  it("handles OKLCH anchors and clamps out-of-gamut inputs accurately", () => {
+    expect(oklchToHex(0, 0, 0)).toBe("#000000");
+    expect(oklchToHex(1, 0, 0)).toBe("#ffffff");
+    expect(oklchToHex(-0.25, 0.2, 40)).toBe("#000000");
+    expect(oklchToHex(1.3, 0.2, 40)).toBe("#ffffff");
+
+    // Achromatic anchor stays neutral grey with matching L.
+    const neutralHex = oklchToHex(0.5, 0, 120);
+    const neutralRgb = parseHexColor(neutralHex);
+    expect(neutralRgb).not.toBeNull();
+    expect(neutralRgb?.r).toBe(neutralRgb?.g);
+    expect(neutralRgb?.g).toBe(neutralRgb?.b);
+    const neutralOklch = hexToOklch(neutralHex);
+    expect(neutralOklch?.l ?? 0).toBeCloseTo(0.5, 2);
+    expect(neutralOklch?.c ?? 1).toBeLessThan(0.005);
+
+    // Negative chroma clamps cleanly and hues wrap modulo 360.
+    expect(oklchToHex(0.5, -0.3, 40)).toBe(oklchToHex(0.5, 0, 40));
+    expect(oklchToHex(0.6, 0.12, -30)).toBe(oklchToHex(0.6, 0.12, 330));
+    expect(oklchToHex(0.6, 0.12, 690)).toBe(oklchToHex(0.6, 0.12, 330));
+
+    // Curated anchors and sRGB primaries stay consistent through OKLCH round-tripping.
+    for (const swatch of CATEGORY_PALETTE) {
+      const roundTrip = hexToOklch(swatch.background);
+      expect(roundTrip).not.toBeNull();
+      expect(Math.abs((roundTrip?.l ?? 0) - swatch.oklch.l)).toBeLessThan(0.01);
+      expect(hueDistance(roundTrip?.h ?? 0, swatch.oklch.h)).toBeLessThan(2);
+    }
+    expect(hueDistance(hexToOklch("#ff0000")?.h ?? 0, 29.2)).toBeLessThan(2);
+    expect(hueDistance(hexToOklch("#00ff00")?.h ?? 0, 142.5)).toBeLessThan(2);
+    expect(hueDistance(hexToOklch("#0000ff")?.h ?? 0, 264.1)).toBeLessThan(2);
+
+    // Out-of-gamut chroma reduces chroma in-gamut while preserving lightness and hue.
+    for (const [targetL, targetH] of [[0.7, 145], [0.55, 260], [0.85, 95]] as const) {
+      const hex = oklchToHex(targetL, 0.5, targetH);
+      expect(parseHexColor(hex)).not.toBeNull();
+      const result = hexToOklch(hex);
+      expect(result).not.toBeNull();
+      expect(Math.abs((result?.l ?? 0) - targetL)).toBeLessThan(0.015);
+      expect(hueDistance(result?.h ?? 0, targetH)).toBeLessThan(3);
+    }
+  });
+
+  it("handles deep trees beyond depth 3 without identical clamping, 5000-level chains, cycles, and ~50 categories", () => {
+    // Depths 0..7 stay distinguishable even near the upper lightness anchor (including amber L=0.60 and light override).
+    const deepLevels: CategoryColorInput[] = Array.from({ length: 8 }, (_, idx) => ({
+      id: `d-${String(idx)}`,
+      parent_id: idx === 0 ? null : `d-${String(idx - 1)}`,
+    }));
+    const amberSlotIdx = CATEGORY_PALETTE.findIndex((swatch) => swatch.name === "amber");
+    for (const overrideHex of [undefined, CATEGORY_PALETTE[amberSlotIdx]?.background, "#eef480"]) {
+      const overrides = overrideHex === undefined ? undefined : { "d-0": overrideHex };
+      const deepColors = buildCategoryColors(deepLevels, overrides === undefined ? undefined : { overrides });
+      const hexes = deepLevels.map((item) => deepColors.get(item.id).background);
+      for (let idx = 1; idx < hexes.length; idx += 1) {
+        expect(hexes[idx]).not.toBe(hexes[idx - 1]);
+      }
+      for (const item of deepLevels) {
+        const entryColor = deepColors.get(item.id);
+        expect(contrastRatio(entryColor.background, entryColor.text)).toBeGreaterThanOrEqual(4.5);
+      }
+    }
+
+    // 5000-level deep tree does not throw RangeError and resolves every node cleanly.
+    const chain5000: CategoryColorInput[] = Array.from({ length: 5000 }, (_, idx) => ({
+      id: `lvl-${String(idx)}`,
+      parent_id: idx === 0 ? null : `lvl-${String(idx - 1)}`,
+    }));
+    const chainMap = buildCategoryColorMap(chain5000);
+    expect(chainMap.size).toBe(5000);
+    expect(chainMap.get("lvl-4999")?.rootId).toBe("lvl-0");
+    expect(chainMap.get("lvl-4999")?.depth).toBe(4999);
+    expect(contrastRatio(
+      chainMap.get("lvl-4999")?.background ?? "#000000",
+      chainMap.get("lvl-4999")?.text ?? "#ffffff",
+    )).toBeGreaterThanOrEqual(4.5);
+
+    // Cyclic components terminate cleanly in any input order and respect overrides/AA contrast.
+    const cyclicInput: CategoryColorInput[] = [
+      { id: "cy-a", parent_id: "cy-c" },
+      { id: "cy-b", parent_id: "cy-a" },
+      { id: "cy-c", parent_id: "cy-b" },
+      { id: "cy-leaf", parent_id: "cy-b" },
+      { id: "self-loop", parent_id: "self-loop" },
+    ];
+    const cyForward = buildCategoryColorMap(cyclicInput);
+    const cyReversed = buildCategoryColorMap([...cyclicInput].reverse());
+    expect(cyForward.size).toBe(cyclicInput.length);
+    for (const item of cyclicInput) {
+      const color = cyForward.get(item.id);
+      expect(color).toBeDefined();
+      expect(cyReversed.get(item.id)).toEqual(color);
+      expect(contrastRatio(color?.background ?? "#000000", color?.text ?? "#ffffff")).toBeGreaterThanOrEqual(4.5);
+    }
+
+    // Realistic ~50-category 3-level tree stays order-independent, monotonic by depth, and sibling-distinct.
+    const fiftyCategories: CategoryColorInput[] = [];
+    for (let r = 0; r < 10; r += 1) {
+      const rootId = `grp-${String(r)}`;
+      fiftyCategories.push({ id: rootId, parent_id: null });
+      const child0 = `${rootId}-c0`;
+      const child1 = `${rootId}-c1`;
+      fiftyCategories.push(
+        { id: child0, parent_id: rootId },
+        { id: child1, parent_id: rootId },
+        { id: `${child0}-g0`, parent_id: child0 },
+        { id: `${child0}-g1`, parent_id: child0 },
+      );
+    }
+    expect(fiftyCategories).toHaveLength(50);
+    const fiftyMap = buildCategoryColorMap(fiftyCategories);
+    const fiftyRevMap = buildCategoryColorMap([...fiftyCategories].reverse());
+    expect(fiftyMap.size).toBe(50);
+    for (const item of fiftyCategories) {
+      const c = fiftyMap.get(item.id);
+      expect(c).toBeDefined();
+      expect(fiftyRevMap.get(item.id)).toEqual(c);
+      expect(contrastRatio(c?.background ?? "#000000", c?.text ?? "#ffffff")).toBeGreaterThanOrEqual(4.5);
+    }
+    for (let r = 0; r < 10; r += 1) {
+      const rootId = `grp-${String(r)}`;
+      const c0 = `${rootId}-c0`;
+      const c1 = `${rootId}-c1`;
+      expect(fiftyMap.get(c0)?.background).not.toBe(fiftyMap.get(c1)?.background);
+      expect(fiftyMap.get(`${c0}-g0`)?.background).not.toBe(fiftyMap.get(`${c0}-g1`)?.background);
+      expect(relativeLuminance(fiftyMap.get(c0)?.background ?? "#000000"))
+        .toBeGreaterThan(relativeLuminance(fiftyMap.get(rootId)?.background ?? "#ffffff"));
+      expect(relativeLuminance(fiftyMap.get(`${c0}-g0`)?.background ?? "#000000"))
+        .toBeGreaterThan(relativeLuminance(fiftyMap.get(c0)?.background ?? "#ffffff"));
+    }
   });
 });
 
@@ -421,6 +576,7 @@ describe("CategorySwatch and CategoryBadge render", () => {
               }),
             }),
             categories: () => Promise.resolve({ ok: true as const, data: { categories } }),
+            analyticsTransactions: vi.fn(() => Promise.resolve({ ok: true as const, data: entriesOf("2026-11", []) })),
           }}
           accounts={[account({ id: "acc-1" })]}
           text={yearLabels.en}
@@ -558,5 +714,90 @@ describe("CategorySwatch and CategoryBadge render", () => {
     const otherLegendSwatch = host.querySelector<HTMLElement>('.budget-chart-legend .budget-chart-swatch[data-hatched="true"]');
     expect(otherLegendSwatch).not.toBeNull();
     expect(cssColorToHex(otherLegendSwatch?.style.backgroundColor ?? "")).toBe(OTHER_CATEGORY_COLOR.background);
+  });
+
+  it("renders several charts on the page with globally unique pattern IDs", async () => {
+    const categories: AnalyticsCategory[] = Array.from({ length: 7 }, (_, idx) => ({
+      id: `pcat-${String(idx)}`,
+      name: `Category ${String(idx)}`,
+      archived: false,
+      version: 1,
+      created_at: 1,
+      updated_at: 1,
+      parent_id: null,
+    }));
+    const makeProps = (currency: string) => ({
+      budget: monthlyBudgetOf({
+        currency,
+        expected_income: monthlyBudgetExpectedIncome({ status: "estimated", total: "1000" }),
+        pace: monthlyBudgetPace({ basis: "received_plus_expected", budget: "6000" }),
+      }),
+      series: monthlyBudgetSeriesOf({
+        months: [
+          {
+            period: "2026-11", has_activity: true, is_current_month: true, income_estimate_partial: false,
+            provisional: false, start_budget: "5000", spent: "300",
+            categories: categories.map((cat, idx) => ({ category_id: cat.id, net_spending: String(100 - idx * 10) })),
+          },
+        ],
+        category_labels: categories.map((cat) => ({ category_id: cat.id, name: cat.name, archived: false })),
+      }),
+    });
+    const pln = makeProps("PLN");
+    const eur = makeProps("EUR");
+
+    await act(async () => {
+      root.render(
+        <div>
+          <MonthBudgetCharts
+            budget={pln.budget}
+            series={pln.series}
+            paceProjection={null}
+            locale="en-US"
+            text={monthBudgetLabels.en}
+            categories={categories}
+          />
+          <MonthBudgetCharts
+            budget={eur.budget}
+            series={eur.series}
+            paceProjection={null}
+            locale="en-US"
+            text={monthBudgetLabels.en}
+            categories={categories}
+          />
+        </div>,
+      );
+      await Promise.resolve();
+    });
+
+    const svgs = [...host.querySelectorAll("svg")];
+    expect(svgs.length).toBe(6);
+
+    const patterns = [...host.querySelectorAll("svg pattern")];
+    const patternIds = patterns.map((el) => el.getAttribute("id") ?? "");
+    expect(patternIds.length).toBe(6);
+    expect(patternIds.every((value) => value !== "")).toBe(true);
+    expect(new Set(patternIds).size).toBe(patternIds.length);
+
+    for (const cat of categories) {
+      for (const value of patternIds) {
+        expect(value).not.toContain(cat.id);
+      }
+    }
+
+    // Every url(#...) fill inside each SVG resolves to a <pattern> defined in that same SVG.
+    let urlFillCount = 0;
+    for (const svg of svgs) {
+      const localIds = new Set([...svg.querySelectorAll("pattern")].map((el) => el.getAttribute("id") ?? ""));
+      for (const el of svg.querySelectorAll("[fill]")) {
+        const fill = el.getAttribute("fill") ?? "";
+        const match = /^url\(#(.+)\)$/.exec(fill);
+        if (match !== null) {
+          urlFillCount += 1;
+          expect(localIds.has(match[1] ?? "")).toBe(true);
+        }
+      }
+    }
+    expect(urlFillCount).toBeGreaterThanOrEqual(4);
   });
 });
