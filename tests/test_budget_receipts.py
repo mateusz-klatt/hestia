@@ -782,6 +782,37 @@ NR KARTY ****5555
         self.assertLess(time.perf_counter() - started, 0.5)
         self.assertEqual(scanned, "[usunięto]")
 
+    def test_long_line_is_dropped_before_item_expressions(self):
+        import time
+        from hestia.budget.receipt_parser import MAX_LINE_CHARS
+
+        price = " 1 x 2,00 2,00 A"
+        kept = "MLEKO" + (" " * (MAX_LINE_CHARS - len("MLEKO") - len(price))) + price
+        self.assertEqual(len(kept), MAX_LINE_CHARS)
+        parsed = parse_receipt(f"SKLEP\n{kept}\nSUMA PLN 2,00\n")
+        self.assertEqual(parsed["lines"][0]["raw_name"], "MLEKO")
+        self.assertEqual(parsed["lines"][0]["gross_line_total"], "2")
+        dropped = "M" + kept
+        self.assertEqual(len(dropped), MAX_LINE_CHARS + 1)
+        parsed = parse_receipt(f"SKLEP\nMLEKO 1 x 2,00 2,00 A\n{dropped}\nSUMA PLN 2,00\n")
+        self.assertEqual([line["raw_name"] for line in parsed["lines"]], ["MLEKO"])
+        self.assertEqual(parsed["total_amount"], "2")
+        unit = parse_receipt("MLEKO 2 szt x 4,49=8,98 A\nSUMA PLN 8,98\n")
+        self.assertEqual(unit["lines"][0]["raw_unit"], "szt")
+        self.assertEqual(unit["lines"][0]["unit_price_raw"], "4.49")
+        self.assertEqual(unit["math_delta"], "0")
+        labelled = parse_receipt("KAUCJA 0,50 PLN\nSUMA PLN 0,50\n")
+        self.assertEqual(labelled["lines"][0]["line_kind"], "deposit")
+        self.assertEqual(labelled["lines"][0]["gross_line_total"], "0.5")
+        blob = "A " * ((32 * 1024 - 1) // 2)
+        self.assertLess(len(blob.encode("utf-8")), 32 * 1024)
+        self.assertGreater(len(blob), MAX_LINE_CHARS)
+        started = time.perf_counter()
+        scanned = parse_receipt(blob)
+        self.assertLess(time.perf_counter() - started, 0.5)
+        self.assertEqual(scanned["lines"], [])
+        self.assertIsNone(scanned["total_amount"])
+
     def test_money_magnitude_precision_and_folded_name_length_are_limited(self):
         def text(item):
             return f"BIEDRONKA\nNIP 7791011327\nPARAGON FISKALNY\n2026-11-30 12:34\n{item}\nSUMA PLN 5,00\n"

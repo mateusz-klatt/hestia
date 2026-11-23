@@ -12,6 +12,7 @@ MAX_LINE_NAME_LEN = 128
 MAX_SHOP_NAME_LEN = 128
 MAX_TEXT_BYTES = 32 * 1024
 MAX_TEXT_LINES = 500
+MAX_LINE_CHARS = 512
 MAX_MONEY_INTEGER_DIGITS = 9
 MAX_MONEY_FRACTION_DIGITS = 4
 # Joined digits of this length are a secret, with or without a Luhn check.
@@ -43,16 +44,22 @@ _NUMBER_RE = re.compile(_NUMBER, re.ASCII)
 _MONEY = re.compile(r"-?[0-9]+(?:\.[0-9]+)?\Z", re.ASCII)
 _DATE_ISO = re.compile(r"(?<![0-9])([0-9]{4})-([0-9]{2})-([0-9]{2})(?![0-9])", re.ASCII)
 _DATE_PL = re.compile(r"(?<![0-9])([0-9]{2})[-.]([0-9]{2})[-.]([0-9]{4})(?![0-9])", re.ASCII)
-_ITEM = re.compile(
-    rf"^(?P<name>.+?)\s+(?:(?P<quantity>{_NUMBER})\s*(?P<unit>kg|g|dag|l|ml|szt|op)?"
-    rf"\s*[x×*]\s*(?P<unit_price>{_NUMBER})\s*(?:=\s*)?)?"
-    rf"(?P<gross>{_NUMBER})\s*(?:PLN\s*)?(?P<ptu>[A-G])?$",
+_UNITS = r"kg|g|dag|l|ml|szt|op"
+# The price tail is anchored at the end of the line. The name is the text before it,
+# so neither expression uses a leading `.+?` that overlaps the amount.
+_ITEM_QTY_TAIL = re.compile(
+    rf"(?P<quantity>{_NUMBER})(?:\s*(?P<unit>{_UNITS}))?\s*[x×*]\s*"
+    rf"(?P<unit_price>{_NUMBER})\s*(?:=\s*)?(?P<gross>{_NUMBER})\s*(?:PLN\s*)?(?P<ptu>[A-G])?\Z",
     re.IGNORECASE | re.ASCII,
 )
-_NAMED_UNIT = re.compile(
-    rf"^(?P<name>.+?)\s+(?P<quantity>{_NUMBER})\s*(?P<unit>kg|g|dag|l|ml|szt|op)"
+_ITEM_GROSS_TAIL = re.compile(
+    rf"(?P<gross>{_NUMBER})\s*(?:PLN\s*)?(?P<ptu>[A-G])?\Z",
+    re.IGNORECASE | re.ASCII,
+)
+_NAMED_UNIT_TAIL = re.compile(
+    rf"(?P<quantity>{_NUMBER})\s*(?P<unit>{_UNITS})"
     rf"(?:\s*[x×*]\s*(?P<unit_price>{_NUMBER})\s*(?:=\s*)?)?"
-    rf"\s+(?P<gross>{_NUMBER})\s*(?:PLN\s*)?(?P<ptu>[A-G])?$",
+    rf"\s+(?P<gross>{_NUMBER})\s*(?:PLN\s*)?(?P<ptu>[A-G])?\Z",
     re.IGNORECASE | re.ASCII,
 )
 _BARE_UNIT = re.compile(
@@ -391,10 +398,47 @@ def _make_line(name, match, line_no):
     }
 
 
+class _FieldMatch:
+    def __init__(self, groups):
+        self._groups = groups
+
+    def __getitem__(self, key):
+        return self._groups[key]
+
+
+def _tail_match(value, tails):
+    """Shortest non-empty name whose remainder matches a price tail.
+
+    The caller has already collapsed whitespace. Each suffix starts at a single
+    space and is anchored, so the name and the amount do not share a quantifier.
+    """
+    start = 0
+    while True:
+        space = value.find(" ", start)
+        if space < 0:
+            return None
+        suffix = value[space + 1:]
+        for tail in tails:
+            match = tail.fullmatch(suffix)
+            if match is not None:
+                groups = {"name": value[:space], "quantity": None, "unit": None, "unit_price": None}
+                groups.update(match.groupdict())
+                return _FieldMatch(groups)
+        start = space + 1
+
+
+def _named_unit_match(value):
+    return _tail_match(value, (_NAMED_UNIT_TAIL,))
+
+
+def _item_match(value):
+    return _tail_match(value, (_ITEM_QTY_TAIL, _ITEM_GROSS_TAIL))
+
+
 def _parse_lines(lines):
     result, pending = [], None
     for raw in lines:
-        value = raw.strip()
+        value = " ".join(raw.split())
         if not value:
             continue
         discount = _DISCOUNT.match(value)
@@ -408,7 +452,7 @@ def _parse_lines(lines):
             line["net_line_total"] = _bounded_sum((line["gross_line_total"], negate_money(line["discount_amount"])))
             pending = None
             continue
-        match = _NAMED_UNIT.fullmatch(value)
+        match = _named_unit_match(value)
         bare_match = None if match is not None else _BARE_UNIT.fullmatch(value)
         if bare_match is not None:
             match = bare_match
@@ -416,7 +460,7 @@ def _parse_lines(lines):
         elif match is not None:
             name = (match["name"] or "").strip() or pending or match["unit"]
         else:
-            match = _ITEM.fullmatch(value)
+            match = _item_match(value)
             name = None
             if match is not None:
                 name = match["name"]
@@ -446,7 +490,8 @@ def _parse_lines(lines):
 
 def parse_receipt(text):
     text = redact_pan(text)
-    lines = text.split("\n")
+    # Drop a line before every parsing expression. A 32 KiB line must not reach one.
+    lines = ["" if len(line) > MAX_LINE_CHARS else line for line in text.split("\n")]
     if len(lines) > MAX_TEXT_LINES:
         raise ReceiptError()
     nip = None
