@@ -967,7 +967,10 @@ def init_db(path=None) -> tuple[Engine, sessionmaker[Session]]:
 
 
 def downgrade_db(path, revision: str) -> None:
-    """Downgrade the database at ``path`` to ``revision`` on the dedicated migration connection.
+    """Downgrade the database at explicit ``path`` to ``revision``.
+
+    Unlike ``init_db(None)``, a downgrade never defaults to ``HESTIA_DB``. A ``None``,
+    empty, or whitespace-only path raises ``ValueError`` before target resolution or cache access.
 
     Shares ``_run_sqlite_migration`` with ``init_db``: ``PRAGMA foreign_keys=OFF`` (read back
     and required to be 0), an explicit ``BEGIN IMMEDIATE``, the Alembic downgrade, ``PRAGMA
@@ -978,8 +981,11 @@ def downgrade_db(path, revision: str) -> None:
     Reuses the cached engine for ``path`` when ``init_db`` already opened it (normalising the
     cache key the same way ``init_db`` does). The cache entry is dropped and the engine disposed
     before this returns, including when the downgrade rolls back, so the next ``init_db`` on this
-    path runs migrations again. Raises ``ValueError`` for ``None``, empty, or invalid revisions.
+    path runs migrations again. A ``None``, empty/whitespace, non-string, or invalid revision
+    raises ``ValueError``.
     """
+    if path is None or (isinstance(path, str) and not path.strip()):
+        raise ValueError("Downgrade requires an explicit database path")
     if not isinstance(revision, str) or not revision.strip():
         raise ValueError(f"Invalid downgrade revision: {revision!r}")
     target, key = _resolve_db_target(path)
