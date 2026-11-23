@@ -117,6 +117,8 @@ def register(app, read_json_body, *, auth_enabled, session_secret):
                 raise api._Rejected(404, "budget_receipts_disabled")
             if not auth_enabled() or "Cookie" in request.headers or "Authorization" in request.headers:
                 return _device_error(400, "device_token_rejected")
+            if not device_token.budget_http_enabled():
+                raise api._Rejected(404, "budget_disabled")
             retry = device_token.redeem_limited(device_token.client_ip(request), time.monotonic())
             if retry is not None:
                 return _device_error(429, "device_token_rejected", retry)
@@ -125,6 +127,8 @@ def register(app, read_json_body, *, auth_enabled, session_secret):
                 return _device_error(400, "device_token_rejected")
             if not enabled():
                 raise api._Rejected(404, "budget_receipts_disabled")
+            if not device_token.budget_http_enabled():
+                raise api._Rejected(404, "budget_disabled")
             code = device_token.normalize_code(body["code"])
             if code is None:
                 return _device_error(400, "device_token_rejected")

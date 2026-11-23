@@ -13,9 +13,10 @@ from unittest import mock
 
 from aiohttp.test_utils import TestClient, TestServer
 from sqlalchemy import select
+from yarl import URL
 
 from hestia import auth, db, store_sql, web
-from hestia.budget import api, consent_context, device_token, receipt_api
+from hestia.budget import api, consent_api, consent_context, device_token, receipt_api
 from hestia.budget.config import BudgetConfigError
 from hestia.budget.receipt_parser import ReceiptError
 from hestia.budget.views import BudgetUsersBackendRequired
@@ -165,6 +166,46 @@ class DeviceTokenStoreTests(unittest.TestCase):
         self.assertEqual(self._tokens()[0].last_used_at, self.moment["now"])
         self.store.identify(redeemed["token"], slide=False)
         self.assertEqual(self._tokens()[0].sliding_written_at, self.moment["now"])
+
+    def test_identify_avoids_writer_lock_for_unknown_debounced_and_revoke_requests(self):
+        issued = self.store.issue_code("alice")
+        device = self.store.redeem(issued["code"], "Vesta")
+        unknown = base64.urlsafe_b64encode(bytes(32)).rstrip(b"=").decode("ascii")
+        with mock.patch.object(self.store, "_transaction", wraps=self.store._transaction) as writer:
+            self.assertEqual(self.store.identify(unknown, slide=True)["status"], "unknown")
+            with mock.patch.object(device_token, "open_store", return_value=self.store):
+                request_headers = {"Authorization": "Bearer " + device["token"]}
+                decision = device_token.decide(
+                    "POST", device_token.REVOKE_PATH, request_headers, {}, self.secret, self.moment["now"],
+                )
+            self.assertEqual(decision["action"], "accept")
+            self.assertIsNone(self._tokens()[0].last_used_at)
+            writer.assert_not_called()
+
+            first_use = self.store.identify(device["token"], slide=True)
+            self.assertEqual(first_use["status"], "ok")
+            writer.assert_called_once()
+            writer.reset_mock()
+            self.moment["now"] += device_token.SLIDE_WRITE_INTERVAL - 1
+            self.assertEqual(self.store.identify(device["token"], slide=True)["status"], "ok")
+            writer.assert_not_called()
+
+    def test_identify_rechecks_revocation_after_read_before_sliding(self):
+        issued = self.store.issue_code("alice")
+        device = self.store.redeem(issued["code"], "Vesta")
+        write_transaction = self.store._transaction
+
+        def revoke_before_writer_lock():
+            with self.sessions.begin() as session:
+                row = session.get(db.BudgetReceiptDeviceToken, device["token_id"])
+                row.revoked_at = self.moment["now"]
+            return write_transaction()
+
+        with mock.patch.object(self.store, "_transaction", side_effect=revoke_before_writer_lock) as writer:
+            result = self.store.identify(device["token"], slide=True)
+        writer.assert_called_once()
+        self.assertEqual(result["status"], "revoked")
+        self.assertIsNone(self._tokens()[0].last_used_at)
 
     def test_slide_stops_at_hard_cap(self):
         started = self.moment["now"]
@@ -427,16 +468,13 @@ class DeviceTokenStoreTests(unittest.TestCase):
         self.assertEqual(missed["code"], "device_token_invalid")
         with mock.patch.object(device_token, "open_store", side_effect=BudgetConfigError("hidden")):
             configured = device_token.decide(
-                "GET", "/api/whoami", device_headers, {}, self.secret, self.moment["now"])
-        self.assertEqual(configured["action"], "pass")
+                "POST", device_token.PARSE_PATH, device_headers, {}, self.secret, self.moment["now"])
+        self.assertEqual(configured["code"], "device_token_invalid")
         with mock.patch.object(device_token, "open_store", side_effect=RuntimeError("boom")), \
                 self.assertLogs("hestia.budget.device_token", level="ERROR") as logs:
             failed = device_token.decide(
                 "POST", device_token.PARSE_PATH, device_headers, {}, self.secret, self.moment["now"])
-            ignored = device_token.decide(
-                "GET", "/api/whoami", device_headers, {}, self.secret, self.moment["now"])
         self.assertEqual(failed["code"], "budget_unavailable")
-        self.assertEqual(ignored["action"], "pass")
         self.assertFalse(redeemed["token"] in "\n".join(logs.output))
         with mock.patch.object(device_token.DeviceTokenStore, "identify", return_value={"status": "weird"}):
             weird = device_token.decide(
@@ -651,10 +689,16 @@ class DeviceTokenHTTPTests(fixture.unittest.IsolatedAsyncioTestCase):
             path = route.resource.canonical
             if not path.startswith(api.PREFIX + "/"):
                 continue
-            denied = await self.client.request(route.method, path, headers={"Authorization": "Bearer " + bearer})
-            expected = 400 if path == device_token.REDEEM_PATH else 403
-            self.assertEqual(denied.status, expected, f"{route.method} {path}")
-            await denied.read()
+            response = await self.client.request(
+                route.method, path, headers={"Authorization": "Bearer " + bearer}, allow_redirects=False,
+            )
+            if path == consent_api.CALLBACK:
+                self.assertEqual(response.status, 303)
+                self.assertEqual(response.headers["Location"], consent_api.COMPLETE)
+            else:
+                expected = 400 if path == device_token.REDEEM_PATH else 403
+                self.assertEqual(response.status, expected, f"{route.method} {path}")
+            await response.read()
 
     async def test_failures_are_generic_and_rate_limited(self):
         paired = await self._pair()
@@ -827,10 +871,59 @@ class DeviceTokenHTTPTests(fixture.unittest.IsolatedAsyncioTestCase):
         allowed |= {("GET", receipt_api.PREFIX + "/" + operation) for operation in ("detail", "image")}
         self.assertEqual(device_token.ALLOWED, allowed)
         self.assertLessEqual(allowed, routes)
-        for method, path in sorted(routes - allowed):
-            response = await self.client.request(method, path, headers=self._auth(device), allow_redirects=False)
-            self.assertEqual(response.status, 403, f"{method} {path}")
-            await response.read()
+        with mock.patch.object(device_token, "open_store") as open_store:
+            for method, path in sorted(routes - allowed):
+                response = await self.client.request(method, path, headers=self._auth(device), allow_redirects=False)
+                self.assertEqual(response.status, 403, f"{method} {path}")
+                await response.read()
+            open_store.assert_not_called()
+
+    async def test_bearers_cannot_use_method_or_path_aliases(self):
+        device = await self._device()
+        base_url = str(self.client.make_url("/")).rstrip("/")
+        targets = {
+            ("GET" if allowed_method == "POST" else "POST", path)
+            for allowed_method, path in device_token.ALLOWED
+        }
+        targets.update({("HEAD", device_token.DETAIL_PATH), ("HEAD", device_token.IMAGE_PATH)})
+        for method, path in (("GET", device_token.DETAIL_PATH), ("POST", device_token.PARSE_PATH)):
+            targets.update((method, variant) for variant in (
+                path + "/", path.upper(), path.replace("/receipts/", "//receipts/"),
+                path.replace("/receipts/", "/receipts/./"), path.replace("/receipts/", "/r%65ceipts/"),
+            ))
+        with mock.patch.object(device_token, "open_store") as open_store:
+            for headers in (self._auth(device), self.headers(bearer=True)):
+                for method, path in sorted(targets):
+                    # Keep repeated slashes, escapes, and dot segments in the actual request.
+                    target = URL(base_url + path, encoded=True)
+                    async with self.client.session.request(
+                        method, target, headers=headers, allow_redirects=False,
+                    ) as response:
+                        self.assertIn(response.status, (403, 404), f"{method} {path}")
+            open_store.assert_not_called()
+
+    async def test_budget_http_flag_blocks_redeem_and_device_lookup(self):
+        device = await self._device()
+        pending = await self._pair()
+        with mock.patch.object(device_token, "open_store") as open_store:
+            with mock.patch.dict(os.environ, {"HESTIA_BUDGET_HTTP_ENABLED": "0"}):
+                for headers in (self._auth(device), self.headers(bearer=True)):
+                    blocked = await self._post(device_token.LIST_RECEIPTS_PATH, {}, headers)
+                    _status(blocked, 404)
+                    self.assertEqual((await blocked.json())["error"], "budget_disabled")
+                mixed = await self._post(
+                    device_token.LIST_RECEIPTS_PATH, {}, {**self.headers(), **self._auth(device)},
+                )
+                _status(mixed, 400)
+                self.assertEqual((await mixed.json())["error"], "budget_auth_ambiguous")
+                blocked = await self._redeem(pending["code"])
+                _status(blocked, 404)
+                self.assertEqual((await blocked.json())["error"], "budget_disabled")
+            with mock.patch.object(device_token, "budget_http_enabled", side_effect=(True, False)):
+                blocked = await self._redeem(pending["code"])
+                _status(blocked, 404)
+                self.assertEqual((await blocked.json())["error"], "budget_disabled")
+            open_store.assert_not_called()
 
     async def test_flag_off_ambiguous_and_auth_disabled(self):
         device = await self._device()

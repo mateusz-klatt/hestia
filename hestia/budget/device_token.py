@@ -107,6 +107,10 @@ def receipts_enabled():
     return os.environ.get(FLAG) == "1"
 
 
+def budget_http_enabled():
+    return os.environ.get("HESTIA_BUDGET_HTTP_ENABLED") == "1"
+
+
 def receipts_path(path):
     return isinstance(path, str) and path.startswith(PREFIX + "/")
 
@@ -306,9 +310,8 @@ def open_store(*, clock=None):
 def decide(method, path, headers, cookies, secret, moment):
     """Classify a bearer without logging it.
 
-    Login sessions pass through to the web session policy. A recognized
-    device token is accepted only on the receipts allowlist.
-    Everywhere else it is 403, including when it is expired or revoked.
+    Login sessions pass through to the web session policy.
+    Device-shaped credentials are forbidden outside the receipts allowlist.
     """
     from .. import auth
     from .views import BudgetUsersBackendRequired
@@ -321,6 +324,8 @@ def decide(method, path, headers, cookies, secret, moment):
         return {"action": "pass"}
     if receipts and has_cookie and has_authorization:
         return {"action": "response", "status": 400, "code": "budget_auth_ambiguous"}
+    if receipts and not budget_http_enabled():
+        return {"action": "response", "status": 404, "code": "budget_disabled"}
     token = _bearer(headers)
     if token is None:
         return {"action": "pass"}
@@ -331,21 +336,17 @@ def decide(method, path, headers, cookies, secret, moment):
         if allow:
             return {"action": "response", "status": 401, "code": "device_token_invalid"}
         return {"action": "pass"}
+    if not allow:
+        return {"action": "response", "status": 403, "code": "budget_forbidden"}
     try:
-        found = open_store(clock=lambda: moment).identify(token, slide=allow)
+        found = open_store(clock=lambda: moment).identify(token, slide=path != REVOKE_PATH)
     except (BudgetUsersBackendRequired, BudgetConfigError):
         found = {"status": "unknown"}
     except Exception as exc:
         log.error("device token check failed: %s", type(exc).__name__)
-        if allow:
-            return {"action": "response", "status": 503, "code": "budget_unavailable"}
-        return {"action": "pass"}
+        return {"action": "response", "status": 503, "code": "budget_unavailable"}
     if found.get("status") == "unknown":
-        if allow:
-            return {"action": "response", "status": 401, "code": "device_token_invalid"}
-        return {"action": "pass"}
-    if not allow:
-        return {"action": "response", "status": 403, "code": "budget_forbidden"}
+        return {"action": "response", "status": 401, "code": "device_token_invalid"}
     if found.get("status") == "revoked" and path != REVOKE_PATH:
         return {"action": "response", "status": 401, "code": "device_token_revoked"}
     if found.get("status") == "expired":
@@ -466,25 +467,34 @@ class DeviceTokenStore:
             _accepted(None, _BLANK)
             return {"status": "unknown"}
         digest = _mac(_rule_key(), _TOKEN_DOMAIN, canonical)
-        with self._transaction() as session:
-            row = session.scalar(select(DeviceToken).where(DeviceToken.token_hmac == digest))
-            if not _accepted(None if row is None else row.token_hmac, digest):
-                return {"status": "unknown"}
-            if row.revoked_at is not None:
-                return {"status": "revoked", "owner": row.owner, "token_id": row.id}
-            moment = self._moment()
-            if not self._owner_ok(session, row.owner):
+        with self.sessions() as session:
+            result, needs_write = self._inspect_token(session, digest, slide=slide, write=False)
+        if needs_write:
+            with self._transaction() as session:
+                result, _ = self._inspect_token(session, digest, slide=slide, write=True)
+        return result
+
+    def _inspect_token(self, session, digest, *, slide, write):
+        row = session.scalar(select(DeviceToken).where(DeviceToken.token_hmac == digest))
+        if not _accepted(None if row is None else row.token_hmac, digest):
+            return {"status": "unknown"}, False
+        if row.revoked_at is not None:
+            return {"status": "revoked", "owner": row.owner, "token_id": row.id}, False
+        moment = self._moment()
+        if not self._owner_ok(session, row.owner):
+            if write:
                 row.revoked_at = moment
-                return {"status": "revoked", "owner": row.owner, "token_id": row.id}
-            if moment >= min(row.expires_at, row.hard_expires_at):
-                return {"status": "expired", "token_id": row.id}
-            if slide and (row.last_used_at is None or moment - row.sliding_written_at >= SLIDE_WRITE_INTERVAL):
-                row.expires_at = min(moment + SLIDE_TTL, row.hard_expires_at)
-                row.last_used_at = moment
-                row.sliding_written_at = moment
-            return {
-                "status": "ok", "owner": row.owner, "token_id": row.id, "expires_at": row.expires_at,
-            }
+            return {"status": "revoked", "owner": row.owner, "token_id": row.id}, not write
+        if moment >= min(row.expires_at, row.hard_expires_at):
+            return {"status": "expired", "token_id": row.id}, False
+        needs_slide = slide and (row.last_used_at is None or moment - row.sliding_written_at >= SLIDE_WRITE_INTERVAL)
+        if needs_slide and write:
+            row.expires_at = min(moment + SLIDE_TTL, row.hard_expires_at)
+            row.last_used_at = moment
+            row.sliding_written_at = moment
+        return {
+            "status": "ok", "owner": row.owner, "token_id": row.id, "expires_at": row.expires_at,
+        }, needs_slide and not write
 
     def list_tokens(self, owner):
         with self._transaction() as session:
