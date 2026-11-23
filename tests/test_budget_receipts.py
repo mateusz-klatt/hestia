@@ -1233,6 +1233,43 @@ NR KARTY ****5555
         self.assertEqual(saved["receipt"]["linked_entry_ref"], digest)
         self.assertEqual(self.receipt_row(saved["receipt"]["receipt_id"]).linked_entry_ref, "debit")
 
+    def test_api_bodies_omit_the_raw_ledger_key(self):
+        from hestia.budget.receipt_reconcile import reconcile_receipt_links
+
+        reference = "Ż" * 32
+        self.add_transaction("a", reference, amount="100", booking_date="2026-11-30")
+        parsed = self.draft()
+        digest = reference_digest(reference)
+        token = next(item["candidate_token"] for item in parsed["candidates"]
+                     if item["entry_reference"] == digest)
+        draft_detail = self.receipts.detail("owner", parsed["receipt_id"])
+        listed = self.receipts.list("owner", {})
+        found = self.receipts.search("owner", {"query": "mleko"})
+        self.assertGreaterEqual(len(found["receipts"]), 1)
+        confirmed = self.receipts.confirm("owner", confirm_values(parsed, link={
+            "account_id": self.accounts["a"], "entry_reference": digest, "candidate_token": token,
+        }))
+        linked_detail = self.receipts.detail("owner", parsed["receipt_id"])
+        self.change_transaction("a", reference, remittance_information=["Changed after confirm"])
+        with self.sessions.begin() as session:
+            self.assertEqual(reconcile_receipt_links(session, "owner", self.now), 1)
+        reviewed = self.receipts.detail("owner", parsed["receipt_id"])
+        self.assertIn(digest, {item["entry_reference"] for item in reviewed["candidates"]})
+        bodies = {
+            "parse-text": parsed, "candidates": parsed["candidates"], "detail": draft_detail,
+            "list": listed, "search": found, "confirm": confirmed, "detail-linked": linked_detail,
+            "list-linked": self.receipts.list("owner", {"linked": True}),
+            "search-linked": self.receipts.search("owner", {"query": "mleko"}),
+            "detail-review": reviewed, "candidates-review": reviewed["candidates"],
+        }
+        escaped = json.dumps(reference)[1:-1]
+        for name, body in bodies.items():
+            with self.subTest(body=name):
+                self.assertNotIn(reference, json.dumps(body, ensure_ascii=False))
+                self.assertNotIn(escaped, json.dumps(body))
+        self.assertEqual(self.receipt_row(parsed["receipt_id"]).linked_entry_ref, reference)
+        self.assertEqual(confirmed["receipt"]["linked_entry_ref"], digest)
+
     def test_long_remittance_still_yields_a_candidate_and_confirms(self):
         remittance = "S" * 4096
         self.change_transaction(remittance_information=[remittance])

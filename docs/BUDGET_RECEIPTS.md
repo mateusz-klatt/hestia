@@ -327,6 +327,7 @@ CREATE TABLE budget_receipt_lines (
 );
 ```
 
+- **Accepted risk (`linked_entry_ref`):** the column is a foreign key to the ledger key `budget_transactions (account_id, entry_reference)`. It stores that raw provider key so the foreign key and `uq_budget_receipts_tx_link` can be enforced. Its exposure equals the ledger's: a reader who can see `budget_transactions.entry_reference` can see the same value here. The receipts API never returns it. `parse-text`, `detail`, `list`, `search`, candidate lists, and `confirm` return only the sha256 digest of the key.
 - **`0022` downgrade order (child-first):** drop indexes → `budget_receipt_lines` → `budget_receipts` → `budget_shops`. The accounts `(id, owner)` unique index added by this revision drops last.
 - **Runtime delete order:** inside `BEGIN IMMEDIATE`, `DELETE FROM budget_receipt_lines` → `DELETE FROM budget_receipts` → commit → unlink image file on disk (`ReceiptFiles.delete`).
 
