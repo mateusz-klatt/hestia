@@ -364,7 +364,7 @@ class ViewerPreferenceHouseholdTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         await household_tests.HouseholdAPITests.asyncSetUp(self)
 
-    async def test_household_uses_the_viewers_order_then_canonical_name(self):
+    async def test_household_never_uses_owner_names_or_translations(self):
         store = BudgetAnalyticsStore(self.sessions, cursor_secret=SECRET)
         store.set_category_translation("alice", category_id=self.groceries["id"], lang="de", name="Lebensmittel")
         store.set_category_translation("alice", category_id=self.groceries["id"], lang="fr", name="Courses")
@@ -380,22 +380,24 @@ class ViewerPreferenceHouseholdTests(unittest.IsolatedAsyncioTestCase):
         alias = household.entity_alias(SECRET, self.grant_id, "category", self.groceries["id"])
         categories = await (await self.fetch("categories")).json()
         row = next(row for row in categories["categories"] if row["id"] == alias)
-        self.assertEqual(row["display_name"], "Courses")
+        safe_row = dict(row)
         self.assertEqual(row["color_hue"], self.groceries["color_hue"])
+        for operation in ("categories", "overview", "monthly-budget"):
+            body = await (await self.fetch(operation)).json()
+            text = json.dumps(body, ensure_ascii=False)
+            for secret in (GROCERIES, "Lebensmittel", "Courses"):
+                self.assertNotIn(secret, text, operation)
+            self.assertNotIn("display_name", text, operation)
+            self.assertNotIn("display_label", text, operation)
         overview = await (await self.fetch("overview")).json()
         row = next(row for row in overview["categories"] if row["category_id"] == alias)
-        self.assertEqual(row["display_name"], "Courses")
         self.assertEqual(row["color_hue"], self.groceries["color_hue"])
-        with self.sessions.begin() as session:
-            session.get(db.UserSetting, "viewer").preferred_languages = ["de"]
-        categories = await (await self.fetch("categories")).json()
-        row = next(row for row in categories["categories"] if row["id"] == alias)
-        self.assertEqual(row["display_name"], "Lebensmittel")
-        with self.sessions.begin() as session:
-            session.get(db.UserSetting, "viewer").preferred_languages = []
-        categories = await (await self.fetch("categories")).json()
-        row = next(row for row in categories["categories"] if row["id"] == alias)
-        self.assertEqual(row["display_name"], GROCERIES)
+        for languages in (["de"], []):
+            with self.sessions.begin() as session:
+                session.get(db.UserSetting, "viewer").preferred_languages = languages
+            categories = await (await self.fetch("categories")).json()
+            row = next(row for row in categories["categories"] if row["id"] == alias)
+            self.assertEqual(row, safe_row)
         api_contract.BudgetHouseholdCategories.model_validate(categories)
 
 

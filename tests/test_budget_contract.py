@@ -350,6 +350,7 @@ class BudgetOpenApiTests(unittest.TestCase):
                 hue = schema["properties"]["color_hue"]
                 if name.startswith("BudgetHousehold"):
                     self.assertIn("color_hue", schema["required"])
+                    self.assertNotIn("display_name", schema["properties"])
                 else:
                     self.assertNotIn("color_hue", schema["required"])
                 self.assertEqual(hue["anyOf"][0]["minimum"], 0)

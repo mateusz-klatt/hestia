@@ -79,9 +79,6 @@ class OpenApiArtifactTests(unittest.TestCase):
             ("BudgetAnalyticsMonthlyBudgetSeriesCategory", "display_name"),
             ("BudgetAnalyticsMonthlyBudgetSeriesCategory", "display_label"),
             ("BudgetAnalyticsMonthlyBudgetCategoryLabel", "display_name"),
-            ("BudgetHouseholdCategoryLabel", "display_name"),
-            ("BudgetHouseholdOverviewCategory", "display_name"),
-            ("BudgetHouseholdCategory", "display_name"),
         ):
             schemas[schema]["properties"].pop(field)
             if field in schemas[schema].get("required", []):

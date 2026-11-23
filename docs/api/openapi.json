@@ -8366,17 +8366,6 @@
             ],
             "title": "Color Hue"
           },
-          "display_name": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Display Name"
-          },
           "id": {
             "maxLength": 64,
             "minLength": 64,
@@ -8423,17 +8412,6 @@
               }
             ],
             "title": "Color Hue"
-          },
-          "display_name": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Display Name"
           },
           "name": {
             "title": "Name",
@@ -8880,17 +8858,6 @@
           "currency": {
             "title": "Currency",
             "type": "string"
-          },
-          "display_name": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Display Name"
           },
           "expenses": {
             "maxLength": 192,

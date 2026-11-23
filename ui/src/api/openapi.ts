@@ -5018,8 +5018,6 @@ export interface components {
             archived: boolean;
             /** Color Hue */
             color_hue: number | null;
-            /** Display Name */
-            display_name?: string | null;
             /** Id */
             id: string;
             /** Label */
@@ -5033,8 +5031,6 @@ export interface components {
             category_id: string;
             /** Color Hue */
             color_hue: number | null;
-            /** Display Name */
-            display_name?: string | null;
             /** Name */
             name: string;
         };
@@ -5178,8 +5174,6 @@ export interface components {
             color_hue: number | null;
             /** Currency */
             currency: string;
-            /** Display Name */
-            display_name?: string | null;
             /** Expenses */
             expenses: string;
             /** Income */

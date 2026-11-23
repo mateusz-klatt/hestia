@@ -3171,7 +3171,6 @@ class BudgetHouseholdCategoryLabel(BaseModel):
     model_config = _READ
     category_id: _HouseholdAlias
     name: str
-    display_name: Annotated[str | None, Field(default=None, json_schema_extra=_OMIT)] = None
     archived: bool
     color_hue: BudgetCategoryHue | None
 
@@ -3210,7 +3209,6 @@ class BudgetHouseholdOverviewCategory(BaseModel):
     model_config = _READ
     category_id: _HouseholdAlias | None
     label: str | None
-    display_name: Annotated[str | None, Field(default=None, json_schema_extra=_OMIT)] = None
     archived: bool
     color_hue: BudgetCategoryHue | None
     currency: str
@@ -3253,7 +3251,6 @@ class BudgetHouseholdCategory(BaseModel):
     model_config = _READ
     id: _HouseholdAlias
     label: str
-    display_name: Annotated[str | None, Field(default=None, json_schema_extra=_OMIT)] = None
     archived: bool
     color_hue: BudgetCategoryHue | None
 
