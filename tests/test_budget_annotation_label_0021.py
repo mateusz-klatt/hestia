@@ -1,10 +1,12 @@
 """Migration 0021 and one-off label normalization.
 
 Revision 0021 revises 0020. Upgrade and downgrade go through ``init_db`` and
-``downgrade_db``: foreign keys off, an explicit transaction, then
-``PRAGMA foreign_key_check``. No table references ``budget_annotations``.
-The annotation row itself references transactions, users and categories, so the
-runner's check still sees those outgoing keys after the batch rebuild.
+``downgrade_db``: foreign keys off, ``BEGIN IMMEDIATE``, then
+``PRAGMA foreign_key_check``. After upgrade, downgrade, and upgrade again,
+``PRAGMA integrity_check`` is ok and no ``_alembic_tmp_*`` table remains.
+No table references ``budget_annotations``. The annotation row itself
+references transactions, users and categories, so the runner's check still
+sees those outgoing keys after the batch rebuild.
 
 The label text is owner-private: these tests use synthetic phrases and never log them.
 """
@@ -176,6 +178,10 @@ class AnnotationLabelMigration0021Tests(unittest.TestCase):
         def spy(config, revision):
             connection = config.attributes["connection"]
             raw = connection.connection.dbapi_connection
+            with closing(sqlite3.connect(self.path, timeout=0)) as contender:
+                contender.isolation_level = None
+                with self.assertRaises(sqlite3.OperationalError):
+                    contender.execute("BEGIN IMMEDIATE")
             observed.append((
                 raw.in_transaction,
                 raw.isolation_level,
@@ -201,6 +207,7 @@ class AnnotationLabelMigration0021Tests(unittest.TestCase):
             self.assertIsNone(conn.exec_driver_sql(
                 "SELECT label FROM budget_annotations WHERE entry_reference='kept'").scalar())
             self.assertEqual(conn.exec_driver_sql("SELECT version_num FROM alembic_version").scalar(), "0021")
+        self._assert_integrity_and_no_batch_temp()
 
         def insert(reference, label):
             with engine.connect() as conn:
@@ -236,6 +243,10 @@ class AnnotationLabelMigration0021Tests(unittest.TestCase):
         def spy_downgrade(config, revision):
             connection = config.attributes["connection"]
             raw = connection.connection.dbapi_connection
+            with closing(sqlite3.connect(self.path, timeout=0)) as contender:
+                contender.isolation_level = None
+                with self.assertRaises(sqlite3.OperationalError):
+                    contender.execute("BEGIN IMMEDIATE")
             self.assertTrue(raw.in_transaction)
             self.assertIsNone(raw.isolation_level)
             self.assertEqual(connection.exec_driver_sql("PRAGMA foreign_keys").scalar(), 0)
