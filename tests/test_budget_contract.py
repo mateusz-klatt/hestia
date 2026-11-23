@@ -211,7 +211,7 @@ class BudgetOpenApiTests(unittest.TestCase):
             self.assertEqual(set(methods), {method})
             self.assertEqual(methods[method]["x-required-role"], "admin")
             self.assertIn("413", methods[method]["responses"])
-        self.assertEqual(document["info"]["version"], "0.32.0")
+        self.assertEqual(document["info"]["version"], "0.33.0")
         batch = analytics["/api/budget/analytics/rule-batch-preview"]["post"]["description"]
         self.assertIn("1..100", batch)
         self.assertIn("All-or-nothing", batch)
@@ -249,8 +249,9 @@ class BudgetOpenApiTests(unittest.TestCase):
             "500": "Stored mortgage schedule, ledger, or metadata integrity check failed (`budget_analytics_data_error`), "
                    "including stored-data helper errors mapped to 500 after forecast query validation, or unexpected "
                    "internal failure (`budget_internal_error`).",
-            "503": "Analytics storage or budget configuration unavailable (`budget_analytics_unavailable`, "
-                   "`budget_unavailable`, or `budget_forecast_config_conflict`).",
+            "503": "Analytics storage or budget configuration unavailable (`budget_analytics_unavailable` or "
+                   "`budget_unavailable`). budget_forecast_config_conflict (0.31–0.32) wycofany w 0.33; "
+                   "konflikt to teraz 200 + summary.baseline_conflicts.",
         }.items():
             with self.subTest(code=code):
                 self.assertEqual(responses[code]["description"], description)
@@ -261,19 +262,21 @@ class BudgetOpenApiTests(unittest.TestCase):
 
     def test_forecast_schemas_pin_wire_fields_and_bounds(self):
         schemas = contract.build_openapi()["components"]["schemas"]
-        optional_keys = {}
+        optional_keys = {"Summary": {"baseline_conflicts"}}
         for suffix, keys in {
             "": {"evaluation_date", "evaluation_timezone", "horizon_months", "start_month", "end_month",
                  "ledger_as_of", "freshness_stale", "stale_account_ids", "stale_account_ids_truncated",
                  "snapshot_digest", "schedules_version", "rule_version", "summary", "totals", "deduplications", "months"},
             "Summary": {"selected_accounts", "excluded_accounts", "stale_accounts", "overdue_mortgage_schedule_count",
-                        "lapsed_recurring_count", "deduped_recurring_count", "stale_recurring_count"},
+                        "lapsed_recurring_count", "deduped_recurring_count", "stale_recurring_count",
+                        "baseline_conflicts"},
             "CurrencyTotal": {"currency", "total", "scheduled_total", "estimated_total"},
             "Deduplication": {"schedule_id", "schedule_label", "recurring_label", "amount", "currency",
                               "matched_due_date", "last_observed_date", "day_distance", "account_stale"},
             "Month": {"month", "currencies", "items"},
             "Item": {"source", "schedule_id", "label", "amount", "currency", "expected_date", "confidence",
                      "past_due", "account_stale"},
+            "BaselineConflict": {"category_id", "reason"},
         }.items():
             with self.subTest(schema=suffix):
                 schema = schemas["BudgetAnalyticsForecast" + suffix]
@@ -288,6 +291,14 @@ class BudgetOpenApiTests(unittest.TestCase):
         self.assertEqual(item["confidence"]["enum"], ["scheduled", "high", "medium", "estimated"])
         self.assertEqual(forecast["evaluation_timezone"]["const"], "UTC")
         self.assertEqual(forecast["stale_account_ids"]["maxItems"], 200)
+        conflicts = schemas["BudgetAnalyticsForecastSummary"]["properties"]["baseline_conflicts"]
+        self.assertEqual(conflicts["maxItems"], 64)
+        self.assertEqual(conflicts["items"], {"$ref": "#/components/schemas/BudgetAnalyticsForecastBaselineConflict"})
+        conflict = schemas["BudgetAnalyticsForecastBaselineConflict"]["properties"]
+        self.assertEqual(set(conflict), {"category_id", "reason"})
+        self.assertEqual(conflict["reason"]["enum"], ["recurring", "mortgage"])
+        self.assertEqual(conflict["category_id"]["maxLength"], 128)
+        self.assertNotIn("amount", conflict)
         for label in (item["label"], dedup["schedule_label"], dedup["recurring_label"]):
             self.assertEqual(label["maxLength"], 256)
         for money in (item["amount"], dedup["amount"], totals["total"], totals["scheduled_total"], totals["estimated_total"]):

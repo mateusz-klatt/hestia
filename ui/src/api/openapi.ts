@@ -214,7 +214,7 @@ export interface paths {
         };
         /**
          * Read the owner-private upcoming commitments estimate
-         * @description Read-only evaluation of unmarked mortgage instalments and active recurring charges from one local snapshot using the server UTC date. Matches recurring hints to individual scheduled instalments to suppress duplicate estimates. When HESTIA_BUDGET_FORECAST_CONFIG names categories, each month also includes a category_baseline estimate (confidence estimated, schedule_id null, label is the category name): the median or trimmed mean of net spending over prior complete months inside each account's coverage window, including months with no spend. The current month subtracts net spending already booked, floored at zero. A configured category already represented by an active recurring hint or an enabled mortgage schedule is rejected. An optional currency filter scopes commitments, deduplications and their summary counts. Snapshot metadata and account freshness cover all selected accounts. The estimate excludes spending limits and makes no bank requests or stored changes.
+         * @description Read-only evaluation of unmarked mortgage instalments and active recurring charges from one local snapshot using the server UTC date. Matches recurring hints to individual scheduled instalments to suppress duplicate estimates. When HESTIA_BUDGET_FORECAST_CONFIG names categories, each month also includes a category_baseline estimate (confidence estimated, schedule_id null, label is the category name): the median or trimmed mean of net spending over prior complete months inside each account's coverage window, including months with no spend. The current month subtracts net spending already booked, floored at zero. A configured category already represented by an active recurring hint or an enabled mortgage schedule is omitted from the baselines and listed in summary.baseline_conflicts (category id and reason only, no amounts). Every other baseline, mortgage and recurring item is still computed. An optional currency filter scopes commitments, deduplications and their summary counts. Snapshot metadata and account freshness cover all selected accounts. The estimate excludes spending limits and makes no bank requests or stored changes.
          */
         get: operations["getBudgetAnalyticsForecast"];
         put?: never;
@@ -1944,6 +1944,21 @@ export interface components {
             totals: components["schemas"]["BudgetAnalyticsForecastCurrencyTotal"][];
         };
         /**
+         * BudgetAnalyticsForecastBaselineConflict
+         * @description A configured category omitted because an active hint or an enabled mortgage already represents it.
+         *
+         *     No amounts. A category may appear twice when both reasons apply.
+         */
+        BudgetAnalyticsForecastBaselineConflict: {
+            /** Category Id */
+            category_id: string;
+            /**
+             * Reason
+             * @enum {string}
+             */
+            reason: "recurring" | "mortgage";
+        };
+        /**
          * BudgetAnalyticsForecastCurrencyTotal
          * @description Exact decimal commitment totals in one currency.
          */
@@ -2016,6 +2031,8 @@ export interface components {
         };
         /** BudgetAnalyticsForecastSummary */
         BudgetAnalyticsForecastSummary: {
+            /** Baseline Conflicts */
+            baseline_conflicts?: components["schemas"]["BudgetAnalyticsForecastBaselineConflict"][];
             /** Deduped Recurring Count */
             deduped_recurring_count: number;
             /** Excluded Accounts */
@@ -6222,7 +6239,7 @@ export interface operations {
                     "application/json": components["schemas"]["BudgetError"];
                 };
             };
-            /** @description Analytics storage or budget configuration unavailable (`budget_analytics_unavailable`, `budget_unavailable`, or `budget_forecast_config_conflict`). */
+            /** @description Analytics storage or budget configuration unavailable (`budget_analytics_unavailable` or `budget_unavailable`). budget_forecast_config_conflict (0.31–0.32) wycofany w 0.33; konflikt to teraz 200 + summary.baseline_conflicts. */
             503: {
                 headers: {
                     [name: string]: unknown;

@@ -795,12 +795,12 @@ class ForecastProjectionTests(ProjectionCase):
         self.assertEqual(unfiltered["summary"], {
             "selected_accounts": 3, "excluded_accounts": 1, "stale_accounts": 2,
             "overdue_mortgage_schedule_count": 1, "lapsed_recurring_count": 1,
-            "deduped_recurring_count": 1, "stale_recurring_count": 1,
+            "deduped_recurring_count": 1, "stale_recurring_count": 1, "baseline_conflicts": [],
         })
         self.assertEqual(eur_only["summary"], {
             "selected_accounts": 3, "excluded_accounts": 1, "stale_accounts": 2,
             "overdue_mortgage_schedule_count": 0, "lapsed_recurring_count": 0,
-            "deduped_recurring_count": 0, "stale_recurring_count": 0,
+            "deduped_recurring_count": 0, "stale_recurring_count": 0, "baseline_conflicts": [],
         })
         for field in ("stale_account_ids", "stale_account_ids_truncated", "ledger_as_of", "freshness_stale",
                       "snapshot_digest", "schedules_version"):
@@ -926,7 +926,7 @@ class ForecastProjectionTests(ProjectionCase):
         with mock.patch.dict(os.environ, {forecast.FORECAST_CONFIG_ENV: bad}):
             with self.assertRaises(BudgetConfigError) as unavailable:
                 self.store.forecast("owner")
-        self.assertNotIsInstance(unavailable.exception, forecast.ForecastConfigConflict)
+        self.assertEqual(type(unavailable.exception), BudgetConfigError)
         self.assertEqual(getattr(unavailable.exception, "code", "budget_unavailable"), "budget_unavailable")
 
         ready = json.dumps({"owner": {"category_ids": [category["id"]], "history_months": 6}})
@@ -938,12 +938,24 @@ class ForecastProjectionTests(ProjectionCase):
         self.assertEqual([item["source"] for item in scoped["months"][0]["items"]], ["category_baseline"])
         self.assertEqual(scoped["months"][0]["items"][0]["currency"], "EUR")
 
+        rent = self._power_category(tuple((month, "7") for month in range(5, 11)), prefix="rent")
         self.add_schedule("Synthetic power mortgage", amount="10", due_day=4, start_date="2026-01-01")
-        with mock.patch.dict(os.environ, {forecast.FORECAST_CONFIG_ENV: ready}):
-            with self.assertRaises(forecast.ForecastConfigConflict) as conflict:
-                self.store.forecast("owner", months="1", currency="EUR")
-        self.assertEqual(conflict.exception.code, "budget_forecast_config_conflict")
-        self.assertNotIn(category["id"], str(conflict.exception))
+        mixed = json.dumps({"owner": {"category_ids": [category["id"], rent["id"]], "history_months": 6}})
+        with mock.patch.dict(os.environ, {forecast.FORECAST_CONFIG_ENV: mixed}):
+            degraded = self.store.forecast("owner", months="1")
+        api_contract.BudgetAnalyticsForecast.model_validate(degraded)
+        baselines = [item for item in degraded["months"][0]["items"] if item["source"] == "category_baseline"]
+        self.assertEqual([item["label"] for item in baselines], ["Synthetic rent"])
+        self.assertEqual(degraded["summary"]["baseline_conflicts"],
+                         [{"category_id": category["id"], "reason": "mortgage"}])
+        self.assertNotIn("amount", degraded["summary"]["baseline_conflicts"][0])
+        self.assertTrue(any(item["source"] == "mortgage" for item in degraded["months"][0]["items"]))
+        alone = json.dumps({"owner": {"category_ids": [category["id"]], "history_months": 6}})
+        with mock.patch.dict(os.environ, {forecast.FORECAST_CONFIG_ENV: alone}):
+            skipped = self.store.forecast("owner", months="1", currency="EUR")
+        self.assertEqual(skipped["months"][0]["items"], [])
+        self.assertEqual(skipped["summary"]["baseline_conflicts"],
+                         [{"category_id": category["id"], "reason": "mortgage"}])
 
 
 class MonthlyBudgetProjectionTests(ProjectionCase):

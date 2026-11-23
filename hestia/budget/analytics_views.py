@@ -1004,14 +1004,14 @@ class BudgetAnalyticsViews(BudgetAnalyticsStore):
                 account_timestamps = self._forecast_account_timestamps(session, owner)
                 schedule_models = _mortgage_models(owner, schedules)
                 hints = _snapshot_recurring(snapshot)
-                baselines, estimator = forecast_mod.baselines_for_snapshot(
+                baselines, estimator, conflicts = forecast_mod.baselines_for_snapshot(
                     snapshot, evaluation_date, hints, schedule_models, account_timestamps=account_timestamps)
                 return forecast_mod.evaluate_forecast(
                     owner=owner, evaluation_date=evaluation_date, months=months, currency=currency,
                     account_timestamps=account_timestamps, excluded_accounts=snapshot["counts"]["excluded_accounts"],
                     schedules=schedule_models, hints=hints,
                     snapshot_digest=snapshot["digest"], schedules_version=schedules_version,
-                    baselines=baselines, baseline_estimator=estimator,
+                    baselines=baselines, baseline_estimator=estimator, baseline_conflicts=conflicts,
                 )
         except forecast_mod.ForecastLimitError:
             raise AnalyticsError(_LIMIT_ERROR, 413) from None
