@@ -2,140 +2,16 @@
 // against server UTC today, stores destination_kind only (zero PII targets), triggers no notifications,
 // shared calendar sync or bank payments. Writes require strict CAS expected_version.
 import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { t, tPlural } from "../../i18n";
 import type { BudgetApi, BudgetResult } from "../api";
 import type { BudgetAccount } from "../model";
 import { formatAmount } from "../model";
-import { ANALYTICS_ERROR, DEFAULT_REMIND_DAYS_BEFORE, MORTGAGE_DESTINATIONS, MORTGAGE_LABEL_MAX, RELOAD_ERRORS,
-  SPENDING_LIMIT_AMOUNT_MAX, isMonth, labelOf, mortgageCurrencies, parseIntInRange, pluralPl, validCurrency,
-  validIsoDate, validLimitAmount, validMortgageLabel } from "./model";
+import { ANALYTICS_ERROR, DEFAULT_REMIND_DAYS_BEFORE, MORTGAGE_DESTINATIONS, MORTGAGE_DESTINATION_KEYS,
+  MORTGAGE_LABEL_MAX, MORTGAGE_STATUS_KEYS, RELOAD_ERRORS, SPENDING_LIMIT_AMOUNT_MAX, isMonth, labelOf,
+  mortgageCurrencies, parseIntInRange, validCurrency, validIsoDate, validLimitAmount,
+  validMortgageLabel } from "./model";
 import type { AnalyticsMortgageReminder, AnalyticsMortgageSchedule, AnalyticsMortgages, MortgageDestination,
   MortgageSaveRequest } from "./model";
-
-export const mortgagesLabels = {
-  en: {
-    title: "Mortgage reminders",
-    intro: "Private mortgage reminder schedules evaluated strictly on the server's UTC date. Evaluation only — no notifications, shared calendars or bank payments are triggered here.",
-    evaluatedFor: (date: string, tz: string) => `Evaluated for ${date} (${tz})`,
-    ledgerAsOf: (date: string | null) => (date === null ? "No synced ledger data yet" : `Ledger data as of ${date}`),
-    freshnessStale: "Ledger data may be outdated — confirm payment status directly before acting.",
-    loading: "Loading mortgage reminders…",
-    error: "Mortgage reminders could not be loaded. Try again.",
-    remindersTitle: "Upcoming & overdue reminders",
-    noReminders: "No active mortgage reminders.",
-    schedulesTitle: "Configured schedules",
-    noSchedules: "No private mortgage schedules configured yet.",
-    newSchedule: "New schedule",
-    edit: "Edit",
-    save: "Save schedule",
-    cancel: "Cancel",
-    disable: "Disable",
-    enable: "Enable",
-    enabled: "Enabled",
-    disabled: "disabled",
-    label: "Schedule label",
-    amount: "Installment amount",
-    currency: "Currency",
-    dueDay: "Due day of month (1–31)",
-    startDate: "Start date",
-    endDate: "End date (optional)",
-    remindDays: "Remind days before (0–31)",
-    destinationKind: "Private destination type",
-    destinationHelp: "Only the private channel type is stored — never an email address, phone number or shared calendar.",
-    destinations: {
-      owner_inbox: "Owner inbox",
-      owner_push: "Owner push",
-      owner_email: "Owner email",
-    },
-    statuses: {
-      overdue: "Overdue",
-      due_today: "Due today",
-      due_soon: "Due soon",
-      upcoming: "Upcoming",
-      completed: "Completed",
-    },
-    dueOn: (date: string) => `Due ${date}`,
-    daysOverdue: (days: number) => `${String(days)} ${days === 1 ? "day" : "days"} overdue`,
-    daysUntil: (days: number) => `In ${String(days)} ${days === 1 ? "day" : "days"}`,
-    allPaid: "All scheduled installments marked paid",
-    dueDayFact: (day: number) => `Day ${String(day)} of month`,
-    windowFact: (start: string, end: string | null) => (end === null ? `From ${start} (no end date)` : `${start} – ${end}`),
-    remindFact: (days: number) => (days === 0 ? "Remind on due day" : `Remind ${String(days)} ${days === 1 ? "day" : "days"} before`),
-    markMonthPaid: (month: string) => `Mark ${month} paid`,
-    paidMonths: (count: number) => `Paid installments (${String(count)})`,
-    noPaidMonths: "No installments marked paid yet.",
-    unmark: "Unmark",
-    monthInput: "Month (YYYY-MM)",
-    markPaid: "Mark paid",
-    invalidHint: "Fill in a label, positive amount, 3-letter currency, due day (1–31), valid start date (and end date on or after start), and lead days (0–31).",
-    conflict: "This changed elsewhere; the latest state was loaded.",
-    limitCap: "Maximum number of mortgage schedules or paid months reached.",
-    invalidWrite: "The server rejected this change. Check the date range or installment month and try again.",
-    saveError: "Could not save mortgage change. Try again.",
-  },
-  pl: {
-    title: "Przypomnienia hipoteczne",
-    intro: "Prywatne harmonogramy przypomnień hipotecznych liczone wyłącznie według daty UTC serwera. Tylko ocena — nie wysyła powiadomień, nie synchronizuje wspólnych kalendarzy i nie wykonuje płatności bankowych.",
-    evaluatedFor: (date: string, tz: string) => `Stan na ${date} (${tz})`,
-    ledgerAsOf: (date: string | null) => (date === null ? "Brak zsynchronizowanych danych księgowych" : `Dane księgowe na dzień ${date}`),
-    freshnessStale: "Dane księgowe mogą być nieaktualne — przed działaniem potwierdź status płatności osobno.",
-    loading: "Wczytywanie przypomnień hipotecznych…",
-    error: "Nie udało się wczytać przypomnień hipotecznych. Spróbuj ponownie.",
-    remindersTitle: "Nadchodzące i zaległe raty",
-    noReminders: "Brak aktywnych przypomnień hipotecznych.",
-    schedulesTitle: "Skonfigurowane harmonogramy",
-    noSchedules: "Nie skonfigurowano jeszcze prywatnych harmonogramów hipotecznych.",
-    newSchedule: "Nowy harmonogram",
-    edit: "Edytuj",
-    save: "Zapisz harmonogram",
-    cancel: "Anuluj",
-    disable: "Wyłącz",
-    enable: "Włącz",
-    enabled: "Włączony",
-    disabled: "wyłączony",
-    label: "Nazwa harmonogramu",
-    amount: "Kwota raty",
-    currency: "Waluta",
-    dueDay: "Dzień płatności w miesiącu (1–31)",
-    startDate: "Data początkowa",
-    endDate: "Data końcowa (opcjonalnie)",
-    remindDays: "Przypomnienie dni wcześniej (0–31)",
-    destinationKind: "Prywatny kanał docelowy",
-    destinationHelp: "Zapisywany jest wyłącznie typ prywatnego kanału — nigdy adres e-mail, numer telefonu ani wspólny kalendarz.",
-    destinations: {
-      owner_inbox: "Skrzynka właściciela",
-      owner_push: "Push właściciela",
-      owner_email: "E-mail właściciela",
-    },
-    statuses: {
-      overdue: "Po terminie",
-      due_today: "Termin dziś",
-      due_soon: "Wkrótce termin",
-      upcoming: "Nadchodząca",
-      completed: "Zakończona",
-    },
-    dueOn: (date: string) => `Termin ${date}`,
-    daysOverdue: (days: number) => `${String(days)} ${pluralPl(days, "dzień", "dni", "dni")} po terminie`,
-    daysUntil: (days: number) => `Za ${String(days)} ${pluralPl(days, "dzień", "dni", "dni")}`,
-    allPaid: "Wszystkie zaplanowane raty oznaczone jako opłacone",
-    dueDayFact: (day: number) => `Dzień miesiąca: ${String(day)}`,
-    windowFact: (start: string, end: string | null) => (end === null ? `Od ${start} (bez daty końcowej)` : `${start} – ${end}`),
-    remindFact: (days: number) => (days === 0
-      ? "Przypomnienie w dniu terminu"
-      : `Przypomnienie ${String(days)} ${pluralPl(days, "dzień", "dni", "dni")} wcześniej`),
-    markMonthPaid: (month: string) => `Oznacz ${month} jako opłaconą`,
-    paidMonths: (count: number) => `Opłacone raty (${String(count)})`,
-    noPaidMonths: "Żadna rata nie została jeszcze oznaczona jako opłacona.",
-    unmark: "Cofnij",
-    monthInput: "Miesiąc (RRRR-MM)",
-    markPaid: "Oznacz opłaconą",
-    invalidHint: "Podaj nazwę, dodatnią kwotę, 3-literową walutę, dzień (1–31), poprawną datę początkową (i końcową nie wcześniejszą niż początkowa) oraz dni wyprzedzenia (0–31).",
-    conflict: "Zmieniono to w innym miejscu; wczytano aktualny stan.",
-    limitCap: "Osiągnięto maksymalną liczbę harmonogramów lub oznaczonych rat.",
-    invalidWrite: "Serwer odrzucił zmianę. Sprawdź zakres dat lub miesiąc raty i spróbuj ponownie.",
-    saveError: "Nie udało się zapisać zmiany. Spróbuj ponownie.",
-  },
-};
-export type MortgagesLabels = typeof mortgagesLabels.en;
 
 type Loss = (result: { ok: boolean; status?: number; error?: string }) => boolean;
 type Shown = { state: "loading" } | { state: "error" } | { state: "ready"; data: AnalyticsMortgages };
@@ -157,17 +33,16 @@ interface ScheduleDraft {
 export interface MortgagesViewProps {
   api: Pick<BudgetApi, "mortgages" | "saveMortgage" | "setMortgagePayment">;
   accounts: readonly BudgetAccount[];
-  text: MortgagesLabels;
   locale: string;
   revision: number;
   onAccessLoss: Loss;
 }
 
-function saveFailure(text: MortgagesLabels, error: string): string {
-  if (RELOAD_ERRORS.has(error)) return text.conflict;
-  if (error === ANALYTICS_ERROR.limit) return text.limitCap;
-  if (error === ANALYTICS_ERROR.invalidRequest) return text.invalidWrite;
-  return text.saveError;
+function saveFailure(error: string): string {
+  if (RELOAD_ERRORS.has(error)) return t("budget.mortgages.conflict");
+  if (error === ANALYTICS_ERROR.limit) return t("budget.mortgages.limitCap");
+  if (error === ANALYTICS_ERROR.invalidRequest) return t("budget.mortgages.invalidWrite");
+  return t("budget.mortgages.saveError");
 }
 
 function buildScheduleRequest(draft: ScheduleDraft): MortgageSaveRequest | null {
@@ -195,27 +70,27 @@ function buildScheduleRequest(draft: ScheduleDraft): MortgageSaveRequest | null 
   };
 }
 
-function timingNote(item: AnalyticsMortgageReminder, text: MortgagesLabels): string {
-  if (item.due_date === null || item.days_until_due === null) return text.allPaid;
-  if (item.days_until_due < 0) return text.daysOverdue(-item.days_until_due);
-  if (item.days_until_due === 0) return text.statuses.due_today;
-  return text.daysUntil(item.days_until_due);
+function timingNote(item: AnalyticsMortgageReminder): string {
+  if (item.due_date === null || item.days_until_due === null) return t("budget.mortgages.allPaid");
+  if (item.days_until_due < 0) return tPlural("budget.mortgages.daysOverdue", -item.days_until_due);
+  if (item.days_until_due === 0) return t("budget.mortgages.statuses.due_today");
+  return tPlural("budget.mortgages.daysUntil", item.days_until_due);
 }
 
 interface RemindersPanelProps {
   reminders: readonly AnalyticsMortgageReminder[];
   scheduleMap: ReadonlyMap<string, AnalyticsMortgageSchedule>;
   busy: boolean;
-  text: MortgagesLabels;
   locale: string;
   onMarkPaid: (schedule: AnalyticsMortgageSchedule, month: string) => void;
 }
 
-function RemindersPanel({ reminders, scheduleMap, busy, text, locale, onMarkPaid }: RemindersPanelProps) {
+function RemindersPanel({ reminders, scheduleMap, busy, locale, onMarkPaid }: RemindersPanelProps) {
+  const remindersTitle = t("budget.mortgages.remindersTitle");
   return (
-    <section className="budget-entries" aria-label={text.remindersTitle}>
-      <h4>{text.remindersTitle}</h4>
-      {reminders.length === 0 ? <p className="budget-muted">{text.noReminders}</p> : (
+    <section className="budget-entries" aria-label={remindersTitle}>
+      <h4>{remindersTitle}</h4>
+      {reminders.length === 0 ? <p className="budget-muted">{t("budget.mortgages.noReminders")}</p> : (
         <ul className="budget-entry-list">
           {reminders.map((item) => {
             const schedule = scheduleMap.get(item.schedule_id);
@@ -225,21 +100,21 @@ function RemindersPanel({ reminders, scheduleMap, busy, text, locale, onMarkPaid
                 <div className="budget-limit-main">
                   <span className="budget-entry-text"><strong>{item.label}</strong></span>
                   <span className="budget-chip budget-mortgage-status" data-status={item.status}>
-                    {labelOf(text.statuses, item.status)}
+                    {labelOf(MORTGAGE_STATUS_KEYS, item.status)}
                   </span>
                 </div>
                 <div className="budget-entry-facts">
                   <strong className="budget-limit-figures">{formatAmount(item.amount, item.currency, locale)}</strong>
-                  {item.due_date === null ? null : <span>{text.dueOn(item.due_date)}</span>}
-                  <span>{timingNote(item, text)}</span>
-                  <span className="budget-chip">{labelOf(text.destinations, item.destination_kind)}</span>
+                  {item.due_date === null ? null : <span>{t("budget.mortgages.dueOn", { date: item.due_date })}</span>}
+                  <span>{timingNote(item)}</span>
+                  <span className="budget-chip">{labelOf(MORTGAGE_DESTINATION_KEYS, item.destination_kind)}</span>
                   {schedule !== undefined && month !== null ? (
                     <button type="button" disabled={busy} onClick={() => { onMarkPaid(schedule, month); }}>
-                      {text.markMonthPaid(month)}
+                      {t("budget.mortgages.markMonthPaid", { month })}
                     </button>
                   ) : null}
                 </div>
-                {item.freshness_stale ? <p className="budget-muted">{text.freshnessStale}</p> : null}
+                {item.freshness_stale ? <p className="budget-muted">{t("budget.mortgages.freshnessStale")}</p> : null}
               </li>
             );
           })}
@@ -253,13 +128,12 @@ interface ScheduleEditorProps {
   draft: ScheduleDraft;
   currencySuggestions: readonly string[];
   busy: boolean;
-  text: MortgagesLabels;
   onChange: (patch: Partial<ScheduleDraft>) => void;
   onSubmit: (request: MortgageSaveRequest) => void;
   onCancel: () => void;
 }
 
-function ScheduleEditor({ draft, currencySuggestions, busy, text, onChange, onSubmit, onCancel }: ScheduleEditorProps) {
+function ScheduleEditor({ draft, currencySuggestions, busy, onChange, onSubmit, onCancel }: ScheduleEditorProps) {
   const listId = useId();
   const request = buildScheduleRequest(draft);
   const canSave = !busy && request !== null;
@@ -269,56 +143,56 @@ function ScheduleEditor({ draft, currencySuggestions, busy, text, onChange, onSu
       event.preventDefault();
       if (canSave) onSubmit(request);
     }}>
-      <label>{text.label}
+      <label>{t("budget.mortgages.label")}
         <input name="mortgage_label" type="text" maxLength={MORTGAGE_LABEL_MAX} value={draft.label} disabled={busy}
           onChange={(event) => { onChange({ label: event.currentTarget.value }); }} />
       </label>
-      <label>{text.amount}
+      <label>{t("budget.mortgages.amount")}
         <input name="mortgage_amount" type="text" inputMode="decimal" maxLength={SPENDING_LIMIT_AMOUNT_MAX}
           value={draft.amount} disabled={busy} placeholder="2500.00"
           onChange={(event) => { onChange({ amount: event.currentTarget.value }); }} />
       </label>
-      <label>{text.currency}
+      <label>{t("budget.mortgages.currency")}
         <input name="mortgage_currency" type="text" list={listId} maxLength={3} value={draft.currency} disabled={busy}
           placeholder="PLN" onChange={(event) => { onChange({ currency: event.currentTarget.value.toUpperCase() }); }} />
         <datalist id={listId}>
           {currencySuggestions.map((code) => <option key={code} value={code} />)}
         </datalist>
       </label>
-      <label>{text.dueDay}
+      <label>{t("budget.mortgages.dueDay")}
         <input name="mortgage_due_day" type="number" min={1} max={31} step={1} value={draft.due_day} disabled={busy}
           onChange={(event) => { onChange({ due_day: event.currentTarget.value }); }} />
       </label>
-      <label>{text.startDate}
+      <label>{t("budget.mortgages.startDate")}
         <input name="mortgage_start_date" type="date" value={draft.start_date} disabled={busy}
           onChange={(event) => { onChange({ start_date: event.currentTarget.value }); }} />
       </label>
-      <label>{text.endDate}
+      <label>{t("budget.mortgages.endDate")}
         <input name="mortgage_end_date" type="date" value={draft.end_date} min={draft.start_date || undefined} disabled={busy}
           onChange={(event) => { onChange({ end_date: event.currentTarget.value }); }} />
       </label>
-      <label>{text.remindDays}
+      <label>{t("budget.mortgages.remindDays")}
         <input name="mortgage_remind_days" type="number" min={0} max={31} step={1} value={draft.remind_days_before}
           disabled={busy} onChange={(event) => { onChange({ remind_days_before: event.currentTarget.value }); }} />
       </label>
-      <label>{text.destinationKind}
+      <label>{t("budget.mortgages.destinationKind")}
         <select name="mortgage_destination" value={draft.destination_kind} disabled={busy}
           onChange={(event) => { onChange({ destination_kind: event.currentTarget.value as MortgageDestination }); }}>
           {MORTGAGE_DESTINATIONS.map((kind) => (
-            <option key={kind} value={kind}>{labelOf(text.destinations, kind)}</option>
+            <option key={kind} value={kind}>{labelOf(MORTGAGE_DESTINATION_KEYS, kind)}</option>
           ))}
         </select>
       </label>
       <label className="budget-toggle">
         <input name="mortgage_enabled" type="checkbox" checked={draft.enabled} disabled={busy}
           onChange={(event) => { onChange({ enabled: event.currentTarget.checked }); }} />
-        {text.enabled}
+        {t("budget.mortgages.enabled")}
       </label>
-      <p className="budget-muted">{text.destinationHelp}</p>
-      {request === null ? <p className="budget-muted">{text.invalidHint}</p> : null}
+      <p className="budget-muted">{t("budget.mortgages.destinationHelp")}</p>
+      {request === null ? <p className="budget-muted">{t("budget.mortgages.invalidHint")}</p> : null}
       <div className="budget-actions">
-        <button type="submit" className="budget-primary" disabled={!canSave}>{text.save}</button>
-        <button type="button" disabled={busy} onClick={onCancel}>{text.cancel}</button>
+        <button type="submit" className="budget-primary" disabled={!canSave}>{t("budget.mortgages.save")}</button>
+        <button type="button" disabled={busy} onClick={onCancel}>{t("budget.mortgages.cancel")}</button>
       </div>
     </form>
   );
@@ -327,17 +201,22 @@ function ScheduleEditor({ draft, currencySuggestions, busy, text, onChange, onSu
 interface ScheduleRowProps {
   schedule: AnalyticsMortgageSchedule;
   busy: boolean;
-  text: MortgagesLabels;
   locale: string;
   onEdit: (schedule: AnalyticsMortgageSchedule) => void;
   onToggle: (schedule: AnalyticsMortgageSchedule) => void;
   onSetPayment: (schedule: AnalyticsMortgageSchedule, month: string, paid: boolean) => void;
 }
 
-function ScheduleRow({ schedule, busy, text, locale, onEdit, onToggle, onSetPayment }: ScheduleRowProps) {
+function ScheduleRow({ schedule, busy, locale, onEdit, onToggle, onSetPayment }: ScheduleRowProps) {
   const [monthDraft, setMonthDraft] = useState("");
   const trimmedMonth = monthDraft.trim();
   const canMark = !busy && isMonth(trimmedMonth) && !schedule.paid_months.includes(trimmedMonth);
+  const windowText = schedule.end_date === null
+    ? t("budget.mortgages.windowOpen", { start: schedule.start_date })
+    : t("budget.mortgages.windowRange", { start: schedule.start_date, end: schedule.end_date });
+  const remindText = schedule.remind_days_before === 0
+    ? t("budget.mortgages.remindOnDueDay")
+    : tPlural("budget.mortgages.remindBefore", schedule.remind_days_before);
 
   return (
     <li className="budget-entry">
@@ -348,25 +227,25 @@ function ScheduleRow({ schedule, busy, text, locale, onEdit, onToggle, onSetPaym
         <strong className="budget-limit-figures">{formatAmount(schedule.amount, schedule.currency, locale)}</strong>
       </div>
       <div className="budget-entry-facts">
-        <span>{text.dueDayFact(schedule.due_day)}</span>
-        <span>{text.windowFact(schedule.start_date, schedule.end_date)}</span>
-        <span>{text.remindFact(schedule.remind_days_before)}</span>
-        <span className="budget-chip">{labelOf(text.destinations, schedule.destination_kind)}</span>
-        {schedule.enabled ? null : <span className="budget-chip">{text.disabled}</span>}
-        <button type="button" disabled={busy} onClick={() => { onEdit(schedule); }}>{text.edit}</button>
+        <span>{t("budget.mortgages.dueDayFact", { day: schedule.due_day })}</span>
+        <span>{windowText}</span>
+        <span>{remindText}</span>
+        <span className="budget-chip">{labelOf(MORTGAGE_DESTINATION_KEYS, schedule.destination_kind)}</span>
+        {schedule.enabled ? null : <span className="budget-chip">{t("budget.mortgages.disabled")}</span>}
+        <button type="button" disabled={busy} onClick={() => { onEdit(schedule); }}>{t("budget.mortgages.edit")}</button>
         <button type="button" disabled={busy} onClick={() => { onToggle(schedule); }}>
-          {schedule.enabled ? text.disable : text.enable}
+          {schedule.enabled ? t("budget.mortgages.disable") : t("budget.mortgages.enable")}
         </button>
       </div>
       <details className="budget-mortgage-paid">
-        <summary>{text.paidMonths(schedule.paid_months.length)}</summary>
-        {schedule.paid_months.length === 0 ? <p className="budget-muted">{text.noPaidMonths}</p> : (
+        <summary>{t("budget.mortgages.paidMonths", { count: schedule.paid_months.length })}</summary>
+        {schedule.paid_months.length === 0 ? <p className="budget-muted">{t("budget.mortgages.noPaidMonths")}</p> : (
           <ul className="budget-mortgage-months">
             {schedule.paid_months.map((month) => (
               <li key={`${schedule.id}/${month}`}>
                 <span>{month}</span>
                 <button type="button" disabled={busy}
-                  onClick={() => { onSetPayment(schedule, month, false); }}>{text.unmark}</button>
+                  onClick={() => { onSetPayment(schedule, month, false); }}>{t("budget.mortgages.unmark")}</button>
               </li>
             ))}
           </ul>
@@ -378,18 +257,18 @@ function ScheduleRow({ schedule, busy, text, locale, onEdit, onToggle, onSetPaym
             setMonthDraft("");
           }
         }}>
-          <label>{text.monthInput}
+          <label>{t("budget.mortgages.monthInput")}
             <input name="paid_month" type="text" maxLength={7} placeholder="2026-11" value={monthDraft}
               disabled={busy} onChange={(event) => { setMonthDraft(event.currentTarget.value); }} />
           </label>
-          <button type="submit" disabled={!canMark}>{text.markPaid}</button>
+          <button type="submit" disabled={!canMark}>{t("budget.mortgages.markPaid")}</button>
         </form>
       </details>
     </li>
   );
 }
 
-export function MortgagesView({ api, accounts, text, locale, revision, onAccessLoss }: MortgagesViewProps) {
+export function MortgagesView({ api, accounts, locale, revision, onAccessLoss }: MortgagesViewProps) {
   const [shown, setShown] = useState<Shown>({ state: "loading" });
   const [changes, setChanges] = useState(0);
   const [editing, setEditing] = useState<ScheduleDraft | null>(null);
@@ -422,12 +301,12 @@ export function MortgagesView({ api, accounts, text, locale, revision, onAccessL
         setEditing(null);
         reload();
       }
-      setNotice(saveFailure(text, result.error));
+      setNotice(saveFailure(result.error));
       return;
     }
     if (closeEditor) setEditing(null);
     reload();
-  }, [onAccessLoss, reload, text]);
+  }, [onAccessLoss, reload]);
 
   const schedules = shown.state === "ready" ? shown.data.schedules : [];
   const scheduleMap = new Map(schedules.map((item) => [item.id, item]));
@@ -491,39 +370,50 @@ export function MortgagesView({ api, accounts, text, locale, revision, onAccessL
     }), false);
   };
 
+  const title = t("budget.mortgages.title");
+  const schedulesTitle = t("budget.mortgages.schedulesTitle");
+  const ledgerAsOf = shown.state !== "ready" ? "" : shown.data.ledger_as_of === null
+    ? t("budget.mortgages.ledgerAsOfEmpty")
+    : t("budget.mortgages.ledgerAsOfDate", { date: shown.data.ledger_as_of });
+
   return (
-    <section className="budget-month" aria-label={text.title}>
-      <p className="budget-muted">{text.intro}</p>
+    <section className="budget-month" aria-label={title}>
+      <p className="budget-muted">{t("budget.mortgages.intro")}</p>
       {shown.state === "ready" ? (
         <div className="budget-entry-facts">
-          <span>{text.evaluatedFor(shown.data.evaluation_date, shown.data.evaluation_timezone)}</span>
-          <span>{text.ledgerAsOf(shown.data.ledger_as_of)}</span>
+          <span>
+            {t("budget.mortgages.evaluatedFor", {
+              date: shown.data.evaluation_date,
+              tz: shown.data.evaluation_timezone,
+            })}
+          </span>
+          <span>{ledgerAsOf}</span>
         </div>
       ) : null}
       {notice === null ? null : <p className="budget-notice" role="alert">{notice}</p>}
-      {shown.state === "loading" ? <p className="budget-muted" role="status">{text.loading}</p> : null}
-      {shown.state === "error" ? <p className="budget-notice" role="alert">{text.error}</p> : null}
+      {shown.state === "loading" ? <p className="budget-muted" role="status">{t("budget.mortgages.loading")}</p> : null}
+      {shown.state === "error" ? <p className="budget-notice" role="alert">{t("budget.mortgages.error")}</p> : null}
       {shown.state === "ready" ? (
         <>
-          <RemindersPanel reminders={shown.data.reminders} scheduleMap={scheduleMap} busy={busy} text={text}
+          <RemindersPanel reminders={shown.data.reminders} scheduleMap={scheduleMap} busy={busy}
             locale={locale} onMarkPaid={(schedule, month) => { setPayment(schedule, month, true); }} />
-          <section className="budget-entries" aria-label={text.schedulesTitle}>
+          <section className="budget-entries" aria-label={schedulesTitle}>
             <div className="budget-limit-main">
-              <h4>{text.schedulesTitle}</h4>
+              <h4>{schedulesTitle}</h4>
               {editing === null ? (
-                <button type="button" disabled={busy} onClick={openNew}>{text.newSchedule}</button>
+                <button type="button" disabled={busy} onClick={openNew}>{t("budget.mortgages.newSchedule")}</button>
               ) : null}
             </div>
             {editing === null ? null : (
-              <ScheduleEditor draft={editing} currencySuggestions={suggestions} busy={busy} text={text}
+              <ScheduleEditor draft={editing} currencySuggestions={suggestions} busy={busy}
                 onChange={(patch) => { setEditing((current) => (current === null ? null : { ...current, ...patch })); }}
                 onSubmit={(request) => { void mutate(() => api.saveMortgage(request), true); }}
                 onCancel={() => { setEditing(null); }} />
             )}
-            {schedules.length === 0 ? <p className="budget-muted">{text.noSchedules}</p> : (
+            {schedules.length === 0 ? <p className="budget-muted">{t("budget.mortgages.noSchedules")}</p> : (
               <ul className="budget-entry-list">
                 {schedules.map((schedule) => (
-                  <ScheduleRow key={schedule.id} schedule={schedule} busy={busy} text={text} locale={locale}
+                  <ScheduleRow key={schedule.id} schedule={schedule} busy={busy} locale={locale}
                     onEdit={openEdit} onToggle={toggleSchedule} onSetPayment={setPayment} />
                 ))}
               </ul>

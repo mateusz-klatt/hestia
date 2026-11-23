@@ -16,11 +16,11 @@ import { ForecastView } from "./analytics/forecast";
 import { InboxView } from "./analytics/inbox";
 import { MonthView, monthLabels } from "./analytics/month";
 import { MonthBudgetView, monthBudgetLabels } from "./analytics/month_budget";
-import { MortgagesView, mortgagesLabels } from "./analytics/mortgages";
+import { MortgagesView } from "./analytics/mortgages";
 import { QuarantineView } from "./analytics/quarantine";
 import { RecurringView } from "./analytics/recurring";
 import { CategoriesView, rulesLabels } from "./analytics/rules";
-import { SpendingLimitsView, spendingLimitsLabels } from "./analytics/spending_limits";
+import { SpendingLimitsView } from "./analytics/spending_limits";
 import { YearView, yearLabels } from "./analytics/year";
 import { hasAnalytics } from "./analytics/model";
 import type { RuleCandidate } from "./analytics/model";
@@ -125,15 +125,12 @@ type Labels = typeof labels.en;
 
 function pick(): { text: Labels;
   monthBudget: typeof monthBudgetLabels.en; month: typeof monthLabels.en; year: typeof yearLabels.en;
-  limits: typeof spendingLimitsLabels.en;
-  mortgages: typeof mortgagesLabels.en; rules: typeof rulesLabels.en; locale: string } {
+  rules: typeof rulesLabels.en; locale: string } {
   const locale = currentLocale();
   const pl = locale.startsWith("pl");
   return { text: pl ? labels.pl : labels.en,
     monthBudget: pl ? monthBudgetLabels.pl : monthBudgetLabels.en,
     month: pl ? monthLabels.pl : monthLabels.en, year: pl ? yearLabels.pl : yearLabels.en,
-    limits: pl ? spendingLimitsLabels.pl : spendingLimitsLabels.en,
-    mortgages: pl ? mortgagesLabels.pl : mortgagesLabels.en,
     rules: pl ? rulesLabels.pl : rulesLabels.en, locale };
 }
 
@@ -183,7 +180,7 @@ export interface BudgetProps {
 export function Budget({ active, api = budgetApi, pollMs = 2000, principal,
   navigate = (url) => { window.location.assign(url); }, completeUrl = "/budget/connect/complete" }: BudgetProps) {
   const { text, monthBudget: monthBudgetText, month: monthText,
-    year: yearText, limits: limitsText, mortgages: mortgagesText,
+    year: yearText,
     rules: rulesText, locale } = pick();
   const [load, setLoad] = useState<Load>("loading");
   const [connections, setConnections] = useState<BudgetConnection[]>([]);
@@ -517,13 +514,13 @@ export function Budget({ active, api = budgetApi, pollMs = 2000, principal,
         <YearView api={api} accounts={accounts} connections={connections} text={yearText} locale={locale} revision={revision} onAccessLoss={barrier}
           onOpenMonth={(month) => { setFocusMonth(month); setFocusToday(undefined); setFocusCurrency(undefined); setFocusProvisional(undefined); setView("month"); }} />
       ) : shownView === "limits" ? (
-        <SpendingLimitsView api={api} accounts={accounts} text={limitsText} locale={locale} revision={revision}
+        <SpendingLimitsView api={api} accounts={accounts} locale={locale} revision={revision}
           onAccessLoss={barrier} onOpenRules={() => { setView("rules"); }} />
       ) : shownView === "recurring" ? (
         <RecurringView api={api} accounts={accounts} connections={connections} locale={locale} revision={revision}
           onAccessLoss={barrier} />
       ) : shownView === "mortgages" ? (
-        <MortgagesView api={api} accounts={accounts} text={mortgagesText} locale={locale} revision={revision}
+        <MortgagesView api={api} accounts={accounts} locale={locale} revision={revision}
           onAccessLoss={barrier} />
       ) : shownView === "forecast" ? (
         <ForecastView api={api} accounts={accounts} connections={connections} locale={locale} revision={revision}

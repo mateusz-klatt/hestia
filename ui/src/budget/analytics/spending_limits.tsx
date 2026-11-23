@@ -1,119 +1,18 @@
 // Monthly category spending limits (2D): organisational aids only. Server evaluates exact decimal totals
 // per currency without conversion; writes require strict CAS expected_version and never touch bank accounts.
 import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { t } from "../../i18n";
 import type { BudgetApi, BudgetResult } from "../api";
 import type { BudgetAccount } from "../model";
 import { formatAmount } from "../model";
 import { CategorySwatch } from "./category_badge";
 import { buildCategoryColors } from "./category_colors";
 import type { CategoryColorResolver } from "./category_colors";
-import { ANALYTICS_ERROR, DEFAULT_WARNING_PERCENT, RELOAD_ERRORS, SPENDING_LIMIT_AMOUNT_MAX, currentMonth,
-  isMonth, isZero, labelOf, limitCurrencies, monthLabel, parseWarningPercent, shiftMonth, validCurrency,
+import { ANALYTICS_ERROR, DEFAULT_WARNING_PERCENT, LIMIT_STATUS_KEYS, RELOAD_ERRORS, SPENDING_LIMIT_AMOUNT_MAX,
+  currentMonth, isMonth, isZero, labelOf, limitCurrencies, monthLabel, parseWarningPercent, shiftMonth, validCurrency,
   validLimitAmount } from "./model";
 import type { AnalyticsCategory, AnalyticsSpendingLimit, AnalyticsSpendingLimitStatus,
   AnalyticsSpendingLimits, SpendingLimitSaveRequest } from "./model";
-
-export const spendingLimitsLabels = {
-  en: {
-    title: "Spending limits",
-    intro: "Monthly category limits evaluated per currency without conversion. These are organisational aids only and never block payments or change accounts.",
-    previous: "Previous month",
-    next: "Next month",
-    allCurrencies: "All currencies",
-    currencyFilter: "Filter spending limits by currency",
-    loading: "Loading spending limits…",
-    error: "Spending limits could not be loaded. Try again.",
-    evaluationTitle: "Monthly status",
-    noStatuses: "No active spending limits to evaluate for this view.",
-    configuredTitle: "Configured limits",
-    noLimits: "No monthly spending limits configured yet.",
-    noLimitsForCurrency: (currency: string) => `No spending limits configured in ${currency}.`,
-    noCategoriesHint: "Create at least one active category before adding a spending limit.",
-    openCategoriesLink: "Open Categories and rules",
-    newLimit: "New limit",
-    edit: "Edit",
-    save: "Save limit",
-    cancel: "Cancel",
-    disable: "Disable",
-    enable: "Enable",
-    enabled: "Enabled",
-    disabled: "disabled",
-    archived: "archived",
-    category: "Category",
-    chooseCategory: "Choose category…",
-    currency: "Currency",
-    monthlyLimit: "Monthly limit",
-    warningPercent: "Warning at (%)",
-    statuses: {
-      within: "Within limit",
-      approaching: "Approaching limit",
-      at_limit: "At limit",
-      exceeded: "Exceeded",
-    },
-    spentOf: (spent: string, limit: string, percent: number) => `${spent} of ${limit} (${String(percent)}%)`,
-    remaining: (amount: string) => `Remaining: ${amount}`,
-    overBy: (amount: string) => `Over by: ${amount}`,
-    expenses: (amount: string) => `Expenses: ${amount}`,
-    refunds: (amount: string) => `Refunds: ${amount}`,
-    warningAt: (percent: number) => `Warning at ${String(percent)}%`,
-    duplicateHint: "A limit for this category and currency already exists — edit it below.",
-    archivedTarget: "This category is archived: the limit can only stay disabled.",
-    invalidHint: "Choose a category, 3-letter currency (e.g. PLN), positive amount and warning threshold (1–99%).",
-    conflict: "This changed elsewhere; the latest state was loaded.",
-    limitCap: "Maximum number of spending limits reached.",
-    saveError: "Could not save spending limit. Try again.",
-  },
-  pl: {
-    title: "Limity wydatków",
-    intro: "Miesięczne limity kategorii liczone osobno dla każdej waluty, bez przeliczania kursów. To wyłącznie pomoc organizacyjna — nigdy nie blokują płatności ani nie zmieniają kont.",
-    previous: "Poprzedni miesiąc",
-    next: "Następny miesiąc",
-    allCurrencies: "Wszystkie waluty",
-    currencyFilter: "Filtruj limity wydatków według waluty",
-    loading: "Wczytywanie limitów wydatków…",
-    error: "Nie udało się wczytać limitów wydatków. Spróbuj ponownie.",
-    evaluationTitle: "Stan miesięczny",
-    noStatuses: "Brak aktywnych limitów wydatków do oceny w tym widoku.",
-    configuredTitle: "Skonfigurowane limity",
-    noLimits: "Nie skonfigurowano jeszcze miesięcznych limitów wydatków.",
-    noLimitsForCurrency: (currency: string) => `Brak limitów wydatków w walucie ${currency}.`,
-    noCategoriesHint: "Najpierw utwórz aktywną kategorię, aby dodać limit wydatków.",
-    openCategoriesLink: "Przejdź do: Kategorie i reguły",
-    newLimit: "Nowy limit",
-    edit: "Edytuj",
-    save: "Zapisz limit",
-    cancel: "Anuluj",
-    disable: "Wyłącz",
-    enable: "Włącz",
-    enabled: "Włączony",
-    disabled: "wyłączony",
-    archived: "archiwalna",
-    category: "Kategoria",
-    chooseCategory: "Wybierz kategorię…",
-    currency: "Waluta",
-    monthlyLimit: "Limit miesięczny",
-    warningPercent: "Ostrzeżenie od (%)",
-    statuses: {
-      within: "W limicie",
-      approaching: "Blisko limitu",
-      at_limit: "Na limicie",
-      exceeded: "Przekroczony",
-    },
-    spentOf: (spent: string, limit: string, percent: number) => `${spent} z ${limit} (${String(percent)}%)`,
-    remaining: (amount: string) => `Pozostało: ${amount}`,
-    overBy: (amount: string) => `Przekroczono o: ${amount}`,
-    expenses: (amount: string) => `Wydatki: ${amount}`,
-    refunds: (amount: string) => `Zwroty: ${amount}`,
-    warningAt: (percent: number) => `Ostrzeżenie od ${String(percent)}%`,
-    duplicateHint: "Limit dla tej kategorii i waluty już istnieje — edytuj go poniżej.",
-    archivedTarget: "Ta kategoria jest archiwalna: limit może pozostać tylko wyłączony.",
-    invalidHint: "Wybierz kategorię, 3-literowy kod waluty (np. PLN), dodatnią kwotę i próg ostrzeżenia (1–99%).",
-    conflict: "Zmieniono to w innym miejscu; wczytano aktualny stan.",
-    limitCap: "Osiągnięto maksymalną liczbę limitów wydatków.",
-    saveError: "Nie udało się zapisać limitu wydatków. Spróbuj ponownie.",
-  },
-};
-export type SpendingLimitsLabels = typeof spendingLimitsLabels.en;
 
 type Loss = (result: { ok: boolean; status?: number; error?: string }) => boolean;
 type Shown = { state: "loading" } | { state: "error" } | { state: "ready"; data: AnalyticsSpendingLimits };
@@ -131,7 +30,6 @@ interface LimitDraft {
 export interface SpendingLimitsViewProps {
   api: Pick<BudgetApi, "spendingLimits" | "saveSpendingLimit" | "categories">;
   accounts: readonly BudgetAccount[];
-  text: SpendingLimitsLabels;
   locale: string;
   revision: number;
   onAccessLoss: Loss;
@@ -140,10 +38,10 @@ export interface SpendingLimitsViewProps {
   today?: () => Date;
 }
 
-function saveFailure(text: SpendingLimitsLabels, error: string): string {
-  if (RELOAD_ERRORS.has(error)) return text.conflict;
-  if (error === ANALYTICS_ERROR.limit) return text.limitCap;
-  return text.saveError;
+function saveFailure(error: string): string {
+  if (RELOAD_ERRORS.has(error)) return t("budget.limits.conflict");
+  if (error === ANALYTICS_ERROR.limit) return t("budget.limits.limitCap");
+  return t("budget.limits.saveError");
 }
 
 function buildRequest(draft: LimitDraft): SpendingLimitSaveRequest | null {
@@ -165,15 +63,16 @@ interface StatusPanelProps {
   statuses: readonly AnalyticsSpendingLimitStatus[];
   categoryMap: ReadonlyMap<string, AnalyticsCategory>;
   categoryColors: CategoryColorResolver;
-  text: SpendingLimitsLabels;
   locale: string;
 }
 
-function StatusPanel({ statuses, categoryMap, categoryColors, text, locale }: StatusPanelProps) {
+function StatusPanel({ statuses, categoryMap, categoryColors, locale }: StatusPanelProps) {
+  const evaluationTitle = t("budget.limits.evaluationTitle");
+  const archivedText = t("budget.limits.archived");
   return (
-    <section className="budget-entries" aria-label={text.evaluationTitle}>
-      <h4>{text.evaluationTitle}</h4>
-      {statuses.length === 0 ? <p className="budget-muted">{text.noStatuses}</p> : (
+    <section className="budget-entries" aria-label={evaluationTitle}>
+      <h4>{evaluationTitle}</h4>
+      {statuses.length === 0 ? <p className="budget-muted">{t("budget.limits.noStatuses")}</p> : (
         <ul className="budget-entry-list">
           {statuses.map((item) => {
             const label = item.name ?? categoryMap.get(item.category_id)?.name ?? item.category_id;
@@ -186,27 +85,31 @@ function StatusPanel({ statuses, categoryMap, categoryColors, text, locale }: St
                   <span className="budget-entry-text">
                     <CategorySwatch color={categoryColors.get(item.category_id)} />
                     <strong>{label}</strong>
-                    {item.archived ? <span className="budget-muted"> ({text.archived})</span> : null}
+                    {item.archived ? <span className="budget-muted"> ({archivedText})</span> : null}
                   </span>
                   <span className="budget-chip budget-limit-status" data-status={item.status}>
-                    {labelOf(text.statuses, item.status)}
+                    {labelOf(LIMIT_STATUS_KEYS, item.status)}
                   </span>
                 </div>
                 <div className="budget-limit-meter">
                   <progress value={progress} max={100} aria-label={label} />
-                  <span className="budget-limit-figures">{text.spentOf(spent, cap, item.percent_used_floor)}</span>
+                  <span className="budget-limit-figures">
+                    {t("budget.limits.spentOf", { spent, limit: cap, percent: item.percent_used_floor })}
+                  </span>
                 </div>
                 <div className="budget-entry-facts">
                   {isZero(item.over_by) ? (
-                    <span>{text.remaining(formatAmount(item.remaining, item.currency, locale))}</span>
+                    <span>{t("budget.limits.remaining", { amount: formatAmount(item.remaining, item.currency, locale) })}</span>
                   ) : (
-                    <span className="budget-warn">{text.overBy(formatAmount(item.over_by, item.currency, locale))}</span>
+                    <span className="budget-warn">
+                      {t("budget.limits.overBy", { amount: formatAmount(item.over_by, item.currency, locale) })}
+                    </span>
                   )}
-                  <span>{text.expenses(formatAmount(item.expenses, item.currency, locale))}</span>
+                  <span>{t("budget.limits.expenses", { amount: formatAmount(item.expenses, item.currency, locale) })}</span>
                   {isZero(item.refunds) ? null : (
-                    <span>{text.refunds(formatAmount(item.refunds, item.currency, locale))}</span>
+                    <span>{t("budget.limits.refunds", { amount: formatAmount(item.refunds, item.currency, locale) })}</span>
                   )}
-                  <span>{text.warningAt(item.warning_percent)}</span>
+                  <span>{t("budget.limits.warningAt", { percent: item.warning_percent })}</span>
                 </div>
               </li>
             );
@@ -223,13 +126,12 @@ interface LimitEditorProps {
   currencySuggestions: readonly string[];
   existingKeys: ReadonlySet<string>;
   busy: boolean;
-  text: SpendingLimitsLabels;
   onChange: (patch: Partial<LimitDraft>) => void;
   onSubmit: (request: SpendingLimitSaveRequest) => void;
   onCancel: () => void;
 }
 
-function LimitEditor({ draft, categories, currencySuggestions, existingKeys, busy, text, onChange,
+function LimitEditor({ draft, categories, currencySuggestions, existingKeys, busy, onChange,
   onSubmit, onCancel }: LimitEditorProps) {
   const listId = useId();
   const activeCategories = categories.filter((item) => !item.archived);
@@ -248,16 +150,16 @@ function LimitEditor({ draft, categories, currencySuggestions, existingKeys, bus
     }}>
       {draft.mode === "create" ? (
         <>
-          <label>{text.category}
+          <label>{t("budget.limits.category")}
             <select name="limit_category" value={draft.category_id} disabled={busy}
               onChange={(event) => { onChange({ category_id: event.currentTarget.value }); }}>
-              <option value="">{text.chooseCategory}</option>
+              <option value="">{t("budget.limits.chooseCategory")}</option>
               {activeCategories.map((item) => (
                 <option key={item.id} value={item.id}>{item.name}</option>
               ))}
             </select>
           </label>
-          <label>{text.currency}
+          <label>{t("budget.limits.currency")}
             <input name="limit_currency" type="text" list={listId} maxLength={3} value={draft.currency} disabled={busy}
               placeholder="PLN" onChange={(event) => { onChange({ currency: event.currentTarget.value.toUpperCase() }); }} />
             <datalist id={listId}>
@@ -268,15 +170,15 @@ function LimitEditor({ draft, categories, currencySuggestions, existingKeys, bus
       ) : (
         <p className="budget-muted">
           <strong>{selectedCategory?.name ?? draft.category_id}</strong> · {draft.currency}
-          {archivedTarget ? ` (${text.archived})` : ""}
+          {archivedTarget ? ` (${t("budget.limits.archived")})` : ""}
         </p>
       )}
-      <label>{text.monthlyLimit}
+      <label>{t("budget.limits.monthlyLimit")}
         <input name="monthly_limit" type="text" inputMode="decimal" maxLength={SPENDING_LIMIT_AMOUNT_MAX}
           value={draft.monthly_limit} disabled={busy} placeholder="500.00"
           onChange={(event) => { onChange({ monthly_limit: event.currentTarget.value }); }} />
       </label>
-      <label>{text.warningPercent}
+      <label>{t("budget.limits.warningPercent")}
         <input name="warning_percent" type="number" min={1} max={99} step={1} value={draft.warning_percent}
           disabled={busy} onChange={(event) => { onChange({ warning_percent: event.currentTarget.value }); }} />
       </label>
@@ -284,22 +186,22 @@ function LimitEditor({ draft, categories, currencySuggestions, existingKeys, bus
         <input name="limit_enabled" type="checkbox" checked={draft.enabled}
           disabled={busy || (archivedTarget && !draft.enabled)}
           onChange={(event) => { onChange({ enabled: event.currentTarget.checked }); }} />
-        {text.enabled}
+        {t("budget.limits.enabled")}
       </label>
-      {duplicate ? <p className="budget-notice" role="alert">{text.duplicateHint}</p> : null}
-      {archivedTarget && draft.enabled ? <p className="budget-notice" role="alert">{text.archivedTarget}</p> : null}
+      {duplicate ? <p className="budget-notice" role="alert">{t("budget.limits.duplicateHint")}</p> : null}
+      {archivedTarget && draft.enabled ? <p className="budget-notice" role="alert">{t("budget.limits.archivedTarget")}</p> : null}
       {!duplicate && !(archivedTarget && draft.enabled) && request === null ? (
-        <p className="budget-muted">{text.invalidHint}</p>
+        <p className="budget-muted">{t("budget.limits.invalidHint")}</p>
       ) : null}
       <div className="budget-actions">
-        <button type="submit" className="budget-primary" disabled={!canSave}>{text.save}</button>
-        <button type="button" disabled={busy} onClick={onCancel}>{text.cancel}</button>
+        <button type="submit" className="budget-primary" disabled={!canSave}>{t("budget.limits.save")}</button>
+        <button type="button" disabled={busy} onClick={onCancel}>{t("budget.limits.cancel")}</button>
       </div>
     </form>
   );
 }
 
-export function SpendingLimitsView({ api, accounts, text, locale, revision, onAccessLoss, onOpenRules, initialMonth,
+export function SpendingLimitsView({ api, accounts, locale, revision, onAccessLoss, onOpenRules, initialMonth,
   today = () => new Date() }: SpendingLimitsViewProps) {
   const latest = currentMonth(today());
   const [month, setMonth] = useState(
@@ -360,7 +262,7 @@ export function SpendingLimitsView({ api, accounts, text, locale, revision, onAc
         setEditing(null);
         reload();
       }
-      setNotice(saveFailure(text, result.error));
+      setNotice(saveFailure(result.error));
       return;
     }
     setAllLimitKeys((current) => new Set([...current, `${request.category_id}/${request.currency}`]));
@@ -369,7 +271,7 @@ export function SpendingLimitsView({ api, accounts, text, locale, revision, onAc
       if (currency !== "" && request.currency !== currency) setCurrency("");
     }
     reload();
-  }, [api, currency, onAccessLoss, reload, text]);
+  }, [api, currency, onAccessLoss, reload]);
 
   const categoryMap = new Map(categories.map((item) => [item.id, item]));
   const categoryColors = buildCategoryColors(categories);
@@ -414,20 +316,24 @@ export function SpendingLimitsView({ api, accounts, text, locale, revision, onAc
     }, false);
   };
 
+  const title = t("budget.limits.title");
+  const configuredTitle = t("budget.limits.configuredTitle");
+  const archivedText = t("budget.limits.archived");
+
   return (
-    <section className="budget-month" aria-label={text.title}>
+    <section className="budget-month" aria-label={title}>
       <nav className="budget-month-nav">
-        <button type="button" aria-label={text.previous} disabled={busy}
+        <button type="button" aria-label={t("budget.limits.previous")} disabled={busy}
           onClick={() => { setMonth((value) => shiftMonth(value, -1)); }}>◀</button>
         <h3>{monthLabel(month, locale)}</h3>
-        <button type="button" aria-label={text.next} disabled={busy || month >= latest}
+        <button type="button" aria-label={t("budget.limits.next")} disabled={busy || month >= latest}
           onClick={() => { setMonth((value) => (isMonth(value) && value < latest ? shiftMonth(value, 1) : value)); }}>▶</button>
       </nav>
-      <p className="budget-muted">{text.intro}</p>
+      <p className="budget-muted">{t("budget.limits.intro")}</p>
       {showCurrencies ? (
-        <div className="budget-views" role="group" aria-label={text.currencyFilter}>
+        <div className="budget-views" role="group" aria-label={t("budget.limits.currencyFilter")}>
           <button type="button" disabled={busy} aria-pressed={currency === ""} onClick={() => { setCurrency(""); }}>
-            {text.allCurrencies}
+            {t("budget.limits.allCurrencies")}
           </button>
           {currencies.map((code) => (
             <button type="button" key={code} disabled={busy} aria-pressed={currency === code} onClick={() => { setCurrency(code); }}>
@@ -437,26 +343,26 @@ export function SpendingLimitsView({ api, accounts, text, locale, revision, onAc
         </div>
       ) : null}
       {notice === null ? null : <p className="budget-notice" role="alert">{notice}</p>}
-      {shown.state === "loading" ? <p className="budget-muted" role="status">{text.loading}</p> : null}
-      {shown.state === "error" ? <p className="budget-notice" role="alert">{text.error}</p> : null}
+      {shown.state === "loading" ? <p className="budget-muted" role="status">{t("budget.limits.loading")}</p> : null}
+      {shown.state === "error" ? <p className="budget-notice" role="alert">{t("budget.limits.error")}</p> : null}
       {shown.state === "ready" ? (
         <>
-          <StatusPanel statuses={shown.data.statuses} categoryMap={categoryMap} categoryColors={categoryColors} text={text} locale={locale} />
-          <section className="budget-entries" aria-label={text.configuredTitle}>
+          <StatusPanel statuses={shown.data.statuses} categoryMap={categoryMap} categoryColors={categoryColors} locale={locale} />
+          <section className="budget-entries" aria-label={configuredTitle}>
             <div className="budget-limit-main">
-              <h4>{text.configuredTitle}</h4>
+              <h4>{configuredTitle}</h4>
               {editing === null && activeCategories.length > 0 ? (
-                <button type="button" disabled={busy} onClick={openNew}>{text.newLimit}</button>
+                <button type="button" disabled={busy} onClick={openNew}>{t("budget.limits.newLimit")}</button>
               ) : null}
             </div>
             {editing === null && activeCategories.length === 0 ? (
               <p className="budget-muted">
-                {text.noCategoriesHint}
+                {t("budget.limits.noCategoriesHint")}
                 {onOpenRules === undefined ? null : (
                   <>
                     {" "}
                     <button type="button" className="budget-link" disabled={busy} onClick={onOpenRules}>
-                      {text.openCategoriesLink}
+                      {t("budget.limits.openCategoriesLink")}
                     </button>
                   </>
                 )}
@@ -464,13 +370,15 @@ export function SpendingLimitsView({ api, accounts, text, locale, revision, onAc
             ) : null}
             {editing === null ? null : (
               <LimitEditor draft={editing} categories={categories} currencySuggestions={suggestions}
-                existingKeys={allLimitKeys} busy={busy} text={text}
+                existingKeys={allLimitKeys} busy={busy}
                 onChange={(patch) => { setEditing((current) => (current === null ? null : { ...current, ...patch })); }}
                 onSubmit={(request) => { void submit(request, true); }}
                 onCancel={() => { setEditing(null); }} />
             )}
             {limits.length === 0 ? (
-              <p className="budget-muted">{currency === "" ? text.noLimits : text.noLimitsForCurrency(currency)}</p>
+              <p className="budget-muted">
+                {currency === "" ? t("budget.limits.noLimits") : t("budget.limits.noLimitsForCurrency", { currency })}
+              </p>
             ) : (
               <ul className="budget-entry-list">
                 {limits.map((limit) => {
@@ -485,18 +393,18 @@ export function SpendingLimitsView({ api, accounts, text, locale, revision, onAc
                           <strong className={limit.enabled ? undefined : "budget-muted"}>
                             {category?.name ?? limit.category_id}
                           </strong>
-                          {archived ? <span className="budget-muted"> ({text.archived})</span> : null}
+                          {archived ? <span className="budget-muted"> ({archivedText})</span> : null}
                         </span>
                         <strong className="budget-limit-figures">
                           {formatAmount(limit.monthly_limit, limit.currency, locale)}
                         </strong>
                       </div>
                       <div className="budget-entry-facts">
-                        <span>{text.warningAt(limit.warning_percent)}</span>
-                        {limit.enabled ? null : <span className="budget-chip">{text.disabled}</span>}
-                        <button type="button" disabled={busy} onClick={() => { openEdit(limit); }}>{text.edit}</button>
+                        <span>{t("budget.limits.warningAt", { percent: limit.warning_percent })}</span>
+                        {limit.enabled ? null : <span className="budget-chip">{t("budget.limits.disabled")}</span>}
+                        <button type="button" disabled={busy} onClick={() => { openEdit(limit); }}>{t("budget.limits.edit")}</button>
                         <button type="button" disabled={!canToggle} onClick={() => { toggleLimit(limit); }}>
-                          {limit.enabled ? text.disable : text.enable}
+                          {limit.enabled ? t("budget.limits.disable") : t("budget.limits.enable")}
                         </button>
                       </div>
                     </li>
