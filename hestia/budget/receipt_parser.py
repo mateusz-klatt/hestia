@@ -35,6 +35,17 @@ _NUMBER_RE = re.compile(_NUMBER, re.ASCII)
 _MONEY = re.compile(r"-?[0-9]+(?:\.[0-9]+)?\Z", re.ASCII)
 _DATE_ISO = re.compile(r"(?<![0-9])([0-9]{4})-([0-9]{2})-([0-9]{2})(?![0-9])", re.ASCII)
 _DATE_PL = re.compile(r"(?<![0-9])([0-9]{2})[-.]([0-9]{2})[-.]([0-9]{4})(?![0-9])", re.ASCII)
+# Stream breaks use one separator and a real calendar day. Mixed separators and
+# spaces are not dates. A two-digit year is only the dotted ``DD.MM.YY`` form.
+_STREAM_DATE = re.compile(
+    r"(?<![0-9])(?:"
+    r"(?P<iso_y>[0-9]{4})-(?P<iso_m>[0-9]{2})-(?P<iso_d>[0-9]{2})"
+    r"|(?P<dmy_d>[0-9]{2})-(?P<dmy_m>[0-9]{2})-(?P<dmy_y>[0-9]{4})"
+    r"|(?P<slash_d>[0-9]{2})/(?P<slash_m>[0-9]{2})/(?P<slash_y>[0-9]{4})"
+    r"|(?P<dot_d>[0-9]{2})\.(?P<dot_m>[0-9]{2})\.(?P<dot_y>[0-9]{4}|[0-9]{2})"
+    r")(?![0-9])",
+    re.ASCII,
+)
 _TIME = re.compile(r"(?<![0-9])((?:[01][0-9]|2[0-3]):[0-5][0-9])(?![0-9])", re.ASCII)
 _NIP = re.compile(r"\bNIP\s*:?\s*([0-9][0-9 -]{8,16}[0-9])\b", re.IGNORECASE | re.ASCII)
 # A candidate is digits and mask symbols on one line. Spaces, hyphens, dots and
@@ -49,7 +60,9 @@ _NIP = re.compile(r"\bNIP\s*:?\s*([0-9][0-9 -]{8,16}[0-9])\b", re.IGNORECASE | r
 # Everywhere, each window of up to three lines joins digit runs that are
 # separated only by spaces, hyphens or the newline. Windows of 13–19 symbols
 # on that stream are tested for Luhn and for a mask beside digits. A price
-# token or a receipt date breaks the stream, so item lines stay intact.
+# token breaks the stream. A date breaks it only when it is a real calendar
+# day in 2000–2099 written with one canonical separator. Beside a card label
+# a date does not break the stream.
 _PAN_NEWLINES = frozenset("\n\r\u2028\u2029")
 _PAN_DASHES = frozenset("-‐‑‒–—―")
 _PAN_MASKS = frozenset("*Xx•●#")
@@ -511,38 +524,105 @@ def _merge_spans(spans):
     return merged
 
 
-def _stream_break_ranges(line):
-    """Price tokens and receipt dates. Their digits are not card groups.
+def _stream_date_parts(match):
+    if match.group("iso_y") is not None:
+        return match.group("iso_y"), match.group("iso_m"), match.group("iso_d")
+    if match.group("dmy_y") is not None:
+        return match.group("dmy_y"), match.group("dmy_m"), match.group("dmy_d")
+    if match.group("slash_y") is not None:
+        return match.group("slash_y"), match.group("slash_m"), match.group("slash_d")
+    return match.group("dot_y"), match.group("dot_m"), match.group("dot_d")
+
+
+def _real_calendar_date(year, month, day):
+    """True when the parts are a real day and the year is 2000–2099.
+
+    A two-digit year is ``20xx``.
+    """
+    if len(year) == 2:
+        year = "20" + year
+    if len(year) != 4:
+        return False
+    try:
+        parsed = date(int(year), int(month), int(day))
+    except ValueError:
+        return False
+    return 2000 <= parsed.year <= 2099
+
+
+def _span_overlaps(span, others):
+    start, end = span
+    return any(start < other_end and end > other_start for other_start, other_end in others)
+
+
+def _covered_by(span, covers):
+    start, end = span
+    return any(cover_start <= start and end <= cover_end for cover_start, cover_end in covers)
+
+
+def _date_break_and_joiner_spans(line):
+    """Real canonical dates break the stream. Invalid date shapes do not.
+
+    A dotted invalid day such as ``31.13.0000`` would otherwise be dropped as
+    a date and as a price. Its separators join the digits instead, so a PAN
+    wrapped across the newline still meets the scanner.
+    """
+    real = []
+    joiners = []
+    for match in _STREAM_DATE.finditer(line):
+        year, month, day = _stream_date_parts(match)
+        span = (match.start(), match.end())
+        if _real_calendar_date(year, month, day):
+            real.append(span)
+        else:
+            joiners.append(span)
+    for match in _DATE_PL.finditer(line):
+        span = (match.start(), match.end())
+        if _covered_by(span, real):
+            continue
+        day, month, year = match.groups()
+        separators = {char for char in match.group(0) if char in ".-"}
+        if len(separators) == 1 and _real_calendar_date(year, month, day):
+            continue
+        joiners.append(span)
+    return real, joiners
+
+
+def _stream_break_ranges(line, *, break_dates=True):
+    """Price tokens, and receipt dates that are real calendar days.
 
     A hyphenated date such as ``2026-11-20`` would otherwise join a NIP across
-    the newline, and that combined digit string can pass Luhn.
+    the newline, and that combined digit string can pass Luhn. An invalid
+    month or day is not a date, so those digits stay in the stream. Inside a
+    card-label window ``break_dates`` is false and a date exempts nothing.
     """
-    ranges = list(_money_ranges(line))
-    for pattern in (_DATE_ISO, _DATE_PL):
-        ranges.extend((match.start(), match.end()) for match in pattern.finditer(line))
-    if not ranges:
-        return []
-    ranges.sort()
-    merged = [ranges[0]]
-    for start, end in ranges[1:]:
-        if start <= merged[-1][1]:
-            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
-        else:
-            merged.append((start, end))
-    return merged
+    real, joiners = _date_break_and_joiner_spans(line) if break_dates else ([], [])
+    ranges = [span for span in _money_ranges(line) if not _span_overlaps(span, joiners)]
+    ranges.extend(real)
+    return _merge_spans(ranges), _merge_spans(joiners)
 
 
-def _plain_line_tokens(line):
+def _plain_line_tokens(line, *, break_dates=True):
     """Digit and mask runs, with ``None`` where the plain stream must break.
 
     Spaces and hyphens are skipped, so they join the runs on either side.
     A dot, a comma, a letter or any other character breaks the stream.
+    A dot or slash inside an invalid date shape joins, same as a hyphen.
     """
-    breaks = _stream_break_ranges(line)
+    breaks, joiners = _stream_break_ranges(line, break_dates=break_dates)
     tokens = []
     length = len(line)
     index = 0
     break_at = 0
+    joiner_at = 0
+    joiner_count = len(joiners)
+
+    def in_joiner(at):
+        nonlocal joiner_at
+        while joiner_at < joiner_count and joiners[joiner_at][1] <= at:
+            joiner_at += 1
+        return joiner_at < joiner_count and joiners[joiner_at][0] <= at
+
     while index < length:
         if break_at < len(breaks) and breaks[break_at][1] <= index:
             break_at += 1
@@ -573,6 +653,9 @@ def _plain_line_tokens(line):
             tokens.append((start, index, symbols))
             continue
         if line[index] in _PAN_DASHES or (line[index].isspace() and line[index] not in _PAN_NEWLINES):
+            index += 1
+            continue
+        if line[index] in "./" and in_joiner(index):
             index += 1
             continue
         tokens.append(None)
@@ -639,13 +722,17 @@ def _flagged_fragment_spans(fragments):
     return spans
 
 
-def _cross_line_plain_spans(lines, offsets):
+def _cross_line_plain_spans(lines, offsets, break_dates):
     """Join plain groups across each window of up to three lines.
 
     Each line is visited at most three times, and only windows of 13–19 symbols
-    are tested, so the scan stays linear.
+    are tested, so the scan stays linear. ``break_dates`` is false on a card
+    label and the next two lines, where a date exempts nothing.
     """
-    tokens = [_plain_line_tokens(line) for line in lines]
+    tokens = [
+        _plain_line_tokens(line, break_dates=break_dates[index])
+        for index, line in enumerate(lines)
+    ]
     spans = []
     total = len(lines)
     for start in range(total):
@@ -713,7 +800,8 @@ def _pan_spans(text):
                 if fragments[index] is None:
                     fragments[index] = _symbol_fragments(lines[index])
             spans.extend(_label_stream_spans(fragments, number, limit, offsets))
-    spans.extend(_cross_line_plain_spans(lines, offsets))
+    date_breaks = [not (label[number] or follow[number]) for number in range(len(lines))]
+    spans.extend(_cross_line_plain_spans(lines, offsets, date_breaks))
     return _merge_spans(spans)
 
 

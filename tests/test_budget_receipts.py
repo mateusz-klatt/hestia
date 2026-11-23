@@ -591,6 +591,48 @@ NR KARTY ****5555
         self.assertIn("CARD NUMBER", split_redacted)
         self.assertEqual(redact_pan("KARTA\n****\n1234"), "KARTA\n[REDACTED]\n[REDACTED]")
 
+    def test_invalid_date_shape_does_not_hide_a_wrapped_pan(self):
+        wrapped = {
+            "4111-1111\n31-13-0000": "[REDACTED]-[REDACTED]\n[REDACTED]-[REDACTED]-[REDACTED]",
+            "4111-1111\n00-00-0002": "[REDACTED]-[REDACTED]\n[REDACTED]-[REDACTED]-[REDACTED]",
+            "4111-1111\n31.13.0000": "[REDACTED]-[REDACTED]\n[REDACTED].[REDACTED].[REDACTED]",
+            "4111-1111\n00.00.0002": "[REDACTED]-[REDACTED]\n[REDACTED].[REDACTED].[REDACTED]",
+            "4111-1111\n31.13-0000": "[REDACTED]-[REDACTED]\n[REDACTED].[REDACTED]-[REDACTED]",
+            "4111-1111\n00.00-0002": "[REDACTED]-[REDACTED]\n[REDACTED].[REDACTED]-[REDACTED]",
+        }
+        for raw, expected in wrapped.items():
+            with self.subTest(raw=raw):
+                self.assertEqual(redact_pan(raw), expected)
+                self.assertEqual(parse_receipt(raw)["raw_ocr_text"], expected)
+                self.assertNotRegex(expected, r"[0-9]")
+        for kept in (
+            "2026-11-22 14:35",
+            "22.11.2026",
+            "22.11.26",
+            "22/11/2026",
+            "29.02.2024",
+            "22 11 2026",
+            "NIP 7791011327\n2026-11-22 14:35\n",
+            "NIP 7791011327\n22.11.2026\n",
+            "NIP 7791011327\n22.11.26\n",
+            "411111111111\n2026-11-22 14:35",
+            "22.11.2026\n411111111111",
+            "22.11.26\n411111111111",
+            "KARTA\nok\nok\n2026-11-22 14:35",
+        ):
+            with self.subTest(kept=kept):
+                self.assertEqual(redact_pan(kept), kept)
+        self.assertEqual(redact_pan("KARTA\n2026-11-22"), "KARTA\n[REDACTED]-[REDACTED]-[REDACTED]")
+        self.assertEqual(redact_pan("KARTA\n22.11.2026"), "KARTA\n[REDACTED].[REDACTED].[REDACTED]")
+        labelled = "KARTA\n4 1 1 1 1 1 1 1\n31-13-0000"
+        self.assertEqual(
+            redact_pan(labelled),
+            "KARTA\n[REDACTED] [REDACTED] [REDACTED] [REDACTED] "
+            "[REDACTED] [REDACTED] [REDACTED] [REDACTED]\n"
+            "[REDACTED]-[REDACTED]-[REDACTED]",
+        )
+        self.assertNotRegex(parse_receipt(labelled)["raw_ocr_text"], r"[0-9]")
+
     def test_item_three_lines_after_card_label_keeps_prices(self):
         text = (
             "BIEDRONKA\nNIP 7791011327\n2026-11-30 12:34\n"
