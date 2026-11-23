@@ -20,8 +20,10 @@ PREFIX = "/api/budget/analytics"
 FLAG = "HESTIA_BUDGET_ANALYTICS_ENABLED"
 MAX_FORECAST_RESPONSE_BYTES = 4 * 1024 * 1024
 MAX_MONTHLY_BUDGET_RESPONSE_BYTES = 4 * 1024 * 1024
+MAX_TRANSACTIONS_BY_KEYS_BYTES = 1048576
 _MONTHLY_BUDGET_OP = "monthly-budget"
 _MONTHLY_BUDGET_CHARTS_OP = "monthly-budget/charts"
+_TRANSACTIONS_BY_KEYS_OP = "transactions-by-keys"
 READS = ("overview", "transactions", "categories", "rules", "transfers", "recurring", "spending-limits",
          "mortgages", "inbox", "quarantine", "forecast", _MONTHLY_BUDGET_OP, _MONTHLY_BUDGET_CHARTS_OP)
 WRITES = {
@@ -154,17 +156,24 @@ def register(app, read_json_body, *, auth_enabled, session_secret):
                                         headers=api.PRIVATE_HEADERS)
             else:
                 api._browser(request, owner, secret)
-                max_bytes = 65536 if operation == "inbox-mark" else 262144 if operation == "rule-batch-preview" else 16384
+                max_bytes = (MAX_TRANSACTIONS_BY_KEYS_BYTES if operation == _TRANSACTIONS_BY_KEYS_OP
+                             else 65536 if operation == "inbox-mark"
+                             else 262144 if operation == "rule-batch-preview" else 16384)
                 body, error = await read_json_body(request, max_bytes, reject_duplicates=True)
                 if error:
                     return body
-                values = WRITES[operation][0].model_validate(body).model_dump()
+                model = (api_contract.BudgetAnalyticsTransactionsByKeysRequest
+                         if operation == _TRANSACTIONS_BY_KEYS_OP else WRITES[operation][0])
+                values = model.model_validate(body).model_dump()
                 owner = api._principal(request, auth_enabled)
                 secret = api._secret(session_secret)
                 api._browser(request, owner, secret)
                 if not enabled():
                     raise api._Rejected(404, "budget_analytics_disabled")
-                result = await api._settled_thread(lambda: _write(owner, operation, values, secret))
+                if operation == _TRANSACTIONS_BY_KEYS_OP:
+                    result = await asyncio.to_thread(_read, owner, operation, values, secret)
+                else:
+                    result = await api._settled_thread(lambda: _write(owner, operation, values, secret))
             return web.json_response(result, headers=api.PRIVATE_HEADERS)
         except AnalyticsError as exc:
             return api._error(exc.status, exc.code)
@@ -173,5 +182,5 @@ def register(app, read_json_body, *, auth_enabled, session_secret):
 
     for operation in READS:
         app.router.add_get(PREFIX + "/" + operation, handle, allow_head=False)
-    for operation in WRITES:
+    for operation in (*WRITES, _TRANSACTIONS_BY_KEYS_OP):
         app.router.add_post(PREFIX + "/" + operation, handle)

@@ -56,7 +56,18 @@ class OpenApiArtifactTests(unittest.TestCase):
 
     def test_monthly_budget_contract_is_strictly_additive_from_0_27_0(self):
         document = api_contract.build_openapi()
-        self.assertEqual(document["info"]["version"], "0.31.0")
+        self.assertEqual(document["info"]["version"], "0.32.0")
+        # Strip the pending_row_keys / pending_row_keys_truncated / transactions-by-keys additions
+        # and compare with the 0.31.0 forecast contract published by master.
+        coverage_props = document["components"]["schemas"]["BudgetAnalyticsMonthlyBudgetCoverage"]["properties"]
+        del coverage_props["pending_row_keys"]
+        del coverage_props["pending_row_keys_truncated"]
+        del document["paths"]["/api/budget/analytics/transactions-by-keys"]
+        del document["components"]["schemas"]["BudgetAnalyticsTransactionsByKeysRequest"]
+        document["info"]["version"] = "0.31.0"
+        canonical_0_31 = json.dumps(document, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        self.assertEqual(hashlib.sha256(canonical_0_31).hexdigest(),
+                         "9180a43e2a4e00edeece98e9adc5f1689bf440a52e5612e90bed68400de3c782")
         # Strip the category-baseline addition and compare with the 0.30.0 forecast contract.
         forecast_get = document["paths"]["/api/budget/analytics/forecast"]["get"]
         forecast_get["description"] = (
@@ -78,7 +89,11 @@ class OpenApiArtifactTests(unittest.TestCase):
         item_properties = document["components"]["schemas"]["BudgetAnalyticsForecastItem"]["properties"]
         item_properties["source"]["enum"] = ["mortgage", "recurring"]
         item_properties["confidence"]["enum"] = ["scheduled", "high", "medium"]
-        # Strip this batch addition and compare with the 0.29.0 monthly-budget contract.
+        document["info"]["version"] = "0.30.0"
+        canonical_0_30 = json.dumps(document, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        self.assertEqual(hashlib.sha256(canonical_0_30).hexdigest(),
+                         "896148e8965fdf4d10e9433f4b0145d2b440db22f3e98ae6a6f2f685d78d4e9b")
+        # Strip the batch addition and compare with the 0.29.0 monthly-budget contract.
         for path in ("/api/budget/analytics/rule-batch-preview", "/api/budget/analytics/rule-batch-save"):
             del document["paths"][path]
         for name in ("BudgetAnalyticsRuleBatchPreviewRequest", "BudgetAnalyticsRuleBatchSaveRequest",
@@ -532,6 +547,7 @@ class TolerantResponseContractTests(unittest.TestCase):
         "BudgetAnalyticsSpendingLimitSaveRequest", "BudgetAnalyticsMortgageSaveRequest",
         "BudgetAnalyticsMortgagePaymentSetRequest", "BudgetAnalyticsInboxKeyRequest",
         "BudgetAnalyticsInboxMarkRequest",
+        "BudgetAnalyticsTransactionsByKeysRequest",
         "AddUserRequest", "ChangePasswordRequest", "ControlCover", "ControlLevel", "ControlRequest",
         "ControlSwitch", "ControlThermostat", "ControlThermostatPower", "IrRequest", "LoginRequest",
         "NameRequest", "ResetPasswordRequest", "RoomIconRequest", "RuleInput", "SceneRequest",

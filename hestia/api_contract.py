@@ -80,8 +80,10 @@ from pydantic.json_schema import models_json_schema
 # 0.30.0: batch rule preview and save (POST /api/budget/analytics/rule-batch-preview and rule-batch-save,
 #         zero migration).
 # 0.31.0: additive forecast source category_baseline and confidence estimated
-#         (HESTIA_BUDGET_FORECAST_CONFIG, zero migration). The open follow-up remains 0.32.0.
-CONTRACT_VERSION = "0.31.0"
+#         (HESTIA_BUDGET_FORECAST_CONFIG, zero migration).
+# 0.32.0: additive coverage.pending_row_keys / pending_row_keys_truncated and POST
+#         transactions-by-keys endpoint (zero migration).
+CONTRACT_VERSION = "0.32.0"
 OPENAPI_PATH = Path(__file__).resolve().parent.parent / "docs" / "api" / "openapi.json"
 
 # De-duplicated string literals (SonarPython S1192): the OpenAPI content-type, the paths reused
@@ -1536,7 +1538,20 @@ class BudgetConflict(BudgetError):
 BudgetAnalyticsVersion = Annotated[int, Field(ge=0)]
 BudgetAnalyticsFingerprint = Annotated[str, Field(pattern=r"^[a-f0-9]{64}$")]
 BudgetAnalyticsReference = Annotated[str, Field(min_length=1, max_length=1024)]
+_ROW_KEY_PATTERN = r"^[^/\x00-\x1f\x7f]{1,128}/[^\x00-\x1f\x7f]{1,1024}$"
+BudgetAnalyticsRowKey = Annotated[str, Field(min_length=3, max_length=1153, pattern=_ROW_KEY_PATTERN)]
 BudgetAnalyticsKind = Literal["auto", "expense", "income", "refund", "excluded"]
+
+
+class BudgetAnalyticsTransactionsByKeysRequest(BaseModel):
+    model_config = _STRICT
+    row_keys: Annotated[list[BudgetAnalyticsRowKey], Field(min_length=1, max_length=500)]
+    cursor: Annotated[str, Field(min_length=1, max_length=8192)] | None = None
+    limit: Annotated[int, Field(ge=1, le=200)] = 50
+    currency: Annotated[str, Field(pattern=r"^[A-Z]{3}$")] | None = None
+    category_id: BudgetId | None = None
+    kind: Literal["expense", "income", "refund", "excluded", "unclassified_credit", "transfer"] | None = None
+    query: Annotated[str, Field(min_length=1, max_length=256)] | None = None
 
 
 class BudgetAnalyticsCategoryCreateRequest(BaseModel):
@@ -2401,6 +2416,8 @@ class BudgetAnalyticsMonthlyBudgetCoverage(BaseModel):
     stale_selected_accounts: int
     purchase_date_fallback_count: int
     pending_transfer_rows: int
+    pending_row_keys: Annotated[list[BudgetAnalyticsRowKey], Field(default_factory=list, max_length=500)]
+    pending_row_keys_truncated: bool = Field(default_factory=lambda: False)
     transfer_scan_limited: bool
     provisional: bool
     has_activity: bool
@@ -2554,11 +2571,12 @@ class BudgetAnalyticsMonthlyBudgetCharts(BaseModel):
 
 
 _ANALYTICS_MODELS = (BudgetAnalyticsCategoryCreateRequest, BudgetAnalyticsCategoryUpdateRequest,
-                     BudgetAnalyticsAnnotationRequest, BudgetAnalyticsRulePreviewRequest,
-                     BudgetAnalyticsRuleSaveRequest, BudgetAnalyticsTransferDecisionRequest,
-                     BudgetAnalyticsSpendingLimitSaveRequest, BudgetAnalyticsMortgageSaveRequest,
-                     BudgetAnalyticsMortgagePaymentSetRequest, BudgetAnalyticsInboxMarkRequest,
-                     BudgetAnalyticsCategories, BudgetAnalyticsCategoryResult, BudgetAnalyticsAnnotationResult,
+                     BudgetAnalyticsAnnotationRequest, BudgetAnalyticsTransactionsByKeysRequest,
+                     BudgetAnalyticsRulePreviewRequest, BudgetAnalyticsRuleSaveRequest,
+                     BudgetAnalyticsTransferDecisionRequest, BudgetAnalyticsSpendingLimitSaveRequest,
+                     BudgetAnalyticsMortgageSaveRequest, BudgetAnalyticsMortgagePaymentSetRequest,
+                     BudgetAnalyticsInboxMarkRequest, BudgetAnalyticsCategories,
+                     BudgetAnalyticsCategoryResult, BudgetAnalyticsAnnotationResult,
                      BudgetAnalyticsRules, BudgetAnalyticsRuleResult, BudgetAnalyticsPreviewResult,
                      BudgetAnalyticsRuleBatchPreviewRequest, BudgetAnalyticsRuleBatchSaveRequest,
                      BudgetAnalyticsBatchPreview, BudgetAnalyticsBatchPreviewResult,
@@ -2595,6 +2613,7 @@ def _ref(name: str) -> dict:
 _PATH_ROLES = {
     ("GET", "/api/budget/analytics/overview"): "admin",
     ("GET", "/api/budget/analytics/transactions"): "admin",
+    ("POST", "/api/budget/analytics/transactions-by-keys"): "admin",
     ("GET", "/api/budget/analytics/categories"): "admin",
     ("GET", "/api/budget/analytics/rules"): "admin",
     ("GET", "/api/budget/analytics/transfers"): "admin",
@@ -3257,7 +3276,8 @@ def _analytics_paths():
         ("overview", "getBudgetAnalyticsOverview", "BudgetAnalyticsOverview", [period, currency]),
         ("transactions", "getBudgetAnalyticsTransactions", "BudgetAnalyticsTransactions",
          [period, currency, _budget_query("category_id", description="Category ID, or uncategorised for no category."),
-          _budget_query("kind"), _budget_query("query", schema={"type": "string", "minLength": 1, "maxLength": 256}), *page]),
+          _budget_query("kind"), _budget_query("query", schema={"type": "string", "minLength": 1, "maxLength": 256}),
+          *page]),
         ("categories", "getBudgetAnalyticsCategories", "BudgetAnalyticsCategories", []),
         ("rules", "getBudgetAnalyticsRules", "BudgetAnalyticsRules", []),
         ("transfers", "getBudgetAnalyticsTransfers", "BudgetAnalyticsTransfers",
@@ -3413,6 +3433,17 @@ def _analytics_paths():
         "409 budget_analytics_source_changed if any unmarked key is inactive on read=true; 413 budget_analytics_limit "
         "at the 500-marker cap on create only). No bank request is made."
     )
+    paths[prefix + "transactions-by-keys"] = {"post": {
+        "operationId": "listBudgetAnalyticsTransactionsByKeys",
+        "summary": "Read owner-private transactions matching exact row keys (pure read-only)",
+        "description": "Requires the exact admin owner, browser cookie and configured HTTPS Origin. "
+                       "Returns the same paginated BudgetAnalyticsTransactions shape as GET transactions for "
+                       "1..500 exact <account_id>/<entry_reference> keys in the JSON body (<= 1 MiB) regardless of "
+                       "period, preventing oversized GET query strings and key leakage in access logs. "
+                       "Makes no bank requests and no database writes.",
+        "requestBody": {"required": True, "content": {_APP_JSON: {"schema": _ref("BudgetAnalyticsTransactionsByKeysRequest")}}},
+        "responses": _analytics_responses("BudgetAnalyticsTransactions"),
+    }}
     return paths
 
 

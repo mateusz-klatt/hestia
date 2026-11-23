@@ -550,6 +550,56 @@ class ValidationTests(ProjectionCase):
         with mock.patch.object(views, "MAX_ROWS", 2):
             self.assert_invalid(lambda: self.store.overview("owner", "2026"), code="budget_analytics_limit", status=413)
 
+    def test_transactions_row_keys_crosses_periods_ignores_foreign_and_validates(self):
+        self.add_transaction("a", "nov-pln", amount="10", currency="PLN", booking_date="2026-11-10")
+        self.add_transaction("a", "dec-pln", amount="20", currency="PLN", booking_date="2026-12-02",
+                             transaction_date="2026-11-29", remittance_information=["Adjacent December"])
+        self.add_transaction("b", "oct-eur", amount="30", currency="EUR", credit_debit_indicator="CRDT",
+                             booking_date="2026-10-28", remittance_information=["Adjacent October"])
+        self.add_transaction("d", "deselected-nov", amount="40", booking_date="2026-11-15")
+        self.select_account("d", False)
+        self.add_transaction("foreign", "bob-tx", amount="50", booking_date="2026-11-10")
+
+        nov_only = self.store.transactions("owner", "2026-11")
+        self.assertEqual([row["entry_reference"] for row in nov_only["transactions"]], ["nov-pln"])
+
+        requested = [
+            f"{self.accounts['a']}/dec-pln",
+            f"{self.accounts['a']}/nov-pln",
+            f"{self.accounts['b']}/oct-eur",
+            f"{self.accounts['d']}/deselected-nov",
+            f"{self.accounts['foreign']}/bob-tx",
+            f"{self.accounts['a']}/unknown-ref",
+        ]
+        all_matched = self.store.transactions_by_keys("owner", row_keys=requested)
+        api_contract.BudgetAnalyticsTransactions.model_validate(all_matched)
+        self.assertEqual((all_matched["period"], all_matched["start"], all_matched["end"]), ("", "", ""))
+        self.assertEqual(all_matched["filtered_total"], 3)
+        self.assertEqual([row["entry_reference"] for row in all_matched["transactions"]],
+                         ["dec-pln", "nov-pln", "oct-eur"])
+
+        pln_only = self.store.transactions_by_keys("owner", currency="PLN", row_keys=requested)
+        self.assertEqual([row["entry_reference"] for row in pln_only["transactions"]], ["dec-pln", "nov-pln"])
+
+        first = self.store.transactions_by_keys("owner", limit=1, row_keys=requested)
+        second = self.store.transactions_by_keys("owner", limit=1, cursor=first["next_cursor"], row_keys=requested)
+        self.assertEqual(
+            [first["transactions"][0]["entry_reference"], second["transactions"][0]["entry_reference"]],
+            ["dec-pln", "nov-pln"],
+        )
+        self.assert_invalid(
+            lambda: self.store.transactions_by_keys("owner", limit=1, cursor=first["next_cursor"],
+                                                    row_keys=[f"{self.accounts['a']}/nov-pln"]),
+        )
+
+        too_many = [f"{self.accounts['a']}/r{i}" for i in range(501)]
+        too_long = "a/" + ("b" * views.MAX_ROW_KEY_LENGTH)
+        for bad in (None, [], "not-a-list", too_many, ["no-slash"], ["/ref"], ["acc/"], ["acc/bad\x00ref"],
+                    ["a" * 129 + "/ref"], ["acc/" + "r" * 1025], ["ab"], [too_long], [None], [1]):
+            self.assert_invalid(lambda: self.store.transactions_by_keys("owner", row_keys=bad))
+        # None is rejected before parsing; the helper still treats an omitted list as "no key filter".
+        self.assertIsNone(views._validate_row_keys(None))
+
     def test_corrupt_ledger_and_metadata_never_yield_partial_figures(self):
         self.add_transaction("a", "debit")
         original = self.transaction().payload_json

@@ -6,7 +6,7 @@ import type { BudgetApi, BudgetResult } from "./api";
 import { Budget } from "./budget";
 import { account, componentLimit, connection, sharedLimit } from "./fixtures";
 import type { BudgetAccount, BudgetBalances, BudgetJob, BudgetTransaction, BudgetTransactions } from "./model";
-import { entriesOf, forecastCurrencyTotal, forecastItem, forecastOf, inboxConsentItem, inboxMarkSaved, inboxOf,
+import { entriesOf, entry, forecastCurrencyTotal, forecastItem, forecastOf, inboxConsentItem, inboxMarkSaved, inboxOf,
   monthlyBudgetChartsOf, monthlyBudgetOf, mortgageReminder, mortgageSchedule, mortgagesOf, overviewOf, quarantineOf,
   recurringHint, recurringOf, spendingLimit, spendingLimitsOf, spendingLimitStatus, transfersOf } from "./analytics/fixtures";
 
@@ -71,6 +71,7 @@ function fakeApi(accounts: BudgetAccount[] = [account({ display })]) {
     refresh: vi.fn<BudgetApi["refresh"]>(),
     overview: vi.fn<BudgetApi["overview"]>((period) => ok(overviewOf(period))),
     analyticsTransactions: vi.fn<BudgetApi["analyticsTransactions"]>((period) => ok(entriesOf(period))),
+    analyticsTransactionsByKeys: vi.fn<BudgetApi["analyticsTransactionsByKeys"]>(() => ok(entriesOf(""))),
     categories: vi.fn<BudgetApi["categories"]>(() => ok({ categories: [] })),
     annotate: vi.fn<BudgetApi["annotate"]>(),
     transfers: vi.fn<BudgetApi["transfers"]>((period) => ok(transfersOf(period))),
@@ -991,6 +992,120 @@ describe("analytics views", () => {
     expect(host.querySelector(".budget-month-nav h3")?.textContent).toBe("February 2024");
     expect(nextMonth()?.disabled).toBe(true);
     expect(host.textContent).toContain("This period is still in progress.");
+  });
+
+  it("opens Month transactions filtered to the provisional rows when clicking View transactions on the provisional banner", async () => {
+    const api = fakeApi();
+    api.connections.mockImplementation(() => ok({ connections: [connection], capabilities: analysis }));
+    const provRows = [
+      entry("prov-1", { account_id: "acc-secret-a", booking_date: "2026-11-10", remittance_information: ["Synthetic Prov One"] }),
+      entry("prov-2-dec", {
+        account_id: "acc-secret-a",
+        booking_date: "2026-12-02",
+        transaction_date: "2026-11-29",
+        remittance_information: ["Synthetic Prov Two Dec"],
+        effective: { kind: "expense", category_id: "cat-food", source: "rule", rule_id: "rule-auto" },
+      }),
+      entry("prov-3-oct", {
+        account_id: "acc-secret-a",
+        booking_date: "2026-10-28",
+        remittance_information: ["Synthetic Prov Three Oct"],
+        transfer: { status: "review", decision_id: "d-1", candidate_count: 1, ambiguous: false },
+      }),
+      entry("prov-4", {
+        account_id: "acc-secret-a",
+        remittance_information: ["Synthetic Prov Four"],
+        annotation: { version: 1, mode: "manual", category_id: null, kind: "excluded", stale: true },
+      }),
+    ];
+    const novRows = [
+      provRows[0] as typeof provRows[number],
+      provRows[3] as typeof provRows[number],
+      entry("clean-rule", { remittance_information: ["Synthetic Clean Rule"], effective: { kind: "expense", category_id: "cat-food", source: "rule", rule_id: "rule-exp" } }),
+      entry("clean-manual", {
+        remittance_information: ["Synthetic Clean Manual"],
+        annotation: { version: 1, mode: "manual", category_id: "cat-food", kind: "expense", stale: false },
+        effective: { kind: "expense", category_id: "cat-food", source: "manual", rule_id: null },
+      }),
+      entry("nov-extra-1", { remittance_information: ["Synthetic Nov Extra 1"] }),
+      entry("nov-extra-2", { remittance_information: ["Synthetic Nov Extra 2"] }),
+    ];
+    const keys = [
+      "acc-secret-a/prov-1",
+      "acc-secret-a/prov-2-dec",
+      "acc-secret-a/prov-3-oct",
+      "acc-secret-a/prov-4",
+    ];
+    api.monthlyBudgetCharts.mockImplementation(() => ok(monthlyBudgetChartsOf({
+      period: "2026-11",
+      current_month: "2026-11",
+      cutoff: "2026-11-22",
+      currency: "PLN",
+      coverage: {
+        ledger_as_of: 1_795_345_200,
+        stale_selected_accounts: 0,
+        purchase_date_fallback_count: 0,
+        pending_transfer_rows: 4,
+        pending_row_keys: keys,
+        pending_row_keys_truncated: false,
+        transfer_scan_limited: false,
+        provisional: true,
+        has_activity: true,
+      },
+    })));
+    api.transfers.mockImplementation((period) => ok(transfersOf(period, [])));
+    api.analyticsTransactions.mockImplementation((period) => ok(entriesOf(period, novRows)));
+    api.analyticsTransactionsByKeys.mockImplementation(() => ok(entriesOf("", provRows)));
+
+    await render(api);
+    for (const secret of [...keys, "acc-secret-a", "prov-2-dec", "prov-3-oct"]) {
+      expect(host.textContent).not.toContain(secret);
+    }
+    const scrollSpy = vi.spyOn(Element.prototype, "scrollIntoView");
+    const links = [...host.querySelectorAll("button")].filter((item) => item.textContent === "View transactions");
+    expect(links).toHaveLength(2);
+    await click(links[1] as HTMLButtonElement);
+
+    expect(button("Month").getAttribute("aria-pressed")).toBe("true");
+    expect(api.rules).not.toHaveBeenCalled();
+    expect(api.analyticsTransactionsByKeys).toHaveBeenCalledWith({ row_keys: keys, currency: "PLN" });
+    const provisionalToggle = host.querySelector<HTMLInputElement>('input[name="provisional"]');
+    expect(provisionalToggle?.checked).toBe(true);
+    expect(host.querySelector<HTMLSelectElement>('select[name="currency"]')?.value).toBe("PLN");
+    expect(scrollSpy).toHaveBeenCalled();
+    expect(scrollSpy.mock.instances).toContain(host.querySelector(".budget-entries"));
+
+    const visibleTexts = () => [...host.querySelectorAll(".budget-entries .budget-entry-text")].map((item) => item.textContent);
+    expect(visibleTexts()).toEqual([
+      "Synthetic Prov One",
+      "Synthetic Prov Two Dec",
+      "Synthetic Prov Three Oct",
+      "Synthetic Prov Four",
+    ]);
+    expect(host.querySelector(".budget-entries")?.textContent).toContain("4 entries");
+    for (const secret of [...keys, "acc-secret-a", "prov-2-dec", "prov-3-oct"]) {
+      expect(host.textContent).not.toContain(secret);
+    }
+
+    // Toggling the provisional checkbox loads all month entries via GET and re-enabling uses POST transactions-by-keys.
+    if (provisionalToggle === null) throw new Error("missing provisional toggle");
+    await click(provisionalToggle);
+    expect(api.analyticsTransactions).toHaveBeenLastCalledWith("2026-11", { currency: "PLN", category: "", kind: "", query: "" });
+    expect(visibleTexts()).toHaveLength(6);
+    expect(host.querySelector(".budget-entries")?.textContent).toContain("6 entries");
+    const toggledAgain = host.querySelector<HTMLInputElement>('input[name="provisional"]');
+    if (toggledAgain === null) throw new Error("missing provisional toggle after uncheck");
+    await click(toggledAgain);
+    expect(api.analyticsTransactionsByKeys).toHaveBeenCalledTimes(2);
+    expect(api.analyticsTransactionsByKeys).toHaveBeenLastCalledWith({ row_keys: keys, currency: "PLN" });
+    expect(visibleTexts()).toHaveLength(4);
+
+    // Returning to Monthly budget and opening the general View transactions link clears the provisional filter.
+    await click(button("Monthly budget"));
+    const freshLinks = [...host.querySelectorAll("button")].filter((item) => item.textContent === "View transactions");
+    await click(freshLinks[0] as HTMLButtonElement);
+    expect(host.querySelector<HTMLInputElement>('input[name="provisional"]')).toBeNull();
+    expect(host.querySelectorAll(".budget-entries .budget-entry")).toHaveLength(6);
   });
 
   it("offers Forecast after Mortgages only while analytics is enabled", async () => {
