@@ -5,6 +5,9 @@ import { useEffect, useRef, useState } from "react";
 import type { BudgetApi, BudgetResult } from "../api";
 import { formatAmount, when } from "../model";
 import type { BudgetAccount } from "../model";
+import { CategorySwatch } from "./category_badge";
+import { buildCategoryColors } from "./category_colors";
+import type { CategoryColorResolver } from "./category_colors";
 import { groupCategoryTotals, hasCategoryParents, visibleCategoryRows } from "./category_tree";
 import { clampPercentString, formatRatioHalfEven, isPositiveDecimal, isZero, labelOf,
   monthLabel, monthlyBudgetCurrencies, pluralPl, ratioPercentFloor, shiftMonth, validCurrency } from "./model";
@@ -357,11 +360,12 @@ function paceSentence(pace: AnalyticsMonthlyBudgetPace, text: MonthBudgetLabels,
   }
 }
 
-function ExpectedIncomeCard({ income, currency, evaluationDate, categoryMap, text, locale }: {
+function ExpectedIncomeCard({ income, currency, evaluationDate, categoryMap, categoryColors, text, locale }: {
   income: AnalyticsMonthlyBudgetExpectedIncome;
   currency: string;
   evaluationDate: string;
   categoryMap: ReadonlyMap<string, string>;
+  categoryColors: CategoryColorResolver;
   text: MonthBudgetLabels;
   locale: string;
 }) {
@@ -402,6 +406,7 @@ function ExpectedIncomeCard({ income, currency, evaluationDate, categoryMap, tex
                   <li key={`${String(index)}-${item.expected_date ?? "none"}`} className="budget-entry">
                     <div className="budget-recurring-main">
                       <span className="budget-entry-text">
+                        <CategorySwatch color={categoryColors.get(item.category_id)} />
                         {categoryMap.get(item.category_id) ?? text.incomeCategoryFallback}
                       </span>
                       <strong className="budget-recurring-amount">{money(item.amount)}</strong>
@@ -767,6 +772,7 @@ function ReadyDashboard({ data, series, paceSchedule, categoryMap, categories, t
     ? null
     : buildMonthPaceProjection(data, paceSchedule.state === "ready" ? paceSchedule.data : undefined);
   const projectedRemaining = isCurrent ? paceProjection?.projectedRemaining ?? null : null;
+  const categoryColors = buildCategoryColors(isCategoryList(categories) ? categories : []);
 
   return (
     <>
@@ -875,7 +881,8 @@ function ReadyDashboard({ data, series, paceSchedule, categoryMap, categories, t
             </article>
 
             <ExpectedIncomeCard income={data.expected_income} currency={data.currency}
-              evaluationDate={data.evaluation_date} categoryMap={categoryMap} text={text} locale={locale} />
+              evaluationDate={data.evaluation_date} categoryMap={categoryMap} categoryColors={categoryColors}
+              text={text} locale={locale} />
 
             <PaceCard pace={data.pace} projection={paceProjection}
               schedulePending={schedulePending} scheduleError={scheduleError} currency={data.currency}
@@ -934,6 +941,7 @@ function ReadyDashboard({ data, series, paceSchedule, categoryMap, categories, t
                                 {closed ? "▸" : "▾"}
                               </button>
                             ) : null}
+                            <CategorySwatch color={categoryColors.get(categoryId)} />
                             {label}
                             {row.archived ? <small className="budget-muted"> ({text.archived})</small> : null}
                           </th>

@@ -4,6 +4,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { BudgetApi } from "../api";
 import type { BudgetAccount, BudgetConnection } from "../model";
 import { formatAmount, transactionDate, transactionText } from "../model";
+import { CategoryBadge } from "./category_badge";
+import { buildCategoryColors } from "./category_colors";
 import { ANALYTICS_ERROR, EFFECTIVE_KINDS, NO_FILTER, RELOAD_ERRORS, UNCATEGORISED, annotationRequest, canPair, canonicalAmount,
   counterparty, accountName as nameOf, currentChoice, daysBetween, kindChoice, kindChoicesFor, labelOf, manualPairRequest,
   pairCandidates, pairDate, pairPeriods, transactionRowKey } from "./model";
@@ -407,6 +409,7 @@ export function TransactionsPanel({ api, period, currencies, accounts, connectio
     return extras.length === 0 ? currencies : [...currencies, ...extras].sort((a, b) => a.localeCompare(b));
   }, [currencies, draft.currency, filter.currency]);
   const categoryNames = useMemo(() => new Map(categories.map((item) => [item.id, item.name])), [categories]);
+  const categoryColors = useMemo(() => buildCategoryColors(categories), [categories]);
   const categoryName = useCallback(
     (id: string | null) => (id === null ? text.uncategorised : (categoryNames.get(id) ?? text.uncategorised)),
     [categoryNames, text.uncategorised],
@@ -632,7 +635,14 @@ export function TransactionsPanel({ api, period, currencies, accounts, connectio
                   </div>
                   <div className="budget-entry-facts">
                     <span>{accountName(row.account_id)}</span>
-                    <span className="budget-chip">{categoryName(row.effective.category_id)}</span>
+                    <CategoryBadge
+                      color={categoryColors.get(
+                        row.effective.category_id !== null && categoryNames.has(row.effective.category_id)
+                          ? row.effective.category_id
+                          : null,
+                      )}
+                      label={categoryName(row.effective.category_id)}
+                    />
                     {row.effective.kind === "expense" || row.effective.kind === "income" ? null
                       : <span className="budget-chip">{kindText(row.effective.kind)}</span>}
                     {row.effective.source === "manual" ? <span>{text.manual}</span> : null}

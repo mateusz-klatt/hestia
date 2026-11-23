@@ -5,6 +5,9 @@ import type { ReactNode } from "react";
 import type { BudgetResult } from "../api";
 import type { BudgetAccount, BudgetConnection } from "../model";
 import { formatAmount } from "../model";
+import { CategorySwatch } from "./category_badge";
+import { buildCategoryColors } from "./category_colors";
+import type { CategoryColorInput } from "./category_colors";
 import { groupCategoryTotals, hasCategoryParents, visibleCategoryRows } from "./category_tree";
 import { accountName, isZero, staleAccounts } from "./model";
 import type { AnalyticsCategory, AnalyticsCategoryTotal, AnalyticsOverview, AnalyticsTotals } from "./model";
@@ -175,6 +178,15 @@ function CurrencyCard({ total, categories, links, partial, text, locale }: CardP
   const money = (amount: string) => formatAmount(amount, total.currency, locale);
   const tree = hasCategoryParents(links);
   const rows = tree ? visibleCategoryRows(groupCategoryTotals(categories, links, locale), collapsed) : [];
+  const colorInputs: CategoryColorInput[] = [...links];
+  const seenColorIds = new Set(links.map((item) => item.id));
+  for (const item of categories) {
+    if (item.category_id !== null && !seenColorIds.has(item.category_id)) {
+      seenColorIds.add(item.category_id);
+      colorInputs.push({ id: item.category_id, parent_id: null });
+    }
+  }
+  const categoryColors = buildCategoryColors(colorInputs);
   const toggle = (id: string) => {
     setCollapsed((current) => {
       const next = new Set(current);
@@ -240,6 +252,7 @@ function CurrencyCard({ total, categories, links, partial, text, locale }: CardP
                         {open ? "▾" : "▸"}
                       </button>
                     ) : null}
+                    <CategorySwatch color={categoryColors.get(id)} />
                     {label}
                     {item.archived ? <small> ({text.archived})</small> : null}
                   </th>
@@ -249,6 +262,7 @@ function CurrencyCard({ total, categories, links, partial, text, locale }: CardP
             }) : categories.map((item) => (
               <tr key={item.category_id ?? "uncategorised"} className={item.category_id === null ? "is-uncategorised" : undefined}>
                 <th scope="row">
+                  <CategorySwatch color={categoryColors.get(item.category_id)} />
                   {item.category_id === null ? text.uncategorised : item.name ?? text.uncategorised}
                   {item.archived ? <small> ({text.archived})</small> : null}
                 </th>

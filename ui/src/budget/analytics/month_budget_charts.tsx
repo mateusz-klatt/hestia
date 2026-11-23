@@ -3,6 +3,9 @@
 // plus keyboard-operable exact HTML data tables.
 import { useId } from "react";
 import { formatAmount } from "../model";
+import { CategorySwatch } from "./category_badge";
+import { OTHER_CATEGORY_COLOR, buildCategoryColors } from "./category_colors";
+import type { CategoryColorInput, CategoryColorOverrides } from "./category_colors";
 import { categoryParentMap, hasCategoryParents, rollupNetAmounts } from "./category_tree";
 import type { CategoryLink } from "./category_tree";
 import { formatRatioHalfEven, formatScaledBigInt, isZero, parseScaledInt } from "./model";
@@ -55,14 +58,6 @@ const PLOT_LEFT = 64;
 const PLOT_RIGHT = 346;
 const PLOT_TOP = 16;
 const PLOT_BOTTOM = 172;
-const TOP_CATEGORY_COLORS = [
-  "var(--chart-cat-1)",
-  "var(--chart-cat-2)",
-  "var(--chart-cat-3)",
-  "var(--chart-cat-4)",
-  "var(--chart-cat-5)",
-] as const;
-const OTHER_CATEGORY_COLOR = "var(--chart-cat-other)";
 
 function signedBigInt(value: string): { coeff: bigint; scale: number } {
   const parsed = parseScaledInt(value);
@@ -468,12 +463,15 @@ export interface RankedCategory {
   name: string;
   archived: boolean;
   absTotal: bigint;
+  color: string;
+  hatched: boolean;
 }
 
 export interface CategorySlice {
   key: string;
   label: string;
   color: string;
+  hatched: boolean;
   value: bigint;
   y0: bigint;
   y1: bigint;
@@ -518,6 +516,7 @@ export function buildCategoryChartModel(
   categoryLabels: readonly AnalyticsMonthlyBudgetCategoryLabel[],
   options: { uncategorised: string; unknownCategory: string; otherCategory: string },
   categories?: readonly CategoryLink[],
+  overrides?: CategoryColorOverrides,
 ): CategoryChartModel {
   const prepared = topLevelMonths(months, categoryLabels, categories);
   const chartMonths = prepared.months;
@@ -547,14 +546,38 @@ export function buildCategoryChartModel(
     byMonthAndCategory.set(month.period, strMap);
   }
 
+  const colorInputs: CategoryColorInput[] = [...(categories ?? [])];
+  const knownColorIds = new Set(colorInputs.map((item) => item.id));
+  for (const item of prepared.labels) {
+    if (!knownColorIds.has(item.category_id)) {
+      knownColorIds.add(item.category_id);
+      colorInputs.push({ id: item.category_id, parent_id: null });
+    }
+  }
+  for (const id of absTotals.keys()) {
+    if (id !== null && !knownColorIds.has(id)) {
+      knownColorIds.add(id);
+      colorInputs.push({ id, parent_id: null });
+    }
+  }
+  const categoryColors = buildCategoryColors(colorInputs, overrides === undefined ? undefined : { overrides });
+
   const allCategories: RankedCategory[] = [...absTotals.entries()].map(([id, absTotal]) => {
-    if (id === null) return { id: null, name: options.uncategorised, archived: false, absTotal };
+    const resolved = categoryColors.get(id);
+    if (id === null) {
+      return {
+        id: null, name: options.uncategorised, archived: false, absTotal,
+        color: resolved.background, hatched: resolved.hatched,
+      };
+    }
     const meta = labelLookup.get(id);
     return {
       id,
       name: meta?.name ?? options.unknownCategory,
       archived: meta?.archived ?? false,
       absTotal,
+      color: resolved.background,
+      hatched: resolved.hatched,
     };
   });
 
@@ -569,9 +592,6 @@ export function buildCategoryChartModel(
   const nonzeroCategories = allCategories.filter((item) => item.absTotal > 0n);
   const displayed = nonzeroCategories.slice(0, 5);
   const restIds = new Set(nonzeroCategories.slice(5).map((item) => item.id));
-  const displayedColor = new Map<string | null, string>(
-    displayed.map((item, index) => [item.id, TOP_CATEGORY_COLORS[index] ?? OTHER_CATEGORY_COLOR]),
-  );
 
   let hasOtherPositive = false;
   let hasOtherNegative = false;
@@ -583,13 +603,18 @@ export function buildCategoryChartModel(
 
     for (const cat of displayed) {
       const val = bigMap.get(cat.id) ?? 0n;
-      const color = displayedColor.get(cat.id) ?? OTHER_CATEGORY_COLOR;
       const sliceKey = cat.id === null ? "__uncategorised__" : cat.id;
       if (val > 0n) {
-        slices.push({ key: sliceKey, label: cat.name, color, value: val, y0: posCursor, y1: posCursor + val });
+        slices.push({
+          key: sliceKey, label: cat.name, color: cat.color, hatched: cat.hatched,
+          value: val, y0: posCursor, y1: posCursor + val,
+        });
         posCursor += val;
       } else if (val < 0n) {
-        slices.push({ key: sliceKey, label: cat.name, color, value: val, y0: negCursor, y1: negCursor + val });
+        slices.push({
+          key: sliceKey, label: cat.name, color: cat.color, hatched: cat.hatched,
+          value: val, y0: negCursor, y1: negCursor + val,
+        });
         negCursor += val;
       }
     }
@@ -604,7 +629,7 @@ export function buildCategoryChartModel(
     if (otherPos > 0n) {
       hasOtherPositive = true;
       slices.push({
-        key: "__other_pos__", label: options.otherCategory, color: OTHER_CATEGORY_COLOR,
+        key: "__other_pos__", label: options.otherCategory, color: OTHER_CATEGORY_COLOR.background, hatched: true,
         value: otherPos, y0: posCursor, y1: posCursor + otherPos,
       });
       posCursor += otherPos;
@@ -612,7 +637,7 @@ export function buildCategoryChartModel(
     if (otherNeg < 0n) {
       hasOtherNegative = true;
       slices.push({
-        key: "__other_neg__", label: options.otherCategory, color: OTHER_CATEGORY_COLOR,
+        key: "__other_neg__", label: options.otherCategory, color: OTHER_CATEGORY_COLOR.background, hatched: true,
         value: otherNeg, y0: negCursor, y1: negCursor + otherNeg,
       });
       negCursor += otherNeg;
@@ -651,6 +676,11 @@ function CategorySpendingChart({ series, currency, locale, text, categories }: {
   const hasCurrent = series.months.some((month) => month.is_current_month);
   const hasProvisional = series.months.some((month) => month.provisional);
   const hasOther = model.hasOtherPositive || model.hasOtherNegative;
+  const customHatchColors = [...new Set(
+    model.stacks.flatMap((stack) => stack.slices)
+      .filter((slice) => slice.hatched && !slice.key.startsWith("__other_"))
+      .map((slice) => slice.color),
+  )];
 
   return (
     <article className="budget-total budget-month-chart" aria-label={`${text.chartCategoriesTitle} · ${currency}`}>
@@ -660,9 +690,16 @@ function CategorySpendingChart({ series, currency, locale, text, categories }: {
         <desc id={`${id}-desc`}>{text.chartCategoriesDesc(series.months.length, currency)}</desc>
         <defs>
           <pattern id={`${id}-other-pattern`} width="5" height="5" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
-            <rect width="5" height="5" fill={OTHER_CATEGORY_COLOR} fillOpacity="0.25" />
-            <line x1="0" y1="0" x2="0" y2="5" stroke={OTHER_CATEGORY_COLOR} strokeWidth="2" />
+            <rect width="5" height="5" fill={OTHER_CATEGORY_COLOR.background} fillOpacity="0.25" />
+            <line x1="0" y1="0" x2="0" y2="5" stroke={OTHER_CATEGORY_COLOR.background} strokeWidth="2" />
           </pattern>
+          {customHatchColors.map((hatchColor, idx) => (
+            <pattern key={hatchColor} id={`${id}-hatch-${String(idx)}`} width="5" height="5"
+              patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+              <rect width="5" height="5" fill={hatchColor} fillOpacity="0.25" />
+              <line x1="0" y1="0" x2="0" y2="5" stroke={hatchColor} strokeWidth="2" />
+            </pattern>
+          ))}
         </defs>
         <YAxisGrid scaleObj={yScale} scale={model.scale} denom={1n} locale={locale} />
         {model.stacks.map((stack, index) => {
@@ -679,10 +716,16 @@ function CategorySpendingChart({ series, currency, locale, text, categories }: {
                 const top = Math.min(yA, yB);
                 const rectHeight = Math.max(0.5, Number(Math.abs(yA - yB).toFixed(2)));
                 const isOther = slice.key.startsWith("__other_");
+                const hatchIdx = !isOther && slice.hatched ? customHatchColors.indexOf(slice.color) : -1;
+                const fill = isOther
+                  ? `url(#${id}-other-pattern)`
+                  : hatchIdx >= 0
+                    ? `url(#${id}-hatch-${String(hatchIdx)})`
+                    : slice.color;
+                const stroke = isOther || slice.hatched ? slice.color : "var(--surface)";
                 return (
                   <rect key={`${stack.month.period}-${slice.key}`} x={x} y={top} width={w} height={rectHeight}
-                    fill={isOther ? `url(#${id}-other-pattern)` : slice.color}
-                    stroke={isOther ? OTHER_CATEGORY_COLOR : "var(--surface)"} strokeWidth="0.6" />
+                    fill={fill} stroke={stroke} strokeWidth="0.6" />
                 );
               })}
               {showLabel ? (
@@ -695,10 +738,9 @@ function CategorySpendingChart({ series, currency, locale, text, categories }: {
         })}
       </svg>
       <ul className="budget-chart-legend">
-        {model.displayed.map((cat, index) => (
+        {model.displayed.map((cat) => (
           <li key={cat.id ?? "__uncategorised__"}>
-            <span className="budget-chart-swatch"
-              style={{ background: TOP_CATEGORY_COLORS[index] ?? OTHER_CATEGORY_COLOR, borderColor: "transparent" }} aria-hidden="true" />
+            <CategorySwatch color={{ background: cat.color, hatched: cat.hatched }} className="budget-chart-swatch" />
             <span>
               {cat.name}
               {cat.archived ? <small className="budget-muted"> ({text.archived})</small> : null}
@@ -707,10 +749,7 @@ function CategorySpendingChart({ series, currency, locale, text, categories }: {
         ))}
         {hasOther ? (
           <li>
-            <span className="budget-chart-swatch" style={{
-              background: `repeating-linear-gradient(45deg, ${OTHER_CATEGORY_COLOR}, ${OTHER_CATEGORY_COLOR} 2px, var(--surface) 2px, var(--surface) 4px)`,
-              borderColor: OTHER_CATEGORY_COLOR,
-            }} aria-hidden="true" />
+            <CategorySwatch color={OTHER_CATEGORY_COLOR} className="budget-chart-swatch" />
             <span>{text.otherCategory}</span>
           </li>
         ) : null}
@@ -738,6 +777,7 @@ function CategorySpendingChart({ series, currency, locale, text, categories }: {
               {model.allCategories.map((cat) => (
                 <tr key={cat.id ?? "__uncategorised__"} className={cat.id === null ? "is-uncategorised" : undefined}>
                   <th scope="row">
+                    <CategorySwatch color={{ background: cat.color, hatched: cat.hatched }} />
                     {cat.name}
                     {cat.archived ? <small className="budget-muted"> ({text.archived})</small> : null}
                   </th>
