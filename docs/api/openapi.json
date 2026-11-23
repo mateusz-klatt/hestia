@@ -7322,6 +7322,1340 @@
         "title": "BudgetError",
         "type": "object"
       },
+      "BudgetHouseholdAccess": {
+        "description": "Discovery. The only household read that does not take X-Budget-Grant.",
+        "properties": {
+          "grant_id": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Grant Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "grant_id"
+        ],
+        "title": "BudgetHouseholdAccess",
+        "type": "object"
+      },
+      "BudgetHouseholdAccount": {
+        "properties": {
+          "account_id": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Account Id",
+            "type": "string"
+          },
+          "ordinal": {
+            "minimum": 1,
+            "title": "Ordinal",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "account_id",
+          "ordinal"
+        ],
+        "title": "BudgetHouseholdAccount",
+        "type": "object"
+      },
+      "BudgetHouseholdAccounts": {
+        "properties": {
+          "accounts": {
+            "items": {
+              "$ref": "#/components/schemas/BudgetHouseholdAccount"
+            },
+            "title": "Accounts",
+            "type": "array"
+          },
+          "grant_id": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Grant Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "grant_id",
+          "accounts"
+        ],
+        "title": "BudgetHouseholdAccounts",
+        "type": "object"
+      },
+      "BudgetHouseholdCategories": {
+        "properties": {
+          "categories": {
+            "items": {
+              "$ref": "#/components/schemas/BudgetHouseholdCategory"
+            },
+            "title": "Categories",
+            "type": "array"
+          },
+          "grant_id": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Grant Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "grant_id",
+          "categories"
+        ],
+        "title": "BudgetHouseholdCategories",
+        "type": "object"
+      },
+      "BudgetHouseholdCategory": {
+        "properties": {
+          "archived": {
+            "title": "Archived",
+            "type": "boolean"
+          },
+          "id": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Id",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "archived"
+        ],
+        "title": "BudgetHouseholdCategory",
+        "type": "object"
+      },
+      "BudgetHouseholdCategoryLabel": {
+        "properties": {
+          "archived": {
+            "title": "Archived",
+            "type": "boolean"
+          },
+          "category_id": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Category Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "category_id",
+          "name",
+          "archived"
+        ],
+        "title": "BudgetHouseholdCategoryLabel",
+        "type": "object"
+      },
+      "BudgetHouseholdInbox": {
+        "properties": {
+          "evaluation_date": {
+            "title": "Evaluation Date",
+            "type": "string"
+          },
+          "grant_id": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Grant Id",
+            "type": "string"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/BudgetHouseholdInboxItem"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "unread_count": {
+            "minimum": 0,
+            "title": "Unread Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "grant_id",
+          "evaluation_date",
+          "unread_count",
+          "items"
+        ],
+        "title": "BudgetHouseholdInbox",
+        "type": "object"
+      },
+      "BudgetHouseholdInboxItem": {
+        "properties": {
+          "category_id": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "minLength": 64,
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Category Id"
+          },
+          "currency": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Currency"
+          },
+          "due_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Due Date"
+          },
+          "id": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "mortgage_due",
+              "spending_limit"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "period": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Period"
+          },
+          "read": {
+            "title": "Read",
+            "type": "boolean"
+          },
+          "schedule_id": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "minLength": 64,
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Schedule Id"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "read",
+          "status"
+        ],
+        "title": "BudgetHouseholdInboxItem",
+        "type": "object"
+      },
+      "BudgetHouseholdMoney": {
+        "properties": {
+          "currency": {
+            "title": "Currency",
+            "type": "string"
+          },
+          "expenses": {
+            "maxLength": 192,
+            "minLength": 1,
+            "title": "Expenses",
+            "type": "string"
+          },
+          "income": {
+            "maxLength": 192,
+            "minLength": 1,
+            "title": "Income",
+            "type": "string"
+          },
+          "net_spending": {
+            "maxLength": 192,
+            "minLength": 1,
+            "title": "Net Spending",
+            "type": "string"
+          },
+          "refunds": {
+            "maxLength": 192,
+            "minLength": 1,
+            "title": "Refunds",
+            "type": "string"
+          }
+        },
+        "required": [
+          "currency",
+          "expenses",
+          "refunds",
+          "income",
+          "net_spending"
+        ],
+        "title": "BudgetHouseholdMoney",
+        "type": "object"
+      },
+      "BudgetHouseholdMonthlyBudget": {
+        "description": "Same calculations as the owner dashboard, with grant-scoped aliases and safe labels.",
+        "properties": {
+          "budget": {
+            "$ref": "#/components/schemas/BudgetAnalyticsMonthlyBudget"
+          },
+          "grant_id": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Grant Id",
+            "type": "string"
+          },
+          "series": {
+            "$ref": "#/components/schemas/BudgetHouseholdSeries"
+          }
+        },
+        "required": [
+          "grant_id",
+          "budget",
+          "series"
+        ],
+        "title": "BudgetHouseholdMonthlyBudget",
+        "type": "object"
+      },
+      "BudgetHouseholdMortgageReminder": {
+        "properties": {
+          "due_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Due Date"
+          },
+          "schedule_id": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Schedule Id",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "overdue",
+              "due_today",
+              "due_soon",
+              "upcoming",
+              "completed"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "schedule_id",
+          "due_date",
+          "status"
+        ],
+        "title": "BudgetHouseholdMortgageReminder",
+        "type": "object"
+      },
+      "BudgetHouseholdMortgageSchedule": {
+        "properties": {
+          "amount": {
+            "maxLength": 192,
+            "minLength": 1,
+            "title": "Amount",
+            "type": "string"
+          },
+          "currency": {
+            "title": "Currency",
+            "type": "string"
+          },
+          "due_day": {
+            "maximum": 31,
+            "minimum": 1,
+            "title": "Due Day",
+            "type": "integer"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "end_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "End Date"
+          },
+          "id": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Id",
+            "type": "string"
+          },
+          "ordinal": {
+            "minimum": 1,
+            "title": "Ordinal",
+            "type": "integer"
+          },
+          "paid_months": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Paid Months",
+            "type": "array"
+          },
+          "start_date": {
+            "title": "Start Date",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "ordinal",
+          "currency",
+          "amount",
+          "enabled",
+          "due_day",
+          "start_date",
+          "end_date",
+          "paid_months"
+        ],
+        "title": "BudgetHouseholdMortgageSchedule",
+        "type": "object"
+      },
+      "BudgetHouseholdMortgages": {
+        "properties": {
+          "evaluation_date": {
+            "title": "Evaluation Date",
+            "type": "string"
+          },
+          "grant_id": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Grant Id",
+            "type": "string"
+          },
+          "reminders": {
+            "items": {
+              "$ref": "#/components/schemas/BudgetHouseholdMortgageReminder"
+            },
+            "title": "Reminders",
+            "type": "array"
+          },
+          "schedules": {
+            "items": {
+              "$ref": "#/components/schemas/BudgetHouseholdMortgageSchedule"
+            },
+            "title": "Schedules",
+            "type": "array"
+          }
+        },
+        "required": [
+          "grant_id",
+          "evaluation_date",
+          "schedules",
+          "reminders"
+        ],
+        "title": "BudgetHouseholdMortgages",
+        "type": "object"
+      },
+      "BudgetHouseholdOverview": {
+        "properties": {
+          "categories": {
+            "items": {
+              "$ref": "#/components/schemas/BudgetHouseholdOverviewCategory"
+            },
+            "title": "Categories",
+            "type": "array"
+          },
+          "currencies": {
+            "items": {
+              "$ref": "#/components/schemas/BudgetHouseholdMoney"
+            },
+            "title": "Currencies",
+            "type": "array"
+          },
+          "grant_id": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Grant Id",
+            "type": "string"
+          },
+          "months": {
+            "items": {
+              "$ref": "#/components/schemas/BudgetHouseholdOverviewMonth"
+            },
+            "title": "Months",
+            "type": "array"
+          },
+          "period": {
+            "title": "Period",
+            "type": "string"
+          }
+        },
+        "required": [
+          "grant_id",
+          "period",
+          "currencies",
+          "months",
+          "categories"
+        ],
+        "title": "BudgetHouseholdOverview",
+        "type": "object"
+      },
+      "BudgetHouseholdOverviewCategory": {
+        "properties": {
+          "archived": {
+            "title": "Archived",
+            "type": "boolean"
+          },
+          "category_id": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "minLength": 64,
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Category Id"
+          },
+          "currency": {
+            "title": "Currency",
+            "type": "string"
+          },
+          "expenses": {
+            "maxLength": 192,
+            "minLength": 1,
+            "title": "Expenses",
+            "type": "string"
+          },
+          "income": {
+            "maxLength": 192,
+            "minLength": 1,
+            "title": "Income",
+            "type": "string"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          },
+          "net_spending": {
+            "maxLength": 192,
+            "minLength": 1,
+            "title": "Net Spending",
+            "type": "string"
+          },
+          "refunds": {
+            "maxLength": 192,
+            "minLength": 1,
+            "title": "Refunds",
+            "type": "string"
+          }
+        },
+        "required": [
+          "category_id",
+          "label",
+          "archived",
+          "currency",
+          "expenses",
+          "refunds",
+          "income",
+          "net_spending"
+        ],
+        "title": "BudgetHouseholdOverviewCategory",
+        "type": "object"
+      },
+      "BudgetHouseholdOverviewMonth": {
+        "properties": {
+          "currencies": {
+            "items": {
+              "$ref": "#/components/schemas/BudgetHouseholdMoney"
+            },
+            "title": "Currencies",
+            "type": "array"
+          },
+          "month": {
+            "title": "Month",
+            "type": "string"
+          }
+        },
+        "required": [
+          "month",
+          "currencies"
+        ],
+        "title": "BudgetHouseholdOverviewMonth",
+        "type": "object"
+      },
+      "BudgetHouseholdPassThrough": {
+        "properties": {
+          "mortgage_category_id": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Mortgage Category Id",
+            "type": "string"
+          },
+          "rent_category_id": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Rent Category Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "rent_category_id",
+          "mortgage_category_id"
+        ],
+        "title": "BudgetHouseholdPassThrough",
+        "type": "object"
+      },
+      "BudgetHouseholdQuarantine": {
+        "properties": {
+          "grant_id": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Grant Id",
+            "type": "string"
+          },
+          "import_unresolved_count": {
+            "minimum": 0,
+            "title": "Import Unresolved Count",
+            "type": "integer"
+          },
+          "uncertain_count": {
+            "minimum": 0,
+            "title": "Uncertain Count",
+            "type": "integer"
+          },
+          "unresolved_count": {
+            "minimum": 0,
+            "title": "Unresolved Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "grant_id",
+          "uncertain_count",
+          "unresolved_count",
+          "import_unresolved_count"
+        ],
+        "title": "BudgetHouseholdQuarantine",
+        "type": "object"
+      },
+      "BudgetHouseholdRecurring": {
+        "properties": {
+          "grant_id": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Grant Id",
+            "type": "string"
+          },
+          "hints": {
+            "items": {
+              "$ref": "#/components/schemas/BudgetHouseholdRecurringHint"
+            },
+            "title": "Hints",
+            "type": "array"
+          }
+        },
+        "required": [
+          "grant_id",
+          "hints"
+        ],
+        "title": "BudgetHouseholdRecurring",
+        "type": "object"
+      },
+      "BudgetHouseholdRecurringHint": {
+        "properties": {
+          "amount": {
+            "maxLength": 192,
+            "minLength": 1,
+            "title": "Amount",
+            "type": "string"
+          },
+          "cadence": {
+            "title": "Cadence",
+            "type": "string"
+          },
+          "currency": {
+            "title": "Currency",
+            "type": "string"
+          },
+          "first_date": {
+            "title": "First Date",
+            "type": "string"
+          },
+          "last_date": {
+            "title": "Last Date",
+            "type": "string"
+          },
+          "occurrence_count": {
+            "minimum": 0,
+            "title": "Occurrence Count",
+            "type": "integer"
+          },
+          "ordinal": {
+            "minimum": 1,
+            "title": "Ordinal",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "ordinal",
+          "amount",
+          "currency",
+          "cadence",
+          "first_date",
+          "last_date",
+          "occurrence_count"
+        ],
+        "title": "BudgetHouseholdRecurringHint",
+        "type": "object"
+      },
+      "BudgetHouseholdRule": {
+        "properties": {
+          "category_id": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "minLength": 64,
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Category Id"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "field": {
+            "enum": [
+              "description",
+              "counterparty_name",
+              "mcc"
+            ],
+            "title": "Field",
+            "type": "string"
+          },
+          "id": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "auto",
+              "expense",
+              "income",
+              "refund",
+              "excluded"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "operator": {
+            "enum": [
+              "contains",
+              "equals"
+            ],
+            "title": "Operator",
+            "type": "string"
+          },
+          "priority": {
+            "title": "Priority",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "field",
+          "operator",
+          "category_id",
+          "kind",
+          "priority",
+          "enabled"
+        ],
+        "title": "BudgetHouseholdRule",
+        "type": "object"
+      },
+      "BudgetHouseholdRules": {
+        "properties": {
+          "grant_id": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Grant Id",
+            "type": "string"
+          },
+          "rules": {
+            "items": {
+              "$ref": "#/components/schemas/BudgetHouseholdRule"
+            },
+            "title": "Rules",
+            "type": "array"
+          }
+        },
+        "required": [
+          "grant_id",
+          "rules"
+        ],
+        "title": "BudgetHouseholdRules",
+        "type": "object"
+      },
+      "BudgetHouseholdSeries": {
+        "properties": {
+          "category_labels": {
+            "items": {
+              "$ref": "#/components/schemas/BudgetHouseholdCategoryLabel"
+            },
+            "title": "Category Labels",
+            "type": "array"
+          },
+          "daily": {
+            "items": {
+              "$ref": "#/components/schemas/BudgetHouseholdSeriesDay"
+            },
+            "title": "Daily",
+            "type": "array"
+          },
+          "months": {
+            "items": {
+              "$ref": "#/components/schemas/BudgetHouseholdSeriesMonth"
+            },
+            "title": "Months",
+            "type": "array"
+          }
+        },
+        "required": [
+          "daily",
+          "months",
+          "category_labels"
+        ],
+        "title": "BudgetHouseholdSeries",
+        "type": "object"
+      },
+      "BudgetHouseholdSeriesCategory": {
+        "properties": {
+          "category_id": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "minLength": 64,
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Category Id"
+          },
+          "net_spending": {
+            "maxLength": 192,
+            "minLength": 1,
+            "title": "Net Spending",
+            "type": "string"
+          }
+        },
+        "required": [
+          "category_id",
+          "net_spending"
+        ],
+        "title": "BudgetHouseholdSeriesCategory",
+        "type": "object"
+      },
+      "BudgetHouseholdSeriesDay": {
+        "properties": {
+          "cumulative_spent": {
+            "maxLength": 192,
+            "minLength": 1,
+            "title": "Cumulative Spent",
+            "type": "string"
+          },
+          "date": {
+            "title": "Date",
+            "type": "string"
+          }
+        },
+        "required": [
+          "date",
+          "cumulative_spent"
+        ],
+        "title": "BudgetHouseholdSeriesDay",
+        "type": "object"
+      },
+      "BudgetHouseholdSeriesMonth": {
+        "properties": {
+          "categories": {
+            "items": {
+              "$ref": "#/components/schemas/BudgetHouseholdSeriesCategory"
+            },
+            "title": "Categories",
+            "type": "array"
+          },
+          "has_activity": {
+            "title": "Has Activity",
+            "type": "boolean"
+          },
+          "income_estimate_partial": {
+            "title": "Income Estimate Partial",
+            "type": "boolean"
+          },
+          "is_current_month": {
+            "title": "Is Current Month",
+            "type": "boolean"
+          },
+          "period": {
+            "title": "Period",
+            "type": "string"
+          },
+          "provisional": {
+            "title": "Provisional",
+            "type": "boolean"
+          },
+          "spent": {
+            "maxLength": 192,
+            "minLength": 1,
+            "title": "Spent",
+            "type": "string"
+          },
+          "start_budget": {
+            "maxLength": 192,
+            "minLength": 1,
+            "title": "Start Budget",
+            "type": "string"
+          }
+        },
+        "required": [
+          "period",
+          "has_activity",
+          "is_current_month",
+          "income_estimate_partial",
+          "provisional",
+          "start_budget",
+          "spent",
+          "categories"
+        ],
+        "title": "BudgetHouseholdSeriesMonth",
+        "type": "object"
+      },
+      "BudgetHouseholdSettings": {
+        "description": "Bootstrap month config only. An absent owner entry is an empty income list and null pass-through.",
+        "properties": {
+          "grant_id": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Grant Id",
+            "type": "string"
+          },
+          "income_category_ids": {
+            "items": {
+              "maxLength": 64,
+              "minLength": 64,
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            "title": "Income Category Ids",
+            "type": "array"
+          },
+          "pass_through": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BudgetHouseholdPassThrough"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "grant_id",
+          "income_category_ids",
+          "pass_through"
+        ],
+        "title": "BudgetHouseholdSettings",
+        "type": "object"
+      },
+      "BudgetHouseholdSpendingLimit": {
+        "properties": {
+          "category_id": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Category Id",
+            "type": "string"
+          },
+          "currency": {
+            "title": "Currency",
+            "type": "string"
+          },
+          "monthly_limit": {
+            "title": "Monthly Limit",
+            "type": "string"
+          },
+          "net_spending": {
+            "maxLength": 192,
+            "minLength": 1,
+            "title": "Net Spending",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "within",
+              "approaching",
+              "at_limit",
+              "exceeded"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "warning_percent": {
+            "maximum": 99,
+            "minimum": 1,
+            "title": "Warning Percent",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "category_id",
+          "currency",
+          "monthly_limit",
+          "warning_percent",
+          "status",
+          "net_spending"
+        ],
+        "title": "BudgetHouseholdSpendingLimit",
+        "type": "object"
+      },
+      "BudgetHouseholdSpendingLimits": {
+        "properties": {
+          "grant_id": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Grant Id",
+            "type": "string"
+          },
+          "limits": {
+            "items": {
+              "$ref": "#/components/schemas/BudgetHouseholdSpendingLimit"
+            },
+            "title": "Limits",
+            "type": "array"
+          }
+        },
+        "required": [
+          "grant_id",
+          "limits"
+        ],
+        "title": "BudgetHouseholdSpendingLimits",
+        "type": "object"
+      },
+      "BudgetHouseholdTransaction": {
+        "properties": {
+          "account_id": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Account Id",
+            "type": "string"
+          },
+          "amount": {
+            "maxLength": 192,
+            "minLength": 1,
+            "title": "Amount",
+            "type": "string"
+          },
+          "category_id": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "minLength": 64,
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Category Id"
+          },
+          "currency": {
+            "title": "Currency",
+            "type": "string"
+          },
+          "date": {
+            "title": "Date",
+            "type": "string"
+          },
+          "direction": {
+            "enum": [
+              "DBIT",
+              "CRDT"
+            ],
+            "title": "Direction",
+            "type": "string"
+          },
+          "id": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "expense",
+              "income",
+              "refund",
+              "excluded",
+              "unclassified_credit",
+              "transfer"
+            ],
+            "title": "Kind",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "date",
+          "account_id",
+          "category_id",
+          "kind",
+          "currency",
+          "amount",
+          "direction"
+        ],
+        "title": "BudgetHouseholdTransaction",
+        "type": "object"
+      },
+      "BudgetHouseholdTransactions": {
+        "properties": {
+          "filtered_total": {
+            "title": "Filtered Total",
+            "type": "integer"
+          },
+          "grant_id": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Grant Id",
+            "type": "string"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          },
+          "transactions": {
+            "items": {
+              "$ref": "#/components/schemas/BudgetHouseholdTransaction"
+            },
+            "title": "Transactions",
+            "type": "array"
+          }
+        },
+        "required": [
+          "grant_id",
+          "transactions",
+          "filtered_total",
+          "next_cursor"
+        ],
+        "title": "BudgetHouseholdTransactions",
+        "type": "object"
+      },
+      "BudgetHouseholdTransfer": {
+        "properties": {
+          "credit": {
+            "$ref": "#/components/schemas/BudgetHouseholdTransferLeg"
+          },
+          "debit": {
+            "$ref": "#/components/schemas/BudgetHouseholdTransferLeg"
+          },
+          "id": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Id",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "suggested",
+              "accepted",
+              "review",
+              "boundary",
+              "rejected",
+              "undone"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "status",
+          "debit",
+          "credit"
+        ],
+        "title": "BudgetHouseholdTransfer",
+        "type": "object"
+      },
+      "BudgetHouseholdTransferLeg": {
+        "properties": {
+          "account_id": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Account Id",
+            "type": "string"
+          },
+          "amount": {
+            "maxLength": 192,
+            "minLength": 1,
+            "title": "Amount",
+            "type": "string"
+          },
+          "currency": {
+            "title": "Currency",
+            "type": "string"
+          },
+          "date": {
+            "title": "Date",
+            "type": "string"
+          }
+        },
+        "required": [
+          "account_id",
+          "date",
+          "amount",
+          "currency"
+        ],
+        "title": "BudgetHouseholdTransferLeg",
+        "type": "object"
+      },
+      "BudgetHouseholdTransfers": {
+        "properties": {
+          "filtered_total": {
+            "title": "Filtered Total",
+            "type": "integer"
+          },
+          "grant_id": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Grant Id",
+            "type": "string"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          },
+          "transfers": {
+            "items": {
+              "$ref": "#/components/schemas/BudgetHouseholdTransfer"
+            },
+            "title": "Transfers",
+            "type": "array"
+          }
+        },
+        "required": [
+          "grant_id",
+          "transfers",
+          "filtered_total",
+          "next_cursor"
+        ],
+        "title": "BudgetHouseholdTransfers",
+        "type": "object"
+      },
       "BudgetJob": {
         "description": "A local intent; debits, cadence and Retry-After stay authoritative, never the job.",
         "properties": {
@@ -12204,7 +13538,7 @@
   "info": {
     "description": "Local cloud-free smart-home control API. Generated from hestia/api_contract.py \u2014 do not edit by hand; run `python -m hestia.api_contract`.",
     "title": "hestia API",
-    "version": "0.36.0"
+    "version": "0.37.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -16916,6 +18250,1777 @@
         },
         "summary": "Stage a browser-bound one-time bank code",
         "x-required-role": "public"
+      }
+    },
+    "/api/budget/household/access": {
+      "get": {
+        "description": "Requires an authenticated active viewer, both budget flags, SQLite users and a grant whose owner is an active admin. The grant header is 64 lowercase hex characters. Reads the same owner projection through a separate allowlist. No bank request. Data reads may write one sanitised internal analytics-audit row for the member, owner and view name, at most once per 60 seconds, in the same immediate transaction as the fresh grant check. Household audit rows older than 180 days are pruned on that write. GET /access returns only the member's grant id and writes no audit row. Failures write nothing. The row is not visible on /api/audit or the SSE stream. GET /monthly-budget-settings reads the P1 bootstrap config only.",
+        "operationId": "getBudgetHouseholdAccess",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetHouseholdAccess"
+                }
+              }
+            },
+            "description": "Household view. No bank request. The body is sent only after a fresh grant check commits in one immediate transaction. A successful data read may write one sanitised analytics-audit row naming the member, owner and view, at most once per 60 seconds. Discovery writes no audit row. A denial writes nothing."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "session required; middleware may return an empty body"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Stored role must be exactly an active viewer with a grant whose owner is an active admin. Data reads also require exactly one matching X-Budget-Grant. The viewer route floor admits higher roles; those roles are rejected here. Middleware may return an empty body."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "unknown, disabled or foreign resource"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Version, financial source, reserved transfer leg, preview or cursor changed; reload and review."
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Household response exceeded 4 MiB of UTF-8 JSON, or a monthly-budget processing cap was hit. No partial body is returned."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "budget configuration unavailable"
+          }
+        },
+        "summary": "Discover the caller's household grant id",
+        "x-required-role": "viewer"
+      }
+    },
+    "/api/budget/household/categories": {
+      "get": {
+        "description": "Requires an authenticated active viewer, both budget flags, SQLite users and a grant whose owner is an active admin. The grant header is 64 lowercase hex characters. Reads the same owner projection through a separate allowlist. No bank request. Data reads may write one sanitised internal analytics-audit row for the member, owner and view name, at most once per 60 seconds, in the same immediate transaction as the fresh grant check. Household audit rows older than 180 days are pruned on that write. GET /access returns only the member's grant id and writes no audit row. Failures write nothing. The row is not visible on /api/audit or the SSE stream. GET /monthly-budget-settings reads the P1 bootstrap config only.",
+        "operationId": "getBudgetHouseholdCategories",
+        "parameters": [
+          {
+            "description": "Exactly one household grant id, as returned by discovery. A missing, duplicate or different value is rejected.",
+            "in": "header",
+            "name": "X-Budget-Grant",
+            "required": true,
+            "schema": {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetHouseholdCategories"
+                }
+              }
+            },
+            "description": "Household view. No bank request. The body is sent only after a fresh grant check commits in one immediate transaction. A successful data read may write one sanitised analytics-audit row naming the member, owner and view, at most once per 60 seconds. Discovery writes no audit row. A denial writes nothing."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "session required; middleware may return an empty body"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Stored role must be exactly an active viewer with a grant whose owner is an active admin. Data reads also require exactly one matching X-Budget-Grant. The viewer route floor admits higher roles; those roles are rejected here. Middleware may return an empty body."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "unknown, disabled or foreign resource"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Version, financial source, reserved transfer leg, preview or cursor changed; reload and review."
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Household response exceeded 4 MiB of UTF-8 JSON, or a monthly-budget processing cap was hit. No partial body is returned."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "budget configuration unavailable"
+          }
+        },
+        "summary": "Household category aliases and safe labels",
+        "x-required-role": "viewer"
+      }
+    },
+    "/api/budget/household/inbox": {
+      "get": {
+        "description": "Requires an authenticated active viewer, both budget flags, SQLite users and a grant whose owner is an active admin. The grant header is 64 lowercase hex characters. Reads the same owner projection through a separate allowlist. No bank request. Data reads may write one sanitised internal analytics-audit row for the member, owner and view name, at most once per 60 seconds, in the same immediate transaction as the fresh grant check. Household audit rows older than 180 days are pruned on that write. GET /access returns only the member's grant id and writes no audit row. Failures write nothing. The row is not visible on /api/audit or the SSE stream. GET /monthly-budget-settings reads the P1 bootstrap config only.",
+        "operationId": "getBudgetHouseholdInbox",
+        "parameters": [
+          {
+            "description": "Exactly one household grant id, as returned by discovery. A missing, duplicate or different value is rejected.",
+            "in": "header",
+            "name": "X-Budget-Grant",
+            "required": true,
+            "schema": {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetHouseholdInbox"
+                }
+              }
+            },
+            "description": "Household view. No bank request. The body is sent only after a fresh grant check commits in one immediate transaction. A successful data read may write one sanitised analytics-audit row naming the member, owner and view, at most once per 60 seconds. Discovery writes no audit row. A denial writes nothing."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "session required; middleware may return an empty body"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Stored role must be exactly an active viewer with a grant whose owner is an active admin. Data reads also require exactly one matching X-Budget-Grant. The viewer route floor admits higher roles; those roles are rejected here. Middleware may return an empty body."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "unknown, disabled or foreign resource"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Version, financial source, reserved transfer leg, preview or cursor changed; reload and review."
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Household response exceeded 4 MiB of UTF-8 JSON, or a monthly-budget processing cap was hit. No partial body is returned."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "budget configuration unavailable"
+          }
+        },
+        "summary": "Household mortgage and spending-limit inbox",
+        "x-required-role": "viewer"
+      }
+    },
+    "/api/budget/household/monthly-budget": {
+      "get": {
+        "description": "Requires an authenticated active viewer, both budget flags, SQLite users and a grant whose owner is an active admin. The grant header is 64 lowercase hex characters. Reads the same owner projection through a separate allowlist. No bank request. Data reads may write one sanitised internal analytics-audit row for the member, owner and view name, at most once per 60 seconds, in the same immediate transaction as the fresh grant check. Household audit rows older than 180 days are pruned on that write. GET /access returns only the member's grant id and writes no audit row. Failures write nothing. The row is not visible on /api/audit or the SSE stream. GET /monthly-budget-settings reads the P1 bootstrap config only.",
+        "operationId": "getBudgetHouseholdMonthlyBudget",
+        "parameters": [
+          {
+            "description": "Exactly one household grant id, as returned by discovery. A missing, duplicate or different value is rejected.",
+            "in": "header",
+            "name": "X-Budget-Grant",
+            "required": true,
+            "schema": {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Optional calendar month YYYY-MM through the current Europe/Warsaw month. Defaults to that month.",
+            "in": "query",
+            "name": "period",
+            "required": false,
+            "schema": {
+              "pattern": "^[0-9]{4}-[0-9]{2}$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Optional uppercase 3-letter ISO currency code. Defaults to PLN.",
+            "in": "query",
+            "name": "currency",
+            "required": false,
+            "schema": {
+              "default": "PLN",
+              "pattern": "^[A-Z]{3}$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetHouseholdMonthlyBudget"
+                }
+              }
+            },
+            "description": "Household view. No bank request. The body is sent only after a fresh grant check commits in one immediate transaction. A successful data read may write one sanitised analytics-audit row naming the member, owner and view, at most once per 60 seconds. Discovery writes no audit row. A denial writes nothing."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "session required; middleware may return an empty body"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Stored role must be exactly an active viewer with a grant whose owner is an active admin. Data reads also require exactly one matching X-Budget-Grant. The viewer route floor admits higher roles; those roles are rejected here. Middleware may return an empty body."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "unknown, disabled or foreign resource"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Version, financial source, reserved transfer leg, preview or cursor changed; reload and review."
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Household response exceeded 4 MiB of UTF-8 JSON, or a monthly-budget processing cap was hit. No partial body is returned."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "budget configuration unavailable"
+          }
+        },
+        "summary": "Household monthly budget and series",
+        "x-required-role": "viewer"
+      }
+    },
+    "/api/budget/household/monthly-budget-settings": {
+      "get": {
+        "description": "Requires an authenticated active viewer, both budget flags, SQLite users and a grant whose owner is an active admin. The grant header is 64 lowercase hex characters. Reads the same owner projection through a separate allowlist. No bank request. Data reads may write one sanitised internal analytics-audit row for the member, owner and view name, at most once per 60 seconds, in the same immediate transaction as the fresh grant check. Household audit rows older than 180 days are pruned on that write. GET /access returns only the member's grant id and writes no audit row. Failures write nothing. The row is not visible on /api/audit or the SSE stream. GET /monthly-budget-settings reads the P1 bootstrap config only.",
+        "operationId": "getBudgetHouseholdMonthlyBudgetSettings",
+        "parameters": [
+          {
+            "description": "Exactly one household grant id, as returned by discovery. A missing, duplicate or different value is rejected.",
+            "in": "header",
+            "name": "X-Budget-Grant",
+            "required": true,
+            "schema": {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetHouseholdSettings"
+                }
+              }
+            },
+            "description": "Household view. No bank request. The body is sent only after a fresh grant check commits in one immediate transaction. A successful data read may write one sanitised analytics-audit row naming the member, owner and view, at most once per 60 seconds. Discovery writes no audit row. A denial writes nothing."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "session required; middleware may return an empty body"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Stored role must be exactly an active viewer with a grant whose owner is an active admin. Data reads also require exactly one matching X-Budget-Grant. The viewer route floor admits higher roles; those roles are rejected here. Middleware may return an empty body."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "unknown, disabled or foreign resource"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Version, financial source, reserved transfer leg, preview or cursor changed; reload and review."
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Household response exceeded 4 MiB of UTF-8 JSON, or a monthly-budget processing cap was hit. No partial body is returned."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "budget configuration unavailable"
+          }
+        },
+        "summary": "Bootstrap monthly-budget settings with grant-scoped category ids",
+        "x-required-role": "viewer"
+      }
+    },
+    "/api/budget/household/mortgages": {
+      "get": {
+        "description": "Requires an authenticated active viewer, both budget flags, SQLite users and a grant whose owner is an active admin. The grant header is 64 lowercase hex characters. Reads the same owner projection through a separate allowlist. No bank request. Data reads may write one sanitised internal analytics-audit row for the member, owner and view name, at most once per 60 seconds, in the same immediate transaction as the fresh grant check. Household audit rows older than 180 days are pruned on that write. GET /access returns only the member's grant id and writes no audit row. Failures write nothing. The row is not visible on /api/audit or the SSE stream. GET /monthly-budget-settings reads the P1 bootstrap config only.",
+        "operationId": "getBudgetHouseholdMortgages",
+        "parameters": [
+          {
+            "description": "Exactly one household grant id, as returned by discovery. A missing, duplicate or different value is rejected.",
+            "in": "header",
+            "name": "X-Budget-Grant",
+            "required": true,
+            "schema": {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetHouseholdMortgages"
+                }
+              }
+            },
+            "description": "Household view. No bank request. The body is sent only after a fresh grant check commits in one immediate transaction. A successful data read may write one sanitised analytics-audit row naming the member, owner and view, at most once per 60 seconds. Discovery writes no audit row. A denial writes nothing."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "session required; middleware may return an empty body"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Stored role must be exactly an active viewer with a grant whose owner is an active admin. Data reads also require exactly one matching X-Budget-Grant. The viewer route floor admits higher roles; those roles are rejected here. Middleware may return an empty body."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "unknown, disabled or foreign resource"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Version, financial source, reserved transfer leg, preview or cursor changed; reload and review."
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Household response exceeded 4 MiB of UTF-8 JSON, or a monthly-budget processing cap was hit. No partial body is returned."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "budget configuration unavailable"
+          }
+        },
+        "summary": "Household mortgage schedules without labels",
+        "x-required-role": "viewer"
+      }
+    },
+    "/api/budget/household/overview": {
+      "get": {
+        "description": "Requires an authenticated active viewer, both budget flags, SQLite users and a grant whose owner is an active admin. The grant header is 64 lowercase hex characters. Reads the same owner projection through a separate allowlist. No bank request. Data reads may write one sanitised internal analytics-audit row for the member, owner and view name, at most once per 60 seconds, in the same immediate transaction as the fresh grant check. Household audit rows older than 180 days are pruned on that write. GET /access returns only the member's grant id and writes no audit row. Failures write nothing. The row is not visible on /api/audit or the SSE stream. GET /monthly-budget-settings reads the P1 bootstrap config only.",
+        "operationId": "getBudgetHouseholdOverview",
+        "parameters": [
+          {
+            "description": "Exactly one household grant id, as returned by discovery. A missing, duplicate or different value is rejected.",
+            "in": "header",
+            "name": "X-Budget-Grant",
+            "required": true,
+            "schema": {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Inclusive calendar month or year, 1900 through 9999.",
+            "in": "query",
+            "name": "period",
+            "required": true,
+            "schema": {
+              "pattern": "^[0-9]{4}(?:-[0-9]{2})?$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "",
+            "in": "query",
+            "name": "currency",
+            "required": false,
+            "schema": {
+              "pattern": "^[A-Z]{3}$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetHouseholdOverview"
+                }
+              }
+            },
+            "description": "Household view. No bank request. The body is sent only after a fresh grant check commits in one immediate transaction. A successful data read may write one sanitised analytics-audit row naming the member, owner and view, at most once per 60 seconds. Discovery writes no audit row. A denial writes nothing."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "session required; middleware may return an empty body"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Stored role must be exactly an active viewer with a grant whose owner is an active admin. Data reads also require exactly one matching X-Budget-Grant. The viewer route floor admits higher roles; those roles are rejected here. Middleware may return an empty body."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "unknown, disabled or foreign resource"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Version, financial source, reserved transfer leg, preview or cursor changed; reload and review."
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Household response exceeded 4 MiB of UTF-8 JSON, or a monthly-budget processing cap was hit. No partial body is returned."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "budget configuration unavailable"
+          }
+        },
+        "summary": "Household selected-account totals",
+        "x-required-role": "viewer"
+      }
+    },
+    "/api/budget/household/quarantine": {
+      "get": {
+        "description": "Requires an authenticated active viewer, both budget flags, SQLite users and a grant whose owner is an active admin. The grant header is 64 lowercase hex characters. Reads the same owner projection through a separate allowlist. No bank request. Data reads may write one sanitised internal analytics-audit row for the member, owner and view name, at most once per 60 seconds, in the same immediate transaction as the fresh grant check. Household audit rows older than 180 days are pruned on that write. GET /access returns only the member's grant id and writes no audit row. Failures write nothing. The row is not visible on /api/audit or the SSE stream. GET /monthly-budget-settings reads the P1 bootstrap config only.",
+        "operationId": "getBudgetHouseholdQuarantine",
+        "parameters": [
+          {
+            "description": "Exactly one household grant id, as returned by discovery. A missing, duplicate or different value is rejected.",
+            "in": "header",
+            "name": "X-Budget-Grant",
+            "required": true,
+            "schema": {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetHouseholdQuarantine"
+                }
+              }
+            },
+            "description": "Household view. No bank request. The body is sent only after a fresh grant check commits in one immediate transaction. A successful data read may write one sanitised analytics-audit row naming the member, owner and view, at most once per 60 seconds. Discovery writes no audit row. A denial writes nothing."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "session required; middleware may return an empty body"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Stored role must be exactly an active viewer with a grant whose owner is an active admin. Data reads also require exactly one matching X-Budget-Grant. The viewer route floor admits higher roles; those roles are rejected here. Middleware may return an empty body."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "unknown, disabled or foreign resource"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Version, financial source, reserved transfer leg, preview or cursor changed; reload and review."
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Household response exceeded 4 MiB of UTF-8 JSON, or a monthly-budget processing cap was hit. No partial body is returned."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "budget configuration unavailable"
+          }
+        },
+        "summary": "Household quarantine counts over selected accounts",
+        "x-required-role": "viewer"
+      }
+    },
+    "/api/budget/household/recurring": {
+      "get": {
+        "description": "Requires an authenticated active viewer, both budget flags, SQLite users and a grant whose owner is an active admin. The grant header is 64 lowercase hex characters. Reads the same owner projection through a separate allowlist. No bank request. Data reads may write one sanitised internal analytics-audit row for the member, owner and view name, at most once per 60 seconds, in the same immediate transaction as the fresh grant check. Household audit rows older than 180 days are pruned on that write. GET /access returns only the member's grant id and writes no audit row. Failures write nothing. The row is not visible on /api/audit or the SSE stream. GET /monthly-budget-settings reads the P1 bootstrap config only.",
+        "operationId": "getBudgetHouseholdRecurring",
+        "parameters": [
+          {
+            "description": "Exactly one household grant id, as returned by discovery. A missing, duplicate or different value is rejected.",
+            "in": "header",
+            "name": "X-Budget-Grant",
+            "required": true,
+            "schema": {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "",
+            "in": "query",
+            "name": "currency",
+            "required": false,
+            "schema": {
+              "pattern": "^[A-Z]{3}$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetHouseholdRecurring"
+                }
+              }
+            },
+            "description": "Household view. No bank request. The body is sent only after a fresh grant check commits in one immediate transaction. A successful data read may write one sanitised analytics-audit row naming the member, owner and view, at most once per 60 seconds. Discovery writes no audit row. A denial writes nothing."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "session required; middleware may return an empty body"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Stored role must be exactly an active viewer with a grant whose owner is an active admin. Data reads also require exactly one matching X-Budget-Grant. The viewer route floor admits higher roles; those roles are rejected here. Middleware may return an empty body."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "unknown, disabled or foreign resource"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Version, financial source, reserved transfer leg, preview or cursor changed; reload and review."
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Household response exceeded 4 MiB of UTF-8 JSON, or a monthly-budget processing cap was hit. No partial body is returned."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "budget configuration unavailable"
+          }
+        },
+        "summary": "Household recurring hints with generic ordinals",
+        "x-required-role": "viewer"
+      }
+    },
+    "/api/budget/household/report-accounts": {
+      "get": {
+        "description": "Requires an authenticated active viewer, both budget flags, SQLite users and a grant whose owner is an active admin. The grant header is 64 lowercase hex characters. Reads the same owner projection through a separate allowlist. No bank request. Data reads may write one sanitised internal analytics-audit row for the member, owner and view name, at most once per 60 seconds, in the same immediate transaction as the fresh grant check. Household audit rows older than 180 days are pruned on that write. GET /access returns only the member's grant id and writes no audit row. Failures write nothing. The row is not visible on /api/audit or the SSE stream. GET /monthly-budget-settings reads the P1 bootstrap config only.",
+        "operationId": "getBudgetHouseholdReportAccounts",
+        "parameters": [
+          {
+            "description": "Exactly one household grant id, as returned by discovery. A missing, duplicate or different value is rejected.",
+            "in": "header",
+            "name": "X-Budget-Grant",
+            "required": true,
+            "schema": {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetHouseholdAccounts"
+                }
+              }
+            },
+            "description": "Household view. No bank request. The body is sent only after a fresh grant check commits in one immediate transaction. A successful data read may write one sanitised analytics-audit row naming the member, owner and view, at most once per 60 seconds. Discovery writes no audit row. A denial writes nothing."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "session required; middleware may return an empty body"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Stored role must be exactly an active viewer with a grant whose owner is an active admin. Data reads also require exactly one matching X-Budget-Grant. The viewer route floor admits higher roles; those roles are rejected here. Middleware may return an empty body."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "unknown, disabled or foreign resource"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Version, financial source, reserved transfer leg, preview or cursor changed; reload and review."
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Household response exceeded 4 MiB of UTF-8 JSON, or a monthly-budget processing cap was hit. No partial body is returned."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "budget configuration unavailable"
+          }
+        },
+        "summary": "Selected accounts as grant-scoped aliases and ordinals",
+        "x-required-role": "viewer"
+      }
+    },
+    "/api/budget/household/rules": {
+      "get": {
+        "description": "Requires an authenticated active viewer, both budget flags, SQLite users and a grant whose owner is an active admin. The grant header is 64 lowercase hex characters. Reads the same owner projection through a separate allowlist. No bank request. Data reads may write one sanitised internal analytics-audit row for the member, owner and view name, at most once per 60 seconds, in the same immediate transaction as the fresh grant check. Household audit rows older than 180 days are pruned on that write. GET /access returns only the member's grant id and writes no audit row. Failures write nothing. The row is not visible on /api/audit or the SSE stream. GET /monthly-budget-settings reads the P1 bootstrap config only.",
+        "operationId": "getBudgetHouseholdRules",
+        "parameters": [
+          {
+            "description": "Exactly one household grant id, as returned by discovery. A missing, duplicate or different value is rejected.",
+            "in": "header",
+            "name": "X-Budget-Grant",
+            "required": true,
+            "schema": {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetHouseholdRules"
+                }
+              }
+            },
+            "description": "Household view. No bank request. The body is sent only after a fresh grant check commits in one immediate transaction. A successful data read may write one sanitised analytics-audit row naming the member, owner and view, at most once per 60 seconds. Discovery writes no audit row. A denial writes nothing."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "session required; middleware may return an empty body"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Stored role must be exactly an active viewer with a grant whose owner is an active admin. Data reads also require exactly one matching X-Budget-Grant. The viewer route floor admits higher roles; those roles are rejected here. Middleware may return an empty body."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "unknown, disabled or foreign resource"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Version, financial source, reserved transfer leg, preview or cursor changed; reload and review."
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Household response exceeded 4 MiB of UTF-8 JSON, or a monthly-budget processing cap was hit. No partial body is returned."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "budget configuration unavailable"
+          }
+        },
+        "summary": "Household rules without literal operands",
+        "x-required-role": "viewer"
+      }
+    },
+    "/api/budget/household/spending-limits": {
+      "get": {
+        "description": "Requires an authenticated active viewer, both budget flags, SQLite users and a grant whose owner is an active admin. The grant header is 64 lowercase hex characters. Reads the same owner projection through a separate allowlist. No bank request. Data reads may write one sanitised internal analytics-audit row for the member, owner and view name, at most once per 60 seconds, in the same immediate transaction as the fresh grant check. Household audit rows older than 180 days are pruned on that write. GET /access returns only the member's grant id and writes no audit row. Failures write nothing. The row is not visible on /api/audit or the SSE stream. GET /monthly-budget-settings reads the P1 bootstrap config only.",
+        "operationId": "getBudgetHouseholdSpendingLimits",
+        "parameters": [
+          {
+            "description": "Exactly one household grant id, as returned by discovery. A missing, duplicate or different value is rejected.",
+            "in": "header",
+            "name": "X-Budget-Grant",
+            "required": true,
+            "schema": {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Inclusive calendar month YYYY-MM.",
+            "in": "query",
+            "name": "period",
+            "required": true,
+            "schema": {
+              "pattern": "^[0-9]{4}-[0-9]{2}$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "",
+            "in": "query",
+            "name": "currency",
+            "required": false,
+            "schema": {
+              "pattern": "^[A-Z]{3}$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetHouseholdSpendingLimits"
+                }
+              }
+            },
+            "description": "Household view. No bank request. The body is sent only after a fresh grant check commits in one immediate transaction. A successful data read may write one sanitised analytics-audit row naming the member, owner and view, at most once per 60 seconds. Discovery writes no audit row. A denial writes nothing."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "session required; middleware may return an empty body"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Stored role must be exactly an active viewer with a grant whose owner is an active admin. Data reads also require exactly one matching X-Budget-Grant. The viewer route floor admits higher roles; those roles are rejected here. Middleware may return an empty body."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "unknown, disabled or foreign resource"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Version, financial source, reserved transfer leg, preview or cursor changed; reload and review."
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Household response exceeded 4 MiB of UTF-8 JSON, or a monthly-budget processing cap was hit. No partial body is returned."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "budget configuration unavailable"
+          }
+        },
+        "summary": "Enabled household spending limits",
+        "x-required-role": "viewer"
+      }
+    },
+    "/api/budget/household/transactions": {
+      "get": {
+        "description": "Requires an authenticated active viewer, both budget flags, SQLite users and a grant whose owner is an active admin. The grant header is 64 lowercase hex characters. Reads the same owner projection through a separate allowlist. No bank request. Data reads may write one sanitised internal analytics-audit row for the member, owner and view name, at most once per 60 seconds, in the same immediate transaction as the fresh grant check. Household audit rows older than 180 days are pruned on that write. GET /access returns only the member's grant id and writes no audit row. Failures write nothing. The row is not visible on /api/audit or the SSE stream. GET /monthly-budget-settings reads the P1 bootstrap config only.",
+        "operationId": "getBudgetHouseholdTransactions",
+        "parameters": [
+          {
+            "description": "Exactly one household grant id, as returned by discovery. A missing, duplicate or different value is rejected.",
+            "in": "header",
+            "name": "X-Budget-Grant",
+            "required": true,
+            "schema": {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Inclusive calendar month or year, 1900 through 9999.",
+            "in": "query",
+            "name": "period",
+            "required": true,
+            "schema": {
+              "pattern": "^[0-9]{4}(?:-[0-9]{2})?$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "",
+            "in": "query",
+            "name": "currency",
+            "required": false,
+            "schema": {
+              "pattern": "^[A-Z]{3}$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "",
+            "in": "query",
+            "name": "kind",
+            "required": false,
+            "schema": {
+              "enum": [
+                "expense",
+                "income",
+                "refund",
+                "excluded",
+                "unclassified_credit",
+                "transfer"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "description": "Grant-scoped alias of a selected account.",
+            "in": "query",
+            "name": "account_id",
+            "required": false,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "description": "Grant-scoped category alias. The owner token uncategorised is rejected.",
+            "in": "query",
+            "name": "category_id",
+            "required": false,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "description": "",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Opaque cursor bound to the viewer, owner, grant, route and safe rows.",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "maxLength": 8192,
+              "minLength": 1,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetHouseholdTransactions"
+                }
+              }
+            },
+            "description": "Household view. No bank request. The body is sent only after a fresh grant check commits in one immediate transaction. A successful data read may write one sanitised analytics-audit row naming the member, owner and view, at most once per 60 seconds. Discovery writes no audit row. A denial writes nothing."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "session required; middleware may return an empty body"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Stored role must be exactly an active viewer with a grant whose owner is an active admin. Data reads also require exactly one matching X-Budget-Grant. The viewer route floor admits higher roles; those roles are rejected here. Middleware may return an empty body."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "unknown, disabled or foreign resource"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Version, financial source, reserved transfer leg, preview or cursor changed; reload and review."
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Household response exceeded 4 MiB of UTF-8 JSON, or a monthly-budget processing cap was hit. No partial body is returned."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "budget configuration unavailable"
+          }
+        },
+        "summary": "Household transactions without bank text",
+        "x-required-role": "viewer"
+      }
+    },
+    "/api/budget/household/transfers": {
+      "get": {
+        "description": "Requires an authenticated active viewer, both budget flags, SQLite users and a grant whose owner is an active admin. The grant header is 64 lowercase hex characters. Reads the same owner projection through a separate allowlist. No bank request. Data reads may write one sanitised internal analytics-audit row for the member, owner and view name, at most once per 60 seconds, in the same immediate transaction as the fresh grant check. Household audit rows older than 180 days are pruned on that write. GET /access returns only the member's grant id and writes no audit row. Failures write nothing. The row is not visible on /api/audit or the SSE stream. GET /monthly-budget-settings reads the P1 bootstrap config only.",
+        "operationId": "getBudgetHouseholdTransfers",
+        "parameters": [
+          {
+            "description": "Exactly one household grant id, as returned by discovery. A missing, duplicate or different value is rejected.",
+            "in": "header",
+            "name": "X-Budget-Grant",
+            "required": true,
+            "schema": {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Inclusive calendar month or year, 1900 through 9999.",
+            "in": "query",
+            "name": "period",
+            "required": true,
+            "schema": {
+              "pattern": "^[0-9]{4}(?:-[0-9]{2})?$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "",
+            "in": "query",
+            "name": "currency",
+            "required": false,
+            "schema": {
+              "pattern": "^[A-Z]{3}$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "",
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "default": "suggested",
+              "enum": [
+                "suggested",
+                "accepted",
+                "review",
+                "boundary",
+                "rejected",
+                "undone"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "description": "",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Opaque cursor bound to the viewer, owner, grant, route and safe rows.",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "maxLength": 8192,
+              "minLength": 1,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetHouseholdTransfers"
+                }
+              }
+            },
+            "description": "Household view. No bank request. The body is sent only after a fresh grant check commits in one immediate transaction. A successful data read may write one sanitised analytics-audit row naming the member, owner and view, at most once per 60 seconds. Discovery writes no audit row. A denial writes nothing."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "session required; middleware may return an empty body"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Stored role must be exactly an active viewer with a grant whose owner is an active admin. Data reads also require exactly one matching X-Budget-Grant. The viewer route floor admits higher roles; those roles are rejected here. Middleware may return an empty body."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "unknown, disabled or foreign resource"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Version, financial source, reserved transfer leg, preview or cursor changed; reload and review."
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Household response exceeded 4 MiB of UTF-8 JSON, or a monthly-budget processing cap was hit. No partial body is returned."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "budget configuration unavailable"
+          }
+        },
+        "summary": "Household transfer pairs whose both legs are selected",
+        "x-required-role": "viewer"
       }
     },
     "/api/budget/jobs": {

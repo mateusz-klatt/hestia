@@ -95,6 +95,7 @@ def _eval(
     account_kinds: dict | None = None,
     settings: month_budget.MonthBudgetSettings | None = None,
     one_off_secret: bytes | None = ONE_OFF_TEST_SECRET,
+    include_series: bool = False,
 ) -> dict:
     if evaluated_at is None:
         evaluated_at = _utc_ts("2026-11-22T12:00:00Z")
@@ -127,6 +128,7 @@ def _eval(
         account_kinds={} if account_kinds is None else account_kinds,
         settings=settings,
         one_off_secret=one_off_secret,
+        include_series=include_series,
     )
 
 
@@ -166,6 +168,33 @@ DEFAULT_SETTINGS = month_budget.MonthBudgetSettings(
     income_category_ids=("cat-salary", "cat-zus"),
     pass_through=month_budget.PassThroughSettings(rent_category_id="cat-rent", mortgage_category_id="cat-mortgage"),
 )
+
+
+class HouseholdDailySeriesTests(unittest.TestCase):
+    def test_series_stays_off_the_owner_response_and_matches_spent(self):
+        owner = _eval(settings=DEFAULT_SETTINGS, transactions=[
+            _tx("acc-a", "e1", amount="10.00", category_id="cat-food", kind="expense"),
+        ])
+        self.assertNotIn("_series_daily", owner)
+        labelled = _tx(
+            "acc-a", "e2", amount="10.00", category_id="cat-food", kind="expense",
+            annotation={"version": 1, "mode": "manual", "category_id": "cat-food", "kind": "expense",
+                        "stale": False, "label": "Remont lazienki"},
+        )
+        household = _eval(settings=DEFAULT_SETTINGS, transactions=[labelled], include_series=True)
+        self.assertEqual(household["_series_daily"][-1]["cumulative_spent"], household["summary"]["spent"])
+        self.assertNotIn("Remont lazienki", household["_series_daily"][-1]["cumulative_spent"])
+        unconfigured = _eval(include_series=True)
+        self.assertIsNone(unconfigured["summary"])
+        self.assertEqual(unconfigured["_series_daily"][-1]["cumulative_spent"], "0")
+        self.assertGreaterEqual(len(unconfigured["_series_daily"]), 1)
+
+    def test_series_rejects_a_daily_total_that_differs_from_spent(self):
+        with mock.patch.object(month_budget, "_build_daily_series", return_value=[
+            {"date": "2026-11-01", "cumulative_spent": "9.00"},
+        ]):
+            with self.assertRaises(month_budget.MonthDataError):
+                _eval(settings=DEFAULT_SETTINGS, include_series=True)
 
 
 class MonthlyBudgetConfigAndClockTests(unittest.TestCase):
