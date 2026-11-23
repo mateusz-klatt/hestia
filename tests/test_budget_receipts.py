@@ -514,6 +514,12 @@ NR KARTY ****5555
             "KARTA\nok\nok\n12,99": "KARTA\nok\nok\n12,99",
             "KARTA 4111 1111 1111 1111": "KARTA [REDACTED]",
             "4111 1111 1111 1111": "[REDACTED]",
+            "4111 1111\n1111 1111": "[REDACTED] [REDACTED]\n[REDACTED] [REDACTED]",
+            "4111 1111 1111\n1111": "[REDACTED] [REDACTED] [REDACTED]\n[REDACTED]",
+            "4111-1111\n1111-1111": "[REDACTED]-[REDACTED]\n[REDACTED]-[REDACTED]",
+            "4111 1111\n1111\n1111": "[REDACTED] [REDACTED]\n[REDACTED]\n[REDACTED]",
+            "4111\n1111\n1111\n1111": "4111\n1111\n1111\n1111",
+            "MLEKO 3,49\nCHLEB 4,99": "MLEKO 3,49\nCHLEB 4,99",
             "41.11 1111.11 11.1111": "41.11 1111.11 11.1111",
         }
         for raw, expected in cases.items():
@@ -523,6 +529,9 @@ NR KARTY ****5555
         parsed = parse_receipt(wrapped)
         self.assertEqual(parsed["raw_ocr_text"], cases[wrapped])
         self.assertNotRegex(parsed["raw_ocr_text"], r"[0-9]")
+        bare = "4111 1111\n1111 1111"
+        self.assertEqual(parse_receipt(bare)["raw_ocr_text"], cases[bare])
+        self.assertNotRegex(parse_receipt("4111 1111 1111\n1111")["raw_ocr_text"], r"[0-9]")
         split_digits = "CARD NUMBER 4 1 1\n1 1 1 1 1 1\n1 1 1 1 1 1 1"
         split_redacted = redact_pan(split_digits)
         self.assertNotRegex(split_redacted, r"[0-9]")

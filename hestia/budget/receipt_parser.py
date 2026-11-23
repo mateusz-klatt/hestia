@@ -46,6 +46,10 @@ _NIP = re.compile(r"\bNIP\s*:?\s*([0-9][0-9 -]{8,16}[0-9])\b", re.IGNORECASE | r
 # except a quantity written ``\d+ ?(szt|kg|g|l|x)``. Those three lines also share
 # one digit stream, so a PAN wrapped across them is removed with every fragment
 # that contributed a digit or a mask.
+# Everywhere, each window of up to three lines joins digit runs that are
+# separated only by spaces, hyphens or the newline. Windows of 13–19 symbols
+# on that stream are tested for Luhn and for a mask beside digits. A price
+# token or a receipt date breaks the stream, so item lines stay intact.
 _PAN_NEWLINES = frozenset("\n\r\u2028\u2029")
 _PAN_DASHES = frozenset("-‐‑‒–—―")
 _PAN_MASKS = frozenset("*Xx•●#")
@@ -492,11 +496,168 @@ def _merge_spans(spans):
     return merged
 
 
-def _pan_spans(text):
-    """PAN windows per line, then every short digit run on a label and the next two lines.
+def _stream_break_ranges(line):
+    """Price tokens and receipt dates. Their digits are not card groups.
 
-    The same three lines are checked again as one digit stream. A Luhn window or
-    a mask beside digits removes each original fragment that contributed.
+    A hyphenated date such as ``2026-11-20`` would otherwise join a NIP across
+    the newline, and that combined digit string can pass Luhn.
+    """
+    ranges = list(_money_ranges(line))
+    for pattern in (_DATE_ISO, _DATE_PL):
+        ranges.extend((match.start(), match.end()) for match in pattern.finditer(line))
+    if not ranges:
+        return []
+    ranges.sort()
+    merged = [ranges[0]]
+    for start, end in ranges[1:]:
+        if start <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+    return merged
+
+
+def _plain_line_tokens(line):
+    """Digit and mask runs, with ``None`` where the plain stream must break.
+
+    Spaces and hyphens are skipped, so they join the runs on either side.
+    A dot, a comma, a letter or any other character breaks the stream.
+    """
+    breaks = _stream_break_ranges(line)
+    tokens = []
+    length = len(line)
+    index = 0
+    break_at = 0
+    while index < length:
+        if break_at < len(breaks) and breaks[break_at][1] <= index:
+            break_at += 1
+        if break_at < len(breaks) and breaks[break_at][0] <= index < breaks[break_at][1]:
+            tokens.append(None)
+            index = breaks[break_at][1]
+            break_at += 1
+            continue
+        digit = _pan_digit(line[index])
+        if digit is not None or line[index] in _PAN_MASKS:
+            start = index
+            kind = "d" if digit is not None else "m"
+            symbols = []
+            while index < length:
+                if break_at < len(breaks) and breaks[break_at][0] <= index < breaks[break_at][1]:
+                    break
+                digit = _pan_digit(line[index])
+                if digit is not None:
+                    this, value = "d", digit
+                elif line[index] in _PAN_MASKS:
+                    this, value = "m", line[index]
+                else:
+                    break
+                if this != kind:
+                    break
+                symbols.append((this, value))
+                index += 1
+            tokens.append((start, index, symbols))
+            continue
+        if line[index] in _PAN_DASHES or (line[index].isspace() and line[index] not in _PAN_NEWLINES):
+            index += 1
+            continue
+        tokens.append(None)
+        index += 1
+    return tokens
+
+
+def _plain_window_flags(symbols):
+    """Flag symbols inside 13–19 windows that pass Luhn or sit beside a mask."""
+    count = len(symbols)
+    flagged = bytearray(count)
+    if count < 13:
+        return flagged
+    for length in range(13, min(19, count) + 1):
+        last = count - length + 1
+        for start in range(last):
+            window = symbols[start:start + length]
+            runs = []
+            for kind, _ in window:
+                if runs and runs[-1][0] == kind:
+                    runs[-1][1] += 1
+                else:
+                    runs.append([kind, 1])
+            hit = False
+            for index, (kind, run) in enumerate(runs):
+                if kind != "m" or run < 2:
+                    continue
+                left = index and runs[index - 1][0] == "d" and runs[index - 1][1] >= 2
+                right = (index + 1 < len(runs) and runs[index + 1][0] == "d"
+                         and runs[index + 1][1] >= 2)
+                if left or right:
+                    hit = True
+                    break
+            if not hit:
+                digits = "".join(value for kind, value in window if kind == "d")
+                hit = _luhn(digits)
+            if not hit:
+                continue
+            flagged[start:start + length] = b"\x01" * length
+    return flagged
+
+
+def _flagged_fragment_spans(fragments):
+    """Redact each fragment that contributed a symbol to a flagged window."""
+    symbols = []
+    owners = []
+    for index, (_, _, frag_symbols) in enumerate(fragments):
+        for kind, value in frag_symbols:
+            symbols.append((kind, value))
+            owners.append(index)
+    flagged = _plain_window_flags(symbols)
+    spans = []
+    seen = set()
+    for index, mark in enumerate(flagged):
+        if not mark:
+            continue
+        owner = owners[index]
+        if owner in seen:
+            continue
+        seen.add(owner)
+        start, end, _ = fragments[owner]
+        spans.append((start, end))
+    return spans
+
+
+def _cross_line_plain_spans(lines, offsets):
+    """Join plain groups across each window of up to three lines.
+
+    Each line is visited at most three times, and only windows of 13–19 symbols
+    are tested, so the scan stays linear.
+    """
+    tokens = [_plain_line_tokens(line) for line in lines]
+    spans = []
+    total = len(lines)
+    for start in range(total):
+        limit = min(start + 3, total)
+        stream = []
+
+        def flush():
+            if stream:
+                spans.extend(_flagged_fragment_spans(stream))
+                stream.clear()
+
+        for number in range(start, limit):
+            for token in tokens[number]:
+                if token is None:
+                    flush()
+                    continue
+                local_start, local_end, symbols = token
+                stream.append((offsets[number] + local_start, offsets[number] + local_end, symbols))
+        flush()
+    return spans
+
+
+def _pan_spans(text):
+    """PAN windows per line, then label fragments, then plain groups across three lines.
+
+    A label line and the next two share one digit stream. Separately, every
+    window of up to three lines joins groups that use only spaces and hyphens.
+    A Luhn or mask hit removes each fragment that contributed.
     """
     lines = text.split("\n")
     label = [False] * len(lines)
@@ -536,6 +697,7 @@ def _pan_spans(text):
                 if fragments[index] is None:
                     fragments[index] = _symbol_fragments(lines[index])
             spans.extend(_label_stream_spans(fragments, number, limit, offsets))
+    spans.extend(_cross_line_plain_spans(lines, offsets))
     return _merge_spans(spans)
 
 
