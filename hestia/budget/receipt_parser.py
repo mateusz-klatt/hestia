@@ -13,6 +13,7 @@ MAX_SHOP_NAME_LEN = 128
 MAX_TEXT_BYTES = 32 * 1024
 MAX_TEXT_LINES = 500
 MAX_LINE_CHARS = 512
+_MAX_COMBINING = 8
 MAX_MONEY_INTEGER_DIGITS = 9
 MAX_MONEY_FRACTION_DIGITS = 4
 # Joined digits of this length are a secret, with or without a Luhn check.
@@ -315,16 +316,42 @@ def redact_digit_field(value):
     return value
 
 
+def _bound_raw_line(line):
+    """Drop a line past the cap, then collapse a combining run to eight marks.
+
+    Both happen before NFKC. A long run of combining marks makes CPython's
+    canonical reordering quadratic, so the normaliser must not see one.
+    """
+    if len(line) > MAX_LINE_CHARS:
+        return ""
+    kept = []
+    run = 0
+    for char in line:
+        if unicodedata.category(char)[0] == "M":
+            run += 1
+            if run <= _MAX_COMBINING:
+                kept.append(char)
+            continue
+        run = 0
+        kept.append(char)
+    return "".join(kept)
+
+
 def _normalize_receipt_text(text):
     """Allowlist after NFKC. The stored OCR text is this form.
 
-    NFKC first, so compatibility digits fold to ASCII and Polish letters
-    compose. Line terminators are already ``\\n``. One linear pass then keeps
-    letters, ASCII digits, punctuation, symbols, an ASCII space and ``\\n``.
-    A non-ASCII digit that NFKC left behind is mapped with ``unicodedata.digit``.
-    Marks, format characters, other spaces, and every other category are removed.
+    Line breaks are folded and each raw line is capped before NFKC, so
+    compatibility digits still fold to ASCII and Polish letters still compose.
+    One linear pass then keeps letters, ASCII digits, punctuation, symbols, an
+    ASCII space and ``\\n``. A non-ASCII digit that NFKC left behind is mapped
+    with ``unicodedata.digit``. Marks, format characters, other spaces, and
+    every other category are removed.
     """
-    text = unicodedata.normalize("NFKC", text).replace("\r\n", "\n").translate(_LINE_BREAK)
+    bounded = "\n".join(
+        _bound_raw_line(line)
+        for line in text.replace("\r\n", "\n").translate(_LINE_BREAK).split("\n")
+    )
+    text = unicodedata.normalize("NFKC", bounded)
     if text.isascii() and _ASCII_DROPPED.search(text) is None:
         return text
     kept = []
@@ -363,7 +390,9 @@ def _receipt_text(text):
         size = len(text.encode("utf-8"))
     except UnicodeEncodeError:
         raise ReceiptError() from None
-    if size < 1 or size > MAX_TEXT_BYTES or _CONTROL.search(text) or text.count("\n") + 1 > MAX_TEXT_LINES:
+    # A line past the cap is dropped before NFKC, so a single oversized line can
+    # normalise to empty. The raw byte check above already rejected an empty input.
+    if size > MAX_TEXT_BYTES or _CONTROL.search(text) or text.count("\n") + 1 > MAX_TEXT_LINES:
         raise ReceiptError()
     return text
 

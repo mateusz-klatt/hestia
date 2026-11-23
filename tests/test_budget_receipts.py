@@ -797,7 +797,7 @@ NR KARTY ****5555
         started = time.perf_counter()
         scanned = redact_pan("*" * (32 * 1024 - 1))
         self.assertLess(time.perf_counter() - started, 0.5)
-        self.assertEqual(scanned, "*" * (32 * 1024 - 1))
+        self.assertEqual(scanned, "")
         for sample in ("\n" * 50_000, "\n" * (32 * 1024 - 1)):
             started = time.perf_counter()
             with self.assertRaises(ReceiptError):
@@ -807,7 +807,7 @@ NR KARTY ****5555
         started = time.perf_counter()
         scanned = redact_pan(many)
         self.assertLess(time.perf_counter() - started, 0.5)
-        self.assertEqual(scanned, "[usunięto]")
+        self.assertEqual(scanned, "")
 
     def test_long_line_is_dropped_before_item_expressions(self):
         import time
@@ -839,6 +839,27 @@ NR KARTY ****5555
         self.assertLess(time.perf_counter() - started, 0.5)
         self.assertEqual(scanned["lines"], [])
         self.assertIsNone(scanned["total_amount"])
+
+    def test_combining_marks_are_capped_before_normalisation(self):
+        import time
+
+        from hestia.budget.receipt_parser import _bound_raw_line
+
+        mark = "\u0301"
+        self.assertEqual(_bound_raw_line("e" + mark * 8), "e" + mark * 8)
+        self.assertEqual(_bound_raw_line("e" + mark * 9), "e" + mark * 8)
+        self.assertEqual(_bound_raw_line("x" * 600), "")
+        self.assertEqual(_bound_raw_line("x" * 512), "x" * 512)
+        self.assertEqual(redact_pan("e" + mark), "é")
+        raw = "A" + mark * ((32 * 1024 - 1 - 1) // 2)
+        self.assertEqual(len(raw.encode("utf-8")), 32 * 1024 - 1)
+        started = time.perf_counter()
+        redacted = redact_pan(raw)
+        parsed = parse_receipt(raw)
+        self.assertLess(time.perf_counter() - started, 0.5)
+        self.assertLessEqual(len(redacted), 512)
+        self.assertNotIn(mark * 9, redacted)
+        self.assertEqual(parsed["lines"], [])
 
     def test_money_magnitude_precision_and_folded_name_length_are_limited(self):
         def text(item):
