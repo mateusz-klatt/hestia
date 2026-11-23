@@ -637,6 +637,7 @@ export function TransactionsPanel({ api, period, currencies, accounts, connectio
             {shownRows.map((row) => {
               const key = rowKey(row);
               const transfer = labelOf(text.transfer, row.transfer.status === "none" ? "" : row.transfer.status);
+              const accountCandidate = counterpartyRuleCandidate(row);
               return (
                 <li key={key} className="budget-entry">
                   <div className="budget-entry-main">
@@ -670,6 +671,10 @@ export function TransactionsPanel({ api, period, currencies, accounts, connectio
                     {canPair(row) && pairing !== key ? (
                       <button type="button" disabled={busy !== null} onClick={() => { openPairs(row); }}>{text.pair}</button>
                     ) : null}
+                    {editing === key || onCreateRule === undefined || accountCandidate === null ? null : (
+                      <button type="button" disabled={busy !== null} title={row.counterparty_account ?? undefined}
+                        onClick={() => { onCreateRule(accountCandidate); }}>{text.accountRule}</button>
+                    )}
                   </div>
                   {editing === key ? (
                     <Editor row={row} categories={categories} text={text} kindText={kindText} saving={busy === key}

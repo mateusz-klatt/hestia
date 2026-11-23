@@ -21432,7 +21432,7 @@
     },
     "/api/budget/receipts/device-token/pair-code": {
       "post": {
-        "description": "Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Cookie plus Authorization returns 400 budget_auth_ambiguous.  Browser cookie and exact Origin. At most 3 active codes.",
+        "description": "Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Cookie plus Authorization returns 400 budget_auth_ambiguous.  Browser cookie and exact Origin. At most 3 active codes. Every /api/budget/* route requires the browser hestia_session cookie and configured same-origin Origin. A login/session Authorization: Bearer from /api/login returns 403 budget_browser_session_required on every budget route, including GETs. The only bearer exception is a receipts-scoped device token obtained through browser pairing: it is accepted only on receipts parse-text, confirm, list, search, delete, detail and image, plus device-token/revoke for itself. Household viewer/operator access is browser-only too.",
         "operationId": "pairBudgetReceiptDevice",
         "requestBody": {
           "content": {
