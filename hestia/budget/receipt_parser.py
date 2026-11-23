@@ -37,10 +37,10 @@ _DATE_ISO = re.compile(r"(?<![0-9])([0-9]{4})-([0-9]{2})-([0-9]{2})(?![0-9])", r
 _DATE_PL = re.compile(r"(?<![0-9])([0-9]{2})[-.]([0-9]{2})[-.]([0-9]{4})(?![0-9])", re.ASCII)
 _TIME = re.compile(r"(?<![0-9])((?:[01][0-9]|2[0-3]):[0-5][0-9])(?![0-9])", re.ASCII)
 _NIP = re.compile(r"\bNIP\s*:?\s*([0-9][0-9 -]{8,16}[0-9])\b", re.IGNORECASE | re.ASCII)
-# Separators Live Text inserts between PAN digits, including a run of them.
-# Whitespace covers ASCII and Unicode spaces. Dashes U+2010–U+2015 and "-" are not
-# whitespace. Line breaks are excluded so a NIP and a date on adjacent lines are
-# not glued into a false PAN.
+# A PAN run is digits, a mask sequence, and the separators between them.
+# Whitespace covers ASCII and Unicode spaces. Dashes U+2010–U+2015, "-" and "."
+# join a run. A comma does not, so "12,99" stays a price. Line breaks do not,
+# so a NIP and a date on adjacent lines stay apart.
 _PAN_NEWLINES = frozenset("\n\r\u2028\u2029")
 _PAN_DASHES = frozenset("-‐‑‒–—―")
 _PAN_MASKS = frozenset("*Xx•●#")
@@ -95,8 +95,10 @@ def fold_text(value):
                    if unicodedata.category(char) != "Mn").casefold()
 
 
-def _pan_gap(char):
-    return char not in _PAN_NEWLINES and (char in _PAN_DASHES or char.isspace())
+def _pan_separator(char):
+    if char in _PAN_NEWLINES:
+        return False
+    return char == "." or char in _PAN_DASHES or char.isspace()
 
 
 def _pan_digit(char):
@@ -110,44 +112,7 @@ def _pan_digit(char):
     return None
 
 
-def _word_boundary(text, index):
-    return index >= len(text) or not (text[index].isalnum() or text[index] == "_")
-
-
-def _label_at(line, index, word):
-    end = index + len(word)
-    return end <= len(line) and line[index:end].casefold() == word and _word_boundary(line, end)
-
-
-def _terminal_label_end(line):
-    """End offset of a leading NR KARTY or AID label on this line."""
-    index = 0
-    length = len(line)
-    while index < length and line[index].isspace():
-        index += 1
-    if _label_at(line, index, "aid"):
-        return index + 3
-    if _label_at(line, index, "nr"):
-        cursor = index + 2
-        if cursor < length and line[cursor].isspace():
-            while cursor < length and line[cursor].isspace():
-                cursor += 1
-            if _label_at(line, cursor, "karty"):
-                return cursor + 5
-    return None
-
-
-def _redact_terminal(text):
-    """Rewrite NR KARTY and AID lines once. The label stays so card continuations still match."""
-    lines = text.split("\n")
-    for number, line in enumerate(lines):
-        end = _terminal_label_end(line)
-        if end is not None:
-            lines[number] = line[:end] + " [REDACTED]"
-    return "\n".join(lines)
-
-
-def _mask_run(text, index):
+def _mask_length(text, index):
     length = len(text)
     end = index
     while end < length and text[end] in _PAN_MASKS:
@@ -155,113 +120,139 @@ def _mask_run(text, index):
     return end - index
 
 
-def _luhn(digits):
-    total = 0
-    double = False
-    for digit in reversed(digits):
-        if double:
-            digit *= 2
-            if digit > 9:
-                digit -= 9
-        total += digit
-        double = not double
-    return total % 10 == 0
+def _digit_length(text, index):
+    length = len(text)
+    end = index
+    while end < length and _pan_digit(text[end]) is not None:
+        end += 1
+    return end - index
 
 
-def _pan_run_spans(groups):
-    """Group-aligned windows. A leading reference and the PAN are different groups."""
-    found = []
-    count = len(groups)
-    for start in range(count):
-        digits = []
-        masks = 0
-        grouped = True
-        for end in range(start, count):
-            part, part_masks = groups[end][2], groups[end][3]
-            digits.extend(part)
-            masks += part_masks
-            if part_masks or len(part) != 4:
-                grouped = False
-            symbols = len(digits) + masks
-            if symbols > 19:
-                break
-            if masks >= 2 and len(digits) >= 4 and symbols >= 13:
-                found.append((groups[start][0], groups[end][1], 200 + symbols))
-            elif masks == 0 and symbols >= 13 and _luhn(digits):
-                found.append((groups[start][0], groups[end][1], 300 + symbols))
-            elif masks == 0 and symbols == 16 and grouped and end - start + 1 == 4:
-                found.append((groups[start][0], groups[end][1], 150 + symbols))
-            elif masks == 0 and start == end and 12 <= symbols <= 19:
-                found.append((groups[start][0], groups[end][1], 120 + symbols))
-    return found
+def _symbol_runs(text):
+    """Maximal digit, mask and separator runs. One forward pass.
 
-
-def _pan_choose(found):
-    found.sort(key=lambda item: (-item[2], item[0], item[0] - item[1]))
-    chosen = []
-    for start, end, _score in found:
-        if all(end <= chosen_start or start >= chosen_end for chosen_start, chosen_end in chosen):
-            chosen.append((start, end))
-    chosen.sort()
-    return chosen
-
-
-def _pan_spans(text):
-    """Redact a PAN window inside a run of digits, masks and in-line separators.
-
-    Each run is split into groups on spaces, tabs and dashes. A window is a
-    contiguous group sequence of 13–19 symbols: Luhn for a full digit window,
-    or at least two masks and four digits for a masked one. A 4×4 grouping and
-    a bare 12–19 digit group are redacted too, so a non-Luhn fixture is covered
-    without taking a shorter slice of it. The window's own span is replaced, so
-    a numeric reference in an earlier group stays. A comma or dot drops the next
-    group, and a solitary ``x`` or ``*`` stays a multiplication operator.
+    A solitary mask stays an operator (``2 x 3,50``). Two or more mask
+    characters form a mask sequence. The whole run is a secret when it holds
+    13 or more digit and mask symbols and at least one digit, or when a mask
+    sequence of two or more sits next to two or more digits (``****1234``).
     """
-    spans = []
+    found = []
     length = len(text)
     index = 0
     while index < length:
-        if text[index] in ".,":
+        # A comma keeps the fractional part of a price out of the next run:
+        # "9999,9999 999999999" must not become one 13-symbol run.
+        if index and text[index - 1] == "," and _mask_length(text, index) == 0:
+            count = _digit_length(text, index)
+            if count:
+                index += count
+                continue
+        masks = _mask_length(text, index)
+        if masks == 1 or (masks == 0 and _digit_length(text, index) == 0):
             index += 1
-            while index < length and (_pan_digit(text[index]) is not None or text[index] in _PAN_MASKS):
-                index += 1
             continue
-        if _pan_digit(text[index]) is None and _mask_run(text, index) < 2:
-            index += 1
-            continue
-        groups = []
+        start = index
+        symbols = 0
+        digits = 0
+        previous = None
+        previous_len = 0
+        adjacent = False
         while index < length:
-            if _pan_gap(text[index]):
+            masks = _mask_length(text, index)
+            if masks >= 2:
+                symbols += masks
+                if previous == "d" and previous_len >= 2:
+                    adjacent = True
+                previous, previous_len = "m", masks
+                index += masks
+                continue
+            if masks == 1:
+                break
+            count = _digit_length(text, index)
+            if count:
+                symbols += count
+                digits += count
+                if previous == "m" and previous_len >= 2 and count >= 2:
+                    adjacent = True
+                previous, previous_len = "d", count
+                index += count
+                continue
+            if _pan_separator(text[index]):
                 gap = index + 1
-                while gap < length and _pan_gap(text[gap]):
+                while gap < length and _pan_separator(text[gap]):
                     gap += 1
-                if gap < length and text[gap] not in ".," and (
-                        _pan_digit(text[gap]) is not None or _mask_run(text, gap) >= 2):
+                if gap < length and (_mask_length(text, gap) >= 2 or _digit_length(text, gap)):
                     index = gap
                     continue
-                break
-            if text[index] in ".,":
-                break
-            start = index
-            digits = []
-            masks = 0
-            while index < length and text[index] not in ".," and not _pan_gap(text[index]):
-                digit = _pan_digit(text[index])
-                if digit is not None:
-                    digits.append(int(digit))
-                    index += 1
-                    continue
-                run = _mask_run(text, index)
-                if run >= 2:
-                    masks += run
-                    index += run
-                    continue
-                break
-            if index == start:
-                break
-            groups.append((start, index, digits, masks))
-        spans.extend(_pan_run_spans(groups))
-    return _pan_choose(spans)
+            break
+        found.append((start, index, adjacent or (digits > 0 and symbols >= 13)))
+    return found
+
+
+def _word_at(line, index, word):
+    end = index + len(word)
+    if end > len(line) or line[index:end].casefold() != word:
+        return False
+    before = index == 0 or not (line[index - 1].isalnum() or line[index - 1] == "_")
+    after = end == len(line) or not (line[end].isalnum() or line[end] == "_")
+    return before and after
+
+
+def _ends_word(line, word):
+    end = len(line)
+    while end and line[end - 1].isspace():
+        end -= 1
+    return _word_at(line, end - len(word), word) if end >= len(word) else False
+
+
+def _starts_word(line, word):
+    index = 0
+    length = len(line)
+    while index < length and line[index].isspace():
+        index += 1
+    return _word_at(line, index, word)
+
+
+def _split_card_label(line, nxt):
+    """NR/NUMER and KARTY land on adjacent OCR lines. ``\\s`` in the label covers that newline."""
+    return (_ends_word(line, "nr") or _ends_word(line, "numer")) and _starts_word(nxt, "karty")
+
+
+def _pan_spans(text):
+    """Whole-run spans plus card-label runs. No window search."""
+    runs = _symbol_runs(text)
+    lines = text.split("\n")
+    label = [False] * len(lines)
+    for number, line in enumerate(lines):
+        if _CARD_LABEL.search(line) is not None:
+            label[number] = True
+        if number + 1 < len(lines) and _split_card_label(line, lines[number + 1]):
+            label[number] = True
+            label[number + 1] = True
+    follow = [False] * len(lines)
+    for number, flagged in enumerate(label):
+        if not flagged:
+            continue
+        if number + 1 < len(lines):
+            follow[number + 1] = True
+        if number + 2 < len(lines):
+            follow[number + 2] = True
+    bases = []
+    offset = 0
+    for line in lines:
+        bases.append(offset)
+        offset += len(line) + 1
+    spans = []
+    line_no = 0
+    seen = [False] * len(lines)
+    for start, end, secret in runs:
+        while line_no + 1 < len(bases) and start >= bases[line_no + 1]:
+            line_no += 1
+        first = not seen[line_no]
+        seen[line_no] = True
+        if secret or label[line_no] or (follow[line_no] and first):
+            spans.append((start, end))
+    return spans
 
 
 def _redact_spans(text, spans):
@@ -275,46 +266,6 @@ def _redact_spans(text, spans):
         cursor = end
     parts.append(text[cursor:])
     return "".join(parts)
-
-
-def _card_fragment(line):
-    body = line.strip()
-    if not body or len(body) > 64:
-        return False
-    symbols = 0
-    for char in body:
-        if _pan_digit(char) is not None or char in _PAN_MASKS:
-            symbols += 1
-        elif not _pan_gap(char):
-            return False
-    return symbols > 0
-
-
-def _redact_card_continuations(text):
-    """Redact digit or mask lines that continue a card label split by OCR."""
-    lines = text.split("\n")
-    index = 0
-    while index < len(lines):
-        if _CARD_LABEL.search(lines[index]) is None:
-            index += 1
-            continue
-        following = []
-        cursor = index + 1
-        while cursor < len(lines) and _card_fragment(lines[cursor]):
-            following.append(cursor)
-            cursor += 1
-        digits = masks = 0
-        for line_no in (index, *following):
-            for char in lines[line_no]:
-                if _pan_digit(char) is not None:
-                    digits += 1
-                elif char in _PAN_MASKS:
-                    masks += 1
-        if following and (masks or 12 <= digits <= 19):
-            for line_no in following:
-                lines[line_no] = "[REDACTED]"
-        index = cursor
-    return "\n".join(lines)
 
 
 def _receipt_text(text):
@@ -339,9 +290,7 @@ def _receipt_text(text):
 
 def redact_pan(text):
     text = _receipt_text(text)
-    text = _redact_terminal(text)
-    text = _redact_spans(text, _pan_spans(text))
-    return _redact_card_continuations(text)
+    return _redact_spans(text, _pan_spans(text))
 
 
 def valid_nip(value):

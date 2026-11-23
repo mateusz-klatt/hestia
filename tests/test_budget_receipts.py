@@ -133,7 +133,7 @@ NR KARTY ****5555
         parsed = self.draft()
         nbsp_pan = "5351\u00a00055\u00a05555\u00a05555"
         dash_pan = "5351\u20130055\u20135555\u20135555"
-        unit_pan = "411111111111"
+        unit_pan = "****1234"
         values = confirm_values(parsed, raw_shop_name=f"BIEDRONKA {nbsp_pan}")
         values["lines"][0]["raw_name"] = f"MLEKO {dash_pan}"
         values["lines"][0]["raw_unit"] = unit_pan
@@ -466,15 +466,25 @@ NR KARTY ****5555
         self.assertEqual(redact_pan("4111********1111"), "[REDACTED]")
         self.assertEqual(redact_pan("4111XXXXXXXX1111"), "[REDACTED]")
         self.assertEqual(redact_pan("411111******1111"), "[REDACTED]")
-        self.assertEqual(redact_pan("Ref 12345 4111 1111 1111 1111"), "Ref 12345 [REDACTED]")
-        self.assertEqual(redact_pan("123456 4111-1111-1111-1111"), "123456 [REDACTED]")
-        beside_mask = redact_pan("4111********1111 998877")
-        self.assertNotIn("4111", beside_mask)
-        self.assertIn("998877", beside_mask)
-        beside_pan = redact_pan("4111111111111111 20261120")
-        self.assertNotIn("4111111111111111", beside_pan)
-        self.assertIn("20261120", beside_pan)
+        self.assertEqual(redact_pan("****1234"), "[REDACTED]")
+        self.assertEqual(redact_pan("1234****"), "[REDACTED]")
+        self.assertEqual(redact_pan("Ref 12345 4111 1111 1111 1111"), "Ref [REDACTED]")
+        self.assertEqual(redact_pan("4111 1111 1111 1111 Ref 98765"), "[REDACTED] Ref 98765")
+        self.assertEqual(redact_pan("123456 4111-1111-1111-1111"), "[REDACTED]")
+        self.assertEqual(redact_pan("4111********1111 998877"), "[REDACTED]")
+        self.assertEqual(redact_pan("4111111111111111 20261120"), "[REDACTED]")
+        self.assertEqual(redact_pan("12,99"), "12,99")
+        self.assertEqual(redact_pan("2 x 3,50"), "2 x 3,50")
         self.assertNotIn("5351", redact_pan("5351  0055  5555  5555 2026"))
+        split = "NR\nKARTY ****1234\n5351 0055\n5555 5555\nSUMA PLN 5,00\nNIP 7791011327\n"
+        split_redacted = redact_pan(split)
+        self.assertNotIn("1234", split_redacted)
+        self.assertNotIn("5351", split_redacted)
+        self.assertNotIn("0055", split_redacted)
+        self.assertNotIn("5555", split_redacted)
+        self.assertIn("KARTY", split_redacted)
+        self.assertIn("SUMA PLN 5,00", split_redacted)
+        self.assertIn("7791011327", split_redacted)
 
     def test_pan_scan_is_bounded_before_a_long_mask_run(self):
         import time
@@ -491,6 +501,11 @@ NR KARTY ****5555
             with self.assertRaises(ReceiptError):
                 redact_pan(sample)
             self.assertLess(time.perf_counter() - started, 0.5)
+        many = "12,99 " * ((32 * 1024 - 1) // 6)
+        started = time.perf_counter()
+        scanned = redact_pan(many)
+        self.assertLess(time.perf_counter() - started, 0.5)
+        self.assertEqual(scanned, many)
 
     def test_money_magnitude_precision_and_folded_name_length_are_limited(self):
         def text(item):
