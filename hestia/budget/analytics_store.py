@@ -312,6 +312,10 @@ class BudgetAnalyticsStore(BudgetHTTPStore):
                 if prior.name != name or prior.parent_id != parent_id:
                     raise AnalyticsError("budget_analytics_conflict", 409)
                 return {**_dict(prior, _CATEGORY_FIELDS), "changed": False}
+            translated = session.scalar(select(CategoryTranslation.category_id).where(
+                CategoryTranslation.owner == owner, CategoryTranslation.name_key == key).limit(1))
+            if translated is not None:
+                raise AnalyticsError("budget_analytics_conflict", 409)
             if session.scalar(select(func.count()).select_from(Category).where(Category.owner == owner)) >= 100:
                 raise AnalyticsError("budget_analytics_limit", 413)
             parent_id = self._checked_parent(session, owner, parent_id, None)
@@ -320,7 +324,10 @@ class BudgetAnalyticsStore(BudgetHTTPStore):
             row = Category(id=str(uuid.uuid4()), owner=owner, name=name, name_key=key, archived=False, version=1,
                            created_at=now, updated_at=now, parent_id=parent_id, color_hue=hue)
             session.add(row)
-            session.flush()
+            try:
+                session.flush()
+            except IntegrityError:
+                raise AnalyticsError("budget_analytics_conflict", 409) from None
             result = _dict(row, _CATEGORY_FIELDS)
             self._analytics_audit(session, owner, "category", row.id, "create", None, result)
             return {**result, "changed": True}
@@ -338,6 +345,11 @@ class BudgetAnalyticsStore(BudgetHTTPStore):
             other = session.scalar(select(Category).where(Category.owner == owner, Category.name_key == name.casefold(),
                                                           Category.id != row.id))
             if other is not None:
+                raise AnalyticsError("budget_analytics_conflict", 409)
+            translated = session.scalar(select(CategoryTranslation.category_id).where(
+                CategoryTranslation.owner == owner, CategoryTranslation.name_key == name.casefold(),
+                CategoryTranslation.category_id != row.id).limit(1))
+            if translated is not None:
                 raise AnalyticsError("budget_analytics_conflict", 409)
             new_parent = row.parent_id if parent_id is _UNSET else self._checked_parent(session, owner, parent_id, row.id)
             if new_parent is not None and color_hue is not _UNSET:
@@ -359,6 +371,10 @@ class BudgetAnalyticsStore(BudgetHTTPStore):
             row.color_hue = new_hue
             row.version += 1
             row.updated_at = self._now()
+            try:
+                session.flush()
+            except IntegrityError:
+                raise AnalyticsError("budget_analytics_conflict", 409) from None
             result = _dict(row, _CATEGORY_FIELDS)
             self._analytics_audit(session, owner, "category", row.id, "update", before, result)
             return {**result, "changed": True}
@@ -394,6 +410,10 @@ class BudgetAnalyticsStore(BudgetHTTPStore):
         name = " ".join(_text(name).split())
         self._owned(session, Category, owner, category_id)
         key = name.casefold()
+        canonical = session.scalar(select(Category.id).where(
+            Category.owner == owner, Category.name_key == key, Category.id != category_id).limit(1))
+        if canonical is not None:
+            raise AnalyticsError("budget_analytics_conflict", 409)
         other = session.scalar(select(CategoryTranslation).where(
             CategoryTranslation.owner == owner, CategoryTranslation.lang == lang,
             CategoryTranslation.name_key == key, CategoryTranslation.category_id != category_id,

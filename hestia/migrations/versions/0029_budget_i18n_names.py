@@ -19,6 +19,56 @@ depends_on = None
 _CATEGORY_TRANSLATIONS = "budget_category_translations"
 _LABEL_TRANSLATIONS = "budget_annotation_label_translations"
 _CATEGORY_OWNER_INDEX = "uq_budget_categories_id_owner"
+_CATEGORY_NAME_TRIGGERS = (
+    ("trg_budget_categories_name_insert", """
+        CREATE TRIGGER trg_budget_categories_name_insert
+        BEFORE INSERT ON budget_categories
+        WHEN EXISTS (
+            SELECT 1 FROM budget_category_translations AS translated
+            WHERE translated.owner = NEW.owner AND translated.name_key = NEW.name_key
+              AND translated.category_id <> NEW.id
+        )
+        BEGIN
+            SELECT RAISE(ABORT, 'budget_analytics_conflict');
+        END
+    """),
+    ("trg_budget_categories_name_update", """
+        CREATE TRIGGER trg_budget_categories_name_update
+        BEFORE UPDATE OF owner, name_key ON budget_categories
+        WHEN EXISTS (
+            SELECT 1 FROM budget_category_translations AS translated
+            WHERE translated.owner = NEW.owner AND translated.name_key = NEW.name_key
+              AND translated.category_id <> NEW.id
+        )
+        BEGIN
+            SELECT RAISE(ABORT, 'budget_analytics_conflict');
+        END
+    """),
+    ("trg_budget_category_translations_name_insert", """
+        CREATE TRIGGER trg_budget_category_translations_name_insert
+        BEFORE INSERT ON budget_category_translations
+        WHEN EXISTS (
+            SELECT 1 FROM budget_categories AS category
+            WHERE category.owner = NEW.owner AND category.name_key = NEW.name_key
+              AND category.id <> NEW.category_id
+        )
+        BEGIN
+            SELECT RAISE(ABORT, 'budget_analytics_conflict');
+        END
+    """),
+    ("trg_budget_category_translations_name_update", """
+        CREATE TRIGGER trg_budget_category_translations_name_update
+        BEFORE UPDATE OF owner, name_key, category_id ON budget_category_translations
+        WHEN EXISTS (
+            SELECT 1 FROM budget_categories AS category
+            WHERE category.owner = NEW.owner AND category.name_key = NEW.name_key
+              AND category.id <> NEW.category_id
+        )
+        BEGIN
+            SELECT RAISE(ABORT, 'budget_analytics_conflict');
+        END
+    """),
+)
 
 
 def upgrade():
@@ -49,9 +99,13 @@ def upgrade():
         ),
         sa.CheckConstraint(annotation_label_check_sql(), name="ck_budget_annotation_label_translations_label"),
     )
+    for _name, statement in _CATEGORY_NAME_TRIGGERS:
+        op.execute(statement)
 
 
 def downgrade():
+    for name, _statement in _CATEGORY_NAME_TRIGGERS:
+        op.execute(f"DROP TRIGGER IF EXISTS {name}")
     op.drop_table(_LABEL_TRANSLATIONS)
     op.drop_table(_CATEGORY_TRANSLATIONS)
     op.drop_index(_CATEGORY_OWNER_INDEX, table_name="budget_categories")
