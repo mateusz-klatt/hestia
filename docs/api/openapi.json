@@ -21846,7 +21846,7 @@
                 }
               }
             },
-            "description": "Version conflict or a missing authoritative SQLite users backend."
+            "description": "Version conflict, missing authoritative SQLite users backend, or Gmail busy (budget_receipt_gmail_busy)."
           },
           "411": {
             "content": {
@@ -21986,7 +21986,7 @@
                 }
               }
             },
-            "description": "Version conflict or a missing authoritative SQLite users backend."
+            "description": "Version conflict, missing authoritative SQLite users backend, or Gmail busy (budget_receipt_gmail_busy)."
           },
           "411": {
             "content": {
@@ -22156,7 +22156,7 @@
                 }
               }
             },
-            "description": "Accepted. next_sync_at is now, and force_full_resync is persisted when requested. The background poller performs the import."
+            "description": "Accepted for the background poller. Kicks share queued or running work. A full-resync request upgrades that work."
           },
           "400": {
             "content": {

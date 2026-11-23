@@ -193,6 +193,24 @@ class GmailHTTPTests(IsolatedAsyncioTestCase):
                           body["version"]), (False, 0, 0, accepted.version + 2))
         self.assertEqual(self.transport.calls, calls)
 
+    async def test_grant_changes_return_busy_promptly_while_the_provider_lock_is_held(self):
+        os.environ[gmail_api.FLAG] = "1"
+        requests = (
+            ("gmail-grant", {"action": "enable", "expected_version": 1}),
+            ("gmail-grant", {"action": "disable", "expected_version": 1}),
+            ("gmail-revoke", {"expected_version": 1}),
+        )
+        with self.gmail.lock("alice"):
+            for operation, body in requests:
+                with self.subTest(operation=operation, body=body):
+                    blocked = await asyncio.wait_for(self.call(operation, json=body), timeout=2)
+                    self.assertEqual(blocked.status, 409)
+                    self.assertEqual((await blocked.json())["error"], "budget_receipt_gmail_busy")
+        self.worker.ready.assert_not_called()
+        self.assertEqual(self.transport.calls, [])
+        with self.sessions() as session:
+            self.assertIsNone(session.get(db.BudgetGmailState, "alice"))
+
     async def test_profile_mismatch_and_parser_unavailability_use_safe_errors(self):
         os.environ[gmail_api.FLAG] = "1"
         other = await self.call("gmail-status", headers=self.headers("other"))

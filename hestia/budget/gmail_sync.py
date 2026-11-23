@@ -106,10 +106,10 @@ def _sync_lock(database_path):
 
 
 @contextmanager
-def grant_transition_lock(client, owner):
+def grant_transition_lock(client, owner, *, timeout=35):
     lock = client.lock(owner)
-    if not lock.acquire(timeout=35):
-        raise GmailError("budget_receipt_gmail_transition_busy")
+    if not lock.acquire(timeout=timeout):
+        raise GmailError("budget_receipt_gmail_busy", 409)
     try:
         yield
     finally:
@@ -154,8 +154,10 @@ class GmailSync:
 
     def transition(self, owner, expected_version, status, *, defer_profile=False):
         self._require_owner(owner)
-        with grant_transition_lock(self.client, owner):
+        with grant_transition_lock(self.client, owner, timeout=0 if defer_profile else 35):
             self.store.check_version(owner, expected_version)
+            if status == "active" and defer_profile and not self.processor.ready():
+                raise GmailError("parser_unavailable")
             self.client.forget(owner)
             mailbox_hmac = None
             if status == "active":

@@ -4090,10 +4090,10 @@ def _gmail_receipt_paths():
     for name, operation, summary, request_model, response_model, conflict in (
         ("grant", "setBudgetReceiptGmailGrant", "Enable or disable the local Gmail grant",
          "BudgetReceiptGmailGrantRequest", "BudgetReceiptGmailGrantResult",
-         "Version conflict or a missing authoritative SQLite users backend."),
+         "Version conflict, missing authoritative SQLite users backend, or Gmail busy (budget_receipt_gmail_busy)."),
         ("revoke", "revokeBudgetReceiptGmailGrant", "Revoke the local grant and purge unconfirmed imports",
          "BudgetReceiptGmailRevokeRequest", "BudgetReceiptGmailGrantResult",
-         "Version conflict or a missing authoritative SQLite users backend."),
+         "Version conflict, missing authoritative SQLite users backend, or Gmail busy (budget_receipt_gmail_busy)."),
         ("sync", "syncBudgetReceiptGmail", "Schedule one Gmail import for the background poller",
          "BudgetReceiptGmailSyncRequest", "BudgetReceiptGmailSyncResult",
          "Grant is inactive or authoritative SQLite users are unavailable."),
@@ -4101,8 +4101,8 @@ def _gmail_receipt_paths():
         responses = _budget_responses(response_model)
         if name == "sync":
             accepted = responses.pop("200")
-            accepted["description"] = ("Accepted. next_sync_at is now, and force_full_resync is persisted when "
-                                       "requested. The background poller performs the import.")
+            accepted["description"] = ("Accepted for the background poller. Kicks share queued or running work. "
+                                       "A full-resync request upgrades that work.")
             responses["202"] = accepted
         else:
             responses["200"]["description"] = summary

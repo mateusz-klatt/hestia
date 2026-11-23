@@ -13294,7 +13294,7 @@ export interface operations {
                     "application/json": components["schemas"]["BudgetError"];
                 };
             };
-            /** @description Version conflict or a missing authoritative SQLite users backend. */
+            /** @description Version conflict, missing authoritative SQLite users backend, or Gmail busy (budget_receipt_gmail_busy). */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -13417,7 +13417,7 @@ export interface operations {
                     "application/json": components["schemas"]["BudgetError"];
                 };
             };
-            /** @description Version conflict or a missing authoritative SQLite users backend. */
+            /** @description Version conflict, missing authoritative SQLite users backend, or Gmail busy (budget_receipt_gmail_busy). */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -13569,7 +13569,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Accepted. next_sync_at is now, and force_full_resync is persisted when requested. The background poller performs the import. */
+            /** @description Accepted for the background poller. Kicks share queued or running work. A full-resync request upgrades that work. */
             202: {
                 headers: {
                     [name: string]: unknown;

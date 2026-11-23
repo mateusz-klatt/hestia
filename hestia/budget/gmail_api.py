@@ -89,15 +89,13 @@ class _Runtime:
             return self._status(store, owner, secret)
         if operation == "gmail-revoke" or (operation == "gmail-grant" and values["action"] == "disable"):
             version = values["expected_version"]
-            with grant_transition_lock(self.client, owner):
+            with grant_transition_lock(self.client, owner, timeout=0):
                 store.check_version(owner, version)
                 self.client.forget(owner)
                 store.transition(owner, version, "revoked" if operation == "gmail-revoke" else "disabled")
                 return _grant_result(store.status(owner))
         service = self._service(path, store, _settings(secret))
         if operation == "gmail-grant":
-            if not self.worker.ready():
-                raise GmailError("parser_unavailable")
             return _grant_result(service.transition(owner, values["expected_version"], "active", defer_profile=True))
         return service.schedule(owner, force_full_resync=values["force_full_resync"])
 

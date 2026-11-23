@@ -705,7 +705,7 @@ class GmailSyncTests(TestCase):
             with self.assertRaisesRegex(GmailError, "sync_busy"):
                 self.sync()
         with mock.patch.object(self.client, "lock", return_value=mock.MagicMock(acquire=lambda **_: False)):
-            with self.assertRaisesRegex(GmailError, "transition_busy"):
+            with self.assertRaisesRegex(GmailError, "^budget_receipt_gmail_busy$"):
                 self.service.transition(OWNER, 2, "revoked")
         self.assertEqual(self.store.state(OWNER).grant_status, "active")
         self.service.transition(OWNER, 2, "revoked")
