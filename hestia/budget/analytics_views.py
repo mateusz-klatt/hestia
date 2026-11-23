@@ -448,6 +448,11 @@ def _wire_mortgage_reminder(item):
     }
 
 
+def _category_parents(categories):
+    """Category id to parent id. A missing parent is a root; limits then count that subtree."""
+    return {row["id"]: row.get("parent_id") or None for row in categories.values()}
+
+
 def _spending_limit_statuses(owner, period, limit_rows, category_totals, categories):
     from .spending_limits import (CategoryLimit, CategorySpending, SpendingLimitInputError,
                                   evaluate_spending_limits)
@@ -464,7 +469,7 @@ def _spending_limit_statuses(owner, period, limit_rows, category_totals, categor
         for row in category_totals
     ]
     try:
-        evaluated = evaluate_spending_limits(owner, period, limits, spending)
+        evaluated = evaluate_spending_limits(owner, period, limits, spending, parents=_category_parents(categories))
     except SpendingLimitInputError:
         raise AnalyticsError() from None
     return [
@@ -1174,7 +1179,7 @@ class BudgetAnalyticsViews(BudgetAnalyticsStore):
             for row in totals
         ]
         try:
-            evaluated = evaluate_spending_limits(owner, period, limits, spending)
+            evaluated = evaluate_spending_limits(owner, period, limits, spending, parents=_category_parents(categories))
         except SpendingLimitCapError:
             raise AnalyticsError(_LIMIT_ERROR, 413) from None
         except SpendingLimitInputError:

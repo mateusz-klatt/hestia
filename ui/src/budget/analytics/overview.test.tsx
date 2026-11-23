@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BudgetResult } from "../api";
 import { account, connection } from "../fixtures";
 import { overviewOf, staleFreshness, totals } from "./fixtures";
-import type { AnalyticsOverview, AnalyticsScope } from "./model";
+import type { AnalyticsCategory, AnalyticsOverview, AnalyticsScope } from "./model";
 import { OverviewPanel, overviewLabels } from "./overview";
 
 type Answer = BudgetResult<AnalyticsOverview>;
@@ -56,12 +56,14 @@ async function settle(): Promise<void> {
 
 async function show(overview: (period: string) => Promise<Answer>,
   options: { period?: string; current?: boolean; revision?: number; lost?: boolean; text?: typeof overviewLabels.en;
-    locale?: string; onCurrencies?: (currencies: string[]) => void } = {}) {
+    locale?: string; onCurrencies?: (currencies: string[]) => void;
+    loadCategories?: () => Promise<BudgetResult<{ categories: AnalyticsCategory[] }>> } = {}) {
   const onAccessLoss = vi.fn(() => options.lost === true);
+  const categories = options.loadCategories === undefined ? {} : { loadCategories: options.loadCategories };
   await act(async () => {
     root.render(<OverviewPanel overview={overview} period={options.period ?? "2026-11"} current={options.current ?? true}
       accounts={accounts} text={options.text ?? overviewLabels.en} locale={options.locale ?? "en"} revision={options.revision ?? 0}
-      onAccessLoss={onAccessLoss} onCurrencies={options.onCurrencies} />);
+      onAccessLoss={onAccessLoss} onCurrencies={options.onCurrencies} {...categories} />);
     await Promise.resolve();
   });
   await settle();
@@ -126,6 +128,40 @@ describe("period overview", () => {
     const eur = host.querySelector('[aria-label="Spending by category EUR"]');
     expect(eur?.textContent).toContain("Synthetic Travel");
     expect(eur?.textContent).not.toContain("Synthetic Food");
+  });
+
+  it("rolls a parent up from its children and collapses the subtree", async () => {
+    const links: AnalyticsCategory[] = [
+      { id: "cat-transport", name: "Synthetic Transport", archived: false, version: 1, created_at: 1, updated_at: 1, parent_id: null },
+      { id: "cat-fuel", name: "Synthetic Fuel", archived: false, version: 1, created_at: 1, updated_at: 1, parent_id: "cat-transport" },
+    ];
+    const data = rich("2026-11", {
+      categories: [
+        { currency: "PLN", category_id: "cat-transport", name: "Synthetic Transport", archived: false, expenses: "10", refunds: "0", net_spending: "10" },
+        { currency: "PLN", category_id: "cat-fuel", name: "Synthetic Fuel", archived: false, expenses: "40", refunds: "0", net_spending: "40" },
+        { currency: "PLN", category_id: null, name: null, archived: false, expenses: "5", refunds: "0", net_spending: "5" },
+      ],
+    });
+    await show(() => Promise.resolve<Answer>({ ok: true, data }), {
+      loadCategories: () => Promise.resolve({ ok: true, data: { categories: links } }),
+    });
+    const table = host.querySelector('[aria-label="Spending by category PLN"]');
+    const rows = [...table?.querySelectorAll("tbody tr") ?? []];
+    expect(rows.map((row) => row.getAttribute("data-depth"))).toEqual(["0", "1", "0"]);
+    expect(rows[0]?.textContent).toContain("Synthetic Transport");
+    expect(rows[0]?.textContent).toContain("50.00 PLN");
+    expect(rows[1]?.textContent).toContain("Synthetic Fuel");
+    expect(rows[1]?.textContent).toContain("40.00 PLN");
+    expect(rows[2]?.textContent).toContain("Uncategorised");
+    const toggle = rows[0]?.querySelector("button");
+    if (toggle === null || toggle === undefined) throw new Error("collapse missing");
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    await act(async () => { toggle.click(); await Promise.resolve(); });
+    const after = [...host.querySelectorAll('[aria-label="Spending by category PLN"] tbody tr')];
+    expect(after).toHaveLength(2);
+    expect(after[0]?.textContent).toContain("50.00 PLN");
+    expect(after.map((row) => row.textContent).join(" ")).not.toContain("Synthetic Fuel");
+    expect(after[0]?.querySelector("button")?.getAttribute("aria-expanded")).toBe("false");
   });
 
   it("explains transfers to review, re-check, boundary cases and a limited scan", async () => {

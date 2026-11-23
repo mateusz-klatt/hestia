@@ -284,7 +284,7 @@ describe("SpendingLimitsView", () => {
     // Category select change inside create form
     api.categories.mockImplementationOnce(() => ok({ categories: [
       ...categoryList,
-      { id: "cat-home", name: "Synthetic Home", archived: false, version: 1, created_at: 1, updated_at: 1 },
+      { id: "cat-home", name: "Synthetic Home", archived: false, version: 1, created_at: 1, updated_at: 1, parent_id: null },
     ] }));
     api.spendingLimits.mockImplementationOnce((period) => ok(spendingLimitsOf(period, [], [])));
     await act(async () => {

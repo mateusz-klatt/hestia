@@ -86,7 +86,9 @@ from pydantic.json_schema import models_json_schema
 # 0.33.0: a category-baseline conflict skips only that category and lists it on
 #         summary.baseline_conflicts (optional, zero migration). Not strictly additive:
 #         budget_forecast_config_conflict (0.31–0.32) is withdrawn; a conflict is HTTP 200.
-CONTRACT_VERSION = "0.33.0"
+# 0.34.0: additive category parent_id (migration 0020). List rows include parent_id. Create and update
+#         accept an optional parent_id: omit it on update to leave the parent, send null to detach.
+CONTRACT_VERSION = "0.34.0"
 OPENAPI_PATH = Path(__file__).resolve().parent.parent / "docs" / "api" / "openapi.json"
 
 # De-duplicated string literals (SonarPython S1192): the OpenAPI content-type, the paths reused
@@ -1560,6 +1562,11 @@ class BudgetAnalyticsTransactionsByKeysRequest(BaseModel):
 class BudgetAnalyticsCategoryCreateRequest(BaseModel):
     model_config = _STRICT
     name: Annotated[str, Field(min_length=1, max_length=80)]
+    parent_id: BudgetId | None = Field(
+        default=None,
+        description="Parent category owned by the same user. Null is a top-level category. "
+                    "On update, omit this field to leave the parent unchanged and send null to detach.",
+    )
 
 
 class BudgetAnalyticsCategoryUpdateRequest(BudgetAnalyticsCategoryCreateRequest):
@@ -1623,6 +1630,7 @@ class BudgetAnalyticsCategory(BaseModel):
     version: int
     created_at: float
     updated_at: float
+    parent_id: str | None
 
 
 class BudgetAnalyticsCategorySaved(BudgetAnalyticsCategory):

@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import type { BudgetApi, BudgetResult } from "../api";
 import { formatAmount, when } from "../model";
 import type { BudgetAccount } from "../model";
+import { groupCategoryTotals, hasCategoryParents, visibleCategoryRows } from "./category_tree";
 import { clampPercentString, formatRatioHalfEven, isPositiveDecimal, isZero, labelOf,
   monthLabel, monthlyBudgetCurrencies, pluralPl, ratioPercentFloor, shiftMonth, validCurrency } from "./model";
 import type { AnalyticsCategory, AnalyticsMonthlyBudget, AnalyticsMonthlyBudgetCharts,
@@ -25,7 +26,9 @@ export const monthBudgetLabels = {
     currencyCode: "Currency code (ISO 4217)",
     applyCurrency: "Apply currency",
     loading: "Loading monthly budget…",
+    categoriesLoading: "Loading categories before spending and charts…",
     error: "Monthly budget could not be loaded. Try again.",
+    categoriesError: "Categories could not be loaded, so spending and charts are not shown.",
     badRequest: "Invalid month or currency selection. Choose another month or currency.",
     limit: "Monthly budget data exceed the response size limit. Choose another currency or month.",
     unconfigured: "Monthly budget is not configured yet on this server. Income categories must be configured before monthly totals can be shown.",
@@ -108,6 +111,8 @@ export const monthBudgetLabels = {
     uncategorised: "Uncategorised",
     unknownCategory: "Category",
     archived: "archived",
+    collapseCategory: (name: string) => `Collapse ${name}`,
+    expandCategory: (name: string) => `Expand ${name}`,
     noExpenses: "No category spending recorded in this month.",
     limitStatuses: {
       within: "Within limit",
@@ -164,7 +169,9 @@ export const monthBudgetLabels = {
     currencyCode: "Kod waluty (ISO 4217)",
     applyCurrency: "Zastosuj walutę",
     loading: "Wczytywanie budżetu miesiąca…",
+    categoriesLoading: "Wczytywanie kategorii przed wydatkami i wykresami…",
     error: "Nie udało się wczytać budżetu miesiąca. Spróbuj ponownie.",
+    categoriesError: "Nie udało się wczytać kategorii, więc wydatki i wykresy nie są pokazane.",
     badRequest: "Nieprawidłowy wybór miesiąca lub waluty. Wybierz inny miesiąc lub walutę.",
     limit: "Dane budżetu miesiąca przekraczają limit rozmiaru odpowiedzi. Wybierz inną walutę lub miesiąc.",
     unconfigured: "Budżet miesiąca nie jest jeszcze skonfigurowany na tym serwerze. Najpierw trzeba skonfigurować kategorie wpływów.",
@@ -248,6 +255,8 @@ export const monthBudgetLabels = {
     uncategorised: "Bez kategorii",
     unknownCategory: "Kategoria",
     archived: "archiwalna",
+    collapseCategory: (name: string) => `Zwiń ${name}`,
+    expandCategory: (name: string) => `Rozwiń ${name}`,
     noExpenses: "Brak wydatków w kategoriach w tym miesiącu.",
     limitStatuses: {
       within: "W limicie",
@@ -515,6 +524,39 @@ function PassThroughCard({ passThrough, currency, categoryMap, text, locale }: {
   );
 }
 
+type CategorySpend = AnalyticsMonthlyBudget["category_spend"][number];
+type LoadedCategories = "pending" | "error" | readonly AnalyticsCategory[];
+
+function isCategoryList(value: LoadedCategories): value is readonly AnalyticsCategory[] {
+  return Array.isArray(value);
+}
+
+function shownCategorySpend(
+  rows: readonly CategorySpend[],
+  categories: readonly AnalyticsCategory[],
+  locale: string,
+  collapsed: ReadonlySet<string>,
+): {
+  key: string; category_id: string | null; name: string | null; archived: boolean; depth: number;
+  has_children: boolean; expenses: string; refunds: string; net_spending: string;
+  limit: CategorySpend["limit"]; tree: boolean;
+}[] {
+  if (!hasCategoryParents(categories)) {
+    return rows.map((row, index) => ({
+      key: row.category_id ?? `uncategorised-${String(index)}`,
+      category_id: row.category_id, name: row.name, archived: row.archived, depth: 0, has_children: false,
+      expenses: row.expenses, refunds: row.refunds, net_spending: row.net_spending, limit: row.limit, tree: false,
+    }));
+  }
+  const limits = new Map(rows.map((row) => [row.category_id, row.limit]));
+  return visibleCategoryRows(groupCategoryTotals(rows, categories, locale), collapsed).map((row) => ({
+    key: row.category_id ?? "uncategorised",
+    category_id: row.category_id, name: row.name, archived: row.archived, depth: row.depth,
+    has_children: row.has_children, expenses: row.expenses, refunds: row.refunds, net_spending: row.net_spending,
+    limit: limits.get(row.category_id) ?? null, tree: true,
+  }));
+}
+
 export function MonthBudgetView({ api, accounts, text, locale, revision, onAccessLoss, onOpenMonth }: MonthBudgetViewProps) {
   const [period, setPeriod] = useState<string | undefined>(undefined);
   const [currency, setCurrency] = useState("PLN");
@@ -524,11 +566,12 @@ export function MonthBudgetView({ api, accounts, text, locale, revision, onAcces
   const [manualCode, setManualCode] = useState("");
   const [shown, setShown] = useState<Shown>({ state: "loading" });
   const [paceSchedule, setPaceSchedule] = useState<PaceScheduleState>({ state: "idle" });
-  const [categories, setCategories] = useState<AnalyticsCategory[]>([]);
+  const [categories, setCategories] = useState<LoadedCategories>("pending");
   const mounted = useRef(true);
   const generation = useRef(0);
   const revisionRef = useRef(revision);
   const categoriesLoadedRev = useRef(-1);
+  const categoriesRequest = useRef(0);
 
   useEffect(() => {
     mounted.current = true;
@@ -539,7 +582,10 @@ export function MonthBudgetView({ api, accounts, text, locale, revision, onAcces
     const token = ++generation.current;
     const prevRevision = revisionRef.current;
     revisionRef.current = revision;
-    if (prevRevision !== revision) setCategories([]);
+    if (prevRevision !== revision) {
+      categoriesLoadedRev.current = -1;
+      setCategories("pending");
+    }
     setShown({ state: "loading" });
     setPaceSchedule({ state: "idle" });
     void api.monthlyBudgetCharts(period, currency, history).then((result) => {
@@ -591,13 +637,20 @@ export function MonthBudgetView({ api, accounts, text, locale, revision, onAcces
           }
         });
       }
+      // Parent limits already include the subtree. Drawing the table or the charts before the
+      // category list arrives would pair that rolled limit with direct spend, or plot leaves as roots.
       if (budget.configuration.status === "ready" && categoriesLoadedRev.current !== revision) {
+        const request = ++categoriesRequest.current;
+        setCategories("pending");
         void api.categories().then((catResult) => {
           if (onAccessLoss(catResult) || !mounted.current || revision !== revisionRef.current) return;
-          if (catResult.ok) {
-            categoriesLoadedRev.current = revision;
-            setCategories(catResult.data.categories);
+          if (request !== categoriesRequest.current) return;
+          if (!catResult.ok) {
+            setCategories("error");
+            return;
           }
+          categoriesLoadedRev.current = revision;
+          setCategories(catResult.data.categories);
         });
       }
     });
@@ -614,7 +667,7 @@ export function MonthBudgetView({ api, accounts, text, locale, revision, onAcces
     [...(data?.available_currencies ?? []), ...discoveredCurrencies, currency],
     accounts,
   );
-  const categoryMap = new Map(categories.map((item) => [item.id, item.name]));
+  const categoryMap = new Map(isCategoryList(categories) ? categories.map((item) => [item.id, item.name]) : []);
 
   return (
     <section className="budget-month budget-month-dashboard" aria-label={text.title}>
@@ -670,7 +723,7 @@ export function MonthBudgetView({ api, accounts, text, locale, revision, onAcces
 
       {data === null ? null : (
         <ReadyDashboard data={data} series={series} paceSchedule={paceSchedule} categoryMap={categoryMap}
-          text={text} locale={locale} onOpenMonth={onOpenMonth} />
+          categories={categories} text={text} locale={locale} onOpenMonth={onOpenMonth} />
       )}
     </section>
   );
@@ -686,15 +739,25 @@ function SummaryMeter({ spent, budget, label }: { spent: string; budget: string;
   );
 }
 
-function ReadyDashboard({ data, series, paceSchedule, categoryMap, text, locale, onOpenMonth }: {
+function ReadyDashboard({ data, series, paceSchedule, categoryMap, categories, text, locale, onOpenMonth }: {
   data: AnalyticsMonthlyBudget;
   series: AnalyticsMonthlyBudgetSeries | null;
   paceSchedule: PaceScheduleState;
   categoryMap: ReadonlyMap<string, string>;
+  categories: LoadedCategories;
   text: MonthBudgetLabels;
   locale: string;
   onOpenMonth: (month: string, serverCurrentMonth: string, options?: OpenMonthOptions) => void;
 }) {
+  const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set());
+  const toggleCategory = (id: string) => {
+    setCollapsed((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
   const money = (amount: string) => formatAmount(amount, data.currency, locale);
   const ledgerStamp = when(data.coverage.ledger_as_of, locale);
   const isCurrent = data.period === data.current_month;
@@ -836,9 +899,12 @@ function ReadyDashboard({ data, series, paceSchedule, categoryMap, text, locale,
 
           <section className="budget-entries" aria-label={text.spendingAndLimits}>
             <h4>{text.spendingAndLimits}</h4>
-            {data.category_spend.length === 0 ? (
+            {categories === "pending" ? <p className="budget-muted" role="status">{text.categoriesLoading}</p> : null}
+            {categories === "error" ? <p className="budget-notice" role="alert">{text.categoriesError}</p> : null}
+            {isCategoryList(categories) && data.category_spend.length === 0 ? (
               <p className="budget-muted">{text.noExpenses}</p>
-            ) : (
+            ) : null}
+            {isCategoryList(categories) && data.category_spend.length > 0 ? (
               <div className="budget-table-wrap" role="region" aria-label={text.spendingAndLimits} tabIndex={0}>
                 <table className="budget-month-dashboard-table">
                   <thead>
@@ -851,14 +917,23 @@ function ReadyDashboard({ data, series, paceSchedule, categoryMap, text, locale,
                     </tr>
                   </thead>
                   <tbody>
-                    {data.category_spend.map((row, index) => {
+                    {shownCategorySpend(data.category_spend, categories, locale, collapsed).map((row) => {
                       const label = row.category_id === null
                         ? text.uncategorised
                         : (row.name ?? categoryMap.get(row.category_id) ?? text.unknownCategory);
+                      const categoryId = row.category_id;
+                      const closed = categoryId !== null && collapsed.has(categoryId);
                       return (
-                        <tr key={row.category_id ?? `uncategorised-${String(index)}`}
-                          className={row.category_id === null ? "is-uncategorised" : undefined}>
+                        <tr key={row.key} data-depth={row.tree ? row.depth : undefined}
+                          className={categoryId === null ? "is-uncategorised" : undefined}>
                           <th scope="row">
+                            {row.tree && row.has_children && categoryId !== null ? (
+                              <button type="button" className="budget-tree-toggle" aria-expanded={!closed}
+                                aria-label={closed ? text.expandCategory(label) : text.collapseCategory(label)}
+                                onClick={() => { toggleCategory(categoryId); }}>
+                                {closed ? "▸" : "▾"}
+                              </button>
+                            ) : null}
                             {label}
                             {row.archived ? <small className="budget-muted"> ({text.archived})</small> : null}
                           </th>
@@ -892,12 +967,13 @@ function ReadyDashboard({ data, series, paceSchedule, categoryMap, text, locale,
                   </tbody>
                 </table>
               </div>
-            )}
+            ) : null}
           </section>
 
-          {series === null ? null : (
+          {series === null || !isCategoryList(categories) ? null : (
             <MonthBudgetCharts budget={data} series={series} paceProjection={paceProjection}
-              schedulePending={schedulePending} scheduleError={scheduleError} locale={locale} text={text} />
+              schedulePending={schedulePending} scheduleError={scheduleError} categories={categories}
+              locale={locale} text={text} />
           )}
         </>
       )}

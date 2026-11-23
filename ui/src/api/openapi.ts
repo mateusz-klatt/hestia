@@ -1758,6 +1758,8 @@ export interface components {
             id: string;
             /** Name */
             name: string;
+            /** Parent Id */
+            parent_id: string | null;
             /** Updated At */
             updated_at: number;
             /** Version */
@@ -1767,6 +1769,12 @@ export interface components {
         BudgetAnalyticsCategoryCreateRequest: {
             /** Name */
             name: string;
+            /**
+             * Parent Id
+             * @description Parent category owned by the same user. Null is a top-level category. On update, omit this field to leave the parent unchanged and send null to detach.
+             * @default null
+             */
+            parent_id: string | null;
         };
         /** BudgetAnalyticsCategoryResult */
         BudgetAnalyticsCategoryResult: {
@@ -1789,6 +1797,8 @@ export interface components {
             id: string;
             /** Name */
             name: string;
+            /** Parent Id */
+            parent_id: string | null;
             /** Updated At */
             updated_at: number;
             /** Version */
@@ -1821,6 +1831,12 @@ export interface components {
             expected_version: number;
             /** Name */
             name: string;
+            /**
+             * Parent Id
+             * @description Parent category owned by the same user. Null is a top-level category. On update, omit this field to leave the parent unchanged and send null to detach.
+             * @default null
+             */
+            parent_id: string | null;
         };
         /**
          * BudgetAnalyticsCurrency

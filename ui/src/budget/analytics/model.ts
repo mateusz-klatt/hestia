@@ -1,5 +1,6 @@
-// Spending analytics (2D) helpers. Server totals arrive as decimal STRINGs; UI projections use exact BigInt
-// arithmetic and never mix currencies. Periods are "YYYY-MM" or "YYYY".
+// Spending analytics (2D) helpers. Server totals arrive as decimal STRINGs. UI projections use exact BigInt
+// arithmetic. A category tree adds a parent's own amount to its descendants. Nothing is converted or mixed
+// across currencies. Periods are "YYYY-MM" or "YYYY".
 import type { components } from "../../api/openapi";
 import type { BudgetAccount, BudgetCapabilities, BudgetConnection } from "../model";
 import { accountLabel, formatAmount } from "../model";

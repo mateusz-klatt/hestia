@@ -34,10 +34,10 @@ function fakeApi() {
     monthlyBudgetCharts: vi.fn<BudgetApi["monthlyBudgetCharts"]>().mockResolvedValue(ok(monthlyBudgetChartsOf())),
     categories: vi.fn<BudgetApi["categories"]>().mockResolvedValue(ok({ categories: [
       ...categoryList,
-      { id: "cat-salary", name: "Synthetic Salary", archived: false, version: 1, created_at: 1, updated_at: 1 },
-      { id: "cat-rent", name: "Synthetic Rent", archived: false, version: 1, created_at: 1, updated_at: 1 },
-      { id: "cat-mortgage", name: "Synthetic Mortgage", archived: false, version: 1, created_at: 1, updated_at: 1 },
-      { id: "cat-lookup", name: "Synthetic Lookup", archived: false, version: 1, created_at: 1, updated_at: 1 },
+      { id: "cat-salary", name: "Synthetic Salary", archived: false, version: 1, created_at: 1, updated_at: 1, parent_id: null },
+      { id: "cat-rent", name: "Synthetic Rent", archived: false, version: 1, created_at: 1, updated_at: 1, parent_id: null },
+      { id: "cat-mortgage", name: "Synthetic Mortgage", archived: false, version: 1, created_at: 1, updated_at: 1, parent_id: null },
+      { id: "cat-lookup", name: "Synthetic Lookup", archived: false, version: 1, created_at: 1, updated_at: 1, parent_id: null },
     ] })),
     forecast: vi.fn<BudgetApi["forecast"]>().mockResolvedValue(ok(forecastOf())),
     mortgages: vi.fn<BudgetApi["mortgages"]>().mockResolvedValue(ok(mortgagesOf())),
@@ -1097,6 +1097,130 @@ describe("MonthBudgetView", () => {
     expect(catModel.allCategories.map((c) => c.id)).toContain("c0-zero");
   });
 
+  it("rolls chart categories up to the top level when parents exist", () => {
+    const rolled = buildCategoryChartModel(
+      [{
+        period: "2026-10", has_activity: true, is_current_month: false, income_estimate_partial: false,
+        provisional: false, start_budget: "0", spent: "55",
+        categories: [
+          { category_id: "transport", net_spending: "10" },
+          { category_id: "fuel", net_spending: "40" },
+          { category_id: "food", net_spending: "5" },
+        ],
+      }],
+      [{ category_id: "fuel", name: "Synthetic Fuel", archived: false }],
+      { uncategorised: "Uncategorised", unknownCategory: "Category", otherCategory: "Other" },
+      [
+        { id: "transport", name: "Synthetic Transport", archived: false, parent_id: null },
+        { id: "fuel", name: "Synthetic Fuel", archived: false, parent_id: "transport" },
+        { id: "food", name: "Synthetic Food", archived: false, parent_id: null },
+      ],
+    );
+    expect(rolled.displayed.map((item) => item.id)).toEqual(["transport", "food"]);
+    expect(rolled.displayed[0]?.name).toBe("Synthetic Transport");
+    expect(rolled.byMonthAndCategory.get("2026-10")?.get("transport")).toBe("50");
+    expect(rolled.byMonthAndCategory.get("2026-10")?.has("fuel")).toBe(false);
+  });
+
+  it("rolls the month category list up, indents the child, and keeps the parent's limit", async () => {
+    const api = fakeApi();
+    api.categories.mockResolvedValue(ok({ categories: [
+      { id: "transport", name: "Synthetic Transport", archived: false, version: 1, created_at: 1, updated_at: 1, parent_id: null },
+      { id: "fuel", name: "Synthetic Fuel", archived: false, version: 1, created_at: 1, updated_at: 1, parent_id: "transport" },
+    ] }));
+    api.monthlyBudgetCharts.mockResolvedValue(ok(monthlyBudgetChartsOf({
+      category_spend: [
+        monthlyBudgetCategorySpend({
+          category_id: "transport", name: "Synthetic Transport", expenses: "0", refunds: "0", net_spending: "0",
+          limit: monthlyBudgetCategoryLimit({
+            monthly_limit: "30", remaining: "0", over_by: "10", percent_used_floor: "133", status: "exceeded",
+          }),
+        }),
+        monthlyBudgetCategorySpend({
+          category_id: "fuel", name: "Synthetic Fuel", expenses: "40", refunds: "0", net_spending: "40", limit: null,
+        }),
+      ],
+    })));
+    await show(api);
+    const rows = [...host.querySelectorAll('section[aria-label="Spending and limits"] tbody tr')];
+    expect(rows.map((row) => row.getAttribute("data-depth"))).toEqual(["0", "1"]);
+    expect(rows[0]?.textContent).toContain("40.00 PLN");
+    expect(rows[0]?.textContent).toContain("of 30.00 PLN (133%)");
+    expect(rows[1]?.textContent).toContain("Synthetic Fuel");
+    await click(labelledButton("Collapse Synthetic Transport"));
+    const after = [...host.querySelectorAll('section[aria-label="Spending and limits"] tbody tr')];
+    expect(after).toHaveLength(1);
+    expect(after[0]?.textContent).toContain("40.00 PLN");
+    expect(after[0]?.textContent).not.toContain("Synthetic Fuel");
+  });
+
+  it("hides spending and charts until categories load, then shows the rolled parent", async () => {
+    const pending = deferred<{ categories: AnalyticsCategory[] }>();
+    const api = fakeApi();
+    api.categories.mockReturnValueOnce(pending.promise);
+    api.monthlyBudgetCharts.mockResolvedValue(ok(monthlyBudgetChartsOf({
+      category_spend: [
+        monthlyBudgetCategorySpend({
+          category_id: "transport", name: "Synthetic Transport", expenses: "0", refunds: "0", net_spending: "0",
+          limit: monthlyBudgetCategoryLimit({
+            monthly_limit: "30", remaining: "0", over_by: "10", percent_used_floor: "133", status: "exceeded",
+          }),
+        }),
+        monthlyBudgetCategorySpend({
+          category_id: "fuel", name: "Synthetic Fuel", expenses: "40", refunds: "0", net_spending: "40", limit: null,
+        }),
+      ],
+    })));
+    await show(api);
+    const spending = host.querySelector('section[aria-label="Spending and limits"]');
+    expect(spending?.textContent).toContain(monthBudgetLabels.en.categoriesLoading);
+    expect(spending?.querySelector("tbody")).toBeNull();
+    expect(spending?.textContent).not.toContain("Synthetic Fuel");
+    expect(spending?.textContent).not.toContain("Exceeded");
+    expect(host.querySelector('[aria-label="Charts"]')).toBeNull();
+    expect(host.querySelector('[aria-label="Monthly summary"]')).not.toBeNull();
+
+    await act(async () => {
+      pending.resolve(ok({ categories: [
+        { id: "transport", name: "Synthetic Transport", archived: false, version: 1, created_at: 1, updated_at: 1, parent_id: null },
+        { id: "fuel", name: "Synthetic Fuel", archived: false, version: 1, created_at: 1, updated_at: 1, parent_id: "transport" },
+      ] }));
+      await Promise.resolve();
+    });
+    await settle();
+    const rows = [...host.querySelectorAll('section[aria-label="Spending and limits"] tbody tr')];
+    expect(rows.map((row) => row.getAttribute("data-depth"))).toEqual(["0", "1"]);
+    expect(rows[0]?.textContent).toContain("40.00 PLN");
+    expect(rows[0]?.textContent).toContain("Exceeded");
+    expect(host.querySelector('[aria-label="Charts"]')).not.toBeNull();
+  });
+
+  it("shows an error instead of direct spend when categories fail to load", async () => {
+    const api = fakeApi();
+    api.categories.mockResolvedValue(fail(500, "budget_internal_error"));
+    api.monthlyBudgetCharts.mockResolvedValue(ok(monthlyBudgetChartsOf({
+      category_spend: [
+        monthlyBudgetCategorySpend({
+          category_id: "transport", name: "Synthetic Transport", expenses: "0", refunds: "0", net_spending: "0",
+          limit: monthlyBudgetCategoryLimit({
+            monthly_limit: "30", remaining: "0", over_by: "10", percent_used_floor: "133", status: "exceeded",
+          }),
+        }),
+        monthlyBudgetCategorySpend({
+          category_id: "fuel", name: "Synthetic Fuel", expenses: "40", refunds: "0", net_spending: "40", limit: null,
+        }),
+      ],
+    })));
+    await show(api);
+    const spending = host.querySelector('section[aria-label="Spending and limits"]');
+    expect(spending?.textContent).toContain(monthBudgetLabels.en.categoriesError);
+    expect(spending?.querySelector("tbody")).toBeNull();
+    expect(spending?.textContent).not.toContain("Synthetic Fuel");
+    expect(spending?.textContent).not.toContain("0.00 PLN");
+    expect(host.querySelector('[aria-label="Charts"]')).toBeNull();
+    expect(host.querySelector('[aria-label="Monthly summary"]')).not.toBeNull();
+  });
+
   it("renders pass-through legs, uncovered mortgage, category limits table, and Unavailable card exposure in Polish and English", async () => {
     const api = fakeApi();
     api.monthlyBudgetCharts.mockResolvedValue(ok(monthlyBudgetChartsOf({
@@ -1207,7 +1331,7 @@ describe("MonthBudgetView", () => {
     expect(progressBars[0]?.value).toBe(100);
     expect(progressBars[1]?.value).toBe(40);
 
-    // Also test pass-through when refunds=0 and categories fallback when categories() fails.
+    // Pass-through still renders when categories() fails. Spending and charts stay hidden.
     api.categories.mockResolvedValue(fail(500, "budget_internal_error"));
     api.monthlyBudgetCharts.mockResolvedValue(ok(monthlyBudgetChartsOf({
       pass_through: monthlyBudgetPassThrough(),
@@ -1221,6 +1345,9 @@ describe("MonthBudgetView", () => {
     expect(passThroughEn?.textContent).toContain("Uncovered mortgage1,200.00 PLN");
     expect(passThroughEn?.textContent).not.toContain("Mortgage refunds");
     expect(host.querySelector('[aria-label="Unpaid card spending"]')?.textContent).toContain("Unavailable");
+    expect(host.querySelector('section[aria-label="Spending and limits"] tbody')).toBeNull();
+    expect(host.querySelector('[aria-label="Charts"]')).toBeNull();
+    expect(host.textContent).toContain(monthBudgetLabels.en.categoriesError);
   });
 
   it("navigates months using server current_month, switches currencies and history, and links to Month view", async () => {
@@ -1420,10 +1547,10 @@ describe("MonthBudgetView", () => {
     const api = fakeApi();
     api.categories.mockResolvedValue(ok({
       categories: [
-        { id: secretRentId, name: "Synthetic Rent Name", archived: false, version: 1, created_at: 1, updated_at: 1 },
-        { id: secretMortgageId, name: "Synthetic Mortgage Name", archived: false, version: 1, created_at: 1, updated_at: 1 },
-        { id: secretSalaryId, name: "Synthetic Salary Name", archived: false, version: 1, created_at: 1, updated_at: 1 },
-        { id: secretSpendId, name: "Synthetic Spend Name", archived: false, version: 1, created_at: 1, updated_at: 1 },
+        { id: secretRentId, name: "Synthetic Rent Name", archived: false, version: 1, created_at: 1, updated_at: 1, parent_id: null },
+        { id: secretMortgageId, name: "Synthetic Mortgage Name", archived: false, version: 1, created_at: 1, updated_at: 1, parent_id: null },
+        { id: secretSalaryId, name: "Synthetic Salary Name", archived: false, version: 1, created_at: 1, updated_at: 1, parent_id: null },
+        { id: secretSpendId, name: "Synthetic Spend Name", archived: false, version: 1, created_at: 1, updated_at: 1, parent_id: null },
       ],
     }));
     api.monthlyBudgetCharts.mockResolvedValue(ok(monthlyBudgetChartsOf({

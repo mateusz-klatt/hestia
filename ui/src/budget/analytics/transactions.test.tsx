@@ -531,13 +531,13 @@ describe("period entries", () => {
 
   it("sorts Polish category names using Polish collation and labels the list Transakcje", async () => {
     const plCategories = [
-      { id: "c-zolw", name: "Żółw", archived: false, version: 1, created_at: 1, updated_at: 1 },
-      { id: "c-zebra", name: "Zebra", archived: false, version: 1, created_at: 1, updated_at: 1 },
-      { id: "c-zrebak", name: "Źrebak", archived: false, version: 1, created_at: 1, updated_at: 1 },
-      { id: "c-lodz", name: "Łódź", archived: false, version: 1, created_at: 1, updated_at: 1 },
-      { id: "c-lod", name: "Lód", archived: false, version: 1, created_at: 1, updated_at: 1 },
-      { id: "c-cma", name: "Ćma", archived: false, version: 1, created_at: 1, updated_at: 1 },
-      { id: "c-cebula", name: "Cebula", archived: false, version: 1, created_at: 1, updated_at: 1 },
+      { id: "c-zolw", name: "Żółw", archived: false, version: 1, created_at: 1, updated_at: 1, parent_id: null },
+      { id: "c-zebra", name: "Zebra", archived: false, version: 1, created_at: 1, updated_at: 1, parent_id: null },
+      { id: "c-zrebak", name: "Źrebak", archived: false, version: 1, created_at: 1, updated_at: 1, parent_id: null },
+      { id: "c-lodz", name: "Łódź", archived: false, version: 1, created_at: 1, updated_at: 1, parent_id: null },
+      { id: "c-lod", name: "Lód", archived: false, version: 1, created_at: 1, updated_at: 1, parent_id: null },
+      { id: "c-cma", name: "Ćma", archived: false, version: 1, created_at: 1, updated_at: 1, parent_id: null },
+      { id: "c-cebula", name: "Cebula", archived: false, version: 1, created_at: 1, updated_at: 1, parent_id: null },
     ];
     const rows = [
       classified("zolw", { effective: { kind: "expense", category_id: "c-zolw", source: "default", rule_id: null } }),

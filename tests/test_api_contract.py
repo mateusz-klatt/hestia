@@ -56,8 +56,22 @@ class OpenApiArtifactTests(unittest.TestCase):
         )
 
     def test_monthly_budget_contract_chain_from_0_27_0(self):
-        """0.27.0 through 0.32.0 stay strictly additive. 0.33.0 withdraws a 503 code."""
+        """0.27.0 through 0.32.0 stay strictly additive. 0.33.0 withdraws a 503 code. 0.34.0 adds parent_id."""
         document = api_contract.build_openapi()
+        self.assertEqual(document["info"]["version"], "0.34.0")
+        # Strip the 0.34.0 category parent and compare with the published 0.33.0 document.
+        for name in ("BudgetAnalyticsCategory", "BudgetAnalyticsCategorySaved",
+                     "BudgetAnalyticsCategoryCreateRequest", "BudgetAnalyticsCategoryUpdateRequest"):
+            schema = document["components"]["schemas"][name]
+            schema.get("properties", {}).pop("parent_id", None)
+            if "required" in schema:
+                schema["required"] = [item for item in schema["required"] if item != "parent_id"]
+                if not schema["required"]:
+                    del schema["required"]
+        document["info"]["version"] = "0.33.0"
+        canonical_0_33 = json.dumps(document, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        self.assertEqual(hashlib.sha256(canonical_0_33).hexdigest(),
+                         "bc46ebfdcb8f5d49cfa751f369b786b045a8b013e89212680b2eb6fefa2fa8e6")
         self.assertEqual(document["info"]["version"], "0.33.0")
         forecast_get = document["paths"]["/api/budget/analytics/forecast"]["get"]
         withdrawn = (

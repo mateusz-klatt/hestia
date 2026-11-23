@@ -120,7 +120,7 @@ def _write(owner, operation, values, secret):
     store = _store(secret)
     _, method, response_key = WRITES[operation]
     if operation == "category-create":
-        result = store.create_category(owner, values["name"])
+        result = store.create_category(owner, values["name"], parent_id=values.get("parent_id"))
     elif operation == "category-update":
         identifier = values.pop("category_id")
         result = store.update_category(owner, identifier, **values)
@@ -164,7 +164,9 @@ def register(app, read_json_body, *, auth_enabled, session_secret):
                     return body
                 model = (api_contract.BudgetAnalyticsTransactionsByKeysRequest
                          if operation == _TRANSACTIONS_BY_KEYS_OP else WRITES[operation][0])
-                values = model.model_validate(body).model_dump()
+                parsed = model.model_validate(body)
+                # An omitted parent_id on update leaves the parent; null detaches. Other writes keep defaults.
+                values = parsed.model_dump(exclude_unset=operation == "category-update")
                 owner = api._principal(request, auth_enabled)
                 secret = api._secret(session_secret)
                 api._browser(request, owner, secret)

@@ -477,8 +477,14 @@ class BudgetTransactionMetadata(Base):
 
 
 class BudgetCategory(Base):
+    """Owner category. ``parent_id`` is an optional same-table parent (depth is enforced in the store)."""
+
     __tablename__ = "budget_categories"
-    __table_args__ = (UniqueConstraint("owner", "name_key"),)
+    __table_args__ = (
+        UniqueConstraint("owner", "name_key"),
+        CheckConstraint("parent_id IS NULL OR parent_id != id", name="ck_budget_categories_parent_not_self"),
+        Index("ix_budget_categories_parent_id", "parent_id"),
+    )
     id: Mapped[str] = mapped_column(primary_key=True)
     owner: Mapped[str] = mapped_column(ForeignKey("users.username"))
     name: Mapped[str]
@@ -487,6 +493,7 @@ class BudgetCategory(Base):
     version: Mapped[int]
     created_at: Mapped[float]
     updated_at: Mapped[float]
+    parent_id: Mapped[str | None] = mapped_column(ForeignKey("budget_categories.id", name="fk_budget_categories_parent_id"))
 
 
 class BudgetCategoryLimit(Base):
