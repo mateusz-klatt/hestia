@@ -11,6 +11,10 @@ household GET requires exactly one of those headers. Final recheck failure, incl
 change, discards the encoded body and returns a fixed 403. The first check still reports a missing
 flag as 404 and a non-SQLite backend as 409.
 
+A response that is about to be sent writes one ``budget_analytics_audit`` row in this request:
+the actor is the member, the owner is the grant owner, and the action is the view name. A denied
+or failed read writes nothing. That row is not emitted to ``/api/audit`` or the SSE stream.
+
 ``GET /monthly-budget-settings`` reads the P1 bootstrap ``HESTIA_BUDGET_MONTH_CONFIG`` only.
 P4's ``budget_month_settings`` table is not part of this API.
 """
@@ -104,6 +108,11 @@ def _read(member, operation, query, header, secret):
     return _reader(secret).read(member, operation, query, header)
 
 
+def _record(member, owner, view, secret):
+    """Audit a read only after the handler has decided the response will be sent."""
+    _reader(secret).record_read(member, owner, view)
+
+
 def _recheck(member, grant_id, header, secret, *, require_header):
     return _reader(secret).recheck(member, grant_id, header, require_header=require_header)
 
@@ -123,7 +132,7 @@ def register(app, read_json_body, *, auth_enabled, session_secret):
             member, header = _scope(request, auth_enabled, require_header=require_header)
             secret = api._secret(session_secret)
             query = _query(request, operation)
-            body, grant_id = await asyncio.to_thread(_read, member, operation, query, header, secret)
+            body, owner, grant_id = await asyncio.to_thread(_read, member, operation, query, header, secret)
             before_grant_recheck()
             try:
                 fresh = await asyncio.to_thread(
@@ -138,6 +147,7 @@ def register(app, read_json_body, *, auth_enabled, session_secret):
             if len(body) > MAX_RESPONSE_BYTES:
                 body = None
                 return api._error(413, "budget_analytics_limit")
+            await asyncio.to_thread(_record, member, owner, operation, secret)
             outgoing = bytes(body)
             body = None
             return web.Response(body=outgoing, content_type="application/json", charset="utf-8",

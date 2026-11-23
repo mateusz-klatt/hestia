@@ -1,6 +1,7 @@
 """Household grants, the viewer read gate, and the read-only household API."""
 from __future__ import annotations
 
+import asyncio
 from contextlib import redirect_stderr, redirect_stdout
 import io
 import json
@@ -19,6 +20,7 @@ from sqlalchemy.orm import Session
 
 from hestia import auth, db, store_sql, web
 from hestia.budget import analytics_api, household, household_api, household_views, month_budget
+from hestia.proxy import EventBus
 from hestia.budget.analytics_core import AnalyticsError
 from hestia.budget.analytics_store import BudgetAnalyticsStore
 from hestia.budget.household import (
@@ -357,7 +359,10 @@ class HouseholdAPITests(unittest.IsolatedAsyncioTestCase):
             model.model_validate(body)
             bodies[operation] = body
             head = await self.client.head(PREFIX + "/" + operation, headers=self.grant_headers())
-            self.assertEqual(head.status, 405)
+            self.assertEqual(head.status, 403, operation)
+            self.assertEqual(await head.read(), b"")
+            owner_head = await self.client.head(PREFIX + "/" + operation, headers=self.headers("alice"))
+            self.assertEqual(owner_head.status, 405, operation)
         text = json.dumps(bodies)
         for secret in (SALARY_NAME, ZUS_NAME, GROCERIES, "child benefit", REMITTANCE, IBAN, RULE_VALUE,
                        self.alice_id, self.bob_id, fixture.PRIVATE_A, fixture.PRIVATE_B, "alice-entry"):
@@ -642,3 +647,124 @@ class HouseholdAPITests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(limited.status, 413)
         self.assertEqual((await limited.json())["error"], "budget_analytics_limit")
         self.assert_private_headers(limited)
+
+    def _audit_split(self):
+        with self.sessions() as session:
+            rows = session.scalars(select(db.BudgetAnalyticsAudit).order_by(db.BudgetAnalyticsAudit.id)).all()
+            household_rows = []
+            other = 0
+            for row in rows:
+                if row.subject_type == "household_read":
+                    household_rows.append((row.owner, row.subject_id, row.action, row.before_json, row.after_json))
+                else:
+                    other += 1
+            return household_rows, other
+
+    def _home_audit(self):
+        with self.sessions() as session:
+            rows = session.scalars(select(db.Audit).order_by(db.Audit.id)).all()
+            return [(row.actor, row.action, row.target, row.detail, row.result) for row in rows]
+
+    async def test_successful_viewer_read_writes_one_sanitised_audit_row(self):
+        """One analytics-audit row per successful spouse read, and none when the read is refused.
+
+        The row names the member, the grant owner and the view. It does not carry amounts,
+        aliases, the grant id or query values, and it does not appear on /api/audit or SSE.
+        """
+        household_rows, other = self._audit_split()
+        self.assertEqual(household_rows, [])
+        home_before = self._home_audit()
+        engine, _sessions = db.init_db()
+        runtime = self.client.server.app[web._RT_KEY]
+        runtime.audit_engine = engine
+        bus = EventBus()
+        runtime.event_bus = bus
+        subscription = await bus.try_subscribe()
+        self.addCleanup(subscription.close)
+        reader = household_api._reader(SECRET)
+        with self.assertRaises(AnalyticsError):
+            reader.record_read("viewer", "alice", "period=" + PERIOD)
+        with self.assertRaises(AnalyticsError):
+            reader.record_read("viewer", "alice", PREFIX + "/transactions?period=" + PERIOD)
+        self.assertEqual(self._audit_split()[0], [])
+
+        stream = io.StringIO()
+        handler = logging.StreamHandler(stream)
+        handler.setLevel(logging.DEBUG)
+        logger = logging.getLogger("hestia.budget")
+        logger.addHandler(handler)
+        self.addCleanup(logger.removeHandler, handler)
+        with mock.patch.object(web, "_audit") as home_audit:
+            first = await self.fetch("transactions", params={"period": PERIOD, "limit": "1"})
+            self.assertEqual(first.status, 200, await first.text())
+            page = await first.json()
+            self.assertIn(AMOUNT, [row["amount"] for row in page["transactions"]])
+            alias = page["transactions"][0]["account_id"]
+            cursor = page["next_cursor"]
+            self.assertIsNotNone(cursor)
+            self.assertEqual(page["grant_id"], self.grant_id)
+            second = await self.fetch("transactions", params={"period": PERIOD, "limit": "1", "cursor": cursor})
+            self.assertEqual(second.status, 200, await second.text())
+            discovered = await self.fetch("access")
+            self.assertEqual(discovered.status, 200, await discovered.text())
+            self.assertEqual((await discovered.json())["grant_id"], self.grant_id)
+
+            denied = await self.fetch("overview", grant=False)
+            self.assertEqual(denied.status, 403)
+            mismatched = await self.fetch("rules", grant="ab" * 32)
+            self.assertEqual(mismatched.status, 403)
+            missing_category = await self.fetch(
+                "transactions", params={"period": PERIOD, "category_id": "uncategorised"})
+            self.assertEqual(missing_category.status, 404)
+            operator = await self.fetch("categories", user="operator")
+            self.assertEqual(operator.status, 403)
+            with mock.patch.dict(os.environ, {"HESTIA_BUDGET_HTTP_ENABLED": "0"}):
+                disabled = await self.fetch("inbox")
+            self.assertEqual(disabled.status, 404)
+            self.assertEqual((await disabled.json())["error"], "budget_disabled")
+            with mock.patch.object(household_api, "MAX_RESPONSE_BYTES", 0):
+                oversized = await self.fetch("mortgages")
+            self.assertEqual(oversized.status, 413)
+            with mock.patch.object(household_views.HouseholdReader, "record_read",
+                                    side_effect=RuntimeError(AMOUNT)):
+                broken = await self.fetch("quarantine")
+            self.assertEqual(broken.status, 500)
+            self.assertEqual((await broken.json())["error"], "budget_internal_error")
+            self.assertNotIn(AMOUNT, await broken.text())
+
+            def revoke():
+                household.revoke_grant("viewer", "alice", self.grant_id, path=str(self.path))
+
+            with mock.patch.object(household_api, "before_grant_recheck", revoke):
+                raced = await self.fetch("spending-limits")
+            self.assertEqual(raced.status, 403)
+            self.assertNotIn(AMOUNT, await raced.text())
+            self.assertNotIn(self.grant_id, await raced.text())
+        home_audit.assert_not_called()
+        rows, other_after = self._audit_split()
+        self.assertEqual(other_after, other)
+        self.assertEqual(rows, [
+            ("alice", "viewer", "transactions", "null", "null"),
+            ("alice", "viewer", "transactions", "null", "null"),
+            ("alice", "viewer", "access", "null", "null"),
+        ])
+        recorded = json.dumps(rows)
+        for secret in (AMOUNT, self.grant_id, alias, cursor, PERIOD, REMITTANCE, IBAN, SALARY_NAME,
+                       RULE_VALUE, GROCERIES, self.alice_id):
+            self.assertNotIn(secret, recorded, secret)
+        self.assertEqual(self._home_audit(), home_before)
+        feed = await self.client.get("/api/audit", headers=self.headers("viewer"))
+        self.assertEqual(feed.status, 200)
+        feed_text = await feed.text()
+        self.assertNotIn("household_read", feed_text)
+        self.assertNotIn(AMOUNT, feed_text)
+        self.assertNotIn(self.grant_id, feed_text)
+        self.assertNotIn(alias, feed_text)
+        self.assertNotIn(cursor, feed_text)
+        await asyncio.sleep(0)
+        self.assertTrue(subscription.queue.empty())
+        logged = stream.getvalue()
+        self.assertNotIn(AMOUNT, logged)
+        self.assertNotIn(self.grant_id, logged)
+        self.assertNotIn(alias, logged)
+        self.assertNotIn(cursor, logged)

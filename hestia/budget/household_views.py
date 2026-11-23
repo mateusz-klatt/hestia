@@ -128,7 +128,11 @@ class HouseholdReader:
         self._cipher = AESGCM(hashlib.sha256(_CURSOR_DOMAIN + b"\0" + cursor_secret).digest())
 
     def read(self, member, operation, query, header):
-        """Authorize and serialize inside one snapshot. Returns ``(body, grant_id)``."""
+        """Authorize and serialize inside one snapshot. Returns ``(body, owner, grant_id)``.
+
+        The snapshot is read-only. A successful response records its audit row later,
+        after the fresh grant check, so a denial never keeps a row.
+        """
         require_header = operation != "access"
         with _read_lock, self.sessions() as session:
             session.execute(text("BEGIN"))
@@ -137,7 +141,21 @@ class HouseholdReader:
             values = _normalize_query(operation, query)
             payload = self._build(session, member, owner, grant_id, operation, values)
             body = _encode(payload)
-            return body, grant_id
+            return body, owner, grant_id
+
+    def record_read(self, member, owner, view):
+        """One analytics-audit row for a household read that is about to be returned.
+
+        ``member`` is the actor and ``owner`` is the grant owner. ``view`` is an
+        allowlisted view name (the route's last segment). The row is written with
+        ``BudgetAnalyticsStore._analytics_audit``, so it stays in
+        ``budget_analytics_audit`` and is not copied to the home audit log or the
+        event bus. Amounts, aliases, the grant id and query values are not stored.
+        """
+        if view not in _QUERY:
+            raise AnalyticsError()
+        with self.views.transaction() as session:
+            self.views._analytics_audit(session, owner, "household_read", member, view, None, None)
 
     def recheck(self, member, grant_id, header, *, require_header):
         """Fresh snapshot. False when the grant is gone, changed, or the header no longer matches."""
