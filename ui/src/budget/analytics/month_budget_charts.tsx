@@ -21,7 +21,11 @@ export interface MonthBudgetChartLabels {
   bookedBudgetLine: string;
   expectedBudgetLine: string;
   paceExtensionLine: string;
+  scheduledStepsColumn: string;
   overdue: string;
+  upcoming: string;
+  scheduledPaymentsLoading: string;
+  withoutScheduledPayments: string;
   exhaustionMarker: (day: number) => string;
   incompleteMonth: string;
   currentMonth: string;
@@ -193,15 +197,31 @@ function YAxisGrid({ scaleObj, scale, denom, locale }: {
 // Chart 1: Cumulative daily spend
 // ---------------------------------------------------------------------------
 
-function scheduledItemLabel(item: ScheduledPaceItem, currency: string, locale: string, overdue: string): string {
-  const date = `${String(Number(item.expectedDate.slice(8, 10)))}.${item.expectedDate.slice(5, 7)}`;
-  return `${date} · ${item.label} · ${formatAmount(item.amount, currency, locale)}${item.overdue ? ` · ${overdue}` : ""}`;
+function formatShortDate(isoDate: string, locale: string): string {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(isoDate);
+  if (match === null) return isoDate;
+  const parsed = new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])));
+  if (Number.isNaN(parsed.getTime())) return isoDate;
+  return new Intl.DateTimeFormat(locale, { day: "numeric", month: "short", timeZone: "UTC" }).format(parsed);
 }
 
-function CumulativeDailyChart({ budget, daily, paceProjection, locale, text }: {
+function scheduledItemLabel(
+  item: ScheduledPaceItem,
+  currency: string,
+  locale: string,
+  text: Pick<MonthBudgetChartLabels, "overdue" | "upcoming">,
+): string {
+  const date = formatShortDate(item.expectedDate, locale);
+  const status = item.overdue ? text.overdue : text.upcoming;
+  return `${date} · ${item.label} · ${formatAmount(item.amount, currency, locale)} · ${status}`;
+}
+
+function CumulativeDailyChart({ budget, daily, paceProjection, schedulePending, scheduleError, locale, text }: {
   budget: AnalyticsMonthlyBudget;
   daily: readonly AnalyticsMonthlyBudgetDailyPoint[];
   paceProjection: MonthPaceProjection | null;
+  schedulePending: boolean;
+  scheduleError: boolean;
   locale: string;
   text: MonthBudgetChartLabels;
 }) {
@@ -265,11 +285,20 @@ function CumulativeDailyChart({ budget, daily, paceProjection, locale, text }: {
     if (before !== value) points.push(`${String(x)},${String(yScale.toY(value))}`);
     return points;
   }) ?? [];
-  const pacePolylinePoints = [`${String(cutoffX)},${String(cutoffY)}`, ...pacePoints].join(" ");
+  const startCoord = `${String(cutoffX)},${String(cutoffY)}`;
+  const pacePolylineCoords = [startCoord, ...pacePoints];
+  const pacePolylinePoints = pacePolylineCoords.join(" ");
+  const hasPaceLine = showPaceExtension && pacePolylineCoords.some((coord) => coord !== startCoord);
+  const showProjectedSummary = showPaceExtension && (cutoffDay < daysInMonth || projection.scheduledItems.length > 0);
   const exhaustionX = exhaustionDay !== null ? toX(exhaustionDay) : null;
   const exhaustionY = exhaustionDay !== null
     ? (projection?.status === "already_reached" ? cutoffY : expectedY)
     : null;
+  const dailyByDate = new Map(daily.map((point) => [point.date, point.cumulative_spent]));
+  const projectionByDate = new Map(projection?.points.map((point) => [point.date, point]) ?? []);
+  const allDates = [...new Set([...dailyByDate.keys(), ...projectionByDate.keys()])].sort((a, b) => a.localeCompare(b));
+  const showProjectedColumn = showProjectedSummary && projected !== null;
+  const showStepsColumn = (projection?.scheduledItems.length ?? 0) > 0;
 
   const ticks = [...new Set([1, 10, 20, daysInMonth].filter((day) => day <= daysInMonth && (day === daysInMonth || daysInMonth - day >= 3)))];
 
@@ -291,19 +320,28 @@ function CumulativeDailyChart({ budget, daily, paceProjection, locale, text }: {
             strokeLinejoin="round" strokeLinecap="round" points={polylinePoints} />
         ) : null}
         <circle cx={cutoffX} cy={cutoffY} r="3" fill="var(--chart-spend)" />
-        {showPaceExtension ? (
+        {hasPaceLine ? (
           <polyline className="budget-chart-pace-line" fill="none" stroke="var(--chart-spend)" strokeWidth="1.8"
             strokeDasharray="2 4" strokeLinejoin="round" strokeLinecap="round" points={pacePolylinePoints} />
         ) : null}
-        {projection?.points.map((point, index) => point.items.length === 0 ? null : (
-          <g key={point.date} className="budget-chart-scheduled-step"
-            data-overdue={point.items.some((item) => item.overdue)}>
-            <title>{point.items.map((item) => scheduledItemLabel(item, currency, locale, text.overdue)).join("\n")}</title>
-            <circle cx={toX(point.day)} cy={yScale.toY(projectionCoeffs[index * 2 + 1] ?? 0n)} r="4"
-              fill="var(--surface)" stroke={point.items.some((item) => item.overdue) ? "var(--err)" : "var(--chart-expected)"}
-              strokeWidth="2" />
-          </g>
-        ))}
+        {projection?.points.map((point, index) => {
+          if (point.items.length === 0) return null;
+          const isOverdue = point.items.some((item) => item.overdue);
+          const sx = toX(point.day);
+          const sy = yScale.toY(projectionCoeffs[index * 2 + 1] ?? 0n);
+          return (
+            <g key={point.date} className="budget-chart-scheduled-step" data-overdue={isOverdue}>
+              <title>{point.items.map((item) => scheduledItemLabel(item, currency, locale, text)).join("\n")}</title>
+              <circle cx={sx} cy={sy} r={isOverdue ? "5" : "4"} fill="var(--surface)"
+                stroke={isOverdue ? "var(--err)" : "var(--chart-expected)"}
+                strokeDasharray={isOverdue ? "2 1.5" : undefined} strokeWidth="2" />
+              {isOverdue ? (
+                <text x={sx} y={sy + 3} textAnchor="middle" fontSize="8" fontWeight="700"
+                  fill="var(--err)" aria-hidden="true">!</text>
+              ) : null}
+            </g>
+          );
+        })}
         {exhaustionDay !== null && exhaustionX !== null && exhaustionY !== null ? (
           <g className="budget-chart-exhaustion">
             <line x1={exhaustionX} y1={PLOT_TOP} x2={exhaustionX} y2={PLOT_BOTTOM} stroke="var(--err)" strokeWidth="1.2" strokeDasharray="3 2" />
@@ -337,15 +375,32 @@ function CumulativeDailyChart({ budget, daily, paceProjection, locale, text }: {
             <span>{text.expectedBudgetLine}: <strong>{money(expectedBudget)}</strong></span>
           </li>
         ) : null}
-        {showPaceExtension && projected !== null ? (
+        {showProjectedSummary && projected !== null ? (
           <li>
             <span className="budget-chart-line-swatch" style={{ color: "var(--chart-spend)", borderTopStyle: "dotted" }} aria-hidden="true" />
-            <span>{text.paceExtensionLine}: <strong>{formatRatioHalfEven(projected, currency, locale)}</strong></span>
+            <span>
+              {text.paceExtensionLine}: <strong>{formatRatioHalfEven(projected, currency, locale)}</strong>
+              {scheduleError ? ` (${text.withoutScheduledPayments})` : ""}
+            </span>
+          </li>
+        ) : null}
+        {schedulePending ? (
+          <li role="status">
+            <span>{text.scheduledPaymentsLoading}</span>
+          </li>
+        ) : null}
+        {scheduleError && (!showProjectedSummary || projected === null) ? (
+          <li className="budget-warn">
+            <span>{text.withoutScheduledPayments}</span>
           </li>
         ) : null}
         {projection?.scheduledItems.map((item, index) => (
           <li key={`${item.expectedDate}-${String(index)}`} className={item.overdue ? "budget-warn" : undefined}>
-            <span>{scheduledItemLabel(item, currency, locale, text.overdue)}</span>
+            <span className="budget-chart-step-swatch" data-overdue={item.overdue}
+              style={{ color: item.overdue ? "var(--err)" : "var(--chart-expected)" }} aria-hidden="true">
+              {item.overdue ? "!" : null}
+            </span>
+            <span>{scheduledItemLabel(item, currency, locale, text)}</span>
           </li>
         ))}
         {exhaustionDay !== null ? (
@@ -363,15 +418,37 @@ function CumulativeDailyChart({ budget, daily, paceProjection, locale, text }: {
               <tr>
                 <th scope="col">{text.dateLabel}</th>
                 <th scope="col">{text.cumulativeSpentLabel}</th>
+                {showProjectedColumn ? <th scope="col">{text.paceExtensionLine}</th> : null}
+                {showStepsColumn ? <th scope="col">{text.scheduledStepsColumn}</th> : null}
               </tr>
             </thead>
             <tbody>
-              {daily.map((point) => (
-                <tr key={point.date}>
-                  <th scope="row">{point.date}</th>
-                  <td>{money(point.cumulative_spent)}</td>
-                </tr>
-              ))}
+              {allDates.map((date) => {
+                const actual = dailyByDate.get(date);
+                const projPoint = projectionByDate.get(date);
+                return (
+                  <tr key={date}>
+                    <th scope="row">{date}</th>
+                    <td>{actual !== undefined ? money(actual) : text.noValue}</td>
+                    {showProjectedColumn ? (
+                      <td>{projPoint !== undefined ? formatRatioHalfEven(projPoint.value, currency, locale) : text.noValue}</td>
+                    ) : null}
+                    {showStepsColumn ? (
+                      <td>
+                        {projPoint !== undefined && projPoint.items.length > 0 ? (
+                          <div className="budget-month-steps-cell">
+                            {projPoint.items.map((item, index) => (
+                              <div key={`${item.expectedDate}-${String(index)}`} className={item.overdue ? "budget-warn" : undefined}>
+                                {scheduledItemLabel(item, currency, locale, text)}
+                              </div>
+                            ))}
+                          </div>
+                        ) : text.noValue}
+                      </td>
+                    ) : null}
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -857,17 +934,21 @@ function IncomeVsSpendChart({ budget, months, locale, text }: {
   );
 }
 
-export function MonthBudgetCharts({ budget, series, paceProjection, locale, text }: {
+export function MonthBudgetCharts({
+  budget, series, paceProjection, schedulePending = false, scheduleError = false, locale, text,
+}: {
   budget: AnalyticsMonthlyBudget;
   series: AnalyticsMonthlyBudgetSeries;
   paceProjection: MonthPaceProjection | null;
+  schedulePending?: boolean;
+  scheduleError?: boolean;
   locale: string;
   text: MonthBudgetChartLabels;
 }) {
   return (
     <section className="budget-month-charts" aria-label={text.chartsSectionTitle}>
       <CumulativeDailyChart budget={budget} daily={series.daily} paceProjection={paceProjection}
-        locale={locale} text={text} />
+        schedulePending={schedulePending} scheduleError={scheduleError} locale={locale} text={text} />
       <CategorySpendingChart series={series} currency={budget.currency} locale={locale} text={text} />
       <IncomeVsSpendChart budget={budget} months={series.months} locale={locale} text={text} />
     </section>

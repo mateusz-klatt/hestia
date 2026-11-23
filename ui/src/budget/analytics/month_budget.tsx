@@ -2,7 +2,7 @@
 // Evaluates in Europe/Warsaw from one snapshot on the server; all amounts stay decimal strings end to end,
 // ratios divide via BigInt half-even rounding, and no raw IDs or remittance text ever enter the DOM.
 import { useEffect, useRef, useState } from "react";
-import type { BudgetApi } from "../api";
+import type { BudgetApi, BudgetResult } from "../api";
 import { formatAmount, when } from "../model";
 import type { BudgetAccount } from "../model";
 import { clampPercentString, formatRatioHalfEven, isPositiveDecimal, isZero, labelOf,
@@ -51,6 +51,9 @@ export const monthBudgetLabels = {
     spentClosed: "Spent",
     remaining: "Remaining",
     remainingAtMonthEnd: "Remaining at month end",
+    scheduledPaymentsLoading: "Loading scheduled payments…",
+    withoutScheduledPayments: "without scheduled payments",
+    scheduledPaymentsError: "Scheduled payments could not be loaded — projection is shown without scheduled payments.",
     spentVsBudget: "Spent compared to budget received",
     expectedIncomeTitle: "Expected income",
     expectedIncomeTotal: "Total expected",
@@ -133,7 +136,9 @@ export const monthBudgetLabels = {
     bookedBudgetLine: "Booked budget",
     expectedBudgetLine: "Budget + expected",
     paceExtensionLine: "Pace projection",
+    scheduledStepsColumn: "Scheduled payments",
     overdue: "overdue",
+    upcoming: "upcoming",
     exhaustionMarker: (day: number) => `Exhaustion ~day ${String(day)}`,
     incompleteMonth: "Incomplete month",
     currentMonth: "Current month",
@@ -185,6 +190,9 @@ export const monthBudgetLabels = {
     spentClosed: "Wydano",
     remaining: "Pozostało",
     remainingAtMonthEnd: "Pozostało na koniec miesiąca",
+    scheduledPaymentsLoading: "Wczytywanie zaplanowanych płatności…",
+    withoutScheduledPayments: "bez zaplanowanych płatności",
+    scheduledPaymentsError: "Nie udało się wczytać zaplanowanych płatności — prognoza jest pokazana bez zaplanowanych płatności.",
     spentVsBudget: "Wydano względem budżetu z wpływów",
     expectedIncomeTitle: "Oczekiwane wpływy",
     expectedIncomeTotal: "Łącznie oczekiwane",
@@ -267,7 +275,9 @@ export const monthBudgetLabels = {
     bookedBudgetLine: "Budżet z wpływów",
     expectedBudgetLine: "Budżet + oczekiwane",
     paceExtensionLine: "Prognoza tempa",
+    scheduledStepsColumn: "Zaplanowane płatności",
     overdue: "zaległe",
+    upcoming: "nadchodzące",
     exhaustionMarker: (day: number) => `Wyczerpanie ~dzień ${String(day)}`,
     incompleteMonth: "Niepełny miesiąc",
     currentMonth: "Bieżący miesiąc",
@@ -288,6 +298,12 @@ export type MonthBudgetLabels = typeof monthBudgetLabels.en;
 type Shown =
   | { state: "loading" | "badRequest" | "limit" | "error" }
   | { state: "ready"; data: AnalyticsMonthlyBudgetCharts };
+
+type PaceScheduleState =
+  | { state: "idle" }
+  | { state: "loading" }
+  | { state: "error" }
+  | { state: "ready"; data: MonthPaceScheduleData };
 
 export interface MonthBudgetViewProps {
   api: Pick<BudgetApi, "monthlyBudgetCharts" | "categories" | "forecast" | "mortgages" | "recurring">;
@@ -387,9 +403,11 @@ function ExpectedIncomeCard({ income, currency, evaluationDate, categoryMap, tex
   );
 }
 
-function PaceCard({ pace, projection, currency, provisional, partialIncome, text, locale }: {
+function PaceCard({ pace, projection, schedulePending, scheduleError, currency, provisional, partialIncome, text, locale }: {
   pace: AnalyticsMonthlyBudgetPace;
   projection: MonthPaceProjection | null;
+  schedulePending: boolean;
+  scheduleError: boolean;
   currency: string;
   provisional: boolean;
   partialIncome: boolean;
@@ -410,23 +428,36 @@ function PaceCard({ pace, projection, currency, provisional, partialIncome, text
       <p className="budget-muted">
         {pace.basis === "received_plus_expected" ? text.paceBasisReceivedPlusExpected : text.paceBasisReceived}
       </p>
-      <p>{paceSentence(pace, text, projection)}</p>
-      <dl>
-        <dt>{text.paceBudget}</dt>
-        <dd>{formatAmount(pace.budget, currency, locale)}</dd>
-        {dailyRate === null ? null : (
-          <>
-            <dt>{text.dailyRate}</dt>
-            <dd>{text.perDay(formatRatioHalfEven(dailyRate, currency, locale))}</dd>
-          </>
-        )}
-        {projectedSpend === null ? null : (
-          <>
-            <dt>{text.projectedSpend}</dt>
-            <dd>{formatRatioHalfEven(projectedSpend, currency, locale)}</dd>
-          </>
-        )}
-      </dl>
+      {schedulePending ? (
+        <>
+          <p className="budget-muted" role="status">{text.scheduledPaymentsLoading}</p>
+          <dl>
+            <dt>{text.paceBudget}</dt>
+            <dd>{formatAmount(pace.budget, currency, locale)}</dd>
+          </dl>
+        </>
+      ) : (
+        <>
+          <p>{paceSentence(pace, text, projection)}</p>
+          {scheduleError ? <p className="budget-notice" role="note">{text.scheduledPaymentsError}</p> : null}
+          <dl>
+            <dt>{text.paceBudget}</dt>
+            <dd>{formatAmount(pace.budget, currency, locale)}</dd>
+            {dailyRate === null ? null : (
+              <>
+                <dt>{text.dailyRate}</dt>
+                <dd>{text.perDay(formatRatioHalfEven(dailyRate, currency, locale))}</dd>
+              </>
+            )}
+            {projectedSpend === null ? null : (
+              <>
+                <dt>{text.projectedSpend}</dt>
+                <dd>{formatRatioHalfEven(projectedSpend, currency, locale)}</dd>
+              </>
+            )}
+          </dl>
+        </>
+      )}
     </article>
   );
 }
@@ -482,7 +513,7 @@ export function MonthBudgetView({ api, accounts, text, locale, revision, onAcces
   const [serverCurrentMonth, setServerCurrentMonth] = useState<string | null>(null);
   const [manualCode, setManualCode] = useState("");
   const [shown, setShown] = useState<Shown>({ state: "loading" });
-  const [paceSchedule, setPaceSchedule] = useState<MonthPaceScheduleData | undefined>(undefined);
+  const [paceSchedule, setPaceSchedule] = useState<PaceScheduleState>({ state: "idle" });
   const [categories, setCategories] = useState<AnalyticsCategory[]>([]);
   const mounted = useRef(true);
   const generation = useRef(0);
@@ -500,7 +531,7 @@ export function MonthBudgetView({ api, accounts, text, locale, revision, onAcces
     revisionRef.current = revision;
     if (prevRevision !== revision) setCategories([]);
     setShown({ state: "loading" });
-    setPaceSchedule(undefined);
+    setPaceSchedule({ state: "idle" });
     void api.monthlyBudgetCharts(period, currency, history).then((result) => {
       // Run the access barrier before dropping superseded answers so a 401/403/disabled always clears the view.
       if (onAccessLoss(result) || token !== generation.current) return;
@@ -519,20 +550,34 @@ export function MonthBudgetView({ api, accounts, text, locale, revision, onAcces
       setShown({ state: "ready", data: result.data });
       if (budget.period === budget.current_month && budget.summary !== null && budget.pace !== null
         && budget.pace.status !== "historical") {
+        setPaceSchedule({ state: "loading" });
+        let accessLost = false;
+        // Pass each response through the access barrier immediately so a slow sibling cannot delay clearing.
+        const watch = <T,>(request: Promise<BudgetResult<T>>) => request.then((response) => {
+          if (onAccessLoss(response)) {
+            accessLost = true;
+          } else if (!response.ok && token === generation.current && mounted.current && !accessLost) {
+            setPaceSchedule({ state: "error" });
+          }
+          return response;
+        });
         void Promise.all([
-          api.forecast(1, budget.currency),
-          api.mortgages(),
-          api.recurring(budget.currency),
+          watch(api.forecast(2, budget.currency)),
+          watch(api.mortgages()),
+          watch(api.recurring(budget.currency)),
         ]).then(([forecastResult, mortgagesResult, recurringResult]) => {
-          const accessLost = [forecastResult, mortgagesResult, recurringResult]
-            .map((response) => onAccessLoss(response)).some(Boolean);
-          if (accessLost || token !== generation.current) return;
+          if (accessLost || token !== generation.current || !mounted.current) return;
           if (forecastResult.ok && mortgagesResult.ok && recurringResult.ok) {
             setPaceSchedule({
-              forecast: forecastResult.data,
-              mortgages: mortgagesResult.data,
-              recurring: recurringResult.data,
+              state: "ready",
+              data: {
+                forecast: forecastResult.data,
+                mortgages: mortgagesResult.data,
+                recurring: recurringResult.data,
+              },
             });
+          } else {
+            setPaceSchedule({ state: "error" });
           }
         });
       }
@@ -634,7 +679,7 @@ function SummaryMeter({ spent, budget, label }: { spent: string; budget: string;
 function ReadyDashboard({ data, series, paceSchedule, categoryMap, text, locale, onOpenMonth }: {
   data: AnalyticsMonthlyBudget;
   series: AnalyticsMonthlyBudgetSeries | null;
-  paceSchedule: MonthPaceScheduleData | undefined;
+  paceSchedule: PaceScheduleState;
   categoryMap: ReadonlyMap<string, string>;
   text: MonthBudgetLabels;
   locale: string;
@@ -643,7 +688,11 @@ function ReadyDashboard({ data, series, paceSchedule, categoryMap, text, locale,
   const money = (amount: string) => formatAmount(amount, data.currency, locale);
   const ledgerStamp = when(data.coverage.ledger_as_of, locale);
   const isCurrent = data.period === data.current_month;
-  const paceProjection = buildMonthPaceProjection(data, paceSchedule);
+  const schedulePending = isCurrent && paceSchedule.state === "loading";
+  const scheduleError = isCurrent && paceSchedule.state === "error";
+  const paceProjection = schedulePending
+    ? null
+    : buildMonthPaceProjection(data, paceSchedule.state === "ready" ? paceSchedule.data : undefined);
   const projectedRemaining = isCurrent ? paceProjection?.projectedRemaining ?? null : null;
 
   return (
@@ -715,13 +764,27 @@ function ReadyDashboard({ data, series, paceSchedule, categoryMap, text, locale,
                 </dt>
                 <dd><strong>{money(data.summary.spent)}</strong></dd>
                 <dt>
-                  {projectedRemaining === null ? text.remaining : text.remainingAtMonthEnd}
+                  {schedulePending || projectedRemaining !== null ? text.remainingAtMonthEnd : text.remaining}
                   {data.coverage.provisional ? <small className="budget-warn"> ({text.provisional})</small> : null}
+                  {scheduleError && projectedRemaining !== null ? (
+                    <small className="budget-warn"> ({text.withoutScheduledPayments})</small>
+                  ) : null}
                 </dt>
-                <dd><strong>{projectedRemaining === null
-                  ? money(data.summary.remaining)
-                  : formatRatioHalfEven(projectedRemaining, data.currency, locale)}</strong></dd>
+                <dd>
+                  {schedulePending ? (
+                    <span className="budget-muted" role="status">{text.scheduledPaymentsLoading}</span>
+                  ) : (
+                    <strong>
+                      {projectedRemaining === null
+                        ? money(data.summary.remaining)
+                        : formatRatioHalfEven(projectedRemaining, data.currency, locale)}
+                    </strong>
+                  )}
+                </dd>
               </dl>
+              {scheduleError && projectedRemaining === null ? (
+                <p className="budget-muted" role="note">{text.scheduledPaymentsError}</p>
+              ) : null}
               {isPositiveDecimal(data.summary.start_budget) ? (
                 <SummaryMeter spent={data.summary.spent} budget={data.summary.start_budget} label={text.spentVsBudget} />
               ) : null}
@@ -730,7 +793,8 @@ function ReadyDashboard({ data, series, paceSchedule, categoryMap, text, locale,
             <ExpectedIncomeCard income={data.expected_income} currency={data.currency}
               evaluationDate={data.evaluation_date} categoryMap={categoryMap} text={text} locale={locale} />
 
-            <PaceCard pace={data.pace} projection={paceProjection} currency={data.currency}
+            <PaceCard pace={data.pace} projection={paceProjection}
+              schedulePending={schedulePending} scheduleError={scheduleError} currency={data.currency}
               provisional={data.coverage.provisional} partialIncome={data.expected_income.status === "partial"}
               text={text} locale={locale} />
 
@@ -812,7 +876,7 @@ function ReadyDashboard({ data, series, paceSchedule, categoryMap, text, locale,
 
           {series === null ? null : (
             <MonthBudgetCharts budget={data} series={series} paceProjection={paceProjection}
-              locale={locale} text={text} />
+              schedulePending={schedulePending} scheduleError={scheduleError} locale={locale} text={text} />
           )}
         </>
       )}

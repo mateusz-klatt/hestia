@@ -1002,7 +1002,7 @@ describe("analytics views", () => {
     api.connections.mockImplementationOnce(() => ok({ connections: [connection], capabilities: analysis }));
     await click(button("Reload"));
     expect(button("Mortgages").nextElementSibling).toBe(button("Forecast"));
-    expect(api.forecast).toHaveBeenCalledWith(1, "PLN");
+    expect(api.forecast).toHaveBeenCalledWith(2, "PLN");
     await click(button("Forecast"));
     expect(button("Forecast").getAttribute("aria-pressed")).toBe("true");
     expect(api.forecast).toHaveBeenCalledTimes(2);

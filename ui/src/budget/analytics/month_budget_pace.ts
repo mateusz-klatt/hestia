@@ -53,21 +53,46 @@ function dueDate(schedule: AnalyticsMortgageSchedule, period: string): string | 
   return due;
 }
 
+interface Edge {
+  distance: number;
+  due: string;
+  hintIndex: number;
+  scheduleId: string;
+  hintKey: string;
+}
+
+function matchEdges(edges: Edge[], matchedHints: Set<number>, matchedSchedules: Set<string>): void {
+  edges.sort((a, b) => a.distance - b.distance || a.due.localeCompare(b.due)
+    || a.hintKey.localeCompare(b.hintKey) || a.scheduleId.localeCompare(b.scheduleId));
+  for (const edge of edges) {
+    if (matchedHints.has(edge.hintIndex) || matchedSchedules.has(edge.scheduleId)) continue;
+    matchedHints.add(edge.hintIndex);
+    matchedSchedules.add(edge.scheduleId);
+  }
+}
+
 function paidScheduledAmounts(budget: AnalyticsMonthlyBudget, data?: MonthPaceScheduleData): {
-  amounts: string[];
+  mortgageAmounts: string[];
+  recurringAmounts: string[];
   paidScheduleIds: ReadonlySet<string>;
 } {
-  if (data === undefined) return { amounts: [], paidScheduleIds: new Set() };
+  if (data === undefined) return { mortgageAmounts: [], recurringAmounts: [], paidScheduleIds: new Set() };
   const period = budget.period;
   const currency = budget.currency;
-  const schedules = data.mortgages.schedules.filter((schedule) => schedule.currency === currency);
+  const schedules = data.mortgages.schedules
+    .map((schedule) => ({
+      schedule,
+      due: schedule.enabled && schedule.currency === currency ? dueDate(schedule, period) : null,
+    }))
+    .filter((entry): entry is { schedule: AnalyticsMortgageSchedule; due: string } => entry.due !== null);
   const hints = data.recurring.hints.filter((hint) => hint.currency === currency
-    && hint.last_date.startsWith(`${period}-`) && highConfidence(hint));
-  const edges: { distance: number; due: string; hintIndex: number; scheduleId: string; hintKey: string }[] = [];
+    && hint.last_date.startsWith(`${period}-`)
+    && hint.last_date <= budget.evaluation_date
+    && highConfidence(hint));
+  const edges: Edge[] = [];
   hints.forEach((hint, hintIndex) => {
-    for (const schedule of schedules) {
-      const due = dueDate(schedule, period);
-      if (due === null || !sameAmount(hint.amount, schedule.amount)) continue;
+    for (const { schedule, due } of schedules) {
+      if (!sameAmount(hint.amount, schedule.amount)) continue;
       const distance = daysBetween(hint.last_date, due);
       if (distance <= 5) {
         edges.push({
@@ -77,24 +102,32 @@ function paidScheduledAmounts(budget: AnalyticsMonthlyBudget, data?: MonthPaceSc
       }
     }
   });
-  edges.sort((a, b) => a.distance - b.distance || a.due.localeCompare(b.due)
-    || a.hintKey.localeCompare(b.hintKey) || a.scheduleId.localeCompare(b.scheduleId));
   const matchedHints = new Set<number>();
   const matchedSchedules = new Set<string>();
-  for (const edge of edges) {
-    if (matchedHints.has(edge.hintIndex) || matchedSchedules.has(edge.scheduleId)) continue;
-    matchedHints.add(edge.hintIndex);
-    matchedSchedules.add(edge.scheduleId);
-  }
+  matchEdges(edges, matchedHints, matchedSchedules);
   const paidScheduleIds = new Set(matchedSchedules);
-  for (const schedule of schedules) {
+  for (const { schedule } of schedules) {
     if (schedule.paid_months.includes(period)) paidScheduleIds.add(schedule.id);
   }
+  // A mortgage explicitly marked paid in paid_months may have booked > 5 days from its due date;
+  // pair it 1:1 with a same-amount unmatched hint in this period so it is not subtracted twice.
+  const latePaidEdges: Edge[] = [];
+  hints.forEach((hint, hintIndex) => {
+    if (matchedHints.has(hintIndex)) return;
+    for (const { schedule, due } of schedules) {
+      if (!paidScheduleIds.has(schedule.id) || matchedSchedules.has(schedule.id)) continue;
+      if (!sameAmount(hint.amount, schedule.amount)) continue;
+      latePaidEdges.push({
+        distance: daysBetween(hint.last_date, due), due, hintIndex, scheduleId: schedule.id,
+        hintKey: `${hint.label}|${hint.label_source}|${hint.first_date}|${hint.last_date}`,
+      });
+    }
+  });
+  matchEdges(latePaidEdges, matchedHints, matchedSchedules);
   return {
-    amounts: [
-      ...schedules.filter((schedule) => paidScheduleIds.has(schedule.id)).map((schedule) => schedule.amount),
-      ...hints.filter((_, index) => !matchedHints.has(index)).map((hint) => hint.amount),
-    ],
+    mortgageAmounts: schedules.filter(({ schedule }) => paidScheduleIds.has(schedule.id))
+      .map(({ schedule }) => schedule.amount),
+    recurringAmounts: hints.filter((_, index) => !matchedHints.has(index)).map((hint) => hint.amount),
     paidScheduleIds,
   };
 }
@@ -150,12 +183,19 @@ export function buildMonthPaceProjection(
   const daysInMonth = Number(budget.end.slice(8, 10));
   const paid = paidScheduledAmounts(budget, data);
   const scheduled = scheduledItems(budget, data, paid.paidScheduleIds);
+  const matchedPassThrough = budget.pass_through?.matched ?? "0";
   const scale = decimalScale([
-    summary.spent, pace.budget, ...paid.amounts, ...scheduled.map((item) => item.amount),
+    summary.spent, pace.budget, matchedPassThrough,
+    ...paid.mortgageAmounts, ...paid.recurringAmounts, ...scheduled.map((item) => item.amount),
   ]);
   const spentUnits = decimalUnits(summary.spent, scale);
   const budgetUnits = decimalUnits(pace.budget, scale);
-  const paidUnits = paid.amounts.reduce((total, amount) => total + decimalUnits(amount, scale), 0n);
+  const paidMortgageUnits = paid.mortgageAmounts.reduce((total, amount) => total + decimalUnits(amount, scale), 0n);
+  const matchedUnits = decimalUnits(matchedPassThrough, scale);
+  // summary.spent already excludes rent-covered matched mortgage debits, so subtract only uncovered paid mortgage.
+  const uncoveredPaidMortgageUnits = paidMortgageUnits > matchedUnits ? paidMortgageUnits - matchedUnits : 0n;
+  const paidRecurringUnits = paid.recurringAmounts.reduce((total, amount) => total + decimalUnits(amount, scale), 0n);
+  const paidUnits = uncoveredPaidMortgageUnits + paidRecurringUnits;
   const discretionaryUnits = spentUnits > paidUnits ? spentUnits - paidUnits : 0n;
   const denominator = BigInt(cutoffDay);
   const itemsByDay = new Map<number, ScheduledPaceItem[]>();
@@ -192,7 +232,7 @@ export function buildMonthPaceProjection(
   const dailyRate = points.length === 0 ? null : ratio(discretionaryUnits, scale, cutoffDay);
   let status: AnalyticsMonthlyBudgetPace["status"];
   let exhaustionDay: number | null = null;
-  if (paid.amounts.length === 0 && scheduled.length === 0) {
+  if (paidUnits === 0n && scheduled.length === 0) {
     status = pace.status;
     exhaustionDay = pace.exhaustion_day;
   } else if (budgetUnits <= 0n) {
