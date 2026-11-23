@@ -164,6 +164,8 @@ def upgrade():
 
 
 def downgrade():
+    # Take a backup before downgrading: dropping shops, receipts and lines removes
+    # saved receipt rows while leaving budget_analytics_audit receipt rows intact.
     op.drop_index(_UQ_RECEIPTS_TX_LINK, table_name=_RECEIPTS)
     op.drop_index(_IX_RECEIPTS_OWNER_DATE, table_name=_RECEIPTS)
     op.drop_table(_LINES)

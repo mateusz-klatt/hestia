@@ -53,6 +53,14 @@ class ReceiptMigration0022Tests(unittest.TestCase):
         self.addCleanup(engine.dispose)
         return engine
 
+    def _assert_audit_rows(self, engine):
+        with engine.connect() as conn:
+            rows = conn.exec_driver_sql(
+                "SELECT subject_type, subject_id FROM budget_analytics_audit "
+                "ORDER BY subject_type, subject_id"
+            ).all()
+        self.assertEqual([tuple(row) for row in rows], [("category", "safe"), ("receipt", RECEIPT_A)])
+
     def test_receipt_migration_upgrade_downgrade(self):
         engine, _ = db.init_db(self.path)
         self._assert_clean(engine)
@@ -63,6 +71,10 @@ class ReceiptMigration0022Tests(unittest.TestCase):
                 "INSERT INTO budget_analytics_audit "
                 "(owner, subject_type, subject_id, action, before_json, after_json, changed_at) "
                 "VALUES ('owner', 'category', 'safe', 'create', 'null', '{}', 1.0)")
+            conn.exec_driver_sql(
+                "INSERT INTO budget_analytics_audit "
+                "(owner, subject_type, subject_id, action, before_json, after_json, changed_at) "
+                "VALUES ('owner', 'receipt', ?, 'confirm', 'null', '{}', 2.0)", (RECEIPT_A,))
 
         tables = self._tables(engine)
         self.assertTrue(_RECEIPT_TABLES <= tables)
@@ -138,14 +150,14 @@ class ReceiptMigration0022Tests(unittest.TestCase):
         self.assertFalse(_RECEIPT_TABLES & self._tables(engine))
         categories = {column["name"] for column in inspect(engine).get_columns("budget_categories")}
         self.assertIn("parent_id", categories)
-        with engine.connect() as conn:
-            self.assertEqual(conn.exec_driver_sql("SELECT COUNT(*) FROM budget_analytics_audit").scalar(), 1)
+        self._assert_audit_rows(engine)
 
         engine, _ = db.init_db(self.path)
         self._assert_clean(engine)
         self.assertEqual(self._revision(engine), "0022")
         with engine.connect() as conn:
             self.assertEqual(compare_metadata(MigrationContext.configure(conn), db.Base.metadata), [])
+        self._assert_audit_rows(engine)
 
     def test_upgrade_interruption_rolls_back_and_retries(self):
         from alembic import op
