@@ -192,7 +192,7 @@ services:
 
 `hestia/budget/receipt_parser.py` (pure Python, zero network/DB):
 
-- **Unicode & PAN redaction:** Normalizes `NFC` and constructs a diacritic-folded lookup key (`ą→a, ć→c, ę→e, ł→l, ń→n, ó→o, ś→s, ź→z, ż→z`). Before persisting `raw_ocr_text` on any path (`live_text`, `local_ocr`, `cloud_ai`), applies a **PAN redactor** masking 12–19 digit sequences, masked card PANs (`****1234`, `5351********1234`), and `NR KARTY` / `AID` terminal blocks. Redacted `raw_ocr_text` expires on the same **30-day** post-confirm deadline as the image (not cleared on confirm; `§5.2`).
+- **Unicode & PAN redaction:** Normalizes `NFC` and constructs a diacritic-folded lookup key (`ą→a, ć→c, ę→e, ł→l, ń→n, ó→o, ś→s, ź→z, ż→z`). Before persisting `raw_ocr_text` on any path (`live_text`, `local_ocr`, `cloud_ai`), applies a **PAN redactor** masking digit sequences in `PAN_WINDOW` (`(12, 19)` in `hestia/budget/receipt_parser.py`, shared with every Luhn and mask window), masked card PANs (`****1234`, `5351********1234`), and `NR KARTY` / `AID` terminal blocks. Redacted `raw_ocr_text` expires on the same **30-day** post-confirm deadline as the image (not cleared on confirm; `§5.2`).
 - **Bounded inputs:** Caps receipts at **`MAX_RECEIPT_LINES = 300`**, **`MAX_LINE_NAME_LEN = 128`**, **`MAX_SHOP_NAME_LEN = 128`**, and pasted text at **`32 KiB` (`32,768` B) / `500` lines** inside a **`48 KiB` (`49,152` B)** `parse-text` JSON body.
 - **Disjoint line representation & strict `confirm` validation:**
   - `line_kind = 'item'`: `gross_line_total >= 0`, `discount_amount >= 0`, `net_line_total = gross_line_total - discount_amount >= 0` (item-level `Rabat`/`Opust` lives **only** in `discount_amount`).
@@ -244,9 +244,11 @@ Every route uses a fixed static path and **exactly one HTTP method**, registered
 
 ### 5.1 Relational schema & Alembic migrations (`0020` + `0021`)
 
-New tables require owner-reviewed Alembic migrations matching `hestia/db.py` conventions (`PRAGMA foreign_keys=ON` at `hestia/db.py:757`, no `CASCADE`, strict `owner` FKs, exact decimal strings). **v1 (`0020`) must have zero references to v2 (`0021`) tables.**
+New tables require owner-reviewed Alembic migrations matching `hestia/db.py` conventions (`PRAGMA foreign_keys=ON` at `hestia/db.py:757`, no `CASCADE`, strict `owner` FKs, exact decimal strings). **v1 (`0020` in the original design) must have zero references to v2 product tables.**
 
-#### Migration `0020_budget_receipts` (v1)
+**Shipped revision:** `0022_budget_receipts` (`revision = "0022"`). `down_revision` is temporarily `"0020"` so this branch has a single Alembic head on current master. PR `#251` lands migration `0021` and OpenAPI `0.35.0` first. After `#251` merges, re-parent this revision with `down_revision = "0021"`. Holzera re-parents at merge. This contract is OpenAPI `0.36.0`. The SQL below is the v1 table set.
+
+#### Migration `0022_budget_receipts` (v1, shipped)
 
 ```sql
 -- 1. shop (table: budget_shops) — v1
@@ -325,7 +327,8 @@ CREATE TABLE budget_receipt_lines (
 );
 ```
 
-- **`0020` downgrade order (child-first):** drop indexes → `budget_receipt_lines` → `budget_receipts` → `budget_shops`.
+- **Accepted risk (`linked_entry_ref`):** the column is a foreign key to the ledger key `budget_transactions (account_id, entry_reference)`. It stores that raw provider key so the foreign key and `uq_budget_receipts_tx_link` can be enforced. Its exposure equals the ledger's: a reader who can see `budget_transactions.entry_reference` can see the same value here. The receipts API never returns it. `parse-text`, `detail`, `list`, `search`, candidate lists, and `confirm` return only the sha256 digest of the key.
+- **`0022` downgrade order (child-first):** drop indexes → `budget_receipt_lines` → `budget_receipts` → `budget_shops`. The accounts `(id, owner)` unique index added by this revision drops last.
 - **Runtime delete order:** inside `BEGIN IMMEDIATE`, `DELETE FROM budget_receipt_lines` → `DELETE FROM budget_receipts` → commit → unlink image file on disk (`ReceiptFiles.delete`).
 
 #### Migration `0021_budget_receipt_products` (v2)
@@ -469,7 +472,7 @@ Every PR must pass the full Python statement+branch coverage gate, UI `typecheck
 
 | Phase | Scope | Rough effort |
 | --- | --- | --- |
-| **v1a — Paste + Parser + Match + Review + Draft/Text Purge** | `receipt_parser.py` (with PAN redactor & strict `confirm` line/total validation), matcher (`±4`d, `CRDT`/`DBIT`, transfer exclusion) + `store.py`/`analytics_store.py` drift hook, `0020` migration, static `POST`/`GET` `/api/budget/receipts/*` (`48 KiB` `parse-text`, `128 KiB` `confirm`, `POST` `list`/`search`) + 48h draft & 30d `raw_ocr_text` purge sweep + `privacy-policy.html` update, mobile Paste + Review UI, tests #4, #7–#11, #12 (`v1a` scope), #13–#17 | **5.5–7.5 engineering days** |
+| **v1a — Paste + Parser + Match + Review + Draft/Text Purge** | `receipt_parser.py` (with PAN redactor & strict `confirm` line/total validation), matcher (`±4`d, `CRDT`/`DBIT`, transfer exclusion) + `store.py`/`analytics_store.py` drift hook, `0022` migration, static `POST`/`GET` `/api/budget/receipts/*` (`48 KiB` `parse-text`, `128 KiB` `confirm`, `POST` `list`/`search`) + 48h draft & 30d `raw_ocr_text` purge sweep + `privacy-policy.html` update, mobile Paste + Review UI, tests #4, #7–#11, #12 (`v1a` scope), #13–#17 | **5.5–7.5 engineering days** |
 | **v1b — Photo upload + Hardened RapidOCR sidecar** | Browser `<canvas>` resize, `client_max_size` + `Content-Length` + magic/4MP/frame/process-wide `Semaphore(1)` WebP pipeline, `ReceiptFiles` (`256 MiB` / `20`-draft quotas) + `30d` image purge extension, hardened `receipt-ocr` Compose sidecar (`127.0.0.1:8928`, shared secret `:ro` in both services), `GET .../image` + `cf-cache-status` check, tests #1–#3, #5, #12 (`v1b` image purge) | **4–5 engineering days** |
 | **v1c — Optional Cloud Vision opt-in** | Default-off configurable Cloud Vision adapter (Claude first), `0400` secret file, per-receipt UI opt-in + `privacy-policy.html` provider terms update, test #6 | **1.5–2 engineering days** |
 | **v2 — Product normalization & shop charts** | `0021` migration (`budget_normalized_products`, `budget_product_aliases`, `batch_alter_table`), exact `Decimal` unit extractor + alias matcher, shop comparison view + inline SVG charts | **5–7 engineering days** |
@@ -549,7 +552,7 @@ Resolution mapping for the 9 must-fix findings from the Codex PR `#243` design r
 - **Single mailbox + spouse forwards:** Only the **owner's** mailbox (`users/me`) is read. The spouse forwards her e-receipts to the owner's address; `v1d-a` unwraps forwarded mail in memory and recognizes the original merchant/sender only when the outer forward comes from a configured spouse address.
 - **Proof for larger expenses:** Larger expenses (`>= 500 PLN` default) require an attached invoice, receipt, payment-request email (e.g., Apple/ChatGPT `999.99 PLN` billed via `APPLE.COM/BILL`), or optional manual PDF/photo attachment (`v1d-b`).
 - **Opaque-debit enrichment + category tree:** Opaque `BLIK`, `Przelewy24` (`P24`), and `PayU` (plus `Tpay`, `Autopay`, `APPLE.COM/BILL`) debits are enriched by matching payment-confirmation emails on amount and date, then suggesting a category targeting **any non-archived node** (parent or leaf) in the `0020` `budget_categories` (`parent_id`) tree (`v1d-c`).
-- **v1a reuse:** Reuses `v1a` (`PR #238`, migration `0020`) `budget_receipts` storage, `redact_pan()`, `reconcile_receipt_links`, and `BEGIN IMMEDIATE` verification (`receipt_store.py`, `receipt_parser.py`, `receipt_reconcile.py`).
+- **v1a reuse:** Reuses `v1a` (`PR #238`, migration `0022`, temporarily parented on `0020`) `budget_receipts` storage, `redact_pan()`, `reconcile_receipt_links`, and `BEGIN IMMEDIATE` verification (`receipt_store.py`, `receipt_parser.py`, `receipt_reconcile.py`).
 
 **Runtime prerequisites (all default off):**
 
@@ -700,8 +703,8 @@ Distance `d` is `min(abs((date.fromisoformat(tx_d) - receipt_date).days) for tx_
 Hestia enforces a **single linear Alembic head** (`hestia/db.py:813`). Exact ordering across in-flight branches:
 
 1. `0019_budget_owner_inbox_reads` (`master` at `7f94dce`)
-2. `0020_budget_category_parent` (PR `#248`; `budget_categories.parent_id`; `down_revision = "0019"`). `#248` merges before `#238`.
-3. Receipts `v1a` (PR `#238`, designed in §5.1 as `0020_budget_receipts`) and household `P3` re-parent onto `0020` when they merge.
+2. `0020_budget_category_parent` (PR `#248`; `budget_categories.parent_id`; `down_revision = "0019"`). On master.
+3. `0021` one-off annotation label (PR `#251`, not on master yet). Receipts `v1a` ships as `0022_budget_receipts` (PR `#238`, designed in §5.1 as `0020_budget_receipts`). Its `down_revision` is temporarily `"0020"` so this branch stays a single head. Once `#251` merges, Holzera re-parents `0022` onto `"0021"`. Household `P3` re-parents onto the then-current head the same way. OpenAPI `0.35.0` is reserved for `#251`; this receipts contract is `0.36.0`.
 4. **`0023_budget_receipts_v1d_a` (`v1d-a`):** `down_revision` is the then-current head — creates `budget_gmail_state` + `budget_gmail_messages`, and alters `budget_receipts` (`batch_alter_table`) for `'imported'`, `'email'`/`'attachment'`, `document_kind`, `import_expires_at`.
 5. **`0024_budget_receipts_v1d_b` (`v1d-b`):** `down_revision = "0023"` — alters `budget_receipts` (`batch_alter_table`) to add `link_basis`, `attachment_relpath`, `attachment_mime`, `attachment_expires_at`, backfills `UPDATE budget_receipts SET link_basis = 'exact' WHERE linked_account_id IS NOT NULL`, and updates `ck_budget_receipts_link_fields`.
 6. **`v1d-c`:** **zero migration** (uses `0024` + `0020` `budget_categories` tree + `0015` `budget_annotations`).

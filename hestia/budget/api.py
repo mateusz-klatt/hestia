@@ -210,7 +210,7 @@ def _failure(exc, operation):
 
 
 def register(app, read_json_body, *, auth_enabled, session_secret, secure_cookie=lambda: False):
-    from . import analytics_api, consent_api
+    from . import analytics_api, consent_api, receipt_api
     async def private_headers(request, response):
         if request.path == PREFIX or request.path.startswith(PREFIX + "/"):
             response.headers.update(PRIVATE_HEADERS)
@@ -249,6 +249,7 @@ def register(app, read_json_body, *, auth_enabled, session_secret, secure_cookie
     consent_api.register(app, read_json_body, auth_enabled=auth_enabled, session_secret=session_secret,
                          secure_cookie=secure_cookie)
     analytics_api.register(app, read_json_body, auth_enabled=auth_enabled, session_secret=session_secret)
+    receipt_api.register(app, read_json_body, auth_enabled=auth_enabled, session_secret=session_secret)
     jobs.register(app, JOBS_KEY, auth_enabled=auth_enabled)
     for operation in READS:
         app.router.add_get(PREFIX + "/" + operation, handle, allow_head=False)

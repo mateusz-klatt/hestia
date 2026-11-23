@@ -184,7 +184,9 @@ class BudgetOpenApiTests(unittest.TestCase):
         posts = ("account-selection", "account-kind", "connection-state", "background-selection", "refresh")
         consent = {path: methods for path, methods in budget.items() if "/consent/" in path or "/enable-banking/" in path}
         analytics = {path: methods for path, methods in budget.items() if "/analytics/" in path}
-        stored = {path: methods for path, methods in budget.items() if path not in consent and path not in analytics}
+        receipts = {path: methods for path, methods in budget.items() if "/receipts/" in path}
+        stored = {path: methods for path, methods in budget.items()
+                  if path not in consent and path not in analytics and path not in receipts}
         self.assertEqual({path.rsplit("/", 1)[1] for path in stored},
                          {"connections", "accounts", "status", "transactions", "balances", "limits", "jobs", *posts})
         for path, methods in stored.items():
@@ -211,10 +213,49 @@ class BudgetOpenApiTests(unittest.TestCase):
             self.assertEqual(set(methods), {method})
             self.assertEqual(methods[method]["x-required-role"], "admin")
             self.assertIn("413", methods[method]["responses"])
-        self.assertEqual(document["info"]["version"], "0.35.0")
+        self.assertEqual(set(receipts), {"/api/budget/receipts/" + name for name in
+                         ("parse-text", "confirm", "list", "search", "detail", "image", "delete")})
+        for path, methods in receipts.items():
+            name = path.rsplit("/", 1)[1]
+            method = "get" if name in ("detail", "image") else "post"
+            self.assertEqual(set(methods), {method})
+            self.assertEqual(methods[method]["x-required-role"], "admin")
+            if method == "post":
+                self.assertIn("requestBody", methods[method])
+                self.assertIn("Content-Length", methods[method]["responses"]["411"]["description"])
+                self.assertIn("application/json", methods[method]["responses"]["415"]["description"])
+                self.assertIn("bytes", methods[method]["responses"]["413"]["description"])
+            else:
+                self.assertNotIn("411", methods[method]["responses"])
+                self.assertNotIn("415", methods[method]["responses"])
+                self.assertIn("budget_requires_sqlite_users", methods[method]["responses"]["409"]["description"])
+        self.assertIn("budget_receipt_stale_source",
+                      receipts["/api/budget/receipts/confirm"]["post"]["responses"]["409"]["description"])
+        self.assertIn("budget_receipt_conflict",
+                      receipts["/api/budget/receipts/delete"]["post"]["responses"]["409"]["description"])
+        self.assertNotIn("budget_receipt_stale_source",
+                         receipts["/api/budget/receipts/parse-text"]["post"]["responses"]["409"]["description"])
+        parse_limit = receipts["/api/budget/receipts/parse-text"]["post"]["responses"]["413"]["description"]
+        self.assertIn("49152", parse_limit)
+        self.assertIn("budget_receipt_quota_exceeded", parse_limit)
+        self.assertIn("131072", receipts["/api/budget/receipts/confirm"]["post"]["responses"]["413"]["description"])
+        self.assertIn("16384", receipts["/api/budget/receipts/list"]["post"]["responses"]["413"]["description"])
+        self.assertEqual(document["info"]["version"], "0.36.0")
+        detail = receipts["/api/budget/receipts/detail"]["get"]
+        self.assertNotIn("raw text", detail["summary"])
+        confirm = receipts["/api/budget/receipts/confirm"]["post"]
+        self.assertNotIn("30 days", confirm["summary"])
+        self.assertNotIn("redacted text", confirm["summary"])
+        self.assertIn("optional bank link", confirm["summary"])
+        self.assertIn("128 KiB", confirm["summary"])
+        detail_result = document["components"]["schemas"]["BudgetReceiptDetailResult"]
+        self.assertNotIn("candidates", detail_result["required"])
+        self.assertNotIn("default", detail_result["properties"]["candidates"])
         batch = analytics["/api/budget/analytics/rule-batch-preview"]["post"]["description"]
         self.assertIn("1..100", batch)
         self.assertIn("All-or-nothing", batch)
+        save = analytics["/api/budget/analytics/rule-batch-save"]["post"]["description"]
+        self.assertIn("MAX_RULES = 5000", save)
         mark_desc = analytics["/api/budget/analytics/inbox-mark"]["post"]["description"]
         for phrase in ("reads_version", "1..100", "500"):
             self.assertIn(phrase, mark_desc)
@@ -505,7 +546,10 @@ class BudgetOpenApiTests(unittest.TestCase):
                               "BudgetAnalyticsLegRequest", "BudgetAnalyticsSpendingLimitSaveRequest",
                               "BudgetAnalyticsMortgageSaveRequest", "BudgetAnalyticsMortgagePaymentSetRequest",
                               "BudgetAnalyticsInboxKeyRequest", "BudgetAnalyticsInboxMarkRequest",
-                              "BudgetAnalyticsTransactionsByKeysRequest"})
+                              "BudgetAnalyticsTransactionsByKeysRequest",
+                              "BudgetReceiptParseTextRequest", "BudgetReceiptConfirmRequest", "BudgetReceiptLineInput",
+                              "BudgetReceiptLinkRequest", "BudgetReceiptListRequest", "BudgetReceiptSearchRequest",
+                              "BudgetReceiptDeleteRequest"})
         for name, schema in schemas.items():
             if name in request_names:
                 self.assertIs(schema["additionalProperties"], False)
