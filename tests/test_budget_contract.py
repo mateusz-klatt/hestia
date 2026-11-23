@@ -211,7 +211,7 @@ class BudgetOpenApiTests(unittest.TestCase):
             self.assertEqual(set(methods), {method})
             self.assertEqual(methods[method]["x-required-role"], "admin")
             self.assertIn("413", methods[method]["responses"])
-        self.assertEqual(document["info"]["version"], "0.34.0")
+        self.assertEqual(document["info"]["version"], "0.35.0")
         batch = analytics["/api/budget/analytics/rule-batch-preview"]["post"]["description"]
         self.assertIn("1..100", batch)
         self.assertIn("All-or-nothing", batch)
@@ -354,7 +354,8 @@ class BudgetOpenApiTests(unittest.TestCase):
     def test_monthly_budget_schemas_pin_wire_fields_and_bounds(self):
         schemas = contract.build_openapi()["components"]["schemas"]
         optional_keys = {"Configuration": {"income_window"},
-                         "Coverage": {"pending_row_keys", "pending_row_keys_truncated"}}
+                         "Coverage": {"pending_row_keys", "pending_row_keys_truncated"},
+                         "CategorySpend": {"one_off", "one_off_key"}}
         for suffix, keys in {
             "": {"period", "start", "end", "cutoff", "current_month", "evaluated_at", "evaluation_date",
                  "evaluation_timezone", "currency", "available_currencies", "configuration", "coverage",
@@ -371,7 +372,8 @@ class BudgetOpenApiTests(unittest.TestCase):
             "Pace": {"basis", "budget", "status", "daily_rate", "projected_month_spend", "exhaustion_day"},
             "CategoryLimit": {"monthly_limit", "remaining", "over_by", "percent_used_floor",
                               "warning_percent", "status"},
-            "CategorySpend": {"category_id", "name", "archived", "expenses", "refunds", "net_spending", "limit"},
+            "CategorySpend": {"category_id", "name", "archived", "expenses", "refunds", "net_spending", "limit",
+                              "one_off", "one_off_key"},
             "PassThrough": {"rent_category_id", "mortgage_category_id", "rent_received", "mortgage_debits",
                             "mortgage_refunds", "unapplied_mortgage_refunds", "matched", "unapplied_rent",
                             "uncovered_mortgage"},
@@ -459,9 +461,10 @@ class BudgetOpenApiTests(unittest.TestCase):
             self.assertIn("monthly-budget/charts", responses["409"]["description"])
 
         schemas = doc["components"]["schemas"]
+        optional = {"SeriesCategory": {"name", "one_off", "one_off_key"}}
         for suffix, keys in {
             "DailyPoint": {"date", "cumulative_spent"},
-            "SeriesCategory": {"category_id", "net_spending"},
+            "SeriesCategory": {"category_id", "net_spending", "name", "one_off", "one_off_key"},
             "SeriesMonth": {"period", "has_activity", "is_current_month", "income_estimate_partial",
                             "provisional", "start_budget", "spent", "categories"},
             "CategoryLabel": {"category_id", "name", "archived"},
@@ -471,7 +474,7 @@ class BudgetOpenApiTests(unittest.TestCase):
             with self.subTest(schema=suffix):
                 schema = schemas["BudgetAnalyticsMonthlyBudget" + suffix]
                 self.assertEqual(set(schema["properties"]), keys)
-                self.assertEqual(set(schema["required"]), keys)
+                self.assertEqual(set(schema["required"]), keys - optional.get(suffix, set()))
                 self.assertNotIn("additionalProperties", schema)
         series_props = schemas["BudgetAnalyticsMonthlyBudgetSeries"]["properties"]
         self.assertEqual((series_props["daily"]["minItems"], series_props["daily"]["maxItems"]), (1, 31))

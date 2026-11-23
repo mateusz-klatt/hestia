@@ -6,11 +6,11 @@ import type { BudgetApi, BudgetResult } from "../api";
 import { formatAmount, when } from "../model";
 import type { BudgetAccount } from "../model";
 import { CategorySwatch } from "./category_badge";
-import { buildCategoryColors } from "./category_colors";
+import { buildCategoryColors, oneOffCategoryColor } from "./category_colors";
 import type { CategoryColorResolver } from "./category_colors";
 import { groupCategoryTotals, hasCategoryParents, visibleCategoryRows } from "./category_tree";
 import { clampPercentString, formatRatioHalfEven, isPositiveDecimal, isZero, labelOf,
-  monthLabel, monthlyBudgetCurrencies, pluralPl, ratioPercentFloor, shiftMonth, validCurrency } from "./model";
+  monthLabel, monthlyBudgetCurrencies, oneOffRowKey, pluralPl, ratioPercentFloor, shiftMonth, validCurrency } from "./model";
 import type { AnalyticsCategory, AnalyticsMonthlyBudget, AnalyticsMonthlyBudgetCharts,
   AnalyticsMonthlyBudgetExpectedIncome, AnalyticsMonthlyBudgetIncomeWindow, AnalyticsMonthlyBudgetPace,
   AnalyticsMonthlyBudgetPassThrough, AnalyticsMonthlyBudgetSeries } from "./model";
@@ -139,6 +139,7 @@ export const monthBudgetLabels = {
     chartCategoriesTitle: "Spending by category",
     chartIncomeSpendTitle: "Income and spending",
     otherCategory: "Other",
+    oneOffTag: "one-off",
     dateLabel: "Date",
     monthColumn: "Month",
     cumulativeSpentLabel: "Cumulative spending",
@@ -283,6 +284,7 @@ export const monthBudgetLabels = {
     chartCategoriesTitle: "Wydatki według kategorii",
     chartIncomeSpendTitle: "Wpływy i wydatki",
     otherCategory: "Pozostałe",
+    oneOffTag: "jednorazowe",
     dateLabel: "Data",
     monthColumn: "Miesiąc",
     cumulativeSpentLabel: "Wydatki narastająco",
@@ -544,22 +546,34 @@ function shownCategorySpend(
 ): {
   key: string; category_id: string | null; name: string | null; archived: boolean; depth: number;
   has_children: boolean; expenses: string; refunds: string; net_spending: string;
-  limit: CategorySpend["limit"]; tree: boolean;
+  limit: CategorySpend["limit"]; tree: boolean; one_off: boolean;
 }[] {
+  const oneOffs = rows.filter((row) => row.one_off === true).map((row, index) => ({
+    key: oneOffRowKey(row, index),
+    category_id: row.category_id, name: row.name, archived: row.archived, depth: 0, has_children: false,
+    expenses: row.expenses, refunds: row.refunds, net_spending: row.net_spending, limit: null,
+    tree: false, one_off: true,
+  }));
+  const regular = rows.filter((row) => row.one_off !== true);
   if (!hasCategoryParents(categories)) {
-    return rows.map((row, index) => ({
-      key: row.category_id ?? `uncategorised-${String(index)}`,
-      category_id: row.category_id, name: row.name, archived: row.archived, depth: 0, has_children: false,
-      expenses: row.expenses, refunds: row.refunds, net_spending: row.net_spending, limit: row.limit, tree: false,
-    }));
+    return [
+      ...regular.map((row, index) => ({
+        key: oneOffRowKey(row, index),
+        category_id: row.category_id, name: row.name, archived: row.archived, depth: 0, has_children: false,
+        expenses: row.expenses, refunds: row.refunds, net_spending: row.net_spending, limit: row.limit,
+        tree: false, one_off: false,
+      })),
+      ...oneOffs,
+    ];
   }
-  const limits = new Map(rows.map((row) => [row.category_id, row.limit]));
-  return visibleCategoryRows(groupCategoryTotals(rows, categories, locale), collapsed).map((row) => ({
+  const limits = new Map(regular.map((row) => [row.category_id, row.limit]));
+  const treeRows = visibleCategoryRows(groupCategoryTotals(regular, categories, locale), collapsed).map((row) => ({
     key: row.category_id ?? "uncategorised",
     category_id: row.category_id, name: row.name, archived: row.archived, depth: row.depth,
     has_children: row.has_children, expenses: row.expenses, refunds: row.refunds, net_spending: row.net_spending,
-    limit: limits.get(row.category_id) ?? null, tree: true,
+    limit: limits.get(row.category_id) ?? null, tree: true, one_off: false,
   }));
+  return [...treeRows, ...oneOffs];
 }
 
 export function MonthBudgetView({ api, accounts, text, locale, revision, onAccessLoss, onOpenMonth }: MonthBudgetViewProps) {
@@ -925,14 +939,17 @@ function ReadyDashboard({ data, series, paceSchedule, categoryMap, categories, t
                   </thead>
                   <tbody>
                     {shownCategorySpend(data.category_spend, categories, locale, collapsed).map((row) => {
-                      const label = row.category_id === null
-                        ? text.uncategorised
-                        : (row.name ?? categoryMap.get(row.category_id) ?? text.unknownCategory);
+                      const oneOff = row.one_off;
+                      const label = oneOff
+                        ? (row.name ?? text.uncategorised)
+                        : row.category_id === null
+                          ? text.uncategorised
+                          : (row.name ?? categoryMap.get(row.category_id) ?? text.unknownCategory);
                       const categoryId = row.category_id;
                       const closed = categoryId !== null && collapsed.has(categoryId);
                       return (
                         <tr key={row.key} data-depth={row.tree ? row.depth : undefined}
-                          className={categoryId === null ? "is-uncategorised" : undefined}>
+                          className={oneOff ? "budget-one-off" : categoryId === null ? "is-uncategorised" : undefined}>
                           <th scope="row">
                             {row.tree && row.has_children && categoryId !== null ? (
                               <button type="button" className="budget-tree-toggle" aria-expanded={!closed}
@@ -941,8 +958,9 @@ function ReadyDashboard({ data, series, paceSchedule, categoryMap, categories, t
                                 {closed ? "▸" : "▾"}
                               </button>
                             ) : null}
-                            <CategorySwatch color={categoryColors.get(categoryId)} />
+                            <CategorySwatch color={oneOff ? oneOffCategoryColor(categoryColors, categoryId) : categoryColors.get(categoryId)} />
                             {label}
+                            {oneOff ? <small className="budget-one-off-tag">{text.oneOffTag}</small> : null}
                             {row.archived ? <small className="budget-muted"> ({text.archived})</small> : null}
                           </th>
                           <td>{money(row.expenses)}</td>

@@ -107,6 +107,8 @@
 .budget-entry-facts { display: flex; flex-wrap: wrap; align-items: center; gap: .3rem .6rem; font-size: .8rem; color: var(--fg-soft); }
 .budget-entry-facts button { min-height: 2rem; padding-inline: .6rem; }
 .budget-chip { border: 1px solid var(--border); border-radius: 999px; padding: .05rem .5rem; color: var(--fg); background: var(--bg, transparent); }
+.budget-one-off { font-style: italic; }
+.budget-one-off-tag { font-style: normal; font-size: .75rem; margin-left: .35rem; }
 .budget-cat-swatch { display: inline-block; width: .72rem; height: .72rem; border-radius: .2rem; vertical-align: -0.08em; margin-inline-end: .4rem; flex: 0 0 auto; border: 1px solid color-mix(in srgb, var(--fg) 24%, transparent); }
 .budget-cat-badge { border-color: color-mix(in srgb, currentColor 22%, transparent); font-weight: 500; }
 .budget-entry-editor { display: flex; flex-wrap: wrap; gap: .5rem; align-items: end; padding: .4rem 0; }

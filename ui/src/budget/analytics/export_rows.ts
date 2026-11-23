@@ -1,6 +1,7 @@
 // Browser export of analytics entries. Category cells are the stored leaf name only: names are globally unique,
 // and a parent path is never built. Amounts stay dot-decimal strings for the workbook; CSV rewrites the amount
 // column with a decimal comma. A debit indicator supplies the sign. The booking column follows effective_date.
+// The last column is the annotation's one-off label, blank when it is unset.
 import type { BudgetAccount, BudgetConnection } from "../model";
 import { transactionText } from "../model";
 import { accountName, counterparty } from "./model";
@@ -15,7 +16,7 @@ export const exportLabels = {
     columns: {
       bookingDate: "Booking date", transactionDate: "Transaction date", account: "Account", description: "Description",
       counterparty: "Counterparty", amount: "Amount", currency: "Currency", category: "Category", type: "Type",
-      status: "Status",
+      status: "Status", oneOffLabel: "One-off label",
     },
     types: {
       expense: "expense", income: "income", excluded: "excluded", refund: "refund", transfer: "own transfer",
@@ -31,7 +32,7 @@ export const exportLabels = {
     columns: {
       bookingDate: "Data", transactionDate: "Data transakcji", account: "Konto", description: "Opis",
       counterparty: "Kontrahent", amount: "Kwota", currency: "Waluta", category: "Kategoria", type: "Typ",
-      status: "Status",
+      status: "Status", oneOffLabel: "Etykieta jednorazowa",
     },
     types: {
       expense: "wydatek", income: "przychód", excluded: "wykluczone", refund: "zwrot", transfer: "przelew własny",
@@ -61,7 +62,7 @@ export function exportHeaders(text: ExportLabels): string[] {
   const columns = text.columns;
   return [
     columns.bookingDate, columns.transactionDate, columns.account, columns.description, columns.counterparty,
-    columns.amount, columns.currency, columns.category, columns.type, columns.status,
+    columns.amount, columns.currency, columns.category, columns.type, columns.status, columns.oneOffLabel,
   ];
 }
 
@@ -94,6 +95,8 @@ export interface ExportRecord {
   category: string;
   type: string;
   status: string;
+  /** Annotation label, or "" when the entry has none. */
+  oneOffLabel: string;
   bookingIsDate: boolean;
   transactionIsDate: boolean;
   amountIsNumber: boolean;
@@ -147,6 +150,12 @@ function leafCategory(categories: ReadonlyMap<string, string>, id: string | null
   return categories.get(id) ?? fallback;
 }
 
+/** The stored one-off label. Null and a missing field both export as a blank cell. */
+function exportOneOffLabel(row: AnalyticsTransaction): string {
+  const value = row.annotation.label;
+  return typeof value === "string" ? value : "";
+}
+
 export function mapExportRow(row: AnalyticsTransaction, context: ExportContext): ExportRecord {
   const bookingDate = row.booking_date ?? row.value_date ?? "";
   const transactionDate = row.transaction_date ?? "";
@@ -161,6 +170,7 @@ export function mapExportRow(row: AnalyticsTransaction, context: ExportContext):
     category: leafCategory(context.categories, row.effective.category_id, context.text.uncategorised),
     type: exportTypeLabel(row.effective.kind, context.text),
     status: exportStatus(row.status, context.text),
+    oneOffLabel: exportOneOffLabel(row),
     bookingIsDate: isExcelDate(bookingDate),
     transactionIsDate: isExcelDate(transactionDate),
     amountIsNumber: amount.numeric,
@@ -170,7 +180,7 @@ export function mapExportRow(row: AnalyticsTransaction, context: ExportContext):
 export function exportCells(record: ExportRecord): string[] {
   return [
     record.bookingDate, record.transactionDate, record.account, record.description, record.counterparty,
-    record.amount, record.currency, record.category, record.type, record.status,
+    record.amount, record.currency, record.category, record.type, record.status, record.oneOffLabel,
   ];
 }
 

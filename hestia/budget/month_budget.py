@@ -723,6 +723,9 @@ class _BucketAccum:
     mortgage_refund_legs: list[_MortgageLeg] = field(default_factory=list)
     ordinary_expenses: dict[str | None, list[str]] = field(default_factory=lambda: defaultdict(list))
     ordinary_refunds: dict[str | None, list[str]] = field(default_factory=lambda: defaultdict(list))
+    # (label, category_id) amounts that also sit in the ordinary maps.
+    # Mortgage pass-through legs are not recorded here. ``members`` are (account_id, entry_reference).
+    one_offs: dict[tuple[str, str | None], dict[str, list]] = field(default_factory=dict)
     observed_spend_categories: set[str | None] = field(default_factory=set)
 
     def record_pending(self, row_key: str) -> None:
@@ -802,6 +805,93 @@ def _bucket_category_totals(
     return pass_through_wire, adj_exp_dates, adj_ref_dates, category_rows, start_budget, spent
 
 
+def _note_one_off(bucket: _BucketAccum, annotation: Mapping, cat_id: str | None, amount: str, *,
+                  refund: bool, account_id: str, entry_reference: str) -> None:
+    """Remember a labelled ordinary expense or refund. The amount stays in the ordinary map too."""
+    label = core.active_one_off_label(annotation, amount)
+    if not isinstance(label, str):
+        return
+    slot = bucket.one_offs.setdefault((label, cat_id), {"expenses": [], "refunds": [], "members": []})
+    slot["refunds" if refund else "expenses"].append(amount)
+    slot["members"].append((account_id, entry_reference))
+
+
+def _zero_money(value: str) -> bool:
+    return core.compare_money(value, _ZERO) == 0
+
+
+def _one_off_identity(members, secret: bytes | None) -> str:
+    """HMAC row key. A missing secret is stored-data failure, not a reversible hash."""
+    try:
+        return core.one_off_key(members, secret)
+    except core.AnalyticsError:
+        raise MonthDataError() from None
+
+
+def _split_labelled(
+    category_rows: Sequence[tuple[str | None, str, str, str]],
+    one_offs: Mapping[tuple[str, str | None], Mapping[str, Sequence]],
+    *,
+    observed: set[str | None] | None = None,
+    keep_ids: set[str | None] | frozenset[str | None] = frozenset(),
+    one_off_secret: bytes | None = None,
+) -> list[dict]:
+    """Move labelled nets out of their category. The sum of nets stays equal to the category rows.
+
+    A category row disappears only when a label took every remaining expense and refund and the
+    category is not in ``keep_ids`` (an active limit still shows a zero row). A genuine zero stays.
+    Mortgage pass-through rows are untouched because those legs are never recorded in ``one_offs``.
+    """
+    taken_exp: dict[str | None, str] = {}
+    taken_ref: dict[str | None, str] = {}
+    prepared: list[tuple] = []
+    for (label, cat_id), slot in one_offs.items():
+        exp = _sum_money_checked(slot.get("expenses", ()))
+        ref = _sum_money_checked(slot.get("refunds", ()))
+        taken_exp[cat_id] = _sum_money_checked((taken_exp.get(cat_id, _ZERO), exp))
+        taken_ref[cat_id] = _sum_money_checked((taken_ref.get(cat_id, _ZERO), ref))
+        prepared.append((label, cat_id, exp, ref, tuple(slot.get("members", ()))))
+    result: list[dict] = []
+    for cat_id, exp_total, ref_total, _net_total in category_rows:
+        if observed is not None and cat_id not in observed:
+            continue
+        if cat_id in taken_exp:
+            exp_total = _sub_money(exp_total, taken_exp.get(cat_id, _ZERO))
+            ref_total = _sub_money(ref_total, taken_ref.get(cat_id, _ZERO))
+            if _zero_money(exp_total) and _zero_money(ref_total) and cat_id not in keep_ids:
+                continue
+        result.append({
+            "category_id": cat_id, "name": None, "one_off": False, "one_off_key": None,
+            "expenses": exp_total, "refunds": ref_total, "net_spending": _sub_money(exp_total, ref_total),
+        })
+    for label, cat_id, exp, ref, members in sorted(prepared, key=lambda item: (item[0], item[1] is None, item[1] or "")):
+        if observed is not None and cat_id not in observed:
+            continue
+        if _zero_money(exp) and _zero_money(ref):
+            continue
+        result.append({
+            "category_id": cat_id, "name": label, "one_off": True,
+            "one_off_key": _one_off_identity(members, one_off_secret),
+            "expenses": exp, "refunds": ref, "net_spending": _sub_money(exp, ref),
+        })
+    return result
+
+
+def _series_categories(
+    category_rows: Sequence[tuple[str | None, str, str, str]],
+    one_offs: Mapping[tuple[str, str | None], Mapping[str, Sequence]],
+    *,
+    observed: set[str | None] | None = None,
+    one_off_secret: bytes | None = None,
+) -> list[dict]:
+    """Chart rows for ``_split_labelled``. Names of ordinary categories stay on ``category_labels``."""
+    return [
+        {"category_id": row["category_id"], "name": row["name"], "one_off": row["one_off"],
+         "one_off_key": row["one_off_key"], "net_spending": row["net_spending"]}
+        for row in _split_labelled(category_rows, one_offs, observed=observed, one_off_secret=one_off_secret)
+    ]
+
+
 def _build_daily_series(
     start: str,
     cutoff: str,
@@ -841,6 +931,7 @@ def _evaluate_monthly_budget_core(
     account_kinds: Mapping[str, str],
     settings: MonthBudgetSettings | None,
     history: int | None,
+    one_off_secret: bytes | None = None,
 ) -> tuple[dict, dict | None]:
     requested_period, target_currency = validate_monthly_budget_query(period, currency)
     evaluation_date, current_month = warsaw_date(evaluated_at)
@@ -959,6 +1050,8 @@ def _evaluate_monthly_budget_core(
                         )
                     else:
                         cal_bucket.ordinary_expenses[cat_id].append(amount)
+                        _note_one_off(cal_bucket, row["annotation"], cat_id, amount, refund=False,
+                                      account_id=acct_id, entry_reference=row["entry_reference"])
                         if include_series and cal_period == effective_period:
                             ordinary_by_date[report_date].append(amount)
                 elif direction == "CRDT":
@@ -974,6 +1067,8 @@ def _evaluate_monthly_budget_core(
                             )
                         else:
                             cal_bucket.ordinary_refunds[cat_id].append(amount)
+                            _note_one_off(cal_bucket, row["annotation"], cat_id, amount, refund=True,
+                                          account_id=acct_id, entry_reference=row["entry_reference"])
                             if include_series and cal_period == effective_period:
                                 ordinary_by_date[report_date].append(core.negate_money(amount))
                     elif kind == "income" and rent_cat_id is not None and cat_id == rent_cat_id:
@@ -1051,24 +1146,37 @@ def _evaluate_monthly_budget_core(
     pass_through_wire, adj_exp_dates, adj_ref_dates, selected_rows, start_budget, spent = _bucket_category_totals(
         selected_bucket, pass_through_cfg, extra_categories=set(active_limits),
     )
-    category_spend: list[dict] = []
-    direct_amounts = {cat_id: (exp_total, ref_total) for cat_id, exp_total, ref_total, _net in selected_rows}
+    # The split row shows only the remainder. The badge counts the full category total,
+    # and a parent limit adds descendant totals the same way. Those are the amounts an
+    # unlabelled month would use: a one-off label is not a budget exemption. One-off rows
+    # carry no limit, so the badge is not shown twice.
+    full_by_category = {cat_id: (exp, ref) for cat_id, exp, ref, _net in selected_rows}
     child_map = _category_children(categories_by_id)
-    for cat_id, exp_total, ref_total, net_total in selected_rows:
+    category_spend: list[dict] = []
+    for item in _split_labelled(
+        selected_rows, selected_bucket.one_offs, keep_ids=set(active_limits), one_off_secret=one_off_secret,
+    ):
+        cat_id = item["category_id"]
         category_meta = None if cat_id is None else categories_by_id[cat_id]
-        limit_exp, limit_ref = exp_total, ref_total
-        if cat_id is not None and cat_id in active_limits:
-            rolled = _subtree_limit_amounts(cat_id, direct_amounts, child_map)
-            if rolled is not None:
-                limit_exp, limit_ref = rolled
+        if item["one_off"] or cat_id is None:
+            limit = None
+        else:
+            full_expenses, full_refunds = full_by_category[cat_id]
+            if cat_id in active_limits:
+                rolled = _subtree_limit_amounts(cat_id, full_by_category, child_map)
+                if rolled is not None:
+                    full_expenses, full_refunds = rolled
+            limit = _evaluate_category_limit(full_expenses, full_refunds, active_limits.get(cat_id))
         category_spend.append({
             "category_id": cat_id,
-            "name": None if category_meta is None else category_meta["name"],
+            "name": item["name"] if item["one_off"] else (None if category_meta is None else category_meta["name"]),
             "archived": False if category_meta is None else category_meta["archived"],
-            "expenses": exp_total,
-            "refunds": ref_total,
-            "net_spending": net_total,
-            "limit": None if cat_id is None else _evaluate_category_limit(limit_exp, limit_ref, active_limits.get(cat_id)),
+            "expenses": item["expenses"],
+            "refunds": item["refunds"],
+            "net_spending": item["net_spending"],
+            "limit": limit,
+            "one_off": item["one_off"],
+            "one_off_key": item["one_off_key"],
         })
 
     remaining = _sub_money(start_budget, spent)
@@ -1106,16 +1214,15 @@ def _evaluate_monthly_budget_core(
         bucket = buckets[p]
         if p == effective_period:
             b_start_budget, b_spent = start_budget, spent
-            b_categories = [
-                {"category_id": cat_id, "net_spending": net_total}
-                for cat_id, _, _, net_total in selected_rows
-                if cat_id in bucket.observed_spend_categories
-            ]
+            b_categories = _series_categories(
+                selected_rows, bucket.one_offs, observed=bucket.observed_spend_categories,
+                one_off_secret=one_off_secret,
+            )
             b_provisional = provisional
             b_partial = expected_income["status"] == "partial"
         else:
             _, _, _, b_rows, b_start_budget, b_spent = _bucket_category_totals(bucket, pass_through_cfg)
-            b_categories = [{"category_id": cat_id, "net_spending": net_total} for cat_id, _, _, net_total in b_rows]
+            b_categories = _series_categories(b_rows, bucket.one_offs, one_off_secret=one_off_secret)
             b_provisional = bucket.pending_transfer_rows > 0 or bool(scan_limited and bucket.has_affecting_unexcluded)
             b_partial = False
         for item in b_categories:
@@ -1154,13 +1261,14 @@ def evaluate_monthly_budget(
     account_component_timestamps: Mapping[str, int | float | None],
     account_kinds: Mapping[str, str],
     settings: MonthBudgetSettings | None,
+    one_off_secret: bytes | None = None,
 ) -> dict:
     """Pure single-snapshot evaluation for ``GET /api/budget/analytics/monthly-budget``."""
     budget, _ = _evaluate_monthly_budget_core(
         period=period, currency=currency, evaluated_at=evaluated_at, transactions=transactions,
         transfers=transfers, scan_limited=scan_limited, categories=categories, rules=rules,
         identities=identities, limits=limits, account_component_timestamps=account_component_timestamps,
-        account_kinds=account_kinds, settings=settings, history=None,
+        account_kinds=account_kinds, settings=settings, history=None, one_off_secret=one_off_secret,
     )
     return budget
 
@@ -1182,6 +1290,7 @@ def evaluate_monthly_budget_charts(
     account_component_timestamps: Mapping[str, int | float | None],
     account_kinds: Mapping[str, str],
     settings: MonthBudgetSettings | None,
+    one_off_secret: bytes | None = None,
 ) -> dict:
     """Pure single-snapshot evaluation for ``GET /api/budget/analytics/monthly-budget/charts``."""
     if type(history) is not int or history not in ALLOWED_HISTORY_MONTHS:
@@ -1190,6 +1299,6 @@ def evaluate_monthly_budget_charts(
         period=period, currency=currency, evaluated_at=evaluated_at, transactions=transactions,
         transfers=transfers, scan_limited=scan_limited, categories=categories, rules=rules,
         identities=identities, limits=limits, account_component_timestamps=account_component_timestamps,
-        account_kinds=account_kinds, settings=settings, history=history,
+        account_kinds=account_kinds, settings=settings, history=history, one_off_secret=one_off_secret,
     )
     return {"budget": budget, "series": series}

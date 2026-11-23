@@ -18,9 +18,9 @@ from ..db import BudgetMortgagePayment as MortgagePaymentRow, BudgetMortgageSche
 from ..db import BudgetConnection as Connection, BudgetRule as Rule, BudgetRulePreview as Preview
 from ..db import BudgetTransaction as Transaction, BudgetTransactionMetadata as Metadata
 from ..db import BudgetTransferDecision as Decision, BudgetTransferLeg as Leg
-from .analytics_core import (AnalyticsError, KINDS, compare_money, compatible_kind, compile_rules,
-                             effective_date, financial_fingerprint, first_matching_rule, match_texts,
-                             pair_fingerprint)
+from .analytics_core import (AnalyticsError, KINDS, clean_one_off_label, compare_money, compatible_kind,
+                             compile_rules, effective_date, financial_fingerprint, first_matching_rule,
+                             match_texts, pair_fingerprint)
 from .client import _reject_constant, _unique_error_fields
 from .mortgage_reminders import (MAX_PAID_MONTHS as MAX_MORTGAGE_PAID_MONTHS, MAX_SCHEDULES as MAX_MORTGAGE_SCHEDULES,
                                  PRIVATE_DESTINATIONS as MORTGAGE_DESTINATIONS, MortgageInputError,
@@ -55,6 +55,19 @@ def _json(value):
 
 def _dict(row, fields):
     return {key: getattr(row, key) for key in fields}
+
+
+def _annotation_wire(row):
+    """API shape. Includes the owner-private label and never a log line."""
+    return {**_dict(row, _ANNOTATION_FIELDS), "label": row.label}
+
+
+def _annotation_audit(row):
+    """Audit allowlist. Records whether a label is set and never the text."""
+    return {**_dict(row, _ANNOTATION_FIELDS), "has_label": row.label is not None}
+
+
+_KEEP_LABEL = object()
 
 
 def _text(value, limit=80):
@@ -430,10 +443,12 @@ class BudgetAnalyticsStore(BudgetHTTPStore):
                 row, clean_month, paid, self._mortgage_paid_months(session, owner, row.id), True)
 
     def annotate(self, owner, account_id, entry_reference, *, mode, category_id, kind, expected_version,
-                 expected_fingerprint):
+                 expected_fingerprint, label=_KEEP_LABEL):
         if (mode not in ("auto", "manual") or not isinstance(kind, str) or kind not in KINDS
                 or (mode == "auto" and (category_id is not None or kind != "auto"))):
             raise AnalyticsError()
+        # An omitted label is left alone. Null and blank clear. Failures use a fixed code and never echo the text.
+        clean_label = _KEEP_LABEL if label is _KEEP_LABEL else clean_one_off_label(label)
         with self.transaction() as session:
             self._owner(session, owner)
             _, payload, fingerprint = self._transaction(session, owner, account_id, entry_reference)
@@ -445,23 +460,27 @@ class BudgetAnalyticsStore(BudgetHTTPStore):
             if row is not None and row.owner != owner:
                 raise AnalyticsError("budget_analytics_not_found", 404)
             _version(0 if row is None else row.version, expected_version)
-            before = None if row is None else _dict(row, _ANNOTATION_FIELDS)
-            desired = mode, category_id, kind, fingerprint
-            if row is None and mode == "auto":
+            before = None if row is None else _annotation_audit(row)
+            next_label = (None if row is None else row.label) if clean_label is _KEEP_LABEL else clean_label
+            desired = mode, category_id, kind, fingerprint, next_label
+            if row is None and mode == "auto" and next_label is None:
                 return {"account_id": account_id, "entry_reference": entry_reference, "mode": "auto",
                         "category_id": None, "kind": "auto", "ledger_fingerprint": fingerprint, "version": 0,
-                        "updated_at": None, "changed": False}
-            if row is not None and (row.mode, row.category_id, row.kind, row.ledger_fingerprint) == desired:
-                return {**before, "changed": False}
+                        "updated_at": None, "label": None, "changed": False}
+            if row is not None and (row.mode, row.category_id, row.kind, row.ledger_fingerprint, row.label) == desired:
+                return {**_annotation_wire(row), "changed": False}
             if row is None:
-                row = Annotation(account_id=account_id, entry_reference=entry_reference, owner=owner, version=0)
+                row = Annotation(account_id=account_id, entry_reference=entry_reference, owner=owner, version=0,
+                                 label=next_label)
                 session.add(row)
-            row.mode, row.category_id, row.kind, row.ledger_fingerprint = desired
+            row.mode, row.category_id, row.kind, row.ledger_fingerprint = desired[:4]
+            row.label = next_label
             row.version += 1
             row.updated_at = self._now()
             session.flush()
-            result = _dict(row, _ANNOTATION_FIELDS)
-            self._analytics_audit(session, owner, "annotation", _json([account_id, entry_reference]), "set", before, result)
+            result = _annotation_wire(row)
+            self._analytics_audit(session, owner, "annotation", _json([account_id, entry_reference]), "set",
+                                  before, _annotation_audit(row))
             return {**result, "changed": True}
 
     def rules(self, owner):

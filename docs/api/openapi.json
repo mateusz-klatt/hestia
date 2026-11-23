@@ -645,6 +645,17 @@
             "title": "Kind",
             "type": "string"
           },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          },
           "mode": {
             "title": "Mode",
             "type": "string"
@@ -717,6 +728,18 @@
             "title": "Kind",
             "type": "string"
           },
+          "label": {
+            "anyOf": [
+              {
+                "maxLength": 80,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          },
           "mode": {
             "enum": [
               "auto",
@@ -784,6 +807,17 @@
           "kind": {
             "title": "Kind",
             "type": "string"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
           },
           "ledger_fingerprint": {
             "title": "Ledger Fingerprint",
@@ -1086,6 +1120,22 @@
           "net_spending": {
             "title": "Net Spending",
             "type": "string"
+          },
+          "one_off": {
+            "title": "One Off",
+            "type": "boolean"
+          },
+          "one_off_key": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "One Off Key"
           },
           "refunds": {
             "title": "Refunds",
@@ -2740,6 +2790,22 @@
             "title": "Net Spending",
             "type": "string"
           },
+          "one_off": {
+            "title": "One Off",
+            "type": "boolean"
+          },
+          "one_off_key": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "One Off Key"
+          },
           "refunds": {
             "maxLength": 192,
             "title": "Refunds",
@@ -3200,10 +3266,37 @@
             ],
             "title": "Category Id"
           },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
           "net_spending": {
             "maxLength": 192,
             "title": "Net Spending",
             "type": "string"
+          },
+          "one_off": {
+            "title": "One Off",
+            "type": "boolean"
+          },
+          "one_off_key": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "One Off Key"
           }
         },
         "required": [
@@ -10895,7 +10988,7 @@
   "info": {
     "description": "Local cloud-free smart-home control API. Generated from hestia/api_contract.py \u2014 do not edit by hand; run `python -m hestia.api_contract`.",
     "title": "hestia API",
-    "version": "0.34.0"
+    "version": "0.35.0"
   },
   "openapi": "3.1.0",
   "paths": {

@@ -11,7 +11,8 @@ import { accountName } from "./model";
 import { ExportMenu } from "./export_menu";
 import {
   EXPORT_PAGE_SIZE, ExportCancelled, ExportSnapshotChanged, buildCsv, categoryIndex, csvAmount, csvField, exportBasename,
-  exportHeaders, exportLabels, exportStatus, exportTypeLabel, mapExportRow, monthsOfYear, signedAmount, walkTransactions,
+  exportCells, exportHeaders, exportLabels, exportStatus, exportTypeLabel, mapExportRow, monthsOfYear, signedAmount,
+  walkTransactions,
 } from "./export_rows";
 import type { ExportContext, ExportRecord } from "./export_rows";
 import { buildWorkbook, crc32, excelSerial, sheetTitle } from "./xlsx_writer";
@@ -96,11 +97,35 @@ describe("transaction export rows", () => {
     expect(exportLabels.pl.fetching(4)).toBe("Pobieranie… 4");
     expect(exportHeaders(text)).toEqual([
       "Data", "Data transakcji", "Konto", "Opis", "Kontrahent", "Kwota", "Waluta", "Kategoria", "Typ", "Status",
+      "Etykieta jednorazowa",
     ]);
+    expect(exportHeaders(exportLabels.en).at(-1)).toBe("One-off label");
     expect(monthsOfYear("2026")).toEqual([
       "2026-01", "2026-02", "2026-03", "2026-04", "2026-05", "2026-06",
       "2026-07", "2026-08", "2026-09", "2026-10", "2026-11", "2026-12",
     ]);
+  });
+
+  it("writes the one-off label from the annotation and leaves the cell blank when it is unset", () => {
+    const labelled = mapExportRow(row({
+      annotation: { version: 1, mode: "manual", category_id: "rent", kind: "expense", stale: false, label: "Remont lazienki" },
+    }), context);
+    expect(labelled.oneOffLabel).toBe("Remont lazienki");
+    expect(exportCells(labelled).at(-1)).toBe("Remont lazienki");
+    const cleared = mapExportRow(row({
+      annotation: { version: 1, mode: "manual", category_id: "rent", kind: "expense", stale: false, label: null },
+    }), context);
+    expect(cleared.oneOffLabel).toBe("");
+    expect(mapExportRow(row(), context).oneOffLabel).toBe("");
+    const risky = mapExportRow(row({
+      annotation: { version: 1, mode: "manual", category_id: "rent", kind: "expense", stale: false, label: "=cmd" },
+    }), context);
+    const csv = buildCsv(exportHeaders(text), [labelled, risky, cleared]);
+    const header = csv.replace(/^\uFEFF/, "").split("\r\n")[0] ?? "";
+    expect(header.split(";").at(-1)).toBe("Etykieta jednorazowa");
+    expect(csv).toContain(";Remont lazienki\r\n");
+    expect(csv).toContain(";'=cmd\r\n");
+    expect(exportCells(cleared).at(-1)).toBe("");
   });
 });
 
@@ -208,7 +233,10 @@ function unzip(bytes: Uint8Array): Map<string, string> {
 describe("transaction export xlsx", () => {
   it("packs a stored workbook whose sheet has numeric amounts, dates and a frozen header", () => {
     expect(crc32(new TextEncoder().encode("123456789"))).toBe(0xcbf43926);
-    const mapped = mapExportRow(row({ remittance_information: ["Fish & chips"] }), context);
+    const mapped = mapExportRow(row({
+      remittance_information: ["Fish & chips"],
+      annotation: { version: 1, mode: "manual", category_id: "rent", kind: "expense", stale: false, label: "Remont lazienki" },
+    }), context);
     const headers = exportHeaders(text);
     const cells: XlsxCell[] = [
       { kind: "date", value: mapped.bookingDate },
@@ -221,6 +249,7 @@ describe("transaction export xlsx", () => {
       { kind: "text", value: mapped.category },
       { kind: "text", value: mapped.type },
       { kind: "text", value: mapped.status },
+      { kind: "text", value: mapped.oneOffLabel },
     ];
     const packed = buildWorkbook(headers, [cells], text.sheet);
     const files = unzip(packed);
@@ -243,8 +272,11 @@ describe("transaction export xlsx", () => {
     expect(sheet).toContain("Fish &amp; chips");
     expect(sheet).toContain("ySplit=\"1\"");
     expect(sheet).toContain("state=\"frozen\"");
-    expect(sheet).toContain("autoFilter ref=\"A1:J2\"");
+    expect(sheet).toContain("autoFilter ref=\"A1:K2\"");
+    expect(sheet).toContain("Etykieta jednorazowa");
+    expect(sheet).toContain("Remont lazienki");
     expect(sheet).toContain("width=\"44\"");
+    expect(sheet).toContain("min=\"11\" max=\"11\" width=\"28\"");
     expect(sheet).not.toContain("acc-secret");
     expect(sheet).not.toContain("secret-ref");
     expect(sheet).not.toContain("fp-secret");

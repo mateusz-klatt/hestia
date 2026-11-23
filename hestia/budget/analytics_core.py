@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from datetime import date
 import hashlib
+import hmac
 import json
 import re
 import unicodedata
@@ -84,6 +85,101 @@ def compare_money(first, second):
     scale = max(ls, rs)
     difference = left * 10 ** (scale - ls) - right * 10 ** (scale - rs)
     return (difference > 0) - (difference < 0)
+
+
+# None: every non-empty label is its own summary entry. A canonical decimal string
+# is a minimum absolute amount; smaller labelled rows stay in their category.
+ONE_OFF_LABEL_LIMIT = 80
+ONE_OFF_MIN_ABS = None
+_ONE_OFF_HIDDEN = frozenset({"Cc", "Cf", "Cs"})
+
+
+def _one_off_hidden(value):
+    return any(unicodedata.category(char) in _ONE_OFF_HIDDEN for char in value)
+
+
+def clean_one_off_label(value):
+    """Normalize a one-off label. ``None`` and blank text clear it.
+
+    The stored value is NFC, trimmed, at most 80 characters, and free of control
+    characters. This never echoes the text: failures use the fixed analytics code.
+    """
+    if value is None:
+        return None
+    if not isinstance(value, str) or _one_off_hidden(value):
+        raise AnalyticsError()
+    normalized = unicodedata.normalize("NFC", value.strip())
+    if _one_off_hidden(normalized):
+        raise AnalyticsError()
+    if not normalized:
+        return None
+    if len(normalized) > ONE_OFF_LABEL_LIMIT:
+        raise AnalyticsError()
+    return normalized
+
+
+def stored_one_off_label(value):
+    """Accept only a label that was already stored in canonical form."""
+    if value is None:
+        return None
+    if not isinstance(value, str) or value != clean_one_off_label(value):
+        raise AnalyticsError()
+    return value
+
+
+def _magnitude_below(amount, minimum):
+    try:
+        canonical = canonical_money(amount)
+        floor = canonical_money(minimum)
+    except AnalyticsError:
+        return True
+    if canonical.startswith("-"):
+        canonical = canonical[1:]
+    return compare_money(canonical, floor) < 0
+
+
+def active_one_off_label(annotation, amount, *, minimum=ONE_OFF_MIN_ABS):
+    """Label to split out of a category, or ``None`` when the row stays put.
+
+    A stale annotation does not apply. ``minimum`` is an absolute decimal amount;
+    ``None`` (the default) splits every labelled row.
+    """
+    if type(annotation) is not dict or annotation.get("stale") is True:
+        return None
+    label = annotation.get("label")
+    if not isinstance(label, str) or not label:
+        return None
+    if minimum is not None and _magnitude_below(amount, minimum):
+        return None
+    return label
+
+
+# Same construction as consent reconcile aliases: domain-separated SHA-256 of the
+# session secret, then HMAC-SHA256. A distinct domain keeps the digests from
+# matching a consent id. The digest is not stable across secret rotations.
+_ONE_OFF_KEY_DOMAIN = b"hestia/budget/one-off-key/key/v1\0"
+_ONE_OFF_PAYLOAD_PREFIX = b"hestia/budget/one-off-key/v1\n"
+
+
+def one_off_key(members, secret):
+    """Row identity for a labelled group. The label text is never part of the key.
+
+    ``members`` are ``(account_id, entry_reference)`` pairs. Order does not matter.
+    ``secret`` is the server session secret (the cursor secret). A missing or empty
+    secret fails closed: the key is HMAC-SHA256, so a short entry reference cannot
+    be reversed offline.
+    """
+    if not isinstance(secret, bytes) or not secret:
+        raise AnalyticsError("budget_analytics_data_error", 500)
+    pairs = []
+    for account_id, entry_reference in members:
+        if not isinstance(account_id, str) or not isinstance(entry_reference, str):
+            raise AnalyticsError()
+        pairs.append((account_id, entry_reference))
+    pairs.sort()
+    raw = json.dumps(pairs, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    key = hashlib.sha256(_ONE_OFF_KEY_DOMAIN + secret).digest()
+    return hmac.new(key, _ONE_OFF_PAYLOAD_PREFIX + raw, hashlib.sha256).hexdigest()
 
 
 def effective_date(payload):

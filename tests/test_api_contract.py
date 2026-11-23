@@ -56,9 +56,31 @@ class OpenApiArtifactTests(unittest.TestCase):
         )
 
     def test_monthly_budget_contract_chain_from_0_27_0(self):
-        """0.27.0 through 0.32.0 stay strictly additive. 0.33.0 withdraws a 503 code. 0.34.0 adds parent_id."""
+        """0.35.0 adds the one-off label on top of 0.34.0. Earlier steps stay as published."""
         document = api_contract.build_openapi()
-        self.assertEqual(document["info"]["version"], "0.34.0")
+        self.assertEqual(document["info"]["version"], "0.35.0")
+        # 0.35.0 one-off label is additive over 0.34.0. Remove it before that digest.
+        for schema, field in (
+            ("BudgetAnalyticsAnnotationRequest", "label"),
+            ("BudgetAnalyticsAnnotationSaved", "label"),
+            ("BudgetAnalyticsAnnotation", "label"),
+            ("BudgetAnalyticsCategoryTotal", "one_off"),
+            ("BudgetAnalyticsCategoryTotal", "one_off_key"),
+            ("BudgetAnalyticsMonthlyBudgetSeriesCategory", "name"),
+            ("BudgetAnalyticsMonthlyBudgetSeriesCategory", "one_off"),
+            ("BudgetAnalyticsMonthlyBudgetSeriesCategory", "one_off_key"),
+            ("BudgetAnalyticsMonthlyBudgetCategorySpend", "one_off"),
+            ("BudgetAnalyticsMonthlyBudgetCategorySpend", "one_off_key"),
+        ):
+            properties = document["components"]["schemas"][schema]["properties"]
+            properties.pop(field, None)
+            required = document["components"]["schemas"][schema].get("required")
+            if isinstance(required, list) and field in required:
+                required.remove(field)
+        document["info"]["version"] = "0.34.0"
+        canonical_0_34 = json.dumps(document, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        self.assertEqual(hashlib.sha256(canonical_0_34).hexdigest(),
+                         "90e6cb2e1dbf653df3b59bdaa0590740a738cb25c77f1334d3a5415662a3c6ca")
         # Strip the 0.34.0 category parent and compare with the published 0.33.0 document.
         for name in ("BudgetAnalyticsCategory", "BudgetAnalyticsCategorySaved",
                      "BudgetAnalyticsCategoryCreateRequest", "BudgetAnalyticsCategoryUpdateRequest"):

@@ -9,7 +9,7 @@ const XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.s
 /** LCID 0415 is pl-PL. Excel then shows the grouping and decimal marks for Polish. At least two fraction digits. */
 const POLISH_NUMBER = "[$-415]#,##0.00##########";
 const DATE_FORMAT = "yyyy-mm-dd";
-const WIDTHS = [12, 18, 32, 44, 28, 14, 10, 24, 18, 16] as const;
+const WIDTHS = [12, 18, 32, 44, 28, 14, 10, 24, 18, 16, 28] as const;
 const encoder = new TextEncoder();
 
 const CRC_TABLE = (() => {

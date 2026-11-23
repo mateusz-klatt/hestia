@@ -124,15 +124,31 @@ export const UNCATEGORISED = "uncategorised";
 
 export type AnnotationRequest = Schemas["BudgetAnalyticsAnnotationRequest"];
 
+/** React key for one category row. A one-off uses one_off_key. The label text is never part of the key. */
+export function oneOffRowKey(
+  row: { one_off?: boolean; one_off_key?: string | null; category_id: string | null },
+  index: number,
+): string {
+  if (row.one_off === true) {
+    return row.one_off_key != null && row.one_off_key !== ""
+      ? row.one_off_key
+      : `one-off:${row.category_id ?? ""}:${String(index)}`;
+  }
+  return row.category_id ?? `uncategorised-${String(index)}`;
+}
+
 /** The owner's category choice in the editor: automatic (rules), explicitly none, or a category id. */
 export type CategoryChoice = { mode: "auto" } | { mode: "manual"; category_id: string | null };
 
 /** "auto" resets both category and type to rules and defaults; any explicit type is part of a manual decision. */
-export function annotationRequest(row: AnalyticsTransaction, category: CategoryChoice, kind: KindChoice): AnnotationRequest {
+export function annotationRequest(row: AnalyticsTransaction, category: CategoryChoice, kind: KindChoice,
+  label?: string | null): AnnotationRequest {
+  const trimmed = typeof label === "string" ? label.trim() : "";
   return {
     account_id: row.account_id, entry_reference: row.entry_reference, mode: category.mode,
     category_id: category.mode === "manual" ? category.category_id : null, kind: category.mode === "manual" ? kind : "auto",
     expected_fingerprint: row.fingerprint, expected_version: row.annotation.version,
+    label: trimmed === "" ? null : trimmed,
   };
 }
 

@@ -6,10 +6,10 @@ import type { BudgetResult } from "../api";
 import type { BudgetAccount, BudgetConnection } from "../model";
 import { formatAmount } from "../model";
 import { CategorySwatch } from "./category_badge";
-import { buildCategoryColors } from "./category_colors";
+import { buildCategoryColors, oneOffCategoryColor } from "./category_colors";
 import type { CategoryColorInput } from "./category_colors";
 import { groupCategoryTotals, hasCategoryParents, visibleCategoryRows } from "./category_tree";
-import { accountName, isZero, staleAccounts } from "./model";
+import { accountName, isZero, oneOffRowKey, staleAccounts } from "./model";
 import type { AnalyticsCategory, AnalyticsCategoryTotal, AnalyticsOverview, AnalyticsTotals } from "./model";
 
 export const overviewLabels = {
@@ -18,7 +18,7 @@ export const overviewLabels = {
     income: "Income", unclassified: "To classify", unclassifiedHelp: "incoming payments not yet marked as income or refund",
     transfers: "Own transfers", transferOut: "out", transferIn: "in", transfersHelp: "not counted as spending or income",
     excluded: "Left out by you", excludedOut: "out", excludedIn: "in",
-    categories: "Spending by category", uncategorised: "Uncategorised", archived: "archived",
+    categories: "Spending by category", uncategorised: "Uncategorised", archived: "archived", oneOff: "one-off",
     collapseCategory: (name: string) => `Collapse ${name}`, expandCategory: (name: string) => `Expand ${name}`,
     scope: (selected: number, excluded: number) =>
       `${String(selected)} accounts in the budget${excluded > 0 ? ` (${String(excluded)} excluded)` : ""} · change this on the Accounts tab`,
@@ -37,7 +37,7 @@ export const overviewLabels = {
     income: "Wpływy", unclassified: "Do sklasyfikowania", unclassifiedHelp: "wpływy jeszcze nieoznaczone jako dochód ani zwrot",
     transfers: "Przelewy własne", transferOut: "wyszło", transferIn: "weszło", transfersHelp: "nie liczą się do wydatków ani wpływów",
     excluded: "Pominięte przez Ciebie", excludedOut: "wyszło", excludedIn: "weszło",
-    categories: "Wydatki według kategorii", uncategorised: "Bez kategorii", archived: "archiwalna",
+    categories: "Wydatki według kategorii", uncategorised: "Bez kategorii", archived: "archiwalna", oneOff: "jednorazowe",
     collapseCategory: (name: string) => `Zwiń ${name}`, expandCategory: (name: string) => `Rozwiń ${name}`,
     scope: (selected: number, excluded: number) =>
       `Kont w budżecie: ${String(selected)}${excluded > 0 ? ` (wykluczone: ${String(excluded)})` : ""} · zmienisz to na karcie Konta`,
@@ -177,7 +177,9 @@ function CurrencyCard({ total, categories, links, partial, text, locale }: CardP
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set());
   const money = (amount: string) => formatAmount(amount, total.currency, locale);
   const tree = hasCategoryParents(links);
-  const rows = tree ? visibleCategoryRows(groupCategoryTotals(categories, links, locale), collapsed) : [];
+  const regular = categories.filter((item) => item.one_off !== true);
+  const oneOffs = categories.filter((item) => item.one_off === true);
+  const rows = tree ? visibleCategoryRows(groupCategoryTotals(regular, links, locale), collapsed) : [];
   const colorInputs: CategoryColorInput[] = [...links];
   const seenColorIds = new Set(links.map((item) => item.id));
   for (const item of categories) {
@@ -259,12 +261,23 @@ function CurrencyCard({ total, categories, links, partial, text, locale }: CardP
                   <td>{money(item.net_spending)}</td>
                 </tr>
               );
-            }) : categories.map((item) => (
-              <tr key={item.category_id ?? "uncategorised"} className={item.category_id === null ? "is-uncategorised" : undefined}>
+            }) : regular.map((item, index) => (
+              <tr key={oneOffRowKey(item, index)}
+                className={item.category_id === null ? "is-uncategorised" : undefined}>
                 <th scope="row">
                   <CategorySwatch color={categoryColors.get(item.category_id)} />
                   {item.category_id === null ? text.uncategorised : item.name ?? text.uncategorised}
                   {item.archived ? <small> ({text.archived})</small> : null}
+                </th>
+                <td>{money(item.net_spending)}</td>
+              </tr>
+            ))}
+            {oneOffs.map((item, index) => (
+              <tr key={oneOffRowKey(item, index)} className="budget-one-off">
+                <th scope="row">
+                  <CategorySwatch color={oneOffCategoryColor(categoryColors, item.category_id)} />
+                  {item.name ?? text.uncategorised}
+                  <small className="budget-one-off-tag">{text.oneOff}</small>
                 </th>
                 <td>{money(item.net_spending)}</td>
               </tr>

@@ -1095,6 +1095,20 @@ describe("MonthBudgetView", () => {
     expect(catModel.stacks[0]?.posTotal).toBe(550n);
     expect(catModel.stacks[0]?.negTotal).toBe(-70n);
     expect(catModel.allCategories.map((c) => c.id)).toContain("c0-zero");
+
+    const tied = buildCategoryChartModel(
+      [{
+        period: "2026-10", has_activity: true, is_current_month: false, income_estimate_partial: false,
+        provisional: false, start_budget: "0", spent: "20",
+        categories: [
+          { category_id: "c1", net_spending: "10" },
+          { category_id: null, net_spending: "10" },
+        ],
+      }],
+      [],
+      { uncategorised: "Uncategorised", unknownCategory: "Category", otherCategory: "Other" },
+    );
+    expect(tied.allCategories.map((item) => item.id)).toEqual(["c1", null]);
   });
 
   it("rolls chart categories up to the top level when parents exist", () => {
@@ -1348,6 +1362,32 @@ describe("MonthBudgetView", () => {
     expect(host.querySelector('section[aria-label="Spending and limits"] tbody')).toBeNull();
     expect(host.querySelector('[aria-label="Charts"]')).toBeNull();
     expect(host.textContent).toContain(monthBudgetLabels.en.categoriesError);
+  });
+
+  it("shows a labelled amount on its own row beside the category, with the one-off tag", async () => {
+    const api = fakeApi();
+    const key = "ef".repeat(32);
+    api.monthlyBudgetCharts.mockResolvedValue(ok(monthlyBudgetChartsOf({
+      category_spend: [
+        monthlyBudgetCategorySpend({
+          category_id: "cat-food", name: "Synthetic Food", expenses: "10", refunds: "0", net_spending: "10",
+        }),
+        monthlyBudgetCategorySpend({
+          category_id: "cat-food", name: "Remont lazienki", expenses: "40", refunds: "0", net_spending: "40",
+          one_off: true, one_off_key: key,
+        }),
+      ],
+    })));
+    await show(api);
+    const table = host.querySelector(".budget-month-dashboard-table");
+    const rows = [...(table?.querySelectorAll("tbody tr") ?? [])];
+    expect(rows).toHaveLength(2);
+    expect(rows[0]?.textContent).toContain("Synthetic Food");
+    expect(rows[0]?.classList.contains("budget-one-off")).toBe(false);
+    expect(rows[1]?.textContent).toContain("Remont lazienki");
+    expect(rows[1]?.textContent).toContain("one-off");
+    expect(rows[1]?.classList.contains("budget-one-off")).toBe(true);
+    expect(rows[1]?.textContent).not.toContain(key);
   });
 
   it("navigates months using server current_month, switches currencies and history, and links to Month view", async () => {

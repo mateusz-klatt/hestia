@@ -165,8 +165,9 @@ def register(app, read_json_body, *, auth_enabled, session_secret):
                 model = (api_contract.BudgetAnalyticsTransactionsByKeysRequest
                          if operation == _TRANSACTIONS_BY_KEYS_OP else WRITES[operation][0])
                 parsed = model.model_validate(body)
-                # An omitted parent_id on update leaves the parent; null detaches. Other writes keep defaults.
-                values = parsed.model_dump(exclude_unset=operation == "category-update")
+                # Annotation: an omitted label stays, and null or "" clears it. Category update: an omitted
+                # parent_id stays, and null detaches. Other writes keep their defaults.
+                values = parsed.model_dump(exclude_unset=operation in ("annotation", "category-update"))
                 owner = api._principal(request, auth_enabled)
                 secret = api._secret(session_secret)
                 api._browser(request, owner, secret)
