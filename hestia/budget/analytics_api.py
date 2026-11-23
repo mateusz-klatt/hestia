@@ -29,6 +29,7 @@ READS = ("overview", "transactions", "categories", "rules", "transfers", "recurr
 WRITES = {
     "category-create": (api_contract.BudgetAnalyticsCategoryCreateRequest, "create_category", "category"),
     "category-update": (api_contract.BudgetAnalyticsCategoryUpdateRequest, "update_category", "category"),
+    "category-colors-spread": (api_contract.BudgetAnalyticsCategoryColorSpreadRequest, "spread_category_colors", "categories"),
     "annotation": (api_contract.BudgetAnalyticsAnnotationRequest, "annotate", "annotation"),
     "rule-preview": (api_contract.BudgetAnalyticsRulePreviewRequest, "preview_rule", "preview"),
     "rule-save": (api_contract.BudgetAnalyticsRuleSaveRequest, "save_rule", "rule"),
