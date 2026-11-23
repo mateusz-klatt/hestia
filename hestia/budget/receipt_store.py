@@ -294,7 +294,6 @@ class BudgetReceiptStore(BudgetHTTPStore):
                 "credit_debit_indicator": direction,
                 "transaction_date": evidence["transaction_date"],
                 "booking_date": evidence["booking_date"], "value_date": evidence["value_date"],
-                "remittance_information": remittance, "creditor_name": creditor,
                 "merchant_token_hit": hit, "date_distance": distance,
                 "candidate_token": token,
             }

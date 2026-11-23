@@ -16,7 +16,7 @@ _CHUNK = 400
 _MAX_CREDITOR_LEN = 256
 _EVIDENCE_KEYS = (
     "owner", "account_id", "entry_reference", "transaction_date", "booking_date", "value_date",
-    "raw_shop_name", "raw_nip", "creditor_name", "remittance_digest", "financial_fingerprint",
+    "raw_shop_name", "raw_nip", "creditor_digest", "remittance_digest", "financial_fingerprint",
 )
 
 
@@ -112,6 +112,13 @@ def _remittance_digest(payload):
     return hashlib.sha256(raw.encode("ascii")).hexdigest()
 
 
+def _creditor_digest(creditor):
+    """Sha256 of the exact creditor string. Absence stays null so the name is never stored."""
+    if not isinstance(creditor, str):
+        return None
+    return hashlib.sha256(creditor.encode("utf-8")).hexdigest()
+
+
 def link_evidence(owner, account_id, entry_reference, payload, shop_name, nip, creditor, fingerprint):
     payload = payload if isinstance(payload, dict) else {}
     if fingerprint is not None and (
@@ -123,7 +130,7 @@ def link_evidence(owner, account_id, entry_reference, payload, shop_name, nip, c
         "transaction_date": _bound_date(payload.get("transaction_date")),
         "booking_date": _bound_date(payload.get("booking_date")),
         "value_date": _bound_date(payload.get("value_date")),
-        "raw_shop_name": shop_name, "raw_nip": nip, "creditor_name": creditor,
+        "raw_shop_name": shop_name, "raw_nip": nip, "creditor_digest": _creditor_digest(creditor),
         "remittance_digest": _remittance_digest(payload), "financial_fingerprint": fingerprint,
     }
     if set(evidence) != set(_EVIDENCE_KEYS):

@@ -7615,17 +7615,6 @@
             "title": "Credit Debit Indicator",
             "type": "string"
           },
-          "creditor_name": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Creditor Name"
-          },
           "currency": {
             "title": "Currency",
             "type": "string"
@@ -7641,13 +7630,6 @@
           "merchant_token_hit": {
             "title": "Merchant Token Hit",
             "type": "boolean"
-          },
-          "remittance_information": {
-            "items": {
-              "type": "string"
-            },
-            "title": "Remittance Information",
-            "type": "array"
           },
           "transaction_date": {
             "anyOf": [
@@ -7681,8 +7663,6 @@
           "transaction_date",
           "booking_date",
           "value_date",
-          "remittance_information",
-          "creditor_name",
           "merchant_token_hit",
           "date_distance",
           "candidate_token"

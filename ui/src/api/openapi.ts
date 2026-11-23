@@ -4285,8 +4285,6 @@ export interface components {
              * @enum {string}
              */
             credit_debit_indicator: "DBIT" | "CRDT";
-            /** Creditor Name */
-            creditor_name: string | null;
             /** Currency */
             currency: string;
             /** Date Distance */
@@ -4295,8 +4293,6 @@ export interface components {
             entry_reference: string;
             /** Merchant Token Hit */
             merchant_token_hit: boolean;
-            /** Remittance Information */
-            remittance_information: string[];
             /** Transaction Date */
             transaction_date: string | null;
             /** Value Date */

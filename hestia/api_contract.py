@@ -2669,8 +2669,6 @@ class BudgetReceiptCandidate(BaseModel):
     transaction_date: str | None
     booking_date: str | None
     value_date: str | None
-    remittance_information: list[str]
-    creditor_name: str | None
     merchant_token_hit: bool
     date_distance: int
     candidate_token: Annotated[str, Field(min_length=1, max_length=4096)]

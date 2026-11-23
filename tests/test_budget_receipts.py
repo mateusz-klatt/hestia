@@ -962,6 +962,8 @@ NR KARTY ****5555
         self.assertEqual(evidence["remittance_digest"], hashlib.sha256(
             json.dumps(["Synthetic SHOP"], ensure_ascii=True, separators=(",", ":")).encode("ascii")).hexdigest())
         self.assertNotIn("remittance_information", evidence)
+        self.assertNotIn("creditor_name", evidence)
+        self.assertIsNone(evidence["creditor_digest"])
         self.assertEqual(len(evidence["financial_fingerprint"]), 64)
         self.assertTrue(saved["linked"])
 
@@ -1009,7 +1011,9 @@ NR KARTY ****5555
         self.change_transaction(remittance_information=[remittance])
         parsed = self.draft()
         candidate = next(item for item in parsed["candidates"] if item["entry_reference"] == "debit")
-        self.assertEqual(candidate["remittance_information"], [remittance])
+        self.assertNotIn("remittance_information", candidate)
+        self.assertNotIn("creditor_name", candidate)
+        self.assertNotIn(remittance, json.dumps(candidate))
         saved = self.receipts.confirm("owner", confirm_values(parsed, link=self.link()))["receipt"]
         self.assertTrue(saved["linked"])
         raw = self.receipt_row(parsed["receipt_id"]).linked_evidence
@@ -1022,18 +1026,20 @@ NR KARTY ****5555
         self.assertEqual(len(digest), 64)
 
     def test_creditor_metadata_must_match_the_ledger_fingerprint(self):
-        self.metadata("a", "debit", {"creditor_name": "SYNTHETIC GROCER"})
+        self.metadata("a", "debit", {"creditor_name": "BIEDRONKA GROCER"})
         parsed = self.draft()
         match = next(item for item in parsed["candidates"] if item["entry_reference"] == "debit")
-        self.assertEqual(match["creditor_name"], "SYNTHETIC GROCER")
+        self.assertTrue(match["merchant_token_hit"])
+        self.assertNotIn("creditor_name", match)
+        self.assertNotIn("BIEDRONKA GROCER", json.dumps(match))
         with self.sessions.begin() as session:
             session.get(db.BudgetTransactionMetadata, (self.accounts["a"], "debit")).ledger_fingerprint = "0" * 64
         hidden = self.draft(total="8", item="MLEKO INNE")
-        self.assertTrue(hidden["candidates"] == [] or all(
-            item["creditor_name"] is None for item in hidden["candidates"]))
+        self.assertNotIn("BIEDRONKA GROCER", json.dumps(hidden["candidates"]))
         again = self.receipts.parse_text("owner", receipt_text())
         debit = next(item for item in again["candidates"] if item["entry_reference"] == "debit")
-        self.assertIsNone(debit["creditor_name"])
+        self.assertNotIn("creditor_name", debit)
+        self.assertNotIn("BIEDRONKA GROCER", json.dumps(debit))
         with self.assertRaises(ReceiptError) as stale:
             self.receipts.confirm("owner", confirm_values(parsed, link=self.link()))
         self.assertEqual(stale.exception.code, "budget_receipt_stale_source")
@@ -1041,7 +1047,10 @@ NR KARTY ****5555
         with self.sessions.begin() as session:
             session.get(db.BudgetTransactionMetadata, (self.accounts["a"], "debit")).ledger_fingerprint = self.fingerprint()
         saved = self.receipts.confirm("owner", confirm_values(parsed, link=self.link()))["receipt"]
-        self.assertIn("SYNTHETIC GROCER", self.receipt_row(parsed["receipt_id"]).linked_evidence)
+        raw = self.receipt_row(parsed["receipt_id"]).linked_evidence
+        self.assertNotIn("BIEDRONKA GROCER", raw)
+        self.assertNotIn("creditor_name", json.loads(raw))
+        self.assertEqual(json.loads(raw)["creditor_digest"], hashlib.sha256(b"BIEDRONKA GROCER").hexdigest())
         self.assertTrue(saved["linked"])
 
     def test_later_confirm_keeps_the_first_deadline(self):
