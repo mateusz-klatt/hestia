@@ -41,6 +41,7 @@ STALE_AFTER_SECONDS = STALE_AFTER["transactions"]
 EARLIEST_PERIOD = "1900-01"
 DEFAULT_HISTORY_MONTHS = 6
 ALLOWED_HISTORY_MONTHS = frozenset({6, 12})
+MAX_PENDING_ROW_KEYS = 500
 
 _ZERO = "0"
 _PERIOD_RE = re.compile(r"([0-9]{4})-([0-9]{2})\Z", re.ASCII)
@@ -417,6 +418,44 @@ def _validate_limits(
     return active_for_currency
 
 
+def _category_children(categories_by_id: Mapping[str, Mapping]) -> dict[str, list[str]]:
+    children: dict[str, list[str]] = defaultdict(list)
+    for identifier, row in categories_by_id.items():
+        parent = row.get("parent_id")
+        if isinstance(parent, str) and parent:
+            children[parent].append(identifier)
+    return children
+
+
+def _subtree_limit_amounts(
+    category_id: str,
+    direct: Mapping[str | None, tuple[str, str]],
+    children: Mapping[str, Sequence[str]],
+) -> tuple[str, str] | None:
+    """Own expenses and refunds plus descendants. None when descendants add no amount."""
+    extras_exp: list[str] = []
+    extras_ref: list[str] = []
+    stack = list(children.get(category_id, ()))
+    seen = {category_id}
+    while stack:
+        child = stack.pop()
+        if child in seen:
+            raise MonthDataError()
+        seen.add(child)
+        amounts = direct.get(child)
+        if amounts is not None and (core.compare_money(amounts[0], _ZERO) != 0 or core.compare_money(amounts[1], _ZERO) != 0):
+            extras_exp.append(amounts[0])
+            extras_ref.append(amounts[1])
+        stack.extend(children.get(child, ()))
+    if not extras_exp:
+        return None
+    own = direct.get(category_id)
+    if own is not None:
+        extras_exp.append(own[0])
+        extras_ref.append(own[1])
+    return _sum_money_checked(extras_exp), _sum_money_checked(extras_ref)
+
+
 def _evaluate_category_limit(expenses: str, refunds: str, limit_info: tuple[str, int] | None) -> dict | None:
     if limit_info is None:
         return None
@@ -676,6 +715,7 @@ class _BucketAccum:
     cutoff: str
     has_activity: bool = False
     pending_transfer_rows: int = 0
+    pending_row_keys: list[str] = field(default_factory=list)
     has_affecting_unexcluded: bool = False
     start_budget_amounts: list[str] = field(default_factory=list)
     rent_amounts: list[str] = field(default_factory=list)
@@ -687,6 +727,11 @@ class _BucketAccum:
     # Mortgage pass-through legs are not recorded here. ``members`` are (account_id, entry_reference).
     one_offs: dict[tuple[str, str | None], dict[str, list]] = field(default_factory=dict)
     observed_spend_categories: set[str | None] = field(default_factory=set)
+
+    def record_pending(self, row_key: str) -> None:
+        self.pending_transfer_rows += 1
+        if len(self.pending_row_keys) < MAX_PENDING_ROW_KEYS:
+            self.pending_row_keys.append(row_key)
 
 
 def _chart_periods(effective_period: str, history: int) -> list[str]:
@@ -987,6 +1032,7 @@ def _evaluate_monthly_budget_core(
                 counterpart_outside_horizon=counterpart_outside,
                 other_identities=other_owned.get(acct_id, frozenset()),
             )
+            row_key = f"{acct_id}/{row['entry_reference']}"
             if in_calendar:
                 cal_bucket.has_activity = True
                 if direction == "DBIT" and kind == "expense":
@@ -996,7 +1042,7 @@ def _evaluate_monthly_budget_core(
                         cal_bucket.has_affecting_unexcluded = True
                         if unresolved or (account_kinds.get(acct_id) != "credit_card"
                                           and not _is_explicit_expense(eff, row["annotation"], rules_by_id)):
-                            cal_bucket.pending_transfer_rows += 1
+                            cal_bucket.record_pending(row_key)
                     cal_bucket.observed_spend_categories.add(cat_id)
                     if mortgage_cat_id is not None and cat_id == mortgage_cat_id:
                         cal_bucket.mortgage_debits_legs.append(
@@ -1013,7 +1059,7 @@ def _evaluate_monthly_budget_core(
                         if nonzero:
                             cal_bucket.has_affecting_unexcluded = True
                             if unresolved:
-                                cal_bucket.pending_transfer_rows += 1
+                                cal_bucket.record_pending(row_key)
                         cal_bucket.observed_spend_categories.add(cat_id)
                         if mortgage_cat_id is not None and cat_id == mortgage_cat_id:
                             cal_bucket.mortgage_refund_legs.append(
@@ -1029,14 +1075,14 @@ def _evaluate_monthly_budget_core(
                         if nonzero:
                             cal_bucket.has_affecting_unexcluded = True
                             if unresolved:
-                                cal_bucket.pending_transfer_rows += 1
+                                cal_bucket.record_pending(row_key)
                         cal_bucket.rent_amounts.append(amount)
             if inc_bucket is not None:
                 inc_bucket.has_activity = True
                 if nonzero:
                     inc_bucket.has_affecting_unexcluded = True
                     if unresolved:
-                        inc_bucket.pending_transfer_rows += 1
+                        inc_bucket.record_pending(row_key)
                     if inc_period == effective_period == current_month:
                         current_income_by_cat[cat_id].append(_IncomeCredit(
                             acct_id, row["entry_reference"], amount,
@@ -1064,6 +1110,8 @@ def _evaluate_monthly_budget_core(
         "stale_selected_accounts": stale_selected_accounts,
         "purchase_date_fallback_count": purchase_date_fallback_count,
         "pending_transfer_rows": selected_bucket.pending_transfer_rows,
+        "pending_row_keys": selected_bucket.pending_row_keys,
+        "pending_row_keys_truncated": selected_bucket.pending_transfer_rows > len(selected_bucket.pending_row_keys),
         "transfer_scan_limited": transfer_scan_limited,
         "provisional": provisional,
         "has_activity": selected_bucket.has_activity,
@@ -1098,11 +1146,12 @@ def _evaluate_monthly_budget_core(
     pass_through_wire, adj_exp_dates, adj_ref_dates, selected_rows, start_budget, spent = _bucket_category_totals(
         selected_bucket, pass_through_cfg, extra_categories=set(active_limits),
     )
-    # The split row shows only the remainder. The badge counts the full category total
-    # from ``selected_rows``, the same amount the spending-limits endpoint counts for an
-    # ordinary category. A one-off label is not a budget exemption, so it does not shrink
-    # the limit. One-off rows themselves carry no limit, and the badge is not shown twice.
+    # The split row shows only the remainder. The badge counts the full category total,
+    # and a parent limit adds descendant totals the same way. Those are the amounts an
+    # unlabelled month would use: a one-off label is not a budget exemption. One-off rows
+    # carry no limit, so the badge is not shown twice.
     full_by_category = {cat_id: (exp, ref) for cat_id, exp, ref, _net in selected_rows}
+    child_map = _category_children(categories_by_id)
     category_spend: list[dict] = []
     for item in _split_labelled(
         selected_rows, selected_bucket.one_offs, keep_ids=set(active_limits), one_off_secret=one_off_secret,
@@ -1113,6 +1162,10 @@ def _evaluate_monthly_budget_core(
             limit = None
         else:
             full_expenses, full_refunds = full_by_category[cat_id]
+            if cat_id in active_limits:
+                rolled = _subtree_limit_amounts(cat_id, full_by_category, child_map)
+                if rolled is not None:
+                    full_expenses, full_refunds = rolled
             limit = _evaluate_category_limit(full_expenses, full_refunds, active_limits.get(cat_id))
         category_spend.append({
             "category_id": cat_id,

@@ -1,5 +1,6 @@
-// Spending analytics (2D) helpers. Every total is computed by the server per currency and arrives as a decimal
-// STRING; the browser never adds, subtracts, converts or mixes amounts. Periods are "YYYY-MM" or "YYYY".
+// Spending analytics (2D) helpers. Server totals arrive as decimal STRINGs. UI projections use exact BigInt
+// arithmetic. A category tree adds a parent's own amount to its descendants. Nothing is converted or mixed
+// across currencies. Periods are "YYYY-MM" or "YYYY".
 import type { components } from "../../api/openapi";
 import type { BudgetAccount, BudgetCapabilities, BudgetConnection } from "../model";
 import { accountLabel, formatAmount } from "../model";
@@ -109,6 +110,9 @@ export type TransferStatus = "suggested" | "accepted" | "review" | "boundary" | 
 export type AnalyticsTransaction = Schemas["BudgetAnalyticsTransaction"];
 
 export type AnalyticsTransactions = Schemas["BudgetAnalyticsTransactions"];
+type RawTransactionsByKeysRequest = Schemas["BudgetAnalyticsTransactionsByKeysRequest"];
+export type AnalyticsTransactionsByKeysRequest =
+  Pick<RawTransactionsByKeysRequest, "row_keys"> & Partial<Omit<RawTransactionsByKeysRequest, "row_keys">>;
 
 export type AnalyticsCategory = Schemas["BudgetAnalyticsCategory"];
 export type CategorySaved = Schemas["BudgetAnalyticsCategorySaved"];
@@ -623,4 +627,9 @@ export function monthlyBudgetCurrencies(available: readonly string[], accounts: 
   for (const code of [...extras].sort((a, b) => a.localeCompare(b))) add(code);
   if (ordered.length === 0) ordered.push("PLN");
   return ordered;
+}
+
+/** Stable identifier for an analytics transaction row, matching server `coverage.pending_row_keys`. */
+export function transactionRowKey(row: Pick<AnalyticsTransaction, "account_id" | "entry_reference">): string {
+  return `${row.account_id}/${row.entry_reference}`;
 }

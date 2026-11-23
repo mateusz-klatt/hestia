@@ -1,22 +1,31 @@
-"""Migration 0023 and one-off label normalization.
+"""Migration 0021 and one-off label normalization.
 
-down_revision is 0019, the current master head. Re-parent after 0020, 0021 and 0022 at merge.
+Revision 0021 revises 0020. Upgrade and downgrade go through ``init_db`` and
+``downgrade_db``: foreign keys off, an explicit transaction, then
+``PRAGMA foreign_key_check``. No table references ``budget_annotations``.
+The annotation row itself references transactions, users and categories, so the
+runner's check still sees those outgoing keys after the batch rebuild.
+
 The label text is owner-private: these tests use synthetic phrases and never log them.
 """
 from __future__ import annotations
 
+from contextlib import closing
 from datetime import datetime, timezone
 import hashlib
 import json
 import os
 from pathlib import Path
+import sqlite3
 import tempfile
 import unittest
 from unittest import mock
 
 from alembic import command
 from alembic.autogenerate import compare_metadata
+from alembic.config import Config
 from alembic.runtime.migration import MigrationContext
+from alembic.script import ScriptDirectory
 from sqlalchemy import inspect
 from sqlalchemy.exc import IntegrityError
 
@@ -28,7 +37,7 @@ from hestia.budget.analytics_core import (
 from tests import test_budget_analytics_api as analytics_api_tests
 from tests.test_budget_analytics_store import AnalyticsCase
 from tests.test_budget_analytics_views import ProjectionCase
-from tests.test_budget_month import DEFAULT_SETTINGS, ONE_OFF_TEST_SECRET, _eval_charts, _tx
+from tests.test_budget_month import DEFAULT_SETTINGS, ONE_OFF_TEST_SECRET, _cat, _eval, _eval_charts, _tx
 
 # One scenario for the overview and the chart series. A labelled mortgage leg stays in its category.
 _FOOD_LABEL = "Remont lazienki"
@@ -79,84 +88,283 @@ def _fk_off(conn):
     conn.commit()
 
 
-class AnnotationLabelMigration0023Tests(unittest.TestCase):
+_KEPT_ROW = ("a1", "kept", "alice", "manual", None, "expense", "fp", 1)
+
+
+class AnnotationLabelMigration0021Tests(unittest.TestCase):
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
         self.addCleanup(db.reset_engine_cache)
-        self.path = Path(self.directory.name) / "m0023.db"
+        self.path = Path(self.directory.name) / "m0021.db"
 
-    def test_upgrade_downgrade_check_and_zero_drift(self):
+    def test_single_head_is_0021(self):
+        cfg = Config()
+        cfg.set_main_option("script_location", str(db._MIGRATIONS_DIR))
+        script = ScriptDirectory.from_config(cfg)
+        self.assertEqual(script.get_heads(), ["0021"])
+        revision = script.get_revision("0021")
+        self.assertIsNotNone(revision)
+        self.assertEqual(revision.down_revision, "0020")
+        self.assertNotIn("0023", {item.revision for item in script.walk_revisions()})
+
+    def _database_at_0020(self, *, leftover_temp=False):
         engine = db.make_engine(self.path)
         try:
+            db._run_sqlite_migration(
+                engine, lambda connection: command.upgrade(db._alembic_config(connection), "0020"),
+            )
             with engine.begin() as conn:
-                command.upgrade(db._alembic_config(conn), "0019")
-            with engine.connect() as conn:
-                _fk_off(conn)
-                conn.execute(db.text(
-                    "INSERT INTO budget_annotations (account_id, entry_reference, owner, mode, category_id, kind, "
-                    "ledger_fingerprint, version, updated_at) VALUES ('acct', 'kept', 'owner', 'manual', NULL, "
-                    "'expense', 'fp', 1, 1.0)"))
-                conn.commit()
-            with engine.begin() as conn:
-                command.upgrade(db._alembic_config(conn), "0023")
-
-            columns = {column["name"]: column for column in inspect(engine).get_columns("budget_annotations")}
-            self.assertIn("label", columns)
-            self.assertTrue(columns["label"]["nullable"])
-            checks = inspect(engine).get_check_constraints("budget_annotations")
-            sql = " ".join(item.get("sqltext") or "" for item in checks)
-            self.assertIn("trim(label)", sql)
-            self.assertIn("char(10)", sql)
-            self.assertIn("char(13)", sql)
-            self.assertIn("char(9)", sql)
-
-            with engine.connect() as conn:
-                self.assertIsNone(conn.exec_driver_sql(
-                    "SELECT label FROM budget_annotations WHERE entry_reference='kept'").scalar())
-
-            def insert(reference, label):
-                with engine.connect() as conn:
-                    _fk_off(conn)
-                    conn.exec_driver_sql(_INSERT, (reference, label))
-                    conn.commit()
-
-            insert("ok", "Remont lazienki")
-            insert("eighty", "a" * 80)
-            insert("blank-check", None)
-            for reference, label in (
-                ("empty", ""),
-                ("spaces", "  "),
-                ("lead", " padded"),
-                ("trail", "padded "),
-                ("long", "b" * 81),
-                ("newline", "line\n"),
-                ("cr", "line\r"),
-                ("tab", "line\t"),
-            ):
-                with self.subTest(reference=reference), self.assertRaises(IntegrityError):
-                    insert(reference, label)
-
-            with engine.begin() as conn:
-                command.downgrade(db._alembic_config(conn), "0019")
-            self.assertNotIn("label", {column["name"] for column in inspect(engine).get_columns("budget_annotations")})
-            with engine.connect() as conn:
-                self.assertEqual(conn.exec_driver_sql(
-                    "SELECT COUNT(*) FROM budget_annotations WHERE entry_reference='kept'").scalar(), 1)
-            with engine.begin() as conn:
-                command.upgrade(db._alembic_config(conn), "head")
-            with engine.connect() as conn:
-                context = MigrationContext.configure(conn)
-                self.assertEqual(compare_metadata(context, db.Base.metadata), [])
-            with engine.connect() as conn:
-                self.assertIsNone(conn.exec_driver_sql(
-                    "SELECT label FROM budget_annotations WHERE entry_reference='kept'").scalar())
-                with self.assertRaises(IntegrityError):
-                    _fk_off(conn)
-                    conn.exec_driver_sql(_INSERT, ("after", ""))
-                    conn.commit()
+                conn.exec_driver_sql(
+                    "INSERT INTO users (username, password_hash, role) VALUES ('alice', 'h', 'admin')")
+                conn.exec_driver_sql(
+                    "INSERT INTO budget_connections "
+                    "(id, owner, application_id, bank_name, country, enabled, next_attempt, failures) "
+                    "VALUES ('c1', 'alice', 'app', 'bank', 'PL', 1, 0, 0)")
+                conn.exec_driver_sql(
+                    "INSERT INTO budget_accounts "
+                    "(id, connection_id, owner, identification_hash, enabled, balances_json) "
+                    "VALUES ('a1', 'c1', 'alice', 'hash', 1, '{}')")
+                conn.exec_driver_sql(
+                    "INSERT INTO budget_transactions "
+                    "(account_id, entry_reference, payload_json, observed_at, uncertain) "
+                    "VALUES ('a1', 'kept', '{}', 1, 0)")
+                conn.exec_driver_sql(
+                    "INSERT INTO budget_annotations "
+                    "(account_id, entry_reference, owner, mode, category_id, kind, ledger_fingerprint, "
+                    "version, updated_at) "
+                    "VALUES ('a1', 'kept', 'alice', 'manual', NULL, 'expense', 'fp', 1, 1)")
         finally:
             engine.dispose()
+        if leftover_temp:
+            with closing(sqlite3.connect(self.path)) as raw:
+                raw.execute('CREATE TABLE "_alembic_tmp_budget_annotations" (id TEXT)')
+                raw.commit()
+
+    def _assert_integrity_and_no_batch_temp(self):
+        with closing(sqlite3.connect(self.path)) as raw:
+            integrity = [row[0] for row in raw.execute("PRAGMA integrity_check")]
+            leftovers = [row[0] for row in raw.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table' "
+                "AND name LIKE '!_alembic!_tmp!_%' ESCAPE '!'")]
+        self.assertEqual(integrity, ["ok"])
+        self.assertEqual(leftovers, [])
+
+    def _inbound_annotation_fks(self):
+        """Tables whose foreign keys name ``budget_annotations`` as the parent."""
+        with closing(sqlite3.connect(self.path)) as raw:
+            tables = [row[0] for row in raw.execute("SELECT name FROM sqlite_master WHERE type = 'table'")]
+            inbound = []
+            for table in tables:
+                for fk in raw.execute(f'PRAGMA foreign_key_list("{table}")'):
+                    if fk[2] == "budget_annotations":
+                        inbound.append((table, fk[3], fk[4]))
+        return inbound
+
+    def _kept_row(self):
+        with closing(sqlite3.connect(self.path)) as raw:
+            return raw.execute(
+                "SELECT account_id, entry_reference, owner, mode, category_id, kind, "
+                "ledger_fingerprint, version FROM budget_annotations WHERE entry_reference = 'kept'"
+            ).fetchone()
+
+    def test_init_db_downgrade_upgrade_preserves_the_annotation(self):
+        self._database_at_0020()
+        observed = []
+        real_upgrade = command.upgrade
+
+        def spy(config, revision):
+            connection = config.attributes["connection"]
+            raw = connection.connection.dbapi_connection
+            observed.append((
+                raw.in_transaction,
+                raw.isolation_level,
+                connection.exec_driver_sql("PRAGMA foreign_keys").scalar(),
+                revision,
+            ))
+            return real_upgrade(config, revision)
+
+        with mock.patch("hestia.db.command.upgrade", spy):
+            engine, _ = db.init_db(self.path)
+        self.assertEqual(observed, [(True, None, 0, "head")])
+        columns = {column["name"]: column for column in inspect(engine).get_columns("budget_annotations")}
+        self.assertIn("label", columns)
+        self.assertTrue(columns["label"]["nullable"])
+        checks = inspect(engine).get_check_constraints("budget_annotations")
+        sql = " ".join(item.get("sqltext") or "" for item in checks)
+        self.assertIn("trim(label)", sql)
+        self.assertIn("char(10)", sql)
+        self.assertIn("char(13)", sql)
+        self.assertIn("char(9)", sql)
+        self.assertEqual(self._inbound_annotation_fks(), [])
+        with engine.connect() as conn:
+            self.assertIsNone(conn.exec_driver_sql(
+                "SELECT label FROM budget_annotations WHERE entry_reference='kept'").scalar())
+            self.assertEqual(conn.exec_driver_sql("SELECT version_num FROM alembic_version").scalar(), "0021")
+
+        def insert(reference, label):
+            with engine.connect() as conn:
+                _fk_off(conn)
+                conn.exec_driver_sql(_INSERT, (reference, label))
+                conn.commit()
+
+        insert("ok", "Remont lazienki")
+        insert("eighty", "a" * 80)
+        insert("blank-check", None)
+        for reference, label in (
+            ("empty", ""),
+            ("spaces", "  "),
+            ("lead", " padded"),
+            ("trail", "padded "),
+            ("long", "b" * 81),
+            ("newline", "line\n"),
+            ("cr", "line\r"),
+            ("tab", "line\t"),
+        ):
+            with self.subTest(reference=reference), self.assertRaises(IntegrityError):
+                insert(reference, label)
+
+        # Probe rows point at an account that does not exist. foreign_key_check would
+        # roll the downgrade back, so only the real annotation remains.
+        with engine.connect() as conn:
+            conn.exec_driver_sql("DELETE FROM budget_annotations WHERE entry_reference != 'kept'")
+            conn.commit()
+            self.assertEqual(conn.exec_driver_sql("PRAGMA foreign_key_check").all(), [])
+
+        real_downgrade = command.downgrade
+
+        def spy_downgrade(config, revision):
+            connection = config.attributes["connection"]
+            raw = connection.connection.dbapi_connection
+            self.assertTrue(raw.in_transaction)
+            self.assertIsNone(raw.isolation_level)
+            self.assertEqual(connection.exec_driver_sql("PRAGMA foreign_keys").scalar(), 0)
+            self.assertEqual(revision, "0020")
+            return real_downgrade(config, revision)
+
+        with mock.patch("hestia.db.command.downgrade", spy_downgrade):
+            db.downgrade_db(self.path, "0020")
+        self.assertNotIn(str(self.path), db._ENGINE_CACHE)
+        with closing(sqlite3.connect(self.path)) as raw:
+            names = [row[1] for row in raw.execute("PRAGMA table_info(budget_annotations)")]
+            version = raw.execute("SELECT version_num FROM alembic_version").fetchone()
+        self.assertNotIn("label", names)
+        self.assertEqual(version, ("0020",))
+        self.assertEqual(self._kept_row(), _KEPT_ROW)
+        self._assert_integrity_and_no_batch_temp()
+
+        with mock.patch("hestia.db.command.upgrade", spy):
+            engine, _ = db.init_db(self.path)
+        self.assertEqual(observed, [(True, None, 0, "head"), (True, None, 0, "head")])
+        with engine.connect() as conn:
+            self.assertIsNone(conn.exec_driver_sql(
+                "SELECT label FROM budget_annotations WHERE entry_reference='kept'").scalar())
+            self.assertEqual(compare_metadata(MigrationContext.configure(conn), db.metadata), [])
+            with self.assertRaises(IntegrityError):
+                _fk_off(conn)
+                conn.exec_driver_sql(_INSERT, ("after", ""))
+                conn.commit()
+        self.assertEqual(self._kept_row(), _KEPT_ROW)
+        self.assertEqual(self._inbound_annotation_fks(), [])
+        self._assert_integrity_and_no_batch_temp()
+
+    def test_leftover_batch_temp_table_does_not_block_upgrade(self):
+        self._database_at_0020(leftover_temp=True)
+        with closing(sqlite3.connect(self.path)) as raw:
+            leftovers = [row[0] for row in raw.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table' "
+                "AND name LIKE '!_alembic!_tmp!_%' ESCAPE '!'")]
+        self.assertEqual(leftovers, ["_alembic_tmp_budget_annotations"])
+        db.init_db(self.path)
+        with closing(sqlite3.connect(self.path)) as raw:
+            version = raw.execute("SELECT version_num FROM alembic_version").fetchone()
+            label = raw.execute(
+                "SELECT label FROM budget_annotations WHERE entry_reference='kept'").fetchone()
+        self.assertEqual(version, ("0021",))
+        self.assertEqual(label, (None,))
+        self.assertEqual(self._kept_row(), _KEPT_ROW)
+        self._assert_integrity_and_no_batch_temp()
+
+
+class OneOffParentLimitTests(unittest.TestCase):
+    def test_parent_limit_counts_a_labelled_child_and_the_one_off_row_has_no_limit(self):
+        categories = [
+            _cat("salary", "Wynagrodzenie"),
+            _cat("transport", "Transport"),
+            {**_cat("fuel", "Paliwo"), "parent_id": "transport"},
+        ]
+        labelled = _tx(
+            "acc-a", "tyres", amount="40", kind="expense", category_id="fuel", source="manual",
+            annotation={"version": 1, "mode": "manual", "category_id": "fuel", "kind": "expense",
+                        "stale": False, "label": "Opony"},
+        )
+        plain = _tx("acc-a", "fuel-1", amount="10", kind="expense", category_id="fuel", source="manual")
+        result = _eval(
+            categories=categories,
+            transactions=[labelled, plain],
+            limits=[{"category_id": "transport", "currency": "PLN", "monthly_limit": "30",
+                     "warning_percent": 80, "enabled": True}],
+            settings=month_budget.MonthBudgetSettings(income_category_ids=("salary",)),
+        )
+        regular = {row["category_id"]: row for row in result["category_spend"] if not row["one_off"]}
+        one_offs = [row for row in result["category_spend"] if row["one_off"]]
+        self.assertEqual((regular["transport"]["expenses"], regular["transport"]["net_spending"]), ("0", "0"))
+        self.assertEqual(regular["transport"]["limit"]["status"], "exceeded")
+        self.assertEqual(regular["transport"]["limit"]["over_by"], "20")
+        self.assertIsNone(regular["fuel"]["limit"])
+        self.assertEqual(regular["fuel"]["expenses"], "10")
+        self.assertEqual(len(one_offs), 1)
+        self.assertEqual(
+            (one_offs[0]["name"], one_offs[0]["expenses"], one_offs[0]["category_id"]),
+            ("Opony", "40", "fuel"),
+        )
+        self.assertIsNone(one_offs[0]["limit"])
+        self.assertEqual(len(one_offs[0]["one_off_key"]), 64)
+
+    def test_a_fully_labelled_category_without_a_limit_drops_the_remainder_row(self):
+        labelled = _tx(
+            "acc-a", "tyres", amount="40", kind="expense", category_id="fuel", source="manual",
+            annotation={"version": 1, "mode": "manual", "category_id": "fuel", "kind": "expense",
+                        "stale": False, "label": "Opony"},
+        )
+        result = _eval(
+            categories=[_cat("salary", "Wynagrodzenie"), _cat("fuel", "Paliwo")],
+            transactions=[labelled],
+            settings=month_budget.MonthBudgetSettings(income_category_ids=("salary",)),
+        )
+        regular = [row for row in result["category_spend"] if not row["one_off"]]
+        one_offs = [row for row in result["category_spend"] if row["one_off"]]
+        self.assertEqual(regular, [])
+        self.assertEqual([(row["name"], row["expenses"]) for row in one_offs], [("Opony", "40")])
+
+    def test_a_bad_one_off_secret_is_a_month_data_error(self):
+        labelled = _tx(
+            "acc-a", "tyres", amount="40", kind="expense", category_id="fuel", source="manual",
+            annotation={"version": 1, "mode": "manual", "category_id": "fuel", "kind": "expense",
+                        "stale": False, "label": "Opony"},
+        )
+        with self.assertRaises(month_budget.MonthDataError):
+            _eval(
+                categories=[_cat("salary", "Wynagrodzenie"), _cat("fuel", "Paliwo")],
+                transactions=[labelled],
+                settings=month_budget.MonthBudgetSettings(income_category_ids=("salary",)),
+                one_off_secret=b"",
+            )
+
+    def test_split_skips_a_zero_label_and_a_label_outside_the_observed_set(self):
+        rows = month_budget._split_labelled(
+            [("fuel", "10", "0", "10")],
+            {
+                ("Pusty", "fuel"): {"expenses": ["0"], "refunds": ["0"], "members": [("acc-a", "zero")]},
+                ("Inne", "other"): {"expenses": ["5"], "refunds": [], "members": [("acc-a", "out")]},
+            },
+            observed={"fuel"},
+            one_off_secret=ONE_OFF_TEST_SECRET,
+        )
+        self.assertEqual(
+            [(row["one_off"], row["category_id"], row["name"], row["expenses"]) for row in rows],
+            [(False, "fuel", None, "10")],
+        )
 
 
 class OneOffLabelCoreTests(unittest.TestCase):
@@ -167,6 +375,13 @@ class OneOffLabelCoreTests(unittest.TestCase):
         self.assertEqual(clean_one_off_label("  Remont łazienki  "), "Remont łazienki")
         self.assertEqual(clean_one_off_label("e\u0301"), "\u00e9")
         self.assertEqual(clean_one_off_label("a" * 80), "a" * 80)
+
+    def test_clean_rejects_a_label_that_normalizes_to_a_hidden_character(self):
+        with mock.patch("hestia.budget.analytics_core.unicodedata.normalize", return_value="\u200b"):
+            with self.assertRaises(AnalyticsError) as error:
+                clean_one_off_label("Ok")
+        self.assertEqual(error.exception.code, "budget_analytics_invalid_request")
+        self.assertNotIn("Ok", str(error.exception))
 
     def test_clean_rejects_controls_length_and_non_text(self):
         for value in ("\n", "a\nb", "\t", "\u200b", "\u202e", "a" * 81, 80, b"label"):

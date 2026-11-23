@@ -32,10 +32,12 @@ function mockPairSearch(api: ReturnType<typeof fakeApi>, debit: AnalyticsTransac
 function fakeApi(rows: AnalyticsTransaction[] = [entry("e1")]) {
   return {
     analyticsTransactions: vi.fn<BudgetApi["analyticsTransactions"]>(() => ok(pageOf(rows))),
+    analyticsTransactionsByKeys: vi.fn<BudgetApi["analyticsTransactionsByKeys"]>(() => ok(entriesOf("", rows))),
     categories: vi.fn<BudgetApi["categories"]>(() => ok({ categories: categoryList })),
     annotate: vi.fn<BudgetApi["annotate"]>(() => ok({ annotation: annotationOf() })),
     decideTransfer: vi.fn<BudgetApi["decideTransfer"]>(() => ok({ decision: decisionOf() })),
-  } satisfies Pick<BudgetApi, "analyticsTransactions" | "categories" | "annotate" | "decideTransfer">;
+  } satisfies Pick<BudgetApi,
+    "analyticsTransactions" | "analyticsTransactionsByKeys" | "categories" | "annotate" | "decideTransfer">;
 }
 
 const accounts = [
@@ -573,13 +575,13 @@ describe("period entries", () => {
 
   it("sorts Polish category names using Polish collation and labels the list Transakcje", async () => {
     const plCategories = [
-      { id: "c-zolw", name: "Żółw", archived: false, version: 1, created_at: 1, updated_at: 1 },
-      { id: "c-zebra", name: "Zebra", archived: false, version: 1, created_at: 1, updated_at: 1 },
-      { id: "c-zrebak", name: "Źrebak", archived: false, version: 1, created_at: 1, updated_at: 1 },
-      { id: "c-lodz", name: "Łódź", archived: false, version: 1, created_at: 1, updated_at: 1 },
-      { id: "c-lod", name: "Lód", archived: false, version: 1, created_at: 1, updated_at: 1 },
-      { id: "c-cma", name: "Ćma", archived: false, version: 1, created_at: 1, updated_at: 1 },
-      { id: "c-cebula", name: "Cebula", archived: false, version: 1, created_at: 1, updated_at: 1 },
+      { id: "c-zolw", name: "Żółw", archived: false, version: 1, created_at: 1, updated_at: 1, parent_id: null },
+      { id: "c-zebra", name: "Zebra", archived: false, version: 1, created_at: 1, updated_at: 1, parent_id: null },
+      { id: "c-zrebak", name: "Źrebak", archived: false, version: 1, created_at: 1, updated_at: 1, parent_id: null },
+      { id: "c-lodz", name: "Łódź", archived: false, version: 1, created_at: 1, updated_at: 1, parent_id: null },
+      { id: "c-lod", name: "Lód", archived: false, version: 1, created_at: 1, updated_at: 1, parent_id: null },
+      { id: "c-cma", name: "Ćma", archived: false, version: 1, created_at: 1, updated_at: 1, parent_id: null },
+      { id: "c-cebula", name: "Cebula", archived: false, version: 1, created_at: 1, updated_at: 1, parent_id: null },
     ];
     const rows = [
       classified("zolw", { effective: { kind: "expense", category_id: "c-zolw", source: "default", rule_id: null } }),
@@ -811,6 +813,94 @@ describe("period entries", () => {
     // Closing the editor restores live sorting across all loaded rows.
     await click(button(transactionLabels.en.cancel));
     expect(names()).toEqual(["Synthetic shop huge", "Synthetic shop high", "Synthetic shop mid", "Synthetic shop low"]);
+  });
+
+  it("stops background loading when a page adds no unique rows after deduplication", async () => {
+    const calls: Array<string | undefined> = [];
+    const api = fakeApi();
+    api.analyticsTransactions.mockImplementation((_period, _filter, cursor) => {
+      calls.push(cursor);
+      if (cursor === undefined) return ok(pageOf([entry("p1")], "c1"));
+      if (cursor === "c1") return ok(pageOf([entry("p1")], "c2"));
+      return ok(pageOf([entry("unreachable")]));
+    });
+    await show(api);
+    await drain();
+    expect(calls).toEqual([undefined, "c1"]);
+    expect(names()).toEqual(["Synthetic shop p1"]);
+    expect(host.textContent).not.toContain("Loading…");
+    expect(host.querySelector('[role="note"]')).toBeNull();
+  });
+
+  it("keeps row order stable while the pair picker is open and restores live sorting when closed or confirmed", async () => {
+    const listNames = () => [...host.querySelectorAll('ul[aria-label="Transactions"] > li > .budget-entry-main .budget-entry-text')]
+      .map((item) => item.textContent);
+    let releasePage2: (value: BudgetResult<AnalyticsTransactions>) => void = () => undefined;
+    let releasePage3: (value: BudgetResult<AnalyticsTransactions>) => void = () => undefined;
+    const api = fakeApi();
+    api.analyticsTransactions.mockImplementation((period, ...args) => {
+      const [, cursor, limit] = args;
+      if (limit === 200) return ok(entriesOf(period, [pairCredit("in", { amount: "20.00" })]));
+      if (cursor === undefined) {
+        return ok(pageOf([pairDebit("high", { amount: "50.00" }), pairDebit("mid", { amount: "20.00" })], "c1"));
+      }
+      if (cursor === "c1") return new Promise((resolve) => { releasePage2 = resolve; });
+      return new Promise((resolve) => { releasePage3 = resolve; });
+    });
+    await show(api);
+    await click(sortButton("Amount"));
+    expect(listNames()).toEqual(["Synthetic shop mid", "Synthetic shop high"]);
+
+    await click(button(transactionLabels.en.pair, host.querySelectorAll(".budget-entry")[0]));
+    expect(host.querySelector(".budget-pair-picker")).not.toBeNull();
+
+    // Background page arrives with a smaller amount while picker is open: existing rows must not jump.
+    await act(async () => {
+      releasePage2({ ok: true, data: pageOf([pairDebit("low", { amount: "5.00" })], "c2") });
+      await Promise.resolve();
+    });
+    await settle();
+    expect(listNames()).toEqual(["Synthetic shop mid", "Synthetic shop high", "Synthetic shop low"]);
+    expect(host.querySelectorAll(".budget-entry")[0]?.querySelector(".budget-pair-picker")).not.toBeNull();
+
+    // User explicitly re-sorts while picker is still open: order updates immediately.
+    await click(sortButton("Amount"));
+    expect(listNames()).toEqual(["Synthetic shop high", "Synthetic shop mid", "Synthetic shop low"]);
+
+    // Another background page arrives while picker remains open: newly sorted order stays stable.
+    await act(async () => {
+      releasePage3({ ok: true, data: pageOf([pairDebit("huge", { amount: "100.00" })]) });
+      await Promise.resolve();
+    });
+    await settle();
+    expect(listNames()).toEqual(["Synthetic shop high", "Synthetic shop mid", "Synthetic shop low", "Synthetic shop huge"]);
+
+    // Closing the picker restores live sorting across all loaded rows.
+    await click(button(transactionLabels.en.cancel));
+    expect(listNames()).toEqual(["Synthetic shop huge", "Synthetic shop high", "Synthetic shop mid", "Synthetic shop low"]);
+
+    // Confirming a pair also releases the frozen order.
+    let releaseConfirmPage2: (value: BudgetResult<AnalyticsTransactions>) => void = () => undefined;
+    api.analyticsTransactions.mockImplementation((period, ...args) => {
+      const [, cursor, limit] = args;
+      if (limit === 200) return ok(entriesOf(period, [pairCredit("in", { amount: "20.00" })]));
+      if (cursor === undefined) {
+        return ok(pageOf([pairDebit("high", { amount: "50.00" }), pairDebit("mid", { amount: "20.00" })], "c1"));
+      }
+      return new Promise((resolve) => { releaseConfirmPage2 = resolve; });
+    });
+    await show(api, { revision: 1 });
+    await click(sortButton("Amount"));
+    await click(button(transactionLabels.en.pair, host.querySelectorAll(".budget-entry")[0]));
+    await act(async () => {
+      releaseConfirmPage2({ ok: true, data: pageOf([pairDebit("low", { amount: "5.00" })]) });
+      await Promise.resolve();
+    });
+    await settle();
+    expect(listNames()).toEqual(["Synthetic shop mid", "Synthetic shop high", "Synthetic shop low"]);
+    await click(button(transactionLabels.en.pairConfirm));
+    expect(host.querySelector(".budget-pair-picker")).toBeNull();
+    expect(listNames()).toEqual(["Synthetic shop low", "Synthetic shop mid", "Synthetic shop high"]);
   });
 });
 
@@ -1134,5 +1224,127 @@ describe("manual own-transfer pairing", () => {
     expect(rendered[0]?.querySelector(".budget-pair-picker")).toBeNull();
     expect(rendered[1]?.textContent).toContain("Synthetic Card Repayment");
     expect(rendered[1]?.textContent).not.toContain("Synthetic shop late");
+  });
+
+  it("fetches server-provided row keys across adjacent periods, shows truncation note without leaking keys, and toggles cleanly", async () => {
+    const scrollIntoView = vi.fn();
+    const prevScroll = (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView;
+    Element.prototype.scrollIntoView = scrollIntoView;
+    try {
+      const confirmedCard = account({ id: "acc-card-secret", kind: "credit_card", kind_confirmed_at: 10 });
+      const provisionalRows = [
+        entry("ref-secret-1", { account_id: "acc-secret-1", booking_date: "2026-11-10", remittance_information: ["Synthetic Grocery"] }),
+        entry("ref-secret-dec", { account_id: "acc-secret-1", booking_date: "2026-12-02", transaction_date: "2026-11-29", remittance_information: ["Synthetic Dec Booked"] }),
+        entry("ref-secret-oct", { account_id: "acc-card-secret", booking_date: "2026-10-28", remittance_information: ["Synthetic Window Salary"] }),
+        entry("ref-secret-stale", {
+          account_id: "acc-secret-1",
+          remittance_information: ["Synthetic Stale Exclusion"],
+          annotation: { version: 1, mode: "manual", category_id: null, kind: "excluded", stale: true },
+          effective: { kind: "expense", category_id: "cat-food", source: "rule", rule_id: "rule-exp" },
+        }),
+      ];
+      const novemberRows = [
+        provisionalRows[0] as AnalyticsTransaction,
+        provisionalRows[3] as AnalyticsTransaction,
+        entry("nov-clean-1", { booking_date: "2026-11-11", remittance_information: ["Synthetic November Clean A"] }),
+        entry("nov-clean-2", { booking_date: "2026-11-12", remittance_information: ["Synthetic November Clean B"] }),
+        entry("nov-clean-3", { booking_date: "2026-11-13", remittance_information: ["Synthetic November Clean C"] }),
+        entry("nov-clean-4", { booking_date: "2026-11-14", remittance_information: ["Synthetic November Clean D"] }),
+      ];
+      const keys = [
+        "acc-secret-1/ref-secret-1",
+        "acc-secret-1/ref-secret-dec",
+        "acc-card-secret/ref-secret-oct",
+        "acc-secret-1/ref-secret-stale",
+      ];
+      const api = fakeApi(novemberRows);
+      api.analyticsTransactions.mockImplementation((period) => ok(entriesOf(period, novemberRows)));
+      api.analyticsTransactionsByKeys.mockImplementation(() => ok(entriesOf("", provisionalRows)));
+
+      await act(async () => {
+        root.render(
+          <TransactionsPanel api={api} period="2026-11" currencies={["EUR", "PLN"]}
+            accounts={[...accounts, confirmedCard]} text={transactionLabels.en} locale="en" revision={0}
+            onAccessLoss={() => false} onChanged={() => undefined}
+            initialCurrency="PLN"
+            initialProvisionalKeys={keys}
+            initialProvisionalTotal={505}
+            initialProvisionalTruncated={true}
+            focusOnMount={true} />,
+        );
+        await Promise.resolve();
+      });
+      await settle();
+
+      expect(api.analyticsTransactionsByKeys).toHaveBeenCalledWith({ row_keys: keys, currency: "PLN" });
+      expect(api.analyticsTransactions).not.toHaveBeenCalled();
+      expect(scrollIntoView).toHaveBeenCalled();
+      expect(select("Currency").value).toBe("PLN");
+      const checkbox = host.querySelector<HTMLInputElement>('input[name="provisional"]');
+      expect(checkbox?.checked).toBe(true);
+      const entryNames = () => [...host.querySelectorAll(".budget-entry-text")].map((item) => item.textContent);
+      expect(entryNames()).toEqual([
+        "Synthetic Grocery",
+        "Synthetic Dec Booked",
+        "Synthetic Window Salary",
+        "Synthetic Stale Exclusion",
+      ]);
+      expect(host.textContent).toContain("4 entries");
+      expect(host.textContent).toContain("Showing first 4 of 505.");
+      for (const secret of ["acc-secret-1", "acc-card-secret", "ref-secret-1", "ref-secret-dec", "ref-secret-oct", "ref-secret-stale"]) {
+        expect(host.textContent).not.toContain(secret);
+      }
+
+      // Unchecking loads full month entries via GET and hides the truncation note; re-checking uses POST transactions-by-keys.
+      await act(async () => { checkbox?.click(); await Promise.resolve(); });
+      await settle();
+      expect(api.analyticsTransactions).toHaveBeenLastCalledWith("2026-11", { currency: "PLN", category: "", kind: "", query: "" });
+      expect(entryNames()).toHaveLength(6);
+      expect(host.textContent).toContain("6 entries");
+      expect(host.textContent).not.toContain("Showing first");
+
+      await act(async () => { host.querySelector<HTMLInputElement>('input[name="provisional"]')?.click(); await Promise.resolve(); });
+      await settle();
+      expect(api.analyticsTransactionsByKeys).toHaveBeenCalledTimes(2);
+      expect(api.analyticsTransactionsByKeys).toHaveBeenLastCalledWith({ row_keys: keys, currency: "PLN" });
+      expect(entryNames()).toHaveLength(4);
+    } finally {
+      if (prevScroll === undefined) {
+        delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView;
+      } else {
+        Element.prototype.scrollIntoView = prevScroll as typeof Element.prototype.scrollIntoView;
+      }
+    }
+  });
+
+  it("handles empty initialProvisionalKeys without querying empty row_keys", async () => {
+    const api = fakeApi([entry("e1")]);
+    await act(async () => {
+      root.render(
+        <TransactionsPanel api={api} period="2026-11" currencies={["PLN"]} accounts={accounts}
+          text={transactionLabels.en} locale="en" revision={0} onAccessLoss={() => false}
+          onChanged={() => undefined} initialProvisionalKeys={[]} />,
+      );
+      await Promise.resolve();
+    });
+    await settle();
+    expect(api.analyticsTransactions).not.toHaveBeenCalled();
+    expect(api.analyticsTransactionsByKeys).not.toHaveBeenCalled();
+    expect(host.textContent).toContain("No entries match.");
+  });
+
+  it("hides the provisional toggle when opened without initialProvisionalKeys", async () => {
+    const api = fakeApi([entry("e1")]);
+    await act(async () => {
+      root.render(
+        <TransactionsPanel api={api} period="2026-11" currencies={["PLN"]} accounts={accounts}
+          text={transactionLabels.en} locale="en" revision={0} onAccessLoss={() => false}
+          onChanged={() => undefined} />,
+      );
+      await Promise.resolve();
+    });
+    await settle();
+    expect(host.querySelector('input[name="provisional"]')).toBeNull();
+    expect(host.querySelectorAll(".budget-entry")).toHaveLength(1);
   });
 });

@@ -4,7 +4,7 @@ import type { Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BudgetApi, BudgetResult } from "../api";
 import { account } from "../fixtures";
-import { forecastCurrencyTotal, forecastDeduplication, forecastItem, forecastOf, mortgageSchedule, mortgagesOf } from "./fixtures";
+import { categoryList, forecastCurrencyTotal, forecastDeduplication, forecastItem, forecastOf, mortgageSchedule, mortgagesOf } from "./fixtures";
 import { ForecastView } from "./forecast";
 import { ANALYTICS_ERROR } from "./model";
 import type { AnalyticsForecast, AnalyticsMortgages } from "./model";
@@ -32,6 +32,7 @@ function fakeApi() {
   return {
     forecast: vi.fn<BudgetApi["forecast"]>().mockResolvedValue(ok(forecastOf())),
     mortgages: vi.fn<BudgetApi["mortgages"]>().mockResolvedValue(ok(mortgagesOf())),
+    categories: vi.fn<BudgetApi["categories"]>().mockResolvedValue(ok({ categories: categoryList })),
   };
 }
 
@@ -167,6 +168,46 @@ describe("ForecastView", () => {
     expect(details.textContent).toContain("2026-10-16");
     expect(details.querySelector(".budget-chip")?.textContent).toBe(stale);
     expect(details.querySelector("button, input, select")).toBeNull();
+  });
+
+  it.each([
+    { locale: "en-US", badge: "≈ estimated", merged: "Merged with instalment" },
+    { locale: "pl-PL", badge: "≈ szacowane", merged: "Połączono z ratą" },
+  ])("shows a category baseline estimate badge in $locale", async ({ locale, badge, merged }) => {
+    const api = fakeApi();
+    const base = forecastOf();
+    const estimate = {
+      ...forecastItem({
+        schedule_id: null, label: "Electricity", amount: "180.5", currency: "PLN",
+        expected_date: "2026-11-28", past_due: false, account_stale: false,
+      }),
+      source: "category_baseline",
+      confidence: "estimated",
+    } as unknown as ReturnType<typeof forecastItem>;
+    const total = forecastCurrencyTotal({ currency: "PLN", total: "180.5", scheduled_total: "0", estimated_total: "180.5" });
+    api.forecast.mockResolvedValue(ok({
+      ...base,
+      totals: [total],
+      deduplications: [forecastDeduplication()],
+      months: base.months.map((month) => month.month === base.start_month
+        ? { ...month, items: [estimate], currencies: [total] }
+        : month),
+    }));
+    await show(api, locale);
+
+    const month = requireElement(host.querySelector("section.budget-month"), "month");
+    expect([...month.querySelectorAll(".budget-chip")].map((chip) => chip.textContent)).toEqual([badge]);
+    expect(month.textContent).toContain("Electricity");
+    expect(month.textContent).toContain("2026-11-28");
+    expect(host.textContent).not.toContain(locale === "pl-PL" ? "Korekty szacunku" : "Category estimate adjustments");
+    expect(host.textContent).not.toContain(locale === "pl-PL" ? "Uwzględniono" : "Counted on");
+
+    const mergedDetails = [...host.querySelectorAll("details")].find((item) => item.querySelector("summary")?.textContent === merged);
+    if (mergedDetails === undefined) throw new Error("Missing forecast details");
+    await update(() => { requireElement(mergedDetails.querySelector("summary"), merged).click(); });
+    expect(mergedDetails.open).toBe(true);
+    expect(mergedDetails.textContent).toContain("→");
+    expect(mergedDetails.textContent).toContain(locale === "pl-PL" ? "Termin raty" : "Instalment due");
   });
 
   it("labels each currency chart and shows exact monthly totals in text tables", async () => {
@@ -346,6 +387,85 @@ describe("ForecastView", () => {
     await update(() => { schedules.resolve(refusal); });
     expect(barrier).toHaveBeenLastCalledWith(refusal);
     expect(host.textContent).toContain("Fresh EUR");
+  });
+
+  it.each([
+    {
+      locale: "en-US",
+      note: "Skipped the estimate for: another category, Synthetic Food (already forecast as a fixed payment)",
+    },
+    {
+      locale: "pl-PL",
+      note: "Pominięto szacunek dla: inna kategoria, Synthetic Food (już prognozowane jako stała płatność)",
+    },
+  ])("names a skipped category baseline in $locale", async ({ locale, note }) => {
+    const api = fakeApi();
+    const base = forecastOf();
+    api.forecast.mockResolvedValue(ok(forecastOf({
+      summary: {
+        ...base.summary,
+        baseline_conflicts: [
+          { category_id: "cat-food", reason: "recurring" },
+          { category_id: "cat-food", reason: "mortgage" },
+          { category_id: "cat-missing", reason: "recurring" },
+        ],
+      },
+    })));
+    await show(api, locale);
+
+    expect(api.categories).toHaveBeenCalledTimes(1);
+    expect(host.textContent).toContain(note);
+    expect(host.textContent).not.toContain("cat-food");
+    expect(host.textContent).not.toContain("cat-missing");
+    expect(host.textContent).not.toContain("Synthetic Old");
+  });
+
+  it("keeps an unrecognised category in the note as a generic entry", async () => {
+    const api = fakeApi();
+    const base = forecastOf();
+    api.forecast.mockResolvedValue(ok(forecastOf({
+      summary: { ...base.summary, baseline_conflicts: [{ category_id: "cat-missing", reason: "mortgage" }] },
+    })));
+    await show(api);
+
+    expect(host.textContent).toContain(
+      "Skipped the estimate for: another category (already forecast as a fixed payment)",
+    );
+    expect(host.textContent).not.toContain("cat-missing");
+  });
+
+  it("treats a missing baseline_conflicts list as empty", async () => {
+    const api = fakeApi();
+    const base = forecastOf();
+    const summary = { ...base.summary };
+    delete summary.baseline_conflicts;
+    api.forecast.mockResolvedValue(ok(forecastOf({ summary })));
+    await show(api);
+
+    expect(api.categories).not.toHaveBeenCalled();
+    expect(host.textContent).not.toContain("Skipped the estimate");
+    expect(host.textContent).not.toContain("Pominięto szacunek");
+  });
+
+  it("notes a skipped baseline without a category id when names cannot be loaded", async () => {
+    const api = fakeApi();
+    const base = forecastOf();
+    api.forecast.mockResolvedValue(ok(forecastOf({
+      summary: { ...base.summary, baseline_conflicts: [{ category_id: "cat-food", reason: "recurring" }] },
+    })));
+    api.categories.mockResolvedValue({ ok: false, status: 500, error: "budget_internal_error" });
+    await show(api);
+
+    expect(host.textContent).toContain("Skipped an estimate for a category that is already forecast as a fixed payment");
+    expect(host.textContent).not.toContain("cat-food");
+  });
+
+  it("does not mention a skipped baseline when every configured category is estimated", async () => {
+    const api = fakeApi();
+    await show(api);
+    expect(api.categories).not.toHaveBeenCalled();
+    expect(host.textContent).not.toContain("Skipped the estimate");
+    expect(host.textContent).not.toContain("Pominięto szacunek");
   });
 
   it("offers mortgage reminders and shows dates and stale account names", async () => {

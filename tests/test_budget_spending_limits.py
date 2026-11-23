@@ -224,6 +224,71 @@ class SpendingLimitsTests(unittest.TestCase):
         with self.assertRaises(SpendingLimitCapError):
             evaluate_spending_limits("owner", "2026-11", [], [*at_cap_spending, _spending("cat-over", "1")])
 
+    def test_parent_limit_counts_the_subtree_in_the_same_currency_only(self):
+        parents = {"transport": None, "car": "transport", "fuel": "car", "taxi": "transport", "wash": "car",
+                   "parking": None, "meter": "parking", "food": None, "rebate": "food",
+                   "solo": None, "zero-child": "solo"}
+        limits = [
+            _limit("transport", "30"), _limit("car", "10"), _limit("fuel", "10"),
+            _limit("parking", "5"), _limit("food", "50"), _limit("solo", "10.00"),
+            _limit("parking", "100", currency="EUR"), _limit("transport", "100", currency="EUR"),
+        ]
+        spending = [
+            _spending("transport", "1", archived=True),
+            _spending("car", "5"),
+            _spending("fuel", "8", "1"),
+            _spending("taxi", "20"),
+            _spending("wash", "0", "0"),
+            _spending("meter", "6"),
+            _spending("food", "40"),
+            _spending("rebate", "0", "2"),
+            _spending(None, "100"),
+            _spending("solo", "10.00"),
+            _spending("zero-child", "0", "0"),
+            _spending("meter", "9", currency="EUR"),
+            _spending("fuel", "3", currency="EUR"),
+        ]
+        results = evaluate_spending_limits("owner", "2026-11", limits, spending, parents=parents)
+        by_key = {(item.currency, item.category_id): item for item in results}
+        transport = by_key[("PLN", "transport")]
+        self.assertEqual((transport.expenses, transport.refunds, transport.net_spending, transport.status,
+                          transport.over_by, transport.percent_used_floor, transport.archived),
+                         ("34", "1", "33", "exceeded", "3", 110, True))
+        self.assertEqual(by_key[("PLN", "car")].net_spending, "12")
+        self.assertEqual((by_key[("PLN", "fuel")].net_spending, by_key[("PLN", "fuel")].status,
+                          by_key[("PLN", "fuel")].archived), ("7", "within", False))
+        self.assertEqual((by_key[("PLN", "parking")].net_spending, by_key[("PLN", "parking")].archived,
+                          by_key[("PLN", "parking")].status), ("6", False, "exceeded"))
+        self.assertEqual((by_key[("PLN", "food")].expenses, by_key[("PLN", "food")].refunds,
+                          by_key[("PLN", "food")].net_spending, by_key[("PLN", "food")].status),
+                         ("40", "2", "38", "within"))
+        self.assertEqual(by_key[("EUR", "parking")].net_spending, "9")
+        self.assertEqual(by_key[("EUR", "transport")].net_spending, "3")
+        flat = evaluate_spending_limits("owner", "2026-11", limits, spending)
+        self.assertEqual(next(item.net_spending for item in flat if item.category_id == "transport"
+                              and item.currency == "PLN"), "1")
+        roots = {"solo": None, "zero-child": None}
+        solo_limits = [_limit("solo", "10.00")]
+        solo_spending = [_spending("solo", "10.00"), _spending("zero-child", "0", "0")]
+        self.assertEqual(
+            evaluate_spending_limits("owner", "2026-11", solo_limits, solo_spending, parents=roots),
+            evaluate_spending_limits("owner", "2026-11", solo_limits, solo_spending))
+        self.assertEqual(
+            evaluate_spending_limits("owner", "2026-11", solo_limits, solo_spending,
+                                     parents={"solo": None, "zero-child": "solo"}),
+            evaluate_spending_limits("owner", "2026-11", solo_limits, solo_spending))
+
+    def test_parent_map_rejects_cycles_self_parents_bad_shapes_and_oversized_maps(self):
+        spending = [_spending("a", "1"), _spending("b", "1")]
+        limits = [_limit("a", "10")]
+        for parents in ({"a": "a"}, {"a": "uncategorised"}, {1: None}, {"a": 2}, ["a"], {"a": ""}):
+            with self.subTest(parents=parents), self.assertRaises(SpendingLimitInputError):
+                evaluate_spending_limits("owner", "2026-11", limits, spending, parents=parents)
+        with self.assertRaises(SpendingLimitInputError):
+            evaluate_spending_limits("owner", "2026-11", limits, spending, parents={"a": "b", "b": "a"})
+        with self.assertRaises(SpendingLimitCapError):
+            evaluate_spending_limits("owner", "2026-11", [], [], parents={"a": None}, max_spending=0)
+
     def test_repr_redacts_all_private_financial_fields(self):
         limit = _limit("cat-secret-99", "4321.99", owner="alice-secret")
         spend = _spending("cat-secret-99", "1234.56", "78.90", owner="alice-secret")

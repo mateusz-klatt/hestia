@@ -48,8 +48,8 @@ export function entry(reference: string, changes: Partial<AnalyticsTransaction> 
 }
 
 export const categoryList: AnalyticsCategory[] = [
-  { id: "cat-food", name: "Synthetic Food", archived: false, version: 1, created_at: 1, updated_at: 1 },
-  { id: "cat-old", name: "Synthetic Old", archived: true, version: 3, created_at: 1, updated_at: 2 },
+  { id: "cat-food", name: "Synthetic Food", archived: false, version: 1, created_at: 1, updated_at: 1, parent_id: null },
+  { id: "cat-old", name: "Synthetic Old", archived: true, version: 3, created_at: 1, updated_at: 2, parent_id: null },
 ];
 
 export function leg(account: string, reference: string, changes: Partial<TransferLeg> = {}): TransferLeg {
@@ -210,7 +210,7 @@ export function forecastOf(changes: Partial<AnalyticsForecast> = {}): AnalyticsF
     schedules_version: "synthetic-schedules-v1", rule_version: 1,
     summary: {
       selected_accounts: 1, excluded_accounts: 0, stale_accounts: 0, overdue_mortgage_schedule_count: 0,
-      lapsed_recurring_count: 0, deduped_recurring_count: 0, stale_recurring_count: 0,
+      lapsed_recurring_count: 0, deduped_recurring_count: 0, stale_recurring_count: 0, baseline_conflicts: [],
     },
     totals: [], deduplications: [],
     months: ["2026-11", "2026-12", "2027-01"].map((month) => ({ month, currencies: [], items: [] })),
@@ -398,6 +398,8 @@ export function monthlyBudgetOf(changes: Partial<AnalyticsMonthlyBudget> = {}): 
       stale_selected_accounts: 0,
       purchase_date_fallback_count: 0,
       pending_transfer_rows: 0,
+      pending_row_keys: [],
+      pending_row_keys_truncated: false,
       transfer_scan_limited: false,
       provisional: false,
       has_activity: true,

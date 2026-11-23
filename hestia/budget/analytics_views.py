@@ -44,6 +44,8 @@ MAX_RECURRING_HINTS = 200
 MAX_RECURRING_EVIDENCE = 24
 CURSOR_TTL = 900
 MAX_CURSOR = 8192
+MAX_ROW_KEYS = 500
+MAX_ROW_KEY_LENGTH = 1153
 _DATA_ERROR = "budget_analytics_data_error"
 _LIMIT_ERROR = "budget_analytics_limit"
 _DOMAIN = b"hestia/budget/analytics/cursor/v1"
@@ -450,6 +452,11 @@ def _wire_mortgage_reminder(item):
     }
 
 
+def _category_parents(categories):
+    """Category id to parent id. A missing parent is a root; limits then count that subtree."""
+    return {row["id"]: row.get("parent_id") or None for row in categories.values()}
+
+
 def _spending_limit_statuses(owner, period, limit_rows, category_totals, categories):
     from .spending_limits import (CategoryLimit, CategorySpending, SpendingLimitInputError,
                                   evaluate_spending_limits)
@@ -466,7 +473,7 @@ def _spending_limit_statuses(owner, period, limit_rows, category_totals, categor
         for row in category_totals
     ]
     try:
-        evaluated = evaluate_spending_limits(owner, period, limits, spending)
+        evaluated = evaluate_spending_limits(owner, period, limits, spending, parents=_category_parents(categories))
     except SpendingLimitInputError:
         raise AnalyticsError() from None
     return [
@@ -636,6 +643,24 @@ def _currency(value):
     if value is not None and (not isinstance(value, str) or not re.fullmatch(r"[A-Z]{3}", value, re.ASCII)):
         raise AnalyticsError()
     return value
+
+
+def _validate_row_keys(row_keys):
+    if row_keys is None:
+        return None
+    if not isinstance(row_keys, (list, tuple)) or not row_keys or len(row_keys) > MAX_ROW_KEYS:
+        raise AnalyticsError()
+    parsed = []
+    for item in row_keys:
+        if not isinstance(item, str) or len(item) < 3 or len(item) > MAX_ROW_KEY_LENGTH:
+            raise AnalyticsError()
+        if any(ord(ch) < 32 or ord(ch) == 127 for ch in item):
+            raise AnalyticsError()
+        acct_id, sep, entry_ref = item.partition("/")
+        if not sep or not acct_id or not entry_ref or len(acct_id) > 128 or len(entry_ref) > 1024:
+            raise AnalyticsError()
+        parsed.append((acct_id, entry_ref))
+    return tuple(sorted(set(parsed)))
 
 
 def _forecast_query(months=None, currency=None):
@@ -822,28 +847,59 @@ class BudgetAnalyticsViews(BudgetAnalyticsStore):
         next_cursor = self._cursor_encode(context, snapshot, end, now) if end < len(rows) else None
         return rows[index:end], next_cursor
 
-    def transactions(self, owner, period, *, currency=None, category_id=None, kind=None, query=None, limit=50, cursor=None):
-        start, end = core.parse_period(period)
-        currency = _currency(currency)
+    def _validate_transaction_filters(self, category_id, kind, query):
         if kind is not None and (not isinstance(kind, str) or kind not in _KINDS):
             raise AnalyticsError()
         if category_id is not None and (not isinstance(category_id, str) or not category_id or len(category_id) > 128):
             raise AnalyticsError()
         if query is not None and (not isinstance(query, str) or len(query) > 256):
             raise AnalyticsError()
-        query = None if query is None else query.casefold().strip()
-        filters = {"owner": owner, "operation": "transactions", "period": period, "currency": currency,
-                   "category_id": category_id, "kind": kind, "query": query, "limit": limit}
+        return None if query is None else query.casefold().strip()
+
+    def _transactions_response(self, owner, period, start, end, cursor, filters, select_rows):
+        category_id, kind, query = filters["category_id"], filters["kind"], filters["query"]
         with _read_lock, self._read(owner) as session:
             snapshot = self._projection(session, owner)
-            if category_id not in (None, "uncategorised") and category_id not in {row["id"] for row in snapshot["categories"]}:
+            if (category_id not in (None, "uncategorised")
+                    and category_id not in {row["id"] for row in snapshot["categories"]}):
                 raise AnalyticsError("budget_analytics_not_found", 404)
-            rows = [row for row in _period_rows(snapshot, start, end, currency) if _row_filter(row, category_id, kind, query)]
-            rows.sort(key=lambda row: (core.effective_date(row["payload"]), row["account_id"], row["entry_reference"]), reverse=True)
+            rows = [row for row in select_rows(snapshot) if _row_filter(row, category_id, kind, query)]
+            rows.sort(key=lambda row: (core.effective_date(row["payload"]), row["account_id"], row["entry_reference"]),
+                      reverse=True)
             page, next_cursor = self._page(rows, cursor, filters, snapshot["digest"])
             return {"period": period, "start": start, "end": end, "snapshot_digest": snapshot["digest"],
                     "transactions": deepcopy([_wire_transaction(row) for row in page]), "filtered_total": len(rows),
                     "next_cursor": next_cursor}
+
+    def transactions(self, owner, period, *, currency=None, category_id=None, kind=None, query=None, limit=50,
+                     cursor=None):
+        start, end = core.parse_period(period)
+        currency = _currency(currency)
+        query = self._validate_transaction_filters(category_id, kind, query)
+        filters = {"owner": owner, "operation": "transactions", "period": period, "currency": currency,
+                   "category_id": category_id, "kind": kind, "query": query, "limit": limit}
+        return self._transactions_response(
+            owner, period, start, end, cursor, filters,
+            lambda snapshot: _period_rows(snapshot, start, end, currency),
+        )
+
+    def transactions_by_keys(self, owner, *, row_keys, currency=None, category_id=None, kind=None, query=None,
+                             limit=50, cursor=None):
+        if row_keys is None:
+            raise AnalyticsError()
+        parsed_keys = _validate_row_keys(row_keys)
+        currency = _currency(currency)
+        query = self._validate_transaction_filters(category_id, kind, query)
+        filters = {"owner": owner, "operation": "transactions-by-keys",
+                   "row_keys": [list(item) for item in parsed_keys], "currency": currency,
+                   "category_id": category_id, "kind": kind, "query": query, "limit": limit}
+        key_set = set(parsed_keys)
+        return self._transactions_response(
+            owner, "", "", "", cursor, filters,
+            lambda snapshot: [row for row in snapshot["transactions"]
+                              if (row["account_id"], row["entry_reference"]) in key_set
+                              and (currency is None or row["payload"]["currency"] == currency)],
+        )
 
     def transfers(self, owner, period, *, currency=None, status="suggested", limit=50, cursor=None):
         start, end = core.parse_period(period)
@@ -997,11 +1053,16 @@ class BudgetAnalyticsViews(BudgetAnalyticsStore):
                 schedules = self._forecast_schedules(session, owner)
                 schedules_version = _schedules_version(owner, schedules)
                 account_timestamps = self._forecast_account_timestamps(session, owner)
+                schedule_models = _mortgage_models(owner, schedules)
+                hints = _snapshot_recurring(snapshot)
+                baselines, estimator, conflicts = forecast_mod.baselines_for_snapshot(
+                    snapshot, evaluation_date, hints, schedule_models, account_timestamps=account_timestamps)
                 return forecast_mod.evaluate_forecast(
                     owner=owner, evaluation_date=evaluation_date, months=months, currency=currency,
                     account_timestamps=account_timestamps, excluded_accounts=snapshot["counts"]["excluded_accounts"],
-                    schedules=_mortgage_models(owner, schedules), hints=_snapshot_recurring(snapshot),
+                    schedules=schedule_models, hints=hints,
                     snapshot_digest=snapshot["digest"], schedules_version=schedules_version,
+                    baselines=baselines, baseline_estimator=estimator, baseline_conflicts=conflicts,
                 )
         except forecast_mod.ForecastLimitError:
             raise AnalyticsError(_LIMIT_ERROR, 413) from None
@@ -1165,7 +1226,7 @@ class BudgetAnalyticsViews(BudgetAnalyticsStore):
             for row in totals
         ]
         try:
-            evaluated = evaluate_spending_limits(owner, period, limits, spending)
+            evaluated = evaluate_spending_limits(owner, period, limits, spending, parents=_category_parents(categories))
         except SpendingLimitCapError:
             raise AnalyticsError(_LIMIT_ERROR, 413) from None
         except SpendingLimitInputError:

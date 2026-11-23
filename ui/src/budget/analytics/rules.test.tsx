@@ -19,7 +19,7 @@ const preview: RulePreview = { preview_id: "preview-1", affected_count: 23, expi
   { account_id: "acc-1", entry_reference: "synthetic-ref-1" }, { account_id: "gone", entry_reference: "synthetic-ref-2" }] };
 const accounts = [account({ id: "acc-1", display: { product: "Synthetic Current", currency: "PLN", masked_suffix: "0001",
   source: "offline_import", observed_at: 1, imported_at: 2 } })];
-const category = { id: "cat-new", name: "Synthetic New", archived: false, version: 1, created_at: 1, updated_at: 1, changed: true };
+const category = { id: "cat-new", name: "Synthetic New", archived: false, version: 1, created_at: 1, updated_at: 1, parent_id: null, changed: true };
 
 function fakeApi() {
   return {
@@ -47,10 +47,11 @@ afterEach(async () => {
 async function settle(): Promise<void> {
   await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
 }
-async function show(api: ReturnType<typeof fakeApi>, options: { revision?: number; lost?: boolean } = {}) {
+async function show(api: ReturnType<typeof fakeApi>, options: { revision?: number; lost?: boolean; text?: typeof rulesLabels.en; locale?: string } = {}) {
   const onAccessLoss = vi.fn((result: { ok: boolean }) => options.lost === true && !result.ok);
   await act(async () => {
-    root.render(<CategoriesView api={api} accounts={accounts} text={rulesLabels.en} revision={options.revision ?? 0} onAccessLoss={onAccessLoss} />);
+    root.render(<CategoriesView api={api} accounts={accounts} text={options.text ?? rulesLabels.en} locale={options.locale ?? "en"}
+      revision={options.revision ?? 0} onAccessLoss={onAccessLoss} />);
     await Promise.resolve();
   });
   await settle();
@@ -103,7 +104,7 @@ describe("categories", () => {
     await type(name, "  Synthetic New  ");
     await act(async () => { add?.requestSubmit(); await Promise.resolve(); });
     await settle();
-    expect(api.createCategory).toHaveBeenCalledWith({ name: "Synthetic New" });
+    expect(api.createCategory).toHaveBeenCalledWith({ name: "Synthetic New", parent_id: null });
     expect(api.categories).toHaveBeenCalledTimes(2);
     expect(name?.value).toBe("");
   });
@@ -117,9 +118,9 @@ describe("categories", () => {
     await type(form?.querySelector("input"), "Synthetic Groceries");
     await act(async () => { (form as HTMLFormElement | null)?.requestSubmit(); await Promise.resolve(); });
     await settle();
-    expect(api.updateCategory).toHaveBeenCalledWith({ category_id: "cat-food", name: "Synthetic Groceries", archived: false, expected_version: 1 });
+    expect(api.updateCategory).toHaveBeenCalledWith({ category_id: "cat-food", name: "Synthetic Groceries", archived: false, expected_version: 1, parent_id: null });
     await click(button("Restore", section("Categories")));
-    expect(api.updateCategory).toHaveBeenLastCalledWith({ category_id: "cat-old", name: "Synthetic Old", archived: false, expected_version: 3 });
+    expect(api.updateCategory).toHaveBeenLastCalledWith({ category_id: "cat-old", name: "Synthetic Old", archived: false, expected_version: 3, parent_id: null });
   });
 
   it("reloads after a conflict and refuses an empty rename", async () => {
@@ -134,6 +135,50 @@ describe("categories", () => {
     expect(button("Save", section("Categories")).disabled).toBe(true);
     await click(button("Cancel", section("Categories")));
     expect(section("Categories").querySelector("li form")).toBeNull();
+  });
+
+  it("indents a subcategory, chooses its parent, and will not archive a parent", async () => {
+    const transport = { id: "cat-transport", name: "Synthetic Transport", archived: false, version: 1, created_at: 1, updated_at: 1, parent_id: null };
+    const fuel = { id: "cat-fuel", name: "Synthetic Fuel", archived: false, version: 1, created_at: 1, updated_at: 1, parent_id: "cat-transport" };
+    const api = fakeApi();
+    api.categories.mockImplementation(() => ok({ categories: [fuel, transport] }));
+    await show(api);
+    const panel = section("Categories");
+    const items = [...panel.querySelectorAll("li")];
+    const parent = items[0];
+    const child = items[1];
+    if (parent === undefined || child === undefined) throw new Error("category rows missing");
+    expect(items.map((item) => item.getAttribute("data-depth"))).toEqual(["0", "1"]);
+    expect(parent.textContent).toContain("Synthetic Transport");
+    expect(button("Archive", parent).disabled).toBe(true);
+    expect(button("Archive", parent).title).toBe(rulesLabels.en.archiveBlocked);
+    expect(button("Archive", child).disabled).toBe(false);
+    const add = [...panel.querySelectorAll("form")].at(-1);
+    if (add === undefined) throw new Error("form missing");
+    await choose(field(add, "Parent category") as HTMLSelectElement, "cat-transport");
+    await type(add.querySelector("input"), "Synthetic Wash");
+    await act(async () => { add.requestSubmit(); await Promise.resolve(); });
+    await settle();
+    expect(api.createCategory).toHaveBeenCalledWith({ name: "Synthetic Wash", parent_id: "cat-transport" });
+    const fuelRow = [...section("Categories").querySelectorAll("li")][1];
+    if (fuelRow === undefined) throw new Error("fuel row missing");
+    await click(button("Rename", fuelRow));
+    const editor = section("Categories").querySelector("li form");
+    if (!(editor instanceof HTMLFormElement)) throw new Error("editor missing");
+    await choose(field(editor, "Parent category") as HTMLSelectElement, "");
+    await act(async () => { editor.requestSubmit(); await Promise.resolve(); });
+    await settle();
+    expect(api.updateCategory).toHaveBeenCalledWith({
+      category_id: "cat-fuel", name: "Synthetic Fuel", archived: false, expected_version: 1, parent_id: null,
+    });
+  });
+
+  it("labels the parent field in Polish", async () => {
+    await show(fakeApi(), { text: rulesLabels.pl, locale: "pl" });
+    const panel = section("Kategorie");
+    expect(panel.textContent).toContain("Kategoria nadrzędna");
+    expect(panel.textContent).toContain("Najwyższy poziom");
+    expect(rulesLabels.pl.archiveBlocked).toBe("Najpierw przenieś jej podkategorie. Zarchiwizowane też trzeba przenieść.");
   });
 });
 

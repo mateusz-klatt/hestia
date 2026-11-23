@@ -21,7 +21,7 @@ export interface YearLabels {
 }
 
 export interface YearViewProps {
-  api: Pick<BudgetApi, "overview">;
+  api: Pick<BudgetApi, "overview"> & Partial<Pick<BudgetApi, "categories">>;
   accounts: readonly BudgetAccount[];
   connections?: readonly BudgetConnection[] | undefined;
   text: YearLabels;
@@ -44,6 +44,8 @@ export function YearView({ api, accounts, connections = [], text, locale, revisi
   const latest = currentMonth(today()).slice(0, 4);
   const [year, setYear] = useState(latest);
   const overview = useCallback((period: string) => api.overview(period), [api]);
+  const readCategories = api.categories;
+  const loadCategories = useCallback(() => readCategories?.() ?? Promise.resolve({ ok: true as const, data: { categories: [] } }), [readCategories]);
   const details = useCallback((data: AnalyticsOverview) => (
     data.months.length === 0 ? null : data.currencies.map((total) => {
       const unclassified = data.months.some((item) => item.currencies.some((value) =>
@@ -87,7 +89,8 @@ export function YearView({ api, accounts, connections = [], text, locale, revisi
           onClick={() => { setYear((value) => (value < latest ? String(Number(value) + 1).padStart(4, "0") : value)); }}>▶</button>
       </nav>
       <OverviewPanel overview={overview} period={year} current={year === latest} accounts={accounts} connections={connections} text={text.overview}
-        locale={locale} revision={revision} onAccessLoss={onAccessLoss} details={details} />
+        locale={locale} revision={revision} onAccessLoss={onAccessLoss} details={details}
+        {...(readCategories === undefined ? {} : { loadCategories })} />
     </section>
   );
 }

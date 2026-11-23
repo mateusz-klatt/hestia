@@ -214,7 +214,7 @@ export interface paths {
         };
         /**
          * Read the owner-private upcoming commitments estimate
-         * @description Read-only evaluation of unmarked mortgage instalments and active recurring charges from one local snapshot using the server UTC date. Matches recurring hints to individual scheduled instalments to suppress duplicate estimates. An optional currency filter scopes commitments, deduplications and their summary counts. Snapshot metadata and account freshness cover all selected accounts. The estimate excludes spending limits and makes no bank requests or stored changes.
+         * @description Read-only evaluation of unmarked mortgage instalments and active recurring charges from one local snapshot using the server UTC date. Matches recurring hints to individual scheduled instalments to suppress duplicate estimates. When HESTIA_BUDGET_FORECAST_CONFIG names categories, each month also includes a category_baseline estimate (confidence estimated, schedule_id null, label is the category name): the median or trimmed mean of net spending over prior complete months inside each account's coverage window, including months with no spend. The current month subtracts net spending already booked, floored at zero. A configured category already represented by an active recurring hint or an enabled mortgage schedule is omitted from the baselines and listed in summary.baseline_conflicts (category id and reason only, no amounts). Every other baseline, mortgage and recurring item is still computed. An optional currency filter scopes commitments, deduplications and their summary counts. Snapshot metadata and account freshness cover all selected accounts. The estimate excludes spending limits and makes no bank requests or stored changes.
          */
         get: operations["getBudgetAnalyticsForecast"];
         put?: never;
@@ -561,6 +561,26 @@ export interface paths {
         get: operations["getBudgetAnalyticsTransactions"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/budget/analytics/transactions-by-keys": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Read owner-private transactions matching exact row keys (pure read-only)
+         * @description Requires the exact admin owner, browser cookie and configured HTTPS Origin. Returns the same paginated BudgetAnalyticsTransactions shape as GET transactions for 1..500 exact <account_id>/<entry_reference> keys in the JSON body (<= 1 MiB) regardless of period, preventing oversized GET query strings and key leakage in access logs. Makes no bank requests and no database writes.
+         */
+        post: operations["listBudgetAnalyticsTransactionsByKeys"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1744,6 +1764,8 @@ export interface components {
             id: string;
             /** Name */
             name: string;
+            /** Parent Id */
+            parent_id: string | null;
             /** Updated At */
             updated_at: number;
             /** Version */
@@ -1753,6 +1775,12 @@ export interface components {
         BudgetAnalyticsCategoryCreateRequest: {
             /** Name */
             name: string;
+            /**
+             * Parent Id
+             * @description Parent category owned by the same user. Null is a top-level category. On update, omit this field to leave the parent unchanged and send null to detach.
+             * @default null
+             */
+            parent_id: string | null;
         };
         /** BudgetAnalyticsCategoryResult */
         BudgetAnalyticsCategoryResult: {
@@ -1775,6 +1803,8 @@ export interface components {
             id: string;
             /** Name */
             name: string;
+            /** Parent Id */
+            parent_id: string | null;
             /** Updated At */
             updated_at: number;
             /** Version */
@@ -1811,6 +1841,12 @@ export interface components {
             expected_version: number;
             /** Name */
             name: string;
+            /**
+             * Parent Id
+             * @description Parent category owned by the same user. Null is a top-level category. On update, omit this field to leave the parent unchanged and send null to detach.
+             * @default null
+             */
+            parent_id: string | null;
         };
         /**
          * BudgetAnalyticsCurrency
@@ -1934,6 +1970,21 @@ export interface components {
             totals: components["schemas"]["BudgetAnalyticsForecastCurrencyTotal"][];
         };
         /**
+         * BudgetAnalyticsForecastBaselineConflict
+         * @description A configured category omitted because an active hint or an enabled mortgage already represents it.
+         *
+         *     No amounts. A category may appear twice when both reasons apply.
+         */
+        BudgetAnalyticsForecastBaselineConflict: {
+            /** Category Id */
+            category_id: string;
+            /**
+             * Reason
+             * @enum {string}
+             */
+            reason: "recurring" | "mortgage";
+        };
+        /**
          * BudgetAnalyticsForecastCurrencyTotal
          * @description Exact decimal commitment totals in one currency.
          */
@@ -1978,7 +2029,7 @@ export interface components {
              * Confidence
              * @enum {string}
              */
-            confidence: "scheduled" | "high" | "medium";
+            confidence: "scheduled" | "high" | "medium" | "estimated";
             /** Currency */
             currency: string;
             /** Expected Date */
@@ -1993,7 +2044,7 @@ export interface components {
              * Source
              * @enum {string}
              */
-            source: "mortgage" | "recurring";
+            source: "mortgage" | "recurring" | "category_baseline";
         };
         /** BudgetAnalyticsForecastMonth */
         BudgetAnalyticsForecastMonth: {
@@ -2006,6 +2057,8 @@ export interface components {
         };
         /** BudgetAnalyticsForecastSummary */
         BudgetAnalyticsForecastSummary: {
+            /** Baseline Conflicts */
+            baseline_conflicts?: components["schemas"]["BudgetAnalyticsForecastBaselineConflict"][];
             /** Deduped Recurring Count */
             deduped_recurring_count: number;
             /** Excluded Accounts */
@@ -2414,6 +2467,10 @@ export interface components {
             has_activity: boolean;
             /** Ledger As Of */
             ledger_as_of: number | null;
+            /** Pending Row Keys */
+            pending_row_keys?: string[];
+            /** Pending Row Keys Truncated */
+            pending_row_keys_truncated?: boolean;
             /** Pending Transfer Rows */
             pending_transfer_rows: number;
             /** Provisional */
@@ -3300,6 +3357,41 @@ export interface components {
             start: string;
             /** Transactions */
             transactions: components["schemas"]["BudgetAnalyticsTransaction"][];
+        };
+        /** BudgetAnalyticsTransactionsByKeysRequest */
+        BudgetAnalyticsTransactionsByKeysRequest: {
+            /**
+             * Category Id
+             * @default null
+             */
+            category_id: string | null;
+            /**
+             * Currency
+             * @default null
+             */
+            currency: string | null;
+            /**
+             * Cursor
+             * @default null
+             */
+            cursor: string | null;
+            /**
+             * Kind
+             * @default null
+             */
+            kind: ("expense" | "income" | "refund" | "excluded" | "unclassified_credit" | "transfer") | null;
+            /**
+             * Limit
+             * @default 50
+             */
+            limit: number;
+            /**
+             * Query
+             * @default null
+             */
+            query: string | null;
+            /** Row Keys */
+            row_keys: string[];
         };
         /** BudgetAnalyticsTransfer */
         BudgetAnalyticsTransfer: {
@@ -6165,7 +6257,7 @@ export interface operations {
                     "application/json": components["schemas"]["BudgetError"];
                 };
             };
-            /** @description Forecast limit exceeded (>100,000 selected rows, >100 schedules, >1,200 paid marks per schedule, >200 active currency-filtered hints, >3,600 projected items, or >4 MiB UTF-8 JSON payload); zero partial totals returned. */
+            /** @description Forecast limit exceeded (>100,000 selected rows, >100 schedules, >1,200 paid marks per schedule, >200 active currency-filtered hints, >64 category baselines, >4,368 projected items, or >4 MiB UTF-8 JSON payload); zero partial totals returned. */
             413: {
                 headers: {
                     [name: string]: unknown;
@@ -6183,7 +6275,7 @@ export interface operations {
                     "application/json": components["schemas"]["BudgetError"];
                 };
             };
-            /** @description Analytics storage or budget configuration unavailable (`budget_analytics_unavailable` or `budget_unavailable`). */
+            /** @description Analytics storage or budget configuration unavailable (`budget_analytics_unavailable` or `budget_unavailable`). budget_forecast_config_conflict (0.31–0.32) wycofany w 0.33; konflikt to teraz 200 + summary.baseline_conflicts. */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -7834,6 +7926,102 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            /** @description owner-scoped stored state; no bank request */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetAnalyticsTransactions"];
+                };
+            };
+            /** @description invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description session required; middleware may return an empty body */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description admin owner or browser-origin requirement failed; middleware may return an empty body */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description unknown, disabled or foreign resource */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Version, financial source, reserved transfer leg, preview or cursor changed; reload and review. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Explicit analytics processing or owner configuration limit; no partial totals. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description budget configuration unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+        };
+    };
+    listBudgetAnalyticsTransactionsByKeys: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BudgetAnalyticsTransactionsByKeysRequest"];
+            };
+        };
         responses: {
             /** @description owner-scoped stored state; no bank request */
             200: {

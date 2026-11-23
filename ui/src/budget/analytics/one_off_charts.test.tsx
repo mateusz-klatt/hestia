@@ -74,7 +74,7 @@ describe("one-off chart entries", () => {
       }],
     });
     await act(async () => {
-      root.render(<MonthBudgetCharts budget={monthlyBudgetOf()} series={series} locale="pl" text={monthBudgetLabels.pl} />);
+      root.render(<MonthBudgetCharts budget={monthlyBudgetOf()} series={series} paceProjection={null} locale="pl" text={monthBudgetLabels.pl} />);
       await Promise.resolve();
     });
     const legend = host.querySelector("li.budget-one-off");
