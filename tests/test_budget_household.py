@@ -191,7 +191,7 @@ class HouseholdCommandTests(unittest.TestCase):
         db.init_db(self.path)
         code, _out, err, _logged = self._run("grant", "viewer", "alice")
         self.assertEqual((code, err.strip()), (2, "household_users_required"))
-        self.assertEqual(_versions(self.path), ["0023"])
+        self.assertEqual(_versions(self.path), ["0024"])
         with sqlite3.connect(self.path) as conn:
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM budget_household_members").fetchone()[0], 0)
 
@@ -205,7 +205,7 @@ class HouseholdCommandTests(unittest.TestCase):
             self.assertEqual(leftovers, [])
 
     def test_downgrade_roundtrip_keeps_owner_rows_and_empties_grants(self):
-        """0021 → init_db (0023) → downgrade_db (0022) → init_db (0023).
+        """0021 → init_db (0024) → downgrade_db (0022) → init_db (0024).
 
         Each step goes through the production runner. Receipt rows, category parents,
         the one-off label column, and owner rows survive. Grants do not.
@@ -232,7 +232,7 @@ class HouseholdCommandTests(unittest.TestCase):
         upgraded, sessions = db.init_db(self.path)
         self._assert_migration_clean()
         with upgraded.connect() as conn:
-            self.assertEqual(conn.exec_driver_sql("SELECT version_num FROM alembic_version").scalar(), "0023")
+            self.assertEqual(conn.exec_driver_sql("SELECT version_num FROM alembic_version").scalar(), "0024")
         with sessions.begin() as session:
             session.add(db.BudgetHouseholdMember(member_username="viewer", owner="alice", grant_id="cd" * 32))
         with self.assertRaises(IntegrityError):
@@ -266,7 +266,7 @@ class HouseholdCommandTests(unittest.TestCase):
         again, _sessions = db.init_db(self.path)
         self._assert_migration_clean()
         with again.connect() as conn:
-            self.assertEqual(conn.exec_driver_sql("SELECT version_num FROM alembic_version").scalar(), "0023")
+            self.assertEqual(conn.exec_driver_sql("SELECT version_num FROM alembic_version").scalar(), "0024")
             self.assertEqual(conn.exec_driver_sql("SELECT COUNT(*) FROM budget_household_members").scalar(), 0)
             self.assertEqual(conn.exec_driver_sql(
                 "SELECT name FROM budget_categories WHERE id='cat-salary'").scalar(), SALARY_NAME)

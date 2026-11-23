@@ -60,6 +60,7 @@ from ..db import AppMeta, BudgetHouseholdMember, User, make_engine
 log = logging.getLogger("hestia.budget.household")
 
 SCHEMA_REVISION = "0023"
+_SUPPORTED_REVISIONS = ((SCHEMA_REVISION,), ("0024",))
 _GRANT_BYTES = 32
 _USERS_MARKER = "users_authoritative"
 _GRANT_ID = re.compile(r"[0-9a-f]{64}\Z", re.ASCII)
@@ -174,7 +175,7 @@ def _require_lineage(session):
         versions = session.execute(text("SELECT version_num FROM alembic_version")).scalars().all()
     except OperationalError:
         raise HouseholdCommandError("household_schema_required") from None
-    if versions != [SCHEMA_REVISION]:
+    if tuple(versions) not in _SUPPORTED_REVISIONS:
         raise HouseholdCommandError("household_schema_required")
     found = session.execute(text(
         "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'budget_household_members'")).first()

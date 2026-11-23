@@ -100,11 +100,14 @@ class AnnotationLabelMigration0021Tests(unittest.TestCase):
         self.addCleanup(db.reset_engine_cache)
         self.path = Path(self.directory.name) / "m0021.db"
 
-    def test_single_head_is_0023(self):
+    def test_single_head_and_receipt_lineage(self):
         cfg = Config()
         cfg.set_main_option("script_location", str(db._MIGRATIONS_DIR))
         script = ScriptDirectory.from_config(cfg)
-        self.assertEqual(script.get_heads(), ["0023"])
+        self.assertEqual(script.get_heads(), ["0024"])
+        gmail = script.get_revision("0024")
+        self.assertIsNotNone(gmail)
+        self.assertEqual(gmail.down_revision, "0023")
         household = script.get_revision("0023")
         self.assertIsNotNone(household)
         self.assertEqual(household.down_revision, "0022")
@@ -211,7 +214,7 @@ class AnnotationLabelMigration0021Tests(unittest.TestCase):
         with engine.connect() as conn:
             self.assertIsNone(conn.exec_driver_sql(
                 "SELECT label FROM budget_annotations WHERE entry_reference='kept'").scalar())
-            self.assertEqual(conn.exec_driver_sql("SELECT version_num FROM alembic_version").scalar(), "0023")
+            self.assertEqual(conn.exec_driver_sql("SELECT version_num FROM alembic_version").scalar(), "0024")
         self._assert_integrity_and_no_batch_temp()
 
         def insert(reference, label):
@@ -296,7 +299,7 @@ class AnnotationLabelMigration0021Tests(unittest.TestCase):
             version = raw.execute("SELECT version_num FROM alembic_version").fetchone()
             label = raw.execute(
                 "SELECT label FROM budget_annotations WHERE entry_reference='kept'").fetchone()
-        self.assertEqual(version, ("0023",))
+        self.assertEqual(version, ("0024",))
         self.assertEqual(label, (None,))
         self.assertEqual(self._kept_row(), _KEPT_ROW)
         self._assert_integrity_and_no_batch_temp()

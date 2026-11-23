@@ -257,7 +257,7 @@ class DbSchemaTests(unittest.TestCase):
             self.assertEqual(conn.exec_driver_sql("PRAGMA foreign_keys").scalar(), 1)
             self.assertEqual(
                 conn.exec_driver_sql("SELECT version_num FROM alembic_version").fetchall(),
-                [("0023",)],
+                [(_head_revision(),)],
             )
             annotation_columns = [row[1] for row in conn.exec_driver_sql("PRAGMA table_info(budget_annotations)")]
             category_columns = [row[1] for row in conn.exec_driver_sql("PRAGMA table_info(budget_categories)")]
