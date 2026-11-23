@@ -364,6 +364,60 @@ describe("buildMonthPaceProjection", () => {
     expect(unpaidProj?.scheduledItems).toHaveLength(1);
   });
 
+  it("subtracts pass_through.uncovered_mortgage instead of installment minus matched when a mortgage refund is recognized", () => {
+    const current = budget({
+      cutoff: "2026-11-10",
+      evaluation_date: "2026-11-10",
+      summary: { start_budget: "10000", spent: "3500", remaining: "6500" },
+      pass_through: {
+        rent_category_id: "cat-rent",
+        mortgage_category_id: "cat-mortgage",
+        rent_received: "2000",
+        mortgage_debits: "6000",
+        mortgage_refunds: "1000",
+        unapplied_mortgage_refunds: "0",
+        matched: "2000",
+        unapplied_rent: "0",
+        uncovered_mortgage: "3000",
+      },
+    });
+    const data = scheduleData({
+      schedules: [mortgageSchedule({ id: "mtg-refund", amount: "6000", due_day: 5, paid_months: ["2026-11"] })],
+      hints: [
+        recurringHint({
+          label: "Bank Mortgage", amount: "6000", occurrence_count: 6,
+          first_date: "2026-06-05", last_date: "2026-11-05", min_gap_days: 30, max_gap_days: 31,
+        }),
+      ],
+    });
+    const projection = buildMonthPaceProjection(current, data);
+
+    // spent = 3000 (uncovered_mortgage = 6000 - 2000 matched - 1000 refund) + 500 discretionary.
+    // projected = 3500 + 500/10 * 20 = 4500 = 45000 / 10.
+    expect(projection?.dailyRate).toEqual({ numerator: "500", denominator: 10 });
+    expect(projection?.projectedMonthSpend).toEqual({ numerator: "45000", denominator: 10 });
+
+    // Negative uncovered_mortgage is clamped at 0.
+    const clamped = budget({
+      cutoff: "2026-11-10",
+      evaluation_date: "2026-11-10",
+      summary: { start_budget: "10000", spent: "500", remaining: "9500" },
+      pass_through: {
+        rent_category_id: "cat-rent",
+        mortgage_category_id: "cat-mortgage",
+        rent_received: "2000",
+        mortgage_debits: "2000",
+        mortgage_refunds: "0",
+        unapplied_mortgage_refunds: "0",
+        matched: "2000",
+        unapplied_rent: "0",
+        uncovered_mortgage: "-100",
+      },
+    });
+    const clampedProj = buildMonthPaceProjection(clamped, data);
+    expect(clampedProj?.dailyRate).toEqual({ numerator: "500", denominator: 10 });
+  });
+
   it("does not double-subtract a paid mortgage booked more than 5 days from its due date", () => {
     const current = budget({
       cutoff: "2026-11-15",

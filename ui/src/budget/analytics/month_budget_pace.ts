@@ -183,17 +183,20 @@ export function buildMonthPaceProjection(
   const daysInMonth = Number(budget.end.slice(8, 10));
   const paid = paidScheduledAmounts(budget, data);
   const scheduled = scheduledItems(budget, data, paid.paidScheduleIds);
-  const matchedPassThrough = budget.pass_through?.matched ?? "0";
+  const uncoveredPassThrough = budget.pass_through?.uncovered_mortgage ?? null;
   const scale = decimalScale([
-    summary.spent, pace.budget, matchedPassThrough,
+    summary.spent, pace.budget, ...(uncoveredPassThrough === null ? [] : [uncoveredPassThrough]),
     ...paid.mortgageAmounts, ...paid.recurringAmounts, ...scheduled.map((item) => item.amount),
   ]);
   const spentUnits = decimalUnits(summary.spent, scale);
   const budgetUnits = decimalUnits(pace.budget, scale);
   const paidMortgageUnits = paid.mortgageAmounts.reduce((total, amount) => total + decimalUnits(amount, scale), 0n);
-  const matchedUnits = decimalUnits(matchedPassThrough, scale);
-  // summary.spent already excludes rent-covered matched mortgage debits, so subtract only uncovered paid mortgage.
-  const uncoveredPaidMortgageUnits = paidMortgageUnits > matchedUnits ? paidMortgageUnits - matchedUnits : 0n;
+  let uncoveredPaidMortgageUnits = paidMortgageUnits;
+  if (uncoveredPassThrough !== null) {
+    // summary.spent includes pass_through.uncovered_mortgage (installment - matched - recognized refunds).
+    const passThroughUnits = decimalUnits(uncoveredPassThrough, scale);
+    uncoveredPaidMortgageUnits = paidMortgageUnits > 0n && passThroughUnits > 0n ? passThroughUnits : 0n;
+  }
   const paidRecurringUnits = paid.recurringAmounts.reduce((total, amount) => total + decimalUnits(amount, scale), 0n);
   const paidUnits = uncoveredPaidMortgageUnits + paidRecurringUnits;
   const discretionaryUnits = spentUnits > paidUnits ? spentUnits - paidUnits : 0n;
