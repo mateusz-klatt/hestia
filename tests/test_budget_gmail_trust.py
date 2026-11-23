@@ -16,7 +16,7 @@ SPOUSE = "spouse@gmail.com"
 DIRECT = (MERCHANT, "@provider.example")
 SPOUSES = (SPOUSE,)
 KNOWN = ("merchant.example", "provider.example")
-INVOICE = "Numer dokumentu: FV/2026/42\nKwota: 123,45 PLN\nTermin płatności: 2026-12-01\n"
+INVOICE = "Orange\nNumer dokumentu: FV/2026/11/42\nKwota: 123,45 PLN\nTermin płatności: 2026-12-01\n"
 
 
 def _headers(address=MERCHANT, dkim=None, other=None, *, authserv="mx.google.com"):
@@ -179,14 +179,15 @@ class GmailTrustTests(unittest.TestCase):
         root_rfc822["From"] = SPOUSE
         root_rfc822.set_content(original)
         for outer in (root_rfc822, _forward(SPOUSE, original),
-                      _forward(SPOUSE, _forward("relay@relay.example", original))):
+                      _forward(SPOUSE, _forward("relay@provider.example", original))):
             # Parse serialized fixture bytes as the Gmail import would.
             outer = BytesParser(policy=policy.default).parsebytes(outer.as_bytes())
             selected = unwrap_forward(outer, KNOWN)
             self.assertEqual(selected["Message-ID"], original["Message-ID"])
             self.assertEqual(selected.get_body().get_content(), INVOICE)
         self.assertIsNone(unwrap_forward(_forward(SPOUSE, _forward(
-            "relay@relay.example", _forward("relay2@relay.example", original))), KNOWN))
+            "relay@provider.example", _forward("relay2@provider.example", original))), KNOWN))
+        self.assertIsNone(unwrap_forward(_forward(SPOUSE, _forward("relay@evil.example", original)), KNOWN))
 
     def test_rfc822_wrapper_and_inner_body_have_independent_transfer_encodings(self):
         prefix = b"From: spouse@gmail.com\r\nContent-Type: message/rfc822\r\n"
@@ -225,7 +226,7 @@ class GmailTrustTests(unittest.TestCase):
         self.assertIsNone(unwrap_forward(outer, KNOWN))
         unknown = _message("fake@notmerchant.example")
         self.assertIsNone(unwrap_forward(_forward(SPOUSE, unknown), KNOWN))
-        self.assertIs(unwrap_forward(_forward(SPOUSE, unknown), KNOWN, require_known=False), unknown)
+        self.assertIsNone(unwrap_forward(_forward(SPOUSE, unknown), KNOWN, require_known=False))
         self.assertIsNone(unwrap_forward(_forward(SPOUSE, EmailMessage()), KNOWN))
         direct_public = ("vendor@gmail.com",)
         public_merchant = _message("vendor@gmail.com")
@@ -248,11 +249,12 @@ class GmailTrustTests(unittest.TestCase):
                                       ("Begin forwarded message:", "From"), ("Przekazana wiadomość", "Od")):
             with self.subTest(marker=marker):
                 outer = _message(SPOUSE, _inline(marker, sender_header))
-                original = unwrap_forward(outer, KNOWN)
+                original = unwrap_forward(outer, KNOWN, sender_allowlist=DIRECT)
                 self.assertEqual(original["From"], MERCHANT)
                 self.assertEqual(original["Message-ID"], "<fixture-42@merchant.example>")
                 self.assertEqual(original.get_content().lstrip("\n"), INVOICE)
-        original = unwrap_forward(_message(SPOUSE, f"Przekazana wiadomość:\nOd: {MERCHANT}\n{INVOICE}"), KNOWN)
+        original = unwrap_forward(_message(SPOUSE, f"Przekazana wiadomość:\nOd: {MERCHANT}\n{INVOICE}"), KNOWN,
+                                  sender_allowlist=DIRECT)
         self.assertEqual(original.get_content(), INVOICE)
 
     def test_malformed_inline_headers_and_overlong_input_fail_closed(self):
@@ -264,7 +266,7 @@ class GmailTrustTests(unittest.TestCase):
             _inline(sender="notmerchant@evil.example"), "x" * (1024 * 1024 + 1),
         ):
             with self.subTest(text=text[:100]):
-                self.assertIsNone(unwrap_forward(_message(SPOUSE, text), KNOWN))
+                self.assertIsNone(unwrap_forward(_message(SPOUSE, text), KNOWN, sender_allowlist=DIRECT))
         invalid_charset = _message(SPOUSE, _inline())
         invalid_charset.set_param("charset", "not-a-real-charset")
         self.assertIsNone(unwrap_forward(invalid_charset, KNOWN))
@@ -276,9 +278,17 @@ class GmailTrustTests(unittest.TestCase):
         outer.set_content("<html><body>Synthetic HTML</body></html>", subtype="html")
         self.assertIsNone(unwrap_forward(outer, KNOWN))
         renderer = Mock(return_value=_inline())
-        self.assertEqual(unwrap_forward(outer, KNOWN, render_html=renderer)["From"], MERCHANT)
+        self.assertEqual(unwrap_forward(outer, KNOWN, sender_allowlist=DIRECT, render_html=renderer)["From"], MERCHANT)
         renderer.assert_called_once_with(b"<html><body>Synthetic HTML</body></html>\n")
         renderer.reset_mock()
         outer.set_content("é" * (1024 * 1024 // 2 + 1), charset="iso-8859-1", subtype="html")
         self.assertIsNone(unwrap_forward(outer, KNOWN, render_html=renderer))
         renderer.assert_not_called()
+
+    def test_inline_requires_allowlisted_sender_and_matching_supplier_number(self):
+        original = _message(SPOUSE, _inline())
+        self.assertIsNone(unwrap_forward(original, KNOWN))
+        for body in (_inline().replace("FV/2026/11/42", "arbitrary-number"),
+                     _inline().replace("Orange", "Play"), _inline().replace(INVOICE, "Please pay this bill")):
+            with self.subTest(body=body):
+                self.assertIsNone(unwrap_forward(_message(SPOUSE, body), KNOWN, sender_allowlist=DIRECT))

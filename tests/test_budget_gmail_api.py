@@ -41,6 +41,7 @@ class GmailHTTPTests(IsolatedAsyncioTestCase):
             "client_secret_env": "SYNTHETIC_CLIENT_SECRET", "refresh_token_env": "SYNTHETIC_REFRESH_FILE",
             "sender_allowlist": ["@merchant.example.test"], "spouse_forward_senders": ["spouse@example.test"],
         }), encoding="utf-8")
+        self.settings.chmod(0o600)
         self.env = {
             "HESTIA_DB": str(path / "gmail-api.db"), "HESTIA_PERSIST": "sqlite", "HESTIA_BUDGET_HTTP_ENABLED": "1",
             receipt_api.FLAG: "1", "HESTIA_BUDGET_PUBLIC_ORIGIN": _ORIGIN,

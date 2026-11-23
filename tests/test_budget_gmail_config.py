@@ -36,6 +36,7 @@ class GmailSettingsTests(TestCase):
                      "refresh_token_env": "SYNTHETIC_REFRESH_FILE", "sender_allowlist": ["@Vendor.example.test"],
                      "spouse_forward_senders": ["spouse@example.test"]}
         self.settings.write_text(json.dumps(self.data), encoding="utf-8")
+        self.settings.chmod(0o600)
 
     def load(self, **changes):
         self.settings.write_text(json.dumps(self.data | changes), encoding="utf-8")
@@ -51,7 +52,8 @@ class GmailSettingsTests(TestCase):
             self.assertIsNone(gmail_config.load_settings(environ={"HESTIA_GOOGLE_REFRESH_TOKEN": "synthetic-calendar"}))
             read_secret.assert_not_called()
             settings = self.load()
-            self.assertEqual([call.args[0] for call in read_secret.call_args_list], [str(self.refresh), str(self.key)])
+            self.assertEqual([call.args[0] for call in read_secret.call_args_list],
+                             [str(self.settings), str(self.refresh), str(self.key)])
         self.assertEqual(settings.owner, "alice")
         self.assertEqual(settings.owner_mailbox, MAILBOX)
         self.assertEqual(settings.credentials.client_id, OAUTH_KEY)
@@ -128,3 +130,19 @@ class GmailSettingsTests(TestCase):
         self.assert_invalid()
         self.key.write_bytes(HMAC_KEY + b"\n")
         self.assert_invalid()
+
+    def test_json_config_requires_runtime_owner_and_private_mode(self):
+        for mode in (0o644, 0o640, 0o660, 0o700):
+            with self.subTest(mode=oct(mode)):
+                self.settings.chmod(mode)
+                self.assert_invalid()
+        for mode in (0o400, 0o600):
+            with self.subTest(mode=oct(mode)):
+                self.settings.chmod(mode)
+                self.assertEqual(gmail_config.load_settings(environ=self.env).owner, "alice")
+        wrong_uid = os.geteuid() + 1
+        with mock.patch.object(config.os, "geteuid", return_value=wrong_uid):
+            self.assert_invalid()
+        alias = self.settings.with_name("alias.json")
+        alias.symlink_to(self.settings)
+        self.assert_invalid(self.env | {gmail_config.CONFIG_FILE: str(alias)})

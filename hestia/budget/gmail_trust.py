@@ -6,6 +6,7 @@ from email.utils import getaddresses
 import re
 
 from .gmail_address import canonical_domain, canonical_mailbox
+from .gmail_invoice import has_provider_invoice_number
 
 _PUBLIC_WEBMAIL = frozenset({
     "gmail.com", "icloud.com", "wp.pl", "onet.pl", "o2.pl", "interia.pl", "outlook.com", "yahoo.com",
@@ -222,7 +223,7 @@ def classify_sender(headers, sender_allowlist, spouse_forward_senders):
     return "untrusted"
 
 
-def _inline_forward(text):
+def _inline_forward(text, sender_allowlist):
     lines = text.splitlines()
     marker = next((i for i, line in enumerate(lines)
                    if line.strip(" \t-:").casefold() in _FORWARD_MARKERS), None)
@@ -250,13 +251,16 @@ def _inline_forward(text):
     else:
         return None
     address = _mailbox(fields.get("from", ""))
-    if not address:
+    if not address or not _on_allowlist(address, sender_allowlist):
+        return None
+    body = "\n".join(lines[index:])
+    if not has_provider_invoice_number(body):
         return None
     original = EmailMessage()
     original["From"] = address
     if fields.get("message-id"):
         original["Message-ID"] = fields["message-id"]
-    original.set_content("\n".join(lines[index:]))
+    original.set_content(body)
     return original
 
 
@@ -287,7 +291,7 @@ def mime_parts(message):
             parts.extend(reversed(list(part.iter_parts())))
 
 
-def _forwarded_original(message, render_html):
+def _forwarded_original(message, sender_allowlist, render_html):
     wrappers = [part for part in mime_parts(message) if part.get_content_type() == "message/rfc822"]
     if wrappers:
         if len(wrappers) != 1:
@@ -304,17 +308,18 @@ def _forwarded_original(message, render_html):
             return None
         return originals[0]
     text = _inline_body(message, render_html)
-    return _inline_forward(text) if text else None
+    return _inline_forward(text, sender_allowlist) if text else None
 
 
 def unwrap_forward(message, known_merchant_domains, require_known=True, *,
                    sender_allowlist=(), render_html=None):
     """Select one original, after the caller has classified the outer spouse sender.
 
-    Inline HTML can only be decoded to text by the supplied isolated worker.
+    Every relay must be a configured merchant. The legacy require_known option
+    cannot bypass this boundary. Inline HTML uses the supplied isolated worker.
     """
     for _ in range(_MAX_FORWARD_DEPTH):
-        message = _forwarded_original(message, render_html)
+        message = _forwarded_original(message, sender_allowlist, render_html)
         if message is None:
             return None
         authors = [value for name, value in message.raw_items() if name.lower() == "from"]
@@ -322,7 +327,9 @@ def unwrap_forward(message, known_merchant_domains, require_known=True, *,
         if not address:
             return None
         domain = address.rpartition("@")[2]
-        if (not require_known or _on_allowlist(address, sender_allowlist)
+        if not (_on_allowlist(address, sender_allowlist)
                 or any(_domain_matches(domain, rule) for rule in known_merchant_domains)):
+            return None
+        if not any(part.get_content_type() == "message/rfc822" for part in mime_parts(message)):
             return message
     return None

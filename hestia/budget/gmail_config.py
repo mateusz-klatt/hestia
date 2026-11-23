@@ -5,7 +5,6 @@ import hmac
 import json
 import os
 import re
-import stat
 
 from . import config
 from .client import _reject_constant, _unique_error_fields
@@ -26,12 +25,7 @@ _OPTIONAL_FIELDS = {"known_merchant_domains", "require_known_forwarded_merchant"
 
 
 def _read_config(path):
-    with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), "rb") as source:
-        if not stat.S_ISREG(os.fstat(source.fileno()).st_mode):
-            raise ValueError
-        raw = source.read(_MAX_CONFIG_BYTES + 1)
-    if len(raw) > _MAX_CONFIG_BYTES:
-        raise ValueError
+    raw = config._read_secret(path, max_bytes=_MAX_CONFIG_BYTES)
     return json.loads(raw, object_pairs_hook=_unique_error_fields, parse_constant=_reject_constant)
 
 

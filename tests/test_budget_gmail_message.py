@@ -179,6 +179,19 @@ class GmailMessageProcessorTests(unittest.TestCase):
         self.assertEqual(self.worker.parse.call_args_list, [call("html", html.encode()),
                                                             call("text", b"\n" + INVOICE.encode())])
 
+    def test_inline_merchant_marker_without_provider_invoice_pattern_is_not_imported(self):
+        for text in ("Please pay this bill", INVOICE.replace("RE/2026/00042", "FV/2026/11/42")):
+            message = _email(SPOUSE, f"Begin forwarded message:\nFrom: {MERCHANT}\n\n{text}")
+            pending = self._process(_metadata(message), _raw(message))
+            self.assertEqual(pending.outcome, "skipped_non_receipt")
+            self.assertIsNone(pending.invoice)
+        self.worker.parse.assert_not_called()
+
+    def test_known_domain_alone_cannot_authorize_inline_forward(self):
+        message = _email(SPOUSE, f"Begin forwarded message:\nFrom: other@respect.example\n\n{INVOICE}")
+        self.assertEqual(self._process(_metadata(message), _raw(message)).outcome, "skipped_non_receipt")
+        self.worker.parse.assert_not_called()
+
     def test_direct_sender_never_unwraps_nested_mail_and_unknown_forwards_are_not_imported(self):
         direct = _email(MERCHANT, "")
         inner = _email("attacker@evil.example")

@@ -28,6 +28,12 @@ _BRAND = re.compile(
     re.IGNORECASE | re.MULTILINE,
 )
 _ISSUERS = {"respect": "Respect Energy", "orange": "Orange", "play": "Play", "tmobile": "T-Mobile"}
+_FORWARDED_INVOICE_NUMBERS = {
+    "Respect Energy": re.compile(r"RE/(?:[0-9]+/){1,2}[0-9]+", re.ASCII),
+    "Orange": re.compile(r"FV/[0-9]{4}/[0-9]{2}/[0-9]+", re.ASCII),
+    "Play": re.compile(r"P4/[0-9]{4}/[0-9]+", re.ASCII),
+    "T-Mobile": re.compile(r"TM-[0-9]{4}-[0-9]+", re.ASCII),
+}
 _LABEL = re.compile(
     r"(?<!\w)(?:"
     r"(?P<invoice_number>numer (?:dokumentu|faktury)|nr[.]? (?:faktury|dokumentu)|faktura nr[.]?)"
@@ -124,3 +130,9 @@ def extract_invoice(text: str) -> ImportedInvoice | None:
     if issue_date is not None and due_date < issue_date:
         return None
     return ImportedInvoice(issuer, nip, invoice_number, amount, currency, issue_date, due_date)
+
+
+def has_provider_invoice_number(text: str) -> bool:
+    """Require a structured invoice with the recognized supplier's number format."""
+    invoice = extract_invoice(text)
+    return invoice is not None and bool(_FORWARDED_INVOICE_NUMBERS[invoice.issuer].fullmatch(invoice.invoice_number))
