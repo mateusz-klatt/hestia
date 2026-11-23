@@ -24,6 +24,7 @@ from ..db import (BudgetAccount as Account, BudgetConnection as Connection, Budg
                   BudgetTransferLeg as Leg)
 from .analytics_core import (AnalyticsError, canonical_money, compare_money, financial_fingerprint, negate_money,
                              sum_money)
+from .gmail_store import retain_imports, tombstone_receipt
 from .receipt_parser import (CONFIRMED_TEXT_TTL_SECONDS, DRAFT_TTL_SECONDS, MAX_RECEIPT_LINES, ReceiptError,
                              merchant_tokens, normalize_shop_name, parse_receipt, redact_digit_field,
                              validate_confirm)
@@ -202,7 +203,9 @@ class BudgetReceiptStore(BudgetHTTPStore):
         with self.transaction() as session:
             if owner is not None:
                 self._owner(session, owner)
-            return self._purge(session, owner, self._now())
+            now = self._now()
+            retain_imports(session, owner, now)
+            return self._purge(session, owner, now)
 
     def parse_text(self, owner, text):
         parsed = parse_receipt(text)
@@ -659,6 +662,7 @@ class BudgetReceiptStore(BudgetHTTPStore):
             row = self._owned(session, owner, values["receipt_id"])
             if row.version != values["expected_version"]:
                 raise ReceiptError("budget_receipt_conflict", 409)
+            tombstone_receipt(session, owner, row.id)
             session.execute(delete(Line).where(Line.receipt_id == row.id, Line.owner == owner))
             erase_receipt_audit(session, owner, row.id)
             session.delete(row)
