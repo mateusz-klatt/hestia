@@ -964,7 +964,9 @@ async def _read_json_body(request, max_body=MAX_BODY, *, reject_duplicates=False
     try:
         return (json.loads(body, object_pairs_hook=_unique_json_fields if reject_duplicates else None)
                 if body else {}), False
-    except ValueError:
+    except (ValueError, RecursionError):
+        # RecursionError: a deeply nested document overflows the decoder. That is
+        # a bad request, not a 500.
         return _json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "invalid JSON"}), True
 
 
