@@ -29,7 +29,7 @@ def spaced(value):
 
 def account_rule(value=SYNTHETIC_IBAN, **changes):
     return {"enabled": True, "kind": "auto", "field": "counterparty_account", "operator": "equals",
-            "value": counterparty_rule_from_identification(value, SECRET), **changes}
+            "value": counterparty_rule_from_identification(value, SECRET, owner="owner"), **changes}
 
 
 class CounterpartyAccountCoreTests(unittest.TestCase):
@@ -37,10 +37,11 @@ class CounterpartyAccountCoreTests(unittest.TestCase):
         self.assertEqual(normalize_counterparty_account(spaced(SYNTHETIC_IBAN)), SYNTHETIC_IBAN)
         self.assertEqual(normalize_counterparty_account(spaced(SYNTHETIC_IBAN).replace(" ", "-")), SYNTHETIC_IBAN)
         self.assertEqual(mask_counterparty_account(spaced(SYNTHETIC_IBAN)), "PL** … 1234")
-        key = counterparty_account_key(spaced(SYNTHETIC_IBAN), SECRET)
-        self.assertEqual(key, counterparty_account_key(SYNTHETIC_IBAN, SECRET))
-        self.assertNotEqual(key, counterparty_account_key(SYNTHETIC_IBAN, b"another-synthetic-secret"))
-        stored = counterparty_rule_from_identification(spaced(SYNTHETIC_IBAN), SECRET)
+        key = counterparty_account_key(spaced(SYNTHETIC_IBAN), SECRET, owner="owner")
+        self.assertEqual(key, counterparty_account_key(SYNTHETIC_IBAN, SECRET, owner="owner"))
+        self.assertNotEqual(key, counterparty_account_key(SYNTHETIC_IBAN, b"another-synthetic-secret", owner="owner"))
+        self.assertNotEqual(key, counterparty_account_key(SYNTHETIC_IBAN, SECRET, owner="other"))
+        stored = counterparty_rule_from_identification(spaced(SYNTHETIC_IBAN), SECRET, owner="owner")
         key_id = counterparty_key_id(SECRET)
         self.assertEqual(counterparty_rule_parts(stored), (key_id, key, "PL** … 1234"))
         self.assertEqual(counterparty_rule_value(key_id, key, "PL** … 1234"), stored)
@@ -50,12 +51,12 @@ class CounterpartyAccountCoreTests(unittest.TestCase):
     def test_polish_bban_aliases_and_canonical_schemes_deduplicate_without_collisions(self):
         self.assertEqual(canonical_counterparty_account(POLISH_BBAN, "BBAN"), ("IBAN", POLISH_IBAN))
         self.assertEqual(canonical_counterparty_account(POLISH_IBAN, "IBAN"), ("IBAN", POLISH_IBAN))
-        self.assertEqual(counterparty_account_key(POLISH_BBAN, SECRET, "BBAN"),
-                         counterparty_account_key(POLISH_IBAN, SECRET, "IBAN"))
-        self.assertNotEqual(counterparty_account_key("ABCDEF1234", SECRET, "BBAN"),
-                            counterparty_account_key("ABCDEF1234", SECRET, "OTHER"))
-        self.assertEqual(counterparty_account_key(SYNTHETIC_IBAN, SECRET, "OTHER"),
-                         counterparty_account_key(SYNTHETIC_IBAN, SECRET))
+        self.assertEqual(counterparty_account_key(POLISH_BBAN, SECRET, "BBAN", owner="owner"),
+                         counterparty_account_key(POLISH_IBAN, SECRET, "IBAN", owner="owner"))
+        self.assertNotEqual(counterparty_account_key("ABCDEF1234", SECRET, "BBAN", owner="owner"),
+                            counterparty_account_key("ABCDEF1234", SECRET, "OTHER", owner="owner"))
+        self.assertEqual(counterparty_account_key(SYNTHETIC_IBAN, SECRET, "OTHER", owner="owner"),
+                         counterparty_account_key(SYNTHETIC_IBAN, SECRET, owner="owner"))
         with self.assertRaises(AnalyticsError):
             canonical_counterparty_account("ABCDEF1234", "not a scheme")
 
@@ -65,7 +66,7 @@ class CounterpartyAccountCoreTests(unittest.TestCase):
             with self.subTest(length=length):
                 self.assertEqual(len(value), length)
                 self.assertEqual(mask_counterparty_account(value), "** … 12")
-                stored = counterparty_rule_from_identification(value, SECRET)
+                stored = counterparty_rule_from_identification(value, SECRET, owner="owner")
                 self.assertEqual(counterparty_rule_parts(stored)[2], "** … 12")
         self.assertEqual(mask_counterparty_account("PL" + "0" * 8 + "12"), "PL** … 0012")
 
@@ -76,10 +77,15 @@ class CounterpartyAccountCoreTests(unittest.TestCase):
             self.assertEqual(str(raised.exception), "budget_analytics_invalid_request")
         for secret in (None, b"", "synthetic-only"):
             with self.subTest(secret=secret), self.assertRaises(AnalyticsError) as raised:
-                counterparty_account_key(SYNTHETIC_IBAN, secret)
+                counterparty_account_key(SYNTHETIC_IBAN, secret, owner="owner")
             self.assertEqual((raised.exception.code, raised.exception.status), ("budget_analytics_data_error", 500))
             with self.assertRaises(AnalyticsError):
                 counterparty_key_id(secret)
+        for owner in (None, ""):
+            with self.subTest(owner=owner), self.assertRaises(AnalyticsError):
+                counterparty_account_key(SYNTHETIC_IBAN, SECRET, owner=owner)
+        with self.assertRaises(AnalyticsError):
+            match_texts(payload(), {}, account_secret=SECRET)
         for key_id, key, masked in ((None, "a" * 64, "PL** … 1234"), ("g" * 16, "a" * 64, "PL** … 1234"),
                                     ("0" * 16, None, "PL** … 1234"), ("0" * 16, "A" * 64, "PL** … 1234"),
                                     ("0" * 16, "a" * 64, SYNTHETIC_IBAN), ("0" * 16, "a" * 64, None)):
@@ -97,16 +103,16 @@ class CounterpartyAccountCoreTests(unittest.TestCase):
                           "debtor_accounts": [identity(OTHER_IBAN)]}
         credit_metadata = {"debtor_accounts": [identity(SYNTHETIC_IBAN.lower())],
                            "creditor_accounts": [identity(OTHER_IBAN)]}
-        self.assertTrue(rule_matches(rule, debit, debit_metadata, account_secret=SECRET))
-        self.assertTrue(rule_matches(rule, credit, credit_metadata, account_secret=SECRET))
-        self.assertFalse(rule_matches(rule, debit, {"creditor_accounts": [identity(OTHER_IBAN)]}, account_secret=SECRET))
+        self.assertTrue(rule_matches(rule, debit, debit_metadata, account_secret=SECRET, owner="owner"))
+        self.assertTrue(rule_matches(rule, credit, credit_metadata, account_secret=SECRET, owner="owner"))
+        self.assertFalse(rule_matches(rule, debit, {"creditor_accounts": [identity(OTHER_IBAN)]}, account_secret=SECRET, owner="owner"))
         self.assertFalse(rule_matches(rule, credit, {"creditor_accounts": [identity(SYNTHETIC_IBAN)]},
-                                      account_secret=SECRET))
+                                      account_secret=SECRET, owner="owner"))
         compiled, safe = compile_rules([rule])
         self.assertTrue(safe)
-        self.assertIs(first_matching_rule(compiled, debit, match_texts(debit, debit_metadata, account_secret=SECRET)), rule)
+        self.assertIs(first_matching_rule(compiled, debit, match_texts(debit, debit_metadata, account_secret=SECRET, owner="owner")), rule)
         with self.assertRaises(AnalyticsError):
-            rule_matches(rule | {"operator": "contains"}, debit, debit_metadata, account_secret=SECRET)
+            rule_matches(rule | {"operator": "contains"}, debit, debit_metadata, account_secret=SECRET, owner="owner")
         with self.assertRaises(AnalyticsError) as missing_secret:
             rule_matches(rule, debit, debit_metadata)
         self.assertEqual((missing_secret.exception.code, missing_secret.exception.status),
@@ -114,14 +120,14 @@ class CounterpartyAccountCoreTests(unittest.TestCase):
 
     def test_matching_uses_any_valid_account_and_ignores_non_iban_like_identifiers(self):
         metadata = {"creditor_accounts": [identity("x"), identity(OTHER_IBAN), identity(SYNTHETIC_IBAN)]}
-        evidence = counterparty_account_evidence(payload(), metadata, SECRET)
+        evidence = counterparty_account_evidence(payload(), metadata, SECRET, owner="owner")
         self.assertEqual(len(evidence), 2)
-        self.assertTrue(rule_matches(account_rule(), payload(), metadata, account_secret=SECRET))
+        self.assertTrue(rule_matches(account_rule(), payload(), metadata, account_secret=SECRET, owner="owner"))
         malformed = account_rule() | {"value": "cpacct:v2:broken"}
         compiled, safe = compile_rules([malformed])
         self.assertFalse(safe)
         with self.assertRaises(AnalyticsError):
-            first_matching_rule(compiled, payload(), match_texts(payload(), metadata, account_secret=SECRET))
+            first_matching_rule(compiled, payload(), match_texts(payload(), metadata, account_secret=SECRET, owner="owner"))
 
 
 class CounterpartyAccountProjectionTests(ProjectionCase):
@@ -147,7 +153,7 @@ class CounterpartyAccountProjectionTests(ProjectionCase):
                          {"debit-target", "debit-formatted", "credit-target"})
         saved = self.store.save_rule("owner", preview["preview_id"])
         self.assertEqual((saved["value"], saved["counterparty_account_key"]),
-                         ("PL** … 1234", counterparty_account_key(SYNTHETIC_IBAN, SECRET)))
+                         ("PL** … 1234", counterparty_account_key(SYNTHETIC_IBAN, SECRET, owner="owner")))
         rules = self.store.rules("owner")
         transactions = self.store.transactions("owner", "2026")
         matched = {row["entry_reference"] for row in transactions["transactions"]
@@ -271,16 +277,16 @@ class CounterpartyAccountProjectionTests(ProjectionCase):
             self.candidate(field="counterparty_account", operator="contains", value=SYNTHETIC_IBAN),
             self.candidate(field="counterparty_account", operator="equals", value="x"),
             self.candidate(field="counterparty_account", operator="equals",
-                           value=counterparty_rule_from_identification(SYNTHETIC_IBAN, SECRET)),
+                           value=counterparty_rule_from_identification(SYNTHETIC_IBAN, SECRET, owner="owner")),
             self.candidate(field="counterparty_account", operator="equals", value="PL** … 1234",
                            counterparty_account_key="A" * 64),
             self.candidate(field="counterparty_account", operator="equals", value="",
                            counterparty_account_key="0" * 64),
             self.candidate(field="counterparty_account", operator="equals",
-                           value=counterparty_rule_from_identification(SYNTHETIC_IBAN, SECRET),
+                           value=counterparty_rule_from_identification(SYNTHETIC_IBAN, SECRET, owner="owner"),
                            counterparty_account_key="0" * 64),
             self.candidate(field="counterparty_account", operator="equals",
-                           value=counterparty_rule_from_identification(SYNTHETIC_IBAN, SECRET),
+                           value=counterparty_rule_from_identification(SYNTHETIC_IBAN, SECRET, owner="owner"),
                            counterparty_account_key=123),
             self.candidate(field="description", counterparty_account_key="a" * 64),
         )

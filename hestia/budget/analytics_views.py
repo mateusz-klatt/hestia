@@ -182,7 +182,7 @@ def _effective(payload, metadata, annotation, categories, rules, *, texts=None, 
     return result
 
 
-def _records(ledger, identities, metadata, annotations, categories, rules, *, account_secret=None, account_key_id=None):
+def _records(ledger, identities, metadata, annotations, categories, rules, *, account_secret=None, account_key_id=None, owner=None):
     result = []
     owned = core.owned_identities(identities) if ledger else None
     compiled, _ = core.compile_rules(rules)
@@ -193,9 +193,9 @@ def _records(ledger, identities, metadata, annotations, categories, rules, *, ac
         evidence = _metadata(sidecar.payload_json) if sidecar is not None and sidecar.ledger_fingerprint == financial_fp else None
         annotation = _annotation(annotations.get(key), financial_fp)
         account_evidence = (None if account_secret is None else
-                            core.counterparty_account_evidence(payload, evidence, account_secret))
+                            core.counterparty_account_evidence(payload, evidence, account_secret, owner=owner))
         texts = core.match_texts(payload, evidence, account_secret=account_secret, account_key_id=account_key_id,
-                                 account_evidence=account_evidence)
+                                 account_evidence=account_evidence, owner=owner)
         effective = _effective(payload, evidence, annotation, categories, rules, texts=texts, compiled=compiled)
         result.append({"account_id": row.account_id, "entry_reference": row.entry_reference, "payload": payload,
                        "financial_fp": financial_fp,
@@ -255,7 +255,7 @@ def projection_snapshot(session, owner, *, classify=True, account_secret=None, a
     identities, identity_state, metadata, annotations = _auxiliary(session, owner, accounts)
     applied = rules if classify else ()
     records = _records(ledger, identities, metadata, annotations, {row["id"]: row for row in categories}, applied,
-                       account_secret=account_secret, account_key_id=account_key_id)
+                       account_secret=account_secret, account_key_id=account_key_id, owner=owner)
     account_state = [{"id": row.id, "connection_id": row.connection_id, "enabled": row.enabled,
                       "configured": row.configured, "control_version": row.control_version, "kind": row.kind,
                       "kind_confirmed_at": row.kind_confirmed_at} for row in accounts]

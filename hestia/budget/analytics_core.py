@@ -233,12 +233,19 @@ def counterparty_key_id(secret):
     return hashlib.sha256(_ACCOUNT_KEY_ID_DOMAIN + secret).hexdigest()[:16]
 
 
-def counterparty_account_key(value, secret, scheme=None):
+def _hmac_part(value):
+    encoded = value.encode("utf-8")
+    return len(encoded).to_bytes(4, "big") + encoded
+
+
+def counterparty_account_key(value, secret, scheme=None, *, owner):
     canonical_scheme, normalized = canonical_counterparty_account(value, scheme)
+    if not isinstance(owner, str) or not owner:
+        raise AnalyticsError()
     if not isinstance(secret, bytes) or not secret:
         raise AnalyticsError("budget_analytics_data_error", 500)
     key = hashlib.sha256(_ACCOUNT_KEY_DOMAIN + secret).digest()
-    payload = canonical_scheme.encode("ascii") + b"\0" + normalized.encode("ascii")
+    payload = _hmac_part(owner) + _hmac_part(canonical_scheme) + _hmac_part(normalized)
     return hmac.new(key, _ACCOUNT_PAYLOAD_PREFIX + payload, hashlib.sha256).hexdigest()
 
 
@@ -257,14 +264,14 @@ def counterparty_rule_parts(value):
     return match.group(1), match.group(2), match.group(3)
 
 
-def counterparty_rule_from_identification(value, secret):
+def counterparty_rule_from_identification(value, secret, *, owner):
     canonical_scheme, normalized = canonical_counterparty_account(value)
     return counterparty_rule_value(counterparty_key_id(secret),
-                                   counterparty_account_key(normalized, secret, canonical_scheme),
+                                   counterparty_account_key(normalized, secret, canonical_scheme, owner=owner),
                                    mask_counterparty_account(normalized))
 
 
-def counterparty_account_evidence(payload, metadata, secret):
+def counterparty_account_evidence(payload, metadata, secret, *, owner):
     field = "creditor_accounts" if payload.get("credit_debit_indicator") == "DBIT" else "debtor_accounts"
     evidence = {}
     for account in (metadata or {}).get(field, []):
@@ -272,7 +279,7 @@ def counterparty_account_evidence(payload, metadata, secret):
             canonical_scheme, normalized = canonical_counterparty_account(account["identification"], account["scheme"])
         except AnalyticsError:
             continue
-        key = counterparty_account_key(normalized, secret, canonical_scheme)
+        key = counterparty_account_key(normalized, secret, canonical_scheme, owner=owner)
         evidence[key] = mask_counterparty_account(normalized)
     return tuple(sorted(evidence.items()))
 
@@ -369,15 +376,17 @@ def fold_text(text):
     return unicodedata.normalize("NFC", text).casefold()
 
 
-def match_texts(payload, metadata=None, *, account_secret=None, account_key_id=None, account_evidence=None):
+def match_texts(payload, metadata=None, *, account_secret=None, account_key_id=None, account_evidence=None, owner=None):
     """Fold text once and key only the direction's IBAN-like account identifications."""
+    if account_secret is not None and owner is None:
+        raise AnalyticsError()
     metadata = {} if metadata is None else metadata
     if payload.get("credit_debit_indicator") == "DBIT":
         counterparty = metadata.get("creditor_name") or ""
     else:
         counterparty = metadata.get("debtor_name") or ""
     if account_evidence is None and account_secret is not None:
-        account_evidence = counterparty_account_evidence(payload, metadata, account_secret)
+        account_evidence = counterparty_account_evidence(payload, metadata, account_secret, owner=owner)
     if account_secret is not None and account_key_id is None:
         account_key_id = counterparty_key_id(account_secret)
     accounts = None if account_secret is None else (account_key_id, frozenset(key for key, _ in account_evidence or ()))
@@ -440,7 +449,7 @@ def first_matching_rule(compiled, payload, texts):
     return None
 
 
-def rule_matches(rule, payload, metadata=None, *, account_secret=None):
+def rule_matches(rule, payload, metadata=None, *, account_secret=None, owner=None):
     if not _value(rule, "enabled") or not compatible_kind(_value(rule, "kind"), payload):
         return False
     field, operator = _value(rule, "field"), _value(rule, "operator")
@@ -452,5 +461,5 @@ def rule_matches(rule, payload, metadata=None, *, account_secret=None):
         needle = counterparty_rule_parts(_value(rule, "value"))[:2]
     else:
         needle = fold_text(_value(rule, "value"))
-    texts = match_texts(payload, metadata, account_secret=account_secret)
+    texts = match_texts(payload, metadata, account_secret=account_secret, owner=owner)
     return _rule_value_matches(field, operator, needle, texts[field])

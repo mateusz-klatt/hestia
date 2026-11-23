@@ -561,7 +561,7 @@ class BudgetAnalyticsStore(BudgetHTTPStore):
                     value["value"] = counterparty_rule_value(key_id, stored_key, masked)
                 else:
                     secret, _key_id = self._rule_key_context()
-                    value["value"] = counterparty_rule_from_identification(raw, secret)
+                    value["value"] = counterparty_rule_from_identification(raw, secret, owner=owner)
         else:
             if value.pop("counterparty_account_key", None) is not None:
                 raise AnalyticsError()
