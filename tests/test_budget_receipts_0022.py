@@ -1,7 +1,8 @@
 """Migration 0022 receipt schema, restrictive constraints and reversible roundtrip.
 
 ``down_revision`` is ``0021`` (one-off annotation label). Downgrade to ``0020``
-walks through that revision and leaves ``budget_analytics_audit`` rows in place.
+walks through that revision and deletes ``budget_analytics_audit`` rows whose
+subject is ``receipt``. Every other audit row stays.
 """
 from __future__ import annotations
 
@@ -58,7 +59,7 @@ class ReceiptMigration0022Tests(unittest.TestCase):
                 "SELECT subject_type, subject_id FROM budget_analytics_audit "
                 "ORDER BY subject_type, subject_id"
             ).all()
-        self.assertEqual([tuple(row) for row in rows], [("category", "safe"), ("receipt", RECEIPT_A)])
+        self.assertEqual([tuple(row) for row in rows], [("category", "safe")])
 
     def test_receipt_migration_upgrade_downgrade(self):
         engine, _ = db.init_db(self.path)
@@ -205,6 +206,14 @@ class ReceiptMigration0022Tests(unittest.TestCase):
                 "INSERT INTO budget_receipts (id, owner, status, source_kind, raw_shop_name, version, "
                 "created_at, updated_at) VALUES (?, 'owner', 'draft', 'live_text', 'Synthetic shop', 1, 1.0, 1.0)",
                 (RECEIPT_A,))
+            conn.exec_driver_sql(
+                "INSERT INTO budget_analytics_audit "
+                "(owner, subject_type, subject_id, action, before_json, after_json, changed_at) "
+                "VALUES ('owner', 'category', 'safe', 'create', 'null', '{}', 1.0)")
+            conn.exec_driver_sql(
+                "INSERT INTO budget_analytics_audit "
+                "(owner, subject_type, subject_id, action, before_json, after_json, changed_at) "
+                "VALUES ('owner', 'receipt', ?, 'confirm', 'null', '{}', 2.0)", (RECEIPT_A,))
         self._assert_clean(engine)
         real = op.drop_table
         calls = {"n": 0}
@@ -227,6 +236,11 @@ class ReceiptMigration0022Tests(unittest.TestCase):
                 self.assertEqual(conn.exec_driver_sql("SELECT name FROM budget_shops").scalar(), "Synthetic shop")
                 self.assertEqual(conn.exec_driver_sql("SELECT raw_shop_name FROM budget_receipts").scalar(),
                                  "Synthetic shop")
+                kept = conn.exec_driver_sql(
+                    "SELECT subject_type, subject_id FROM budget_analytics_audit "
+                    "ORDER BY subject_type, subject_id"
+                ).all()
+            self.assertEqual([tuple(row) for row in kept], [("category", "safe"), ("receipt", RECEIPT_A)])
         finally:
             op.drop_table = real
         db.downgrade_db(self.path, "0020")
@@ -237,6 +251,7 @@ class ReceiptMigration0022Tests(unittest.TestCase):
         self.assertIn("parent_id", {column["name"] for column in inspect(engine).get_columns("budget_categories")})
         with engine.connect() as conn:
             self.assertEqual(conn.exec_driver_sql("SELECT username FROM users").scalar(), "owner")
+        self._assert_audit_rows(engine)
 
     def test_cross_owner_link_and_raw_text_without_expiry_are_rejected(self):
         engine, _ = db.init_db(self.path)
