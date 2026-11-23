@@ -3961,7 +3961,7 @@ def _device_token_paths():
             "operationId": "redeemBudgetReceiptDevice",
             "summary": "Exchange a pairing code for a receipts-scoped bearer, once.",
             "description": (note + "Send an application/json body of at most 4096 bytes without cookie or "
-                            "Authorization. After five bad codes, issue a new code to unlock pending pairing."),
+                            "Authorization. Redemption attempts are subject to per-IP backoff and global throttling."),
             "requestBody": {"required": True, "content": {_APP_JSON: {
                 "schema": _ref("BudgetReceiptDeviceRedeemRequest")}}},
             "responses": redeem_responses,

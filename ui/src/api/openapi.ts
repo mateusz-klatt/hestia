@@ -1295,7 +1295,7 @@ export interface paths {
         put?: never;
         /**
          * Exchange a pairing code for a receipts-scoped bearer, once.
-         * @description Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Cookie plus Authorization returns 400 budget_auth_ambiguous. Send an application/json body of at most 4096 bytes without cookie or Authorization. After five bad codes, issue a new code to unlock pending pairing.
+         * @description Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Cookie plus Authorization returns 400 budget_auth_ambiguous. Send an application/json body of at most 4096 bytes without cookie or Authorization. Redemption attempts are subject to per-IP backoff and global throttling.
          */
         post: operations["redeemBudgetReceiptDevice"];
         delete?: never;

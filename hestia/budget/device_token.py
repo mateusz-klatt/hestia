@@ -23,13 +23,12 @@ import uuid
 from aiohttp import web
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
-from sqlalchemy import case, func, select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 
 from ..db import BudgetAnalyticsAudit
 from ..db import BudgetReceiptDeviceToken as DeviceToken
 from ..db import BudgetReceiptPairCode as PairCode
-from ..db import BudgetReceiptPairLock as PairLock
 from ..db import User
 from . import consent_context
 from .config import BudgetConfigError
@@ -65,7 +64,6 @@ ALLOWED = frozenset({
 
 PAIR_TTL = 300
 MAX_ACTIVE_CODES = 3
-LOCK_AFTER = 5
 SLIDE_TTL = 90 * 86400
 HARD_TTL = 180 * 86400
 SLIDE_WRITE_INTERVAL = 3600
@@ -74,6 +72,8 @@ PARSE_WINDOW = 60
 REDEEM_IP_LIMIT = 10
 REDEEM_GLOBAL_LIMIT = 30
 REDEEM_WINDOW = 60
+REDEEM_BACKOFF_AFTER = 5
+_MAX_BACKOFF_EXPONENT = 5
 _MAX_BUCKETS = 4096
 _INSERT_ATTEMPTS = 3
 _CODE_LENGTH = 8
@@ -198,6 +198,15 @@ def _bearer(headers):
     return token
 
 
+def _quota_wait(stamps, moment, window, limit, backoff_after):
+    if len(stamps) >= limit:
+        return max(1, math.ceil(window - (moment - stamps[0])))
+    if backoff_after is not None and len(stamps) >= backoff_after:
+        delay = 2 ** min(len(stamps) - backoff_after, _MAX_BACKOFF_EXPONENT)
+        return math.ceil(delay - (moment - stamps[-1]))
+    return 0
+
+
 def _charge(keys, moment, window):
     """Reserve all quota for one request or return the largest required wait."""
     with _bucket_lock:
@@ -209,15 +218,16 @@ def _charge(keys, moment, window):
         waits = []
         updated = {}
         available = _MAX_BUCKETS - len(_buckets)
-        for key, limit in keys:
+        for key, limit, backoff_after in keys:
             if key not in _buckets:
                 if available <= 0:
                     waits.append(window)
                     continue
                 available -= 1
             stamps = [stamp for stamp in _buckets.get(key, ()) if moment - stamp < window]
-            if len(stamps) >= limit:
-                waits.append(max(1, math.ceil(window - (moment - stamps[0]))))
+            wait = _quota_wait(stamps, moment, window, limit, backoff_after)
+            if wait > 0:
+                waits.append(wait)
             else:
                 updated[key] = [*stamps, moment]
         if waits:
@@ -227,14 +237,17 @@ def _charge(keys, moment, window):
 
 
 def redeem_limited(ip, moment):
+    # Admit attempts by source IP before looking at the body. This makes the
+    # delay independent of code validity and leaves rejected attempts out of global quota.
     return _charge(
-        ((("redeem", "ip", ip), REDEEM_IP_LIMIT), (("redeem", "global"), REDEEM_GLOBAL_LIMIT)),
+        ((("redeem", "ip", ip), REDEEM_IP_LIMIT, REDEEM_BACKOFF_AFTER),
+         (("redeem", "global"), REDEEM_GLOBAL_LIMIT, None)),
         moment, REDEEM_WINDOW,
     )
 
 
 def parse_limited(token_id, moment):
-    return _charge(((("parse", token_id), PARSE_LIMIT),), moment, PARSE_WINDOW)
+    return _charge(((("parse", token_id), PARSE_LIMIT, None),), moment, PARSE_WINDOW)
 
 
 def json_error(decision):
@@ -384,11 +397,6 @@ class DeviceTokenStore:
         with self._transaction() as session:
             self._require_owner(session, owner)
             moment = self._moment()
-            lock = session.get(PairLock, owner)
-            if lock is not None and lock.locked:
-                session.execute(update(PairCode).where(
-                    PairCode.owner == owner, PairCode.consumed_at.is_(None),
-                ).values(consumed_at=moment))
             active = session.scalar(select(func.count()).select_from(PairCode).where(
                 PairCode.owner == owner, PairCode.consumed_at.is_(None), PairCode.expires_at > moment,
             ))
@@ -405,44 +413,29 @@ class DeviceTokenStore:
                 )
 
             row = _insert_unique(session, factory)
-            if lock is None:
-                session.add(PairLock(owner=owner, failures=0, locked=0))
-            else:
-                lock.failures = 0
-                lock.locked = 0
             code = issued["code"]
             expires_at = row.expires_at
         return {"code": code, "expires_at": expires_at, "qr_payload": "hestia-pair:" + code}
 
     def redeem(self, code, device_name):
+        normalized = normalize_code(code)
         name = _device_name(device_name)
-        if name is None:
+        if normalized is None or name is None:
             return None
-        digest = _mac(self.secret, _CODE_DOMAIN, normalize_code(code) or "")
+        digest = _mac(self.secret, _CODE_DOMAIN, normalized)
         with self._transaction() as session:
             moment = self._moment()
-            row = session.scalar(select(PairCode).join(PairLock, PairCode.owner == PairLock.owner)
-                                 .join(User, PairCode.owner == User.username).where(
+            row = session.scalar(select(PairCode).join(User, PairCode.owner == User.username).where(
                 PairCode.code_hmac == digest, PairCode.consumed_at.is_(None), PairCode.expires_at > moment,
-                PairLock.locked == 0, User.role == "admin", User.disabled.is_(False),
+                User.role == "admin", User.disabled.is_(False),
             ))
             if not _accepted(None if row is None else row.code_hmac, digest):
-                self._fail_pending_pairings(session, moment)
                 return None
             row.consumed_at = moment
             token, token_id, expires_at = self._issue_token(session, row.owner, name, moment)
             expires_iso = datetime.fromtimestamp(expires_at, timezone.utc).isoformat(timespec="seconds")
         return {"token": token, "token_id": token_id, "scope": "receipts",
                 "expires_at": expires_iso}
-
-    def _fail_pending_pairings(self, session, moment):
-        # Redeem is anonymous. Every bad code charges the same pending owners so
-        # observing lockout cannot disclose whether a rejected code ever existed.
-        pending = select(PairCode.owner).where(PairCode.consumed_at.is_(None), PairCode.expires_at > moment)
-        failures = PairLock.failures + 1
-        session.execute(update(PairLock).where(PairLock.owner.in_(pending), PairLock.locked == 0).values(
-            failures=failures, locked=case((failures >= LOCK_AFTER, 1), else_=0),
-        ))
 
     def _issue_token(self, session, owner, name, moment):
         issued = {}

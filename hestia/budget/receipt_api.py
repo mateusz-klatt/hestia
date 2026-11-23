@@ -126,8 +126,11 @@ def register(app, read_json_body, *, auth_enabled, session_secret):
                 return _device_error(400, "device_token_rejected")
             if not enabled():
                 raise api._Rejected(404, "budget_receipts_disabled")
+            code = device_token.normalize_code(body["code"])
+            if code is None:
+                return _device_error(400, "device_token_rejected")
             result = await api._settled_thread(
-                lambda: device_token.open_store(secret).redeem(body["code"], body["device_name"]))
+                lambda: device_token.open_store(secret).redeem(code, body["device_name"]))
             if result is None:
                 return _device_error(400, "device_token_rejected")
             return web.json_response(result, headers=api.PRIVATE_HEADERS)

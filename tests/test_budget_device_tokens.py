@@ -81,7 +81,6 @@ class DeviceTokenStoreTests(unittest.TestCase):
     def test_constants_and_normalisation(self):
         self.assertEqual(device_token.PAIR_TTL, 300)
         self.assertEqual(device_token.MAX_ACTIVE_CODES, 3)
-        self.assertEqual(device_token.LOCK_AFTER, 5)
         self.assertEqual(device_token.SLIDE_TTL, 90 * 86400)
         self.assertEqual(device_token.HARD_TTL, 180 * 86400)
         self.assertEqual(device_token.SLIDE_WRITE_INTERVAL, 3600)
@@ -127,7 +126,7 @@ class DeviceTokenStoreTests(unittest.TestCase):
         self.assertTrue(issued["qr_payload"] == "hestia-pair:" + issued["code"])
         self.assertEqual(len(issued["code"]), 8)
         self.assertEqual(issued["expires_at"], self.moment["now"] + device_token.PAIR_TTL)
-        self.assertEqual(self._lock().failures, 0)
+        self.assertIsNone(self._lock())
         self._absent(issued["code"])
         self.assertIsNone(self.store.redeem(issued["code"], "bad\nname"))
         self.assertIsNone(self._codes()[0].consumed_at)
@@ -178,7 +177,7 @@ class DeviceTokenStoreTests(unittest.TestCase):
             self.assertEqual(sum(result is not None for result in results), 1)
         self.assertEqual(len(self._tokens()), 1)
 
-    def test_pair_limit_lockout_and_identical_rejection(self):
+    def test_pair_limit_and_bad_guesses_do_not_charge_any_owner(self):
         expired = self.store.issue_code("alice")
         self.moment["now"] += device_token.PAIR_TTL
         alice = [self.store.issue_code("alice") for _ in range(3)]
@@ -186,28 +185,42 @@ class DeviceTokenStoreTests(unittest.TestCase):
         with self.assertRaises(device_token.DeviceTokenError) as limited:
             self.store.issue_code("alice")
         self.assertEqual((limited.exception.status, limited.exception.code), (409, "device_pair_limit"))
+        with self.sessions.begin() as session:
+            session.add(db.BudgetReceiptPairLock(owner="alice", failures=4, locked=0))
 
         with mock.patch.object(device_token.hmac, "compare_digest", wraps=device_token.hmac.compare_digest) as compare:
-            for attempt in (expired["code"], "U" * 8):
+            for attempt in (expired["code"], "Z" * 8):
                 compare.reset_mock()
                 self.assertIsNone(self.store.redeem(attempt, "Vesta"))
                 compare.assert_called_once()
                 self.assertTrue(all(len(digest) == 64 for digest in compare.call_args.args))
-        self.assertEqual(self._lock().failures, 2)
-        self.assertEqual(self._lock("bob").failures, 2)
-        for _ in range(device_token.LOCK_AFTER - 2):
-            self.assertIsNone(self.store.redeem("U" * 8, "Vesta"))
-        self.assertEqual(self._lock().locked, 1)
-        self.assertEqual(self._lock("bob").locked, 1)
-        self.assertIsNone(self.store.redeem(alice[0]["code"], "Vesta"))
-        self.assertIsNone(self.store.redeem(bob["code"], "Vesta"))
+        for _ in range(20):
+            self.assertIsNone(self.store.redeem("Z" * 8, "Vesta"))
+        lock = self._lock()
+        self.assertEqual((lock.failures, lock.locked), (4, 0))
+        self.assertIsNone(self._lock("bob"))
+        self.assertTrue(self.store.redeem(alice[0]["code"], "Vesta") is not None)
+        self.assertTrue(self.store.redeem(bob["code"], "Vesta") is not None)
 
-        fresh = self.store.issue_code("alice")
-        self.assertEqual(self._lock().locked, 0)
-        for issued in alice:
-            self.assertIsNone(self.store.redeem(issued["code"], "Vesta"))
-        self.assertTrue(self.store.redeem(fresh["code"], "Vesta") is not None)
-        self.assertIsNone(self.store.redeem(bob["code"], "Vesta"))
+    def test_malformed_code_never_opens_a_write_transaction(self):
+        with mock.patch.object(self.store, "_transaction") as transaction:
+            self.assertIsNone(self.store.redeem("U" * 8, "Vesta"))
+        transaction.assert_not_called()
+
+    def test_redeem_backoff_doubles_and_global_limit_still_applies(self):
+        ip = "198.51.100.1"
+        moment = 100.0
+        for _ in range(device_token.REDEEM_BACKOFF_AFTER):
+            self.assertIsNone(device_token.redeem_limited(ip, moment))
+        for delay in (1, 2, 4, 8, 16):
+            self.assertEqual(device_token.redeem_limited(ip, moment), delay)
+            moment += delay
+            self.assertIsNone(device_token.redeem_limited(ip, moment))
+        self.assertGreater(device_token.redeem_limited(ip, moment), 0)
+        device_token.reset_limits()
+        for i in range(device_token.REDEEM_GLOBAL_LIMIT):
+            self.assertIsNone(device_token.redeem_limited(f"198.51.100.{i + 1}", moment))
+        self.assertEqual(device_token.redeem_limited("203.0.113.1", moment), device_token.REDEEM_WINDOW)
 
     def test_owner_checks_revocation_and_expiry(self):
         with self.assertRaises(device_token.DeviceTokenError) as denied:
@@ -619,15 +632,6 @@ class DeviceTokenHTTPTests(fixture.unittest.IsolatedAsyncioTestCase):
         self.assertEqual(second.status, 429)
         self.assertEqual((await second.json())["error"], "device_token_rejected")
         self.assertGreaterEqual(int(second.headers["Retry-After"]), 1)
-        locked = await self._pair()
-        device_token.reset_limits()
-        for _ in range(device_token.LOCK_AFTER):
-            failure = await self._redeem("ZZZZZZZZ")
-            self.assertEqual(failure.status, 400)
-            self.assertEqual(await failure.json(), await unknown.json())
-        rejected = await self._redeem(locked["code"])
-        self.assertEqual(rejected.status, 400)
-        self.assertEqual(await rejected.json(), await unknown.json())
         fresh = await self._pair()
         device_token.reset_limits()
         with mock.patch.object(device_token, "REDEEM_IP_LIMIT", 1):
@@ -652,6 +656,33 @@ class DeviceTokenHTTPTests(fixture.unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await limited_parse.json())["error"], "device_token_rate_limited")
         self.assertIn("Retry-After", limited_parse.headers)
 
+    async def test_anonymous_flood_is_backed_off_without_blocking_another_ip(self):
+        paired = await self._pair()
+        attacker = {"X-Forwarded-For": "203.0.113.1"}
+        client = {"X-Forwarded-For": "203.0.113.2"}
+        with mock.patch.dict(os.environ, {consent_context.TRUSTED_PROXY_ENV: "127.0.0.1/32"}), \
+             mock.patch.object(receipt_api, "time", wraps=receipt_api.time) as clock:
+            clock.monotonic.return_value = 100.0
+            for _ in range(device_token.REDEEM_BACKOFF_AFTER):
+                response = await self._redeem("Z" * 8, headers=attacker)
+                self.assertEqual(response.status, 400)
+                await response.read()
+            for _ in range(device_token.REDEEM_GLOBAL_LIMIT):
+                response = await self._redeem("Z" * 8, headers=attacker)
+                self.assertEqual(response.status, 429)
+                self.assertEqual(response.headers["Retry-After"], "1")
+                await response.read()
+            result = await self._redeem(paired["code"], headers=client)
+            _status(result, 200)
+            await result.read()
+
+    async def test_malformed_code_is_rejected_before_opening_store(self):
+        with mock.patch.object(device_token, "open_store") as open_store:
+            response = await self._redeem("U" * 8)
+        self.assertEqual(response.status, 400)
+        self.assertEqual((await response.json())["error"], "device_token_rejected")
+        open_store.assert_not_called()
+
     async def test_device_body_framing_and_operational_failures(self):
         rejected = {"ok": False, "error": "device_token_rejected"}
         for data, headers in ((b"{}", {"Content-Type": "text/plain"}),
@@ -666,6 +697,7 @@ class DeviceTokenHTTPTests(fixture.unittest.IsolatedAsyncioTestCase):
         })
         self.assertEqual(malformed.status, 400)
         self.assertEqual((await malformed.json())["error"], "invalid JSON")
+        device_token.reset_limits()
         for failure, status, error in (
             (device_token.DeviceTokenError(503, "budget_unavailable"), 503, "budget_unavailable"),
             (BudgetUsersBackendRequired(), 400, "device_token_rejected"),
