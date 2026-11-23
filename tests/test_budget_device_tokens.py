@@ -782,6 +782,26 @@ class DeviceTokenHTTPTests(fixture.unittest.IsolatedAsyncioTestCase):
                 _status(await self._login_device(), 401)
             open_store.assert_not_called()
 
+    async def test_password_login_rechecks_receipts_flag_before_issuance(self):
+        for values in ([False], [True, False]):
+            with self.subTest(values=values), \
+                    mock.patch.object(receipt_api, "enabled", side_effect=values), \
+                    mock.patch.object(device_token, "open_store") as open_store, \
+                    mock.patch.object(auth.LoginLimiter, "take") as take:
+                response = await self._login_device()
+                self.assertEqual((response.status, (await response.json())["error"]),
+                                 (404, "budget_receipts_disabled"))
+                open_store.assert_not_called()
+                take.assert_not_called()
+
+    async def test_password_login_rechecks_receipts_flag_after_reading_the_body(self):
+        with mock.patch.object(receipt_api, "enabled", side_effect=[True, False]), \
+                mock.patch.object(device_token, "open_store") as open_store:
+            response = await self._login_device()
+            self.assertEqual((response.status, (await response.json())["error"]),
+                             (404, "budget_receipts_disabled"))
+        open_store.assert_not_called()
+
     async def test_password_login_framing_and_errors_do_not_log_a_password(self):
         with mock.patch.object(device_token, "open_store", side_effect=RuntimeError(LOGIN_PASSWORD)), \
                 self.assertLogs("hestia.budget.api", "ERROR") as logs:
