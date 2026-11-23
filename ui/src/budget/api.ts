@@ -1,6 +1,6 @@
-// Same-origin budget API calls. The HttpOnly session cookie authenticates; mutations send JSON and never an
-// Authorization header (the server rejects bearer mutations). Results are discriminated, never thrown, so a
-// failed call cannot become an unhandled rejection. Nothing here persists financial data in the browser.
+// Same-origin budget API calls use the HttpOnly session cookie and send JSON for mutations. Results are
+// discriminated, never thrown, so a failed call cannot become an unhandled rejection. Nothing here persists
+// financial data in the browser.
 import { apiUrl } from "../api/client";
 import type { BudgetAccount, BudgetCapabilities, BudgetConnection, BudgetConsent, BudgetConsentFlow,
   BudgetConsentReconcile, BudgetConsentRenewalReminders, BudgetJob, BudgetKind, BudgetBalances, BudgetLimit,
@@ -13,6 +13,20 @@ import type { AnalyticsCategory, AnalyticsForecast, AnalyticsInbox, AnalyticsInb
   MortgagePaymentSetRequest, MortgageSaveRequest, MortgageScheduleSaved, RuleCandidate, RulePreview, RuleSaved,
   SpendingLimitSaveRequest, SpendingLimitSaved, TransactionFilter, TransferDecisionRequest, TransferDecisionResult,
   TransferList, TransferQueue } from "./analytics/model";
+
+export interface ReceiptDevice {
+  token_id: string;
+  device_name: string;
+  created_at: number;
+  last_used_at: number | null;
+  expires_at: number;
+}
+
+export interface ReceiptPair {
+  code: string;
+  expires_at: number;
+  qr_payload: string;
+}
 
 export type BudgetResult<T> =
   | { ok: true; data: T }
@@ -141,6 +155,11 @@ export const budgetApi = {
   /** Atomically marks or unmarks 1..100 owner inbox alert keys under anti-ABA reads_version CAS. */
   markInbox: (request: AnalyticsInboxMarkRequest) =>
     post<{ inbox: AnalyticsInboxMarkSaved }>("analytics/inbox-mark", request),
+  /** Unrevoked receipts devices. A 404 means the receipts flag is off. */
+  receiptDevices: () => post<ReceiptDevice[]>("receipts/device-token/list", {}),
+  pairReceiptDevice: () => post<ReceiptPair>("receipts/device-token/pair-code", {}),
+  revokeReceiptDevice: (tokenId: string) =>
+    post<{ ok: true }>("receipts/device-token/revoke", { token_id: tokenId }),
   setSelected: (account: BudgetAccount, selected: boolean) =>
     post<{ account: BudgetAccount }>("account-selection",
       { account_id: account.id, selected, expected_version: account.control_version }),

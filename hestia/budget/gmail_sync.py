@@ -152,26 +152,27 @@ class GmailSync:
             raise GmailError("mailbox_mismatch", 403, attention="identity_mismatch")
         return _history_id(profile.get("historyId"))
 
-    def transition(self, owner, expected_version, status):
+    def transition(self, owner, expected_version, status, *, defer_profile=False):
         self._require_owner(owner)
         with grant_transition_lock(self.client, owner):
             self.store.check_version(owner, expected_version)
             self.client.forget(owner)
             mailbox_hmac = None
             if status == "active":
-                state = self.store.state(owner)
-                run = self.client.run(owner, state.grant_generation, self.settings.credentials,
-                                      lambda: self.store.check_version(owner, expected_version))
-                try:
-                    self._profile(run)
-                except GmailError as error:
-                    self.store.opt_in_error(owner, expected_version, attention=error.attention, code=error.code,
-                                            http_status=error.http_status)
-                    raise
-                finally:
-                    self.client.forget(owner)
+                if not defer_profile:
+                    state = self.store.state(owner)
+                    run = self.client.run(owner, state.grant_generation, self.settings.credentials,
+                                          lambda: self.store.check_version(owner, expected_version))
+                    try:
+                        self._profile(run)
+                    except GmailError as error:
+                        self.store.opt_in_error(owner, expected_version, attention=error.attention, code=error.code,
+                                                http_status=error.http_status)
+                        raise
+                    finally:
+                        self.client.forget(owner)
                 mailbox_hmac = digest(self.settings.hmac_secret, MAILBOX_DOMAIN, self.settings.owner_mailbox)
-            self.store.transition(owner, expected_version, status, mailbox_hmac)
+            self.store.transition(owner, expected_version, status, mailbox_hmac, queue_sync=defer_profile)
             return self.store.status(owner)
 
     def _commit(self, owner, progress, changes, pending=()):

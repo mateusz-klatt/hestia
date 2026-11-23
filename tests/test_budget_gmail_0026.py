@@ -34,7 +34,7 @@ class GmailScheduleMigrationTests(unittest.TestCase):
 
     def test_schedule_columns_roundtrip_through_init_and_downgrade(self):
         engine, _ = db.init_db(self.path)
-        self._assert_clean(engine, "0025")
+        self._assert_clean(engine, "0026")
         with engine.begin() as connection:
             connection.exec_driver_sql(
                 "INSERT INTO users (username, password_hash, role) VALUES ('owner', 'synthetic', 'admin')"
@@ -65,7 +65,7 @@ class GmailScheduleMigrationTests(unittest.TestCase):
             ).scalar(), "disabled")
 
         engine, _ = db.init_db(self.path)
-        self._assert_clean(engine, "0025")
+        self._assert_clean(engine, "0026")
         with engine.connect() as connection:
             self.assertEqual(connection.exec_driver_sql(
                 "SELECT run_requested, force_full_resync FROM budget_gmail_state"
@@ -116,4 +116,4 @@ class GmailScheduleMigrationTests(unittest.TestCase):
         with self._open().begin() as connection:
             connection.exec_driver_sql('CREATE TABLE "_alembic_tmp_budget_gmail_state" (id TEXT)')
         engine, _ = db.init_db(self.path)
-        self._assert_clean(engine, "0025")
+        self._assert_clean(engine, "0026")

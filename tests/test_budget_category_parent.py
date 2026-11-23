@@ -73,10 +73,10 @@ class CategoryParentMigrationTests(unittest.TestCase):
 
 
 class CategoryParentInitDbTests(unittest.TestCase):
-    """Category parent through real ``init_db``. The head includes the 0021 annotation label.
+    """Category parent through real ``init_db``.
 
     Production turns foreign keys on, and child rows reference categories. The runner
-    upgrades to that head with foreign keys off inside one transaction, then checks them.
+    upgrades to head with foreign keys off inside one transaction, then checks them.
     """
 
     def setUp(self):
@@ -188,7 +188,7 @@ class CategoryParentInitDbTests(unittest.TestCase):
             engine, _ = db.init_db(self.path)
         self.assertEqual(observed, [(True, None, 0, "head")])
         version, columns, rules, limits, annotations, temp_tables, violations = self._snapshot()
-        self.assertEqual(version, [("0025",)])
+        self.assertEqual(version, [("0026",)])
         self.assertIn("parent_id", columns)
         self.assertEqual(rules, [("rule", "cat")])
         self.assertEqual(limits, [("lim", "cat")])
@@ -235,7 +235,7 @@ class CategoryParentInitDbTests(unittest.TestCase):
             engine, _ = db.init_db(self.path)
         self.assertEqual(observed, [(True, None, 0, "head"), (True, None, 0, "head")])
         version, columns, rules, limits, annotations, temp_tables, violations = self._snapshot()
-        self.assertEqual(version, [("0025",)])
+        self.assertEqual(version, [("0026",)])
         self.assertIn("parent_id", columns)
         self.assertEqual(rules, [("rule", "cat")])
         self.assertEqual(limits, [("lim", "cat")])
@@ -278,7 +278,7 @@ class CategoryParentInitDbTests(unittest.TestCase):
             db.downgrade_db(self.path, "0019")
         self.assertIn("foreign_key_check", str(caught.exception))
         version, columns, rules, limits, annotations, temp_tables, _violations = self._snapshot()
-        self.assertEqual(version, [("0025",)])
+        self.assertEqual(version, [("0026",)])
         self.assertIn("parent_id", columns)
         self.assertEqual(rules, [("orphan", "missing"), ("rule", "cat")])
         self.assertEqual(limits, [("lim", "cat")])
@@ -295,7 +295,7 @@ class CategoryParentInitDbTests(unittest.TestCase):
         self.assertEqual(leftovers, ["_alembic_tmp_budget_categories"])
         db.init_db(self.path)
         version, columns, rules, limits, annotations, temp_tables, violations = self._snapshot()
-        self.assertEqual(version, [("0025",)])
+        self.assertEqual(version, [("0026",)])
         self.assertIn("parent_id", columns)
         self.assertEqual(rules, [("rule", "cat")])
         self.assertEqual(limits, [("lim", "cat")])

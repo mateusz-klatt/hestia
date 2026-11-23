@@ -84,7 +84,7 @@ class ReceiptMigration0024Tests(unittest.TestCase):
         original = self._legacy_snapshot(legacy_engine)
 
         engine, _ = db.init_db(self.path)
-        self._assert_clean(engine, "0025")
+        self._assert_clean(engine, "0026")
         self.assertEqual(self._legacy_snapshot(engine), original)
         with engine.begin() as connection:
             self.assertEqual(connection.exec_driver_sql(
@@ -102,7 +102,7 @@ class ReceiptMigration0024Tests(unittest.TestCase):
         self.assertTrue({"document_kind", "import_expires_at", "invoice_number", "due_date"}.isdisjoint(columns))
 
         engine, _ = db.init_db(self.path)
-        self._assert_clean(engine, "0025")
+        self._assert_clean(engine, "0026")
         self.assertEqual(self._legacy_snapshot(engine), original)
 
     def test_aborted_upgrade_keeps_original_rows_and_retry_rebuilds(self):
@@ -119,7 +119,7 @@ class ReceiptMigration0024Tests(unittest.TestCase):
         with legacy_engine.begin() as connection:
             connection.exec_driver_sql("CREATE TABLE _alembic_tmp_budget_receipts (id TEXT)")
         engine, _ = db.init_db(self.path)
-        self._assert_clean(engine, "0025")
+        self._assert_clean(engine, "0026")
         self.assertEqual(self._legacy_snapshot(engine), original)
 
     def test_downgrade_preflight_blocks_each_kind_of_v1d_data(self):
@@ -135,7 +135,7 @@ class ReceiptMigration0024Tests(unittest.TestCase):
                     connection.exec_driver_sql(f"UPDATE budget_receipts SET {clause}")
                 with self.assertRaisesRegex(RuntimeError, "1 incompatible receipts, 0 Gmail provenance rows and 0 active grants"):
                     db.downgrade_db(self.path, "0023")
-                self._assert_clean(self.engine, "0025")
+                self._assert_clean(self.engine, "0026")
                 with self.engine.begin() as connection:
                     connection.exec_driver_sql("DELETE FROM budget_receipts")
                     connection.exec_driver_sql(_RECEIPT)
@@ -149,7 +149,7 @@ class ReceiptMigration0024Tests(unittest.TestCase):
             connection.exec_driver_sql("UPDATE budget_gmail_messages SET outcome = 'deleted'")
         with self.assertRaisesRegex(RuntimeError, "0 incompatible receipts, 1 Gmail provenance rows and 0 active grants"):
             db.downgrade_db(self.path, "0023")
-        self._assert_clean(self.engine, "0025")
+        self._assert_clean(self.engine, "0026")
 
     def test_owner_isolation_dedupe_and_default_disabled_grant(self):
         with self.engine.begin() as connection:
@@ -190,4 +190,4 @@ class ReceiptMigration0024Tests(unittest.TestCase):
         with self.engine.begin() as connection:
             connection.exec_driver_sql("UPDATE budget_gmail_messages SET receipt_id = NULL, outcome = 'deleted'")
             connection.exec_driver_sql("DELETE FROM budget_receipts WHERE id = 'synthetic'")
-        self._assert_clean(self.engine, "0025")
+        self._assert_clean(self.engine, "0026")

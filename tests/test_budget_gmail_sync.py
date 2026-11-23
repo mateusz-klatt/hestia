@@ -715,6 +715,82 @@ class GmailSyncTests(TestCase):
         self.assertEqual(self.rows(db.BudgetGmailMessage), [])
         self.assertIsNone(self.store.state(OWNER).last_error)
 
+    def test_restart_after_committed_chunk_resumes_without_duplicates(self):
+        self.enable()
+        self.transport.routes[("/messages", None)] = response(page("one", "two"))
+        self.service.schedule(OWNER)
+        process = self.processor.process
+
+        def crash_on_second(*args):
+            if args[1] == "two":
+                raise RuntimeError("synthetic container stop")
+            return process(*args)
+
+        with mock.patch.object(sync_module, "BATCH_COMMIT_SIZE", 1), \
+                mock.patch.object(self.processor, "process", side_effect=crash_on_second):
+            with self.assertRaisesRegex(RuntimeError, "container stop"):
+                self.sync(poll=True)
+        state = self.store.state(OWNER)
+        self.assertEqual((state.sync_phase, state.history_id, state.pending_history_id, state.run_requested),
+                         ("backfill", None, "100", 0))
+        self.assertEqual(len(self.rows(db.BudgetReceipt)), 1)
+        with sync_module._sync_lock(self.path):
+            pass
+
+        self.processor = SyntheticProcessor(self.clock)
+        self.client = GmailClient(self.transport, monotonic=self.clock.monotonic, sleep=self.clock.sleep)
+        self.service = GmailSync(SETTINGS, self.store, self.client, self.processor, self.path, jitter=lambda *_: 0)
+        self.tick(60)
+        restarted = self.sync(poll=True)
+        state = self.store.state(OWNER)
+        self.assertEqual(restarted["imported_count"], 1)
+        self.assertEqual(self.processor.processed, ["two"])
+        self.assertEqual(len(self.rows(db.BudgetReceipt)), 2)
+        self.assertEqual(len(self.rows(db.BudgetGmailMessage)), 2)
+        self.assertEqual((state.sync_phase, state.history_id, state.pending_history_id, state.run_requested),
+                         ("idle", "100", None, 0))
+
+    def test_repeated_kicks_never_run_parallel_pollers(self):
+        self.enable()
+        self.transport.routes[("/messages", None)] = response(page("one"))
+        self.service.schedule(OWNER)
+        self.service.schedule(OWNER)
+        before_profiles = len(self.transport.requests("/profile"))
+        started = threading.Event()
+        unblock = threading.Event()
+        errors = []
+
+        def profile(_params):
+            started.set()
+            assert unblock.wait(3)
+            return response(self.transport.profile)
+
+        self.transport.routes[("/profile", None)] = profile
+
+        def poll():
+            try:
+                self.sync(poll=True)
+            except GmailError as error:
+                errors.append(error.code)
+
+        first = threading.Thread(target=poll)
+        second = threading.Thread(target=poll)
+        first.start()
+        try:
+            self.assertTrue(started.wait(3))
+            second.start()
+            second.join(3)
+            self.assertFalse(second.is_alive())
+        finally:
+            unblock.set()
+            first.join(3)
+            second.join(3)
+        self.assertFalse(first.is_alive())
+        self.assertIn(errors, ([], ["budget_receipt_gmail_sync_busy"]))
+        self.assertEqual(len(self.transport.requests("/profile")), before_profiles + 1)
+        self.assertEqual(len(self.rows(db.BudgetReceipt)), 1)
+        self.assertEqual(self.store.state(OWNER).run_requested, 0)
+
     def test_schedule_queues_a_poller_run_without_calling_gmail(self):
         with self.assertRaisesRegex(GmailError, "disabled"):
             self.service.schedule(OWNER)

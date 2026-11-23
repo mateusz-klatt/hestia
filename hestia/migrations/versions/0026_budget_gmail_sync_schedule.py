@@ -1,7 +1,7 @@
 """Queue fields for a Gmail import, plus owner/spouse manual forwards.
 
-Revision ID: 0025
-Revises: 0024
+Revision ID: 0026
+Revises: 0025
 
 ``batch_alter_table`` rebuilds ``budget_gmail_state``, ``budget_receipts`` and
 ``budget_gmail_messages``. Upgrade and downgrade drop a leftover
@@ -16,8 +16,8 @@ run does not survive. Downgrade refuses while a manual forward or an
 from alembic import op
 import sqlalchemy as sa
 
-revision = "0025"
-down_revision = "0024"
+revision = "0026"
+down_revision = "0025"
 branch_labels = None
 depends_on = None
 

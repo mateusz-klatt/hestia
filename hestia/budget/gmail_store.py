@@ -152,7 +152,7 @@ class GmailStore(BudgetStore):
         with self.sessions() as session:
             return self._pending_count(session, owner) >= MAX_PENDING_IMPORTS
 
-    def transition(self, owner, expected, status, mailbox_hmac=None):
+    def transition(self, owner, expected, status, mailbox_hmac=None, *, queue_sync=False):
         with self.transaction() as session:
             BudgetHTTPStore._owner(session, owner)
             row = self._state(session, owner)
@@ -167,6 +167,9 @@ class GmailStore(BudgetStore):
             if status == "active":
                 row.mailbox_hmac = mailbox_hmac
                 row.granted_at, row.revoked_at = now, None
+                if queue_sync:
+                    row.run_requested = 1
+                    row.next_sync_at = now
             elif status == "revoked":
                 row.revoked_at = now
                 session.execute(update(BudgetGmailMessage).where(BudgetGmailMessage.owner == owner)

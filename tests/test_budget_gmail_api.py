@@ -169,12 +169,12 @@ class GmailHTTPTests(IsolatedAsyncioTestCase):
         self.assertEqual(granted.status, 200, await granted.text())
         grant = api_contract.BudgetReceiptGmailGrantResult.model_validate(await granted.json())
         self.assertEqual((grant.grant_status, grant.grant_generation, grant.version), ("active", 1, 2))
-        self.assertEqual([path for path, _params in self.transport.calls], ["token", "/profile"])
+        self.assertEqual(self.transport.calls, [])
         synced = await self.call("gmail-sync", json={"force_full_resync": True})
         self.assertEqual(synced.status, 202, await synced.text())
         accepted = api_contract.BudgetReceiptGmailSyncResult.model_validate(await synced.json())
         self.assertEqual((accepted.ok, accepted.sync_phase, accepted.version), (True, "idle", grant.version + 1))
-        self.assertEqual(len(self.transport.requests("/profile")), 1)
+        self.assertEqual(len(self.transport.requests("/profile")), 0)
         queued = await (await self.call("gmail-status")).json()
         self.assertEqual((queued["sync_phase"], queued["batch_processed_count"], queued["next_sync_at"]),
                          ("idle", 0, self.clock.now))
@@ -208,9 +208,11 @@ class GmailHTTPTests(IsolatedAsyncioTestCase):
         self.worker.ready.return_value = True
         other_mailbox = "unrelated@example.test"
         self.transport.profile["emailAddress"] = other_mailbox
-        denied = await self.call("gmail-grant", json=request)
-        self.assertEqual(denied.status, 403, await denied.text())
-        self.assertEqual((await denied.json())["error"], "budget_receipt_gmail_mailbox_mismatch")
+        granted = await self.call("gmail-grant", json=request)
+        self.assertEqual(granted.status, 200, await granted.text())
+        self.assertEqual(self.transport.calls, [])
+        gmail_api._Runtime().poll(lambda: True, lambda: _SESSION)
+        self.assertEqual(self.transport.requests("/profile"), [{}])
         state_text = await (await self.call("gmail-status")).text()
         self.assertNotIn(other_mailbox, state_text)
         self.assertNotIn(MAILBOX, state_text)
@@ -250,8 +252,41 @@ class GmailHTTPTests(IsolatedAsyncioTestCase):
                     self.assertEqual(receipt.get("invoice_number"), "FV/123" if native else None)
                     self.assertEqual(receipt.get("due_date"), "2026-11-25" if native else None)
 
+    async def test_manual_forward_review_metadata_never_exposes_the_inner_address(self):
+        with self.sessions.begin() as session:
+            session.add(db.BudgetReceipt(
+                id=_RECEIPT_ID, owner="alice", status="needs_review", source_kind="email", version=1,
+                created_at=self.clock.now, updated_at=self.clock.now, document_kind="invoice",
+                raw_shop_name="przekazane ręcznie", forwarded_manually=1,
+                forwarded_sender_domain="corner-shop.example",
+            ))
+        for version in (None, "0.40.0", "0.43.0"):
+            with self.subTest(version=version):
+                headers = self.headers()
+                if version is not None:
+                    headers["X-Hestia-Contract-Version"] = version
+                native = version is not None
+                listing = await self.client.post(
+                    receipt_api.PREFIX + "/list", json={"status": "needs_review"} if native else {}, headers=headers)
+                detail = await self.client.get(receipt_api.PREFIX + "/detail", params={"receipt_id": _RECEIPT_ID},
+                                               headers=headers)
+                self.assertEqual(listing.status, 200, await listing.text())
+                self.assertEqual(detail.status, 200, await detail.text())
+                list_body = await listing.json()
+                detail_body = await detail.json()
+                api_contract.BudgetReceiptListResult.model_validate(list_body)
+                api_contract.BudgetReceiptDetailResult.model_validate(detail_body)
+                for receipt in (list_body["receipts"][0], detail_body["receipt"]):
+                    self.assertEqual((receipt["status"], receipt["raw_shop_name"], receipt["linked"],
+                                      receipt["linked_account_id"]),
+                                     ("needs_review", "przekazane ręcznie", False, None))
+                    self.assertEqual(receipt.get("forwarded_manually"), True if native else None)
+                    self.assertEqual(receipt.get("forwarded_sender_domain"),
+                                     "corner-shop.example" if native else None)
+                self.assertNotIn("billing@corner-shop.example", await detail.text())
+
     async def test_receipt_version_is_validated_before_reading_body(self):
-        for version in ("bad", "1.0.0", "0.40.1", "0.040.0"):
+        for version in ("bad", "1.0.0", "0.43.1", "0.040.0"):
             with self.subTest(version=version):
                 headers = self.headers() | {"X-Hestia-Contract-Version": version}
                 response = await self.client.post(receipt_api.PREFIX + "/parse-text", data="not JSON", headers=headers)

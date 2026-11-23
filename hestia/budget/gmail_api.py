@@ -98,7 +98,7 @@ class _Runtime:
         if operation == "gmail-grant":
             if not self.worker.ready():
                 raise GmailError("parser_unavailable")
-            return _grant_result(service.transition(owner, values["expected_version"], "active"))
+            return _grant_result(service.transition(owner, values["expected_version"], "active", defer_profile=True))
         return service.schedule(owner, force_full_resync=values["force_full_resync"])
 
     def poll(self, auth_enabled, session_secret):
