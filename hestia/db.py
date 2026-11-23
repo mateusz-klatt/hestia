@@ -280,7 +280,10 @@ class BudgetAccount(Base):
     """Stable owner-scoped identity, independent of session account UIDs."""
 
     __tablename__ = "budget_accounts"
-    __table_args__ = (UniqueConstraint("owner", "identification_hash"),)
+    __table_args__ = (
+        UniqueConstraint("owner", "identification_hash"),
+        Index("uq_budget_accounts_id_owner", "id", "owner", unique=True),
+    )
     id: Mapped[str] = mapped_column(primary_key=True)
     connection_id: Mapped[str] = mapped_column(ForeignKey("budget_connections.id"))
     owner: Mapped[str] = mapped_column(ForeignKey("users.username"))
@@ -650,8 +653,8 @@ class BudgetHouseholdMember(Base):
     """One viewer granted read-only access to exactly one admin owner's budget.
 
     ``grant_id`` is a server-generated immutable 64-hex scope id. An identical
-    member/owner pair keeps it; any regrant allocates a new one. Migration 0022
-    revises 0021. Restrictive user foreign keys refuse deleting a user who still
+    member/owner pair keeps it; any regrant allocates a new one. Migration 0023
+    revises 0022. Restrictive user foreign keys refuse deleting a user who still
     participates in a grant.
     """
 
@@ -795,6 +798,143 @@ class BudgetImportUnresolved(Base):
     ordinal: Mapped[int] = mapped_column(primary_key=True)
     reason: Mapped[str]
     payload_json: Mapped[str]
+
+
+class BudgetShop(Base):
+    __tablename__ = "budget_shops"
+    __table_args__ = (
+        ForeignKeyConstraint(["owner"], ["users.username"]),
+        UniqueConstraint("id", "owner", name="uq_budget_shops_id_owner"),
+        Index("ix_budget_shops_owner_chain", "owner", "chain_key"),
+        CheckConstraint("length(name) BETWEEN 1 AND 128", name="ck_budget_shops_name_len"),
+        CheckConstraint("chain_key IS NULL OR length(chain_key) BETWEEN 1 AND 64",
+                        name="ck_budget_shops_chain_key_len"),
+        CheckConstraint(
+            "nip IS NULL OR (length(nip) = 10 AND nip GLOB "
+            "'[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]')",
+            name="ck_budget_shops_nip",
+        ),
+        CheckConstraint("version >= 1", name="ck_budget_shops_version"),
+    )
+    id: Mapped[str] = mapped_column(primary_key=True)
+    owner: Mapped[str]
+    name: Mapped[str]
+    chain_key: Mapped[str | None]
+    nip: Mapped[str | None]
+    merchant_tokens: Mapped[str] = mapped_column(Text, server_default=text("'[]'"))
+    version: Mapped[int]
+    created_at: Mapped[float]
+    updated_at: Mapped[float]
+
+
+class BudgetReceipt(Base):
+    __tablename__ = "budget_receipts"
+    __table_args__ = (
+        ForeignKeyConstraint(["owner"], ["users.username"]),
+        ForeignKeyConstraint(["shop_id", "owner"], ["budget_shops.id", "budget_shops.owner"],
+                             name="fk_budget_receipts_shop_owner"),
+        ForeignKeyConstraint(["linked_account_id", "linked_entry_ref"],
+                             ["budget_transactions.account_id", "budget_transactions.entry_reference"],
+                             name="fk_budget_receipts_transaction"),
+        ForeignKeyConstraint(["linked_account_id", "owner"],
+                             ["budget_accounts.id", "budget_accounts.owner"],
+                             name="fk_budget_receipts_account_owner"),
+        UniqueConstraint("id", "owner", name="uq_budget_receipts_id_owner"),
+        Index("ix_budget_receipts_owner_date", "owner", "receipt_date", "id"),
+        Index("uq_budget_receipts_tx_link", "linked_account_id", "linked_entry_ref", unique=True,
+              sqlite_where=text("status IN ('confirmed', 'needs_review') AND linked_account_id IS NOT NULL "
+                                "AND linked_entry_ref IS NOT NULL")),
+        CheckConstraint("raw_shop_name IS NULL OR length(raw_shop_name) <= 128",
+                        name="ck_budget_receipts_raw_shop_name_len"),
+        CheckConstraint("receipt_kind IN ('purchase', 'refund')", name="ck_budget_receipts_kind"),
+        CheckConstraint(
+            "receipt_date IS NULL OR (length(receipt_date) = 10 AND receipt_date GLOB "
+            "'[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]')",
+            name="ck_budget_receipts_date",
+        ),
+        CheckConstraint("total_amount IS NULL OR length(total_amount) BETWEEN 1 AND 80",
+                        name="ck_budget_receipts_total_len"),
+        CheckConstraint("currency IS NULL OR (length(currency) = 3 AND currency GLOB '[A-Z][A-Z][A-Z]')",
+                        name="ck_budget_receipts_currency"),
+        CheckConstraint("payment_method IS NULL OR payment_method IN ('card', 'blik', 'cash', 'mixed', 'unknown')",
+                        name="ck_budget_receipts_payment"),
+        CheckConstraint("status IN ('draft', 'confirmed', 'needs_review')", name="ck_budget_receipts_status"),
+        CheckConstraint("source_kind IN ('live_text', 'local_ocr', 'cloud_ai')", name="ck_budget_receipts_source"),
+        CheckConstraint(
+            "status = 'draft' OR (receipt_date IS NOT NULL AND total_amount IS NOT NULL "
+            "AND currency IS NOT NULL AND payment_method IS NOT NULL)",
+            name="ck_budget_receipts_confirmed_fields",
+        ),
+        CheckConstraint(
+            "(linked_account_id IS NULL AND linked_entry_ref IS NULL AND linked_fingerprint IS NULL "
+            "AND linked_evidence IS NULL) "
+            "OR (status != 'draft' AND linked_account_id IS NOT NULL AND linked_entry_ref IS NOT NULL "
+            "AND linked_fingerprint IS NOT NULL AND linked_evidence IS NOT NULL)",
+            name="ck_budget_receipts_link_fields",
+        ),
+        CheckConstraint(
+            "linked_evidence IS NULL OR length(linked_evidence) BETWEEN 1 AND 4096",
+            name="ck_budget_receipts_evidence_len",
+        ),
+        CheckConstraint(
+            "raw_ocr_text IS NULL OR raw_text_expires_at IS NOT NULL",
+            name="ck_budget_receipts_raw_text_expiry",
+        ),
+        CheckConstraint("version >= 1", name="ck_budget_receipts_version"),
+    )
+    id: Mapped[str] = mapped_column(primary_key=True)
+    owner: Mapped[str]
+    shop_id: Mapped[str | None]
+    raw_shop_name: Mapped[str | None]
+    raw_nip: Mapped[str | None]
+    receipt_kind: Mapped[str] = mapped_column(server_default=text("'purchase'"))
+    receipt_date: Mapped[str | None]
+    receipt_time: Mapped[str | None]
+    total_amount: Mapped[str | None]
+    currency: Mapped[str | None]
+    payment_method: Mapped[str | None]
+    status: Mapped[str]
+    source_kind: Mapped[str]
+    image_relpath: Mapped[str | None]
+    image_expires_at: Mapped[float | None]
+    raw_ocr_text: Mapped[str | None] = mapped_column(Text)
+    raw_text_expires_at: Mapped[float | None]
+    linked_account_id: Mapped[str | None]
+    linked_entry_ref: Mapped[str | None]
+    linked_fingerprint: Mapped[str | None]
+    linked_evidence: Mapped[str | None] = mapped_column(Text)
+    version: Mapped[int]
+    created_at: Mapped[float]
+    updated_at: Mapped[float]
+
+
+class BudgetReceiptLine(Base):
+    __tablename__ = "budget_receipt_lines"
+    __table_args__ = (
+        ForeignKeyConstraint(["owner"], ["users.username"]),
+        ForeignKeyConstraint(["receipt_id", "owner"], ["budget_receipts.id", "budget_receipts.owner"],
+                             name="fk_budget_receipt_lines_receipt_owner"),
+        CheckConstraint("line_no BETWEEN 1 AND 300", name="ck_budget_receipt_lines_no"),
+        CheckConstraint("line_kind IN ('item', 'deposit', 'basket_discount', 'other')",
+                        name="ck_budget_receipt_lines_kind"),
+        CheckConstraint("length(raw_name) BETWEEN 1 AND 128", name="ck_budget_receipt_lines_name_len"),
+        CheckConstraint("length(raw_name_key) BETWEEN 1 AND 128", name="ck_budget_receipt_lines_name_key_len"),
+        CheckConstraint("ptu_code IS NULL OR ptu_code IN ('A', 'B', 'C', 'D', 'E', 'F', 'G')",
+                        name="ck_budget_receipt_lines_ptu"),
+    )
+    receipt_id: Mapped[str] = mapped_column(primary_key=True)
+    line_no: Mapped[int] = mapped_column(primary_key=True)
+    owner: Mapped[str]
+    line_kind: Mapped[str]
+    raw_name: Mapped[str]
+    raw_name_key: Mapped[str]
+    ptu_code: Mapped[str | None]
+    quantity: Mapped[str]
+    raw_unit: Mapped[str | None]
+    unit_price_raw: Mapped[str | None]
+    gross_line_total: Mapped[str]
+    discount_amount: Mapped[str] = mapped_column(server_default=text("'0'"))
+    net_line_total: Mapped[str]
 
 
 metadata = Base.metadata

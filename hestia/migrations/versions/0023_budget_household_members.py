@@ -1,18 +1,18 @@
 """Household viewer grants (Budget Month P3).
 
-Revision ID: 0022
-Revises: 0021
+Revision ID: 0023
+Revises: 0022
 
 Creates ``budget_household_members`` only. It does not batch-alter a table
-other tables reference. Downgrade drops this table and returns to 0021.
-Category parents, one-off labels, the owner ledger, limits, mortgages, inbox,
-consent and acquisition rows stay in place.
+other tables reference. Downgrade drops this table and returns to 0022.
+Receipt rows, category parents, one-off labels, the owner ledger, limits,
+mortgages, inbox, consent and acquisition rows stay in place.
 """
 from alembic import op
 import sqlalchemy as sa
 
-revision = "0022"
-down_revision = "0021"
+revision = "0023"
+down_revision = "0022"
 branch_labels = None
 depends_on = None
 
@@ -49,6 +49,6 @@ def upgrade():
 
 def downgrade():
     # Take a SQLite backup before downgrading. This drops household grants only.
-    # Reapplying 0022 starts from an empty grant table; grants are not restored.
+    # Reapplying 0023 starts from an empty grant table; grants are not restored.
     op.drop_index(_IX_OWNER, table_name=_TABLE)
     op.drop_table(_TABLE)

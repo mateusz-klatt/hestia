@@ -1330,6 +1330,29 @@ class NameValidationTests(_WebTestBase):
         self.assertEqual(status, 400)
         self.assertIn("invalid JSON", json.loads(body)["error"])
 
+    def test_deeply_nested_json_is_400(self):
+        # CPython's C accelerator parses this nesting without recursing. The pure
+        # decoder, used when that accelerator is unavailable, raises RecursionError.
+        from json.decoder import JSONDecoder
+        from json.scanner import py_make_scanner
+
+        decoder = JSONDecoder()
+        decoder.scan_once = py_make_scanner(decoder)
+
+        def loads(raw, **_kwargs):
+            text = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw
+            return decoder.decode(text)
+
+        depth = 800
+        body = b'{"a":' * depth + b"1" + b"}" * depth
+        self.assertLess(len(body), web.MAX_BODY)
+        with self.assertRaises(RecursionError):
+            loads(body)
+        with mock.patch("hestia.web.json.loads", loads):
+            status, _, payload = _post(self.web.address, "/api/name", body)
+        self.assertEqual(status, 400)
+        self.assertEqual(json.loads(payload)["error"], "invalid JSON")
+
     def test_name_save_failure_returns_500(self):
         with mock.patch.object(self.rt.registry, "write_payload", side_effect=OSError("disk")):
             status, _, body = _post(self.web.address, "/api/name", {"node": 5, "name": "x"})

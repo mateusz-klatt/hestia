@@ -873,7 +873,7 @@ export interface paths {
         };
         /**
          * Discover the caller's household grant id
-         * @description Requires an authenticated active viewer, both budget flags, SQLite users and a grant whose owner is an active admin. Reads the same owner projection through a separate allowlist. Makes no bank request and no database write. GET /monthly-budget-settings reads the P1 bootstrap config only.
+         * @description Requires an authenticated active viewer, both budget flags, SQLite users and a grant whose owner is an active admin. The grant header is 64 lowercase hex characters. Reads the same owner projection through a separate allowlist. No bank request. Data reads may write one sanitised internal analytics-audit row for the member, owner and view name, at most once per 60 seconds, in the same immediate transaction as the fresh grant check. Household audit rows older than 180 days are pruned on that write. GET /access returns only the member's grant id and writes no audit row. Failures write nothing. The row is not visible on /api/audit or the SSE stream. GET /monthly-budget-settings reads the P1 bootstrap config only.
          */
         get: operations["getBudgetHouseholdAccess"];
         put?: never;
@@ -893,7 +893,7 @@ export interface paths {
         };
         /**
          * Household category aliases and safe labels
-         * @description Requires an authenticated active viewer, both budget flags, SQLite users and a grant whose owner is an active admin. Reads the same owner projection through a separate allowlist. Makes no bank request and no database write. GET /monthly-budget-settings reads the P1 bootstrap config only.
+         * @description Requires an authenticated active viewer, both budget flags, SQLite users and a grant whose owner is an active admin. The grant header is 64 lowercase hex characters. Reads the same owner projection through a separate allowlist. No bank request. Data reads may write one sanitised internal analytics-audit row for the member, owner and view name, at most once per 60 seconds, in the same immediate transaction as the fresh grant check. Household audit rows older than 180 days are pruned on that write. GET /access returns only the member's grant id and writes no audit row. Failures write nothing. The row is not visible on /api/audit or the SSE stream. GET /monthly-budget-settings reads the P1 bootstrap config only.
          */
         get: operations["getBudgetHouseholdCategories"];
         put?: never;
@@ -913,7 +913,7 @@ export interface paths {
         };
         /**
          * Household mortgage and spending-limit inbox
-         * @description Requires an authenticated active viewer, both budget flags, SQLite users and a grant whose owner is an active admin. Reads the same owner projection through a separate allowlist. Makes no bank request and no database write. GET /monthly-budget-settings reads the P1 bootstrap config only.
+         * @description Requires an authenticated active viewer, both budget flags, SQLite users and a grant whose owner is an active admin. The grant header is 64 lowercase hex characters. Reads the same owner projection through a separate allowlist. No bank request. Data reads may write one sanitised internal analytics-audit row for the member, owner and view name, at most once per 60 seconds, in the same immediate transaction as the fresh grant check. Household audit rows older than 180 days are pruned on that write. GET /access returns only the member's grant id and writes no audit row. Failures write nothing. The row is not visible on /api/audit or the SSE stream. GET /monthly-budget-settings reads the P1 bootstrap config only.
          */
         get: operations["getBudgetHouseholdInbox"];
         put?: never;
@@ -933,7 +933,7 @@ export interface paths {
         };
         /**
          * Household monthly budget and series
-         * @description Requires an authenticated active viewer, both budget flags, SQLite users and a grant whose owner is an active admin. Reads the same owner projection through a separate allowlist. Makes no bank request and no database write. GET /monthly-budget-settings reads the P1 bootstrap config only.
+         * @description Requires an authenticated active viewer, both budget flags, SQLite users and a grant whose owner is an active admin. The grant header is 64 lowercase hex characters. Reads the same owner projection through a separate allowlist. No bank request. Data reads may write one sanitised internal analytics-audit row for the member, owner and view name, at most once per 60 seconds, in the same immediate transaction as the fresh grant check. Household audit rows older than 180 days are pruned on that write. GET /access returns only the member's grant id and writes no audit row. Failures write nothing. The row is not visible on /api/audit or the SSE stream. GET /monthly-budget-settings reads the P1 bootstrap config only.
          */
         get: operations["getBudgetHouseholdMonthlyBudget"];
         put?: never;
@@ -953,7 +953,7 @@ export interface paths {
         };
         /**
          * Bootstrap monthly-budget settings with grant-scoped category ids
-         * @description Requires an authenticated active viewer, both budget flags, SQLite users and a grant whose owner is an active admin. Reads the same owner projection through a separate allowlist. Makes no bank request and no database write. GET /monthly-budget-settings reads the P1 bootstrap config only.
+         * @description Requires an authenticated active viewer, both budget flags, SQLite users and a grant whose owner is an active admin. The grant header is 64 lowercase hex characters. Reads the same owner projection through a separate allowlist. No bank request. Data reads may write one sanitised internal analytics-audit row for the member, owner and view name, at most once per 60 seconds, in the same immediate transaction as the fresh grant check. Household audit rows older than 180 days are pruned on that write. GET /access returns only the member's grant id and writes no audit row. Failures write nothing. The row is not visible on /api/audit or the SSE stream. GET /monthly-budget-settings reads the P1 bootstrap config only.
          */
         get: operations["getBudgetHouseholdMonthlyBudgetSettings"];
         put?: never;
@@ -973,7 +973,7 @@ export interface paths {
         };
         /**
          * Household mortgage schedules without labels
-         * @description Requires an authenticated active viewer, both budget flags, SQLite users and a grant whose owner is an active admin. Reads the same owner projection through a separate allowlist. Makes no bank request and no database write. GET /monthly-budget-settings reads the P1 bootstrap config only.
+         * @description Requires an authenticated active viewer, both budget flags, SQLite users and a grant whose owner is an active admin. The grant header is 64 lowercase hex characters. Reads the same owner projection through a separate allowlist. No bank request. Data reads may write one sanitised internal analytics-audit row for the member, owner and view name, at most once per 60 seconds, in the same immediate transaction as the fresh grant check. Household audit rows older than 180 days are pruned on that write. GET /access returns only the member's grant id and writes no audit row. Failures write nothing. The row is not visible on /api/audit or the SSE stream. GET /monthly-budget-settings reads the P1 bootstrap config only.
          */
         get: operations["getBudgetHouseholdMortgages"];
         put?: never;
@@ -993,7 +993,7 @@ export interface paths {
         };
         /**
          * Household selected-account totals
-         * @description Requires an authenticated active viewer, both budget flags, SQLite users and a grant whose owner is an active admin. Reads the same owner projection through a separate allowlist. Makes no bank request and no database write. GET /monthly-budget-settings reads the P1 bootstrap config only.
+         * @description Requires an authenticated active viewer, both budget flags, SQLite users and a grant whose owner is an active admin. The grant header is 64 lowercase hex characters. Reads the same owner projection through a separate allowlist. No bank request. Data reads may write one sanitised internal analytics-audit row for the member, owner and view name, at most once per 60 seconds, in the same immediate transaction as the fresh grant check. Household audit rows older than 180 days are pruned on that write. GET /access returns only the member's grant id and writes no audit row. Failures write nothing. The row is not visible on /api/audit or the SSE stream. GET /monthly-budget-settings reads the P1 bootstrap config only.
          */
         get: operations["getBudgetHouseholdOverview"];
         put?: never;
@@ -1013,7 +1013,7 @@ export interface paths {
         };
         /**
          * Household quarantine counts over selected accounts
-         * @description Requires an authenticated active viewer, both budget flags, SQLite users and a grant whose owner is an active admin. Reads the same owner projection through a separate allowlist. Makes no bank request and no database write. GET /monthly-budget-settings reads the P1 bootstrap config only.
+         * @description Requires an authenticated active viewer, both budget flags, SQLite users and a grant whose owner is an active admin. The grant header is 64 lowercase hex characters. Reads the same owner projection through a separate allowlist. No bank request. Data reads may write one sanitised internal analytics-audit row for the member, owner and view name, at most once per 60 seconds, in the same immediate transaction as the fresh grant check. Household audit rows older than 180 days are pruned on that write. GET /access returns only the member's grant id and writes no audit row. Failures write nothing. The row is not visible on /api/audit or the SSE stream. GET /monthly-budget-settings reads the P1 bootstrap config only.
          */
         get: operations["getBudgetHouseholdQuarantine"];
         put?: never;
@@ -1033,7 +1033,7 @@ export interface paths {
         };
         /**
          * Household recurring hints with generic ordinals
-         * @description Requires an authenticated active viewer, both budget flags, SQLite users and a grant whose owner is an active admin. Reads the same owner projection through a separate allowlist. Makes no bank request and no database write. GET /monthly-budget-settings reads the P1 bootstrap config only.
+         * @description Requires an authenticated active viewer, both budget flags, SQLite users and a grant whose owner is an active admin. The grant header is 64 lowercase hex characters. Reads the same owner projection through a separate allowlist. No bank request. Data reads may write one sanitised internal analytics-audit row for the member, owner and view name, at most once per 60 seconds, in the same immediate transaction as the fresh grant check. Household audit rows older than 180 days are pruned on that write. GET /access returns only the member's grant id and writes no audit row. Failures write nothing. The row is not visible on /api/audit or the SSE stream. GET /monthly-budget-settings reads the P1 bootstrap config only.
          */
         get: operations["getBudgetHouseholdRecurring"];
         put?: never;
@@ -1053,7 +1053,7 @@ export interface paths {
         };
         /**
          * Selected accounts as grant-scoped aliases and ordinals
-         * @description Requires an authenticated active viewer, both budget flags, SQLite users and a grant whose owner is an active admin. Reads the same owner projection through a separate allowlist. Makes no bank request and no database write. GET /monthly-budget-settings reads the P1 bootstrap config only.
+         * @description Requires an authenticated active viewer, both budget flags, SQLite users and a grant whose owner is an active admin. The grant header is 64 lowercase hex characters. Reads the same owner projection through a separate allowlist. No bank request. Data reads may write one sanitised internal analytics-audit row for the member, owner and view name, at most once per 60 seconds, in the same immediate transaction as the fresh grant check. Household audit rows older than 180 days are pruned on that write. GET /access returns only the member's grant id and writes no audit row. Failures write nothing. The row is not visible on /api/audit or the SSE stream. GET /monthly-budget-settings reads the P1 bootstrap config only.
          */
         get: operations["getBudgetHouseholdReportAccounts"];
         put?: never;
@@ -1073,7 +1073,7 @@ export interface paths {
         };
         /**
          * Household rules without literal operands
-         * @description Requires an authenticated active viewer, both budget flags, SQLite users and a grant whose owner is an active admin. Reads the same owner projection through a separate allowlist. Makes no bank request and no database write. GET /monthly-budget-settings reads the P1 bootstrap config only.
+         * @description Requires an authenticated active viewer, both budget flags, SQLite users and a grant whose owner is an active admin. The grant header is 64 lowercase hex characters. Reads the same owner projection through a separate allowlist. No bank request. Data reads may write one sanitised internal analytics-audit row for the member, owner and view name, at most once per 60 seconds, in the same immediate transaction as the fresh grant check. Household audit rows older than 180 days are pruned on that write. GET /access returns only the member's grant id and writes no audit row. Failures write nothing. The row is not visible on /api/audit or the SSE stream. GET /monthly-budget-settings reads the P1 bootstrap config only.
          */
         get: operations["getBudgetHouseholdRules"];
         put?: never;
@@ -1093,7 +1093,7 @@ export interface paths {
         };
         /**
          * Enabled household spending limits
-         * @description Requires an authenticated active viewer, both budget flags, SQLite users and a grant whose owner is an active admin. Reads the same owner projection through a separate allowlist. Makes no bank request and no database write. GET /monthly-budget-settings reads the P1 bootstrap config only.
+         * @description Requires an authenticated active viewer, both budget flags, SQLite users and a grant whose owner is an active admin. The grant header is 64 lowercase hex characters. Reads the same owner projection through a separate allowlist. No bank request. Data reads may write one sanitised internal analytics-audit row for the member, owner and view name, at most once per 60 seconds, in the same immediate transaction as the fresh grant check. Household audit rows older than 180 days are pruned on that write. GET /access returns only the member's grant id and writes no audit row. Failures write nothing. The row is not visible on /api/audit or the SSE stream. GET /monthly-budget-settings reads the P1 bootstrap config only.
          */
         get: operations["getBudgetHouseholdSpendingLimits"];
         put?: never;
@@ -1113,7 +1113,7 @@ export interface paths {
         };
         /**
          * Household transactions without bank text
-         * @description Requires an authenticated active viewer, both budget flags, SQLite users and a grant whose owner is an active admin. Reads the same owner projection through a separate allowlist. Makes no bank request and no database write. GET /monthly-budget-settings reads the P1 bootstrap config only.
+         * @description Requires an authenticated active viewer, both budget flags, SQLite users and a grant whose owner is an active admin. The grant header is 64 lowercase hex characters. Reads the same owner projection through a separate allowlist. No bank request. Data reads may write one sanitised internal analytics-audit row for the member, owner and view name, at most once per 60 seconds, in the same immediate transaction as the fresh grant check. Household audit rows older than 180 days are pruned on that write. GET /access returns only the member's grant id and writes no audit row. Failures write nothing. The row is not visible on /api/audit or the SSE stream. GET /monthly-budget-settings reads the P1 bootstrap config only.
          */
         get: operations["getBudgetHouseholdTransactions"];
         put?: never;
@@ -1133,7 +1133,7 @@ export interface paths {
         };
         /**
          * Household transfer pairs whose both legs are selected
-         * @description Requires an authenticated active viewer, both budget flags, SQLite users and a grant whose owner is an active admin. Reads the same owner projection through a separate allowlist. Makes no bank request and no database write. GET /monthly-budget-settings reads the P1 bootstrap config only.
+         * @description Requires an authenticated active viewer, both budget flags, SQLite users and a grant whose owner is an active admin. The grant header is 64 lowercase hex characters. Reads the same owner projection through a separate allowlist. No bank request. Data reads may write one sanitised internal analytics-audit row for the member, owner and view name, at most once per 60 seconds, in the same immediate transaction as the fresh grant check. Household audit rows older than 180 days are pruned on that write. GET /access returns only the member's grant id and writes no audit row. Failures write nothing. The row is not visible on /api/audit or the SSE stream. GET /monthly-budget-settings reads the P1 bootstrap config only.
          */
         get: operations["getBudgetHouseholdTransfers"];
         put?: never;
@@ -1178,6 +1178,146 @@ export interface paths {
         get: operations["getBudgetLimits"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/budget/receipts/confirm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Validate exact line and total identities, review an optional bank link; JSON body cap 128 KiB.
+         * @description Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Requires an authenticated SQLite admin owner, browser cookie and exact configured Origin before the body is read. 411 means Content-Length is required and 415 means Content-Type must be application/json.
+         */
+        post: operations["confirmBudgetReceipt"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/budget/receipts/delete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Delete receipt lines before their owned receipt using expected_version CAS.
+         * @description Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Requires an authenticated SQLite admin owner, browser cookie and exact configured Origin before the body is read. 411 means Content-Length is required and 415 means Content-Type must be application/json.
+         */
+        post: operations["deleteBudgetReceipt"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/budget/receipts/detail": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read one owned receipt and its structured lines.
+         * @description Default-off owner-private read. Unknown and foreign receipt IDs both return 404.
+         */
+        get: operations["getBudgetReceiptDetail"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/budget/receipts/image": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read one owned WebP image; v1a has no stored images and therefore returns 404.
+         * @description Default-off owner-private read. Unknown and foreign receipt IDs both return 404.
+         */
+        get: operations["getBudgetReceiptImage"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/budget/receipts/list": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Keyset-page owner receipts with filters in the JSON body, never URL query parameters.
+         * @description Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Requires an authenticated SQLite admin owner, browser cookie and exact configured Origin before the body is read. 411 means Content-Length is required and 415 means Content-Type must be application/json.
+         */
+        post: operations["listBudgetReceipts"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/budget/receipts/parse-text": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Paste Live Text, redact PAN data and create a 48-hour draft; JSON body cap 48 KiB.
+         * @description Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Requires an authenticated SQLite admin owner, browser cookie and exact configured Origin before the body is read. 411 means Content-Length is required and 415 means Content-Type must be application/json.
+         */
+        post: operations["parseBudgetReceiptText"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/budget/receipts/search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Search owner receipts with the query in the JSON body, never reverse-proxy URL logs.
+         * @description Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Requires an authenticated SQLite admin owner, browser cookie and exact configured Origin before the body is read. 411 means Content-Length is required and 415 means Content-Type must be application/json.
+         */
+        post: operations["searchBudgetReceipts"];
         delete?: never;
         options?: never;
         head?: never;
@@ -4855,6 +4995,354 @@ export interface components {
             amount: string;
             /** Currency */
             currency: string;
+        };
+        /** BudgetReceiptCandidate */
+        BudgetReceiptCandidate: {
+            /** Account Id */
+            account_id: string;
+            /** Amount */
+            amount: string;
+            /** Booking Date */
+            booking_date: string | null;
+            /** Candidate Token */
+            candidate_token: string;
+            /**
+             * Credit Debit Indicator
+             * @enum {string}
+             */
+            credit_debit_indicator: "DBIT" | "CRDT";
+            /** Currency */
+            currency: string;
+            /** Date Distance */
+            date_distance: number;
+            /** Entry Reference */
+            entry_reference: string;
+            /** Merchant Token Hit */
+            merchant_token_hit: boolean;
+            /** Transaction Date */
+            transaction_date: string | null;
+            /** Value Date */
+            value_date: string | null;
+        };
+        /** BudgetReceiptConfirmRequest */
+        BudgetReceiptConfirmRequest: {
+            /** Currency */
+            currency: string;
+            /** Expected Version */
+            expected_version: number;
+            /** Lines */
+            lines: components["schemas"]["BudgetReceiptLineInput"][];
+            link: components["schemas"]["BudgetReceiptLinkRequest"] | null;
+            /**
+             * Payment Method
+             * @enum {string}
+             */
+            payment_method: "card" | "blik" | "cash" | "mixed" | "unknown";
+            /** Raw Nip */
+            raw_nip: string | null;
+            /** Raw Shop Name */
+            raw_shop_name: string | null;
+            /**
+             * Receipt Date
+             * Format: date
+             */
+            receipt_date: string;
+            /** Receipt Id */
+            receipt_id: string;
+            /**
+             * Receipt Kind
+             * @enum {string}
+             */
+            receipt_kind: "purchase" | "refund";
+            /** Receipt Time */
+            receipt_time: string | null;
+            /** Total Amount */
+            total_amount: string;
+        };
+        /** BudgetReceiptConfirmResult */
+        BudgetReceiptConfirmResult: {
+            /**
+             * Ok
+             * @constant
+             */
+            ok: true;
+            receipt: components["schemas"]["BudgetReceiptDetail"];
+        };
+        /** BudgetReceiptDeleteRequest */
+        BudgetReceiptDeleteRequest: {
+            /** Expected Version */
+            expected_version: number;
+            /** Receipt Id */
+            receipt_id: string;
+        };
+        /** BudgetReceiptDeleteResult */
+        BudgetReceiptDeleteResult: {
+            /**
+             * Deleted
+             * @constant
+             */
+            deleted: true;
+            /**
+             * Ok
+             * @constant
+             */
+            ok: true;
+        };
+        /** BudgetReceiptDetail */
+        BudgetReceiptDetail: {
+            /** Chain Key */
+            chain_key: string | null;
+            /** Created At */
+            created_at: number;
+            /** Currency */
+            currency: string | null;
+            /** Image Available */
+            image_available: boolean;
+            /** Image Expires At */
+            image_expires_at: number | null;
+            /** Lines */
+            lines: components["schemas"]["BudgetReceiptLine"][];
+            /** Linked */
+            linked: boolean;
+            /** Linked Account Id */
+            linked_account_id: string | null;
+            /** Linked Entry Ref */
+            linked_entry_ref: string | null;
+            /** Math Delta */
+            math_delta: string | null;
+            /** Payment Method */
+            payment_method: string | null;
+            /** Raw Nip */
+            raw_nip: string | null;
+            /** Raw Shop Name */
+            raw_shop_name: string | null;
+            /** Raw Text Expires At */
+            raw_text_expires_at: number | null;
+            /** Receipt Date */
+            receipt_date: string | null;
+            /** Receipt Id */
+            receipt_id: string;
+            /**
+             * Receipt Kind
+             * @enum {string}
+             */
+            receipt_kind: "purchase" | "refund";
+            /** Receipt Time */
+            receipt_time: string | null;
+            /** Shop Id */
+            shop_id: string | null;
+            /**
+             * Source Kind
+             * @enum {string}
+             */
+            source_kind: "live_text" | "local_ocr" | "cloud_ai";
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "draft" | "confirmed" | "needs_review";
+            /** Total Amount */
+            total_amount: string | null;
+            /** Updated At */
+            updated_at: number;
+            /** Version */
+            version: number;
+        };
+        /** BudgetReceiptDetailResult */
+        BudgetReceiptDetailResult: {
+            /** Candidates */
+            candidates?: components["schemas"]["BudgetReceiptCandidate"][] | null;
+            receipt: components["schemas"]["BudgetReceiptDetail"];
+        };
+        /** BudgetReceiptLine */
+        BudgetReceiptLine: {
+            /** Discount Amount */
+            discount_amount: string;
+            /** Gross Line Total */
+            gross_line_total: string;
+            /**
+             * Line Kind
+             * @enum {string}
+             */
+            line_kind: "item" | "deposit" | "basket_discount" | "other";
+            /** Line No */
+            line_no: number;
+            /** Net Line Total */
+            net_line_total: string;
+            /** Ptu Code */
+            ptu_code: ("A" | "B" | "C" | "D" | "E" | "F" | "G") | null;
+            /** Quantity */
+            quantity: string;
+            /** Raw Name */
+            raw_name: string;
+            /** Raw Name Key */
+            raw_name_key: string;
+            /** Raw Unit */
+            raw_unit: string | null;
+            /** Unit Price Raw */
+            unit_price_raw: string | null;
+        };
+        /** BudgetReceiptLineInput */
+        BudgetReceiptLineInput: {
+            /** Discount Amount */
+            discount_amount: string;
+            /** Gross Line Total */
+            gross_line_total: string;
+            /**
+             * Line Kind
+             * @enum {string}
+             */
+            line_kind: "item" | "deposit" | "basket_discount" | "other";
+            /** Net Line Total */
+            net_line_total: string;
+            /** Ptu Code */
+            ptu_code: ("A" | "B" | "C" | "D" | "E" | "F" | "G") | null;
+            /** Quantity */
+            quantity: string;
+            /** Raw Name */
+            raw_name: string;
+            /** Raw Unit */
+            raw_unit: string | null;
+            /** Unit Price Raw */
+            unit_price_raw: string | null;
+        };
+        /** BudgetReceiptLinkRequest */
+        BudgetReceiptLinkRequest: {
+            /** Account Id */
+            account_id: string;
+            /**
+             * Candidate Token
+             * @description HMAC bound to the owner, transaction, three dates and merchant evidence shown at preview.
+             */
+            candidate_token: string;
+            /** Entry Reference */
+            entry_reference: string;
+        };
+        /** BudgetReceiptListRequest */
+        BudgetReceiptListRequest: {
+            /**
+             * Cursor
+             * @default null
+             */
+            cursor: string | null;
+            /**
+             * Limit
+             * @default 50
+             */
+            limit: number;
+            /**
+             * Linked
+             * @default null
+             */
+            linked: boolean | null;
+            /**
+             * Month
+             * @default null
+             */
+            month: string | null;
+            /**
+             * Status
+             * @default null
+             */
+            status: ("draft" | "confirmed" | "needs_review") | null;
+        };
+        /** BudgetReceiptListResult */
+        BudgetReceiptListResult: {
+            /** Next Cursor */
+            next_cursor: string | null;
+            /** Receipts */
+            receipts: components["schemas"]["BudgetReceiptSummary"][];
+        };
+        /** BudgetReceiptParseResult */
+        BudgetReceiptParseResult: {
+            /** Candidates */
+            candidates: components["schemas"]["BudgetReceiptCandidate"][];
+            draft: components["schemas"]["BudgetReceiptDetail"];
+            /** Receipt Id */
+            receipt_id: string;
+            /** Version */
+            version: number;
+        };
+        /** BudgetReceiptParseTextRequest */
+        BudgetReceiptParseTextRequest: {
+            /**
+             * Text
+             * @description UTF-8 text is additionally capped at 32 KiB and 500 lines.
+             */
+            text: string;
+        };
+        /** BudgetReceiptSearchRequest */
+        BudgetReceiptSearchRequest: {
+            /**
+             * Cursor
+             * @default null
+             */
+            cursor: string | null;
+            /**
+             * Limit
+             * @default 50
+             */
+            limit: number;
+            /** Query */
+            query: string;
+        };
+        /** BudgetReceiptSummary */
+        BudgetReceiptSummary: {
+            /** Chain Key */
+            chain_key: string | null;
+            /** Created At */
+            created_at: number;
+            /** Currency */
+            currency: string | null;
+            /** Image Available */
+            image_available: boolean;
+            /** Image Expires At */
+            image_expires_at: number | null;
+            /** Linked */
+            linked: boolean;
+            /** Linked Account Id */
+            linked_account_id: string | null;
+            /** Linked Entry Ref */
+            linked_entry_ref: string | null;
+            /** Math Delta */
+            math_delta: string | null;
+            /** Payment Method */
+            payment_method: string | null;
+            /** Raw Nip */
+            raw_nip: string | null;
+            /** Raw Shop Name */
+            raw_shop_name: string | null;
+            /** Raw Text Expires At */
+            raw_text_expires_at: number | null;
+            /** Receipt Date */
+            receipt_date: string | null;
+            /** Receipt Id */
+            receipt_id: string;
+            /**
+             * Receipt Kind
+             * @enum {string}
+             */
+            receipt_kind: "purchase" | "refund";
+            /** Receipt Time */
+            receipt_time: string | null;
+            /** Shop Id */
+            shop_id: string | null;
+            /**
+             * Source Kind
+             * @enum {string}
+             */
+            source_kind: "live_text" | "local_ocr" | "cloud_ai";
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "draft" | "confirmed" | "needs_review";
+            /** Total Amount */
+            total_amount: string | null;
+            /** Updated At */
+            updated_at: number;
+            /** Version */
+            version: number;
         };
         /** BudgetRefreshAccepted */
         BudgetRefreshAccepted: {
@@ -10066,7 +10554,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Read-only household view. No bank request and no database write. */
+            /** @description Household view. No bank request. The body is sent only after a fresh grant check commits in one immediate transaction. A successful data read may write one sanitised analytics-audit row naming the member, owner and view, at most once per 60 seconds. Discovery writes no audit row. A denial writes nothing. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -10161,7 +10649,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Read-only household view. No bank request and no database write. */
+            /** @description Household view. No bank request. The body is sent only after a fresh grant check commits in one immediate transaction. A successful data read may write one sanitised analytics-audit row naming the member, owner and view, at most once per 60 seconds. Discovery writes no audit row. A denial writes nothing. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -10256,7 +10744,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Read-only household view. No bank request and no database write. */
+            /** @description Household view. No bank request. The body is sent only after a fresh grant check commits in one immediate transaction. A successful data read may write one sanitised analytics-audit row naming the member, owner and view, at most once per 60 seconds. Discovery writes no audit row. A denial writes nothing. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -10356,7 +10844,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Read-only household view. No bank request and no database write. */
+            /** @description Household view. No bank request. The body is sent only after a fresh grant check commits in one immediate transaction. A successful data read may write one sanitised analytics-audit row naming the member, owner and view, at most once per 60 seconds. Discovery writes no audit row. A denial writes nothing. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -10451,7 +10939,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Read-only household view. No bank request and no database write. */
+            /** @description Household view. No bank request. The body is sent only after a fresh grant check commits in one immediate transaction. A successful data read may write one sanitised analytics-audit row naming the member, owner and view, at most once per 60 seconds. Discovery writes no audit row. A denial writes nothing. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -10546,7 +11034,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Read-only household view. No bank request and no database write. */
+            /** @description Household view. No bank request. The body is sent only after a fresh grant check commits in one immediate transaction. A successful data read may write one sanitised analytics-audit row naming the member, owner and view, at most once per 60 seconds. Discovery writes no audit row. A denial writes nothing. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -10645,7 +11133,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Read-only household view. No bank request and no database write. */
+            /** @description Household view. No bank request. The body is sent only after a fresh grant check commits in one immediate transaction. A successful data read may write one sanitised analytics-audit row naming the member, owner and view, at most once per 60 seconds. Discovery writes no audit row. A denial writes nothing. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -10740,7 +11228,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Read-only household view. No bank request and no database write. */
+            /** @description Household view. No bank request. The body is sent only after a fresh grant check commits in one immediate transaction. A successful data read may write one sanitised analytics-audit row naming the member, owner and view, at most once per 60 seconds. Discovery writes no audit row. A denial writes nothing. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -10837,7 +11325,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Read-only household view. No bank request and no database write. */
+            /** @description Household view. No bank request. The body is sent only after a fresh grant check commits in one immediate transaction. A successful data read may write one sanitised analytics-audit row naming the member, owner and view, at most once per 60 seconds. Discovery writes no audit row. A denial writes nothing. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -10932,7 +11420,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Read-only household view. No bank request and no database write. */
+            /** @description Household view. No bank request. The body is sent only after a fresh grant check commits in one immediate transaction. A successful data read may write one sanitised analytics-audit row naming the member, owner and view, at most once per 60 seconds. Discovery writes no audit row. A denial writes nothing. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -11027,7 +11515,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Read-only household view. No bank request and no database write. */
+            /** @description Household view. No bank request. The body is sent only after a fresh grant check commits in one immediate transaction. A successful data read may write one sanitised analytics-audit row naming the member, owner and view, at most once per 60 seconds. Discovery writes no audit row. A denial writes nothing. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -11126,7 +11614,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Read-only household view. No bank request and no database write. */
+            /** @description Household view. No bank request. The body is sent only after a fresh grant check commits in one immediate transaction. A successful data read may write one sanitised analytics-audit row naming the member, owner and view, at most once per 60 seconds. Discovery writes no audit row. A denial writes nothing. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -11233,7 +11721,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Read-only household view. No bank request and no database write. */
+            /** @description Household view. No bank request. The body is sent only after a fresh grant check commits in one immediate transaction. A successful data read may write one sanitised analytics-audit row naming the member, owner and view, at most once per 60 seconds. Discovery writes no audit row. A denial writes nothing. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -11336,7 +11824,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Read-only household view. No bank request and no database write. */
+            /** @description Household view. No bank request. The body is sent only after a fresh grant check commits in one immediate transaction. A successful data read may write one sanitised analytics-audit row naming the member, owner and view, at most once per 60 seconds. Discovery writes no audit row. A denial writes nothing. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -11561,6 +12049,748 @@ export interface operations {
             };
             /** @description SQLite session users required */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description budget configuration unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+        };
+    };
+    confirmBudgetReceipt: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BudgetReceiptConfirmRequest"];
+            };
+        };
+        responses: {
+            /** @description owner-scoped stored state; no bank request */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetReceiptConfirmResult"];
+                };
+            };
+            /** @description invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description session required; middleware may return an empty body */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description admin owner or browser-origin requirement failed; middleware may return an empty body */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description unknown, disabled or foreign resource */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Stale expected_version (budget_receipt_conflict), the bank transaction is already linked (budget_receipt_tx_already_linked), or the candidate token no longer matches the owner, transaction, dates and merchant evidence shown at preview (budget_receipt_stale_source). A missing SQLite users backend also returns 409 (budget_requires_sqlite_users). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Content-Length is required. */
+            411: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description JSON body exceeds 131072 bytes. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Content-Type must be application/json. */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description budget configuration unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+        };
+    };
+    deleteBudgetReceipt: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BudgetReceiptDeleteRequest"];
+            };
+        };
+        responses: {
+            /** @description owner-scoped stored state; no bank request */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetReceiptDeleteResult"];
+                };
+            };
+            /** @description invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description session required; middleware may return an empty body */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description admin owner or browser-origin requirement failed; middleware may return an empty body */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description unknown, disabled or foreign resource */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Stale expected_version (budget_receipt_conflict). A missing SQLite users backend also returns 409 (budget_requires_sqlite_users). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Content-Length is required. */
+            411: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description JSON body exceeds 16384 bytes. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Content-Type must be application/json. */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description budget configuration unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+        };
+    };
+    getBudgetReceiptDetail: {
+        parameters: {
+            query: {
+                /** @description Opaque owned receipt UUID. */
+                receipt_id: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description owner-scoped stored state; no bank request */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetReceiptDetailResult"];
+                };
+            };
+            /** @description invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description session required; middleware may return an empty body */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description admin owner or browser-origin requirement failed; middleware may return an empty body */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description unknown, disabled or foreign resource */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description SQLite users backend is required (budget_requires_sqlite_users). This read does not accept a JSON body. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description budget configuration unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+        };
+    };
+    getBudgetReceiptImage: {
+        parameters: {
+            query: {
+                /** @description Opaque owned receipt UUID. */
+                receipt_id: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Owner-private WebP bytes (available from v1b). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "image/webp": string;
+                };
+            };
+            /** @description invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description session required; middleware may return an empty body */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description admin owner or browser-origin requirement failed; middleware may return an empty body */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description unknown, disabled or foreign resource */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description SQLite users backend is required (budget_requires_sqlite_users). This read does not accept a JSON body. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description budget configuration unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+        };
+    };
+    listBudgetReceipts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BudgetReceiptListRequest"];
+            };
+        };
+        responses: {
+            /** @description owner-scoped stored state; no bank request */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetReceiptListResult"];
+                };
+            };
+            /** @description invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description session required; middleware may return an empty body */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description admin owner or browser-origin requirement failed; middleware may return an empty body */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description unknown, disabled or foreign resource */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description SQLite users backend is required (budget_requires_sqlite_users). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Content-Length is required. */
+            411: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description JSON body exceeds 16384 bytes. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Content-Type must be application/json. */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description budget configuration unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+        };
+    };
+    parseBudgetReceiptText: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BudgetReceiptParseTextRequest"];
+            };
+        };
+        responses: {
+            /** @description owner-scoped stored state; no bank request */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetReceiptParseResult"];
+                };
+            };
+            /** @description invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description session required; middleware may return an empty body */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description admin owner or browser-origin requirement failed; middleware may return an empty body */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description unknown, disabled or foreign resource */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description SQLite users backend is required (budget_requires_sqlite_users). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Content-Length is required. */
+            411: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description JSON body exceeds 49152 bytes, or the owner already has 20 active drafts (budget_receipt_quota_exceeded). */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Content-Type must be application/json. */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description budget configuration unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+        };
+    };
+    searchBudgetReceipts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BudgetReceiptSearchRequest"];
+            };
+        };
+        responses: {
+            /** @description owner-scoped stored state; no bank request */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetReceiptListResult"];
+                };
+            };
+            /** @description invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description session required; middleware may return an empty body */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description admin owner or browser-origin requirement failed; middleware may return an empty body */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description unknown, disabled or foreign resource */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description SQLite users backend is required (budget_requires_sqlite_users). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Content-Length is required. */
+            411: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description JSON body exceeds 16384 bytes. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Content-Type must be application/json. */
+            415: {
                 headers: {
                     [name: string]: unknown;
                 };

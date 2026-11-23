@@ -56,18 +56,19 @@ class OpenApiArtifactTests(unittest.TestCase):
         )
 
     def test_monthly_budget_contract_chain_from_0_27_0(self):
-        """0.36.0 adds the household read API on top of 0.35.0. Earlier steps stay as published."""
+        """0.37.0 adds the household read API on top of 0.36.0 receipts. Earlier steps stay as published."""
         document = api_contract.build_openapi()
-        self.assertEqual(document["info"]["version"], "0.36.0")
-        # 0.36.0 household reads are additive over 0.35.0. Remove them before that digest.
+        self.assertEqual(document["info"]["version"], "0.37.0")
         for path in [key for key in document["paths"] if key.startswith("/api/budget/household/")]:
             del document["paths"][path]
         for name in [key for key in document["components"]["schemas"] if key.startswith("BudgetHousehold")]:
             del document["components"]["schemas"][name]
+        document["info"]["version"] = "0.36.0"
+        for path in [path for path in document["paths"] if path.startswith("/api/budget/receipts/")]:
+            del document["paths"][path]
+        for name in [name for name in document["components"]["schemas"] if name.startswith("BudgetReceipt")]:
+            del document["components"]["schemas"][name]
         document["info"]["version"] = "0.35.0"
-        canonical_0_35 = json.dumps(document, sort_keys=True, separators=(",", ":")).encode("utf-8")
-        self.assertEqual(hashlib.sha256(canonical_0_35).hexdigest(),
-                         "761eb2e2f021069b4f4c6e7fdabc0e54e4bb2145707cac20bf7e81d74a6c8deb")
         # 0.35.0 one-off label is additive over 0.34.0. Remove it before that digest.
         for schema, field in (
             ("BudgetAnalyticsAnnotationRequest", "label"),
@@ -90,6 +91,7 @@ class OpenApiArtifactTests(unittest.TestCase):
         canonical_0_34 = json.dumps(document, sort_keys=True, separators=(",", ":")).encode("utf-8")
         self.assertEqual(hashlib.sha256(canonical_0_34).hexdigest(),
                          "90e6cb2e1dbf653df3b59bdaa0590740a738cb25c77f1334d3a5415662a3c6ca")
+        self.assertEqual(document["info"]["version"], "0.34.0")
         # Strip the 0.34.0 category parent and compare with the published 0.33.0 document.
         for name in ("BudgetAnalyticsCategory", "BudgetAnalyticsCategorySaved",
                      "BudgetAnalyticsCategoryCreateRequest", "BudgetAnalyticsCategoryUpdateRequest"):
@@ -633,8 +635,10 @@ class TolerantResponseContractTests(unittest.TestCase):
         "BudgetAnalyticsTransferDecisionRequest", "BudgetAnalyticsLegRequest",
         "BudgetAnalyticsSpendingLimitSaveRequest", "BudgetAnalyticsMortgageSaveRequest",
         "BudgetAnalyticsMortgagePaymentSetRequest", "BudgetAnalyticsInboxKeyRequest",
-        "BudgetAnalyticsInboxMarkRequest",
-        "BudgetAnalyticsTransactionsByKeysRequest",
+        "BudgetAnalyticsInboxMarkRequest", "BudgetAnalyticsTransactionsByKeysRequest",
+        "BudgetReceiptParseTextRequest", "BudgetReceiptConfirmRequest",
+        "BudgetReceiptLineInput", "BudgetReceiptLinkRequest", "BudgetReceiptListRequest",
+        "BudgetReceiptSearchRequest", "BudgetReceiptDeleteRequest",
         "AddUserRequest", "ChangePasswordRequest", "ControlCover", "ControlLevel", "ControlRequest",
         "ControlSwitch", "ControlThermostat", "ControlThermostatPower", "IrRequest", "LoginRequest",
         "NameRequest", "ResetPasswordRequest", "RoomIconRequest", "RuleInput", "SceneRequest",

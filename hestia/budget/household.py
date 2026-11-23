@@ -2,8 +2,9 @@
 
 Decisions for this branch:
 
-- Schema revision is 0022 and it revises 0021. Downgrade of 0022 returns to
-  0021 and deletes grants only. Category parents and one-off labels stay.
+- Schema revision is 0023 and it revises 0022. Downgrade of 0023 returns to
+  0022 and deletes grants only. Receipt rows, category parents and one-off
+  labels stay.
 - ``household grant`` and ``household revoke`` open the existing SQLite file and
   run in one ``BEGIN IMMEDIATE`` transaction. They do not call ``init_db``, so
   they cannot upgrade the database, load bank config, or take the acquisition lock.
@@ -58,7 +59,7 @@ from ..db import AppMeta, BudgetHouseholdMember, User, make_engine
 
 log = logging.getLogger("hestia.budget.household")
 
-SCHEMA_REVISION = "0022"
+SCHEMA_REVISION = "0023"
 _GRANT_BYTES = 32
 _USERS_MARKER = "users_authoritative"
 _GRANT_ID = re.compile(r"[0-9a-f]{64}\Z", re.ASCII)

@@ -146,7 +146,7 @@ class HouseholdEdgeTests(unittest.TestCase):
                 return self
 
             def all(self):
-                return ["0022"]
+                return ["0023"]
 
             def first(self):
                 return None
