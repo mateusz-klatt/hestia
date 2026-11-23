@@ -3100,7 +3100,7 @@ export interface components {
             /** Rule Id */
             rule_id: string | null;
             /** Value */
-            value: string;
+            value?: string;
         };
         /** BudgetAnalyticsRuleResult */
         BudgetAnalyticsRuleResult: {

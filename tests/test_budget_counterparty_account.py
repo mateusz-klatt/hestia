@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import unittest
+from unittest import mock
 
 from hestia import db
 from hestia.budget import analytics_views
@@ -188,15 +189,23 @@ class CounterpartyAccountProjectionTests(ProjectionCase):
         self.add_transaction("a", "debit")
         self.metadata_for("a", "debit", "creditor_accounts", SYNTHETIC_IBAN)
         first = self.store.transactions("owner", "2026")["transactions"][0]
+        with self.assertRaises(AnalyticsError):
+            self.store.preview_rule("owner", self.candidate(field="counterparty_account", operator="equals", value="",
+                                                            counterparty_account_key="0" * 64))
         candidate = self.candidate(field="counterparty_account", operator="equals",
-                                   value=first["counterparty_account"], kind="expense",
+                                   value="XX** … 9999", kind="expense",
                                    counterparty_account_key=first["counterparty_account_key"])
         preview = self.store.preview_rule("owner", candidate)
         self.assertEqual(preview["affected_count"], 1)
         saved = self.store.save_rule("owner", preview["preview_id"])
         self.assertEqual(saved["counterparty_account_key"], first["counterparty_account_key"])
+        self.assertEqual(saved["value"], "PL** … 1234")
         replay = self.store.save_rule("owner", preview["preview_id"])
         self.assertFalse(replay["changed"])
+        with mock.patch.object(self.store, "_snapshot", wraps=self.store._snapshot) as projection:
+            batch = self.store.preview_rules("owner", [candidate | {"priority": 200}, candidate | {"priority": 201}])
+        self.assertEqual(projection.call_count, 2, "One evidence lookup plus the final preview snapshot per batch")
+        self.assertEqual(len(self.store.save_rules("owner", batch["preview_id"])["rules"]), 2)
         rotated = analytics_views.BudgetAnalyticsViews(self.sessions, clock=lambda: self.now,
                                                        cursor_secret=b"synthetic-rotated", rule_key_file=str(self.rule_key_file))
         row = rotated.transactions("owner", "2026")["transactions"][0]
@@ -261,8 +270,12 @@ class CounterpartyAccountProjectionTests(ProjectionCase):
         invalid = (
             self.candidate(field="counterparty_account", operator="contains", value=SYNTHETIC_IBAN),
             self.candidate(field="counterparty_account", operator="equals", value="x"),
+            self.candidate(field="counterparty_account", operator="equals",
+                           value=counterparty_rule_from_identification(SYNTHETIC_IBAN, SECRET)),
             self.candidate(field="counterparty_account", operator="equals", value="PL** … 1234",
                            counterparty_account_key="A" * 64),
+            self.candidate(field="counterparty_account", operator="equals", value="",
+                           counterparty_account_key="0" * 64),
             self.candidate(field="counterparty_account", operator="equals",
                            value=counterparty_rule_from_identification(SYNTHETIC_IBAN, SECRET),
                            counterparty_account_key="0" * 64),

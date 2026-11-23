@@ -1598,7 +1598,7 @@ class BudgetAnalyticsRulePreviewRequest(BaseModel):
     expected_version: BudgetAnalyticsVersion
     field: Literal["description", "counterparty_name", "counterparty_account", "mcc"]
     operator: Literal["contains", "equals"]
-    value: Annotated[str, Field(min_length=1, max_length=256)]
+    value: Annotated[str, Field(max_length=256, json_schema_extra=_OMIT)] = ""
     counterparty_account_key: Annotated[str | None, Field(pattern=r"^[0-9a-f]{64}$", json_schema_extra=_OMIT)] = None
     category_id: BudgetId | None
     kind: BudgetAnalyticsKind

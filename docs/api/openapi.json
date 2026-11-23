@@ -4664,7 +4664,6 @@
           },
           "value": {
             "maxLength": 256,
-            "minLength": 1,
             "title": "Value",
             "type": "string"
           }
@@ -4674,7 +4673,6 @@
           "expected_version",
           "field",
           "operator",
-          "value",
           "category_id",
           "kind",
           "priority",

@@ -521,7 +521,21 @@ class BudgetAnalyticsStore(BudgetHTTPStore):
             return [_rule_wire(row) for row in session.scalars(select(Rule).where(Rule.owner == owner)
                                                                .order_by(Rule.priority, Rule.id))]
 
-    def _rule_candidate(self, session, owner, value):
+    def _counterparty_mask(self, session, owner, key):
+        if not isinstance(key, str) or _HASH.fullmatch(key) is None:
+            raise AnalyticsError()
+        cache_key = "hestia_counterparty_account_snapshot"
+        snapshot = session.info.get(cache_key)
+        if snapshot is None:
+            snapshot = self._snapshot(session, owner)
+            session.info[cache_key] = snapshot
+        for row in snapshot["transactions"]:
+            for evidence_key, masked in row["_counterparty_accounts"]:
+                if hmac.compare_digest(evidence_key, key):
+                    return masked
+        raise AnalyticsError()
+
+    def _rule_candidate(self, session, owner, value, *, allow_stored=False):
         if not isinstance(value, dict) or set(value) not in (_RULE_FIELDS, _RULE_FIELDS | {"counterparty_account_key"}):
             raise AnalyticsError()
         value = dict(value)
@@ -533,19 +547,21 @@ class BudgetAnalyticsStore(BudgetHTTPStore):
             raise AnalyticsError()
         if value["field"] == "counterparty_account":
             key = value.pop("counterparty_account_key", None)
-            raw = _text(value["value"], 256)
-            if raw.startswith(COUNTERPARTY_RULE_PREFIX):
-                key_id, stored_key, masked = counterparty_rule_parts(raw)
-                if key is not None and (not isinstance(key, str) or _HASH.fullmatch(key) is None
-                                        or not hmac.compare_digest(stored_key, key)):
-                    raise AnalyticsError()
-                value["value"] = counterparty_rule_value(key_id, stored_key, masked)
-            elif key is not None:
+            raw = value["value"]
+            if not isinstance(raw, str) or len(raw) > 256 or (raw.startswith("cpacct:") and not allow_stored):
+                raise AnalyticsError()
+            if key is not None:
+                masked = self._counterparty_mask(session, owner, key)
                 _secret, key_id = self._rule_key_context()
-                value["value"] = counterparty_rule_value(key_id, key, raw)
+                value["value"] = counterparty_rule_value(key_id, key, masked)
             else:
-                secret, _key_id = self._rule_key_context()
-                value["value"] = counterparty_rule_from_identification(raw, secret)
+                raw = _text(raw, 256)
+                if raw.startswith(COUNTERPARTY_RULE_PREFIX):
+                    key_id, stored_key, masked = counterparty_rule_parts(raw)
+                    value["value"] = counterparty_rule_value(key_id, stored_key, masked)
+                else:
+                    secret, _key_id = self._rule_key_context()
+                    value["value"] = counterparty_rule_from_identification(raw, secret)
         else:
             if value.pop("counterparty_account_key", None) is not None:
                 raise AnalyticsError()
@@ -683,7 +699,7 @@ class BudgetAnalyticsStore(BudgetHTTPStore):
         proposed_id = candidate.pop("_proposed_id", None)
         if not isinstance(proposed_id, str) or not proposed_id:
             raise AnalyticsError()
-        candidate, row = self._rule_candidate(session, owner, candidate)
+        candidate, row = self._rule_candidate(session, owner, candidate, allow_stored=True)
         before = None if row is None else _dict(row, _RULE_OUTPUT)
         fields = ("field", "operator", "value", "category_id", "kind", "priority", "enabled")
         changed = row is None or any(getattr(row, key) != candidate[key] for key in fields)
@@ -772,7 +788,7 @@ class BudgetAnalyticsStore(BudgetHTTPStore):
             for candidate in checked:
                 probe = dict(candidate)
                 probe.pop("_proposed_id", None)
-                self._rule_candidate(session, owner, probe)
+                self._rule_candidate(session, owner, probe, allow_stored=True)
             results = [self._apply_candidate(session, owner, candidate) for candidate in checked]
             preview.saved_rule_id, preview.saved_version = results[0]["id"], results[0]["version"]
             return {"rules": results, "changed": any(row["changed"] for row in results)}

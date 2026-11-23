@@ -839,9 +839,10 @@ class BudgetAnalyticsAPITests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(spaced, json.dumps(rules_body))
         self.assertEqual(rules_body["rules"][0]["value"], "PL** … 1234")
 
-        response = await self.post("rule-preview", self.candidate(
-            field="counterparty_account", operator="equals", value=target["counterparty_account"],
-            counterparty_account_key=target["counterparty_account_key"], priority=11))
+        keyed_candidate = self.candidate(field="counterparty_account", operator="equals",
+                                        counterparty_account_key=target["counterparty_account_key"], priority=11)
+        del keyed_candidate["value"]
+        response = await self.post("rule-preview", keyed_candidate)
         self.assertEqual(response.status, 200, await response.text())
         keyed_preview = (await response.json())["preview"]
         response = await self.post("rule-save", {"preview_id": keyed_preview["preview_id"]})

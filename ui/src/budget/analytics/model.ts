@@ -353,7 +353,7 @@ export type AnalyticsRule = Schemas["BudgetAnalyticsRule"];
 export type RuleSaved = Schemas["BudgetAnalyticsRuleSaved"];
 
 /** A rule as proposed for preview; nothing changes until the previewed rule is saved. */
-export type RuleCandidate = Schemas["BudgetAnalyticsRulePreviewRequest"];
+export type RuleCandidate = Schemas["BudgetAnalyticsRulePreviewRequest"] & { value: string };
 
 /** Only the keys of an affected entry; the preview carries no amounts, dates or descriptions. */
 export type RulePreviewExample = Schemas["BudgetAnalyticsPreviewExample"];

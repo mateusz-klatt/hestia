@@ -67,8 +67,11 @@ class OpenApiArtifactTests(unittest.TestCase):
             ("BudgetAnalyticsTransaction", "counterparty_account"),
         ):
             document["components"]["schemas"][schema]["properties"].pop(field)
-        rule_fields = document["components"]["schemas"]["BudgetAnalyticsRulePreviewRequest"]["properties"]["field"]
+        rule_schema = document["components"]["schemas"]["BudgetAnalyticsRulePreviewRequest"]
+        rule_fields = rule_schema["properties"]["field"]
         rule_fields["enum"].remove("counterparty_account")
+        rule_schema["required"].insert(4, "value")
+        rule_schema["properties"]["value"]["minLength"] = 1
         # 0.35.0 one-off label is additive over 0.34.0. Remove it before that digest.
         for schema, field in (
             ("BudgetAnalyticsAnnotationRequest", "label"),
