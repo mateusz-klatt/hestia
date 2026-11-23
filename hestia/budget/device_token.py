@@ -30,6 +30,8 @@ from ..db import BudgetReceiptDeviceToken as DeviceToken
 from ..db import BudgetReceiptPairCode as PairCode
 from ..db import BudgetReceiptPairLock as PairLock
 from ..db import User
+from . import consent_context
+from .config import BudgetConfigError
 
 log = logging.getLogger("hestia.budget.device_token")
 
@@ -115,6 +117,11 @@ def client_ip(request):
     remote = getattr(request, "remote", None)
     if not isinstance(remote, str) or not remote:
         return "unknown"
+    if os.environ.get(consent_context.TRUSTED_PROXY_ENV):
+        try:
+            return consent_context.psu_context(request).ip_address or remote
+        except BudgetConfigError:
+            return remote
     return remote
 
 
@@ -254,7 +261,6 @@ def revoke_owner_tokens(session, owner, moment=None):
 
 
 def open_store(secret, clock=None):
-    from .config import BudgetConfigError
     from .views import BudgetUsersBackendRequired
     from .. import store_sql
     from ..db import init_db
@@ -272,12 +278,11 @@ def open_store(secret, clock=None):
 def decide(method, path, headers, cookies, secret, moment):
     """Classify a bearer without logging it.
 
-    A login session bearer always passes through, so it keeps today's budget
-    rules. A recognized device token is accepted only on the receipts allowlist.
+    Login sessions pass through to the web session policy. A recognized
+    device token is accepted only on the receipts allowlist.
     Everywhere else it is 403, including when it is expired or revoked.
     """
     from .. import auth
-    from .config import BudgetConfigError
     from .views import BudgetUsersBackendRequired
 
     receipts = receipts_path(path)

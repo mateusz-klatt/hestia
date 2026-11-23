@@ -34,7 +34,7 @@ def enabled():
 _RETENTION_SECRET = b"hestia/budget/receipts/retention/v1"
 
 
-def _store(secret, device_id):
+def _store(secret, device_id=None):
     engine, sessions = init_db()
     if not store_sql.is_users_db_authoritative(engine):
         raise BudgetUsersBackendRequired()
@@ -89,7 +89,7 @@ def register(app, read_json_body, *, auth_enabled, session_secret):
             if device_id is None:
                 api._browser(request, owner, secret)
             elif operation == "parse-text":
-                retry = device_token.parse_limited(device_id, device_token.now())
+                retry = device_token.parse_limited(device_id, time.monotonic())
                 if retry is not None:
                     return _device_error(429, "device_token_rate_limited", retry)
             body, error = await read_json_body(request, WRITES[operation][1], reject_duplicates=True)
@@ -117,7 +117,7 @@ def register(app, read_json_body, *, auth_enabled, session_secret):
                 raise api._Rejected(404, "budget_receipts_disabled")
             if not auth_enabled() or "Cookie" in request.headers or "Authorization" in request.headers:
                 return _device_error(400, "device_token_rejected")
-            retry = device_token.redeem_limited(device_token.client_ip(request), device_token.now())
+            retry = device_token.redeem_limited(device_token.client_ip(request), time.monotonic())
             if retry is not None:
                 return _device_error(429, "device_token_rejected", retry)
             secret = api._secret(session_secret)
@@ -209,7 +209,7 @@ def register(app, read_json_body, *, auth_enabled, session_secret):
     app.router.add_post(PREFIX + "/device-token/redeem", redeem)
 
 
-def _run_read(owner, operation, receipt_id, secret, device_id):
+def _run_read(owner, operation, receipt_id, secret, device_id=None):
     store = _store(secret, device_id)
     if operation == "detail":
         return store.detail(owner, receipt_id)

@@ -15,8 +15,9 @@ from aiohttp.test_utils import TestClient, TestServer
 from sqlalchemy import select
 
 from hestia import auth, db, store_sql, web
-from hestia.budget import api, device_token, receipt_api
+from hestia.budget import api, consent_context, device_token, receipt_api
 from hestia.budget.config import BudgetConfigError
+from hestia.budget.receipt_parser import ReceiptError
 from hestia.budget.views import BudgetUsersBackendRequired
 from tests import test_budget_api as fixture
 from tests.test_budget_receipts import confirm_values, receipt_text
@@ -528,6 +529,36 @@ class DeviceTokenHTTPTests(fixture.unittest.IsolatedAsyncioTestCase):
         who = await self.client.get("/api/whoami", headers=self._auth(device))
         self.assertEqual(who.status, 403)
 
+    async def test_browser_management_requires_owner_cookie_and_exact_origin(self):
+        device = await self._device()
+        for path in (device_token.PAIR_PATH, device_token.LIST_PATH, device_token.REVOKE_PATH):
+            for headers, status in (({}, 401), (self.headers("viewer", origin=True), 403),
+                                    (self.headers(), 403), (self.headers(origin=True) | {"Origin": ORIGIN + "/"}, 403)):
+                response = await self._post(path, {}, headers)
+                self.assertEqual(response.status, status, path)
+                await response.read()
+        bob = await self._post(device_token.LIST_PATH, {}, self.headers("bob", origin=True))
+        self.assertEqual(await bob.json(), [])
+        result = await self._post(device_token.REVOKE_PATH, {"token_id": device["token_id"]},
+                                  self.headers("bob", origin=True))
+        _status(result, 200)
+        alice = await self._post(device_token.LIST_PATH, {}, self.headers(origin=True))
+        self.assertEqual([row["token_id"] for row in await alice.json()], [device["token_id"]])
+
+    async def test_parse_source_defaults_to_paste_and_rejects_unsupported_sources(self):
+        headers = self.headers(origin=True)
+        parsed = await self._post(device_token.PARSE_PATH, {"text": receipt_text()}, headers)
+        _status(parsed, 200)
+        receipt_id = (await parsed.json())["receipt_id"]
+        with self.sessions() as session:
+            self.assertEqual(session.get(db.BudgetReceipt, receipt_id).source_kind, "live_text")
+        rejected = await self._post(device_token.PARSE_PATH,
+                                    {"text": receipt_text(), "source_kind": "cloud_ai"}, headers)
+        self.assertEqual(rejected.status, 400)
+        self.assertEqual((await rejected.json())["error"], "budget_receipt_invalid_request")
+        with self.assertRaises(ReceiptError):
+            receipt_api._store(SECRET).parse_text("alice", receipt_text(), source_kind="cloud_ai")
+
     async def test_login_bearer_cannot_access_budget_routes(self):
         password = "synthetic-login-secret"
         with self.sessions.begin() as session:
@@ -609,6 +640,66 @@ class DeviceTokenHTTPTests(fixture.unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await limited_parse.json())["error"], "device_token_rate_limited")
         self.assertIn("Retry-After", limited_parse.headers)
 
+    async def test_device_body_framing_and_operational_failures(self):
+        rejected = {"ok": False, "error": "device_token_rejected"}
+        for data, headers in ((b"{}", {"Content-Type": "text/plain"}),
+                              (b"{", {"Content-Type": "application/json"}),
+                              (b"[]", {"Content-Type": "application/json"}),
+                              (b"{}", {"Content-Type": "application/json"})):
+            response = await self.client.post(device_token.REDEEM_PATH, data=data, headers=headers)
+            self.assertEqual(response.status, 400)
+            self.assertEqual(await response.json(), rejected)
+        malformed = await self.client.post(device_token.PAIR_PATH, data=b"{", headers={
+            "Content-Type": "application/json", **self.headers(origin=True),
+        })
+        self.assertEqual(malformed.status, 400)
+        self.assertEqual((await malformed.json())["error"], "invalid JSON")
+        for failure, status, error in (
+            (device_token.DeviceTokenError(503, "budget_unavailable"), 503, "budget_unavailable"),
+            (BudgetUsersBackendRequired(), 400, "device_token_rejected"),
+            (RuntimeError(), 500, "budget_internal_error"),
+        ):
+            with mock.patch.object(device_token, "open_store", side_effect=failure):
+                response = await self._redeem("ZZZZZZZZ")
+            self.assertEqual(response.status, status)
+            self.assertEqual((await response.json())["error"], error)
+
+    async def test_redeem_uses_only_trusted_forwarded_ip_and_preserves_global_limit(self):
+        first_ip = "203.0.113.11"
+        second_ip = "203.0.113.12"
+        third_ip = "203.0.113.13"
+        with mock.patch.object(device_token, "REDEEM_IP_LIMIT", 1), \
+             mock.patch.object(device_token, "REDEEM_GLOBAL_LIMIT", 2):
+            for configuration in ("", "invalid", "127.0.0.1/32"):
+                device_token.reset_limits()
+                with mock.patch.dict(os.environ, {consent_context.TRUSTED_PROXY_ENV: configuration}):
+                    for ip, status in ((first_ip, 400), (first_ip, 429),
+                                       (second_ip, 400 if configuration == "127.0.0.1/32" else 429),
+                                       (third_ip, 429)):
+                        response = await self._redeem("ZZZZZZZZ", headers={"X-Forwarded-For": ip})
+                        self.assertEqual(response.status, status)
+                        self.assertEqual((await response.json())["error"], "device_token_rejected")
+                    if configuration == "127.0.0.1/32":
+                        device_token.reset_limits()
+                        for invalid_chain, status in (("invalid", 400), ("127.0.0.1", 429)):
+                            response = await self._redeem("ZZZZZZZZ", headers={"X-Forwarded-For": invalid_chain})
+                            self.assertEqual(response.status, status)
+                            await response.read()
+
+    async def test_receipts_flag_is_rechecked_before_device_mutations(self):
+        for values in ([False], [True, False]):
+            with mock.patch.object(receipt_api, "enabled", side_effect=values):
+                denied = await self._redeem("ZZZZZZZZ")
+            self.assertEqual(denied.status, 404)
+            self.assertEqual((await denied.json())["error"], "budget_receipts_disabled")
+        with mock.patch.object(receipt_api, "enabled", side_effect=[True, False]):
+            denied = await self._post(device_token.PAIR_PATH, {}, self.headers(origin=True))
+        self.assertEqual(denied.status, 404)
+        self.assertEqual((await denied.json())["error"], "budget_receipts_disabled")
+        with mock.patch.object(receipt_api, "enabled", return_value=False):
+            denied = await self._post(device_token.LIST_RECEIPTS_PATH, {}, self.headers(origin=True))
+        self.assertEqual(denied.status, 404)
+
     async def test_revoke_is_idempotent_and_self_scoped(self):
         device = await self._device()
         other = await self._device()
@@ -668,7 +759,7 @@ class DeviceTokenHTTPTests(fixture.unittest.IsolatedAsyncioTestCase):
             disabled = await self._post(device_token.PAIR_PATH, {}, self.headers(origin=True))
         self.assertEqual(disabled.status, 404)
 
-    async def test_expired_token_and_post_body_recheck(self):
+    async def test_expired_token_and_off_scope_rejection(self):
         device = await self._device()
         with self.sessions.begin() as session:
             row = session.get(db.BudgetReceiptDeviceToken, device["token_id"])
@@ -679,3 +770,29 @@ class DeviceTokenHTTPTests(fixture.unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await expired.json())["error"], "device_token_expired")
         who = await self.client.get("/api/whoami", headers=self._auth(device))
         self.assertEqual(who.status, 403)
+
+    async def test_receipt_transaction_rechecks_token_after_body_read(self):
+        run = receipt_api._run
+
+        for change, error in (("deleted", "device_token_invalid"), ("reassigned", "device_token_invalid"),
+                              ("revoked", "device_token_revoked"), ("expired", "device_token_expired")):
+            device = await self._device()
+
+            def change_before_receipt(*args):
+                with self.sessions.begin() as session:
+                    row = session.get(db.BudgetReceiptDeviceToken, device["token_id"])
+                    if change == "deleted":
+                        session.delete(row)
+                    elif change == "reassigned":
+                        row.owner = "bob"
+                    elif change == "revoked":
+                        row.revoked_at = 1
+                    else:
+                        row.expires_at = 1
+                return run(*args)
+
+            with mock.patch.object(receipt_api, "_run", side_effect=change_before_receipt):
+                response = await self._post(device_token.PARSE_PATH, {"text": receipt_text()}, self._auth(device))
+            self.assertEqual(response.status, 401)
+            self.assertEqual((await response.json())["error"], error)
+        self.assertEqual(self.rows(db.BudgetReceipt), [])
