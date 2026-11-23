@@ -453,7 +453,7 @@ class CategoryBaselineTests(unittest.TestCase):
         with self.assertRaisesRegex(forecast.ForecastDataError, "^Invalid forecast data$"):
             forecast._baseline_estimate(("1", "2", "3"), "mode")
         self.assertIsNone(forecast._baseline_estimate(("1", "2"), "median"))
-        for value in (None, "2026-02-31", "2026-2-01"):
+        for value in (None, "2026-02-31", "2026-2-01", "20261122"):
             with self.subTest(value=value), self.assertRaisesRegex(forecast.ForecastDataError, "^Invalid forecast data$"):
                 forecast._iso_day(value)
 
@@ -748,6 +748,11 @@ class CategoryBaselineTests(unittest.TestCase):
         self.assertEqual(built[0].monthly_amounts, ("100", "0", "100", "0", "60", "0"))
         self.assertEqual(forecast._median_money(built[0].monthly_amounts), "30")
         self.assertEqual(built[0].account_ids, frozenset({"home"}))
+        refund_only = [("cat-power", "PLN", f"2026-{month:02d}-04", "15", "home") for month in (8, 9, 10)]
+        self.assertEqual(forecast.build_category_baselines(
+            category_ids=["cat-power"], category_names={"cat-power": "Electricity"}, history_months=6,
+            evaluation_date="2026-11-22", expenses=[], refunds=refund_only,
+            account_first_dates={"home": "2026-08-01"}), ())
 
     def test_configured_category_conflicts_with_an_active_hint_or_enabled_mortgage(self):
         env = {forecast.FORECAST_CONFIG_ENV: json.dumps({"test-owner": {"category_ids": ["cat-power"]}})}
@@ -864,6 +869,9 @@ class CategoryBaselineTests(unittest.TestCase):
             {"expenses": [("cat-power", "pln", "2026-08-01", "10")]},
             {"expenses": [("cat-power", "PLN", "2026-02-31", "10")]},
             {"expenses": [("cat-power", "PLN", "2026-08-01", "nope")]},
+            {"expenses": [("cat-power", "PLN", "2026-08-01", "10", 1)]},
+            {"expenses": [("cat-power", "PLN", "2026-08-01", "10", "a" * 129)]},
+            {"expenses": [("cat-power", "PLN", "2026-08-01", "10", "bad\nid")]},
             {"refunds": "nope"},
             {"refunds": [("cat-power", "PLN", "2026-08-01")]},
             {"account_first_dates": []},
@@ -882,6 +890,14 @@ class CategoryBaselineTests(unittest.TestCase):
             forecast._hint_categories([phone], {("source", "a"): "cat-power"}, {"cat-power"})
         with self.assertRaisesRegex(forecast.ForecastDataError, "^Invalid forecast data$"):
             forecast._hint_categories([_hint("Orange", evidence=("nope",))], {("source", "nope"): "cat-power"}, {"cat-power"})
+        for label, hints, evidence in (
+            ("string", "nope", {}),
+            ("bytes", b"nope", {}),
+            ("evidence", [], []),
+            ("hint", [object()], {}),
+        ):
+            with self.subTest(hints=label), self.assertRaisesRegex(forecast.ForecastDataError, "^Invalid forecast data$"):
+                forecast._hint_categories(hints, evidence, set())
         with self.assertRaisesRegex(forecast.ForecastDataError, "^Invalid forecast data$"):
             forecast._schedule_categories([_schedule("loan", due_day=0)], [("cat-power", "PLN", "2026-10-15", "100", 15)],
                                           {"cat-power"})
@@ -905,6 +921,14 @@ class CategoryBaselineTests(unittest.TestCase):
             with self.subTest(conflict=list(overrides)), self.assertRaisesRegex(
                     forecast.ForecastDataError, "^Invalid forecast data$"):
                 forecast._reject_baseline_conflicts(**(conflict | overrides))
+        self.assertIsNone(forecast._reject_baseline_conflicts(**(conflict | {
+            "expenses": [("cat-power", "PLN", "2026-10-15", "0"), ("cat-power", "PLN", "2026-10-15", "-3")],
+        })))
+        with self.assertRaises(forecast.ForecastConfigConflict):
+            forecast._reject_baseline_conflicts(**(conflict | {
+                "schedules": [_schedule("loan", amount="40", due_day=15, start_date="2026-01-01")],
+                "expenses": [("cat-power", "PLN", "2026-10-15", "0"), ("cat-power", "PLN", "2026-10-15", "40")],
+            }))
         three = [("cat-power", "PLN", f"2026-{month:02d}-01", "10") for month in (8, 9, 10)]
         pln = _baseline(monthly_amounts=("10", "10", "10"))
         eur = _baseline(currency="EUR", category_id="cat-eur", name="Power EU", monthly_amounts=("10", "10", "10"))
