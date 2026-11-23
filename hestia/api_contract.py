@@ -23,7 +23,7 @@ import json
 from pathlib import Path
 from typing import Annotated, Literal
 
-from pydantic import AfterValidator, AwareDatetime, BaseModel, ConfigDict, Field, TypeAdapter
+from pydantic import AfterValidator, AwareDatetime, BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, WrapValidator
 from pydantic.json_schema import models_json_schema
 
 from .budget.i18n import LANGUAGES, validate_languages
@@ -1664,9 +1664,17 @@ class BudgetLabelTranslationImportEntry(BaseModel):
     label: Annotated[str, Field(min_length=1, max_length=80)]
 
 
+def _preserve_invalid_translation_entry(value, handler):
+    try:
+        return handler(value)
+    except ValidationError:
+        return value
+
+
 BudgetTranslationImportEntry = Annotated[
     BudgetCategoryTranslationImportEntry | BudgetLabelTranslationImportEntry,
     Field(discriminator="kind"),
+    WrapValidator(_preserve_invalid_translation_entry),
 ]
 
 

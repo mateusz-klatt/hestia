@@ -10,9 +10,11 @@ import re
 import unicodedata
 import uuid
 
+from pydantic import TypeAdapter, ValidationError
 from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 
+from .. import api_contract
 from ..db import BudgetAccount as Account, BudgetAccountIdentity as Identity
 from ..db import BudgetAnnotation as Annotation, BudgetAnalyticsAudit as Audit, BudgetCategory as Category
 from ..db import BudgetAnnotationLabelTranslation as LabelTranslation
@@ -38,6 +40,8 @@ from .spending_limits import SpendingLimitInputError, _format_scaled, _parse_amo
 from .views import BudgetHTTPStore
 
 MAX_CATEGORY_LIMITS = 200
+_TRANSLATION_ENTRY_ADAPTER = TypeAdapter(
+    api_contract.BudgetCategoryTranslationImportEntry | api_contract.BudgetLabelTranslationImportEntry)
 _LIMIT_ERROR = "budget_analytics_limit"
 MAX_RULES = 5000
 MAX_BATCH_RULES = 100
@@ -473,15 +477,17 @@ class BudgetAnalyticsStore(BudgetHTTPStore):
             for index, entry in enumerate(entries):
                 try:
                     with session.begin_nested():
-                        if entry["kind"] == "category":
+                        try:
+                            values = _TRANSLATION_ENTRY_ADAPTER.validate_python(entry).model_dump()
+                        except ValidationError:
+                            raise AnalyticsError() from None
+                        if values["kind"] == "category":
                             saved = self._set_category_translation(
-                                session, owner, entry["category_id"], entry["lang"], entry["name"])
-                        elif entry["kind"] == "label":
-                            saved = self._set_label_translation(
-                                session, owner, entry["account_id"], entry["entry_reference"],
-                                entry["lang"], entry["label"])
+                                session, owner, values["category_id"], values["lang"], values["name"])
                         else:
-                            raise AnalyticsError()
+                            saved = self._set_label_translation(
+                                session, owner, values["account_id"], values["entry_reference"],
+                                values["lang"], values["label"])
                     results.append({"index": index, "ok": True, "changed": saved["changed"]})
                 except AnalyticsError as exc:
                     results.append({"index": index, "ok": False, "error": exc.code})

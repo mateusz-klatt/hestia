@@ -18,7 +18,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from hestia import api_contract, db
-from hestia.budget import household
+from hestia.budget import analytics_api, household
 from hestia.budget.analytics_core import AnalyticsError, financial_fingerprint
 from hestia.budget.analytics_store import BudgetAnalyticsStore
 from hestia.budget.i18n import DisplayResolver, LANGUAGES, preferred_languages, translated, validate_languages
@@ -352,6 +352,37 @@ class TranslationAPITests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse((await repeated.json())["translation"]["changed"])
         unknown = await self.post("label-translation-set", set_body | {"entry_reference": "missing"})
         self.assertEqual(unknown.status, 404)
+
+    async def test_bulk_import_validates_rows_independently(self):
+        food = self.analytics.create_category("alice", "Row Validation Food")
+        valid = {"kind": "category", "category_id": food["id"], "lang": "de", "name": "Essen"}
+        entries = [
+            valid,
+            valid | {"lang": "unsupported"},
+            {"kind": "other"},
+            valid | {"name": "x" * 81},
+            "not-an-object",
+            valid | {"lang": "fr", "name": "Nourriture"},
+        ]
+        response = await self.post("translation-import", {"entries": entries})
+        self.assertEqual(response.status, 200, await response.text())
+        body = await response.json()
+        api_contract.BudgetTranslationImportResult.model_validate(body)
+        self.assertEqual([row["index"] for row in body["results"]], list(range(len(entries))))
+        self.assertEqual([row["ok"] for row in body["results"]], [True, False, False, False, False, True])
+        self.assertEqual([row["error"] for row in body["results"] if not row["ok"]],
+                         ["budget_analytics_invalid_request"] * 4)
+        categories = await (await self.get("categories")).json()
+        row = next(row for row in categories["categories"] if row["id"] == food["id"])
+        self.assertEqual(row["translations"], {"de": "Essen", "fr": "Nourriture"})
+
+        for envelope in ({"entries": []}, {"entries": [valid] * 501}, {"entries": {}},
+                         {"entries": [valid], "extra": True}):
+            with self.subTest(envelope=type(envelope["entries"]).__name__, size=len(envelope["entries"])):
+                self.assertEqual((await self.post("translation-import", envelope)).status, 400)
+        oversized = await self.post("translation-import", {
+            "entries": [valid], "padding": "x" * analytics_api.MAX_TRANSACTIONS_BY_KEYS_BYTES})
+        self.assertEqual(oversized.status, 413)
 
 
 class ViewerPreferenceHouseholdTests(unittest.IsolatedAsyncioTestCase):
