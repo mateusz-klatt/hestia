@@ -7,6 +7,9 @@ import type { BudgetApi, BudgetResult } from "../api";
 import { consentHealthLabels } from "../consent_health";
 import { when } from "../model";
 import type { BudgetConnection } from "../model";
+import { CategorySwatch } from "./category_badge";
+import { buildCategoryColors } from "./category_colors";
+import type { CategoryColorResolver } from "./category_colors";
 import { ANALYTICS_ERROR, INBOX_MARK_BATCH_MAX, RELOAD_ERRORS, inboxItemKey, inboxRowKey, labelOf,
   pluralPl } from "./model";
 import type { AnalyticsCategory, AnalyticsInbox, AnalyticsInboxConsentItem, AnalyticsInboxItem,
@@ -168,6 +171,7 @@ interface LookupMaps {
   banks: ReadonlyMap<string, string>;
   schedules: ReadonlyMap<string, string>;
   categories: ReadonlyMap<string, string>;
+  categoryColors: CategoryColorResolver;
 }
 
 function saveFailure(text: InboxLabels, error: string): string {
@@ -261,6 +265,9 @@ function InboxRow({
       <div className="budget-limit-main">
         <span className="budget-entry-text">
           <span className="budget-chip">{labelOf(text.kinds, item.kind)}</span>{" "}
+          {item.kind === "spending_limit" ? (
+            <CategorySwatch color={lookups.categoryColors.get(item.ref.category_id)} />
+          ) : null}
           <strong>{title}</strong>
         </span>
         <div className="budget-actions">
@@ -355,6 +362,7 @@ export function InboxView({
     banks: new Map(connections.map((item) => [item.id, item.bank_name])),
     schedules: new Map(schedules.map((item) => [item.id, item.label])),
     categories: new Map(categories.map((item) => [item.id, item.name])),
+    categoryColors: buildCategoryColors(categories),
   };
 
   const data = shown.state === "ready" ? shown.data : null;

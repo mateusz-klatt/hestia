@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { BudgetApi, BudgetResult } from "../api";
 import type { BudgetAccount, BudgetConnection } from "../model";
+import { CategoryBadge, CategorySwatch } from "./category_badge";
+import { buildCategoryColors } from "./category_colors";
 import { listCategoryTree, parentChoices } from "./category_tree";
 import type { ParentChoice } from "./category_tree";
 import { ANALYTICS_ERROR, CATEGORY_NAME_MAX, KIND_CHOICES, RELOAD_ERRORS, accountName as nameOf, labelOf, RULE_FIELDS, RULE_OPERATORS, RULE_PRIORITY_MAX, RULE_VALUE_MAX, ruleCandidate,
@@ -177,48 +179,52 @@ function CategoriesPanel({ categories, api, run, text, locale, onSaved, epoch }:
       {categories === "loading" ? <p className="budget-muted" role="status">{text.loading}</p> : null}
       {categories === "error" ? <p className="budget-notice" role="alert">{text.error}</p> : null}
       {Array.isArray(categories) && categories.length === 0 ? <p className="budget-muted">{text.noCategories}</p> : null}
-      {Array.isArray(categories) && categories.length > 0 ? (
-        <ul className="budget-entry-list">
-          {listCategoryTree(categories, locale).map(({ category, depth, has_children }) => {
-            const archiveBlocked = has_children && !category.archived;
-            return (
-              <li key={category.id} className="budget-entry budget-category" data-depth={depth}>
-                {renaming?.id === category.id ? (
-                  <form className="budget-entry-editor" onSubmit={(event) => {
-                    event.preventDefault();
-                    if (validCategoryName(renaming.name)) {
-                      void save(update(category, {
-                        name: renaming.name.trim(),
-                        parent_id: renaming.parent === "" ? null : renaming.parent,
-                      }), () => { setRenaming(null); });
-                    }
-                  }}>
-                    <label>{text.name}
-                      <input name="category_name" maxLength={CATEGORY_NAME_MAX} value={renaming.name}
-                        onChange={(event) => { setRenaming({ id: category.id, name: event.currentTarget.value, parent: renaming.parent }); }} />
-                    </label>
-                    <ParentField label={text.parent} none={text.noParent} value={renaming.parent} disabled={busy}
-                      choices={parentChoices(categories, category.id, locale)}
-                      onChange={(parent) => { setRenaming({ id: category.id, name: renaming.name, parent }); }} />
-                    <button type="submit" className="budget-primary" disabled={busy || !validCategoryName(renaming.name)}>{text.save}</button>
-                    <button type="button" disabled={busy} onClick={() => { setRenaming(null); }}>{text.cancel}</button>
-                  </form>
-                ) : (
-                  <div className="budget-entry-facts">
-                    <strong className={category.archived ? "budget-muted" : undefined}>{category.name}</strong>
-                    {category.archived ? <span>({text.archived})</span> : null}
-                    <button type="button" disabled={busy} onClick={() => { setRenaming({ id: category.id, name: category.name, parent: category.parent_id ?? "" }); }}>{text.rename}</button>
-                    <button type="button" disabled={busy || archiveBlocked} title={archiveBlocked ? text.archiveBlocked : undefined}
-                      onClick={() => { void save(update(category, { archived: !category.archived }), () => undefined); }}>
-                      {category.archived ? text.restore : text.archive}
-                    </button>
-                  </div>
-                )}
-              </li>
-            );
-          })}
-        </ul>
-      ) : null}
+      {Array.isArray(categories) && categories.length > 0 ? (() => {
+        const categoryColors = buildCategoryColors(categories);
+        return (
+          <ul className="budget-entry-list">
+            {listCategoryTree(categories, locale).map(({ category, depth, has_children }) => {
+              const archiveBlocked = has_children && !category.archived;
+              return (
+                <li key={category.id} className="budget-entry budget-category" data-depth={depth}>
+                  {renaming?.id === category.id ? (
+                    <form className="budget-entry-editor" onSubmit={(event) => {
+                      event.preventDefault();
+                      if (validCategoryName(renaming.name)) {
+                        void save(update(category, {
+                          name: renaming.name.trim(),
+                          parent_id: renaming.parent === "" ? null : renaming.parent,
+                        }), () => { setRenaming(null); });
+                      }
+                    }}>
+                      <label>{text.name}
+                        <input name="category_name" maxLength={CATEGORY_NAME_MAX} value={renaming.name}
+                          onChange={(event) => { setRenaming({ id: category.id, name: event.currentTarget.value, parent: renaming.parent }); }} />
+                      </label>
+                      <ParentField label={text.parent} none={text.noParent} value={renaming.parent} disabled={busy}
+                        choices={parentChoices(categories, category.id, locale)}
+                        onChange={(parent) => { setRenaming({ id: category.id, name: renaming.name, parent }); }} />
+                      <button type="submit" className="budget-primary" disabled={busy || !validCategoryName(renaming.name)}>{text.save}</button>
+                      <button type="button" disabled={busy} onClick={() => { setRenaming(null); }}>{text.cancel}</button>
+                    </form>
+                  ) : (
+                    <div className="budget-entry-facts">
+                      <CategorySwatch color={categoryColors.get(category.id)} />
+                      <strong className={category.archived ? "budget-muted" : undefined}>{category.name}</strong>
+                      {category.archived ? <span>({text.archived})</span> : null}
+                      <button type="button" disabled={busy} onClick={() => { setRenaming({ id: category.id, name: category.name, parent: category.parent_id ?? "" }); }}>{text.rename}</button>
+                      <button type="button" disabled={busy || archiveBlocked} title={archiveBlocked ? text.archiveBlocked : undefined}
+                        onClick={() => { void save(update(category, { archived: !category.archived }), () => undefined); }}>
+                        {category.archived ? text.restore : text.archive}
+                      </button>
+                    </div>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        );
+      })() : null}
       <form className="budget-entry-editor" onSubmit={(event) => {
         event.preventDefault();
         if (validCategoryName(draft)) {
@@ -263,6 +269,7 @@ function RulesPanel({ rules, categories, accounts, connections, api, run, text, 
   // A reload discards pending answers and any preview taken before it.
   useEffect(() => { draft.current += 1; setBusy(false); setPreview(null); }, [epoch]);
   const categoryName = (id: string | null) => (id === null ? null : categories.find((item) => item.id === id)?.name ?? null);
+  const categoryColors = buildCategoryColors(categories);
   const accountName = (id: string) => nameOf(accounts, connections, id, text.account);
 
   const open = (rule: AnalyticsRule | null) => {
@@ -325,19 +332,24 @@ function RulesPanel({ rules, categories, accounts, connections, api, run, text, 
       {Array.isArray(rules) && rules.length === 0 ? <p className="budget-muted">{text.noRules}</p> : null}
       {Array.isArray(rules) && rules.length > 0 ? (
         <ul className="budget-entry-list">
-          {rules.map((rule) => (
-            <li key={rule.id} className="budget-entry budget-rule">
-              <div className="budget-entry-facts">
-                <span>{labelOf(text.fields, rule.field)} {labelOf(text.operators, rule.operator)} „{rule.value}”</span>
-                <span aria-hidden="true">→</span>
-                {categoryName(rule.category_id) === null ? null : <span className="budget-chip">{categoryName(rule.category_id)}</span>}
-                {rule.kind === "auto" ? null : <span className="budget-chip">{labelOf(text.kinds, rule.kind)}</span>}
-                <span>{text.priority} {rule.priority}</span>
-                {rule.enabled ? null : <span className="budget-warn">{text.disabled}</span>}
-                <button type="button" disabled={busy || editing !== null} onClick={() => { open(rule); }}>{text.edit}</button>
-              </div>
-            </li>
-          ))}
+          {rules.map((rule) => {
+            const ruleCategory = categoryName(rule.category_id);
+            return (
+              <li key={rule.id} className="budget-entry budget-rule">
+                <div className="budget-entry-facts">
+                  <span>{labelOf(text.fields, rule.field)} {labelOf(text.operators, rule.operator)} „{rule.value}”</span>
+                  <span aria-hidden="true">→</span>
+                  {ruleCategory === null ? null : (
+                    <CategoryBadge color={categoryColors.get(rule.category_id)} label={ruleCategory} />
+                  )}
+                  {rule.kind === "auto" ? null : <span className="budget-chip">{labelOf(text.kinds, rule.kind)}</span>}
+                  <span>{text.priority} {rule.priority}</span>
+                  {rule.enabled ? null : <span className="budget-warn">{text.disabled}</span>}
+                  <button type="button" disabled={busy || editing !== null} onClick={() => { open(rule); }}>{text.edit}</button>
+                </div>
+              </li>
+            );
+          })}
         </ul>
       ) : null}
       {editing === null ? (

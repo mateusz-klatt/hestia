@@ -107,6 +107,8 @@
 .budget-entry-facts { display: flex; flex-wrap: wrap; align-items: center; gap: .3rem .6rem; font-size: .8rem; color: var(--fg-soft); }
 .budget-entry-facts button { min-height: 2rem; padding-inline: .6rem; }
 .budget-chip { border: 1px solid var(--border); border-radius: 999px; padding: .05rem .5rem; color: var(--fg); background: var(--bg, transparent); }
+.budget-cat-swatch { display: inline-block; width: .72rem; height: .72rem; border-radius: .2rem; vertical-align: -0.08em; margin-inline-end: .4rem; flex: 0 0 auto; border: 1px solid color-mix(in srgb, var(--fg) 24%, transparent); }
+.budget-cat-badge { border-color: color-mix(in srgb, currentColor 22%, transparent); font-weight: 500; }
 .budget-entry-editor { display: flex; flex-wrap: wrap; gap: .5rem; align-items: end; padding: .4rem 0; }
 .budget-entry-editor label { display: grid; gap: .2rem; font-size: .8rem; color: var(--fg-soft); }
 .budget-pair-picker { display: grid; gap: .4rem; padding: .4rem 0; }
@@ -160,12 +162,7 @@
   --chart-budget: #245b7c;
   --chart-expected: #6d4c93;
   --chart-income: #246b29;
-  --chart-cat-1: #9e3f0e;
-  --chart-cat-2: #245b7c;
-  --chart-cat-3: #246b29;
-  --chart-cat-4: #6d4c93;
-  --chart-cat-5: #946300;
-  --chart-cat-other: #6e6357;
+  --chart-cat-other: #7b736b;
 }
 .budget-month-dashboard-controls { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: end; gap: .6rem 1rem; }
 .budget-month-dashboard-controls .budget-range { margin-bottom: 0; }
@@ -178,7 +175,7 @@
 .budget-month-chart svg { display: block; width: 100%; height: auto; max-width: 100%; }
 .budget-chart-legend { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: .35rem .85rem; font-size: .8rem; color: var(--fg-soft); }
 .budget-chart-legend li { display: inline-flex; align-items: center; gap: .35rem; min-width: 0; overflow-wrap: anywhere; }
-.budget-chart-swatch { width: .85rem; height: .85rem; border-radius: .15rem; flex: 0 0 auto; border: 1px solid var(--fg); }
+.budget-chart-swatch { width: .85rem; height: .85rem; border-radius: .15rem; flex: 0 0 auto; border: 1px solid color-mix(in srgb, var(--fg) 24%, transparent); }
 .budget-chart-line-swatch { width: 1.1rem; height: 0; flex: 0 0 auto; border-top: 2px solid currentColor; }
 .budget-chart-step-swatch { display: inline-flex; align-items: center; justify-content: center; width: .85rem; height: .85rem; border-radius: 999px; flex: 0 0 auto; border: 2px solid currentColor; background: var(--surface); font-size: .65rem; font-weight: 700; line-height: 1; }
 .budget-chart-step-swatch[data-overdue="true"] { border-style: dashed; }
