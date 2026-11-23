@@ -41,6 +41,7 @@ STALE_AFTER_SECONDS = STALE_AFTER["transactions"]
 EARLIEST_PERIOD = "1900-01"
 DEFAULT_HISTORY_MONTHS = 6
 ALLOWED_HISTORY_MONTHS = frozenset({6, 12})
+MAX_PENDING_ROW_KEYS = 500
 
 _ZERO = "0"
 _PERIOD_RE = re.compile(r"([0-9]{4})-([0-9]{2})\Z", re.ASCII)
@@ -714,6 +715,7 @@ class _BucketAccum:
     cutoff: str
     has_activity: bool = False
     pending_transfer_rows: int = 0
+    pending_row_keys: list[str] = field(default_factory=list)
     has_affecting_unexcluded: bool = False
     start_budget_amounts: list[str] = field(default_factory=list)
     rent_amounts: list[str] = field(default_factory=list)
@@ -722,6 +724,11 @@ class _BucketAccum:
     ordinary_expenses: dict[str | None, list[str]] = field(default_factory=lambda: defaultdict(list))
     ordinary_refunds: dict[str | None, list[str]] = field(default_factory=lambda: defaultdict(list))
     observed_spend_categories: set[str | None] = field(default_factory=set)
+
+    def record_pending(self, row_key: str) -> None:
+        self.pending_transfer_rows += 1
+        if len(self.pending_row_keys) < MAX_PENDING_ROW_KEYS:
+            self.pending_row_keys.append(row_key)
 
 
 def _chart_periods(effective_period: str, history: int) -> list[str]:
@@ -934,6 +941,7 @@ def _evaluate_monthly_budget_core(
                 counterpart_outside_horizon=counterpart_outside,
                 other_identities=other_owned.get(acct_id, frozenset()),
             )
+            row_key = f"{acct_id}/{row['entry_reference']}"
             if in_calendar:
                 cal_bucket.has_activity = True
                 if direction == "DBIT" and kind == "expense":
@@ -943,7 +951,7 @@ def _evaluate_monthly_budget_core(
                         cal_bucket.has_affecting_unexcluded = True
                         if unresolved or (account_kinds.get(acct_id) != "credit_card"
                                           and not _is_explicit_expense(eff, row["annotation"], rules_by_id)):
-                            cal_bucket.pending_transfer_rows += 1
+                            cal_bucket.record_pending(row_key)
                     cal_bucket.observed_spend_categories.add(cat_id)
                     if mortgage_cat_id is not None and cat_id == mortgage_cat_id:
                         cal_bucket.mortgage_debits_legs.append(
@@ -958,7 +966,7 @@ def _evaluate_monthly_budget_core(
                         if nonzero:
                             cal_bucket.has_affecting_unexcluded = True
                             if unresolved:
-                                cal_bucket.pending_transfer_rows += 1
+                                cal_bucket.record_pending(row_key)
                         cal_bucket.observed_spend_categories.add(cat_id)
                         if mortgage_cat_id is not None and cat_id == mortgage_cat_id:
                             cal_bucket.mortgage_refund_legs.append(
@@ -972,14 +980,14 @@ def _evaluate_monthly_budget_core(
                         if nonzero:
                             cal_bucket.has_affecting_unexcluded = True
                             if unresolved:
-                                cal_bucket.pending_transfer_rows += 1
+                                cal_bucket.record_pending(row_key)
                         cal_bucket.rent_amounts.append(amount)
             if inc_bucket is not None:
                 inc_bucket.has_activity = True
                 if nonzero:
                     inc_bucket.has_affecting_unexcluded = True
                     if unresolved:
-                        inc_bucket.pending_transfer_rows += 1
+                        inc_bucket.record_pending(row_key)
                     if inc_period == effective_period == current_month:
                         current_income_by_cat[cat_id].append(_IncomeCredit(
                             acct_id, row["entry_reference"], amount,
@@ -1007,6 +1015,8 @@ def _evaluate_monthly_budget_core(
         "stale_selected_accounts": stale_selected_accounts,
         "purchase_date_fallback_count": purchase_date_fallback_count,
         "pending_transfer_rows": selected_bucket.pending_transfer_rows,
+        "pending_row_keys": selected_bucket.pending_row_keys,
+        "pending_row_keys_truncated": selected_bucket.pending_transfer_rows > len(selected_bucket.pending_row_keys),
         "transfer_scan_limited": transfer_scan_limited,
         "provisional": provisional,
         "has_activity": selected_bucket.has_activity,

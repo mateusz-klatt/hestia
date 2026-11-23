@@ -100,6 +100,9 @@ class CategoryParentStoreTests(AnalyticsCase):
             self.store.create_category("owner", "Too deep", fuel["id"])
         sport = self.store.create_category("owner", "Sport")
         hobby = self.store.create_category("owner", "Hobby", sport["id"])
+        # A second child keeps subtree height at 1, so the move still fits under a root.
+        wash = self.store.create_category("owner", "Wash", car["id"])
+        self.assertEqual(wash["parent_id"], car["id"])
         moved = self.store.update_category("owner", car["id"], name="Car", archived=False, expected_version=1,
                                             parent_id=sport["id"])
         self.assertEqual(moved["parent_id"], sport["id"])
@@ -108,6 +111,8 @@ class CategoryParentStoreTests(AnalyticsCase):
                                        parent_id=hobby["id"])
         stayed = next(row for row in self.store.categories("owner") if row["id"] == car["id"])
         self.assertEqual(stayed["parent_id"], sport["id"])
+        self.assertEqual(next(row["parent_id"] for row in self.store.categories("owner") if row["id"] == wash["id"]),
+                         car["id"])
         with self.assertRaises(AnalyticsError):
             self.store.update_category("owner", sport["id"], name="Sport", archived=True, expected_version=1)
         archived = self.store.update_category("owner", fuel["id"], name="Fuel renamed", archived=True,

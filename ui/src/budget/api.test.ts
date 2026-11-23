@@ -88,6 +88,17 @@ describe("budget api", () => {
     });
   });
 
+  it("sends row_keys via JSON POST without Authorization header for transactions-by-keys", async () => {
+    const fetchMock = respond(200, { period: "", start: "", end: "", snapshot_digest: "d", transactions: [], filtered_total: 0, next_cursor: null });
+    await budgetApi.analyticsTransactionsByKeys({ row_keys: ["acc-1/r1", "acc-2/r2"], currency: "PLN" });
+    const { url, init } = sent(fetchMock);
+    expect(url.pathname).toMatch(/\/api\/budget\/analytics\/transactions-by-keys$/);
+    expect(url.search).toBe("");
+    expect(init.method).toBe("POST");
+    expect(Object.keys(init.headers as Record<string, string>)).not.toContain("Authorization");
+    expect(JSON.parse(init.body as string)).toEqual({ row_keys: ["acc-1/r1", "acc-2/r2"], currency: "PLN" });
+  });
+
   it("builds quarantine reads with and without an account filter", async () => {
     const fetchMock = respond(200, {});
     await budgetApi.quarantine();

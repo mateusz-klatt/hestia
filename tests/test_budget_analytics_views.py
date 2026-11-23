@@ -13,6 +13,7 @@ from sqlalchemy import delete, event, text
 
 from hestia import api_contract, db
 from hestia.budget import analytics_views as views
+from hestia.budget import forecast
 from hestia.budget import month_budget
 from hestia.budget.analytics_core import AnalyticsError
 from hestia.budget.analytics_views import BudgetAnalyticsViews, projection_snapshot
@@ -549,6 +550,56 @@ class ValidationTests(ProjectionCase):
         with mock.patch.object(views, "MAX_ROWS", 2):
             self.assert_invalid(lambda: self.store.overview("owner", "2026"), code="budget_analytics_limit", status=413)
 
+    def test_transactions_row_keys_crosses_periods_ignores_foreign_and_validates(self):
+        self.add_transaction("a", "nov-pln", amount="10", currency="PLN", booking_date="2026-11-10")
+        self.add_transaction("a", "dec-pln", amount="20", currency="PLN", booking_date="2026-12-02",
+                             transaction_date="2026-11-29", remittance_information=["Adjacent December"])
+        self.add_transaction("b", "oct-eur", amount="30", currency="EUR", credit_debit_indicator="CRDT",
+                             booking_date="2026-10-28", remittance_information=["Adjacent October"])
+        self.add_transaction("d", "deselected-nov", amount="40", booking_date="2026-11-15")
+        self.select_account("d", False)
+        self.add_transaction("foreign", "bob-tx", amount="50", booking_date="2026-11-10")
+
+        nov_only = self.store.transactions("owner", "2026-11")
+        self.assertEqual([row["entry_reference"] for row in nov_only["transactions"]], ["nov-pln"])
+
+        requested = [
+            f"{self.accounts['a']}/dec-pln",
+            f"{self.accounts['a']}/nov-pln",
+            f"{self.accounts['b']}/oct-eur",
+            f"{self.accounts['d']}/deselected-nov",
+            f"{self.accounts['foreign']}/bob-tx",
+            f"{self.accounts['a']}/unknown-ref",
+        ]
+        all_matched = self.store.transactions_by_keys("owner", row_keys=requested)
+        api_contract.BudgetAnalyticsTransactions.model_validate(all_matched)
+        self.assertEqual((all_matched["period"], all_matched["start"], all_matched["end"]), ("", "", ""))
+        self.assertEqual(all_matched["filtered_total"], 3)
+        self.assertEqual([row["entry_reference"] for row in all_matched["transactions"]],
+                         ["dec-pln", "nov-pln", "oct-eur"])
+
+        pln_only = self.store.transactions_by_keys("owner", currency="PLN", row_keys=requested)
+        self.assertEqual([row["entry_reference"] for row in pln_only["transactions"]], ["dec-pln", "nov-pln"])
+
+        first = self.store.transactions_by_keys("owner", limit=1, row_keys=requested)
+        second = self.store.transactions_by_keys("owner", limit=1, cursor=first["next_cursor"], row_keys=requested)
+        self.assertEqual(
+            [first["transactions"][0]["entry_reference"], second["transactions"][0]["entry_reference"]],
+            ["dec-pln", "nov-pln"],
+        )
+        self.assert_invalid(
+            lambda: self.store.transactions_by_keys("owner", limit=1, cursor=first["next_cursor"],
+                                                    row_keys=[f"{self.accounts['a']}/nov-pln"]),
+        )
+
+        too_many = [f"{self.accounts['a']}/r{i}" for i in range(501)]
+        too_long = "a/" + ("b" * views.MAX_ROW_KEY_LENGTH)
+        for bad in (None, [], "not-a-list", too_many, ["no-slash"], ["/ref"], ["acc/"], ["acc/bad\x00ref"],
+                    ["a" * 129 + "/ref"], ["acc/" + "r" * 1025], ["ab"], [too_long], [None], [1]):
+            self.assert_invalid(lambda: self.store.transactions_by_keys("owner", row_keys=bad))
+        # None is rejected before parsing; the helper still treats an omitted list as "no key filter".
+        self.assertIsNone(views._validate_row_keys(None))
+
     def test_corrupt_ledger_and_metadata_never_yield_partial_figures(self):
         self.add_transaction("a", "debit")
         original = self.transaction().payload_json
@@ -744,12 +795,12 @@ class ForecastProjectionTests(ProjectionCase):
         self.assertEqual(unfiltered["summary"], {
             "selected_accounts": 3, "excluded_accounts": 1, "stale_accounts": 2,
             "overdue_mortgage_schedule_count": 1, "lapsed_recurring_count": 1,
-            "deduped_recurring_count": 1, "stale_recurring_count": 1,
+            "deduped_recurring_count": 1, "stale_recurring_count": 1, "baseline_conflicts": [],
         })
         self.assertEqual(eur_only["summary"], {
             "selected_accounts": 3, "excluded_accounts": 1, "stale_accounts": 2,
             "overdue_mortgage_schedule_count": 0, "lapsed_recurring_count": 0,
-            "deduped_recurring_count": 0, "stale_recurring_count": 0,
+            "deduped_recurring_count": 0, "stale_recurring_count": 0, "baseline_conflicts": [],
         })
         for field in ("stale_account_ids", "stale_account_ids_truncated", "ledger_as_of", "freshness_stale",
                       "snapshot_digest", "schedules_version"):
@@ -817,6 +868,94 @@ class ForecastProjectionTests(ProjectionCase):
                                  "WHERE account_id = :account_id AND operation = 'transactions'"),
                             {"account_id": self.accounts["a"]})
         self.assert_invalid(lambda: self.store.forecast("owner"), code="budget_analytics_data_error", status=500)
+
+    def _power_category(self, amounts, *, currency="PLN", prefix="power", category=None):
+        if category is None:
+            category = self.store.create_category("owner", f"Synthetic {prefix}")
+        for month, amount in amounts:
+            reference = f"{prefix}-{month}"
+            self.add_transaction("a", reference, amount=amount, currency=currency,
+                                 booking_date=f"2026-{month:02d}-04",
+                                 remittance_information=[f"Synthetic {prefix} {month}"])
+            self.annotation(account="a", reference=reference, category_id=category["id"], kind="expense")
+        return category
+
+    def test_forecast_category_baseline_is_added_from_one_snapshot(self):
+        category = self._power_category(tuple((month, str(amount)) for month, amount in
+                                              zip(range(5, 11), (10, 20, 30, 40, 50, 60))))
+        config = json.dumps({"owner": {"category_ids": [category["id"]], "history_months": 6, "estimator": "median"}})
+        statements = []
+
+        def capture(connection, cursor, statement, parameters, context, executemany):
+            statements.append(statement.split()[0].upper())
+
+        event.listen(self.engine, "before_cursor_execute", capture)
+        try:
+            with mock.patch.dict(os.environ, {forecast.FORECAST_CONFIG_ENV: config}):
+                result = self.store.forecast("owner", months="1")
+        finally:
+            event.remove(self.engine, "before_cursor_execute", capture)
+        self.assertEqual(statements.count("BEGIN"), 1)
+        self.assertEqual(set(statements), {"BEGIN", "SELECT"})
+        api_contract.BudgetAnalyticsForecast.model_validate(result)
+        item = result["months"][0]["items"][0]
+        self.assertEqual(item["source"], "category_baseline")
+        self.assertEqual(item["amount"], "35")
+        self.assertEqual(item["confidence"], "estimated")
+        self.assertIsNone(item["schedule_id"])
+        self.assertEqual(item["label"], "Synthetic power")
+        self.assertFalse(item["account_stale"])
+        self.assertEqual(result["deduplications"], [])
+        self.assertEqual(result["summary"]["deduped_recurring_count"], 0)
+        with self.sessions.begin() as session:
+            session.query(db.BudgetTransaction).filter_by(account_id=self.accounts["a"]).update(
+                {"observed_at": self.now - 60 * 86400})
+            component = session.get(db.BudgetComponent, (self.accounts["a"], "transactions"))
+            if component is not None:
+                component.last_success = self.now - 60 * 86400
+        with mock.patch.dict(os.environ, {forecast.FORECAST_CONFIG_ENV: config}):
+            stale = self.store.forecast("owner", months="1")
+        self.assertTrue(stale["months"][0]["items"][0]["account_stale"])
+
+    def test_forecast_category_baseline_conflict_and_estimator_and_series_cap(self):
+        category = self._power_category(tuple((month, str(amount)) for month, amount in
+                                              zip(range(5, 11), (10, 20, 30, 40, 50, 60))))
+        self._power_category(tuple((month, "8") for month in range(5, 11)), currency="EUR", prefix="euro",
+                             category=category)
+        bad = json.dumps({"owner": {"category_ids": [category["id"]], "estimator": ["median"]}})
+        with mock.patch.dict(os.environ, {forecast.FORECAST_CONFIG_ENV: bad}):
+            with self.assertRaises(BudgetConfigError) as unavailable:
+                self.store.forecast("owner")
+        self.assertEqual(type(unavailable.exception), BudgetConfigError)
+        self.assertEqual(getattr(unavailable.exception, "code", "budget_unavailable"), "budget_unavailable")
+
+        ready = json.dumps({"owner": {"category_ids": [category["id"]], "history_months": 6}})
+        with mock.patch.dict(os.environ, {forecast.FORECAST_CONFIG_ENV: ready}), \
+             mock.patch.object(forecast, "MAX_BASELINE_SERIES", 1):
+            self.assert_invalid(lambda: self.store.forecast("owner", months="1"),
+                                code="budget_analytics_limit", status=413)
+            scoped = self.store.forecast("owner", months="1", currency="EUR")
+        self.assertEqual([item["source"] for item in scoped["months"][0]["items"]], ["category_baseline"])
+        self.assertEqual(scoped["months"][0]["items"][0]["currency"], "EUR")
+
+        rent = self._power_category(tuple((month, "7") for month in range(5, 11)), prefix="rent")
+        self.add_schedule("Synthetic power mortgage", amount="10", due_day=4, start_date="2026-01-01")
+        mixed = json.dumps({"owner": {"category_ids": [category["id"], rent["id"]], "history_months": 6}})
+        with mock.patch.dict(os.environ, {forecast.FORECAST_CONFIG_ENV: mixed}):
+            degraded = self.store.forecast("owner", months="1")
+        api_contract.BudgetAnalyticsForecast.model_validate(degraded)
+        baselines = [item for item in degraded["months"][0]["items"] if item["source"] == "category_baseline"]
+        self.assertEqual([item["label"] for item in baselines], ["Synthetic rent"])
+        self.assertEqual(degraded["summary"]["baseline_conflicts"],
+                         [{"category_id": category["id"], "reason": "mortgage"}])
+        self.assertNotIn("amount", degraded["summary"]["baseline_conflicts"][0])
+        self.assertTrue(any(item["source"] == "mortgage" for item in degraded["months"][0]["items"]))
+        alone = json.dumps({"owner": {"category_ids": [category["id"]], "history_months": 6}})
+        with mock.patch.dict(os.environ, {forecast.FORECAST_CONFIG_ENV: alone}):
+            skipped = self.store.forecast("owner", months="1", currency="EUR")
+        self.assertEqual(skipped["months"][0]["items"], [])
+        self.assertEqual(skipped["summary"]["baseline_conflicts"],
+                         [{"category_id": category["id"], "reason": "mortgage"}])
 
 
 class MonthlyBudgetProjectionTests(ProjectionCase):
