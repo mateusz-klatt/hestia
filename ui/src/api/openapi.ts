@@ -185,6 +185,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/budget/analytics/category-translation-delete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Save an owner-private local classification
+         * @description Requires the exact admin owner, browser cookie and configured HTTPS Origin. Version and source fingerprints prevent stale changes. No bank request is made.
+         */
+        post: operations["deleteBudgetCategoryTranslation"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/budget/analytics/category-translation-set": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Save an owner-private local classification
+         * @description Requires the exact admin owner, browser cookie and configured HTTPS Origin. Version and source fingerprints prevent stale changes. No bank request is made.
+         */
+        post: operations["setBudgetCategoryTranslation"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/budget/analytics/category-update": {
         parameters: {
             query?: never;
@@ -259,6 +299,46 @@ export interface paths {
          * @description Requires the exact admin owner, browser cookie and configured HTTPS Origin. Atomically marks or unmarks 1..100 deduplicated alert keys under anti-ABA reads_version CAS (409 budget_analytics_conflict if stale; 409 budget_analytics_source_changed if any unmarked key is inactive on read=true; 413 budget_analytics_limit at the 500-marker cap on create only). No bank request is made.
          */
         post: operations["markBudgetAnalyticsInbox"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/budget/analytics/label-translation-delete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Save an owner-private local classification
+         * @description Requires the exact admin owner, browser cookie and configured HTTPS Origin. Version and source fingerprints prevent stale changes. No bank request is made.
+         */
+        post: operations["deleteBudgetLabelTranslation"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/budget/analytics/label-translation-set": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Save an owner-private local classification
+         * @description Requires the exact admin owner, browser cookie and configured HTTPS Origin. Version and source fingerprints prevent stale changes. No bank request is made.
+         */
+        post: operations["setBudgetLabelTranslation"];
         delete?: never;
         options?: never;
         head?: never;
@@ -618,6 +698,26 @@ export interface paths {
         get: operations["getBudgetAnalyticsTransfers"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/budget/analytics/translation-import": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Save an owner-private local classification
+         * @description Requires the exact admin owner, browser cookie and configured HTTPS Origin. Version and source fingerprints prevent stale changes. No bank request is made.
+         */
+        post: operations["importBudgetTranslations"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2079,6 +2179,8 @@ export interface components {
         BudgetAnalyticsAnnotation: {
             /** Category Id */
             category_id: string | null;
+            /** Display Label */
+            display_label?: string | null;
             /** Kind */
             kind: string;
             /** Label */
@@ -2132,6 +2234,8 @@ export interface components {
             category_id: string | null;
             /** Changed */
             changed: boolean;
+            /** Display Label */
+            display_label?: string | null;
             /** Entry Reference */
             entry_reference: string;
             /** Kind */
@@ -2180,12 +2284,18 @@ export interface components {
             archived: boolean;
             /** Created At */
             created_at: number;
+            /** Display Name */
+            display_name?: string | null;
             /** Id */
             id: string;
             /** Name */
             name: string;
             /** Parent Id */
             parent_id: string | null;
+            /** Translations */
+            translations?: {
+                [key: string]: string;
+            } | null;
             /** Updated At */
             updated_at: number;
             /** Version */
@@ -2219,12 +2329,18 @@ export interface components {
             changed: boolean;
             /** Created At */
             created_at: number;
+            /** Display Name */
+            display_name?: string | null;
             /** Id */
             id: string;
             /** Name */
             name: string;
             /** Parent Id */
             parent_id: string | null;
+            /** Translations */
+            translations?: {
+                [key: string]: string;
+            } | null;
             /** Updated At */
             updated_at: number;
             /** Version */
@@ -2238,6 +2354,10 @@ export interface components {
             category_id: string | null;
             /** Currency */
             currency: string;
+            /** Display Label */
+            display_label?: string | null;
+            /** Display Name */
+            display_name?: string | null;
             /** Expenses */
             expenses: string;
             /** Name */
@@ -2452,6 +2572,8 @@ export interface components {
             confidence: "scheduled" | "high" | "medium" | "estimated";
             /** Currency */
             currency: string;
+            /** Display Name */
+            display_name?: string | null;
             /** Expected Date */
             expected_date: string;
             /** Label */
@@ -2818,6 +2940,8 @@ export interface components {
             archived: boolean;
             /** Category Id */
             category_id: string;
+            /** Display Name */
+            display_name?: string | null;
             /** Name */
             name: string;
         };
@@ -2845,6 +2969,10 @@ export interface components {
             archived: boolean;
             /** Category Id */
             category_id: string | null;
+            /** Display Label */
+            display_label?: string | null;
+            /** Display Name */
+            display_name?: string | null;
             /** Expenses */
             expenses: string;
             limit: components["schemas"]["BudgetAnalyticsMonthlyBudgetCategoryLimit"] | null;
@@ -3004,6 +3132,10 @@ export interface components {
         BudgetAnalyticsMonthlyBudgetSeriesCategory: {
             /** Category Id */
             category_id: string | null;
+            /** Display Label */
+            display_label?: string | null;
+            /** Display Name */
+            display_name?: string | null;
             /** Name */
             name?: string | null;
             /** Net Spending */
@@ -3671,6 +3803,8 @@ export interface components {
             category_id: string;
             /** Currency */
             currency: string;
+            /** Display Name */
+            display_name?: string | null;
             /** Expenses */
             expenses: string;
             /** Monthly Limit */
@@ -3994,6 +4128,89 @@ export interface components {
             refresh: boolean;
             /** Stored Reads */
             stored_reads: boolean;
+        };
+        /** BudgetCategoryTranslationDeleteRequest */
+        BudgetCategoryTranslationDeleteRequest: {
+            /** Category Id */
+            category_id: string;
+            /**
+             * Lang
+             * @enum {string}
+             */
+            lang: "ar" | "bn" | "bs" | "cs" | "da" | "de" | "el" | "en" | "es" | "fa" | "fi" | "fil" | "fr" | "ga" | "he" | "hi" | "hr" | "hu" | "hy" | "id" | "is" | "it" | "ja" | "ko" | "lt" | "lv" | "ms" | "my-MM" | "nl" | "no" | "pl" | "pt" | "ro" | "ru" | "sk" | "sq" | "sr" | "sv" | "sw" | "th" | "tr" | "uk" | "vi" | "zh" | "zh-Hant";
+        };
+        /** BudgetCategoryTranslationDeleteResult */
+        BudgetCategoryTranslationDeleteResult: {
+            /**
+             * Ok
+             * @constant
+             */
+            ok: true;
+            translation: components["schemas"]["BudgetCategoryTranslationDeleted"];
+        };
+        /** BudgetCategoryTranslationDeleted */
+        BudgetCategoryTranslationDeleted: {
+            /** Category Id */
+            category_id: string;
+            /** Changed */
+            changed: boolean;
+            /**
+             * Lang
+             * @enum {string}
+             */
+            lang: "ar" | "bn" | "bs" | "cs" | "da" | "de" | "el" | "en" | "es" | "fa" | "fi" | "fil" | "fr" | "ga" | "he" | "hi" | "hr" | "hu" | "hy" | "id" | "is" | "it" | "ja" | "ko" | "lt" | "lv" | "ms" | "my-MM" | "nl" | "no" | "pl" | "pt" | "ro" | "ru" | "sk" | "sq" | "sr" | "sv" | "sw" | "th" | "tr" | "uk" | "vi" | "zh" | "zh-Hant";
+        };
+        /** BudgetCategoryTranslationImportEntry */
+        BudgetCategoryTranslationImportEntry: {
+            /** Category Id */
+            category_id: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "category";
+            /**
+             * Lang
+             * @enum {string}
+             */
+            lang: "ar" | "bn" | "bs" | "cs" | "da" | "de" | "el" | "en" | "es" | "fa" | "fi" | "fil" | "fr" | "ga" | "he" | "hi" | "hr" | "hu" | "hy" | "id" | "is" | "it" | "ja" | "ko" | "lt" | "lv" | "ms" | "my-MM" | "nl" | "no" | "pl" | "pt" | "ro" | "ru" | "sk" | "sq" | "sr" | "sv" | "sw" | "th" | "tr" | "uk" | "vi" | "zh" | "zh-Hant";
+            /** Name */
+            name: string;
+        };
+        /** BudgetCategoryTranslationSaved */
+        BudgetCategoryTranslationSaved: {
+            /** Category Id */
+            category_id: string;
+            /** Changed */
+            changed: boolean;
+            /**
+             * Lang
+             * @enum {string}
+             */
+            lang: "ar" | "bn" | "bs" | "cs" | "da" | "de" | "el" | "en" | "es" | "fa" | "fi" | "fil" | "fr" | "ga" | "he" | "hi" | "hr" | "hu" | "hy" | "id" | "is" | "it" | "ja" | "ko" | "lt" | "lv" | "ms" | "my-MM" | "nl" | "no" | "pl" | "pt" | "ro" | "ru" | "sk" | "sq" | "sr" | "sv" | "sw" | "th" | "tr" | "uk" | "vi" | "zh" | "zh-Hant";
+            /** Name */
+            name: string;
+        };
+        /** BudgetCategoryTranslationSetRequest */
+        BudgetCategoryTranslationSetRequest: {
+            /** Category Id */
+            category_id: string;
+            /**
+             * Lang
+             * @enum {string}
+             */
+            lang: "ar" | "bn" | "bs" | "cs" | "da" | "de" | "el" | "en" | "es" | "fa" | "fi" | "fil" | "fr" | "ga" | "he" | "hi" | "hr" | "hu" | "hy" | "id" | "is" | "it" | "ja" | "ko" | "lt" | "lv" | "ms" | "my-MM" | "nl" | "no" | "pl" | "pt" | "ro" | "ru" | "sk" | "sq" | "sr" | "sv" | "sw" | "th" | "tr" | "uk" | "vi" | "zh" | "zh-Hant";
+            /** Name */
+            name: string;
+        };
+        /** BudgetCategoryTranslationSetResult */
+        BudgetCategoryTranslationSetResult: {
+            /**
+             * Ok
+             * @constant
+             */
+            ok: true;
+            translation: components["schemas"]["BudgetCategoryTranslationSaved"];
         };
         /** BudgetComponentLimit */
         BudgetComponentLimit: {
@@ -4524,6 +4741,8 @@ export interface components {
         BudgetHouseholdCategory: {
             /** Archived */
             archived: boolean;
+            /** Display Name */
+            display_name?: string | null;
             /** Id */
             id: string;
             /** Label */
@@ -4535,6 +4754,8 @@ export interface components {
             archived: boolean;
             /** Category Id */
             category_id: string;
+            /** Display Name */
+            display_name?: string | null;
             /** Name */
             name: string;
         };
@@ -4676,6 +4897,8 @@ export interface components {
             category_id: string | null;
             /** Currency */
             currency: string;
+            /** Display Name */
+            display_name?: string | null;
             /** Expenses */
             expenses: string;
             /** Income */
@@ -5003,6 +5226,99 @@ export interface components {
              * @enum {string}
              */
             kind: "current" | "savings" | "credit_card" | "other";
+        };
+        /** BudgetLabelTranslationDeleteRequest */
+        BudgetLabelTranslationDeleteRequest: {
+            /** Account Id */
+            account_id: string;
+            /** Entry Reference */
+            entry_reference: string;
+            /**
+             * Lang
+             * @enum {string}
+             */
+            lang: "ar" | "bn" | "bs" | "cs" | "da" | "de" | "el" | "en" | "es" | "fa" | "fi" | "fil" | "fr" | "ga" | "he" | "hi" | "hr" | "hu" | "hy" | "id" | "is" | "it" | "ja" | "ko" | "lt" | "lv" | "ms" | "my-MM" | "nl" | "no" | "pl" | "pt" | "ro" | "ru" | "sk" | "sq" | "sr" | "sv" | "sw" | "th" | "tr" | "uk" | "vi" | "zh" | "zh-Hant";
+        };
+        /** BudgetLabelTranslationDeleteResult */
+        BudgetLabelTranslationDeleteResult: {
+            /**
+             * Ok
+             * @constant
+             */
+            ok: true;
+            translation: components["schemas"]["BudgetLabelTranslationDeleted"];
+        };
+        /** BudgetLabelTranslationDeleted */
+        BudgetLabelTranslationDeleted: {
+            /** Account Id */
+            account_id: string;
+            /** Changed */
+            changed: boolean;
+            /** Entry Reference */
+            entry_reference: string;
+            /**
+             * Lang
+             * @enum {string}
+             */
+            lang: "ar" | "bn" | "bs" | "cs" | "da" | "de" | "el" | "en" | "es" | "fa" | "fi" | "fil" | "fr" | "ga" | "he" | "hi" | "hr" | "hu" | "hy" | "id" | "is" | "it" | "ja" | "ko" | "lt" | "lv" | "ms" | "my-MM" | "nl" | "no" | "pl" | "pt" | "ro" | "ru" | "sk" | "sq" | "sr" | "sv" | "sw" | "th" | "tr" | "uk" | "vi" | "zh" | "zh-Hant";
+        };
+        /** BudgetLabelTranslationImportEntry */
+        BudgetLabelTranslationImportEntry: {
+            /** Account Id */
+            account_id: string;
+            /** Entry Reference */
+            entry_reference: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "label";
+            /** Label */
+            label: string;
+            /**
+             * Lang
+             * @enum {string}
+             */
+            lang: "ar" | "bn" | "bs" | "cs" | "da" | "de" | "el" | "en" | "es" | "fa" | "fi" | "fil" | "fr" | "ga" | "he" | "hi" | "hr" | "hu" | "hy" | "id" | "is" | "it" | "ja" | "ko" | "lt" | "lv" | "ms" | "my-MM" | "nl" | "no" | "pl" | "pt" | "ro" | "ru" | "sk" | "sq" | "sr" | "sv" | "sw" | "th" | "tr" | "uk" | "vi" | "zh" | "zh-Hant";
+        };
+        /** BudgetLabelTranslationSaved */
+        BudgetLabelTranslationSaved: {
+            /** Account Id */
+            account_id: string;
+            /** Changed */
+            changed: boolean;
+            /** Entry Reference */
+            entry_reference: string;
+            /** Label */
+            label: string;
+            /**
+             * Lang
+             * @enum {string}
+             */
+            lang: "ar" | "bn" | "bs" | "cs" | "da" | "de" | "el" | "en" | "es" | "fa" | "fi" | "fil" | "fr" | "ga" | "he" | "hi" | "hr" | "hu" | "hy" | "id" | "is" | "it" | "ja" | "ko" | "lt" | "lv" | "ms" | "my-MM" | "nl" | "no" | "pl" | "pt" | "ro" | "ru" | "sk" | "sq" | "sr" | "sv" | "sw" | "th" | "tr" | "uk" | "vi" | "zh" | "zh-Hant";
+        };
+        /** BudgetLabelTranslationSetRequest */
+        BudgetLabelTranslationSetRequest: {
+            /** Account Id */
+            account_id: string;
+            /** Entry Reference */
+            entry_reference: string;
+            /** Label */
+            label: string;
+            /**
+             * Lang
+             * @enum {string}
+             */
+            lang: "ar" | "bn" | "bs" | "cs" | "da" | "de" | "el" | "en" | "es" | "fa" | "fi" | "fil" | "fr" | "ga" | "he" | "hi" | "hr" | "hu" | "hy" | "id" | "is" | "it" | "ja" | "ko" | "lt" | "lv" | "ms" | "my-MM" | "nl" | "no" | "pl" | "pt" | "ro" | "ru" | "sk" | "sq" | "sr" | "sv" | "sw" | "th" | "tr" | "uk" | "vi" | "zh" | "zh-Hant";
+        };
+        /** BudgetLabelTranslationSetResult */
+        BudgetLabelTranslationSetResult: {
+            /**
+             * Ok
+             * @constant
+             */
+            ok: true;
+            translation: components["schemas"]["BudgetLabelTranslationSaved"];
         };
         /** BudgetLimits */
         BudgetLimits: {
@@ -5504,6 +5820,32 @@ export interface components {
             transactions: components["schemas"]["BudgetTransaction"][];
             /** Uncertain Total */
             uncertain_total: number;
+        };
+        /** BudgetTranslationImportEntryResult */
+        BudgetTranslationImportEntryResult: {
+            /** Changed */
+            changed?: boolean | null;
+            /** Error */
+            error?: string | null;
+            /** Index */
+            index: number;
+            /** Ok */
+            ok: boolean;
+        };
+        /** BudgetTranslationImportRequest */
+        BudgetTranslationImportRequest: {
+            /** Entries */
+            entries: (components["schemas"]["BudgetCategoryTranslationImportEntry"] | components["schemas"]["BudgetLabelTranslationImportEntry"])[];
+        };
+        /** BudgetTranslationImportResult */
+        BudgetTranslationImportResult: {
+            /**
+             * Ok
+             * @constant
+             */
+            ok: true;
+            /** Results */
+            results: components["schemas"]["BudgetTranslationImportEntryResult"][];
         };
         /** CalendarCancelledInstance */
         CalendarCancelledInstance: {
@@ -6387,12 +6729,13 @@ export interface components {
         };
         /**
          * Settings
-         * @description GET /api/settings — the logged-in user's UI prefs. All three keys are ALWAYS present, null when
-         *     unset (an unauthenticated / no-row request returns all-null, never an error).
+         * @description GET /api/settings — persisted UI preferences and effective ordered budget display languages.
          */
         Settings: {
             /** Locale */
             locale: string | null;
+            /** Preferred Languages */
+            preferred_languages?: ("ar" | "bn" | "bs" | "cs" | "da" | "de" | "el" | "en" | "es" | "fa" | "fi" | "fil" | "fr" | "ga" | "he" | "hi" | "hr" | "hu" | "hy" | "id" | "is" | "it" | "ja" | "ko" | "lt" | "lv" | "ms" | "my-MM" | "nl" | "no" | "pl" | "pt" | "ro" | "ru" | "sk" | "sq" | "sr" | "sv" | "sw" | "th" | "tr" | "uk" | "vi" | "zh" | "zh-Hant")[] | null;
             /** Temp Scale */
             temp_scale: string | null;
             /** Theme */
@@ -6400,12 +6743,13 @@ export interface components {
         };
         /**
          * SettingsUpdate
-         * @description POST /api/settings — a PARTIAL update: only the keys present are persisted (absent keys are left
-         *     untouched). null clears a field. temp_scale ∈ {C,F,K}. locale ≤ 35 chars.
+         * @description POST /api/settings — a partial update; null restores the locale-derived language default.
          */
         SettingsUpdate: {
             /** Locale */
             locale?: string | null;
+            /** Preferred Languages */
+            preferred_languages?: ("ar" | "bn" | "bs" | "cs" | "da" | "de" | "el" | "en" | "es" | "fa" | "fi" | "fil" | "fr" | "ga" | "he" | "hi" | "hr" | "hu" | "hy" | "id" | "is" | "it" | "ja" | "ko" | "lt" | "lv" | "ms" | "my-MM" | "nl" | "no" | "pl" | "pt" | "ro" | "ru" | "sk" | "sq" | "sr" | "sv" | "sw" | "th" | "tr" | "uk" | "vi" | "zh" | "zh-Hant")[] | null;
             /** Temp Scale */
             temp_scale?: ("C" | "F" | "K") | null;
             /** Theme */
@@ -7308,6 +7652,198 @@ export interface operations {
             };
         };
     };
+    deleteBudgetCategoryTranslation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BudgetCategoryTranslationDeleteRequest"];
+            };
+        };
+        responses: {
+            /** @description owner-scoped stored state; no bank request */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetCategoryTranslationDeleteResult"];
+                };
+            };
+            /** @description invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description session required; middleware may return an empty body */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description admin owner or browser-origin requirement failed; middleware may return an empty body */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description unknown, disabled or foreign resource */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Version, financial source, reserved transfer leg, preview or cursor changed; reload and review. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Explicit analytics processing or owner configuration limit; no partial totals. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description budget configuration unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+        };
+    };
+    setBudgetCategoryTranslation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BudgetCategoryTranslationSetRequest"];
+            };
+        };
+        responses: {
+            /** @description owner-scoped stored state; no bank request */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetCategoryTranslationSetResult"];
+                };
+            };
+            /** @description invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description session required; middleware may return an empty body */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description admin owner or browser-origin requirement failed; middleware may return an empty body */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description unknown, disabled or foreign resource */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Version, financial source, reserved transfer leg, preview or cursor changed; reload and review. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Explicit analytics processing or owner configuration limit; no partial totals. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description budget configuration unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+        };
+    };
     updateBudgetAnalyticsCategory: {
         parameters: {
             query?: never;
@@ -7612,6 +8148,198 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["BudgetAnalyticsInboxMarkResult"];
+                };
+            };
+            /** @description invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description session required; middleware may return an empty body */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description admin owner or browser-origin requirement failed; middleware may return an empty body */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description unknown, disabled or foreign resource */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Version, financial source, reserved transfer leg, preview or cursor changed; reload and review. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Explicit analytics processing or owner configuration limit; no partial totals. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description budget configuration unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+        };
+    };
+    deleteBudgetLabelTranslation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BudgetLabelTranslationDeleteRequest"];
+            };
+        };
+        responses: {
+            /** @description owner-scoped stored state; no bank request */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetLabelTranslationDeleteResult"];
+                };
+            };
+            /** @description invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description session required; middleware may return an empty body */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description admin owner or browser-origin requirement failed; middleware may return an empty body */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description unknown, disabled or foreign resource */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Version, financial source, reserved transfer leg, preview or cursor changed; reload and review. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Explicit analytics processing or owner configuration limit; no partial totals. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description budget configuration unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+        };
+    };
+    setBudgetLabelTranslation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BudgetLabelTranslationSetRequest"];
+            };
+        };
+        responses: {
+            /** @description owner-scoped stored state; no bank request */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetLabelTranslationSetResult"];
                 };
             };
             /** @description invalid request */
@@ -9440,6 +10168,102 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["BudgetAnalyticsTransfers"];
+                };
+            };
+            /** @description invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description session required; middleware may return an empty body */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description admin owner or browser-origin requirement failed; middleware may return an empty body */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description unknown, disabled or foreign resource */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Version, financial source, reserved transfer leg, preview or cursor changed; reload and review. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Explicit analytics processing or owner configuration limit; no partial totals. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description budget configuration unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+        };
+    };
+    importBudgetTranslations: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BudgetTranslationImportRequest"];
+            };
+        };
+        responses: {
+            /** @description owner-scoped stored state; no bank request */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetTranslationImportResult"];
                 };
             };
             /** @description invalid request */

@@ -20,6 +20,12 @@ def _head_revision():
     return int(head)
 
 
+def _revision_chain():
+    cfg = Config()
+    cfg.set_main_option("script_location", str(db._MIGRATIONS_DIR))
+    return list(ScriptDirectory.from_config(cfg).walk_revisions())
+
+
 HEAD = _head_revision()
 
 
@@ -118,7 +124,7 @@ class MigrationDowngradeTests(unittest.TestCase):
 
     def test_populated_head_downgrades_stepwise_to_0001_and_upgrades_again(self):
         self._assert_database(HEAD)
-        for revision in range(HEAD - 1, 0, -1):
+        for revision in (int(item.revision) for item in _revision_chain()[1:]):
             with self.subTest(revision=revision):
                 db.downgrade_db(self.path, f"{revision:04d}")
                 self._assert_database(revision)

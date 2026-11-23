@@ -33,6 +33,7 @@ from .analytics_views import (
 )
 from .config import BudgetConfigError
 from .household import HouseholdAuthError, category_label, entity_alias, require_household_data_grant
+from .i18n import DisplayResolver
 
 MAX_RESPONSE_BYTES = 4 * 1024 * 1024
 _CURSOR_TTL = 900
@@ -77,8 +78,9 @@ _MONTHS = 12
 class AliasBook:
     """Grant-scoped aliases for the visible selected accounts and owner categories."""
 
-    def __init__(self, secret, grant_id, accounts, categories):
+    def __init__(self, secret, grant_id, accounts, categories, display=None):
         self.secret = secret
+        self.display = display
         self.grant_id = grant_id
         self.account_ordinal = {identifier: index for index, identifier in enumerate(sorted(accounts), 1)}
         self.category_ordinal = {row["id"]: index for index, row in enumerate(sorted(categories, key=lambda item: item["id"]), 1)}
@@ -108,6 +110,12 @@ class AliasBook:
         if meta is None:
             raise AnalyticsError("budget_analytics_data_error", 500)
         return category_label(meta["name"], self.category_ordinal[identifier])
+
+    def display_name(self, identifier):
+        if identifier is None:
+            return None
+        canonical = self.category_meta[identifier]["name"]
+        return canonical if self.display is None else self.display.category(identifier, canonical)
 
     def resolve_account(self, alias):
         identifier = self.accounts.get(alias)
@@ -198,7 +206,7 @@ class HouseholdReader:
     def _build(self, session, member, owner, grant_id, operation, values):
         if operation == "access":
             return {"grant_id": grant_id}
-        book = self._book(session, owner, grant_id)
+        book = self._book(session, owner, grant_id, member)
         if operation == "report-accounts":
             return _report_accounts(book, grant_id)
         if operation == "categories":
@@ -228,13 +236,13 @@ class HouseholdReader:
             return self._monthly(session, snapshot, owner, values, book, grant_id)
         raise AnalyticsError()
 
-    def _book(self, session, owner, grant_id):
+    def _book(self, session, owner, grant_id, member):
         accounts = session.scalars(select(db.BudgetAccount.id).join(db.BudgetConnection).where(
             db.BudgetAccount.owner == owner, db.BudgetConnection.owner == owner, db.BudgetAccount.enabled)
             .order_by(db.BudgetAccount.id))
         categories = [{"id": row.id, "name": row.name, "archived": row.archived} for row in session.scalars(
             select(db.BudgetCategory).where(db.BudgetCategory.owner == owner).order_by(db.BudgetCategory.id))]
-        return AliasBook(self.secret, grant_id, list(accounts), categories)
+        return AliasBook(self.secret, grant_id, list(accounts), categories, DisplayResolver(session, owner, member))
 
     def _monthly(self, session, snapshot, owner, values, book, grant_id):
         period, currency = values["period"], values["currency"]
@@ -260,7 +268,8 @@ class HouseholdReader:
                 "daily": daily,
                 "months": months,
                 "category_labels": [
-                    {"category_id": book.category(identifier), "name": book.label(identifier), "archived": archived}
+                    {"category_id": book.category(identifier), "name": book.label(identifier),
+                     "display_name": book.display_name(identifier), "archived": archived}
                     for identifier, archived in sorted(labels.items())
                 ],
             },
@@ -525,6 +534,7 @@ def _report_accounts(book, grant_id):
 
 def _categories(book, grant_id):
     rows = [{"id": book.category(identifier), "label": book.label(identifier),
+             "display_name": book.display_name(identifier),
              "archived": bool(book.category_meta[identifier]["archived"])}
             for identifier in sorted(book.category_ordinal, key=book.category_ordinal.get)]
     return {"grant_id": grant_id, "categories": rows}
@@ -628,6 +638,7 @@ def _category_rows(rows, book):
         safe.append({
             "category_id": book.category(row["category_id"]),
             "label": book.label(row["category_id"]) if row["category_id"] is not None else None,
+            "display_name": book.display_name(row["category_id"]),
             "archived": False if row["category_id"] is None else bool(book.category_meta[row["category_id"]]["archived"]),
             "currency": row["currency"],
             "expenses": row["expenses"],
@@ -642,6 +653,7 @@ def _category_rows(rows, book):
         safe.append({
             "category_id": book.category(identifier),
             "label": book.label(identifier) if identifier is not None else None,
+            "display_name": book.display_name(identifier),
             "archived": False if identifier is None else bool(book.category_meta[identifier]["archived"]),
             "currency": currency,
             "expenses": "0",
@@ -755,6 +767,7 @@ def _sanitize_spend(row, book):
         "category_id": book.category(identifier),
         # Category code or ordinal. A one-off label is owner-private and is not copied.
         "name": book.label(identifier) if identifier is not None else None,
+        "display_name": book.display_name(identifier),
         "archived": row["archived"],
         "expenses": row["expenses"],
         "refunds": row["refunds"],

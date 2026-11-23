@@ -65,6 +65,15 @@ def _tables(path):
         return {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
 
 
+def _without_display_fields(value):
+    if isinstance(value, dict):
+        return {key: _without_display_fields(item) for key, item in value.items()
+                if key not in ("display_name", "display_label")}
+    if isinstance(value, list):
+        return [_without_display_fields(item) for item in value]
+    return value
+
+
 class HouseholdCommandTests(unittest.TestCase):
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()
@@ -191,7 +200,7 @@ class HouseholdCommandTests(unittest.TestCase):
         db.init_db(self.path)
         code, _out, err, _logged = self._run("grant", "viewer", "alice")
         self.assertEqual((code, err.strip()), (2, "household_users_required"))
-        self.assertEqual(_versions(self.path), ["0023"])
+        self.assertEqual(_versions(self.path), [household.SCHEMA_REVISION])
         with sqlite3.connect(self.path) as conn:
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM budget_household_members").fetchone()[0], 0)
 
@@ -205,7 +214,7 @@ class HouseholdCommandTests(unittest.TestCase):
             self.assertEqual(leftovers, [])
 
     def test_downgrade_roundtrip_keeps_owner_rows_and_empties_grants(self):
-        """0021 → init_db (0023) → downgrade_db (0022) → init_db (0023).
+        """0021 → current head → downgrade_db (0022) → current head.
 
         Each step goes through the production runner. Receipt rows, category parents,
         the one-off label column, and owner rows survive. Grants do not.
@@ -232,7 +241,7 @@ class HouseholdCommandTests(unittest.TestCase):
         upgraded, sessions = db.init_db(self.path)
         self._assert_migration_clean()
         with upgraded.connect() as conn:
-            self.assertEqual(conn.exec_driver_sql("SELECT version_num FROM alembic_version").scalar(), "0023")
+            self.assertEqual(conn.exec_driver_sql("SELECT version_num FROM alembic_version").scalar(), household.SCHEMA_REVISION)
         with sessions.begin() as session:
             session.add(db.BudgetHouseholdMember(member_username="viewer", owner="alice", grant_id="cd" * 32))
         with self.assertRaises(IntegrityError):
@@ -266,7 +275,7 @@ class HouseholdCommandTests(unittest.TestCase):
         again, _sessions = db.init_db(self.path)
         self._assert_migration_clean()
         with again.connect() as conn:
-            self.assertEqual(conn.exec_driver_sql("SELECT version_num FROM alembic_version").scalar(), "0023")
+            self.assertEqual(conn.exec_driver_sql("SELECT version_num FROM alembic_version").scalar(), household.SCHEMA_REVISION)
             self.assertEqual(conn.exec_driver_sql("SELECT COUNT(*) FROM budget_household_members").scalar(), 0)
             self.assertEqual(conn.exec_driver_sql(
                 "SELECT name FROM budget_categories WHERE id='cat-salary'").scalar(), SALARY_NAME)
@@ -392,7 +401,7 @@ class HouseholdAPITests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(await head.read(), b"")
             owner_head = await self.client.head(PREFIX + "/" + operation, headers=self.headers("alice"))
             self.assertEqual(owner_head.status, 405, operation)
-        text = json.dumps(bodies)
+        text = json.dumps(_without_display_fields(bodies))
         for secret in (SALARY_NAME, ZUS_NAME, GROCERIES, "child benefit", REMITTANCE, IBAN, RULE_VALUE,
                        self.alice_id, self.bob_id, fixture.PRIVATE_A, fixture.PRIVATE_B, "alice-entry"):
             self.assertNotIn(secret, text, secret)

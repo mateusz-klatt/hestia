@@ -379,17 +379,21 @@ class Phase4UsersTests(unittest.TestCase):
             self.assertIsNone(store_sql.get_user_settings("tata"))
             self.assertTrue(store_sql.set_user_settings("tata", locale="x" * 80, temp_scale=None, theme="dark" * 30))
             self.assertEqual(store_sql.get_user_settings("tata"),
-                             {"locale": "x" * 64, "temp_scale": None, "theme": ("dark" * 30)[:64]})
+                             {"locale": "x" * 64, "temp_scale": None, "theme": ("dark" * 30)[:64],
+                              "preferred_languages": ["en"]})
 
-            self.assertTrue(store_sql.set_user_settings("tata", locale="pl", temp_scale="K", theme=None))
+            self.assertTrue(store_sql.set_user_settings("tata", locale="pl", temp_scale="K", theme=None,
+                                                        preferred_languages=["fr", "en"]))
             self.assertEqual(store_sql.get_user_settings("tata"),
-                             {"locale": "pl", "temp_scale": "K", "theme": None})
+                             {"locale": "pl", "temp_scale": "K", "theme": None,
+                              "preferred_languages": ["fr", "en"]})
 
             # A partial update touches ONLY the named column; the others are preserved (the merge is
             # in one transaction, so concurrent partial writes can't clobber each other's field).
             self.assertTrue(store_sql.set_user_settings("tata", locale="de"))
             self.assertEqual(store_sql.get_user_settings("tata"),
-                             {"locale": "de", "temp_scale": "K", "theme": None})
+                             {"locale": "de", "temp_scale": "K", "theme": None,
+                              "preferred_languages": ["fr", "en"]})
 
     def test_room_icons_unavailable_in_json_mode(self):
         with mock.patch.dict(os.environ, {"HESTIA_PERSIST": "json", "HESTIA_DB": str(self.db)}):

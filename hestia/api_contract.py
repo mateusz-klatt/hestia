@@ -23,8 +23,10 @@ import json
 from pathlib import Path
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, TypeAdapter
 from pydantic.json_schema import models_json_schema
+
+from .budget.i18n import LANGUAGES, validate_languages
 
 # The contract's own version, independent of the app release — bumped when the wire shape changes.
 # 0.2.0: + GET/POST /api/whole-home — a dedicated admin surface for the per-device opt-out of the
@@ -96,7 +98,9 @@ from pydantic.json_schema import models_json_schema
 #         down_revision 0022). Owner routes stay admin. The one-off label is not on this API.
 # 0.38.0: counterparty-account rules store keyed digests and masked display values (zero migration).
 #         Optional inactive_reason on a rule when that key is missing or rotated (additive).
-CONTRACT_VERSION = "0.38.0"
+# 0.41.0: ordered per-user budget display languages, category and one-off label translations
+#         (migration 0026, down_revision 0023), resolved display fields and admin bulk import.
+CONTRACT_VERSION = "0.41.0"
 OPENAPI_PATH = Path(__file__).resolve().parent.parent / "docs" / "api" / "openapi.json"
 
 # De-duplicated string literals (SonarPython S1192): the OpenAPI content-type, the paths reused
@@ -275,19 +279,27 @@ class NameRequest(BaseModel):
     ep: Annotated[int | None, Field(default=None, ge=0, json_schema_extra=_OMIT)] = None
 
 
+BudgetLanguage = Literal[*LANGUAGES]
+_PreferredLanguageList = Annotated[list[BudgetLanguage], Field(max_length=45)]
+_PreferredLanguages = Annotated[
+    _PreferredLanguageList | None,
+    AfterValidator(validate_languages),
+    Field(default=None, json_schema_extra=lambda s: s.pop("default", None)),
+]
+
+
 class Settings(BaseModel):
-    """GET /api/settings — the logged-in user's UI prefs. All three keys are ALWAYS present, null when
-    unset (an unauthenticated / no-row request returns all-null, never an error)."""
+    """GET /api/settings — persisted UI preferences and effective ordered budget display languages."""
 
     model_config = ConfigDict(extra="forbid")
     locale: str | None
     temp_scale: str | None
     theme: str | None
+    preferred_languages: Annotated[list[BudgetLanguage] | None, Field(default=None, json_schema_extra=_OMIT)] = None
 
 
 class SettingsUpdate(BaseModel):
-    """POST /api/settings — a PARTIAL update: only the keys present are persisted (absent keys are left
-    untouched). null clears a field. temp_scale ∈ {C,F,K}. locale ≤ 35 chars."""
+    """POST /api/settings — a partial update; null restores the locale-derived language default."""
 
     model_config = ConfigDict(extra="forbid", strict=True)
     locale: Annotated[str | None, Field(default=None, max_length=35, json_schema_extra=_OMIT)] = None
@@ -295,6 +307,7 @@ class SettingsUpdate(BaseModel):
         Literal["C", "F", "K"] | None, Field(default=None, json_schema_extra=_OMIT)
     ] = None
     theme: Annotated[str | None, Field(default=None, json_schema_extra=_OMIT)] = None
+    preferred_languages: _PreferredLanguages = None
 
 
 class RoomIconRequest(BaseModel):
@@ -1597,6 +1610,125 @@ class BudgetAnalyticsAnnotationRequest(BaseModel):
     label: Annotated[str | None, Field(max_length=80, json_schema_extra=_OMIT)] = None
 
 
+class BudgetCategoryTranslationDeleteRequest(BaseModel):
+    model_config = _STRICT
+    category_id: BudgetId
+    lang: BudgetLanguage
+
+
+class BudgetCategoryTranslationSetRequest(BudgetCategoryTranslationDeleteRequest):
+    name: Annotated[str, Field(min_length=1, max_length=80)]
+
+
+class BudgetLabelTranslationDeleteRequest(BaseModel):
+    model_config = _STRICT
+    account_id: BudgetId
+    entry_reference: BudgetAnalyticsReference
+    lang: BudgetLanguage
+
+
+class BudgetLabelTranslationSetRequest(BudgetLabelTranslationDeleteRequest):
+    label: Annotated[str, Field(min_length=1, max_length=80)]
+
+
+class BudgetCategoryTranslationImportEntry(BaseModel):
+    model_config = _STRICT
+    kind: Literal["category"]
+    category_id: BudgetId
+    lang: BudgetLanguage
+    name: Annotated[str, Field(min_length=1, max_length=80)]
+
+
+class BudgetLabelTranslationImportEntry(BaseModel):
+    model_config = _STRICT
+    kind: Literal["label"]
+    account_id: BudgetId
+    entry_reference: BudgetAnalyticsReference
+    lang: BudgetLanguage
+    label: Annotated[str, Field(min_length=1, max_length=80)]
+
+
+BudgetTranslationImportEntry = Annotated[
+    BudgetCategoryTranslationImportEntry | BudgetLabelTranslationImportEntry,
+    Field(discriminator="kind"),
+]
+
+
+class BudgetTranslationImportRequest(BaseModel):
+    model_config = _STRICT
+    entries: Annotated[list[BudgetTranslationImportEntry], Field(min_length=1, max_length=500)]
+
+
+class BudgetCategoryTranslationSaved(BaseModel):
+    model_config = _READ
+    category_id: str
+    lang: BudgetLanguage
+    name: str
+    changed: bool
+
+
+class BudgetCategoryTranslationDeleted(BaseModel):
+    model_config = _READ
+    category_id: str
+    lang: BudgetLanguage
+    changed: bool
+
+
+class BudgetLabelTranslationSaved(BaseModel):
+    model_config = _READ
+    account_id: str
+    entry_reference: str
+    lang: BudgetLanguage
+    label: str
+    changed: bool
+
+
+class BudgetLabelTranslationDeleted(BaseModel):
+    model_config = _READ
+    account_id: str
+    entry_reference: str
+    lang: BudgetLanguage
+    changed: bool
+
+
+class BudgetCategoryTranslationSetResult(BaseModel):
+    model_config = _READ
+    ok: Literal[True]
+    translation: BudgetCategoryTranslationSaved
+
+
+class BudgetCategoryTranslationDeleteResult(BaseModel):
+    model_config = _READ
+    ok: Literal[True]
+    translation: BudgetCategoryTranslationDeleted
+
+
+class BudgetLabelTranslationSetResult(BaseModel):
+    model_config = _READ
+    ok: Literal[True]
+    translation: BudgetLabelTranslationSaved
+
+
+class BudgetLabelTranslationDeleteResult(BaseModel):
+    model_config = _READ
+    ok: Literal[True]
+    translation: BudgetLabelTranslationDeleted
+
+
+class BudgetTranslationImportEntryResult(BaseModel):
+    model_config = _READ
+    index: Annotated[int, Field(ge=0, le=499)]
+    ok: bool
+    changed: Annotated[bool | None, Field(default=None, json_schema_extra=_OMIT)] = None
+    error: Annotated[str | None, Field(default=None, json_schema_extra=_OMIT)] = None
+
+
+class BudgetTranslationImportResult(BaseModel):
+    model_config = _READ
+    ok: Literal[True]
+    results: list[BudgetTranslationImportEntryResult]
+
+
 class BudgetAnalyticsRulePreviewRequest(BaseModel):
     model_config = _STRICT
     rule_id: BudgetId | None
@@ -1638,6 +1770,8 @@ class BudgetAnalyticsCategory(BaseModel):
     model_config = _READ
     id: str
     name: str
+    display_name: Annotated[str | None, Field(default=None, json_schema_extra=_OMIT)] = None
+    translations: Annotated[dict[BudgetLanguage, str] | None, Field(default=None, json_schema_extra=_OMIT)] = None
     archived: bool
     version: int
     created_at: float
@@ -1671,6 +1805,7 @@ class BudgetAnalyticsAnnotationSaved(BaseModel):
     version: int
     updated_at: float | None
     label: Annotated[str | None, Field(json_schema_extra=_OMIT)] = None
+    display_label: Annotated[str | None, Field(default=None, json_schema_extra=_OMIT)] = None
     changed: bool
 
 
@@ -1785,6 +1920,7 @@ class BudgetAnalyticsAnnotation(BaseModel):
     kind: str
     stale: bool
     label: Annotated[str | None, Field(json_schema_extra=_OMIT)] = None
+    display_label: Annotated[str | None, Field(default=None, json_schema_extra=_OMIT)] = None
 
 
 class BudgetAnalyticsEffective(BaseModel):
@@ -1863,6 +1999,8 @@ class BudgetAnalyticsCategoryTotal(BaseModel):
     model_config = _READ
     category_id: str | None
     name: str | None
+    display_name: Annotated[str | None, Field(default=None, json_schema_extra=_OMIT)] = None
+    display_label: Annotated[str | None, Field(default=None, json_schema_extra=_OMIT)] = None
     archived: bool
     currency: str
     expenses: str
@@ -2036,6 +2174,7 @@ class BudgetAnalyticsSpendingLimitStatus(BaseModel):
     period: str
     category_id: str
     name: str | None
+    display_name: Annotated[str | None, Field(default=None, json_schema_extra=_OMIT)] = None
     archived: bool
     currency: str
     monthly_limit: str
@@ -2404,6 +2543,7 @@ class BudgetAnalyticsForecastItem(BaseModel):
     source: Literal["mortgage", "recurring", "category_baseline"]
     schedule_id: str | None
     label: BudgetAnalyticsForecastLabel
+    display_name: Annotated[str | None, Field(default=None, json_schema_extra=_OMIT)] = None
     amount: str
     currency: str
     expected_date: str
@@ -2525,6 +2665,8 @@ class BudgetAnalyticsMonthlyBudgetCategorySpend(BaseModel):
     model_config = _READ
     category_id: str | None
     name: str | None
+    display_name: Annotated[str | None, Field(default=None, json_schema_extra=_OMIT)] = None
+    display_label: Annotated[str | None, Field(default=None, json_schema_extra=_OMIT)] = None
     archived: bool
     expenses: BudgetAnalyticsMonthlyBudgetMoney
     refunds: BudgetAnalyticsMonthlyBudgetMoney
@@ -2753,6 +2895,8 @@ class BudgetAnalyticsMonthlyBudgetSeriesCategory(BaseModel):
     model_config = _READ
     category_id: str | None
     name: Annotated[str | None, Field(json_schema_extra=_OMIT)] = None
+    display_name: Annotated[str | None, Field(default=None, json_schema_extra=_OMIT)] = None
+    display_label: Annotated[str | None, Field(default=None, json_schema_extra=_OMIT)] = None
     one_off: Annotated[bool, Field(json_schema_extra=_OMIT)] = False
     one_off_key: Annotated[str | None, Field(pattern=r"^[0-9a-f]{64}$", json_schema_extra=_OMIT)] = None
     net_spending: BudgetAnalyticsMonthlyBudgetMoney
@@ -2774,6 +2918,7 @@ class BudgetAnalyticsMonthlyBudgetCategoryLabel(BaseModel):
     model_config = _READ
     category_id: str
     name: str
+    display_name: Annotated[str | None, Field(default=None, json_schema_extra=_OMIT)] = None
     archived: bool
 
 
@@ -2843,6 +2988,7 @@ class BudgetHouseholdCategoryLabel(BaseModel):
     model_config = _READ
     category_id: _HouseholdAlias
     name: str
+    display_name: Annotated[str | None, Field(default=None, json_schema_extra=_OMIT)] = None
     archived: bool
 
 
@@ -2880,6 +3026,7 @@ class BudgetHouseholdOverviewCategory(BaseModel):
     model_config = _READ
     category_id: _HouseholdAlias | None
     label: str | None
+    display_name: Annotated[str | None, Field(default=None, json_schema_extra=_OMIT)] = None
     archived: bool
     currency: str
     expenses: _HouseholdMoney
@@ -2921,6 +3068,7 @@ class BudgetHouseholdCategory(BaseModel):
     model_config = _READ
     id: _HouseholdAlias
     label: str
+    display_name: Annotated[str | None, Field(default=None, json_schema_extra=_OMIT)] = None
     archived: bool
 
 
@@ -3083,6 +3231,11 @@ _HOUSEHOLD_MODELS = (BudgetHouseholdAccess, BudgetHouseholdAccounts, BudgetHouse
 
 _ANALYTICS_MODELS = (BudgetAnalyticsCategoryCreateRequest, BudgetAnalyticsCategoryUpdateRequest,
                      BudgetAnalyticsAnnotationRequest, BudgetAnalyticsTransactionsByKeysRequest,
+                     BudgetCategoryTranslationSetRequest, BudgetCategoryTranslationDeleteRequest,
+                     BudgetLabelTranslationSetRequest, BudgetLabelTranslationDeleteRequest,
+                     BudgetTranslationImportRequest, BudgetCategoryTranslationSetResult,
+                     BudgetCategoryTranslationDeleteResult, BudgetLabelTranslationSetResult,
+                     BudgetLabelTranslationDeleteResult, BudgetTranslationImportResult,
                      BudgetAnalyticsRulePreviewRequest, BudgetAnalyticsRuleSaveRequest,
                      BudgetAnalyticsTransferDecisionRequest, BudgetAnalyticsSpendingLimitSaveRequest,
                      BudgetAnalyticsMortgageSaveRequest, BudgetAnalyticsMortgagePaymentSetRequest,
@@ -3152,6 +3305,11 @@ _PATH_ROLES = {
     ("GET", "/api/budget/household/monthly-budget-settings"): "viewer",
     ("POST", "/api/budget/analytics/category-create"): "admin",
     ("POST", "/api/budget/analytics/category-update"): "admin",
+    ("POST", "/api/budget/analytics/category-translation-set"): "admin",
+    ("POST", "/api/budget/analytics/category-translation-delete"): "admin",
+    ("POST", "/api/budget/analytics/label-translation-set"): "admin",
+    ("POST", "/api/budget/analytics/label-translation-delete"): "admin",
+    ("POST", "/api/budget/analytics/translation-import"): "admin",
     ("POST", "/api/budget/analytics/annotation"): "admin",
     ("POST", "/api/budget/analytics/rule-preview"): "admin",
     ("POST", "/api/budget/analytics/rule-save"): "admin",
@@ -4095,6 +4253,11 @@ def _analytics_paths():
     writes = (
         ("category-create", "createBudgetAnalyticsCategory", "BudgetAnalyticsCategoryCreateRequest", "BudgetAnalyticsCategoryResult"),
         ("category-update", "updateBudgetAnalyticsCategory", "BudgetAnalyticsCategoryUpdateRequest", "BudgetAnalyticsCategoryResult"),
+        ("category-translation-set", "setBudgetCategoryTranslation", "BudgetCategoryTranslationSetRequest", "BudgetCategoryTranslationSetResult"),
+        ("category-translation-delete", "deleteBudgetCategoryTranslation", "BudgetCategoryTranslationDeleteRequest", "BudgetCategoryTranslationDeleteResult"),
+        ("label-translation-set", "setBudgetLabelTranslation", "BudgetLabelTranslationSetRequest", "BudgetLabelTranslationSetResult"),
+        ("label-translation-delete", "deleteBudgetLabelTranslation", "BudgetLabelTranslationDeleteRequest", "BudgetLabelTranslationDeleteResult"),
+        ("translation-import", "importBudgetTranslations", "BudgetTranslationImportRequest", "BudgetTranslationImportResult"),
         ("annotation", "annotateBudgetAnalyticsTransaction", "BudgetAnalyticsAnnotationRequest", "BudgetAnalyticsAnnotationResult"),
         ("rule-preview", "previewBudgetAnalyticsRule", "BudgetAnalyticsRulePreviewRequest", "BudgetAnalyticsPreviewResult"),
         ("rule-save", "saveBudgetAnalyticsRule", "BudgetAnalyticsRuleSaveRequest", "BudgetAnalyticsRuleResult"),

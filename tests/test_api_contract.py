@@ -56,9 +56,42 @@ class OpenApiArtifactTests(unittest.TestCase):
         )
 
     def test_monthly_budget_contract_chain_from_0_27_0(self):
-        """0.38.0 adds counterparty accounts on top of 0.37.0 household reads and 0.36.0 receipts."""
+        """0.41.0 adds translations above the 0.38.0 counterparty-account contract."""
         document = api_contract.build_openapi()
-        self.assertEqual(document["info"]["version"], "0.38.0")
+        self.assertEqual(document["info"]["version"], "0.41.0")
+        schemas = document["components"]["schemas"]
+        for operation in ("category-translation-set", "category-translation-delete", "label-translation-set",
+                          "label-translation-delete", "translation-import"):
+            document["paths"].pop("/api/budget/analytics/" + operation)
+        for name in list(schemas):
+            if name.startswith(("BudgetCategoryTranslation", "BudgetLabelTranslation", "BudgetTranslationImport")):
+                schemas.pop(name)
+        for schema, field in (
+            ("Settings", "preferred_languages"), ("SettingsUpdate", "preferred_languages"),
+            ("BudgetAnalyticsCategory", "display_name"), ("BudgetAnalyticsCategory", "translations"),
+            ("BudgetAnalyticsCategorySaved", "display_name"), ("BudgetAnalyticsCategorySaved", "translations"),
+            ("BudgetAnalyticsAnnotationSaved", "display_label"), ("BudgetAnalyticsAnnotation", "display_label"),
+            ("BudgetAnalyticsCategoryTotal", "display_name"), ("BudgetAnalyticsCategoryTotal", "display_label"),
+            ("BudgetAnalyticsSpendingLimitStatus", "display_name"),
+            ("BudgetAnalyticsForecastItem", "display_name"),
+            ("BudgetAnalyticsMonthlyBudgetCategorySpend", "display_name"),
+            ("BudgetAnalyticsMonthlyBudgetCategorySpend", "display_label"),
+            ("BudgetAnalyticsMonthlyBudgetSeriesCategory", "display_name"),
+            ("BudgetAnalyticsMonthlyBudgetSeriesCategory", "display_label"),
+            ("BudgetAnalyticsMonthlyBudgetCategoryLabel", "display_name"),
+        ):
+            schemas[schema]["properties"].pop(field)
+            if field in schemas[schema].get("required", []):
+                schemas[schema]["required"].remove(field)
+        document["info"]["version"] = "0.38.0"
+        schemas["Settings"]["description"] = (
+            "GET /api/settings — the logged-in user's UI prefs. All three keys are ALWAYS present, null when\n"
+            "unset (an unauthenticated / no-row request returns all-null, never an error)."
+        )
+        schemas["SettingsUpdate"]["description"] = (
+            "POST /api/settings — a PARTIAL update: only the keys present are persisted (absent keys are left\n"
+            "untouched). null clears a field. temp_scale ∈ {C,F,K}. locale ≤ 35 chars."
+        )
         for name in ("BudgetAnalyticsRule", "BudgetAnalyticsRuleSaved"):
             schema = document["components"]["schemas"][name]
             self.assertNotIn("inactive_reason", schema["required"])
@@ -533,7 +566,9 @@ class RegistrySettingsContractTests(unittest.TestCase):
         from hestia.web import _EMPTY_SETTINGS
         api_contract.Settings.model_validate(_EMPTY_SETTINGS)                 # the real all-null default
         api_contract.Settings.model_validate({"locale": "pl", "temp_scale": "C", "theme": "warm"})
-        with self.assertRaises(ValueError):                                   # all 3 keys required (nullable)
+        api_contract.Settings.model_validate({"locale": "pl", "temp_scale": "C", "theme": "warm",
+                                              "preferred_languages": ["pl", "en"]})
+        with self.assertRaises(ValueError):                                   # required UI keys remain required
             api_contract.Settings.model_validate({"locale": None, "temp_scale": None})
 
     def test_settings_update_is_partial_with_scale_enum(self):
@@ -650,6 +685,9 @@ class TolerantResponseContractTests(unittest.TestCase):
 
     REQUEST_ONLY = {
         "BudgetAnalyticsCategoryCreateRequest", "BudgetAnalyticsCategoryUpdateRequest",
+        "BudgetCategoryTranslationSetRequest", "BudgetCategoryTranslationDeleteRequest",
+        "BudgetLabelTranslationSetRequest", "BudgetLabelTranslationDeleteRequest",
+        "BudgetCategoryTranslationImportEntry", "BudgetLabelTranslationImportEntry", "BudgetTranslationImportRequest",
         "BudgetAnalyticsAnnotationRequest", "BudgetAnalyticsRulePreviewRequest", "BudgetAnalyticsRuleSaveRequest",
         "BudgetAnalyticsRuleBatchPreviewRequest", "BudgetAnalyticsRuleBatchSaveRequest",
         "BudgetAnalyticsTransferDecisionRequest", "BudgetAnalyticsLegRequest",

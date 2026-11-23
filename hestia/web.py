@@ -40,6 +40,7 @@ from aiohttp import ClientConnectionError, web
 
 from . import auth, store_sql
 from .budget import consent_api
+from .budget.i18n import validate_languages
 from .classifier import DeviceType
 from .automations import rule_vocab
 from .proxy import (INJECT_GAP_SECS, IR_BUTTONS, KLIMA, _CLOSED_SENTINEL, _LOOPBACK, _audit,
@@ -77,7 +78,7 @@ _SCENE_TARGETS = {
 _BLINDS_SET = "blinds_set"
 _SCENE_NAMES = (*_SCENE_TARGETS, _BLINDS_SET)
 _TEMP_SCALES = {"C", "F", "K"}
-_EMPTY_SETTINGS = {"locale": None, "temp_scale": None, "theme": None}
+_EMPTY_SETTINGS = {"locale": None, "temp_scale": None, "theme": None, "preferred_languages": ["en"]}
 _RT_KEY = web.AppKey("rt", object)
 _UI_DIST_ENV = "HESTIA_UI_DIST"
 _DEFAULT_UI_DIST = Path(__file__).resolve().parent.parent / "ui" / "dist"
@@ -203,6 +204,11 @@ _ROUTE_MIN_ROLE = {
     ("GET", "/api/budget/household/monthly-budget-settings"): _VIEWER,
     ("POST", "/api/budget/analytics/category-create"): _ADMIN,
     ("POST", "/api/budget/analytics/category-update"): _ADMIN,
+    ("POST", "/api/budget/analytics/category-translation-set"): _ADMIN,
+    ("POST", "/api/budget/analytics/category-translation-delete"): _ADMIN,
+    ("POST", "/api/budget/analytics/label-translation-set"): _ADMIN,
+    ("POST", "/api/budget/analytics/label-translation-delete"): _ADMIN,
+    ("POST", "/api/budget/analytics/translation-import"): _ADMIN,
     ("POST", "/api/budget/analytics/annotation"): _ADMIN,
     ("POST", "/api/budget/analytics/rule-preview"): _ADMIN,
     ("POST", "/api/budget/analytics/rule-save"): _ADMIN,
@@ -426,13 +432,18 @@ def _settings_error(body) -> "str | None":
     theme = body.get("theme")
     if theme is not None and not isinstance(theme, str):
         return "theme must be a string or null"
+    if "preferred_languages" in body:
+        try:
+            validate_languages(body["preferred_languages"])
+        except ValueError:
+            return "preferred_languages must be an ordered unique list of supported languages or null"
     return None
 
 
 def _settings_update_fields(body) -> dict:
     # Pass only the fields actually present so the store's single-transaction upsert preserves the
     # rest (no read-merge-write race between two concurrent partial POSTs).
-    return {k: body[k] for k in ("locale", "temp_scale", "theme") if k in body}
+    return {k: body[k] for k in ("locale", "temp_scale", "theme", "preferred_languages") if k in body}
 
 
 async def _persist_user_settings(request, user: str, body: dict) -> None:

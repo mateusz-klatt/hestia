@@ -14,6 +14,7 @@ from . import api
 from .analytics_core import AnalyticsError
 from .analytics_views import (BudgetAnalyticsViews, _forecast_query, _monthly_budget_charts_query,
                               _monthly_budget_query)
+from .i18n import DisplayResolver
 from .views import BudgetUsersBackendRequired
 
 PREFIX = "/api/budget/analytics"
@@ -29,6 +30,11 @@ READS = ("overview", "transactions", "categories", "rules", "transfers", "recurr
 WRITES = {
     "category-create": (api_contract.BudgetAnalyticsCategoryCreateRequest, "create_category", "category"),
     "category-update": (api_contract.BudgetAnalyticsCategoryUpdateRequest, "update_category", "category"),
+    "category-translation-set": (api_contract.BudgetCategoryTranslationSetRequest, "set_category_translation", "translation"),
+    "category-translation-delete": (api_contract.BudgetCategoryTranslationDeleteRequest, "delete_category_translation", "translation"),
+    "label-translation-set": (api_contract.BudgetLabelTranslationSetRequest, "set_label_translation", "translation"),
+    "label-translation-delete": (api_contract.BudgetLabelTranslationDeleteRequest, "delete_label_translation", "translation"),
+    "translation-import": (api_contract.BudgetTranslationImportRequest, "import_translations", "results"),
     "annotation": (api_contract.BudgetAnalyticsAnnotationRequest, "annotate", "annotation"),
     "rule-preview": (api_contract.BudgetAnalyticsRulePreviewRequest, "preview_rule", "preview"),
     "rule-save": (api_contract.BudgetAnalyticsRuleSaveRequest, "save_rule", "rule"),
@@ -110,7 +116,11 @@ def _encode_bounded(payload, limit):
 
 
 def _read(owner, operation, query, secret):
-    result = getattr(_store(secret), operation.replace("-", "_").replace("/", "_"))(owner, **query)
+    store = _store(secret)
+    result = getattr(store, operation.replace("-", "_").replace("/", "_"))(owner, **query)
+    with store.sessions() as session:
+        result = DisplayResolver(session, owner, owner).decorate(
+            result, include_category_translations=operation == "categories")
     if operation in _BOUNDED_READ_CAPS:
         return _encode_bounded(result, _BOUNDED_READ_CAPS[operation]())
     return {operation: result} if operation in ("categories", "rules") else result
@@ -137,6 +147,9 @@ def _write(owner, operation, values, secret):
         result = store.save_rules(owner, values["preview_id"])
     else:
         result = getattr(store, method)(owner, **values)
+    if operation in ("category-create", "category-update", "annotation"):
+        with store.sessions() as session:
+            result = DisplayResolver(session, owner, owner).decorate(result)
     return {"ok": True, response_key: result}
 
 
@@ -156,7 +169,7 @@ def register(app, read_json_body, *, auth_enabled, session_secret):
                                         headers=api.PRIVATE_HEADERS)
             else:
                 api._browser(request, owner, secret)
-                max_bytes = (MAX_TRANSACTIONS_BY_KEYS_BYTES if operation == _TRANSACTIONS_BY_KEYS_OP
+                max_bytes = (MAX_TRANSACTIONS_BY_KEYS_BYTES if operation in (_TRANSACTIONS_BY_KEYS_OP, "translation-import")
                              else 65536 if operation == "inbox-mark"
                              else 262144 if operation == "rule-batch-preview" else 16384)
                 body, error = await read_json_body(request, max_bytes, reject_duplicates=True)

@@ -641,6 +641,17 @@
             ],
             "title": "Category Id"
           },
+          "display_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Label"
+          },
           "kind": {
             "title": "Kind",
             "type": "string"
@@ -800,6 +811,17 @@
             "title": "Changed",
             "type": "boolean"
           },
+          "display_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Label"
+          },
           "entry_reference": {
             "title": "Entry Reference",
             "type": "string"
@@ -937,6 +959,17 @@
             "title": "Created At",
             "type": "number"
           },
+          "display_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Name"
+          },
           "id": {
             "title": "Id",
             "type": "string"
@@ -955,6 +988,69 @@
               }
             ],
             "title": "Parent Id"
+          },
+          "translations": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "propertyNames": {
+                  "enum": [
+                    "ar",
+                    "bn",
+                    "bs",
+                    "cs",
+                    "da",
+                    "de",
+                    "el",
+                    "en",
+                    "es",
+                    "fa",
+                    "fi",
+                    "fil",
+                    "fr",
+                    "ga",
+                    "he",
+                    "hi",
+                    "hr",
+                    "hu",
+                    "hy",
+                    "id",
+                    "is",
+                    "it",
+                    "ja",
+                    "ko",
+                    "lt",
+                    "lv",
+                    "ms",
+                    "my-MM",
+                    "nl",
+                    "no",
+                    "pl",
+                    "pt",
+                    "ro",
+                    "ru",
+                    "sk",
+                    "sq",
+                    "sr",
+                    "sv",
+                    "sw",
+                    "th",
+                    "tr",
+                    "uk",
+                    "vi",
+                    "zh",
+                    "zh-Hant"
+                  ]
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Translations"
           },
           "updated_at": {
             "title": "Updated At",
@@ -1040,6 +1136,17 @@
             "title": "Created At",
             "type": "number"
           },
+          "display_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Name"
+          },
           "id": {
             "title": "Id",
             "type": "string"
@@ -1058,6 +1165,69 @@
               }
             ],
             "title": "Parent Id"
+          },
+          "translations": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "propertyNames": {
+                  "enum": [
+                    "ar",
+                    "bn",
+                    "bs",
+                    "cs",
+                    "da",
+                    "de",
+                    "el",
+                    "en",
+                    "es",
+                    "fa",
+                    "fi",
+                    "fil",
+                    "fr",
+                    "ga",
+                    "he",
+                    "hi",
+                    "hr",
+                    "hu",
+                    "hy",
+                    "id",
+                    "is",
+                    "it",
+                    "ja",
+                    "ko",
+                    "lt",
+                    "lv",
+                    "ms",
+                    "my-MM",
+                    "nl",
+                    "no",
+                    "pl",
+                    "pt",
+                    "ro",
+                    "ru",
+                    "sk",
+                    "sq",
+                    "sr",
+                    "sv",
+                    "sw",
+                    "th",
+                    "tr",
+                    "uk",
+                    "vi",
+                    "zh",
+                    "zh-Hant"
+                  ]
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Translations"
           },
           "updated_at": {
             "title": "Updated At",
@@ -1101,6 +1271,28 @@
           "currency": {
             "title": "Currency",
             "type": "string"
+          },
+          "display_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Label"
+          },
+          "display_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Name"
           },
           "expenses": {
             "title": "Expenses",
@@ -1657,6 +1849,17 @@
           "currency": {
             "title": "Currency",
             "type": "string"
+          },
+          "display_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Name"
           },
           "expected_date": {
             "title": "Expected Date",
@@ -2680,6 +2883,17 @@
             "title": "Category Id",
             "type": "string"
           },
+          "display_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Name"
+          },
           "name": {
             "title": "Name",
             "type": "string"
@@ -2758,6 +2972,28 @@
               }
             ],
             "title": "Category Id"
+          },
+          "display_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Label"
+          },
+          "display_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Name"
           },
           "expenses": {
             "maxLength": 192,
@@ -3265,6 +3501,28 @@
               }
             ],
             "title": "Category Id"
+          },
+          "display_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Label"
+          },
+          "display_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Name"
           },
           "name": {
             "anyOf": [
@@ -5081,6 +5339,17 @@
             "title": "Currency",
             "type": "string"
           },
+          "display_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Name"
+          },
           "expenses": {
             "title": "Expenses",
             "type": "string"
@@ -6015,6 +6284,411 @@
           "consent"
         ],
         "title": "BudgetCapabilities",
+        "type": "object"
+      },
+      "BudgetCategoryTranslationDeleteRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "category_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Category Id",
+            "type": "string"
+          },
+          "lang": {
+            "enum": [
+              "ar",
+              "bn",
+              "bs",
+              "cs",
+              "da",
+              "de",
+              "el",
+              "en",
+              "es",
+              "fa",
+              "fi",
+              "fil",
+              "fr",
+              "ga",
+              "he",
+              "hi",
+              "hr",
+              "hu",
+              "hy",
+              "id",
+              "is",
+              "it",
+              "ja",
+              "ko",
+              "lt",
+              "lv",
+              "ms",
+              "my-MM",
+              "nl",
+              "no",
+              "pl",
+              "pt",
+              "ro",
+              "ru",
+              "sk",
+              "sq",
+              "sr",
+              "sv",
+              "sw",
+              "th",
+              "tr",
+              "uk",
+              "vi",
+              "zh",
+              "zh-Hant"
+            ],
+            "title": "Lang",
+            "type": "string"
+          }
+        },
+        "required": [
+          "category_id",
+          "lang"
+        ],
+        "title": "BudgetCategoryTranslationDeleteRequest",
+        "type": "object"
+      },
+      "BudgetCategoryTranslationDeleteResult": {
+        "properties": {
+          "ok": {
+            "const": true,
+            "title": "Ok",
+            "type": "boolean"
+          },
+          "translation": {
+            "$ref": "#/components/schemas/BudgetCategoryTranslationDeleted"
+          }
+        },
+        "required": [
+          "ok",
+          "translation"
+        ],
+        "title": "BudgetCategoryTranslationDeleteResult",
+        "type": "object"
+      },
+      "BudgetCategoryTranslationDeleted": {
+        "properties": {
+          "category_id": {
+            "title": "Category Id",
+            "type": "string"
+          },
+          "changed": {
+            "title": "Changed",
+            "type": "boolean"
+          },
+          "lang": {
+            "enum": [
+              "ar",
+              "bn",
+              "bs",
+              "cs",
+              "da",
+              "de",
+              "el",
+              "en",
+              "es",
+              "fa",
+              "fi",
+              "fil",
+              "fr",
+              "ga",
+              "he",
+              "hi",
+              "hr",
+              "hu",
+              "hy",
+              "id",
+              "is",
+              "it",
+              "ja",
+              "ko",
+              "lt",
+              "lv",
+              "ms",
+              "my-MM",
+              "nl",
+              "no",
+              "pl",
+              "pt",
+              "ro",
+              "ru",
+              "sk",
+              "sq",
+              "sr",
+              "sv",
+              "sw",
+              "th",
+              "tr",
+              "uk",
+              "vi",
+              "zh",
+              "zh-Hant"
+            ],
+            "title": "Lang",
+            "type": "string"
+          }
+        },
+        "required": [
+          "category_id",
+          "lang",
+          "changed"
+        ],
+        "title": "BudgetCategoryTranslationDeleted",
+        "type": "object"
+      },
+      "BudgetCategoryTranslationImportEntry": {
+        "additionalProperties": false,
+        "properties": {
+          "category_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Category Id",
+            "type": "string"
+          },
+          "kind": {
+            "const": "category",
+            "title": "Kind",
+            "type": "string"
+          },
+          "lang": {
+            "enum": [
+              "ar",
+              "bn",
+              "bs",
+              "cs",
+              "da",
+              "de",
+              "el",
+              "en",
+              "es",
+              "fa",
+              "fi",
+              "fil",
+              "fr",
+              "ga",
+              "he",
+              "hi",
+              "hr",
+              "hu",
+              "hy",
+              "id",
+              "is",
+              "it",
+              "ja",
+              "ko",
+              "lt",
+              "lv",
+              "ms",
+              "my-MM",
+              "nl",
+              "no",
+              "pl",
+              "pt",
+              "ro",
+              "ru",
+              "sk",
+              "sq",
+              "sr",
+              "sv",
+              "sw",
+              "th",
+              "tr",
+              "uk",
+              "vi",
+              "zh",
+              "zh-Hant"
+            ],
+            "title": "Lang",
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "category_id",
+          "lang",
+          "name"
+        ],
+        "title": "BudgetCategoryTranslationImportEntry",
+        "type": "object"
+      },
+      "BudgetCategoryTranslationSaved": {
+        "properties": {
+          "category_id": {
+            "title": "Category Id",
+            "type": "string"
+          },
+          "changed": {
+            "title": "Changed",
+            "type": "boolean"
+          },
+          "lang": {
+            "enum": [
+              "ar",
+              "bn",
+              "bs",
+              "cs",
+              "da",
+              "de",
+              "el",
+              "en",
+              "es",
+              "fa",
+              "fi",
+              "fil",
+              "fr",
+              "ga",
+              "he",
+              "hi",
+              "hr",
+              "hu",
+              "hy",
+              "id",
+              "is",
+              "it",
+              "ja",
+              "ko",
+              "lt",
+              "lv",
+              "ms",
+              "my-MM",
+              "nl",
+              "no",
+              "pl",
+              "pt",
+              "ro",
+              "ru",
+              "sk",
+              "sq",
+              "sr",
+              "sv",
+              "sw",
+              "th",
+              "tr",
+              "uk",
+              "vi",
+              "zh",
+              "zh-Hant"
+            ],
+            "title": "Lang",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "category_id",
+          "lang",
+          "name",
+          "changed"
+        ],
+        "title": "BudgetCategoryTranslationSaved",
+        "type": "object"
+      },
+      "BudgetCategoryTranslationSetRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "category_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Category Id",
+            "type": "string"
+          },
+          "lang": {
+            "enum": [
+              "ar",
+              "bn",
+              "bs",
+              "cs",
+              "da",
+              "de",
+              "el",
+              "en",
+              "es",
+              "fa",
+              "fi",
+              "fil",
+              "fr",
+              "ga",
+              "he",
+              "hi",
+              "hr",
+              "hu",
+              "hy",
+              "id",
+              "is",
+              "it",
+              "ja",
+              "ko",
+              "lt",
+              "lv",
+              "ms",
+              "my-MM",
+              "nl",
+              "no",
+              "pl",
+              "pt",
+              "ro",
+              "ru",
+              "sk",
+              "sq",
+              "sr",
+              "sv",
+              "sw",
+              "th",
+              "tr",
+              "uk",
+              "vi",
+              "zh",
+              "zh-Hant"
+            ],
+            "title": "Lang",
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "category_id",
+          "lang",
+          "name"
+        ],
+        "title": "BudgetCategoryTranslationSetRequest",
+        "type": "object"
+      },
+      "BudgetCategoryTranslationSetResult": {
+        "properties": {
+          "ok": {
+            "const": true,
+            "title": "Ok",
+            "type": "boolean"
+          },
+          "translation": {
+            "$ref": "#/components/schemas/BudgetCategoryTranslationSaved"
+          }
+        },
+        "required": [
+          "ok",
+          "translation"
+        ],
+        "title": "BudgetCategoryTranslationSetResult",
         "type": "object"
       },
       "BudgetComponentLimit": {
@@ -7505,6 +8179,17 @@
             "title": "Archived",
             "type": "boolean"
           },
+          "display_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Name"
+          },
           "id": {
             "maxLength": 64,
             "minLength": 64,
@@ -7537,6 +8222,17 @@
             "pattern": "^[0-9a-f]{64}$",
             "title": "Category Id",
             "type": "string"
+          },
+          "display_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Name"
           },
           "name": {
             "title": "Name",
@@ -7969,6 +8665,17 @@
           "currency": {
             "title": "Currency",
             "type": "string"
+          },
+          "display_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Name"
           },
           "expenses": {
             "maxLength": 192,
@@ -9044,6 +9751,442 @@
           "expected_version"
         ],
         "title": "BudgetKindRequest",
+        "type": "object"
+      },
+      "BudgetLabelTranslationDeleteRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "account_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Account Id",
+            "type": "string"
+          },
+          "entry_reference": {
+            "maxLength": 1024,
+            "minLength": 1,
+            "title": "Entry Reference",
+            "type": "string"
+          },
+          "lang": {
+            "enum": [
+              "ar",
+              "bn",
+              "bs",
+              "cs",
+              "da",
+              "de",
+              "el",
+              "en",
+              "es",
+              "fa",
+              "fi",
+              "fil",
+              "fr",
+              "ga",
+              "he",
+              "hi",
+              "hr",
+              "hu",
+              "hy",
+              "id",
+              "is",
+              "it",
+              "ja",
+              "ko",
+              "lt",
+              "lv",
+              "ms",
+              "my-MM",
+              "nl",
+              "no",
+              "pl",
+              "pt",
+              "ro",
+              "ru",
+              "sk",
+              "sq",
+              "sr",
+              "sv",
+              "sw",
+              "th",
+              "tr",
+              "uk",
+              "vi",
+              "zh",
+              "zh-Hant"
+            ],
+            "title": "Lang",
+            "type": "string"
+          }
+        },
+        "required": [
+          "account_id",
+          "entry_reference",
+          "lang"
+        ],
+        "title": "BudgetLabelTranslationDeleteRequest",
+        "type": "object"
+      },
+      "BudgetLabelTranslationDeleteResult": {
+        "properties": {
+          "ok": {
+            "const": true,
+            "title": "Ok",
+            "type": "boolean"
+          },
+          "translation": {
+            "$ref": "#/components/schemas/BudgetLabelTranslationDeleted"
+          }
+        },
+        "required": [
+          "ok",
+          "translation"
+        ],
+        "title": "BudgetLabelTranslationDeleteResult",
+        "type": "object"
+      },
+      "BudgetLabelTranslationDeleted": {
+        "properties": {
+          "account_id": {
+            "title": "Account Id",
+            "type": "string"
+          },
+          "changed": {
+            "title": "Changed",
+            "type": "boolean"
+          },
+          "entry_reference": {
+            "title": "Entry Reference",
+            "type": "string"
+          },
+          "lang": {
+            "enum": [
+              "ar",
+              "bn",
+              "bs",
+              "cs",
+              "da",
+              "de",
+              "el",
+              "en",
+              "es",
+              "fa",
+              "fi",
+              "fil",
+              "fr",
+              "ga",
+              "he",
+              "hi",
+              "hr",
+              "hu",
+              "hy",
+              "id",
+              "is",
+              "it",
+              "ja",
+              "ko",
+              "lt",
+              "lv",
+              "ms",
+              "my-MM",
+              "nl",
+              "no",
+              "pl",
+              "pt",
+              "ro",
+              "ru",
+              "sk",
+              "sq",
+              "sr",
+              "sv",
+              "sw",
+              "th",
+              "tr",
+              "uk",
+              "vi",
+              "zh",
+              "zh-Hant"
+            ],
+            "title": "Lang",
+            "type": "string"
+          }
+        },
+        "required": [
+          "account_id",
+          "entry_reference",
+          "lang",
+          "changed"
+        ],
+        "title": "BudgetLabelTranslationDeleted",
+        "type": "object"
+      },
+      "BudgetLabelTranslationImportEntry": {
+        "additionalProperties": false,
+        "properties": {
+          "account_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Account Id",
+            "type": "string"
+          },
+          "entry_reference": {
+            "maxLength": 1024,
+            "minLength": 1,
+            "title": "Entry Reference",
+            "type": "string"
+          },
+          "kind": {
+            "const": "label",
+            "title": "Kind",
+            "type": "string"
+          },
+          "label": {
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Label",
+            "type": "string"
+          },
+          "lang": {
+            "enum": [
+              "ar",
+              "bn",
+              "bs",
+              "cs",
+              "da",
+              "de",
+              "el",
+              "en",
+              "es",
+              "fa",
+              "fi",
+              "fil",
+              "fr",
+              "ga",
+              "he",
+              "hi",
+              "hr",
+              "hu",
+              "hy",
+              "id",
+              "is",
+              "it",
+              "ja",
+              "ko",
+              "lt",
+              "lv",
+              "ms",
+              "my-MM",
+              "nl",
+              "no",
+              "pl",
+              "pt",
+              "ro",
+              "ru",
+              "sk",
+              "sq",
+              "sr",
+              "sv",
+              "sw",
+              "th",
+              "tr",
+              "uk",
+              "vi",
+              "zh",
+              "zh-Hant"
+            ],
+            "title": "Lang",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "account_id",
+          "entry_reference",
+          "lang",
+          "label"
+        ],
+        "title": "BudgetLabelTranslationImportEntry",
+        "type": "object"
+      },
+      "BudgetLabelTranslationSaved": {
+        "properties": {
+          "account_id": {
+            "title": "Account Id",
+            "type": "string"
+          },
+          "changed": {
+            "title": "Changed",
+            "type": "boolean"
+          },
+          "entry_reference": {
+            "title": "Entry Reference",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "lang": {
+            "enum": [
+              "ar",
+              "bn",
+              "bs",
+              "cs",
+              "da",
+              "de",
+              "el",
+              "en",
+              "es",
+              "fa",
+              "fi",
+              "fil",
+              "fr",
+              "ga",
+              "he",
+              "hi",
+              "hr",
+              "hu",
+              "hy",
+              "id",
+              "is",
+              "it",
+              "ja",
+              "ko",
+              "lt",
+              "lv",
+              "ms",
+              "my-MM",
+              "nl",
+              "no",
+              "pl",
+              "pt",
+              "ro",
+              "ru",
+              "sk",
+              "sq",
+              "sr",
+              "sv",
+              "sw",
+              "th",
+              "tr",
+              "uk",
+              "vi",
+              "zh",
+              "zh-Hant"
+            ],
+            "title": "Lang",
+            "type": "string"
+          }
+        },
+        "required": [
+          "account_id",
+          "entry_reference",
+          "lang",
+          "label",
+          "changed"
+        ],
+        "title": "BudgetLabelTranslationSaved",
+        "type": "object"
+      },
+      "BudgetLabelTranslationSetRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "account_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Account Id",
+            "type": "string"
+          },
+          "entry_reference": {
+            "maxLength": 1024,
+            "minLength": 1,
+            "title": "Entry Reference",
+            "type": "string"
+          },
+          "label": {
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Label",
+            "type": "string"
+          },
+          "lang": {
+            "enum": [
+              "ar",
+              "bn",
+              "bs",
+              "cs",
+              "da",
+              "de",
+              "el",
+              "en",
+              "es",
+              "fa",
+              "fi",
+              "fil",
+              "fr",
+              "ga",
+              "he",
+              "hi",
+              "hr",
+              "hu",
+              "hy",
+              "id",
+              "is",
+              "it",
+              "ja",
+              "ko",
+              "lt",
+              "lv",
+              "ms",
+              "my-MM",
+              "nl",
+              "no",
+              "pl",
+              "pt",
+              "ro",
+              "ru",
+              "sk",
+              "sq",
+              "sr",
+              "sv",
+              "sw",
+              "th",
+              "tr",
+              "uk",
+              "vi",
+              "zh",
+              "zh-Hant"
+            ],
+            "title": "Lang",
+            "type": "string"
+          }
+        },
+        "required": [
+          "account_id",
+          "entry_reference",
+          "lang",
+          "label"
+        ],
+        "title": "BudgetLabelTranslationSetRequest",
+        "type": "object"
+      },
+      "BudgetLabelTranslationSetResult": {
+        "properties": {
+          "ok": {
+            "const": true,
+            "title": "Ok",
+            "type": "boolean"
+          },
+          "translation": {
+            "$ref": "#/components/schemas/BudgetLabelTranslationSaved"
+          }
+        },
+        "required": [
+          "ok",
+          "translation"
+        ],
+        "title": "BudgetLabelTranslationSetResult",
         "type": "object"
       },
       "BudgetLimits": {
@@ -10711,6 +11854,103 @@
           "next_cursor"
         ],
         "title": "BudgetTransactions",
+        "type": "object"
+      },
+      "BudgetTranslationImportEntryResult": {
+        "properties": {
+          "changed": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Changed"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "index": {
+            "maximum": 499,
+            "minimum": 0,
+            "title": "Index",
+            "type": "integer"
+          },
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "index",
+          "ok"
+        ],
+        "title": "BudgetTranslationImportEntryResult",
+        "type": "object"
+      },
+      "BudgetTranslationImportRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "entries": {
+            "items": {
+              "discriminator": {
+                "mapping": {
+                  "category": "#/components/schemas/BudgetCategoryTranslationImportEntry",
+                  "label": "#/components/schemas/BudgetLabelTranslationImportEntry"
+                },
+                "propertyName": "kind"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/BudgetCategoryTranslationImportEntry"
+                },
+                {
+                  "$ref": "#/components/schemas/BudgetLabelTranslationImportEntry"
+                }
+              ]
+            },
+            "maxItems": 500,
+            "minItems": 1,
+            "title": "Entries",
+            "type": "array"
+          }
+        },
+        "required": [
+          "entries"
+        ],
+        "title": "BudgetTranslationImportRequest",
+        "type": "object"
+      },
+      "BudgetTranslationImportResult": {
+        "properties": {
+          "ok": {
+            "const": true,
+            "title": "Ok",
+            "type": "boolean"
+          },
+          "results": {
+            "items": {
+              "$ref": "#/components/schemas/BudgetTranslationImportEntryResult"
+            },
+            "title": "Results",
+            "type": "array"
+          }
+        },
+        "required": [
+          "ok",
+          "results"
+        ],
+        "title": "BudgetTranslationImportResult",
         "type": "object"
       },
       "CalendarCancelledInstance": {
@@ -13013,7 +14253,7 @@
         "type": "object"
       },
       "Settings": {
-        "description": "GET /api/settings \u2014 the logged-in user's UI prefs. All three keys are ALWAYS present, null when\nunset (an unauthenticated / no-row request returns all-null, never an error).",
+        "description": "GET /api/settings \u2014 persisted UI preferences and effective ordered budget display languages.",
         "properties": {
           "locale": {
             "anyOf": [
@@ -13025,6 +14265,67 @@
               }
             ],
             "title": "Locale"
+          },
+          "preferred_languages": {
+            "anyOf": [
+              {
+                "items": {
+                  "enum": [
+                    "ar",
+                    "bn",
+                    "bs",
+                    "cs",
+                    "da",
+                    "de",
+                    "el",
+                    "en",
+                    "es",
+                    "fa",
+                    "fi",
+                    "fil",
+                    "fr",
+                    "ga",
+                    "he",
+                    "hi",
+                    "hr",
+                    "hu",
+                    "hy",
+                    "id",
+                    "is",
+                    "it",
+                    "ja",
+                    "ko",
+                    "lt",
+                    "lv",
+                    "ms",
+                    "my-MM",
+                    "nl",
+                    "no",
+                    "pl",
+                    "pt",
+                    "ro",
+                    "ru",
+                    "sk",
+                    "sq",
+                    "sr",
+                    "sv",
+                    "sw",
+                    "th",
+                    "tr",
+                    "uk",
+                    "vi",
+                    "zh",
+                    "zh-Hant"
+                  ],
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Preferred Languages"
           },
           "temp_scale": {
             "anyOf": [
@@ -13059,7 +14360,7 @@
       },
       "SettingsUpdate": {
         "additionalProperties": false,
-        "description": "POST /api/settings \u2014 a PARTIAL update: only the keys present are persisted (absent keys are left\nuntouched). null clears a field. temp_scale \u2208 {C,F,K}. locale \u2264 35 chars.",
+        "description": "POST /api/settings \u2014 a partial update; null restores the locale-derived language default.",
         "properties": {
           "locale": {
             "anyOf": [
@@ -13072,6 +14373,68 @@
               }
             ],
             "title": "Locale"
+          },
+          "preferred_languages": {
+            "anyOf": [
+              {
+                "items": {
+                  "enum": [
+                    "ar",
+                    "bn",
+                    "bs",
+                    "cs",
+                    "da",
+                    "de",
+                    "el",
+                    "en",
+                    "es",
+                    "fa",
+                    "fi",
+                    "fil",
+                    "fr",
+                    "ga",
+                    "he",
+                    "hi",
+                    "hr",
+                    "hu",
+                    "hy",
+                    "id",
+                    "is",
+                    "it",
+                    "ja",
+                    "ko",
+                    "lt",
+                    "lv",
+                    "ms",
+                    "my-MM",
+                    "nl",
+                    "no",
+                    "pl",
+                    "pt",
+                    "ro",
+                    "ru",
+                    "sk",
+                    "sq",
+                    "sr",
+                    "sv",
+                    "sw",
+                    "th",
+                    "tr",
+                    "uk",
+                    "vi",
+                    "zh",
+                    "zh-Hant"
+                  ],
+                  "type": "string"
+                },
+                "maxItems": 45,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Preferred Languages"
           },
           "temp_scale": {
             "anyOf": [
@@ -13628,7 +14991,7 @@
   "info": {
     "description": "Local cloud-free smart-home control API. Generated from hestia/api_contract.py \u2014 do not edit by hand; run `python -m hestia.api_contract`.",
     "title": "hestia API",
-    "version": "0.38.0"
+    "version": "0.41.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -14416,6 +15779,226 @@
         "x-required-role": "admin"
       }
     },
+    "/api/budget/analytics/category-translation-delete": {
+      "post": {
+        "description": "Requires the exact admin owner, browser cookie and configured HTTPS Origin. Version and source fingerprints prevent stale changes. No bank request is made.",
+        "operationId": "deleteBudgetCategoryTranslation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BudgetCategoryTranslationDeleteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetCategoryTranslationDeleteResult"
+                }
+              }
+            },
+            "description": "owner-scoped stored state; no bank request"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "session required; middleware may return an empty body"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "admin owner or browser-origin requirement failed; middleware may return an empty body"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "unknown, disabled or foreign resource"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Version, financial source, reserved transfer leg, preview or cursor changed; reload and review."
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Explicit analytics processing or owner configuration limit; no partial totals."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "budget configuration unavailable"
+          }
+        },
+        "summary": "Save an owner-private local classification",
+        "x-required-role": "admin"
+      }
+    },
+    "/api/budget/analytics/category-translation-set": {
+      "post": {
+        "description": "Requires the exact admin owner, browser cookie and configured HTTPS Origin. Version and source fingerprints prevent stale changes. No bank request is made.",
+        "operationId": "setBudgetCategoryTranslation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BudgetCategoryTranslationSetRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetCategoryTranslationSetResult"
+                }
+              }
+            },
+            "description": "owner-scoped stored state; no bank request"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "session required; middleware may return an empty body"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "admin owner or browser-origin requirement failed; middleware may return an empty body"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "unknown, disabled or foreign resource"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Version, financial source, reserved transfer leg, preview or cursor changed; reload and review."
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Explicit analytics processing or owner configuration limit; no partial totals."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "budget configuration unavailable"
+          }
+        },
+        "summary": "Save an owner-private local classification",
+        "x-required-role": "admin"
+      }
+    },
     "/api/budget/analytics/category-update": {
       "post": {
         "description": "Requires the exact admin owner, browser cookie and configured HTTPS Origin. Version and source fingerprints prevent stale changes. No bank request is made.",
@@ -14857,6 +16440,226 @@
           }
         },
         "summary": "Mark or unmark owner-private inbox alerts (atomic anti-ABA CAS)",
+        "x-required-role": "admin"
+      }
+    },
+    "/api/budget/analytics/label-translation-delete": {
+      "post": {
+        "description": "Requires the exact admin owner, browser cookie and configured HTTPS Origin. Version and source fingerprints prevent stale changes. No bank request is made.",
+        "operationId": "deleteBudgetLabelTranslation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BudgetLabelTranslationDeleteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetLabelTranslationDeleteResult"
+                }
+              }
+            },
+            "description": "owner-scoped stored state; no bank request"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "session required; middleware may return an empty body"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "admin owner or browser-origin requirement failed; middleware may return an empty body"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "unknown, disabled or foreign resource"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Version, financial source, reserved transfer leg, preview or cursor changed; reload and review."
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Explicit analytics processing or owner configuration limit; no partial totals."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "budget configuration unavailable"
+          }
+        },
+        "summary": "Save an owner-private local classification",
+        "x-required-role": "admin"
+      }
+    },
+    "/api/budget/analytics/label-translation-set": {
+      "post": {
+        "description": "Requires the exact admin owner, browser cookie and configured HTTPS Origin. Version and source fingerprints prevent stale changes. No bank request is made.",
+        "operationId": "setBudgetLabelTranslation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BudgetLabelTranslationSetRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetLabelTranslationSetResult"
+                }
+              }
+            },
+            "description": "owner-scoped stored state; no bank request"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "session required; middleware may return an empty body"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "admin owner or browser-origin requirement failed; middleware may return an empty body"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "unknown, disabled or foreign resource"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Version, financial source, reserved transfer leg, preview or cursor changed; reload and review."
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Explicit analytics processing or owner configuration limit; no partial totals."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "budget configuration unavailable"
+          }
+        },
+        "summary": "Save an owner-private local classification",
         "x-required-role": "admin"
       }
     },
@@ -17112,6 +18915,116 @@
           }
         },
         "summary": "Read owner-private local budget analytics",
+        "x-required-role": "admin"
+      }
+    },
+    "/api/budget/analytics/translation-import": {
+      "post": {
+        "description": "Requires the exact admin owner, browser cookie and configured HTTPS Origin. Version and source fingerprints prevent stale changes. No bank request is made.",
+        "operationId": "importBudgetTranslations",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BudgetTranslationImportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetTranslationImportResult"
+                }
+              }
+            },
+            "description": "owner-scoped stored state; no bank request"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "session required; middleware may return an empty body"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "admin owner or browser-origin requirement failed; middleware may return an empty body"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "unknown, disabled or foreign resource"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Version, financial source, reserved transfer leg, preview or cursor changed; reload and review."
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Explicit analytics processing or owner configuration limit; no partial totals."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "budget configuration unavailable"
+          }
+        },
+        "summary": "Save an owner-private local classification",
         "x-required-role": "admin"
       }
     },

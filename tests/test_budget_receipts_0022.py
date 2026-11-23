@@ -18,6 +18,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from hestia import db
+from tests.test_db import _head_revision
 
 RECEIPT_A = "11111111-1111-4111-8111-111111111111"
 RECEIPT_B = "22222222-2222-4222-8222-222222222222"
@@ -64,7 +65,7 @@ class ReceiptMigration0022Tests(unittest.TestCase):
     def test_receipt_migration_upgrade_downgrade(self):
         engine, _ = db.init_db(self.path)
         self._assert_clean(engine)
-        self.assertEqual(self._revision(engine), "0023")
+        self.assertEqual(self._revision(engine), _head_revision())
         with engine.begin() as conn:
             conn.exec_driver_sql("INSERT INTO users (username, password_hash, role) VALUES ('owner', 'h', 'admin')")
             conn.exec_driver_sql(
@@ -154,7 +155,7 @@ class ReceiptMigration0022Tests(unittest.TestCase):
 
         engine, _ = db.init_db(self.path)
         self._assert_clean(engine)
-        self.assertEqual(self._revision(engine), "0023")
+        self.assertEqual(self._revision(engine), _head_revision())
         with engine.connect() as conn:
             self.assertEqual(compare_metadata(MigrationContext.configure(conn), db.Base.metadata), [])
         self._assert_audit_rows(engine)
@@ -190,7 +191,7 @@ class ReceiptMigration0022Tests(unittest.TestCase):
             op.create_table = real
         engine, _ = db.init_db(self.path)
         self._assert_clean(engine)
-        self.assertEqual(self._revision(engine), "0023")
+        self.assertEqual(self._revision(engine), _head_revision())
         self.assertTrue(_RECEIPT_TABLES <= self._tables(engine))
 
     def test_downgrade_interruption_keeps_populated_rows_and_retries(self):
@@ -230,7 +231,7 @@ class ReceiptMigration0022Tests(unittest.TestCase):
                 db.downgrade_db(self.path, "0020")
             engine = self._open()
             self._assert_clean(engine)
-            self.assertEqual(self._revision(engine), "0023")
+            self.assertEqual(self._revision(engine), _head_revision())
             self.assertTrue(_RECEIPT_TABLES <= self._tables(engine))
             with engine.connect() as conn:
                 self.assertEqual(conn.exec_driver_sql("SELECT name FROM budget_shops").scalar(), "Synthetic shop")
@@ -256,7 +257,7 @@ class ReceiptMigration0022Tests(unittest.TestCase):
     def test_cross_owner_link_and_raw_text_without_expiry_are_rejected(self):
         engine, _ = db.init_db(self.path)
         self._assert_clean(engine)
-        self.assertEqual(self._revision(engine), "0023")
+        self.assertEqual(self._revision(engine), _head_revision())
         with Session(engine) as session:
             session.add(db.User(username="owner", password_hash="h", role="admin"))
             session.add(db.User(username="other", password_hash="h", role="admin"))
