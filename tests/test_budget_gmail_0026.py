@@ -32,44 +32,81 @@ class GmailScheduleMigrationTests(unittest.TestCase):
                 "AND name LIKE '!_alembic!_tmp!_%' ESCAPE '!'"
             ).all(), [])
 
-    def test_schedule_columns_roundtrip_through_init_and_downgrade(self):
-        engine, _ = db.init_db(self.path)
-        self._assert_clean(engine, "0026")
-        with engine.begin() as connection:
+    def test_populated_0025_to_0026_to_0025_roundtrip(self):
+        db.init_db(self.path)
+        db.downgrade_db(self.path, "0025")
+        original = self._open()
+        self._assert_clean(original, "0025")
+        with original.begin() as connection:
             connection.exec_driver_sql(
                 "INSERT INTO users (username, password_hash, role) VALUES ('owner', 'synthetic', 'admin')"
             )
             connection.exec_driver_sql(
-                "INSERT INTO budget_gmail_state (owner, grant_status, run_requested, force_full_resync) "
-                "VALUES ('owner', 'disabled', 1, 1)"
+                "INSERT INTO budget_gmail_state (owner, grant_status, history_id) VALUES ('owner', 'active', '100')"
             )
+            connection.exec_driver_sql(
+                "INSERT INTO budget_receipts (id, owner, status, source_kind, document_kind, version, "
+                "created_at, updated_at) VALUES ('receipt', 'owner', 'imported', 'email', 'invoice', 1, 1, 1)"
+            )
+            connection.exec_driver_sql(
+                "INSERT INTO budget_gmail_messages (owner, gmail_id_hmac, internal_date, trust_path, outcome, "
+                "created_at, receipt_id) VALUES ('owner', ?, 1, 'spouse_forward', 'imported', 1, 'receipt')",
+                ("aa" * 32,),
+            )
+            connection.exec_driver_sql(
+                "INSERT INTO budget_receipt_device_tokens (id, owner, device_name, token_hmac, created_at, "
+                "expires_at, hard_expires_at, sliding_written_at) VALUES ('device', 'owner', 'Synthetic', ?, 1, 2, 3, 1)",
+                ("bb" * 32,),
+            )
+            connection.exec_driver_sql(
+                "INSERT INTO budget_receipt_pair_codes (id, owner, code_hmac, created_at, expires_at) "
+                "VALUES ('pair', 'owner', ?, 1, 2)",
+                ("cc" * 32,),
+            )
+            connection.exec_driver_sql(
+                "INSERT INTO budget_analytics_audit (owner, subject_type, subject_id, action, before_json, "
+                "after_json, changed_at) VALUES ('owner', 'receipt_device_token', 'device', 'create', '{}', '{}', 1)"
+            )
+
+        tables = (
+            "budget_gmail_state", "budget_receipts", "budget_gmail_messages", "budget_receipt_device_tokens",
+            "budget_receipt_pair_codes", "budget_analytics_audit",
+        )
+        columns = {table: [column["name"] for column in inspect(original).get_columns(table)] for table in tables}
+
+        def snapshot(engine):
+            with engine.connect() as connection:
+                return {table: connection.exec_driver_sql(
+                    "SELECT " + ", ".join(columns[table]) + " FROM " + table
+                ).all() for table in tables}
+
+        before = snapshot(original)
+        upgraded, _ = db.init_db(self.path)
+        self._assert_clean(upgraded, "0026")
+        self.assertEqual(snapshot(upgraded), before)
+        with upgraded.begin() as connection:
             self.assertEqual(connection.exec_driver_sql(
                 "SELECT run_requested, force_full_resync FROM budget_gmail_state"
-            ).one(), (1, 1))
+            ).one(), (0, 0))
+            self.assertEqual(connection.exec_driver_sql(
+                "SELECT forwarded_manually, forwarded_sender_domain FROM budget_receipts"
+            ).one(), (0, None))
+            connection.exec_driver_sql(
+                "UPDATE budget_gmail_state SET run_requested = 1, force_full_resync = 1"
+            )
         for statement in (
             "UPDATE budget_gmail_state SET run_requested = 2",
             "UPDATE budget_gmail_state SET force_full_resync = -1",
         ):
-            with self.subTest(statement=statement):
-                with self.assertRaises(IntegrityError), engine.begin() as connection:
-                    connection.exec_driver_sql(statement)
+            with self.subTest(statement=statement), self.assertRaises(IntegrityError), upgraded.begin() as connection:
+                connection.exec_driver_sql(statement)
 
-        db.downgrade_db(self.path, "0024")
+        db.downgrade_db(self.path, "0025")
         downgraded = self._open()
-        self._assert_clean(downgraded, "0024")
-        columns = {column["name"] for column in inspect(downgraded).get_columns("budget_gmail_state")}
-        self.assertTrue({"run_requested", "force_full_resync"}.isdisjoint(columns))
-        with downgraded.connect() as connection:
-            self.assertEqual(connection.exec_driver_sql(
-                "SELECT grant_status FROM budget_gmail_state"
-            ).scalar(), "disabled")
-
-        engine, _ = db.init_db(self.path)
-        self._assert_clean(engine, "0026")
-        with engine.connect() as connection:
-            self.assertEqual(connection.exec_driver_sql(
-                "SELECT run_requested, force_full_resync FROM budget_gmail_state"
-            ).one(), (0, 0))
+        self._assert_clean(downgraded, "0025")
+        self.assertEqual(snapshot(downgraded), before)
+        for table in tables:
+            self.assertEqual([column["name"] for column in inspect(downgraded).get_columns(table)], columns[table])
 
     def test_manual_forward_is_stored_without_the_address_and_blocks_downgrade(self):
         _engine, sessions = db.init_db(self.path)
@@ -100,19 +137,19 @@ class GmailScheduleMigrationTests(unittest.TestCase):
         self.assertNotIn(b"billing@corner-shop.example", stored)
         self.assertNotIn(b"Please pay this shop bill", stored)
         with self.assertRaisesRegex(RuntimeError, "manual forwards"):
-            db.downgrade_db(self.path, "0024")
+            db.downgrade_db(self.path, "0025")
         _engine, sessions = db.init_db(self.path)
         with sessions.begin() as session:
             session.execute(db.BudgetGmailMessage.__table__.delete())
             session.execute(db.BudgetReceipt.__table__.delete())
         db.reset_engine_cache()
-        db.downgrade_db(self.path, "0024")
-        self._assert_clean(self._open(), "0024")
+        db.downgrade_db(self.path, "0025")
+        self._assert_clean(self._open(), "0025")
 
     def test_leftover_batch_table_does_not_block_upgrade(self):
         db.init_db(self.path)
         db.reset_engine_cache()
-        db.downgrade_db(self.path, "0024")
+        db.downgrade_db(self.path, "0025")
         with self._open().begin() as connection:
             connection.exec_driver_sql('CREATE TABLE "_alembic_tmp_budget_gmail_state" (id TEXT)')
         engine, _ = db.init_db(self.path)
