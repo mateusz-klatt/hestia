@@ -39,7 +39,8 @@ from pathlib import Path
 from aiohttp import ClientConnectionError, web
 
 from . import auth, store_sql
-from .budget import consent_api
+from .budget import consent_api, consent_context, device_token
+from .budget.config import BudgetConfigError
 from .classifier import DeviceType
 from .automations import rule_vocab
 from .proxy import (INJECT_GAP_SECS, IR_BUTTONS, KLIMA, _CLOSED_SENTINEL, _LOOPBACK, _audit,
@@ -56,6 +57,7 @@ SSE_IDLE_TIMEOUT = _num_env("HESTIA_SSE_KEEPALIVE", 5.0, 1.0, 3600.0)  # idle→
 SSE_MAX_LIFETIME = float(os.environ.get("HESTIA_SSE_LIFETIME", "3600"))
 _TYPES = {t.value for t in DeviceType}
 _clock = time.monotonic                              # module-level rebindable for tests
+_LOGIN_LIMITER_KEY = web.AppKey("login_limiter", auth.LoginLimiter)
 _NAME_FIELDS = {"op", "node", "name", "room", "type", "ep"}   # allowlist for /api/name (ep = endpoint label)
 _BODY_NOT_OBJECT = "body must be a JSON object"   # shared 4xx message (/api/ir, /api/name, /api/control)
 _CONTROL_OPS = {"switch", "level", "cover", "thermostat", "thermostat_power"}
@@ -150,14 +152,15 @@ def _is_public_route(method: str, path: str) -> bool:
         return True
     if method == "GET":
         return path in ("/", "/ui/") or path in consent_api.PUBLIC_GET or path.startswith("/assets/")
-    return method == "POST" and path in ("/api/login", "/api/logout",
-                                        "/api/budget/receipts/device-token/redeem")
+    return method == "POST" and (path in ("/api/login", "/api/logout", device_token.REDEEM_PATH)
+                                 or _ROUTE_MIN_ROLE.get((method, path)) == _PUBLIC)
 
 
 # RBAC route policy (#73). The MINIMUM role for each non-public route, kept adjacent to make_app's route
 # table; ``test_every_route_is_classified`` asserts every registered route is here (or public), so this
 # can't silently drift from the routes. Public routes are short-circuited in the middleware before this.
 _VIEWER, _OPERATOR, _ADMIN = "viewer", "operator", "admin"
+_PUBLIC = "public"
 # Route paths that appear in BOTH the floor map and the route registration — named once so the two
 # can't drift (and to satisfy the no-duplicate-literal lint). Single-use paths stay inline literals.
 _PATH_SETTINGS = "/api/settings"
@@ -222,7 +225,9 @@ _ROUTE_MIN_ROLE = {
     ("GET", "/api/budget/receipts/detail"): _ADMIN,
     ("GET", "/api/budget/receipts/image"): _ADMIN,
     ("POST", "/api/budget/receipts/delete"): _ADMIN,
-    ("POST", "/api/budget/receipts/device-token/pair-code"): _ADMIN,
+    ("POST", device_token.PAIR_PATH): _ADMIN,
+    ("POST", device_token.PAIR_CANCEL_PATH): _ADMIN,
+    ("POST", device_token.LOGIN_PATH): _PUBLIC,
     ("POST", "/api/budget/receipts/device-token/list"): _ADMIN,
     ("POST", "/api/budget/receipts/device-token/revoke"): _ADMIN,
 
@@ -316,11 +321,11 @@ async def _auth_middleware(request, handler):
     whose role is below the route's floor → 403. No-op when auth is off (loopback/dev stays fully open).
     The token comes from the bearer header or the session cookie (see ``_request_token``). Runs OUTERMOST
     so an unauthenticated/unauthorized request is rejected before it reaches any handler."""
-    from .budget import device_token
     if device_token.receipts_path(request.path) and not device_token.receipts_enabled():
         return device_token.disabled_response()
     authorization = request.headers.get("Authorization", "")
-    if _AUTH_ENABLED and "Authorization" in request.headers:
+    if (_AUTH_ENABLED and "Authorization" in request.headers
+            and (request.method, request.path) != ("POST", device_token.LOGIN_PATH)):
         target = request.raw_path.partition("?")[0]
         decision = await asyncio.to_thread(
             device_token.decide,
@@ -387,7 +392,22 @@ async def _login(request):
         return op
     user = op.get("user") if isinstance(op, dict) else None
     password = op.get("password") if isinstance(op, dict) else None
-    if not (_AUTH_ENABLED and auth.authenticate(user, password, store_sql.current_users())):
+    if _AUTH_ENABLED and isinstance(user, str) and isinstance(password, str):
+        # Same source resolution as the device login, so both share one bucket per client and a
+        # malformed forwarded chain cannot collapse callers onto the trusted proxy's address.
+        try:
+            source = consent_context.login_ip(request)
+        except (ValueError, BudgetConfigError):
+            return _json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "invalid request"})
+        retry = request.app[_LOGIN_LIMITER_KEY].take(user, source, time.monotonic())
+        if retry is not None:
+            response = _json(HTTPStatus.TOO_MANY_REQUESTS, {"ok": False, "error": "login rate limited"})
+            response.headers["Retry-After"] = str(retry)
+            return response
+        authenticated = await asyncio.to_thread(lambda: auth.authenticate(user, password, store_sql.current_users()))
+    else:
+        authenticated = False
+    if not authenticated:
         _audit(_rt(request), user if isinstance(user, str) else "?", "login", result="invalid")
         return _json(HTTPStatus.UNAUTHORIZED, {"ok": False, "error": "invalid credentials"})
     token = auth.make_session(user, now=_now(), secret=_SESSION_SECRET)
@@ -1251,9 +1271,11 @@ def make_app(rt):
         middlewares=[_auth_middleware, _empty_404_405_middleware],   # auth OUTERMOST: gate before routing
     )
     app[_RT_KEY] = rt
+    app[_LOGIN_LIMITER_KEY] = auth.LoginLimiter()
     register_calendars(app, _read_json_body)
     register_budget(app, _read_json_body, auth_enabled=lambda: _AUTH_ENABLED,
-                    session_secret=lambda: _SESSION_SECRET, secure_cookie=lambda: _COOKIE_SECURE)
+                    session_secret=lambda: _SESSION_SECRET, secure_cookie=lambda: _COOKIE_SECURE,
+                    login_limiter=app[_LOGIN_LIMITER_KEY])
     app.router.add_get("/", _ui_index, allow_head=False)                          # the TS app (Vite build)
     app.router.add_get("/assets/{path:[A-Za-z0-9._-]+}", _ui_asset, allow_head=False)
     app.router.add_get("/ui/", _ui_redirect, allow_head=False)                    # retired alias -> /

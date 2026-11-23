@@ -702,6 +702,13 @@ class AuthTests(_WebTestBase):
     def _login(self, user="tata", password="s3cret"):
         return _post(self.web.address, "/api/login", {"user": user, "password": password})
 
+    def test_password_attempt_budget(self):
+        with mock.patch.object(auth, "LOGIN_ATTEMPTS", 1):
+            self.assertEqual(self._login(password="wrong")[0], 401)
+            status, headers, _ = self._login()
+            self.assertEqual(status, 429)
+            self.assertGreater(int(headers["Retry-After"]), 0)
+
     @staticmethod
     def _cookie(set_cookie_header):
         return set_cookie_header.split(";", 1)[0]      # "hestia_session=<token>"
@@ -2070,6 +2077,8 @@ SPOUSE_ROUTE_STATUS = {
     ("GET", "/api/budget/receipts/image"): 403,
     ("POST", "/api/budget/receipts/delete"): 403,
     ("POST", "/api/budget/receipts/device-token/pair-code"): 403,
+    ("POST", "/api/budget/receipts/device-token/pair-code-cancel"): 403,
+    ("POST", "/api/budget/receipts/device-token/login"): 400,
     ("POST", "/api/budget/receipts/device-token/redeem"): 403,
     ("POST", "/api/budget/receipts/device-token/list"): 403,
     ("POST", "/api/budget/receipts/device-token/revoke"): 403,

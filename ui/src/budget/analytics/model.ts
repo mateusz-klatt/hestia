@@ -55,11 +55,8 @@ export type AnalyticsForecastItem = Schemas["BudgetAnalyticsForecastItem"];
 export type AnalyticsInboxConsentItem = Schemas["BudgetAnalyticsInboxConsentItem"];
 export type AnalyticsInboxMortgageItem = Schemas["BudgetAnalyticsInboxMortgageItem"];
 export type AnalyticsInboxSpendingLimitItem = Schemas["BudgetAnalyticsInboxSpendingLimitItem"];
-export type AnalyticsInboxItem =
-  | AnalyticsInboxConsentItem
-  | AnalyticsInboxMortgageItem
-  | AnalyticsInboxSpendingLimitItem;
 export type AnalyticsInbox = Schemas["BudgetAnalyticsInbox"];
+export type AnalyticsInboxItem = AnalyticsInbox["items"][number];
 export type AnalyticsInboxKey = Schemas["BudgetAnalyticsInboxKeyRequest"];
 export type AnalyticsInboxMarkRequest = Schemas["BudgetAnalyticsInboxMarkRequest"];
 export type AnalyticsInboxMarkSaved = Schemas["BudgetAnalyticsInboxMarkSaved"];

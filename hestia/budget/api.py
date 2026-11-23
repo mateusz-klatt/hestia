@@ -215,7 +215,7 @@ def _failure(exc, operation):
     return _error(500, "budget_internal_error")
 
 
-def register(app, read_json_body, *, auth_enabled, session_secret, secure_cookie=lambda: False):
+def register(app, read_json_body, *, auth_enabled, session_secret, login_limiter, secure_cookie=lambda: False):
     from . import analytics_api, consent_api, gmail_api, receipt_api
     async def private_headers(request, response):
         if request.path == PREFIX or request.path.startswith(PREFIX + "/"):
@@ -257,7 +257,8 @@ def register(app, read_json_body, *, auth_enabled, session_secret, secure_cookie
                          secure_cookie=secure_cookie)
     analytics_api.register(app, read_json_body, auth_enabled=auth_enabled, session_secret=session_secret)
     household_api.register(app, read_json_body, auth_enabled=auth_enabled, session_secret=session_secret)
-    receipt_api.register(app, read_json_body, auth_enabled=auth_enabled, session_secret=session_secret)
+    receipt_api.register(app, read_json_body, auth_enabled=auth_enabled, session_secret=session_secret,
+                         login_limiter=login_limiter)
     gmail_api.register(app, read_json_body, auth_enabled=auth_enabled, session_secret=session_secret)
     jobs.register(app, JOBS_KEY, auth_enabled=auth_enabled)
     for operation in READS:

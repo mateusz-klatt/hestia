@@ -58,7 +58,15 @@ class OpenApiArtifactTests(unittest.TestCase):
     def test_monthly_budget_contract_chain_from_0_27_0(self):
         """Remove additive receipts and household surfaces before verifying earlier contract snapshots."""
         document = api_contract.build_openapi()
-        self.assertEqual(document["info"]["version"], "0.42.0")
+        self.assertEqual(document["info"]["version"], "0.44.0")
+        del document["paths"]["/api/login"]["post"]["responses"]["429"]
+        schemas = document["components"]["schemas"]
+        for name in ("BudgetAnalyticsInboxDeviceItem", "BudgetAnalyticsInboxDeviceParams", "BudgetAnalyticsInboxDeviceRef"):
+            del schemas[name]
+        inbox_items = schemas["BudgetAnalyticsInbox"]["properties"]["items"]["items"]
+        del inbox_items["discriminator"]["mapping"]["device_added"]
+        inbox_items["oneOf"].remove({"$ref": "#/components/schemas/BudgetAnalyticsInboxDeviceItem"})
+        schemas["BudgetAnalyticsInboxKeyRequest"]["properties"]["kind"]["enum"].remove("device_added")
         del document["paths"]["/api/budget/analytics/category-colors-spread"]
         for name in ("BudgetAnalyticsCategoryColorSpreadRequest", "BudgetAnalyticsCategoryColorSpreadResult"):
             del document["components"]["schemas"][name]
@@ -668,7 +676,7 @@ class TolerantResponseContractTests(unittest.TestCase):
         "BudgetReceiptLineInput", "BudgetReceiptLinkRequest", "BudgetReceiptListRequest",
         "BudgetReceiptSearchRequest", "BudgetReceiptDeleteRequest",
         "BudgetReceiptDeviceBrowserRequest", "BudgetReceiptDeviceRedeemRequest",
-        "BudgetReceiptDeviceRevokeRequest",
+        "BudgetReceiptDeviceRevokeRequest", "BudgetReceiptDeviceCancelRequest", "BudgetReceiptDeviceLoginRequest",
         "BudgetReceiptGmailGrantRequest", "BudgetReceiptGmailRevokeRequest", "BudgetReceiptGmailSyncRequest",
         "AddUserRequest", "ChangePasswordRequest", "ControlCover", "ControlLevel", "ControlRequest",
         "ControlSwitch", "ControlThermostat", "ControlThermostatPower", "IrRequest", "LoginRequest",

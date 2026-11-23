@@ -20,6 +20,7 @@ from hestia.budget import analytics_api, owner_inbox as inbox_mod
 from hestia.budget.analytics_core import AnalyticsError
 from hestia.budget.analytics_views import BudgetAnalyticsViews
 from tests import test_budget_analytics_api as analytics_fixture
+from tests.migration_head import HEAD
 from tests.test_budget_analytics_store import AnalyticsCase
 
 HEX_A = "a" * 64
@@ -32,6 +33,24 @@ def _key(item):
 
 
 class OwnerInboxPureTests(unittest.TestCase):
+    def test_device_entry_validates_names_and_timestamps(self):
+        for name in ("Vesta", "Żółw 📱", "x" * 64):
+            for moment in (0, 0.0, 1_700_000_000.5):
+                entry = inbox_mod.device_entry("alice", "device-1", name, moment)
+                self.assertEqual(entry["params"], {"status": "added", "device_name": name,
+                                                  "date": "1970-01-01" if moment == 0 else "2023-11-14"})
+        for name in (None, 1, "", "x" * 65, "bad\nname", "bad\tname", "bad\x00name", "bad\x7fname", "bad\u200bname"):
+            with self.subTest(name=name), self.assertRaises(inbox_mod.OwnerInboxDataError):
+                inbox_mod.device_entry("alice", "device-1", name, 0)
+        for moment in (None, "0", True, False, -1, -0.1, float("nan"), float("inf"), float("-inf"),
+                       1e300, 10 ** 400):
+            with self.subTest(moment=moment), self.assertRaises(inbox_mod.OwnerInboxDataError):
+                inbox_mod.device_entry("alice", "device-1", "Vesta", moment)
+        with mock.patch.object(inbox_mod, "datetime") as clock:
+            clock.fromtimestamp.side_effect = OSError("out of range")
+            with self.assertRaises(inbox_mod.OwnerInboxDataError):
+                inbox_mod.device_entry("alice", "device-1", "Vesta", 0)
+
     def test_opaque_ids_milestones_params_digest_sorting_and_validation(self):
         s1 = inbox_mod.opaque_subject_id("alice", inbox_mod.KIND_CONSENT, "conn-1")
         s2 = inbox_mod.opaque_subject_id("bob", inbox_mod.KIND_CONSENT, "conn-1")
@@ -229,6 +248,61 @@ class OwnerInboxMigration0019Tests(unittest.TestCase):
         self.addCleanup(self.directory.cleanup)
         self.addCleanup(db.reset_engine_cache)
         self.path = Path(self.directory.name) / "m0019.db"
+
+    def test_0028_recovers_leftover_batch_table_in_both_directions(self):
+        engine, _ = db.init_db(self.path)
+        with engine.begin() as conn:
+            conn.exec_driver_sql("INSERT INTO users (username, password_hash) VALUES ('alice', 'h')")
+            conn.exec_driver_sql(
+                "INSERT INTO budget_owner_inbox_reads (owner, kind, subject_id, milestone, read_at) "
+                "VALUES ('alice', 'mortgage_due', ?, 'due', 100)", (HEX_A,))
+
+        for direction in ("downgrade", "upgrade"):
+            with self.subTest(direction=direction):
+                with engine.begin() as conn:
+                    conn.exec_driver_sql('CREATE TABLE "_alembic_tmp_budget_owner_inbox_reads" (stale TEXT)')
+                if direction == "downgrade":
+                    db.downgrade_db(self.path, "0027")
+                    expected = "0027"
+                else:
+                    engine, _ = db.init_db(self.path)
+                    expected = HEAD
+                with engine.connect() as conn:
+                    self.assertEqual(conn.exec_driver_sql("SELECT version_num FROM alembic_version").scalar(), expected)
+                    self.assertEqual(conn.exec_driver_sql(
+                        "SELECT name FROM sqlite_master WHERE name = '_alembic_tmp_budget_owner_inbox_reads'"
+                    ).all(), [])
+                    self.assertEqual(conn.exec_driver_sql(
+                        "SELECT owner, kind, subject_id, milestone, read_at FROM budget_owner_inbox_reads"
+                    ).one(), ("alice", "mortgage_due", HEX_A, "due", 100.0))
+                    self.assertEqual(conn.exec_driver_sql("PRAGMA integrity_check").all(), [("ok",)])
+                    self.assertEqual(conn.exec_driver_sql("PRAGMA foreign_key_check").all(), [])
+                    if direction == "upgrade":
+                        self.assertEqual(compare_metadata(MigrationContext.configure(conn), db.metadata), [])
+
+    def test_device_markers_roundtrip_preserves_existing_reads(self):
+        engine, _ = db.init_db(self.path)
+        self.addCleanup(engine.dispose)
+        insert = ("INSERT INTO budget_owner_inbox_reads (owner, kind, subject_id, milestone, read_at) "
+                  "VALUES ('alice', ?, ?, 'added', 100.0)")
+        with engine.begin() as conn:
+            self.assertEqual(conn.exec_driver_sql("SELECT version_num FROM alembic_version").scalar_one(), HEAD)
+            conn.exec_driver_sql("INSERT INTO users (username, password_hash, role) VALUES ('alice', 'h', 'admin')")
+            conn.exec_driver_sql(insert, ("mortgage_due", HEX_A))
+            conn.exec_driver_sql(insert, ("device_added", HEX_B))
+
+        db.downgrade_db(self.path, "0027")
+        with engine.begin() as conn:
+            self.assertEqual(conn.exec_driver_sql("SELECT kind FROM budget_owner_inbox_reads").scalars().all(),
+                             ["mortgage_due"])
+            with self.assertRaises(IntegrityError):
+                conn.exec_driver_sql(insert, ("device_added", HEX_B))
+
+        upgraded, _ = db.init_db(self.path)
+        with upgraded.begin() as conn:
+            self.assertEqual(conn.exec_driver_sql("SELECT version_num FROM alembic_version").scalar_one(), HEAD)
+            conn.exec_driver_sql(insert, ("device_added", HEX_B))
+            self.assertEqual(conn.exec_driver_sql("PRAGMA foreign_key_check").all(), [])
 
     def test_migration_0019_zero_drift_constraints_restrictive_fk_and_roundtrip(self):
         engine = db.make_engine(self.path)

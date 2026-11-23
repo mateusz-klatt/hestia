@@ -20,6 +20,42 @@ from hestia import auth, db, store_sql
 SECRET = b"unit-test-secret"
 
 
+class LoginLimiterTests(unittest.TestCase):
+    def test_attempts_share_ipv6_prefix_and_expire(self):
+        limiter = auth.LoginLimiter()
+        for _ in range(auth.LOGIN_ATTEMPTS):
+            self.assertIsNone(limiter.take("owner", "2001:db8::1", 1))
+        self.assertEqual(limiter.take("owner", "2001:db8::2", 2), auth.LOGIN_WINDOW - 1)
+        self.assertIsNone(limiter.take("other", "2001:db8::2", 2))
+        self.assertIsNone(limiter.take("owner", "2001:db8:0:1::2", 2))
+        self.assertIsNone(limiter.take("owner", "2001:db8::2", 1 + auth.LOGIN_WINDOW))
+
+    def test_bounded_keys_fail_closed_without_evicting_active_buckets(self):
+        limiter = auth.LoginLimiter()
+        with mock.patch.object(auth, "_MAX_LOGIN_BUCKETS", 1):
+            self.assertIsNone(limiter.take("owner", "192.0.2.1", 0))
+            self.assertIsNone(limiter.take("owner", "::ffff:192.0.2.1", 1))
+            self.assertEqual(limiter.take("other", "invalid", 1), auth.LOGIN_WINDOW - 1)
+            self.assertIsNone(limiter.take("other", "invalid", auth.LOGIN_WINDOW))
+
+    def test_one_source_cannot_exhaust_table_or_evict_lockouts(self):
+        for source, same_source, other in (("192.0.2.1", "::ffff:192.0.2.1", "192.0.2.2"),
+                                           ("2001:db8::1", "2001:db8::2", "2001:db8:0:1::1")):
+            with self.subTest(source=source):
+                limiter = auth.LoginLimiter()
+                for _ in range(auth.LOGIN_ATTEMPTS):
+                    self.assertIsNone(limiter.take("owner", source, 0))
+                for index in range(auth._MAX_LOGIN_SOURCE_BUCKETS - 1):
+                    self.assertIsNone(limiter.take(str(index), source, 1))
+                self.assertEqual(limiter.take("overflow", same_source, 2), auth.LOGIN_WINDOW - 2)
+                self.assertIsNone(limiter.take("unrelated", other, 2))
+                self.assertEqual(limiter.take("owner", source, 2), auth.LOGIN_WINDOW - 2)
+                self.assertIsNone(limiter.take("0", same_source, 2))  # existing buckets still work
+                self.assertEqual(len(limiter._attempts), auth._MAX_LOGIN_SOURCE_BUCKETS + 1)
+                self.assertIsNone(limiter.take("overflow", source, 1 + auth.LOGIN_WINDOW))
+                self.assertEqual(len(limiter._sources[source if ":" not in source else "2001:db8::/64"]), 1)
+
+
 class PasswordTests(unittest.TestCase):
     def test_round_trip(self):
         self.assertTrue(auth.verify_password("hunter2", auth.hash_password("hunter2")))

@@ -23,6 +23,7 @@ export interface ReceiptDevice {
 }
 
 export interface ReceiptPair {
+  code_id: string;
   code: string;
   expires_at: number;
   qr_payload: string;
@@ -159,6 +160,8 @@ export const budgetApi = {
   /** Unrevoked receipts devices. A 404 means the receipts flag is off. */
   receiptDevices: () => post<ReceiptDevice[]>("receipts/device-token/list", {}),
   pairReceiptDevice: () => post<ReceiptPair>("receipts/device-token/pair-code", {}),
+  cancelReceiptPairCode: (codeId: string) =>
+    post<{ ok: true }>("receipts/device-token/pair-code-cancel", { code_id: codeId }),
   revokeReceiptDevice: (tokenId: string) =>
     post<{ ok: true }>("receipts/device-token/revoke", { token_id: tokenId }),
   setSelected: (account: BudgetAccount, selected: boolean) =>

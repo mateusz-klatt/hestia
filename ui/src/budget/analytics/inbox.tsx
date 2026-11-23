@@ -1,7 +1,6 @@
 // Owner-private live active alerts inbox (2D, migration 0019 + OpenAPI 0.24.0).
-// Pure read-only GET /analytics/inbox evaluates active consent, mortgage and spending-limit alerts
-// in one SQLite snapshot; display names are resolved locally from item.ref (never raw hashes or
-// server prose). Read/unread updates use strict anti-ABA expected_reads_version CAS.
+// GET /analytics/inbox evaluates owner alerts in one SQLite snapshot.
+// Read/unread updates use strict anti-ABA expected_reads_version CAS.
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { BudgetApi, BudgetResult } from "../api";
 import { consentHealthLabels } from "../consent_health";
@@ -19,7 +18,7 @@ import type { AnalyticsCategory, AnalyticsInbox, AnalyticsInboxConsentItem, Anal
 export const inboxLabels = {
   en: {
     title: "Owner inbox",
-    intro: "Live active alerts from bank consents, mortgage reminders and monthly spending limits. Resolved alerts disappear automatically even if unread. No emails, push notifications or shared calendars are triggered here.",
+    intro: "New devices and active alerts for bank consents, mortgages and monthly spending limits.",
     evaluatedFor: (date: string, tz: string) => `Evaluated for ${date} (${tz})`,
     unreadCount: (count: number) => `Unread: ${String(count)}`,
     capacity: (used: number, cap: number) => `Saved read markers: ${String(used)} / ${String(cap)}`,
@@ -46,7 +45,9 @@ export const inboxLabels = {
       consent_renewal: "Bank consent",
       mortgage_due: "Mortgage",
       spending_limit: "Spending limit",
+      device_added: "Device",
     },
+    newDevice: (name: string, date: string) => `New device: ${name}, ${date}`,
     consentStatuses: {
       attention_required: "Attention required",
       expired: "Expired",
@@ -84,7 +85,7 @@ export const inboxLabels = {
   },
   pl: {
     title: "Skrzynka właściciela",
-    intro: "Aktywne alerty na żywo ze zgód bankowych, przypomnień hipotecznych i miesięcznych limitów wydatków. Rozwiązane alerty znikają automatycznie, nawet jeśli były nieprzeczytane. Nie wysyła e-maili, powiadomień push ani wpisów do wspólnych kalendarzy.",
+    intro: "Nowe urządzenia i aktywne alerty o zgodach bankowych, hipotekach i miesięcznych limitach wydatków.",
     evaluatedFor: (date: string, tz: string) => `Stan na ${date} (${tz})`,
     unreadCount: (count: number) => `Nieprzeczytane: ${String(count)}`,
     capacity: (used: number, cap: number) => `Zapisane znaczniki przeczytania: ${String(used)} / ${String(cap)}`,
@@ -111,7 +112,9 @@ export const inboxLabels = {
       consent_renewal: "Zgoda bankowa",
       mortgage_due: "Hipoteka",
       spending_limit: "Limit wydatków",
+      device_added: "Urządzenie",
     },
+    newDevice: (name: string, date: string) => `Nowe urządzenie: ${name}, ${date}`,
     consentStatuses: {
       attention_required: "Wymaga uwagi",
       expired: "Wygasła",
@@ -237,12 +240,14 @@ interface RowProps {
 }
 
 function subjectLabel(item: AnalyticsInboxItem, lookups: LookupMaps, text: InboxLabels): string {
+  if (item.kind === "device_added") return text.newDevice(item.params.device_name, item.params.date);
   if (item.kind === "consent_renewal") return lookups.banks.get(item.ref.connection_id) ?? text.unknownBank;
   if (item.kind === "mortgage_due") return lookups.schedules.get(item.ref.schedule_id) ?? text.unknownMortgage;
   return lookups.categories.get(item.ref.category_id) ?? text.unknownCategory;
 }
 
-function statusLabel(item: AnalyticsInboxItem, text: InboxLabels): string {
+function statusLabel(item: AnalyticsInboxItem, text: InboxLabels): string | null {
+  if (item.kind === "device_added") return null;
   if (item.kind === "consent_renewal") return labelOf(text.consentStatuses, item.params.status);
   if (item.kind === "mortgage_due") return labelOf(text.mortgageStatuses, item.params.status);
   return labelOf(text.limitStatuses, item.params.status);
@@ -254,7 +259,8 @@ function InboxRow({
 }: RowProps) {
   const readStamp = when(item.read_at, locale);
   const title = subjectLabel(item, lookups, text);
-  const openAction = item.kind === "consent_renewal"
+  const status = statusLabel(item, text);
+  const openAction = item.kind === "device_added" ? null : item.kind === "consent_renewal"
     ? { label: consentEnabled ? text.openConsent : text.openAccounts, run: () => { onOpenAccounts(consentEnabled); } }
     : item.kind === "mortgage_due"
       ? { label: text.openMortgages, run: onOpenMortgages }
@@ -271,9 +277,9 @@ function InboxRow({
           <strong>{title}</strong>
         </span>
         <div className="budget-actions">
-          <span className="budget-chip budget-inbox-status" data-status={item.params.status}>
-            {statusLabel(item, text)}
-          </span>
+          {status === null ? null : (
+            <span className="budget-chip budget-inbox-status" data-status={item.params.status}>{status}</span>
+          )}
           <span className="budget-chip">{item.read ? text.readBadge : text.unreadBadge}</span>
         </div>
       </div>
@@ -290,7 +296,9 @@ function InboxRow({
         <button type="button" disabled={busy} onClick={() => { onToggleRead(item); }}>
           {item.read ? text.markUnread : text.markRead}
         </button>
-        <button type="button" disabled={busy} onClick={openAction.run}>{openAction.label}</button>
+        {openAction === null ? null : (
+          <button type="button" disabled={busy} onClick={openAction.run}>{openAction.label}</button>
+        )}
       </div>
     </li>
   );

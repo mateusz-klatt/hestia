@@ -96,6 +96,7 @@ function fakeApi(accounts: BudgetAccount[] = [account({ display })]) {
     markInbox: vi.fn<BudgetApi["markInbox"]>(() => ok({ inbox: inboxMarkSaved() })),
     receiptDevices: vi.fn<BudgetApi["receiptDevices"]>(() => ok([])),
     pairReceiptDevice: vi.fn<BudgetApi["pairReceiptDevice"]>(),
+    cancelReceiptPairCode: vi.fn<BudgetApi["cancelReceiptPairCode"]>(),
     revokeReceiptDevice: vi.fn<BudgetApi["revokeReceiptDevice"]>(),
   } satisfies BudgetApi;
 }

@@ -57,6 +57,27 @@ function button(label: string, scope: ParentNode = host): HTMLButtonElement {
 }
 
 describe("InboxView", () => {
+  it("renders an owner device alert in Polish and marks it read through the inbox", async () => {
+    const device: AnalyticsInboxItem = {
+      kind: "device_added", subject_id: "a".repeat(64), milestone: "added", read: false, read_at: null,
+      ref: { token_id: "synthetic-device-id" }, params: { status: "added", device_name: "Vesta", date: "2026-11-21" },
+    };
+    const data = inboxOf([device]);
+    const api = fakeApi(data);
+    await act(async () => {
+      root.render(<InboxView api={api} connections={[]} consentEnabled={false} text={inboxLabels.pl} locale="pl"
+        revision={0} onAccessLoss={() => false} onOpenAccounts={vi.fn()} onOpenMortgages={vi.fn()} onOpenLimits={vi.fn()} />);
+      await Promise.resolve();
+    });
+    expect(host.querySelector("li strong")?.textContent).toBe("Nowe urządzenie: Vesta, 2026-11-21");
+    expect(host.textContent).not.toContain(device.ref.token_id);
+    await click(button(inboxLabels.pl.markRead));
+    expect(api.markInbox).toHaveBeenCalledWith({
+      items: [{ kind: device.kind, subject_id: device.subject_id, milestone: device.milestone }],
+      read: true, expected_reads_version: data.reads_version,
+    });
+  });
+
   it("renders all three alert kinds resolved via item.ref in EN and PL without raw hashes or storage", async () => {
     const setItem = vi.spyOn(Storage.prototype, "setItem");
     const consentAlert = inboxConsentItem({

@@ -6,7 +6,7 @@ import type { BudgetApi, BudgetResult, ReceiptDevice, ReceiptPair } from "./api"
 import { ReceiptDevices } from "./devices";
 import { isAccessLoss } from "./model";
 
-type DeviceApi = Pick<BudgetApi, "receiptDevices" | "pairReceiptDevice" | "revokeReceiptDevice">;
+type DeviceApi = Pick<BudgetApi, "receiptDevices" | "pairReceiptDevice" | "cancelReceiptPairCode" | "revokeReceiptDevice">;
 
 function ok<T>(data: T): Promise<BudgetResult<T>> { return Promise.resolve({ ok: true, data }); }
 function fail<T>(status: number, error: string): Promise<BudgetResult<T>> {
@@ -17,6 +17,7 @@ function api(devices: ReceiptDevice[] = []) {
   return {
     receiptDevices: vi.fn<BudgetApi["receiptDevices"]>(() => ok(devices)),
     pairReceiptDevice: vi.fn<BudgetApi["pairReceiptDevice"]>(),
+    cancelReceiptPairCode: vi.fn<BudgetApi["cancelReceiptPairCode"]>(),
     revokeReceiptDevice: vi.fn<BudgetApi["revokeReceiptDevice"]>(),
   } satisfies DeviceApi;
 }
@@ -28,7 +29,8 @@ const device: ReceiptDevice = {
 
 function pairing(): ReceiptPair {
   const code = Array.from({ length: 8 }, (_, index) => String(index)).join("");
-  return { code, expires_at: Math.floor(Date.now() / 1000) + 300, qr_payload: `hestia-pair:${code}` };
+  return { code_id: "test-code-id", code, expires_at: Math.floor(Date.now() / 1000) + 300,
+    qr_payload: `hestia-pair:${code}` };
 }
 
 let host: HTMLElement;
@@ -88,6 +90,24 @@ describe("receipt devices", () => {
     await act(async () => { button("Zamknij").click(); await Promise.resolve(); });
     expect(host.querySelector(".budget-pair-code")).toBeNull();
     expect(host.textContent).toContain("Recently paired");
+    expect(client.cancelReceiptPairCode).not.toHaveBeenCalled();
+  });
+
+  it("cancels by the server id and keeps the code available if cancellation fails", async () => {
+    const client = api();
+    const pair = pairing();
+    client.pairReceiptDevice.mockImplementation(() => ok(pair));
+    client.cancelReceiptPairCode.mockImplementationOnce(() => fail(503, "budget_unavailable"));
+    client.cancelReceiptPairCode.mockImplementationOnce(() => ok({ ok: true }));
+    await render(client, "pl");
+    await act(async () => { button("Dodaj urządzenie").click(); await Promise.resolve(); });
+    expect(button("Anuluj kod").previousElementSibling).toBe(button("Zamknij"));
+    await act(async () => { button("Anuluj kod").click(); await Promise.resolve(); });
+    expect(host.querySelector(".budget-pair-code")?.textContent).toBe(pair.code);
+    expect(host.querySelector('[role="alert"]')?.textContent).toBe("Nie udało się anulować kodu parowania.");
+    await act(async () => { button("Anuluj kod").click(); await Promise.resolve(); });
+    expect(client.cancelReceiptPairCode.mock.calls).toEqual([[pair.code_id], [pair.code_id]]);
+    expect(host.querySelector(".budget-pair-code")).toBeNull();
   });
 
   it("says the QR is unavailable when the payload does not fit", async () => {

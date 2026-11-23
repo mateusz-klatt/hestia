@@ -620,7 +620,7 @@ class BudgetOwnerInboxRead(Base):
     __table_args__ = (
         Index("ix_budget_owner_inbox_reads_owner", "owner"),
         CheckConstraint(
-            "kind IN ('consent_renewal', 'mortgage_due', 'spending_limit')",
+            "kind IN ('consent_renewal', 'mortgage_due', 'spending_limit', 'device_added')",
             name="ck_budget_owner_inbox_reads_kind",
         ),
         CheckConstraint(
