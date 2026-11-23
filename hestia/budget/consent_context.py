@@ -96,3 +96,34 @@ def psu_context(request, *, environ=None):
     return PSUContext(ip_address=_address(request, networks),
                       user_agent=_header(request.headers, "User-Agent", 1024),
                       accept_language=_header(request.headers, "Accept-Language", 256))
+
+
+def login_ip(request, *, environ=None):
+    """Resolve a login source or reject an unverifiable trusted-proxy chain.
+
+    Duplicate forwarded fields form one ordered chain. Only hops to the right
+    of the first untrusted address are authoritative; a client's malformed
+    prefix cannot collapse all clients into their proxy's limiter bucket.
+    """
+    networks = _networks(os.environ if environ is None else environ)
+    peer = _ip(request.remote)
+    if peer is None:
+        raise ValueError("Invalid login source")
+    if not _trusted(peer, networks):
+        return str(peer)
+    values = request.headers.getall("X-Forwarded-For", ())
+    if not values or sum(len(value) + 1 for value in values) > MAX_FORWARDED + 1:
+        raise ValueError("Invalid login source")
+    value = ",".join(values)
+    if not value.isascii() or any(ord(char) < 32 or ord(char) == 127 for char in value):
+        raise ValueError("Invalid login source")
+    parts = value.split(",")
+    if len(parts) > MAX_PROXY_CHAIN:
+        raise ValueError("Invalid login source")
+    for part in reversed(parts):
+        address = _ip(part)
+        if address is None:
+            raise ValueError("Invalid login source")
+        if not _trusted(address, networks):
+            return str(address)
+    raise ValueError("Invalid login source")

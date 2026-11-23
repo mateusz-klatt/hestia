@@ -46,6 +46,7 @@ SESSION_TTL = 30 * 24 * 3600.0   # 30-day "remember me" cookie
 LOGIN_ATTEMPTS = 10
 LOGIN_WINDOW = 60
 _MAX_LOGIN_BUCKETS = 4096
+_MAX_LOGIN_SOURCE_BUCKETS = 64
 
 DEFAULT_USERS_FILE = "/data/users.json"
 
@@ -55,6 +56,7 @@ class LoginLimiter:
 
     def __init__(self):
         self._attempts = {}
+        self._sources = {}
 
     def take(self, username: str, ip: str, now: float) -> int | None:
         try:
@@ -63,19 +65,28 @@ class LoginLimiter:
             address = None
         if isinstance(address, ipaddress.IPv6Address):
             address = address.ipv4_mapped or ipaddress.ip_network((address, 64), strict=False)
-        key = (hashlib.sha256(username.encode("utf-8", errors="surrogatepass")).digest(), str(address))
+        source = str(address)
+        key = (hashlib.sha256(username.encode("utf-8", errors="surrogatepass")).digest(), source)
         # Entries are inserted in deadline order. Updating a count keeps its position.
         while self._attempts:
             oldest = next(iter(self._attempts))
             if self._attempts[oldest][0] > now:
                 break
             del self._attempts[oldest]
+            source_buckets = self._sources[oldest[1]]
+            del source_buckets[oldest]
+            if not source_buckets:
+                del self._sources[oldest[1]]
         attempt = self._attempts.get(key)
         if attempt is None:
+            source_buckets = self._sources.get(source, {})
+            if len(source_buckets) >= _MAX_LOGIN_SOURCE_BUCKETS:
+                return math.ceil(next(iter(source_buckets.values())) - now)
             if len(self._attempts) >= _MAX_LOGIN_BUCKETS:
                 deadline, _ = next(iter(self._attempts.values()))
                 return math.ceil(deadline - now)
             attempt = now + LOGIN_WINDOW, 0
+            self._sources.setdefault(source, {})[key] = attempt[0]
         deadline, count = attempt
         if count >= LOGIN_ATTEMPTS:
             return math.ceil(deadline - now)

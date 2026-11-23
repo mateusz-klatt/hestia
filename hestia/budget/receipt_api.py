@@ -11,7 +11,8 @@ from pydantic import ValidationError
 
 from .. import api_contract, store_sql
 from ..db import init_db
-from . import api, device_token
+from . import api, consent_context, device_token
+from .config import BudgetConfigError
 from .receipt_parser import ReceiptError
 from .receipt_store import BudgetReceiptStore
 from .views import BudgetUsersBackendRequired
@@ -219,11 +220,16 @@ def register(app, read_json_body, *, auth_enabled, session_secret, login_limiter
                 return _device_error(400, "budget_invalid_request")
             if not auth_enabled():
                 return _device_error(401, "device_token_rejected")
-            retry = login_limiter.take(form.username, device_token.client_ip(request), time.monotonic())
+            store = await api._settled_thread(device_token.open_store)
+            try:
+                ip = consent_context.login_ip(request)
+            except (ValueError, BudgetConfigError):
+                return _device_error(400, "budget_invalid_request")
+            retry = login_limiter.take(form.username, ip, time.monotonic())
             if retry is not None:
                 return _device_error(429, "device_token_rate_limited", retry)
             result = await api._settled_thread(
-                lambda: device_token.open_store().login(form.username, form.password, name))
+                lambda: store.login(form.username, form.password, name))
             if result is None:
                 return _device_error(401, "device_token_rejected")
             return web.json_response(result, headers=api.PRIVATE_HEADERS)

@@ -702,6 +702,43 @@ class DeviceTokenHTTPTests(fixture.unittest.IsolatedAsyncioTestCase):
             _status(result, 429)
             self.assertGreater(int(result.headers["Retry-After"]), 0)
 
+    async def test_unsupported_user_backend_does_not_consume_shared_login_budget(self):
+        self._set_login_passwords("alice")
+        with mock.patch.dict(os.environ, {"HESTIA_PERSIST": "json"}), \
+                mock.patch.object(auth.LoginLimiter, "take") as take:
+            for _ in range(auth.LOGIN_ATTEMPTS + 1):
+                response = await self._login_device()
+                self.assertEqual((response.status, (await response.json())["error"]),
+                                 (401, "device_token_rejected"))
+            take.assert_not_called()
+        with mock.patch.object(web, "_audit"):
+            response = await self._post("/api/login", {"user": "alice", "password": LOGIN_PASSWORD}, {})
+        _status(response, 200)
+
+    async def test_device_login_proxy_sources_reject_unresolved_chains_before_limiting(self):
+        self._set_login_passwords("alice")
+        form = {"username": "alice", "password": LOGIN_PASSWORD, "device_name": "Vesta"}
+        with mock.patch.dict(os.environ, {consent_context.TRUSTED_PROXY_ENV: "127.0.0.1/32,10.0.0.0/8"}), \
+                mock.patch.object(auth, "LOGIN_ATTEMPTS", 1):
+            for headers in ([], [("X-Forwarded-For", "bad")],
+                            [("X-Forwarded-For", "192.0.2.1"), ("X-Forwarded-For", "bad")]):
+                with mock.patch.object(auth.LoginLimiter, "take") as take:
+                    response = await self.client.post(device_token.LOGIN_PATH, json=form, headers=headers)
+                    self.assertEqual((response.status, (await response.json())["error"]),
+                                     (400, "budget_invalid_request"))
+                    take.assert_not_called()
+            for headers in ([('X-Forwarded-For', 'bad, 192.0.2.1, 10.0.0.1')],
+                            [('X-Forwarded-For', 'bad'), ('X-Forwarded-For', '192.0.2.2, 10.0.0.1')]):
+                response = await self.client.post(device_token.LOGIN_PATH, json=form, headers=headers)
+                _status(response, 200)
+            # Normal traffic keeps the shared /api/login lockout and response.
+            with mock.patch.object(web, "_audit"):
+                response = await self._post("/api/login", {"user": "alice", "password": LOGIN_PASSWORD},
+                                            {"X-Forwarded-For": "192.0.2.2, 10.0.0.1"})
+            _status(response, 429)
+            response = await self._login_device(headers={"X-Forwarded-For": "192.0.2.3"})
+            _status(response, 200)
+
     async def test_password_login_rejects_credentials_in_headers_and_honors_flags(self):
         credentials = ({"Cookie": "unrelated=value"}, {"Cookie": ""}, {"Authorization": ""},
                        self.headers(bearer=True), self.headers())
