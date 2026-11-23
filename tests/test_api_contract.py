@@ -77,10 +77,31 @@ class OpenApiArtifactTests(unittest.TestCase):
                 del properties[field]
             properties["status"]["enum"].remove("imported")
             properties["source_kind"]["enum"] = ["live_text", "local_ocr", "cloud_ai"]
-        document["info"]["version"] = "0.37.0"
-        canonical_0_37 = json.dumps(document, sort_keys=True, separators=(",", ":")).encode("utf-8")
-        self.assertEqual(hashlib.sha256(canonical_0_37).hexdigest(),
-                         "dae7c9a8b7ed8e02e3a6663161a161c4706cc489c4e0c3a48fe464e8b4b9f135")
+        document["info"]["version"] = "0.38.0"
+        canonical_0_38 = json.dumps(document, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        self.assertEqual(hashlib.sha256(canonical_0_38).hexdigest(),
+                         "0e9b45bfde00e3e8c8b9d144e86982daca1e75e749dceab7732ec01f7c86e231")
+        for name in ("BudgetAnalyticsRule", "BudgetAnalyticsRuleSaved"):
+            schema = document["components"]["schemas"][name]
+            self.assertNotIn("inactive_reason", schema["required"])
+            reason = schema["properties"].pop("inactive_reason")
+            enums = [item for arm in reason.get("anyOf", [reason]) for item in arm.get("enum", [])]
+            self.assertEqual(enums, ["rule_key_unavailable", "rule_key_rotated"])
+        for schema, field in (
+            ("BudgetAnalyticsRulePreviewRequest", "counterparty_account_key"),
+            ("BudgetAnalyticsRule", "counterparty_account_key"),
+            ("BudgetAnalyticsRuleSaved", "counterparty_account_key"),
+            ("BudgetAnalyticsTransaction", "counterparty_account_key"),
+            ("BudgetAnalyticsTransaction", "counterparty_account"),
+        ):
+            document["components"]["schemas"][schema]["properties"].pop(field)
+        rule_schema = document["components"]["schemas"]["BudgetAnalyticsRulePreviewRequest"]
+        rule_fields = rule_schema["properties"]["field"]
+        rule_fields["enum"].remove("counterparty_account")
+        rule_schema["required"].insert(4, "value")
+        rule_schema["properties"]["value"]["minLength"] = 1
+        # 0.38 also updates household authorization descriptions for operators.
+        # Removing household routes below reconstructs the published 0.36 contract.
         for path in [path for path in paths if path.startswith("/api/budget/household/")]:
             del paths[path]
         for name in [name for name in schemas if name.startswith("BudgetHousehold")]:

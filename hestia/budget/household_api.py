@@ -1,7 +1,7 @@
-"""Household budget API. Viewers see an allowlisted copy of one owner's data.
+"""Household budget API. Grant members see an allowlisted copy of one owner's data.
 
 The route floor is ``viewer``, which also admits operator and admin. ``require_household_data_grant``
-rejects every stored role other than an active viewer. Eligibility runs before the shared analytics
+requires an enabled viewer or operator. Eligibility runs before the shared analytics
 lock, then again inside the read snapshot, before the projection cache, filters or cursor decryption.
 After the body is encoded, one ``BEGIN IMMEDIATE`` transaction re-authorizes that same grant and,
 except for discovery, writes at most one sanitised analytics-audit row per member and view per 60

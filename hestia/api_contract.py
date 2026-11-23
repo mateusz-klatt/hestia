@@ -94,6 +94,8 @@ from pydantic.json_schema import models_json_schema
 #         down_revision 0021).
 # 0.37.0: additive household read API (GET /api/budget/household/*, migration 0023,
 #         down_revision 0022). Owner routes stay admin. The one-off label is not on this API.
+# 0.38.0: counterparty-account rules store keyed digests and masked display values (zero migration).
+#         Optional inactive_reason on a rule when that key is missing or rotated (additive).
 # 0.40.0: separate Gmail receipt grant, status, sync and revocation (migration 0025).
 CONTRACT_VERSION = "0.40.0"
 OPENAPI_PATH = Path(__file__).resolve().parent.parent / "docs" / "api" / "openapi.json"
@@ -1600,9 +1602,10 @@ class BudgetAnalyticsRulePreviewRequest(BaseModel):
     model_config = _STRICT
     rule_id: BudgetId | None
     expected_version: BudgetAnalyticsVersion
-    field: Literal["description", "counterparty_name", "mcc"]
+    field: Literal["description", "counterparty_name", "counterparty_account", "mcc"]
     operator: Literal["contains", "equals"]
-    value: Annotated[str, Field(min_length=1, max_length=256)]
+    value: Annotated[str, Field(max_length=256, json_schema_extra=_OMIT)] = ""
+    counterparty_account_key: Annotated[str | None, Field(pattern=r"^[0-9a-f]{64}$", json_schema_extra=_OMIT)] = None
     category_id: BudgetId | None
     kind: BudgetAnalyticsKind
     priority: Annotated[int, Field(ge=0, le=10000)]
@@ -1684,6 +1687,14 @@ class BudgetAnalyticsRule(BaseModel):
     field: str
     operator: str
     value: str
+    counterparty_account_key: Annotated[str | None, Field(pattern=r"^[0-9a-f]{64}$", json_schema_extra=_OMIT)] = None
+    inactive_reason: Annotated[
+        Literal["rule_key_unavailable", "rule_key_rotated"] | None,
+        Field(
+            description="Set when a counterparty-account rule cannot match because its key is missing or was rotated.",
+            json_schema_extra=_OMIT,
+        ),
+    ] = None
     category_id: str | None
     kind: str
     priority: int
@@ -1807,6 +1818,8 @@ class BudgetAnalyticsTransaction(BudgetTransaction):
     annotation: BudgetAnalyticsAnnotation
     effective: BudgetAnalyticsEffective
     metadata: BudgetAnalyticsMetadata | None
+    counterparty_account_key: Annotated[str | None, Field(pattern=r"^[0-9a-f]{64}$", json_schema_extra=_OMIT)] = None
+    counterparty_account: Annotated[str | None, Field(json_schema_extra=_OMIT)] = None
     transfer: BudgetAnalyticsTransactionTransfer
 
 
@@ -3977,9 +3990,8 @@ def _household_responses(model):
         "immediate transaction. A successful data read may write one sanitised analytics-audit row naming "
         "the member, owner and view, at most once per 60 seconds. Discovery writes no audit row. A denial "
         "writes nothing.")
-    responses["403"]["description"] = ("Stored role must be exactly an active viewer with a grant whose owner is an "
-                                       "active admin. Data reads also require exactly one matching X-Budget-Grant. "
-                                       "The viewer route floor admits higher roles; those roles are rejected here. "
+    responses["403"]["description"] = ("The member must be an enabled viewer or operator with a grant whose owner "
+                                       "is an enabled admin. Data reads also require exactly one matching X-Budget-Grant. "
                                        "Middleware may return an empty body.")
     responses["413"]["description"] = ("Household response exceeded 4 MiB of UTF-8 JSON, or a monthly-budget "
                                        "processing cap was hit. No partial body is returned.")
@@ -3987,7 +3999,7 @@ def _household_responses(model):
 
 
 def _household_paths():
-    """P3 viewer reads. Existing owner routes stay admin. Settings reads the P1 bootstrap config only."""
+    """P3 household reads. Existing owner routes stay admin. Settings reads the P1 bootstrap config only."""
     prefix = "/api/budget/household/"
     period = _budget_query("period", required=True, schema={"type": "string", "pattern": r"^[0-9]{4}(?:-[0-9]{2})?$"},
                            description="Inclusive calendar month or year, 1900 through 9999.")
@@ -3996,7 +4008,7 @@ def _household_paths():
                           description="Inclusive calendar month YYYY-MM.")
     page = [_budget_query("limit", schema={"type": "integer", "minimum": 1, "maximum": 200, "default": 50}),
             _budget_query("cursor", schema={"type": "string", "minLength": 1, "maxLength": 8192},
-                          description="Opaque cursor bound to the viewer, owner, grant, route and safe rows.")]
+                          description="Opaque cursor bound to the member, owner, grant, route and safe rows.")]
     month_optional = _budget_query(
         "period", schema={"type": "string", "pattern": r"^[0-9]{4}-[0-9]{2}$"},
         description="Optional calendar month YYYY-MM through the current Europe/Warsaw month. Defaults to that month.")
@@ -4042,9 +4054,9 @@ def _household_paths():
     paths = {}
     for name, operation, summary, model, parameters in reads:
         entry = {"operationId": operation, "summary": summary,
-                 "description": "Requires an authenticated active viewer, both budget flags, SQLite users and a "
-                                "grant whose owner is an active admin. The grant header is 64 lowercase hex "
-                                "characters. Reads the same owner projection through a separate allowlist. No bank "
+                 "description": "Requires an authenticated, enabled viewer or operator, both budget flags, SQLite "
+                                "users and a grant whose owner is an enabled admin. The grant header is 64 lowercase "
+                                "hex characters. Reads the same owner projection through a separate allowlist. No bank "
                                 "request. Data reads may write one sanitised internal analytics-audit row for the "
                                 "member, owner and view name, at most once per 60 seconds, in the same immediate "
                                 "transaction as the fresh grant check. Household audit rows older than 180 days are "

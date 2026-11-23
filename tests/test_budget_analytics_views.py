@@ -26,7 +26,8 @@ from tests.test_budget_analytics_store import AnalyticsCase
 class ProjectionCase(AnalyticsCase):
     def setUp(self):
         super().setUp()
-        self.store = BudgetAnalyticsViews(self.sessions, clock=lambda: self.now, cursor_secret=b"synthetic-only")
+        self.store = BudgetAnalyticsViews(self.sessions, clock=lambda: self.now, cursor_secret=b"synthetic-only",
+                                          rule_key_file=str(self.rule_key_file))
         with self.sessions.begin() as session:
             session.execute(delete(db.BudgetTransaction))
 

@@ -650,7 +650,7 @@ def annotation_label_check_sql() -> str:
 
 
 class BudgetHouseholdMember(Base):
-    """One viewer granted read-only access to exactly one admin owner's budget.
+    """One member granted read-only access to exactly one admin owner's budget.
 
     ``grant_id`` is a server-generated immutable 64-hex scope id. An identical
     member/owner pair keeps it; any regrant allocates a new one. Migration 0023

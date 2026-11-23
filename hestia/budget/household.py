@@ -1,4 +1,4 @@
-"""Household grants and the viewer read gate (Budget Month P3).
+"""Household grants and the member read gate (Budget Month P3).
 
 Decisions for this branch:
 
@@ -13,11 +13,11 @@ Decisions for this branch:
   Regrant allocates a new id. Command output and logs use fixed status codes.
 - Discovery does not read ``X-Budget-Grant``. Data routes require exactly one
   header and it must equal the grant id from that snapshot.
-- Route floor ``viewer`` also admits operator and admin. Authorization still
-  requires the stored role to be exactly ``viewer`` and the grant owner to be
-  an active admin, in the read snapshot and again in one immediate transaction
-  before the response is sent.
-- A disabled viewer fails this gate with ``budget_forbidden``. The auth
+- The ``viewer`` route floor admits higher roles. Authorization requires an
+  enabled ``viewer`` or ``operator`` and an active admin grant owner, in the
+  read snapshot and again in one immediate transaction before responding.
+- Role changes between viewer and operator preserve access. A member who is
+  disabled or promoted to admin is denied with ``budget_forbidden``. The auth
   middleware returns 401 first when it already sees the disabled account.
 - Category labels are ``salary`` or ``child_benefit`` only when the stored name
   is exactly ``Wynagrodzenie``, ``Świadczenia ZUS``, ``salary``, ``child benefit``
@@ -64,6 +64,7 @@ _SUPPORTED_REVISIONS = ((SCHEMA_REVISION,), ("0025",))
 _GRANT_BYTES = 32
 _USERS_MARKER = "users_authoritative"
 _GRANT_ID = re.compile(r"[0-9a-f]{64}\Z", re.ASCII)
+_MEMBER_ROLES = ("viewer", "operator")
 
 # Exact stored names that may be serialized as a fixed code. Anything else is an ordinal.
 APPROVED_CATEGORY_LABELS = {
@@ -127,8 +128,7 @@ def authorize_household(session, member, *, header, require_header):
     if session.get(AppMeta, _USERS_MARKER) is None:
         from .views import BudgetUsersBackendRequired
         raise BudgetUsersBackendRequired()
-    user = session.get(User, member) if isinstance(member, str) and member else None
-    if user is None or user.disabled or user.role != "viewer":
+    if _active(session, member, *_MEMBER_ROLES) is None:
         raise HouseholdAuthError(403, "budget_forbidden")
     grant = session.get(BudgetHouseholdMember, member)
     if grant is None or grant.member_username != member or grant.owner == member:
@@ -144,10 +144,10 @@ def authorize_household(session, member, *, header, require_header):
 def require_household_data_grant(session, member, *, header, require_header):
     """Snapshot gate for a household read. Runs before cache, filters and cursors.
 
-    Requires both budget flags, SQLite, an authenticated username, an active user
-    whose stored role is exactly ``viewer``, a grant row for that username, and an
-    owner who is an active admin. Data reads also require ``header`` to be the one
-    ``X-Budget-Grant`` value and to equal the grant id. Discovery passes
+    Requires both budget flags, SQLite, an authenticated and enabled ``viewer`` or
+    ``operator``, a grant row for that username, and an enabled admin owner.
+    Data reads also require ``header`` to be the one ``X-Budget-Grant`` value and
+    to equal the grant id. Discovery passes
     ``require_header=False`` and does not consult the header.
     """
     if os.environ.get("HESTIA_BUDGET_HTTP_ENABLED") != "1":
@@ -185,17 +185,17 @@ def _require_lineage(session):
         raise HouseholdCommandError("household_users_required")
 
 
-def _active(session, username, role):
+def _active(session, username, *roles):
     if not isinstance(username, str) or not username:
         return None
     row = session.get(User, username)
-    if row is None or row.disabled or row.role != role:
+    if row is None or row.disabled or row.role not in roles:
         return None
     return row
 
 
 def _grant(session, member, owner):
-    if _active(session, member, "viewer") is None or member == owner:
+    if _active(session, member, *_MEMBER_ROLES) is None or member == owner:
         raise HouseholdCommandError("household_member_invalid")
     if _active(session, owner, "admin") is None:
         raise HouseholdCommandError("household_owner_invalid")

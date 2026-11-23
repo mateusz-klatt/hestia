@@ -28,6 +28,7 @@ from aiohttp.web_middlewares import middleware
 
 from hestia import auth, db, proxy, store_sql, web
 from hestia.automations import AutomationEngine, AutomationStore, rule_vocab
+from hestia.budget import household, household_api
 from hestia.protocol import Frame, build_frame, tlv
 
 
@@ -1980,12 +1981,8 @@ class RoleHelpersTests(unittest.TestCase):
         self.assertFalse(web._role_allows(None, "viewer"))
 
 
-# Spouse (stored role viewer) status for every registered method and path.
-# Household GETs are the only budget reads the spouse may reach. With the budget HTTP
-# flag off they answer 404 budget_disabled, which means the role gate admitted the viewer.
-# POST /api/budget/analytics/transactions-by-keys is a pure read of owner rows and is 403.
-# Owner analytics, consent, refresh, connections, rules, category writes, annotations,
-# the one-off label, forecast config, spending limits, mortgage config and exports stay 403.
+# Every registered method and path for a viewer with a household grant.
+# Owner budget routes stay 403, including the POST that reads transactions by key.
 SPOUSE_ROUTE_STATUS = {
     ("GET", "/"): 404,
     ("GET", "/api/audit"): 200,
@@ -2011,20 +2008,20 @@ SPOUSE_ROUTE_STATUS = {
     ("GET", "/api/budget/consent/renewal-reminders"): 403,
     ("GET", "/api/budget/consent/status"): 403,
     ("GET", "/api/budget/enable-banking/callback"): 303,
-    ("GET", "/api/budget/household/access"): 404,
-    ("GET", "/api/budget/household/categories"): 404,
-    ("GET", "/api/budget/household/inbox"): 404,
-    ("GET", "/api/budget/household/monthly-budget"): 404,
-    ("GET", "/api/budget/household/monthly-budget-settings"): 404,
-    ("GET", "/api/budget/household/mortgages"): 404,
-    ("GET", "/api/budget/household/overview"): 404,
-    ("GET", "/api/budget/household/quarantine"): 404,
-    ("GET", "/api/budget/household/recurring"): 404,
-    ("GET", "/api/budget/household/report-accounts"): 404,
-    ("GET", "/api/budget/household/rules"): 404,
-    ("GET", "/api/budget/household/spending-limits"): 404,
-    ("GET", "/api/budget/household/transactions"): 404,
-    ("GET", "/api/budget/household/transfers"): 404,
+    ("GET", "/api/budget/household/access"): 200,
+    ("GET", "/api/budget/household/categories"): 200,
+    ("GET", "/api/budget/household/inbox"): 200,
+    ("GET", "/api/budget/household/monthly-budget"): 200,
+    ("GET", "/api/budget/household/monthly-budget-settings"): 200,
+    ("GET", "/api/budget/household/mortgages"): 200,
+    ("GET", "/api/budget/household/overview"): 200,
+    ("GET", "/api/budget/household/quarantine"): 200,
+    ("GET", "/api/budget/household/recurring"): 200,
+    ("GET", "/api/budget/household/report-accounts"): 200,
+    ("GET", "/api/budget/household/rules"): 200,
+    ("GET", "/api/budget/household/spending-limits"): 200,
+    ("GET", "/api/budget/household/transactions"): 200,
+    ("GET", "/api/budget/household/transfers"): 200,
     ("GET", "/api/budget/jobs"): 403,
     ("GET", "/api/budget/limits"): 403,
     ("GET", "/api/budget/status"): 403,
@@ -2098,6 +2095,14 @@ SPOUSE_ROUTE_STATUS = {
     ("POST", "/api/users/reset-password"): 403,
     ("POST", "/api/users/role"): 403,
     ("POST", "/api/whole-home"): 403,
+}
+
+OPERATOR_ROUTE_STATUS = SPOUSE_ROUTE_STATUS | {
+    ("POST", "/api/calendars/events"): 400,
+    ("POST", "/api/calendars/events/delete"): 400,
+    ("POST", "/api/control"): 503,
+    ("POST", "/api/ir"): 503,
+    ("POST", "/api/scene"): 200,
 }
 
 
@@ -2191,52 +2196,65 @@ class AuthzTests(_WebTestBase):
         self.assertEqual(self._get("/api/does-not-exist", "operator"), 403)
         self.assertEqual(self._get("/api/does-not-exist", "admin"), 404)
 
-    def test_spouse_status_is_classified_for_every_route(self):
-        """A new route fails until it is classified and ``SPOUSE_ROUTE_STATUS`` names the viewer's status.
 
-        The walk rejects an unclassified route before comparing statuses, so a future receipts
-        route cannot pass by inheriting a viewer fallback. Budget owner routes stay 403, including
-        ``POST .../transactions-by-keys``. That POST is a pure read of owner rows; the spouse still
-        does not receive it. Household GETs are the spouse read API.
-        """
-        self.role = "viewer"
-        with mock.patch.dict(os.environ, {"HESTIA_BUDGET_HTTP_ENABLED": "", "HESTIA_BUDGET_ANALYTICS_ENABLED": ""}):
-            app = web.make_app(SimpleNamespace())
-            actual = {}
-            for route in app.router.routes():
-                path = route.resource.canonical
-                if "{path}" in path:
-                    path = path.replace("{path}", "asset.js")
-                self.assertNotIn("{", path, path)
-                classified = (web._is_public_route(route.method, path)
-                              or (route.method, path) in web._ROUTE_MIN_ROLE)
-                self.assertTrue(classified, f"unclassified route: {route.method} {path}")
-                status, body = self._spouse_status(route.method, path)
-                actual[(route.method, path)] = status
-                if path.startswith("/api/budget/household/"):
-                    self.assertEqual(json.loads(body)["error"], "budget_disabled", path)
-                elif path.startswith("/api/budget/") and not path.endswith("/callback"):
-                    self.assertEqual(status, 403, path)
-                    self.assertEqual(body, b"", path)
-        missing = set(actual) - set(SPOUSE_ROUTE_STATUS)
-        extra = set(SPOUSE_ROUTE_STATUS) - set(actual)
-        mismatched = {key: (SPOUSE_ROUTE_STATUS[key], actual[key])
-                      for key in set(actual) & set(SPOUSE_ROUTE_STATUS)
-                      if SPOUSE_ROUTE_STATUS[key] != actual[key]}
-        self.assertEqual(
-            (missing, extra, mismatched),
-            (set(), set(), {}),
-            "\n".join(f"{method} {path} {status}" for (method, path), status in sorted(actual.items())),
-        )
+class HouseholdRouteTests(_WebTestBase):
+    def test_household_member_status_is_classified_for_every_route(self):
+        """Both granted roles get the same budget reads and each role's usual house controls."""
+        self.addCleanup(db.reset_engine_cache)
+        database = str(self.tmp / "household.db")
+        roles = {"viewer": SPOUSE_ROUTE_STATUS, "operator": OPERATOR_ROUTE_STATUS}
+        flags = {
+            "HESTIA_DB": database,
+            "HESTIA_PERSIST": "sqlite",
+            "HESTIA_BUDGET_HTTP_ENABLED": "1",
+            "HESTIA_BUDGET_ANALYTICS_ENABLED": "1",
+            "HESTIA_BUDGET_MONTH_CONFIG": "",
+            "HESTIA_BUDGET_CONSENT_ENABLED": "0",
+        }
+        secret = b"test-secret-bytes"
+        with mock.patch.dict(os.environ, flags), mock.patch.multiple(web, _AUTH_ENABLED=True, _SESSION_SECRET=secret):
+            engine, sessions = db.init_db()
+            store_sql.cutover_users(engine, {"owner": "unused"})
+            with sessions.begin() as session:
+                session.add_all(db.User(username=role, role=role, password_hash="unused") for role in roles)
+            routes = list(web.make_app(SimpleNamespace()).router.routes())
+            for role, expected in roles.items():
+                with self.subTest(role=role):
+                    grant_id = household.grant_member(role, "owner", path=database)["grant_id"]
+                    token = auth.make_session(role, now=web._now(), secret=secret)
+                    actual = {}
+                    for route in routes:
+                        method = route.method
+                        path = route.resource.canonical.replace("{path}", "asset.js")
+                        self.assertNotIn("{", path, path)
+                        public = web._is_public_route(method, path)
+                        self.assertTrue(public or (method, path) in web._ROUTE_MIN_ROLE,
+                                        f"unclassified route: {method} {path}")
+                        status, body = self._member_status(method, path, token, grant_id)
+                        actual[(method, path)] = status
+                        if method == "GET" and path.startswith(household_api.PREFIX + "/"):
+                            self.assertEqual(status, 200, (path, body))
+                            self.assertEqual(json.loads(body)["grant_id"], grant_id, path)
+                        elif path.startswith("/api/budget/") and not public:
+                            self.assertEqual((status, body), (403, b""), path)
+                    self.assertEqual(actual, expected)
 
-    def _spouse_status(self, method, path):
+    def _member_status(self, method, path, token, grant_id):
+        headers = {"Authorization": f"Bearer {token}", household_api.GRANT_HEADER: grant_id}
+        body = None
+        if method in web._MUTATING_METHODS:
+            controls = {
+                "/api/control": {"op": "switch", "node": 5, "on": True},
+                "/api/ir": {"file": "/k.ir", "button": "Power"},
+                "/api/scene": {"op": "lights_off"},
+            }
+            headers["Content-Type"] = "application/json"
+            body = json.dumps(controls.get(path, {})).encode()
+        if path in {household_api.PREFIX + "/" + view for view in
+                    ("overview", "transactions", "transfers", "spending-limits")}:
+            path += "?period=2024-01"
         conn = http.client.HTTPConnection(*self.web.address, timeout=5)
         try:
-            headers = {"Cookie": self.cookie}
-            body = None
-            if method in web._MUTATING_METHODS:
-                headers["Content-Type"] = "application/json"
-                body = b"{}"
             conn.request(method, path, body=body, headers=headers)
             response = conn.getresponse()
             status = response.status
