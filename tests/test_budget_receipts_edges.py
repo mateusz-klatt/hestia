@@ -44,7 +44,11 @@ class ParserEdgeTests(unittest.TestCase):
         self.assertFalse(receipt_parser._iban_shape("GB2XNWBK60161331926819"))
         self.assertFalse(receipt_parser._iban_shape("GB29NWBK6016133192681!"))
         self.assertTrue(receipt_parser._iban_shape("PL61109010140000071219812874"))
+        self.assertTrue(receipt_parser._iban_shape("PL" + "0" * 26))
         self.assertTrue(receipt_parser._iban_shape("GB29NWBK60161331926819"))
+        self.assertTrue(receipt_parser._iban_checksum("GB29NWBK60161331926819"))
+        self.assertFalse(receipt_parser._iban_shape("ML12ABCD1234567"))
+        self.assertFalse(receipt_parser._iban_checksum("ML12ABCD1234567"))
         for error in (ValueError, TypeError):
             with mock.patch("hestia.budget.receipt_parser.unicodedata.digit", side_effect=error):
                 self.assertEqual(receipt_parser._normalize_receipt_text("١"), "")
@@ -58,6 +62,9 @@ class ParserEdgeTests(unittest.TestCase):
         self.assertEqual(redact_pan("GB29 NWBK 6016 1331 9268 19"), "[usunięto]")
         self.assertEqual(redact_pan("gb29 nwbk 6016 1331 9268 19"), "[usunięto]")
         self.assertEqual(redact_pan("GB29 NWBK\n6016 1331 9268 19"), "[usunięto]\n[usunięto]")
+        self.assertEqual(redact_pan("NL91 ABNA 0417 1643 00"), "[usunięto]")
+        self.assertEqual(redact_pan("NL91 ABNA 0417 1643 00EXTRA"), "NL91 ABNA 0417 1643 00EXTRA")
+        self.assertEqual(redact_pan("NL91 ABNA 0417 1643 00\n"), "[usunięto]\n")
         self.assertEqual(redact_pan("PL61!123"), "PL61!123")
         self.assertEqual(redact_pan("PL6110901014"), "PL6110901014")
         glued = "GB29NWBK6016X1331X9268X19EXTRAEXTRAEXTRA"

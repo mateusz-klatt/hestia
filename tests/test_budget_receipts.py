@@ -150,8 +150,11 @@ NR KARTY ****5555
         nip = "779\u00a0101\u00a013\u00a027"
         self.assertEqual(redact_pan("NIP " + nip), "NIP 779 101 13 27")
         adjacent = "NIP 7791011327\n2026-11-20 12:34\n"
-        self.assertEqual(redact_pan(adjacent), "[usunięto]\n[usunięto]\n")
-        self.assertNotRegex(redact_pan(adjacent), r"[0-9]")
+        self.assertEqual(redact_pan(adjacent), adjacent)
+        parsed_adjacent = parse_receipt(adjacent)
+        self.assertEqual(parsed_adjacent["receipt_date"], "2026-11-20")
+        self.assertEqual(parsed_adjacent["receipt_time"], "12:34")
+        self.assertEqual(parsed_adjacent["raw_nip"], "7791011327")
         nbsp_pan = "\u00a0".join(groups)
         text = ("BIEDRONKA\nNIP 7791011327\nPARAGON FISKALNY\n2026-11-20 12:34\nMLEKO " + nbsp_pan
                 + "\n1 x 5,00 5,00 A\nSUMA PLN 5,00\n")
@@ -563,9 +566,9 @@ NR KARTY ****5555
         self.assertNotIn("5351", redacted)
         self.assertNotIn("0055", redacted)
         self.assertIn("SUMA PLN 5,00", redacted)
-        self.assertNotIn("7791011327", redacted)
-        self.assertNotIn("2026-11-20", redacted)
-        self.assertEqual(redact_pan("NIP 7791011327\n2026-11-20\n"), "[usunięto]\n[usunięto]\n")
+        self.assertIn("7791011327", redacted)
+        self.assertIn("2026-11-20", redacted)
+        self.assertEqual(redact_pan("NIP 7791011327\n2026-11-20\n"), "NIP 7791011327\n2026-11-20\n")
         self.assertEqual(redact_pan("4111********1111"), "4111********1111")
         self.assertEqual(redact_pan("4111XXXXXXXX1111"), "4111XXXXXXXX1111")
         self.assertEqual(redact_pan("411111******1111"), "411111******1111")
@@ -645,11 +648,6 @@ NR KARTY ****5555
             "4111-1111\n00.00.0002",
             "4111-1111\n31.13-0000",
             "4111-1111\n00.00-0002",
-            "NIP 7791011327\n2026-11-22 14:35",
-            "NIP 7791011327\n22.11.2026",
-            "NIP 7791011327\n22.11.26",
-            "411111111111\n2026-11-22 14:35",
-            "22.11.2026\n411111111111",
             "22.11.26\n411111111111",
         ):
             with self.subTest(raw=raw):
@@ -669,6 +667,25 @@ NR KARTY ****5555
         ):
             with self.subTest(kept=kept):
                 self.assertEqual(redact_pan(kept), kept)
+        for kept_structured in (
+            "NIP 7791011327\n2026-11-22 14:35",
+            "NIP 7791011327\n22.11.2026",
+            "NIP 7791011327\n22.11.26",
+            "5,00 PLN\n2026-11-20 12:34",
+            "PLN 5,00\n2026-11-20",
+            "PTU A 23,00 8,13 1,87",
+        ):
+            with self.subTest(kept_structured=kept_structured):
+                self.assertEqual(redact_pan(kept_structured), kept_structured)
+        self.assertEqual(redact_pan("5,00 PLN\n411111111111\n"), "5,00 PLN\n[usunięto]\n")
+        self.assertEqual(redact_pan("PLN 5,00\n411111111111\n"), "PLN 5,00\n[usunięto]\n")
+        self.assertEqual(redact_pan("PTU A 23,00 8,13\n411111111111\n"), "PTU A 23,00 8,13\n[usunięto]\n")
+        self.assertEqual(redact_pan("PTU 4111111111111111"), "[usunięto]")
+        self.assertEqual(redact_pan("NIP 7791011327 4111111111111111"), "[usunięto]")
+        self.assertEqual(redact_pan("2026-11-20 4111111111111111"), "[usunięto]")
+        self.assertEqual(redact_pan("411111111111\n2026-11-22 14:35"), "[usunięto]\n2026-11-22 14:35")
+        self.assertEqual(redact_pan("22.11.2026\n411111111111"), "22.11.2026\n[usunięto]")
+        self.assertEqual(redact_pan("ML12 ABCD 1234567"), "ML12 ABCD 1234567")
         labelled = "KARTA\n4 1 1 1 1 1 1 1\n31-13-0000"
         self.assertEqual(redact_pan(labelled), "KARTA\n[usunięto]\n[usunięto]")
         self.assertNotRegex(json.dumps(parse_receipt(labelled)), r"4111|31-13")

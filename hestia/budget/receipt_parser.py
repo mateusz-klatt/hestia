@@ -76,6 +76,14 @@ _DISCOUNT = re.compile(rf"^\s*(?:RABAT|OPUST)\b[^0-9+-]*(?P<amount>{_NUMBER})", 
 _UUID = re.compile(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\Z", re.ASCII)
 _CURRENCY = re.compile(r"[A-Z]{3}\Z", re.ASCII)
 _TIME = re.compile(r"(?<![0-9])((?:[01][0-9]|2[0-3]):[0-5][0-9])(?![0-9])", re.ASCII)
+_SHORT_AMOUNT = r"[+-]?[0-9]{1,9}(?:[.,][0-9]{1,4})?"
+_CURRENCY_AMOUNT = re.compile(
+    rf"(?<![A-Z0-9])(?:PLN|EUR|USD|GBP|CHF)\s*{_SHORT_AMOUNT}(?![0-9])"
+    rf"|(?<![0-9]){_SHORT_AMOUNT}\s*(?:PLN|EUR|USD|GBP|CHF)(?![A-Z0-9])",
+    re.IGNORECASE | re.ASCII,
+)
+_PTU_WORD = re.compile(r"(?<![A-Z0-9])PTU(?![A-Z0-9])", re.IGNORECASE | re.ASCII)
+_PTU_AMOUNT = re.compile(rf"(?<![0-9]){_SHORT_AMOUNT}%?(?![0-9])", re.ASCII)
 _NIP_LABEL = re.compile(r"\bNIP", re.IGNORECASE | re.ASCII)
 _NIP_SPACE = " \t\r\f\v"
 _NIP_BODY = set("0123456789 -")
@@ -132,14 +140,30 @@ def _pesel(digits):
     return (10 - (total % 10)) % 10 == int(digits[10])
 
 
+def _iban_checksum(token):
+    """ISO 13616 mod-97. The check digits make the rearranged integer congruent to 1."""
+    moved = token[4:] + token[:4]
+    total = 0
+    for char in moved:
+        if char.isdigit():
+            total = (total * 10 + int(char)) % 97
+        else:
+            total = (total * 100 + (ord(char) - 55)) % 97
+    return total == 1
+
+
 def _iban_shape(token):
-    """PL + 26 digits, and the generic IBAN shape (2 letters, 2 check digits, 11–30 alnum)."""
+    """Polish PL plus 26 digits, or a generic IBAN with a valid mod-97 checksum."""
     length = len(token)
     if length < _IBAN_MIN or length > _IBAN_MAX:
         return False
     if not (token[0].isalpha() and token[1].isalpha() and token[2].isdigit() and token[3].isdigit()):
         return False
-    return all(char.isalnum() for char in token)
+    if not all(char.isalnum() for char in token):
+        return False
+    if token[:2] == "PL" and length == 28 and token[2:].isdigit():
+        return True
+    return _iban_checksum(token)
 
 
 def _mark_digit_runs(text, bad):
@@ -224,9 +248,42 @@ def _mark_ibans(text, bad):
         index = matched_end
 
 
+def _mask_structured(line):
+    """Hide NIP, date, currency amount and PTU amount digits from the line scanner.
+
+    The scanner then sees only the remainder. A shop NIP on the line above a
+    date no longer becomes one run, and both lines can stay.
+    """
+    chars = list(line)
+
+    def mask(start, end):
+        for index in range(start, end):
+            chars[index] = "x"
+
+    span = _nip_body_span(line)
+    if span is not None and valid_nip(re.sub(r"[ -]", "", line[span[0]:span[1]])):
+        mask(*span)
+    for pattern in (_DATE_ISO, _DATE_PL):
+        for match in pattern.finditer(line):
+            if pattern is _DATE_ISO:
+                parsed = _iso_date(*match.groups())
+            else:
+                day, month, year = match.groups()
+                parsed = _iso_date(year, month, day)
+            if parsed is not None:
+                mask(*match.span())
+    for match in _CURRENCY_AMOUNT.finditer(line):
+        mask(*match.span())
+    if _PTU_WORD.search(line):
+        for match in _PTU_AMOUNT.finditer(line):
+            mask(*match.span())
+    return "".join(chars)
+
+
 def _secret_lines(text):
     bad = set()
-    _mark_digit_runs(text, bad)
+    masked = "\n".join(_mask_structured(line) for line in text.split("\n"))
+    _mark_digit_runs(masked, bad)
     _mark_ibans(text, bad)
     return bad
 
@@ -319,8 +376,8 @@ def _ascii_word(char):
     return char.isascii() and (char.isalnum() or char == "_")
 
 
-def _nip_candidate(line):
-    """Digits from the first NIP body. The span is at most 18 characters and does not backtrack."""
+def _nip_body_span(line):
+    """Start and end of the first NIP body. The window is 18 characters and does not backtrack."""
     found = _NIP_LABEL.search(line)
     if found is None:
         return None
@@ -341,9 +398,17 @@ def _nip_candidate(line):
         end += 1
     while end - start >= 10:
         if line[end - 1] in "0123456789" and (end == limit or not _ascii_word(line[end])):
-            return re.sub(r"[ -]", "", line[start:end])
+            return start, end
         end -= 1
     return None
+
+
+def _nip_candidate(line):
+    """Digits from the first NIP body. The span is at most 18 characters and does not backtrack."""
+    span = _nip_body_span(line)
+    if span is None:
+        return None
+    return re.sub(r"[ -]", "", line[span[0]:span[1]])
 
 
 def valid_nip(value):
