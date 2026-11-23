@@ -49,6 +49,7 @@ log = logging.getLogger("hestia.web")
 
 MAX_BODY = 8192                                      # cap POST body size (bytes)
 MAX_RULE_BODY = 65536                                # larger cap for an automation rule
+BODY_READ_TIMEOUT = 10                               # seconds; a stalled Content-Length read must not pin the handler
 MAX_STRING = 256                                     # cap name / room length (chars)
 SSE_IDLE_TIMEOUT = _num_env("HESTIA_SSE_KEEPALIVE", 5.0, 1.0, 3600.0)  # idle→keepalive; also how fast a
 #       reloaded-away client's slot is reclaimed (write fails). Clamped ≥1s so a typo can't tight-loop.
@@ -97,6 +98,41 @@ _SESSION_COOKIE = "hestia_session"
 _USER_KEY = "hestia_user"
 _ROLE_KEY = "hestia_role"          # the request's resolved RBAC role (set by the auth middleware)
 _now = time.time          # WALL clock for session expiry (must survive restarts, unlike _clock); rebindable for tests
+
+
+def _install_incomplete_body_eof() -> None:
+    """Let a handler answer 400 when the peer half-closes mid-body.
+
+    aiohttp's protocol treats TCP EOF as "close now", which drops the socket
+    before ``readexactly`` can turn the short read into a response. For our
+    app only, mark the payload EOF and keep the transport up long enough to
+    write that response, then do not keepalive the half-closed connection.
+    """
+    from aiohttp import web_protocol
+
+    handler = web_protocol.RequestHandler
+    if getattr(handler, "_hestia_body_eof", False):
+        return
+    original = handler.eof_received
+
+    def eof_received(self):
+        request = self._current_request
+        app = getattr(request, "app", None) if request is not None else None
+        if app is None or _RT_KEY not in app:
+            return original(self)
+        payload = request.content
+        if payload.is_eof():
+            return original(self)
+        payload.feed_eof()
+        self._keepalive = False
+        self._close = True
+        return True
+
+    handler.eof_received = eof_received
+    handler._hestia_body_eof = True
+
+
+_install_incomplete_body_eof()
 
 
 def _require_safe_web_bind(host: str) -> None:
@@ -913,7 +949,9 @@ async def _read_json_body(request, max_body=MAX_BODY, *, reject_duplicates=False
     content-type/framing/size/parse error this returns ``(response, True)``;
     on success returns ``(obj, False)``. A zero-length body parses to ``{}``
     (preserving the original ``/api/name`` contract); ``max_body`` caps the byte
-    size per endpoint (names are small, rules larger).
+    size per endpoint (names are small, rules larger). The declared length is
+    read with ``readexactly`` under ``BODY_READ_TIMEOUT``: a stall is 408, and
+    a short read or a reset connection is 400 rather than a partial parse.
 
     Requiring ``Content-Type: application/json`` is the CSRF guard for these
     device-controlling mutations: it is NOT a CORS "simple" content type, so a
@@ -933,15 +971,16 @@ async def _read_json_body(request, max_body=MAX_BODY, *, reject_duplicates=False
     if cl > max_body:
         return _json(HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
                      {"ok": False, "error": f"body must be ≤ {max_body} bytes"}), True
-    chunks = []
-    remaining = cl
-    while remaining > 0:
-        chunk = await request.content.read(remaining)
-        if not chunk:
-            break
-        chunks.append(chunk)
-        remaining -= len(chunk)
-    body = b"".join(chunks)
+    # Content-Length 0 is an empty payload (EmptyStreamReader.readexactly raises).
+    # Keep the historical contract: a zero-length body parses as {}.
+    try:
+        body = b"" if cl <= 0 else await asyncio.wait_for(
+            request.content.readexactly(cl), timeout=BODY_READ_TIMEOUT)
+    except (asyncio.IncompleteReadError, ConnectionResetError):
+        return _json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "incomplete body"}), True
+    except asyncio.TimeoutError:
+        return _json(HTTPStatus.REQUEST_TIMEOUT,
+                     {"ok": False, "error": "body read timed out"}), True
     try:
         return (json.loads(body, object_pairs_hook=_unique_json_fields if reject_duplicates else None)
                 if body else {}), False
