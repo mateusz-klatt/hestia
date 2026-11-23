@@ -2,7 +2,8 @@
 
 The same snapshot digest fences rule previews and encrypted pagination. Transfer
 matching always precedes period filtering; only current, accepted pairs affect
-totals. No configuration, provider, file, secret or acquisition operation runs here.
+totals. No configuration, provider, file, credential-loading or acquisition operation runs here.
+Counterparty digests use only the dedicated rule key loaded by the store.
 
 Reads memoise the projection in process memory under a digest of every source row it
 can depend on, so any committed change yields a new key and nothing is ever invalidated
@@ -160,7 +161,8 @@ def _annotation(row, financial_fp):
             "label": core.stored_one_off_label(row.label)}
 
 
-def _effective(payload, metadata, annotation, categories, rules, *, texts=None, compiled=None):
+def _effective(payload, metadata, annotation, categories, rules, *, texts=None, compiled=None,
+               account_secret=None, account_key_id=None, owner=None):
     default = "expense" if payload["credit_debit_indicator"] == "DBIT" else "unclassified_credit"
     result = {"kind": default, "category_id": None, "source": "default", "rule_id": None}
     if annotation["mode"] == "manual":
@@ -173,7 +175,7 @@ def _effective(payload, metadata, annotation, categories, rules, *, texts=None, 
     if compiled is None:
         compiled, _ = core.compile_rules(rules)
     if texts is None:
-        texts = core.match_texts(payload, metadata)
+        texts = core.match_texts(payload, metadata, account_secret=account_secret, account_key_id=account_key_id, owner=owner)
     rule = core.first_matching_rule(compiled, payload, texts)
     if rule is not None:
         result.update(kind=default if rule["kind"] == "auto" else rule["kind"],
@@ -181,7 +183,7 @@ def _effective(payload, metadata, annotation, categories, rules, *, texts=None, 
     return result
 
 
-def _records(ledger, identities, metadata, annotations, categories, rules):
+def _records(ledger, identities, metadata, annotations, categories, rules, *, account_secret=None, account_key_id=None, owner=None):
     result = []
     owned = core.owned_identities(identities) if ledger else None
     compiled, _ = core.compile_rules(rules)
@@ -191,14 +193,19 @@ def _records(ledger, identities, metadata, annotations, categories, rules):
         sidecar = metadata.get(key)
         evidence = _metadata(sidecar.payload_json) if sidecar is not None and sidecar.ledger_fingerprint == financial_fp else None
         annotation = _annotation(annotations.get(key), financial_fp)
-        texts = core.match_texts(payload, evidence)
-        effective = _effective(payload, evidence, annotation, categories, rules, texts=texts, compiled=compiled)
+        account_evidence = (None if account_secret is None else
+                            core.counterparty_account_evidence(payload, evidence, account_secret, owner=owner))
+        texts = core.match_texts(payload, evidence, account_secret=account_secret, account_key_id=account_key_id,
+                                 account_evidence=account_evidence, owner=owner)
+        effective = _effective(payload, evidence, annotation, categories, rules, texts=texts, compiled=compiled,
+                               account_secret=account_secret, account_key_id=account_key_id, owner=owner)
         result.append({"account_id": row.account_id, "entry_reference": row.entry_reference, "payload": payload,
                        "financial_fp": financial_fp,
                        "transfer_fp": core.pair_fingerprint(row.account_id, row.entry_reference, payload, evidence, identities,
                                                             financial=financial_fp, owned_ids=owned),
                        "metadata": evidence, "annotation": annotation, "effective": effective,
-                       "base_effective": dict(effective), "_match_texts": texts, "source": row.source,
+                       "base_effective": dict(effective), "_match_texts": texts,
+                       "_counterparty_accounts": account_evidence or (), "source": row.source,
                        "observed_at": row.observed_at, "api_observed_at": row.api_observed_at, "uncertain": row.uncertain,
                        "eligible": not row.uncertain and payload["status"] == "BOOK" and core.effective_date(payload) is not None,
                        "transfer": {"status": "none", "decision_id": None, "candidate_count": 0, "ambiguous": False}})
@@ -226,7 +233,7 @@ def _scope_counts(session, owner, accounts):
             "excluded_accounts": sum(not account.enabled for account in accounts), **_owner_counts(session, owner)}
 
 
-def projection_snapshot(session, owner, *, classify=True):
+def projection_snapshot(session, owner, *, classify=True, account_secret=None, account_key_id=None):
     """Shared read/preview snapshot; caller owns the existing SQLite transaction.
 
     ``classify=False`` still parses the ledger and builds the same digest, but skips rule
@@ -249,14 +256,15 @@ def projection_snapshot(session, owner, *, classify=True):
         db.BudgetTransferDecision.owner == owner).order_by(db.BudgetTransferDecision.id))]
     identities, identity_state, metadata, annotations = _auxiliary(session, owner, accounts)
     applied = rules if classify else ()
-    records = _records(ledger, identities, metadata, annotations, {row["id"]: row for row in categories}, applied)
+    records = _records(ledger, identities, metadata, annotations, {row["id"]: row for row in categories}, applied,
+                       account_secret=account_secret if classify else None, account_key_id=account_key_id, owner=owner)
     account_state = [{"id": row.id, "connection_id": row.connection_id, "enabled": row.enabled,
                       "configured": row.configured, "control_version": row.control_version, "kind": row.kind,
                       "kind_confirmed_at": row.kind_confirmed_at} for row in accounts]
     snapshot = {"owner": owner, "accounts": account_state, "categories": categories, "rules": rules,
                 "decisions": decisions, "identities": identities, "transactions": [row for row in records if row["eligible"]],
                 "counts": _scope_counts(session, owner, accounts), "_records": records, "_accounts": accounts}
-    semantic = {"version": 1, "owner": owner,
+    semantic = {"version": 1, "owner": owner, "counterparty_rule_key_id": account_key_id,
                 "accounts": [{"id": row.id, "enabled": row.enabled} for row in accounts], "identities": identity_state,
                 "ledger": [[row.account_id, row.entry_reference, record["payload"], row.uncertain, row.source]
                            for row, record in zip(ledger, records, strict=True)],
@@ -631,10 +639,13 @@ def _category_totals(rows, categories, *, split_one_offs=False, pass_through_cat
 
 def _wire_transaction(row):
     metadata = row["metadata"]
+    accounts = row["_counterparty_accounts"]
+    account_key, masked = accounts[0] if len(accounts) == 1 else (None, None)
     return {"account_id": row["account_id"], "entry_reference": row["entry_reference"],
             **{field: row["payload"].get(field) for field in _PAYLOAD_FIELDS},
             "source": row["source"], "observed_at": row["observed_at"], "api_observed_at": row["api_observed_at"],
             "fingerprint": row["financial_fp"], "transfer_fingerprint": row["transfer_fp"],
+            "counterparty_account_key": account_key, "counterparty_account": masked,
             "annotation": row["annotation"], "effective": row["effective"], "transfer": row["transfer"],
             "metadata": None if metadata is None else {key: metadata.get(key) for key in ("creditor_name", "debtor_name", "mcc")}}
 
@@ -684,7 +695,7 @@ def _monthly_budget_charts_query(period=None, currency=None, history=None):
         raise AnalyticsError() from None
 
 
-def _source_digest(session, owner):
+def _source_digest(session, owner, *, account_key_id=None):
     """Digest of everything the projection reads for ``owner``: all columns of the rows it loads
     (equal to or a superset of its own filters) and the owner-wide counts it reports.
 
@@ -715,6 +726,7 @@ def _source_digest(session, owner):
         digest.update(len(data).to_bytes(8, "big"))
         digest.update(data)
 
+    put(account_key_id)
     for model, conditions, joined in sources:
         table = model.__table__
         query = select(*table.columns)
@@ -761,11 +773,14 @@ class BudgetAnalyticsViews(BudgetAnalyticsStore):
     def _projection(self, session, owner):
         """Shared, read-only projection for this transaction's committed state; callers never mutate it."""
         BudgetHTTPStore._owner(session, owner)
-        key = (str(session.get_bind().url), owner, MAX_ROWS, MAX_EDGES, _source_digest(session, owner))
+        context = self._rule_key_context(required=False)
+        _secret, key_id = context if context is not None else (None, None)
+        key = (str(session.get_bind().url), owner, MAX_ROWS, MAX_EDGES, key_id,
+               _source_digest(session, owner, account_key_id=key_id))
         value = _cached(key)
         if value is None:
             # Callers hold _read_lock, so concurrent readers of one state find this result instead of repeating it.
-            value = projection_snapshot(session, owner)
+            value = self._account_projection(session, owner)
             _transfer_projection(value)
             del value["_accounts"]  # ORM rows never outlive their session
             _remember(key, value)
@@ -1203,7 +1218,7 @@ class BudgetAnalyticsViews(BudgetAnalyticsStore):
             .order_by(db.BudgetCategoryLimit.currency, db.BudgetCategoryLimit.category_id,
                       db.BudgetCategoryLimit.id))]
         if any(row["enabled"] for row in all_limits):
-            snapshot = self._projection(session, owner) if use_cache else projection_snapshot(session, owner)
+            snapshot = self._projection(session, owner) if use_cache else self._account_projection(session, owner)
             categories = {row["id"]: row for row in snapshot["categories"]}
             start, end = core.parse_period(period)
             totals = _category_totals(_period_rows(snapshot, start, end, None), snapshot["categories"])

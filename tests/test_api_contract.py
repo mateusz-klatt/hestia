@@ -56,9 +56,29 @@ class OpenApiArtifactTests(unittest.TestCase):
         )
 
     def test_monthly_budget_contract_chain_from_0_27_0(self):
-        """0.37.0 adds the household read API on top of 0.36.0 receipts. Earlier steps stay as published."""
+        """0.38.0 adds counterparty accounts on top of 0.37.0 household reads and 0.36.0 receipts."""
         document = api_contract.build_openapi()
-        self.assertEqual(document["info"]["version"], "0.37.0")
+        self.assertEqual(document["info"]["version"], "0.38.0")
+        for name in ("BudgetAnalyticsRule", "BudgetAnalyticsRuleSaved"):
+            schema = document["components"]["schemas"][name]
+            self.assertNotIn("inactive_reason", schema["required"])
+            reason = schema["properties"].pop("inactive_reason")
+            enums = [item for arm in reason.get("anyOf", [reason]) for item in arm.get("enum", [])]
+            self.assertEqual(enums, ["rule_key_unavailable", "rule_key_rotated"])
+        for schema, field in (
+            ("BudgetAnalyticsRulePreviewRequest", "counterparty_account_key"),
+            ("BudgetAnalyticsRule", "counterparty_account_key"),
+            ("BudgetAnalyticsRuleSaved", "counterparty_account_key"),
+            ("BudgetAnalyticsTransaction", "counterparty_account_key"),
+            ("BudgetAnalyticsTransaction", "counterparty_account"),
+        ):
+            document["components"]["schemas"][schema]["properties"].pop(field)
+        rule_schema = document["components"]["schemas"]["BudgetAnalyticsRulePreviewRequest"]
+        rule_fields = rule_schema["properties"]["field"]
+        rule_fields["enum"].remove("counterparty_account")
+        rule_schema["required"].insert(4, "value")
+        rule_schema["properties"]["value"]["minLength"] = 1
+        document["info"]["version"] = "0.37.0"
         for path in [key for key in document["paths"] if key.startswith("/api/budget/household/")]:
             del document["paths"][path]
         for name in [key for key in document["components"]["schemas"] if key.startswith("BudgetHousehold")]:

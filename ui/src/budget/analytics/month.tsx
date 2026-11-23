@@ -4,6 +4,7 @@ import { useCallback, useState } from "react";
 import type { BudgetApi } from "../api";
 import type { BudgetAccount, BudgetConnection } from "../model";
 import { currentMonth, isMonth, monthLabel, shiftMonth } from "./model";
+import type { RuleCandidate } from "./model";
 import { OverviewPanel, overviewLabels } from "./overview";
 import type { OverviewLabels } from "./overview";
 import { TransactionsPanel, transactionLabels } from "./transactions";
@@ -44,11 +45,12 @@ export interface MonthViewProps {
   initialProvisionalTruncated?: boolean | undefined;
   /** Injected clock for tests. */
   today?: () => Date;
+  onCreateRule?: ((candidate: RuleCandidate) => void) | undefined;
 }
 
 export function MonthView({ api, accounts, connections = [], text, locale, revision, onAccessLoss, initialMonth,
   initialCurrency, initialProvisionalKeys, initialProvisionalTotal, initialProvisionalTruncated,
-  today = () => new Date() }: MonthViewProps) {
+  today = () => new Date(), onCreateRule }: MonthViewProps) {
   const latest = currentMonth(today());
   const initialPeriod = initialMonth !== undefined && isMonth(initialMonth) && initialMonth < latest ? initialMonth : latest;
   const [month, setMonth] = useState(initialPeriod);
@@ -77,7 +79,7 @@ export function MonthView({ api, accounts, connections = [], text, locale, revis
         locale={locale} revision={revision + changes} onAccessLoss={onAccessLoss} onChanged={changed}
         initialCurrency={initialCurrency} initialProvisionalKeys={provisionalKeys}
         initialProvisionalTotal={provisionalTotal} initialProvisionalTruncated={provisionalTruncated}
-        focusOnMount={initialProvisionalKeys !== undefined} />
+        focusOnMount={initialProvisionalKeys !== undefined} onCreateRule={onCreateRule} />
     </section>
   );
 }

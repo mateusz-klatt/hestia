@@ -67,14 +67,15 @@ interface Options { period?: string; revision?: number; lost?: boolean; rowCap?:
 async function show(api: ReturnType<typeof fakeApi>, options: Options = {}) {
   const onAccessLoss = vi.fn((result: { ok: boolean }) => options.lost === true && !result.ok);
   const onChanged = vi.fn();
+  const onCreateRule = vi.fn();
   await act(async () => {
     root.render(<TransactionsPanel api={api} period={options.period ?? "2026-11"} currencies={["EUR", "PLN"]}
       accounts={accounts} text={options.text ?? transactionLabels.en} locale={options.locale ?? "en"} revision={options.revision ?? 0}
-      onAccessLoss={onAccessLoss} onChanged={onChanged} rowCap={options.rowCap} />);
+      onAccessLoss={onAccessLoss} onChanged={onChanged} rowCap={options.rowCap} onCreateRule={onCreateRule} />);
     await Promise.resolve();
   });
   await settle();
-  return { onAccessLoss, onChanged };
+  return { onAccessLoss, onChanged, onCreateRule };
 }
 
 async function drain(times = 12): Promise<void> {
@@ -151,6 +152,22 @@ describe("period entries", () => {
     expect(rows[2]).toContain("own transfer to re-check");
     expect(rows[2]).toContain("the bank changed this entry");
     expect(host.textContent).toContain("3 entries");
+  });
+
+  it("offers a recipient-account rule using only the opaque key and masked display", async () => {
+    const syntheticIban = `PL${"0".repeat(22)}1234`;
+    const key = "a".repeat(64);
+    const api = fakeApi([entry("account-row", { counterparty_account_key: key, counterparty_account: "PL** … 1234" })]);
+    const { onCreateRule } = await show(api, { text: transactionLabels.pl, locale: "pl" });
+    await click(button("Zmień"));
+    const action = button("Utwórz regułę z konta odbiorcy");
+    expect(action.title).toBe("PL** … 1234");
+    await click(action);
+    expect(onCreateRule).toHaveBeenCalledWith({
+      rule_id: null, expected_version: 0, field: "counterparty_account", operator: "equals", value: "PL** … 1234",
+      counterparty_account_key: key, category_id: null, kind: "expense", priority: 100, enabled: true,
+    });
+    expect(JSON.stringify(onCreateRule.mock.calls[0]?.[0])).not.toContain(syntheticIban);
   });
 
   it("applies filters only on submit and offers active categories plus uncategorised", async () => {

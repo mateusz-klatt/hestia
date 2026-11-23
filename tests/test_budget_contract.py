@@ -255,7 +255,6 @@ class BudgetOpenApiTests(unittest.TestCase):
         self.assertIn("budget_receipt_quota_exceeded", parse_limit)
         self.assertIn("131072", receipts["/api/budget/receipts/confirm"]["post"]["responses"]["413"]["description"])
         self.assertIn("16384", receipts["/api/budget/receipts/list"]["post"]["responses"]["413"]["description"])
-        self.assertEqual(document["info"]["version"], "0.37.0")
         detail = receipts["/api/budget/receipts/detail"]["get"]
         self.assertNotIn("raw text", detail["summary"])
         confirm = receipts["/api/budget/receipts/confirm"]["post"]
@@ -266,6 +265,7 @@ class BudgetOpenApiTests(unittest.TestCase):
         detail_result = document["components"]["schemas"]["BudgetReceiptDetailResult"]
         self.assertNotIn("candidates", detail_result["required"])
         self.assertNotIn("default", detail_result["properties"]["candidates"])
+        self.assertEqual(document["info"]["version"], "0.38.0")
         batch = analytics["/api/budget/analytics/rule-batch-preview"]["post"]["description"]
         self.assertIn("1..100", batch)
         self.assertIn("All-or-nothing", batch)

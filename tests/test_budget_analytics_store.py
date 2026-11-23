@@ -38,7 +38,11 @@ class AnalyticsCase(unittest.TestCase):
                              db.User(username="other", password_hash="unused", role="admin"),
                              db.AppMeta(key="users_authoritative", value="1")])
         self.now = 1_000_000.0
-        self.store = BudgetAnalyticsStore(self.sessions, clock=lambda: self.now, cursor_secret=b"synthetic-only")
+        self.rule_key_file = self.path.parent / "counterparty-rule.key"
+        self.rule_key_file.write_bytes(b"synthetic-only-32-byte-rule-key-value")
+        self.rule_key_file.chmod(0o400)
+        self.store = BudgetAnalyticsStore(self.sessions, clock=lambda: self.now, cursor_secret=b"synthetic-only",
+                                          rule_key_file=str(self.rule_key_file))
         config = configuration(accounts=("a", "b", "c", "d"))
         other = replace(config.connections[0], id="other-bank", owner="other", accounts=("foreign",))
         self.config = replace(config, connections=(*config.connections, other))

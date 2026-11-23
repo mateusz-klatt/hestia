@@ -4432,6 +4432,18 @@
             ],
             "title": "Category Id"
           },
+          "counterparty_account_key": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Counterparty Account Key"
+          },
           "created_at": {
             "title": "Created At",
             "type": "number"
@@ -4447,6 +4459,22 @@
           "id": {
             "title": "Id",
             "type": "string"
+          },
+          "inactive_reason": {
+            "anyOf": [
+              {
+                "enum": [
+                  "rule_key_unavailable",
+                  "rule_key_rotated"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Set when a counterparty-account rule cannot match because its key is missing or was rotated.",
+            "title": "Inactive Reason"
           },
           "kind": {
             "title": "Kind",
@@ -4581,6 +4609,18 @@
             ],
             "title": "Category Id"
           },
+          "counterparty_account_key": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Counterparty Account Key"
+          },
           "enabled": {
             "title": "Enabled",
             "type": "boolean"
@@ -4594,6 +4634,7 @@
             "enum": [
               "description",
               "counterparty_name",
+              "counterparty_account",
               "mcc"
             ],
             "title": "Field",
@@ -4639,7 +4680,6 @@
           },
           "value": {
             "maxLength": 256,
-            "minLength": 1,
             "title": "Value",
             "type": "string"
           }
@@ -4649,7 +4689,6 @@
           "expected_version",
           "field",
           "operator",
-          "value",
           "category_id",
           "kind",
           "priority",
@@ -4709,6 +4748,18 @@
             "title": "Changed",
             "type": "boolean"
           },
+          "counterparty_account_key": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Counterparty Account Key"
+          },
           "created_at": {
             "title": "Created At",
             "type": "number"
@@ -4724,6 +4775,22 @@
           "id": {
             "title": "Id",
             "type": "string"
+          },
+          "inactive_reason": {
+            "anyOf": [
+              {
+                "enum": [
+                  "rule_key_unavailable",
+                  "rule_key_rotated"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Set when a counterparty-account rule cannot match because its key is missing or was rotated.",
+            "title": "Inactive Reason"
           },
           "kind": {
             "title": "Kind",
@@ -5181,6 +5248,29 @@
               }
             ],
             "title": "Booking Date"
+          },
+          "counterparty_account": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Counterparty Account"
+          },
+          "counterparty_account_key": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Counterparty Account Key"
           },
           "credit_debit_indicator": {
             "enum": [
@@ -13538,7 +13628,7 @@
   "info": {
     "description": "Local cloud-free smart-home control API. Generated from hestia/api_contract.py \u2014 do not edit by hand; run `python -m hestia.api_contract`.",
     "title": "hestia API",
-    "version": "0.37.0"
+    "version": "0.38.0"
   },
   "openapi": "3.1.0",
   "paths": {

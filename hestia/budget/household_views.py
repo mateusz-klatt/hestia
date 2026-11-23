@@ -537,6 +537,9 @@ def _rules(session, owner, book, grant_id):
     ).where(rule.owner == owner).order_by(rule.priority, rule.id))
     safe = []
     for identifier, field, operator, category_id, kind, priority, enabled in rows:
+        # Account rules carry a masked number and a key digest. Omit the whole row.
+        if field == "counterparty_account":
+            continue
         if field not in _RULE_FIELDS or operator not in _RULE_OPERATORS or kind not in core.KINDS:
             raise AnalyticsError("budget_analytics_data_error", 500)
         if type(priority) is not int or type(enabled) is not bool:
