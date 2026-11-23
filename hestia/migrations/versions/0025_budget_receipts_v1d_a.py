@@ -1,13 +1,13 @@
 """Owner-scoped Gmail grant, sync checkpoints, and receipt provenance.
 
 Revision ID: 0025
-Revises: 0022
+Revises: 0023
 """
 from alembic import op
 import sqlalchemy as sa
 
 revision = "0025"
-down_revision = "0022"
+down_revision = "0023"
 branch_labels = None
 depends_on = None
 

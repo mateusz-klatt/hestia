@@ -81,7 +81,20 @@ def main(argv=None):
     resumed.add_argument("--scope", required=True, choices=sorted(LIMIT_SCOPES))
     resumed.add_argument("--account", help="Local account ID, required only for component scope")
     resumed.add_argument("--operation", choices=("transactions", "balances"), help="Required only for component scope")
+    household = commands.add_parser("household", help="Grant or revoke one viewer read of an admin budget")
+    household_actions = household.add_subparsers(dest="action", required=True)
+    grant = household_actions.add_parser("grant", help="Create or reuse one viewer grant")
+    grant.add_argument("--member", required=True, help="Enabled viewer username")
+    grant.add_argument("--owner", required=True, help="Enabled admin username")
+    revoke = household_actions.add_parser("revoke", help="Revoke one grant when member, owner and id all match")
+    revoke.add_argument("--member", required=True, help="Viewer username on the grant")
+    revoke.add_argument("--owner", required=True, help="Admin username on the grant")
+    revoke.add_argument("--grant-id", required=True, help="Current grant id")
     args = parser.parse_args(argv)
+    if args.command == "household":
+        # Before bank config, the acquisition lock, imports and configure(). No init_db.
+        from .household import run_household_command
+        return run_household_command(args)
     try:
         result = execute(args)
     except (BudgetConfigError, BudgetImportError, BudgetBusyError, BudgetStoreError) as exc:

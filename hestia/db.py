@@ -649,6 +649,34 @@ def annotation_label_check_sql() -> str:
     )
 
 
+class BudgetHouseholdMember(Base):
+    """One viewer granted read-only access to exactly one admin owner's budget.
+
+    ``grant_id`` is a server-generated immutable 64-hex scope id. An identical
+    member/owner pair keeps it; any regrant allocates a new one. Migration 0023
+    revises 0022. Restrictive user foreign keys refuse deleting a user who still
+    participates in a grant.
+    """
+
+    __tablename__ = "budget_household_members"
+    __table_args__ = (
+        Index("ix_budget_household_members_owner", "owner"),
+        UniqueConstraint("grant_id", name="uq_budget_household_members_grant_id"),
+        CheckConstraint("member_username <> owner", name="ck_budget_household_members_distinct"),
+        CheckConstraint(
+            "typeof(grant_id) = 'text' AND length(grant_id) = 64 AND grant_id NOT GLOB '*[^0-9a-f]*' "
+            "AND instr(grant_id, char(0)) = 0",
+            name="ck_budget_household_members_grant_id",
+        ),
+    )
+    member_username: Mapped[str] = mapped_column(
+        ForeignKey("users.username", ondelete="RESTRICT", name="fk_budget_household_members_member"),
+        primary_key=True)
+    owner: Mapped[str] = mapped_column(
+        ForeignKey("users.username", ondelete="RESTRICT", name="fk_budget_household_members_owner"))
+    grant_id: Mapped[str]
+
+
 class BudgetAnnotation(Base):
     __tablename__ = "budget_annotations"
     __table_args__ = (
@@ -730,6 +758,7 @@ class BudgetTransferLeg(Base):
 
 class BudgetAnalyticsAudit(Base):
     __tablename__ = "budget_analytics_audit"
+    __table_args__ = (Index("ix_budget_analytics_audit_subject_action_at", "subject_id", "action", "changed_at"),)
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     owner: Mapped[str] = mapped_column(ForeignKey("users.username"))
     subject_type: Mapped[str]

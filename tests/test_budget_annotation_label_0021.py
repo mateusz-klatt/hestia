@@ -100,18 +100,23 @@ class AnnotationLabelMigration0021Tests(unittest.TestCase):
         self.addCleanup(db.reset_engine_cache)
         self.path = Path(self.directory.name) / "m0021.db"
 
-    def test_single_head_and_annotation_receipt_lineage(self):
+    def test_single_head_and_receipt_lineage(self):
         cfg = Config()
         cfg.set_main_option("script_location", str(db._MIGRATIONS_DIR))
         script = ScriptDirectory.from_config(cfg)
         self.assertEqual(script.get_heads(), ["0025"])
-        label = script.get_revision("0021")
-        self.assertIsNotNone(label)
-        self.assertEqual(label.down_revision, "0020")
+        gmail = script.get_revision("0025")
+        self.assertIsNotNone(gmail)
+        self.assertEqual(gmail.down_revision, "0023")
+        household = script.get_revision("0023")
+        self.assertIsNotNone(household)
+        self.assertEqual(household.down_revision, "0022")
         receipts = script.get_revision("0022")
         self.assertIsNotNone(receipts)
         self.assertEqual(receipts.down_revision, "0021")
-        self.assertNotIn("0023", {item.revision for item in script.walk_revisions()})
+        label = script.get_revision("0021")
+        self.assertIsNotNone(label)
+        self.assertEqual(label.down_revision, "0020")
 
     def _database_at_0020(self, *, leftover_temp=False):
         engine = db.make_engine(self.path)

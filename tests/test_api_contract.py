@@ -77,6 +77,14 @@ class OpenApiArtifactTests(unittest.TestCase):
                 del properties[field]
             properties["status"]["enum"].remove("imported")
             properties["source_kind"]["enum"] = ["live_text", "local_ocr", "cloud_ai"]
+        document["info"]["version"] = "0.37.0"
+        canonical_0_37 = json.dumps(document, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        self.assertEqual(hashlib.sha256(canonical_0_37).hexdigest(),
+                         "dae7c9a8b7ed8e02e3a6663161a161c4706cc489c4e0c3a48fe464e8b4b9f135")
+        for path in [path for path in paths if path.startswith("/api/budget/household/")]:
+            del paths[path]
+        for name in [name for name in schemas if name.startswith("BudgetHousehold")]:
+            del schemas[name]
         document["info"]["version"] = "0.36.0"
         canonical_0_36 = json.dumps(document, sort_keys=True, separators=(",", ":")).encode("utf-8")
         self.assertEqual(hashlib.sha256(canonical_0_36).hexdigest(),

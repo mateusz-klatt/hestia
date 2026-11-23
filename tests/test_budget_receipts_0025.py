@@ -51,21 +51,22 @@ class ReceiptMigration0025Tests(unittest.TestCase):
                 "AND name LIKE '!_alembic!_tmp!_%' ESCAPE '!'"
             ).all(), [])
 
-    def _receipt_snapshot(self, engine):
+    def _legacy_snapshot(self, engine):
         with engine.connect() as connection:
             return (
                 connection.exec_driver_sql(
                     "SELECT id, owner, status, source_kind, version FROM budget_receipts"
                 ).all(),
                 connection.exec_driver_sql("SELECT * FROM budget_receipt_lines").all(),
+                connection.exec_driver_sql("SELECT * FROM budget_household_members").all(),
                 connection.exec_driver_sql(
                     "SELECT name, sql FROM sqlite_master WHERE type = 'index' AND sql IS NOT NULL "
                     "AND tbl_name = 'budget_receipts' ORDER BY name"
                 ).all(),
             )
 
-    def test_v1a_rows_child_foreign_key_and_indexes_survive_roundtrip(self):
-        db.downgrade_db(self.path, "0022")
+    def test_receipt_and_household_rows_and_indexes_survive_roundtrip(self):
+        db.downgrade_db(self.path, "0023")
         legacy_engine = self._open()
         with legacy_engine.begin() as connection:
             connection.exec_driver_sql(_RECEIPT)
@@ -74,12 +75,17 @@ class ReceiptMigration0025Tests(unittest.TestCase):
                 "quantity, gross_line_total, net_line_total) "
                 "VALUES ('synthetic', 1, 'owner', 'item', 'Invoice item', 'invoice item', '1', '10', '10')"
             )
-        self._assert_clean(legacy_engine, "0022")
-        original = self._receipt_snapshot(legacy_engine)
+            connection.exec_driver_sql("UPDATE users SET role = 'viewer' WHERE username = 'other'")
+            connection.exec_driver_sql(
+                "INSERT INTO budget_household_members (member_username, owner, grant_id) "
+                "VALUES ('other', 'owner', ?)", ("b" * 64,),
+            )
+        self._assert_clean(legacy_engine, "0023")
+        original = self._legacy_snapshot(legacy_engine)
 
         engine, _ = db.init_db(self.path)
         self._assert_clean(engine, "0025")
-        self.assertEqual(self._receipt_snapshot(engine), original)
+        self.assertEqual(self._legacy_snapshot(engine), original)
         with engine.begin() as connection:
             self.assertEqual(connection.exec_driver_sql(
                 "SELECT document_kind, import_expires_at, invoice_number, due_date FROM budget_receipts"
@@ -87,34 +93,34 @@ class ReceiptMigration0025Tests(unittest.TestCase):
             connection.exec_driver_sql("INSERT INTO budget_gmail_state (owner) VALUES ('owner')")
             connection.exec_driver_sql("INSERT INTO budget_gmail_state (owner, grant_status) VALUES ('other', 'revoked')")
 
-        db.downgrade_db(self.path, "0022")
+        db.downgrade_db(self.path, "0023")
         rebuilt_legacy = self._open()
-        self._assert_clean(rebuilt_legacy, "0022")
-        self.assertEqual(self._receipt_snapshot(rebuilt_legacy), original)
+        self._assert_clean(rebuilt_legacy, "0023")
+        self.assertEqual(self._legacy_snapshot(rebuilt_legacy), original)
         self.assertTrue({"budget_gmail_state", "budget_gmail_messages"}.isdisjoint(inspect(rebuilt_legacy).get_table_names()))
         columns = {column["name"] for column in inspect(rebuilt_legacy).get_columns("budget_receipts")}
         self.assertTrue({"document_kind", "import_expires_at", "invoice_number", "due_date"}.isdisjoint(columns))
 
         engine, _ = db.init_db(self.path)
         self._assert_clean(engine, "0025")
-        self.assertEqual(self._receipt_snapshot(engine), original)
+        self.assertEqual(self._legacy_snapshot(engine), original)
 
     def test_aborted_upgrade_keeps_original_rows_and_retry_rebuilds(self):
-        db.downgrade_db(self.path, "0022")
+        db.downgrade_db(self.path, "0023")
         legacy_engine = self._open()
         with legacy_engine.begin() as connection:
             connection.exec_driver_sql(_RECEIPT)
-        original = self._receipt_snapshot(legacy_engine)
+        original = self._legacy_snapshot(legacy_engine)
         with patch.object(op, "create_table", side_effect=RuntimeError("injected upgrade failure")):
             with self.assertRaisesRegex(RuntimeError, "injected upgrade failure"):
                 db.init_db(self.path)
-        self._assert_clean(legacy_engine, "0022")
-        self.assertEqual(self._receipt_snapshot(legacy_engine), original)
+        self._assert_clean(legacy_engine, "0023")
+        self.assertEqual(self._legacy_snapshot(legacy_engine), original)
         with legacy_engine.begin() as connection:
             connection.exec_driver_sql("CREATE TABLE _alembic_tmp_budget_receipts (id TEXT)")
         engine, _ = db.init_db(self.path)
         self._assert_clean(engine, "0025")
-        self.assertEqual(self._receipt_snapshot(engine), original)
+        self.assertEqual(self._legacy_snapshot(engine), original)
 
     def test_downgrade_preflight_blocks_each_kind_of_v1d_data(self):
         with self.engine.begin() as connection:
@@ -128,7 +134,7 @@ class ReceiptMigration0025Tests(unittest.TestCase):
                 with self.engine.begin() as connection:
                     connection.exec_driver_sql(f"UPDATE budget_receipts SET {clause}")
                 with self.assertRaisesRegex(RuntimeError, "1 incompatible receipts, 0 Gmail provenance rows and 0 active grants"):
-                    db.downgrade_db(self.path, "0022")
+                    db.downgrade_db(self.path, "0023")
                 self._assert_clean(self.engine, "0025")
                 with self.engine.begin() as connection:
                     connection.exec_driver_sql("DELETE FROM budget_receipts")
@@ -136,13 +142,13 @@ class ReceiptMigration0025Tests(unittest.TestCase):
         with self.engine.begin() as connection:
             connection.exec_driver_sql("INSERT INTO budget_gmail_state (owner, grant_status) VALUES ('owner', 'active')")
         with self.assertRaisesRegex(RuntimeError, "0 incompatible receipts, 0 Gmail provenance rows and 1 active grants"):
-            db.downgrade_db(self.path, "0022")
+            db.downgrade_db(self.path, "0023")
         with self.engine.begin() as connection:
             connection.exec_driver_sql("UPDATE budget_gmail_state SET grant_status = 'revoked'")
             connection.exec_driver_sql(_MESSAGE, ("owner", _HMAC, None))
             connection.exec_driver_sql("UPDATE budget_gmail_messages SET outcome = 'deleted'")
         with self.assertRaisesRegex(RuntimeError, "0 incompatible receipts, 1 Gmail provenance rows and 0 active grants"):
-            db.downgrade_db(self.path, "0022")
+            db.downgrade_db(self.path, "0023")
         self._assert_clean(self.engine, "0025")
 
     def test_owner_isolation_dedupe_and_default_disabled_grant(self):
