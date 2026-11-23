@@ -16,7 +16,7 @@ _PERIOD = re.compile(r"([0-9]{4})(?:-([0-9]{2}))?\Z", re.ASCII)
 _CODES = frozenset({"budget_analytics_invalid_request", "budget_analytics_not_found", "budget_analytics_conflict",
                     "budget_analytics_source_changed", "budget_analytics_stale_preview", "budget_analytics_stale_cursor", "budget_analytics_preview_expired",
                     "budget_analytics_leg_reserved", "budget_analytics_limit", "budget_analytics_data_error",
-                    "budget_analytics_unavailable"})
+                    "budget_analytics_rule_key_unavailable", "budget_analytics_unavailable"})
 
 
 class AnalyticsError(ValueError):
@@ -182,12 +182,13 @@ def one_off_key(members, secret):
     return hmac.new(key, _ONE_OFF_PAYLOAD_PREFIX + raw, hashlib.sha256).hexdigest()
 
 
-_ACCOUNT_KEY_DOMAIN = b"hestia/budget/counterparty-account/key/v1\0"
-_ACCOUNT_PAYLOAD_PREFIX = b"hestia/budget/counterparty-account/v1\n"
+_ACCOUNT_KEY_DOMAIN = b"hestia/budget/counterparty-account/key/v2\0"
+_ACCOUNT_KEY_ID_DOMAIN = b"hestia/budget/counterparty-account/key-id/v1\0"
+_ACCOUNT_PAYLOAD_PREFIX = b"hestia/budget/counterparty-account/v2\n"
 _ACCOUNT_IDENTIFICATION = re.compile(r"[A-Z0-9]{6,128}\Z", re.ASCII)
 _ACCOUNT_MASK = re.compile(r"[A-Z0-9]{2}\*\* … [A-Z0-9]{4}\Z", re.ASCII)
-COUNTERPARTY_RULE_PREFIX = "cpacct:v1:"
-_STORED_ACCOUNT = re.compile(r"cpacct:v1:([0-9a-f]{64}):([A-Z0-9]{2}\*\* … [A-Z0-9]{4})\Z", re.ASCII)
+COUNTERPARTY_RULE_PREFIX = "cpacct:v2:"
+_STORED_ACCOUNT = re.compile(r"cpacct:v2:([0-9a-f]{16}):([0-9a-f]{64}):([A-Z0-9]{2}\*\* … [A-Z0-9]{4})\Z", re.ASCII)
 
 
 def normalize_counterparty_account(value):
@@ -204,6 +205,12 @@ def mask_counterparty_account(value):
     return f"{normalized[:2]}** … {normalized[-4:]}"
 
 
+def counterparty_key_id(secret):
+    if not isinstance(secret, bytes) or not secret:
+        raise AnalyticsError("budget_analytics_data_error", 500)
+    return hashlib.sha256(_ACCOUNT_KEY_ID_DOMAIN + secret).hexdigest()[:16]
+
+
 def counterparty_account_key(value, secret):
     normalized = normalize_counterparty_account(value)
     if not isinstance(secret, bytes) or not secret:
@@ -212,23 +219,25 @@ def counterparty_account_key(value, secret):
     return hmac.new(key, _ACCOUNT_PAYLOAD_PREFIX + normalized.encode("ascii"), hashlib.sha256).hexdigest()
 
 
-def counterparty_rule_value(key, masked):
-    if (not isinstance(key, str) or not re.fullmatch(r"[0-9a-f]{64}", key, re.ASCII)
+def counterparty_rule_value(key_id, key, masked):
+    if (not isinstance(key_id, str) or not re.fullmatch(r"[0-9a-f]{16}", key_id, re.ASCII)
+            or not isinstance(key, str) or not re.fullmatch(r"[0-9a-f]{64}", key, re.ASCII)
             or not isinstance(masked, str) or _ACCOUNT_MASK.fullmatch(masked) is None):
         raise AnalyticsError()
-    return COUNTERPARTY_RULE_PREFIX + key + ":" + masked
+    return COUNTERPARTY_RULE_PREFIX + key_id + ":" + key + ":" + masked
 
 
 def counterparty_rule_parts(value):
     match = _STORED_ACCOUNT.fullmatch(value) if isinstance(value, str) else None
     if match is None:
         raise AnalyticsError()
-    return match.group(1), match.group(2)
+    return match.group(1), match.group(2), match.group(3)
 
 
 def counterparty_rule_from_identification(value, secret):
     normalized = normalize_counterparty_account(value)
-    return counterparty_rule_value(counterparty_account_key(normalized, secret), mask_counterparty_account(normalized))
+    return counterparty_rule_value(counterparty_key_id(secret), counterparty_account_key(normalized, secret),
+                                   mask_counterparty_account(normalized))
 
 
 def counterparty_account_evidence(payload, metadata, secret):
@@ -335,7 +344,7 @@ def fold_text(text):
     return unicodedata.normalize("NFC", text).casefold()
 
 
-def match_texts(payload, metadata=None, *, account_secret=None, account_evidence=None):
+def match_texts(payload, metadata=None, *, account_secret=None, account_key_id=None, account_evidence=None):
     """Fold text once and key only the direction's IBAN-like account identifications."""
     metadata = {} if metadata is None else metadata
     if payload.get("credit_debit_indicator") == "DBIT":
@@ -344,7 +353,9 @@ def match_texts(payload, metadata=None, *, account_secret=None, account_evidence
         counterparty = metadata.get("debtor_name") or ""
     if account_evidence is None and account_secret is not None:
         account_evidence = counterparty_account_evidence(payload, metadata, account_secret)
-    accounts = None if account_secret is None else frozenset(key for key, _ in account_evidence or ())
+    if account_secret is not None and account_key_id is None:
+        account_key_id = counterparty_key_id(account_secret)
+    accounts = None if account_secret is None else (account_key_id, frozenset(key for key, _ in account_evidence or ()))
     return {"description": fold_text("\n".join(payload.get("remittance_information", []))),
             "counterparty_name": fold_text(counterparty), "mcc": fold_text(metadata.get("mcc") or ""),
             "counterparty_account": accounts}
@@ -362,7 +373,7 @@ def compile_rules(rules):
         if enabled and field in _FIELDS and valid_operator:
             if field == "counterparty_account":
                 try:
-                    needle = counterparty_rule_parts(_value(rule, "value"))[0]
+                    needle = counterparty_rule_parts(_value(rule, "value"))[:2]
                 except AnalyticsError:
                     safe = False
             else:
@@ -377,9 +388,9 @@ def _rule_value_matches(field, operator, needle, text):
     if field == "counterparty_account":
         if operator != "equals" or needle is None:
             raise AnalyticsError()
-        if text is None:
-            raise AnalyticsError("budget_analytics_data_error", 500)
-        return needle in text
+        if text is None or text[0] != needle[0]:
+            raise AnalyticsError("budget_analytics_rule_key_unavailable", 400)
+        return needle[1] in text[1]
     return needle == text if operator == "equals" else needle in text
 
 
@@ -413,7 +424,7 @@ def rule_matches(rule, payload, metadata=None, *, account_secret=None):
     if field == "counterparty_account":
         if operator != "equals":
             raise AnalyticsError()
-        needle = counterparty_rule_parts(_value(rule, "value"))[0]
+        needle = counterparty_rule_parts(_value(rule, "value"))[:2]
     else:
         needle = fold_text(_value(rule, "value"))
     texts = match_texts(payload, metadata, account_secret=account_secret)

@@ -36,6 +36,12 @@ class BudgetAnalyticsAPITests(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(patch.stop)
         # Reuse fixture construction, without inheriting or re-running its tests.
         await fixture.BudgetAPITests.asyncSetUp(self)
+        rule_key_file = self.path.parent / "counterparty-rule.key"
+        rule_key_file.write_bytes(b"synthetic-only-32-byte-rule-key-value")
+        rule_key_file.chmod(0o400)
+        key_patch = mock.patch.dict(os.environ, {"HESTIA_BUDGET_RULE_KEY_FILE": str(rule_key_file)})
+        key_patch.start()
+        self.addCleanup(key_patch.stop)
         first = replace(self.config.connections[0], accounts=(fixture.PRIVATE_A, "ALICE-SYNTHETIC-CREDIT"))
         self.config = replace(self.config, connections=(first, self.config.connections[1]))
         prepare_selected(self.store, self.config)

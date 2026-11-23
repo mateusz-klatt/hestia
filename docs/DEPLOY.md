@@ -63,3 +63,18 @@ Follow-ups only. This PR does not change those migrations. The dedicated-connect
 
 - `0002` and `0003` downgrades batch-alter `users` while `user_settings` references it.
 - The planned v1d `0023` / `0024` migrations will batch-alter `budget_receipts`, which lines reference.
+
+## Persistent budget-rule HMAC key
+
+Before deploying counterparty-account rules, **holzera must create the dedicated rule key on the host**, as the same user that runs Hestia. Do not reuse `HESTIA_SESSION_SECRET`: session rotation must not change persisted rule matching.
+
+```sh
+install -d -m 0700 /var/lib/hestia/secrets
+umask 077
+head -c32 /dev/urandom > /var/lib/hestia/secrets/budget-rule.key
+chmod 0400 /var/lib/hestia/secrets/budget-rule.key
+```
+
+Set `HESTIA_BUDGET_RULE_KEY_FILE=/var/lib/hestia/secrets/budget-rule.key` in Hestia's deployment environment and mount the file read-only at that path. Back up the key securely with the database. The file must remain owned by the Hestia user with mode `0400` or `0600`; missing, short, symlinked, or otherwise unsafe files make account-rule creation and matching fail with `budget_analytics_rule_key_unavailable` while other rule types remain available.
+
+Keep this key stable. Changing it changes the stored key-ID context, rejects previews created under the previous key, and prevents older counterparty-account rules from matching until they are deliberately recreated.

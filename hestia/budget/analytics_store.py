@@ -5,6 +5,7 @@ from datetime import date
 import hmac
 import json
 import math
+import os
 import re
 import unicodedata
 import uuid
@@ -19,10 +20,11 @@ from ..db import BudgetConnection as Connection, BudgetRule as Rule, BudgetRuleP
 from ..db import BudgetTransaction as Transaction, BudgetTransactionMetadata as Metadata
 from ..db import BudgetTransferDecision as Decision, BudgetTransferLeg as Leg
 from .analytics_core import (AnalyticsError, KINDS, COUNTERPARTY_RULE_PREFIX, clean_one_off_label, compare_money,
-                             compatible_kind, compile_rules, counterparty_rule_from_identification, counterparty_rule_parts,
+                             compatible_kind, compile_rules, counterparty_key_id, counterparty_rule_from_identification, counterparty_rule_parts,
                              counterparty_rule_value, effective_date, financial_fingerprint, first_matching_rule,
                              match_texts, pair_fingerprint)
 from .client import _reject_constant, _unique_error_fields
+from .config import BudgetConfigError, _read_secret
 from .mortgage_reminders import (MAX_PAID_MONTHS as MAX_MORTGAGE_PAID_MONTHS, MAX_SCHEDULES as MAX_MORTGAGE_SCHEDULES,
                                  PRIVATE_DESTINATIONS as MORTGAGE_DESTINATIONS, MortgageInputError,
                                  _parse_amount as _parse_mortgage_amount, _parse_date as _parse_mortgage_date,
@@ -62,7 +64,7 @@ def _rule_wire(row):
     result = _dict(row, _RULE_OUTPUT)
     if result["field"] == "counterparty_account":
         try:
-            key, masked = counterparty_rule_parts(result["value"])
+            _key_id, key, masked = counterparty_rule_parts(result["value"])
         except AnalyticsError:
             raise AnalyticsError("budget_analytics_data_error", 500) from None
         result["value"] = masked
@@ -108,6 +110,24 @@ def _fingerprint(current, expected):
 
 
 class BudgetAnalyticsStore(BudgetHTTPStore):
+    def __init__(self, sessions, *, rule_key_file=None, **kwargs):
+        super().__init__(sessions, **kwargs)
+        self._rule_key_file = rule_key_file
+
+    def _rule_key_context(self, *, required=True):
+        path = self._rule_key_file or os.environ.get("HESTIA_BUDGET_RULE_KEY_FILE")
+        try:
+            if not isinstance(path, str) or not path:
+                raise ValueError
+            secret = _read_secret(path, max_bytes=1024)
+            if len(secret) < 32:
+                raise ValueError
+            return secret, counterparty_key_id(secret)
+        except (BudgetConfigError, TypeError, ValueError):
+            if required:
+                raise AnalyticsError("budget_analytics_rule_key_unavailable", 400) from None
+            return None
+
     def _now(self):
         now = self.clock()
         if type(now) not in (int, float) or not math.isfinite(now) or now < 0:
@@ -515,15 +535,17 @@ class BudgetAnalyticsStore(BudgetHTTPStore):
             key = value.pop("counterparty_account_key", None)
             raw = _text(value["value"], 256)
             if raw.startswith(COUNTERPARTY_RULE_PREFIX):
-                stored_key, masked = counterparty_rule_parts(raw)
+                key_id, stored_key, masked = counterparty_rule_parts(raw)
                 if key is not None and (not isinstance(key, str) or _HASH.fullmatch(key) is None
                                         or not hmac.compare_digest(stored_key, key)):
                     raise AnalyticsError()
-                value["value"] = counterparty_rule_value(stored_key, masked)
+                value["value"] = counterparty_rule_value(key_id, stored_key, masked)
             elif key is not None:
-                value["value"] = counterparty_rule_value(key, raw)
+                _secret, key_id = self._rule_key_context()
+                value["value"] = counterparty_rule_value(key_id, key, raw)
             else:
-                value["value"] = counterparty_rule_from_identification(raw, self._cursor_secret)
+                secret, _key_id = self._rule_key_context()
+                value["value"] = counterparty_rule_from_identification(raw, secret)
         else:
             if value.pop("counterparty_account_key", None) is not None:
                 raise AnalyticsError()
@@ -537,10 +559,15 @@ class BudgetAnalyticsStore(BudgetHTTPStore):
             self._category(session, owner, value["category_id"])
         return value, row
 
-    def _snapshot(self, session, owner):
+    def _account_projection(self, session, owner, *, classify=True):
         # Import after module initialization: the read projection subclasses this store.
         from .analytics_views import projection_snapshot
-        return projection_snapshot(session, owner, account_secret=self._cursor_secret)
+        context = self._rule_key_context(required=False)
+        secret, key_id = context if context is not None else (None, None)
+        return projection_snapshot(session, owner, classify=classify, account_secret=secret, account_key_id=key_id)
+
+    def _snapshot(self, session, owner):
+        return self._account_projection(session, owner)
 
     @staticmethod
     def _proposed(rows, rules, *, watch=None):
@@ -646,12 +673,11 @@ class BudgetAnalyticsStore(BudgetHTTPStore):
                     "affected_count": affected, "examples": examples, "rule_count": len(staged)}
 
     def _snapshot_digest(self, session, owner):
-        from .analytics_views import projection_snapshot
-        preview = projection_snapshot(session, owner, classify=False, account_secret=self._cursor_secret)
+        preview = self._account_projection(session, owner, classify=False)
         _, safe = compile_rules(preview["rules"])
         if safe:
             return preview["digest"]
-        return projection_snapshot(session, owner, account_secret=self._cursor_secret)["digest"]
+        return self._account_projection(session, owner)["digest"]
 
     def _apply_candidate(self, session, owner, candidate):
         proposed_id = candidate.pop("_proposed_id", None)

@@ -64,7 +64,7 @@ class BudgetHTTPStore(BudgetJobStore):
         super().__init__(sessions, clock=clock)
         if not isinstance(cursor_secret, bytes) or not cursor_secret:
             raise BudgetQueryError("Invalid cursor configuration")
-        # Retained for one-off row and counterparty-account keys. Those HMAC with this same session secret;
+        # Retained for one-off row keys. Those HMAC with this same session secret;
         # consent aliases derive their key from it the same way. It is not logged.
         self._cursor_secret = cursor_secret
         self._cipher = AESGCM(hashlib.sha256(_CURSOR_DOMAIN + b"\0" + cursor_secret).digest())

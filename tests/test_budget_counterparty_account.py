@@ -7,7 +7,7 @@ import unittest
 from hestia import db
 from hestia.budget import analytics_views
 from hestia.budget.analytics_core import (AnalyticsError, compile_rules, counterparty_account_evidence,
-    counterparty_account_key, counterparty_rule_from_identification, counterparty_rule_parts,
+    counterparty_account_key, counterparty_key_id, counterparty_rule_from_identification, counterparty_rule_parts,
     counterparty_rule_value, first_matching_rule, mask_counterparty_account, match_texts,
     normalize_counterparty_account, rule_matches)
 from tests.test_budget_analytics_core import identity, payload
@@ -16,7 +16,7 @@ from tests.test_budget_analytics_views import ProjectionCase
 
 SYNTHETIC_IBAN = "PL" + "0" * 22 + "1234"
 OTHER_IBAN = "PL" + "0" * 22 + "5678"
-SECRET = b"synthetic-only"
+SECRET = b"synthetic-only-32-byte-rule-key-value"
 
 
 def spaced(value):
@@ -37,8 +37,9 @@ class CounterpartyAccountCoreTests(unittest.TestCase):
         self.assertEqual(key, counterparty_account_key(SYNTHETIC_IBAN, SECRET))
         self.assertNotEqual(key, counterparty_account_key(SYNTHETIC_IBAN, b"another-synthetic-secret"))
         stored = counterparty_rule_from_identification(spaced(SYNTHETIC_IBAN), SECRET)
-        self.assertEqual(counterparty_rule_parts(stored), (key, "PL** … 1234"))
-        self.assertEqual(counterparty_rule_value(key, "PL** … 1234"), stored)
+        key_id = counterparty_key_id(SECRET)
+        self.assertEqual(counterparty_rule_parts(stored), (key_id, key, "PL** … 1234"))
+        self.assertEqual(counterparty_rule_value(key_id, key, "PL** … 1234"), stored)
         self.assertLessEqual(len(stored), 256)
         self.assertNotIn(SYNTHETIC_IBAN, stored)
 
@@ -51,11 +52,14 @@ class CounterpartyAccountCoreTests(unittest.TestCase):
             with self.subTest(secret=secret), self.assertRaises(AnalyticsError) as raised:
                 counterparty_account_key(SYNTHETIC_IBAN, secret)
             self.assertEqual((raised.exception.code, raised.exception.status), ("budget_analytics_data_error", 500))
-        for key, masked in ((None, "PL** … 1234"), ("A" * 64, "PL** … 1234"),
-                            ("a" * 64, SYNTHETIC_IBAN), ("a" * 64, None)):
+            with self.assertRaises(AnalyticsError):
+                counterparty_key_id(secret)
+        for key_id, key, masked in ((None, "a" * 64, "PL** … 1234"), ("g" * 16, "a" * 64, "PL** … 1234"),
+                                    ("0" * 16, None, "PL** … 1234"), ("0" * 16, "A" * 64, "PL** … 1234"),
+                                    ("0" * 16, "a" * 64, SYNTHETIC_IBAN), ("0" * 16, "a" * 64, None)):
             with self.subTest(masked=masked), self.assertRaises(AnalyticsError):
-                counterparty_rule_value(key, masked)
-        for stored in (None, SYNTHETIC_IBAN, "cpacct:v1:broken"):
+                counterparty_rule_value(key_id, key, masked)
+        for stored in (None, SYNTHETIC_IBAN, "cpacct:v1:broken", "cpacct:v2:broken"):
             with self.subTest(stored=stored), self.assertRaises(AnalyticsError):
                 counterparty_rule_parts(stored)
 
@@ -79,14 +83,15 @@ class CounterpartyAccountCoreTests(unittest.TestCase):
             rule_matches(rule | {"operator": "contains"}, debit, debit_metadata, account_secret=SECRET)
         with self.assertRaises(AnalyticsError) as missing_secret:
             rule_matches(rule, debit, debit_metadata)
-        self.assertEqual(missing_secret.exception.status, 500)
+        self.assertEqual((missing_secret.exception.code, missing_secret.exception.status),
+                         ("budget_analytics_rule_key_unavailable", 400))
 
     def test_matching_uses_any_valid_account_and_ignores_non_iban_like_identifiers(self):
         metadata = {"creditor_accounts": [identity("not-an-iban"), identity(OTHER_IBAN), identity(SYNTHETIC_IBAN)]}
         evidence = counterparty_account_evidence(payload(), metadata, SECRET)
         self.assertEqual(len(evidence), 2)
         self.assertTrue(rule_matches(account_rule(), payload(), metadata, account_secret=SECRET))
-        malformed = account_rule() | {"value": "cpacct:v1:broken"}
+        malformed = account_rule() | {"value": "cpacct:v2:broken"}
         compiled, safe = compile_rules([malformed])
         self.assertFalse(safe)
         with self.assertRaises(AnalyticsError):
@@ -149,14 +154,64 @@ class CounterpartyAccountProjectionTests(ProjectionCase):
         replay = self.store.save_rule("owner", preview["preview_id"])
         self.assertFalse(replay["changed"])
         rotated = analytics_views.BudgetAnalyticsViews(self.sessions, clock=lambda: self.now,
-                                                       cursor_secret=b"synthetic-rotated")
-        self.assertEqual(rotated.transactions("owner", "2026")["transactions"][0]["effective"]["source"], "default")
+                                                       cursor_secret=b"synthetic-rotated", rule_key_file=str(self.rule_key_file))
+        row = rotated.transactions("owner", "2026")["transactions"][0]
+        self.assertEqual((row["effective"]["source"], row["effective"]["rule_id"]), ("rule", saved["id"]))
         with self.sessions.begin() as session:
             metadata = session.get(db.BudgetTransactionMetadata, (self.accounts["a"], "debit"))
             metadata.payload_json = json.dumps({"creditor_accounts": [identity(SYNTHETIC_IBAN), identity(OTHER_IBAN)]})
         row = self.store.transactions("owner", "2026")["transactions"][0]
         self.assertIsNone(row["counterparty_account_key"])
         self.assertIsNone(row["counterparty_account"])
+
+    def test_dedicated_key_is_required_and_rotation_fences_previews(self):
+        self.add_transaction("a", "debit")
+        self.metadata_for("a", "debit", "creditor_accounts", SYNTHETIC_IBAN)
+        missing = analytics_views.BudgetAnalyticsViews(
+            self.sessions, clock=lambda: self.now, cursor_secret=b"session-one",
+            rule_key_file=str(self.path.parent / "missing-rule.key"))
+        ordinary = missing.preview_rule("owner", self.candidate())
+        self.assertEqual(ordinary["affected_count"], 1)
+        with self.assertRaises(AnalyticsError) as unavailable:
+            missing.preview_rule("owner", self.candidate(field="counterparty_account", operator="equals",
+                                                         value=SYNTHETIC_IBAN))
+        self.assertEqual((unavailable.exception.code, unavailable.exception.status),
+                         ("budget_analytics_rule_key_unavailable", 400))
+        insecure_path = self.path.parent / "insecure-rule.key"
+        insecure_path.write_bytes(SECRET)
+        insecure_path.chmod(0o644)
+        insecure = analytics_views.BudgetAnalyticsViews(
+            self.sessions, clock=lambda: self.now, cursor_secret=b"session-one", rule_key_file=str(insecure_path))
+        with self.assertRaises(AnalyticsError) as refused:
+            insecure.preview_rule("owner", self.candidate(field="counterparty_account", operator="equals",
+                                                          value=SYNTHETIC_IBAN))
+        self.assertEqual(refused.exception.status, 400)
+        short_path = self.path.parent / "short-rule.key"
+        short_path.write_bytes(b"too-short")
+        short_path.chmod(0o400)
+        insecure = analytics_views.BudgetAnalyticsViews(
+            self.sessions, clock=lambda: self.now, cursor_secret=b"session-one", rule_key_file=str(short_path))
+        with self.assertRaises(AnalyticsError) as too_short:
+            insecure.preview_rule("owner", self.candidate(field="counterparty_account", operator="equals",
+                                                          value=SYNTHETIC_IBAN))
+        self.assertEqual(too_short.exception.status, 400)
+
+        candidate = self.candidate(field="counterparty_account", operator="equals", value=SYNTHETIC_IBAN)
+        stale = self.store.preview_rule("owner", candidate)
+        saved = self.store.save_rule("owner", self.store.preview_rule("owner", candidate)["preview_id"])
+        self.assertTrue(self.rows(db.BudgetRule)[0].value.startswith("cpacct:v2:" + counterparty_key_id(SECRET) + ":"))
+        self.rule_key_file.chmod(0o600)
+        self.rule_key_file.write_bytes(b"another-synthetic-persistent-key-32b")
+        self.rule_key_file.chmod(0o400)
+        with self.assertRaises(AnalyticsError) as stale_save:
+            self.store.save_rule("owner", stale["preview_id"])
+        self.assertEqual((stale_save.exception.code, stale_save.exception.status),
+                         ("budget_analytics_stale_preview", 409))
+        with self.assertRaises(AnalyticsError) as mismatched:
+            self.store.transactions("owner", "2026")
+        self.assertEqual((mismatched.exception.code, mismatched.exception.status),
+                         ("budget_analytics_rule_key_unavailable", 400))
+        self.assertEqual(saved["value"], "PL** … 1234")
 
     def test_validation_and_malformed_storage_fail_closed(self):
         invalid = (
