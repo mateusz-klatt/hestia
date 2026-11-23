@@ -1213,23 +1213,37 @@ NR KARTY ****5555
         other = "other-account-only"
         self.add_transaction("b", other, amount="100", booking_date="2026-11-30")
         other_digest = reference_digest(other)
+        from sqlalchemy import literal_column, select
+        with self.sessions() as session:
+            foreign = session.scalar(select(literal_column("budget_transactions.rowid")).where(
+                db.BudgetTransaction.account_id == self.accounts["b"],
+                db.BudgetTransaction.entry_reference == other,
+            ))
+            self.assertIsNotNone(foreign)
+            self.assertIsNone(BudgetReceiptStore._named_transaction(session, "owner", account, foreign))
 
-        def confirm(link):
-            with mock.patch.object(BudgetReceiptStore, "_named_transaction", side_effect=AssertionError("lookup")):
+        def confirm(link, *, lookup=False):
+            def run():
                 with self.assertRaises(ReceiptError) as rejected:
                     self.receipts.confirm("owner", confirm_values(parsed, link=link))
-            self.assertEqual((rejected.exception.code, rejected.exception.status),
-                             ("budget_receipt_invalid_request", 400))
-            self.assertEqual(self.receipt_row(parsed["receipt_id"]).status, "draft")
+                self.assertEqual((rejected.exception.code, rejected.exception.status),
+                                 ("budget_receipt_invalid_request", 400))
+                self.assertEqual(self.receipt_row(parsed["receipt_id"]).status, "draft")
+
+            if lookup:
+                run()
+                return
+            with mock.patch.object(BudgetReceiptStore, "_named_transaction", side_effect=AssertionError("lookup")):
+                run()
 
         with self.subTest(case="wrong token"):
             confirm({"account_id": account, "entry_reference": digest, "candidate_token": "not a token!"})
         with self.subTest(case="forged token"):
             confirm({"account_id": account, "entry_reference": digest, "candidate_token": "a" * 43})
         with self.subTest(case="raw key"):
-            confirm({"account_id": account, "entry_reference": "debit", "candidate_token": token})
+            confirm({"account_id": account, "entry_reference": "debit", "candidate_token": token}, lookup=True)
         with self.subTest(case="other account digest"):
-            confirm({"account_id": account, "entry_reference": other_digest, "candidate_token": token})
+            confirm({"account_id": account, "entry_reference": other_digest, "candidate_token": token}, lookup=True)
         with self.subTest(case="other account id"):
             confirm({"account_id": self.accounts["b"], "entry_reference": other_digest, "candidate_token": token})
         with self.sessions.begin() as session:

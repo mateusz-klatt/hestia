@@ -319,18 +319,39 @@ class StoreEdgeTests(AnalyticsCase):
             self.assertEqual(self.draft()["candidates"], [])
         with mock.patch("hestia.budget.receipt_store.base64.urlsafe_b64encode", return_value=b"***"):
             with self.assertRaises(ReceiptError):
-                self.receipts._candidate_token({"owner": "owner"}, "account", "ref")
+                self.receipts._candidate_token({"owner": "owner"}, "account", 1)
         from hestia.budget.receipt_reconcile import link_evidence
         evidence = link_evidence("owner", "account", "ref", {}, None, None, None, None)
         with self.assertRaises(AnalyticsError):
-            self.receipts._candidate_token(evidence, "a" * 128, "😀" * 1024)
+            self.receipts._candidate_token(evidence, "account", "not-a-row")
+        with mock.patch("hestia.budget.receipt_store.base64.urlsafe_b64encode", return_value=b"A" * 4097):
+            with self.assertRaises(AnalyticsError):
+                self.receipts._candidate_token(evidence, "account", 1)
+
+    def test_maximum_unicode_reference_is_a_candidate_and_confirms(self):
+        reference = "Ż" * 1024
+        self.add_transaction("a", reference, amount="100", booking_date="2026-11-30")
+        parsed = self.draft()
+        digest = hashlib.sha256(reference.encode("utf-8")).hexdigest()
+        candidate = next(item for item in parsed["candidates"] if item["entry_reference"] == digest)
+        self.assertLessEqual(len(candidate["candidate_token"]), 4096)
+        self.assertNotIn(reference, candidate["candidate_token"])
+        saved = self.receipts.confirm("owner", confirm_values(parsed, link={
+            "account_id": candidate["account_id"], "entry_reference": digest,
+            "candidate_token": candidate["candidate_token"],
+        }))["receipt"]
+        self.assertTrue(saved["linked"])
+        self.assertEqual(saved["linked_entry_ref"], digest)
+        self.assertNotIn(reference, json.dumps(saved, ensure_ascii=False))
+        with self.sessions() as session:
+            self.assertEqual(session.get(db.BudgetReceipt, parsed["receipt_id"]).linked_entry_ref, reference)
 
     def test_sealed_token_rejects_a_non_string_pair_and_a_broken_evidence_rebuild(self):
         from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-        payload = json.dumps({"a": 1, "m": "ab" * 32, "r": "ref"}, separators=(",", ":")).encode("ascii")
-        key = self.receipts._candidate_key
-        nonce = hashlib.sha256(key + payload).digest()[:12]
+        payload = json.dumps({"a": 1, "i": 1, "m": "ab" * 32}, separators=(",", ":")).encode("ascii")
+        key = self.receipts._token_key
+        nonce = b"0123456789ab"
         blob = nonce + AESGCM(key).encrypt(nonce, payload, None)
         token = base64.urlsafe_b64encode(blob).rstrip(b"=").decode("ascii")
         self.assertRaises(ReceiptError, self.receipts._open_candidate_token, token)
