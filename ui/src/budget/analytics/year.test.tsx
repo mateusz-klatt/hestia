@@ -4,7 +4,7 @@ import { createRoot } from "react-dom/client";
 import type { Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BudgetApi, BudgetResult } from "../api";
-import { overviewOf, totals } from "./fixtures";
+import { entriesOf, overviewOf, totals } from "./fixtures";
 import type { AnalyticsOverview } from "./model";
 import { YearView, yearLabels } from "./year";
 
@@ -36,7 +36,11 @@ async function settle(): Promise<void> {
 async function show(overview: BudgetApi["overview"]) {
   const onOpenMonth = vi.fn();
   await act(async () => {
-    root.render(<YearView api={{ overview }} accounts={[]} text={yearLabels.en} locale="en" revision={0} onAccessLoss={() => false}
+    root.render(<YearView api={{
+      overview,
+      analyticsTransactions: vi.fn<BudgetApi["analyticsTransactions"]>(() => Promise.resolve({ ok: true, data: entriesOf("2026", []) })),
+      categories: vi.fn<BudgetApi["categories"]>(() => Promise.resolve({ ok: true, data: { categories: [] } })),
+    }} accounts={[]} text={yearLabels.en} locale="en" revision={0} onAccessLoss={() => false}
       onOpenMonth={onOpenMonth} today={() => new Date(2026, 10, 21, 12)} />);
     await Promise.resolve();
   });
