@@ -82,7 +82,8 @@ def confirm_values(parsed, *, link=None, **changes):
                       and item["entry_reference"] in {presented, digested}
                       and item.get("candidate_token")), None)
         if match is not None:
-            link = {**link, "candidate_token": match["candidate_token"]}
+            link = {**link, "candidate_token": match["candidate_token"],
+                    "entry_reference": match["entry_reference"]}
     values.update({
         "receipt_id": parsed["receipt_id"], "expected_version": parsed["version"], "link": link,
         "lines": [{key: line[key] for key in LINE_FIELDS} for line in draft["lines"]],
@@ -1030,7 +1031,7 @@ NR KARTY ****5555
                              value_date="2026-11-10", transaction_date="2026-11-20")
         parsed = self.draft(day="2026-11-20")
         candidate = next(item for item in parsed["candidates"] if item["entry_reference"] == reference_digest("window"))
-        link = {"account_id": candidate["account_id"], "entry_reference": "window",
+        link = {"account_id": candidate["account_id"], "entry_reference": reference_digest("window"),
                 "candidate_token": candidate["candidate_token"]}
         merchant = confirm_values(parsed, link=link, raw_shop_name="INNY SKLEP")
         with self.assertRaises(ReceiptError) as stale_merchant:
@@ -1102,7 +1103,8 @@ NR KARTY ****5555
         self.assertEqual(rejected.exception.code, "budget_receipt_stale_source")
         self.assertEqual(self.receipt_row(identifier).status, "needs_review")
         saved = self.receipts.confirm("owner", confirm_values(
-            parsed, link={**self.link(), "candidate_token": match["candidate_token"]},
+            parsed, link={"account_id": match["account_id"], "entry_reference": match["entry_reference"],
+                          "candidate_token": match["candidate_token"]},
             expected_version=version, raw_shop_name="ŻÓŁTY SKLEP",
         ))["receipt"]
         self.assertEqual((saved["status"], saved["raw_shop_name"], saved["linked"]),
@@ -1119,7 +1121,7 @@ NR KARTY ****5555
         parsed = self.draft()
         candidate = next(item for item in parsed["candidates"] if item["entry_reference"] == digest)
         token = candidate["candidate_token"]
-        self.assertEqual(len(token), 43)
+        self.assertGreater(len(token), 43)
         self.assertLessEqual(len(token), 4096)
         self.assertNotIn(".", token)
         self.assertNotIn(reference, token)
@@ -1143,7 +1145,7 @@ NR KARTY ****5555
 
         preview = self.draft(item="MLEKO INNE")
         issued = next(item for item in preview["candidates"] if item["entry_reference"] == reference_digest("debit"))
-        debit = {"account_id": issued["account_id"], "entry_reference": "debit",
+        debit = {"account_id": issued["account_id"], "entry_reference": issued["entry_reference"],
                  "candidate_token": issued["candidate_token"]}
         self.change_transaction(remittance_information=["Corrected synthetic text"])
         with self.assertRaises(ReceiptError) as stale_text:
@@ -1159,7 +1161,7 @@ NR KARTY ****5555
         self.change_transaction(amount="100")
 
         fresh = self.draft(item="MLEKO TRZECIE")
-        fresh_link = self.link()
+        fresh_link = {"account_id": self.accounts["a"], "entry_reference": reference_digest("debit")}
         fresh_link["candidate_token"] = next(
             item["candidate_token"] for item in fresh["candidates"] if item["entry_reference"] == reference_digest("debit"))
         with self.sessions.begin() as session:
@@ -1180,19 +1182,45 @@ NR KARTY ****5555
             self.assertEqual(reconcile_receipt_links(session, "owner", self.now + 1), 0)
         self.assert_latched(rebound["receipt_id"], confirmed["version"])
 
-    def test_unknown_presented_reference_is_stale(self):
+    def test_confirm_accepts_only_the_digest_named_by_the_token(self):
         parsed = self.draft()
-        token = next(item["candidate_token"] for item in parsed["candidates"]
-                     if item["entry_reference"] == reference_digest("debit"))
         account = self.accounts["a"]
-        for presented in ("missing-ref", "g" * 64, "0" * 64):
-            link = {"account_id": account, "entry_reference": presented, "candidate_token": token}
-            with self.subTest(presented=presented[:12]):
+        digest = reference_digest("debit")
+        token = next(item["candidate_token"] for item in parsed["candidates"]
+                     if item["entry_reference"] == digest)
+        other = "other-account-only"
+        self.add_transaction("b", other, amount="100", booking_date="2026-11-30")
+        other_digest = reference_digest(other)
+
+        def confirm(link):
+            with mock.patch.object(BudgetReceiptStore, "_named_transaction", side_effect=AssertionError("lookup")):
                 with self.assertRaises(ReceiptError) as rejected:
                     self.receipts.confirm("owner", confirm_values(parsed, link=link))
-                self.assertEqual((rejected.exception.code, rejected.exception.status),
-                                 ("budget_receipt_stale_source", 409))
-                self.assertEqual(self.receipt_row(parsed["receipt_id"]).status, "draft")
+            self.assertEqual((rejected.exception.code, rejected.exception.status),
+                             ("budget_receipt_invalid_request", 400))
+            self.assertEqual(self.receipt_row(parsed["receipt_id"]).status, "draft")
+
+        with self.subTest(case="wrong token"):
+            confirm({"account_id": account, "entry_reference": digest, "candidate_token": "not a token!"})
+        with self.subTest(case="forged token"):
+            confirm({"account_id": account, "entry_reference": digest, "candidate_token": "a" * 43})
+        with self.subTest(case="raw key"):
+            confirm({"account_id": account, "entry_reference": "debit", "candidate_token": token})
+        with self.subTest(case="other account digest"):
+            confirm({"account_id": account, "entry_reference": other_digest, "candidate_token": token})
+        with self.subTest(case="other account id"):
+            confirm({"account_id": self.accounts["b"], "entry_reference": other_digest, "candidate_token": token})
+        with self.sessions.begin() as session:
+            session.get(db.BudgetAccount, account).enabled = False
+        with self.subTest(case="disabled account"):
+            confirm({"account_id": account, "entry_reference": digest, "candidate_token": token})
+        with self.sessions.begin() as session:
+            session.get(db.BudgetAccount, account).enabled = True
+        self.assertRaises(ReceiptError, self.receipts._open_candidate_token, None)
+        saved = self.receipts.confirm("owner", confirm_values(self.draft(item="MLEKO TOKEN"), link=self.link()))
+        self.assertTrue(saved["receipt"]["linked"])
+        self.assertEqual(saved["receipt"]["linked_entry_ref"], digest)
+        self.assertEqual(self.receipt_row(saved["receipt"]["receipt_id"]).linked_entry_ref, "debit")
 
     def test_long_remittance_still_yields_a_candidate_and_confirms(self):
         remittance = "S" * 4096

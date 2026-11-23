@@ -11,6 +11,8 @@ import re
 from types import SimpleNamespace
 import uuid
 
+from cryptography.exceptions import InvalidTag
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from sqlalchemy import delete, exists, func, or_, select
 from sqlalchemy.exc import IntegrityError
 
@@ -32,7 +34,8 @@ CURSOR_TTL_SECONDS = 900
 MAX_CURSOR_CHARS = 8192
 _CURSOR_DOMAIN = b"hestia/budget/receipts/cursor/v1"
 _CANDIDATE_DOMAIN = b"hestia/budget/receipts/candidate/v1"
-_CANDIDATE_TOKEN = re.compile(r"[A-Za-z0-9_-]{43}\Z")
+_TOKEN_ALPHABET = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-")
+_TOKEN_LIMIT = 4096
 _UUID = re.compile(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\Z", re.ASCII)
 _MONTH = re.compile(r"[0-9]{4}-[0-9]{2}\Z", re.ASCII)
 _SUMMARY_FIELDS = (
@@ -289,7 +292,7 @@ class BudgetReceiptStore(BudgetHTTPStore):
                 evidence = link_evidence(
                     owner, transaction.account_id, transaction.entry_reference, payload,
                     shop_name, row.raw_nip, creditor, fingerprint)
-                token = self._candidate_token(evidence)
+                token = self._candidate_token(evidence, transaction.account_id, transaction.entry_reference)
             except (AnalyticsError, ValueError, TypeError, RecursionError):
                 continue
             remittance = payload.get("remittance_information")
@@ -312,13 +315,18 @@ class BudgetReceiptStore(BudgetHTTPStore):
         ranked.sort(key=lambda item: item[:4])
         return [item[-1] for item in ranked[:MAX_CANDIDATES]]
 
-    def _verify_link(self, session, owner, cleaned, link, receipt_id):
-        account = session.get(Account, link["account_id"])
+    @staticmethod
+    def _owned_account(session, owner, account_id):
+        account = session.get(Account, account_id)
         if account is None or account.owner != owner or not account.enabled:
             raise ReceiptError()
         connection = session.get(Connection, account.connection_id)
         if connection is None or connection.owner != owner:
             raise ReceiptError()
+        return account
+
+    def _verify_link(self, session, owner, cleaned, link, receipt_id):
+        self._owned_account(session, owner, link["account_id"])
         transaction = session.get(Transaction, (link["account_id"], link["entry_reference"]))
         if transaction is None:
             raise ReceiptError("budget_receipt_stale_source", 409)
@@ -349,54 +357,74 @@ class BudgetReceiptStore(BudgetHTTPStore):
             raise ReceiptError() from None
         return fingerprint
 
-    def _candidate_token(self, evidence):
-        """Fixed-length HMAC over a digest of the evidence, not the evidence itself."""
+    def _evidence_mac(self, evidence):
+        """HMAC over a digest of the evidence, not the evidence itself."""
         raw = evidence_json(evidence).encode("ascii")
         digest = hashlib.sha256(raw).digest()
-        signature = hmac.new(self._candidate_key, digest, hashlib.sha256).digest()
-        token = base64.urlsafe_b64encode(signature).rstrip(b"=").decode("ascii")
-        if _CANDIDATE_TOKEN.fullmatch(token) is None:
+        return hmac.new(self._candidate_key, digest, hashlib.sha256).digest()
+
+    def _candidate_token(self, evidence, account_id, entry_reference):
+        """Seal the named pair. The client sees the digest, not the provider reference."""
+        payload = json.dumps(
+            {"a": account_id, "m": self._evidence_mac(evidence).hex(), "r": entry_reference},
+            sort_keys=True, separators=(",", ":"), ensure_ascii=True,
+        ).encode("ascii")
+        nonce = hashlib.sha256(self._candidate_key + payload).digest()[:12]
+        blob = nonce + AESGCM(self._candidate_key).encrypt(nonce, payload, None)
+        token = base64.urlsafe_b64encode(blob).rstrip(b"=").decode("ascii")
+        if any(char not in _TOKEN_ALPHABET for char in token):
             raise ReceiptError()
+        if len(token) > _TOKEN_LIMIT:
+            raise AnalyticsError()
         return token
 
-    def _linked_transaction(self, session, account_id, presented):
-        """Bank row addressed by its provider reference or by the digest clients see."""
-        direct = session.get(Transaction, (account_id, presented))
-        if direct is not None:
-            return direct
-        if len(presented) != 64 or any(char not in "0123456789abcdef" for char in presented):
-            return None
-        matches = []
-        for reference in session.scalars(select(Transaction.entry_reference).where(
-                Transaction.account_id == account_id)):
-            if entry_reference_digest(reference) == presented:
-                matches.append(reference)
-        if len(matches) != 1:
-            return None
-        return session.get(Transaction, (account_id, matches[0]))
+    def _open_candidate_token(self, token):
+        """The signed pair inside a candidate token. A bad token never touches the ledger."""
+        if not isinstance(token, str) or any(char not in _TOKEN_ALPHABET for char in token):
+            raise ReceiptError()
+        try:
+            padded = token + "=" * ((4 - len(token) % 4) % 4)
+            blob = base64.urlsafe_b64decode(padded.encode("ascii"))
+            data = json.loads(AESGCM(self._candidate_key).decrypt(blob[:12], blob[12:], None))
+            account_id, reference = data["a"], data["r"]
+            mac = bytes.fromhex(data["m"])
+        except (InvalidTag, ValueError, KeyError, TypeError):
+            raise ReceiptError() from None
+        if not isinstance(account_id, str) or not isinstance(reference, str) or len(mac) != 32:
+            raise ReceiptError()
+        return account_id, reference, mac
+
+    @staticmethod
+    def _named_transaction(session, account_id, entry_reference):
+        """Point lookup of the pair the token names. Never a scan of the account."""
+        return session.get(Transaction, (account_id, entry_reference))
 
     def _confirmed_link(self, session, owner, cleaned, link, row):
-        token = link["candidate_token"]
-        if not isinstance(token, str) or _CANDIDATE_TOKEN.fullmatch(token) is None:
+        account_id, reference, mac = self._open_candidate_token(link["candidate_token"])
+        presented = link["entry_reference"]
+        if account_id != link["account_id"] or entry_reference_digest(reference) != presented:
             raise ReceiptError()
-        transaction = self._linked_transaction(session, link["account_id"], link["entry_reference"])
+        self._owned_account(session, owner, account_id)
+        transaction = self._named_transaction(session, account_id, reference)
         if transaction is None:
             raise ReceiptError("budget_receipt_stale_source", 409)
-        link["entry_reference"] = transaction.entry_reference
         try:
             payload = _json(transaction.payload_json)
             fingerprint = None if transaction.uncertain else financial_fingerprint(payload)
-            creditor = creditor_name(session, owner, link["account_id"], link["entry_reference"], fingerprint)
+            creditor = creditor_name(session, owner, account_id, reference, fingerprint)
             current = link_evidence(
-                owner, link["account_id"], link["entry_reference"], payload,
+                owner, account_id, reference, payload,
                 normalize_shop_name(cleaned["raw_shop_name"]), cleaned["raw_nip"], creditor, fingerprint)
-            expected = self._candidate_token(current)
+            expected = self._evidence_mac(current)
             stored = evidence_json(current)
         except (AnalyticsError, ValueError, TypeError, KeyError, RecursionError):
             raise ReceiptError("budget_receipt_stale_source", 409) from None
-        if not hmac.compare_digest(expected, token):
+        if not hmac.compare_digest(expected, mac):
             raise ReceiptError("budget_receipt_stale_source", 409)
-        return self._verify_link(session, owner, cleaned, link, row.id), stored
+        resolved = {**link, "entry_reference": reference}
+        verified = self._verify_link(session, owner, cleaned, resolved, row.id)
+        link["entry_reference"] = reference
+        return verified, stored
 
     def confirm(self, owner, values):
         cleaned = validate_confirm(values)

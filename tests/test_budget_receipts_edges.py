@@ -319,7 +319,33 @@ class StoreEdgeTests(AnalyticsCase):
             self.assertEqual(self.draft()["candidates"], [])
         with mock.patch("hestia.budget.receipt_store.base64.urlsafe_b64encode", return_value=b"***"):
             with self.assertRaises(ReceiptError):
-                self.receipts._candidate_token({"owner": "owner"})
+                self.receipts._candidate_token({"owner": "owner"}, "account", "ref")
+        from hestia.budget.receipt_reconcile import link_evidence
+        evidence = link_evidence("owner", "account", "ref", {}, None, None, None, None)
+        with self.assertRaises(AnalyticsError):
+            self.receipts._candidate_token(evidence, "a" * 128, "😀" * 1024)
+
+    def test_sealed_token_rejects_a_non_string_pair_and_a_broken_evidence_rebuild(self):
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+        payload = json.dumps({"a": 1, "m": "ab" * 32, "r": "ref"}, separators=(",", ":")).encode("ascii")
+        key = self.receipts._candidate_key
+        nonce = hashlib.sha256(key + payload).digest()[:12]
+        blob = nonce + AESGCM(key).encrypt(nonce, payload, None)
+        token = base64.urlsafe_b64encode(blob).rstrip(b"=").decode("ascii")
+        self.assertRaises(ReceiptError, self.receipts._open_candidate_token, token)
+
+        parsed = self.draft()
+        digest = hashlib.sha256(b"debit").hexdigest()
+        candidate = next(item for item in parsed["candidates"] if item["entry_reference"] == digest)
+        link = {"account_id": candidate["account_id"], "entry_reference": digest,
+                "candidate_token": candidate["candidate_token"]}
+        with mock.patch("hestia.budget.receipt_store.link_evidence", side_effect=AnalyticsError()):
+            with self.assertRaises(ReceiptError) as stale:
+                self.receipts.confirm("owner", confirm_values(parsed, link=link))
+        self.assertEqual((stale.exception.code, stale.exception.status), ("budget_receipt_stale_source", 409))
+        with self.sessions() as session:
+            self.assertEqual(session.get(db.BudgetReceipt, parsed["receipt_id"]).status, "draft")
 
     def test_verify_and_confirm_reject_bad_links(self):
         parsed = self.draft()
@@ -367,10 +393,10 @@ class StoreEdgeTests(AnalyticsCase):
             self.receipts.confirm("owner", short)
         forged = confirm_values(parsed, link={"account_id": account, "entry_reference": "debit",
                                                "candidate_token": "a" * 43})
-        with mock.patch("hestia.budget.receipt_store.link_evidence", side_effect=AnalyticsError()):
-            with self.assertRaises(ReceiptError) as stale:
+        with mock.patch.object(BudgetReceiptStore, "_named_transaction", side_effect=AssertionError("lookup")):
+            with self.assertRaises(ReceiptError) as forged_error:
                 self.receipts.confirm("owner", forged)
-        self.assertEqual(stale.exception.code, "budget_receipt_stale_source")
+        self.assertEqual(forged_error.exception.status, 400)
 
     def test_confirm_without_raw_text_still_sets_the_image_deadline(self):
         parsed = self.draft(payment="GOTOWKA")
