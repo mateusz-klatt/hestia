@@ -1,6 +1,7 @@
 import type { Messages } from "./en";
 
 const messages: Partial<Messages> = {
+  "header.title": "hestia",
   "header.confirmed": "{confirmed}/{total} staðfest",
   "header.unknown": "{unknown} óþekkt",
 
@@ -108,7 +109,11 @@ const messages: Partial<Messages> = {
   "rooms.editIcons": "Breyta táknum",
   "rooms.editIconsDone": "Lokið",
   "rooms.iconNone": "—",
+  "rooms.deviceCount.zero": "{n} tæki",
   "rooms.deviceCount.one": "{n} tæki",
+  "rooms.deviceCount.two": "{n} tæki",
+  "rooms.deviceCount.few": "{n} tæki",
+  "rooms.deviceCount.many": "{n} tæki",
   "rooms.deviceCount.other": "{n} tæki",
 
   "ctl.on": "Kveikt",
@@ -182,6 +187,7 @@ const messages: Partial<Messages> = {
   "auto.error": "villa {status}",
   "auto.trig.scene": "sena {id} @hnútur {node}",
   "auto.trig.state": "hnútur {node}{gang} {field} {op} {value}",
+  "auto.trig.stateGlobal": "{field} {op} {value}",
   "auto.trig.gang": " takki {ep}",
   "auto.trig.time": "kl. {time}{days}",
   "auto.trig.cron": "cron {expr}",
@@ -197,7 +203,7 @@ const messages: Partial<Messages> = {
   "rule.wizardTitle": "Regluleiðsögn",
   "rule.id": "id",
   "rule.enabled": "virkt",
-  "rule.debounce": "debounce s",
+  "rule.debounce": "lágmarksbil milli keyrslna s",
   "rule.trigger": "kveikja",
   "rule.conditions": "skilyrði:",
   "rule.actions": "aðgerðir:",
@@ -219,7 +225,7 @@ const messages: Partial<Messages> = {
   "rule.gang": "takki",
   "rule.phRuleId": "reglu-id",
   "rule.phButton": "hnappur",
-  "rule.phOffset": "offset min",
+  "rule.phOffset": "hliðrun min",
   "rule.phWindowStart": "HH:MM",
   "rule.phWindowEnd": "HH:MM",
   "rule.errNumberRequired": "{label}: tala nauðsynleg",

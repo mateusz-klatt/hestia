@@ -1,6 +1,7 @@
 import type { Messages } from "./en";
 
 const messages: Partial<Messages> = {
+  "header.title": "hestia",
   "header.confirmed": "{confirmed}/{total} אושרו",
   "header.unknown": "{unknown} לא ידועים",
 
@@ -108,8 +109,11 @@ const messages: Partial<Messages> = {
   "rooms.editIcons": "עריכת סמלים",
   "rooms.editIconsDone": "סיום",
   "rooms.iconNone": "—",
+  "rooms.deviceCount.zero": "{n} מכשירים",
   "rooms.deviceCount.one": "{n} מכשיר",
   "rooms.deviceCount.two": "{n} מכשירים",
+  "rooms.deviceCount.few": "{n} מכשירים",
+  "rooms.deviceCount.many": "{n} מכשירים",
   "rooms.deviceCount.other": "{n} מכשירים",
 
   "ctl.on": "פועל",
@@ -183,6 +187,7 @@ const messages: Partial<Messages> = {
   "auto.error": "שגיאה {status}",
   "auto.trig.scene": "סצנה {id} @צומת {node}",
   "auto.trig.state": "צומת {node}{gang} {field} {op} {value}",
+  "auto.trig.stateGlobal": "{field} {op} {value}",
   "auto.trig.gang": " מקש {ep}",
   "auto.trig.time": "בשעה {time}{days}",
   "auto.trig.cron": "cron {expr}",
@@ -198,7 +203,7 @@ const messages: Partial<Messages> = {
   "rule.wizardTitle": "אשף כלל",
   "rule.id": "id",
   "rule.enabled": "מופעל",
-  "rule.debounce": "debounce s",
+  "rule.debounce": "מרווח מינימלי בין הפעלות s",
   "rule.trigger": "טריגר",
   "rule.conditions": "תנאים:",
   "rule.actions": "פעולות:",
@@ -220,7 +225,7 @@ const messages: Partial<Messages> = {
   "rule.gang": "מקש",
   "rule.phRuleId": "מזהה-כלל",
   "rule.phButton": "כפתור",
-  "rule.phOffset": "offset min",
+  "rule.phOffset": "היסט min",
   "rule.phWindowStart": "HH:MM",
   "rule.phWindowEnd": "HH:MM",
   "rule.errNumberRequired": "{label}: נדרש מספר",

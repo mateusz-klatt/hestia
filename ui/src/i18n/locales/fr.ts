@@ -1,6 +1,7 @@
 import type { Messages } from "./en";
 
 const messages: Partial<Messages> = {
+  "header.title": "hestia",
   "header.confirmed": "{confirmed}/{total} confirmés",
   "header.unknown": "{unknown} inconnus",
 
@@ -108,7 +109,10 @@ const messages: Partial<Messages> = {
   "rooms.editIcons": "Modifier les icônes",
   "rooms.editIconsDone": "Terminé",
   "rooms.iconNone": "—",
+  "rooms.deviceCount.zero": "{n} appareils",
   "rooms.deviceCount.one": "{n} appareil",
+  "rooms.deviceCount.two": "{n} appareils",
+  "rooms.deviceCount.few": "{n} appareils",
   "rooms.deviceCount.many": "{n} appareils",
   "rooms.deviceCount.other": "{n} appareils",
 
@@ -183,6 +187,7 @@ const messages: Partial<Messages> = {
   "auto.error": "erreur {status}",
   "auto.trig.scene": "scène {id} @nœud {node}",
   "auto.trig.state": "nœud {node}{gang} {field} {op} {value}",
+  "auto.trig.stateGlobal": "{field} {op} {value}",
   "auto.trig.gang": " touche {ep}",
   "auto.trig.time": "à {time}{days}",
   "auto.trig.cron": "cron {expr}",
@@ -198,7 +203,7 @@ const messages: Partial<Messages> = {
   "rule.wizardTitle": "Assistant de règle",
   "rule.id": "id",
   "rule.enabled": "activée",
-  "rule.debounce": "debounce s",
+  "rule.debounce": "intervalle minimal entre déclenchements s",
   "rule.trigger": "déclencheur",
   "rule.conditions": "conditions :",
   "rule.actions": "actions :",
@@ -220,7 +225,7 @@ const messages: Partial<Messages> = {
   "rule.gang": "touche",
   "rule.phRuleId": "id-règle",
   "rule.phButton": "bouton",
-  "rule.phOffset": "offset min",
+  "rule.phOffset": "décalage min",
   "rule.phWindowStart": "HH:MM",
   "rule.phWindowEnd": "HH:MM",
   "rule.errNumberRequired": "{label} : nombre requis",

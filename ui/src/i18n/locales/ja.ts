@@ -1,6 +1,7 @@
 import type { Messages } from "./en";
 
 const messages: Partial<Messages> = {
+  "header.title": "hestia",
   "header.confirmed": "{confirmed}/{total} 確認済み",
   "header.unknown": "{unknown} 不明",
 
@@ -108,6 +109,11 @@ const messages: Partial<Messages> = {
   "rooms.editIcons": "アイコンを編集",
   "rooms.editIconsDone": "完了",
   "rooms.iconNone": "—",
+  "rooms.deviceCount.zero": "{n} 台のデバイス",
+  "rooms.deviceCount.one": "{n} 台のデバイス",
+  "rooms.deviceCount.two": "{n} 台のデバイス",
+  "rooms.deviceCount.few": "{n} 台のデバイス",
+  "rooms.deviceCount.many": "{n} 台のデバイス",
   "rooms.deviceCount.other": "{n} 台のデバイス",
 
   "ctl.on": "オン",
@@ -181,6 +187,7 @@ const messages: Partial<Messages> = {
   "auto.error": "エラー {status}",
   "auto.trig.scene": "シーン {id} @ノード {node}",
   "auto.trig.state": "ノード {node}{gang} {field} {op} {value}",
+  "auto.trig.stateGlobal": "{field} {op} {value}",
   "auto.trig.gang": " ボタン {ep}",
   "auto.trig.time": "時刻 {time}{days}",
   "auto.trig.cron": "cron {expr}",
@@ -196,7 +203,7 @@ const messages: Partial<Messages> = {
   "rule.wizardTitle": "ルールウィザード",
   "rule.id": "id",
   "rule.enabled": "有効",
-  "rule.debounce": "debounce s",
+  "rule.debounce": "最小実行間隔 s",
   "rule.trigger": "トリガー",
   "rule.conditions": "条件:",
   "rule.actions": "操作:",
@@ -218,7 +225,7 @@ const messages: Partial<Messages> = {
   "rule.gang": "ボタン",
   "rule.phRuleId": "ルール-id",
   "rule.phButton": "ボタン",
-  "rule.phOffset": "offset min",
+  "rule.phOffset": "オフセット min",
   "rule.phWindowStart": "HH:MM",
   "rule.phWindowEnd": "HH:MM",
   "rule.errNumberRequired": "{label}: 数値が必要",

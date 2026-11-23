@@ -1,6 +1,7 @@
 import type { Messages } from "./en";
 
 const messages: Partial<Messages> = {
+  "header.title": "hestia",
   "header.confirmed": "{confirmed}/{total} confirmate",
   "header.unknown": "{unknown} necunoscute",
 
@@ -108,8 +109,11 @@ const messages: Partial<Messages> = {
   "rooms.editIcons": "Editați pictogramele",
   "rooms.editIconsDone": "Gata",
   "rooms.iconNone": "—",
+  "rooms.deviceCount.zero": "{n} de dispozitive",
   "rooms.deviceCount.one": "{n} dispozitiv",
+  "rooms.deviceCount.two": "{n} de dispozitive",
   "rooms.deviceCount.few": "{n} dispozitive",
+  "rooms.deviceCount.many": "{n} de dispozitive",
   "rooms.deviceCount.other": "{n} de dispozitive",
 
   "ctl.on": "Pornit",
@@ -183,6 +187,7 @@ const messages: Partial<Messages> = {
   "auto.error": "eroare {status}",
   "auto.trig.scene": "scenă {id} @nod {node}",
   "auto.trig.state": "nod {node}{gang} {field} {op} {value}",
+  "auto.trig.stateGlobal": "{field} {op} {value}",
   "auto.trig.gang": " tastă {ep}",
   "auto.trig.time": "la {time}{days}",
   "auto.trig.cron": "cron {expr}",
@@ -198,7 +203,7 @@ const messages: Partial<Messages> = {
   "rule.wizardTitle": "Asistent regulă",
   "rule.id": "id",
   "rule.enabled": "activată",
-  "rule.debounce": "debounce s",
+  "rule.debounce": "interval minim s",
   "rule.trigger": "declanșator",
   "rule.conditions": "condiții:",
   "rule.actions": "acțiuni:",
@@ -220,7 +225,7 @@ const messages: Partial<Messages> = {
   "rule.gang": "tastă",
   "rule.phRuleId": "id-regulă",
   "rule.phButton": "buton",
-  "rule.phOffset": "offset min",
+  "rule.phOffset": "decalaj min",
   "rule.phWindowStart": "HH:MM",
   "rule.phWindowEnd": "HH:MM",
   "rule.errNumberRequired": "{label}: număr necesar",

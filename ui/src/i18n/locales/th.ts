@@ -1,6 +1,7 @@
 import type { Messages } from "./en";
 
 const messages: Partial<Messages> = {
+  "header.title": "hestia",
   "header.confirmed": "{confirmed}/{total} ยืนยันแล้ว",
   "header.unknown": "{unknown} ไม่ทราบ",
 
@@ -108,7 +109,12 @@ const messages: Partial<Messages> = {
   "rooms.editIcons": "แก้ไขไอคอน",
   "rooms.editIconsDone": "เสร็จสิ้น",
   "rooms.iconNone": "—",
-  "rooms.deviceCount.other": "{n} อุปกรณ์",
+  "rooms.deviceCount.zero": "อุปกรณ์ {n} ชิ้น",
+  "rooms.deviceCount.one": "อุปกรณ์ {n} ชิ้น",
+  "rooms.deviceCount.two": "อุปกรณ์ {n} ชิ้น",
+  "rooms.deviceCount.few": "อุปกรณ์ {n} ชิ้น",
+  "rooms.deviceCount.many": "อุปกรณ์ {n} ชิ้น",
+  "rooms.deviceCount.other": "อุปกรณ์ {n} ชิ้น",
 
   "ctl.on": "เปิด",
   "ctl.off": "ปิด",
@@ -181,6 +187,7 @@ const messages: Partial<Messages> = {
   "auto.error": "ข้อผิดพลาด {status}",
   "auto.trig.scene": "ฉาก {id} @โหนด {node}",
   "auto.trig.state": "โหนด {node}{gang} {field} {op} {value}",
+  "auto.trig.stateGlobal": "{field} {op} {value}",
   "auto.trig.gang": " ปุ่ม {ep}",
   "auto.trig.time": "เวลา {time}{days}",
   "auto.trig.cron": "cron {expr}",
@@ -196,7 +203,7 @@ const messages: Partial<Messages> = {
   "rule.wizardTitle": "ตัวช่วยสร้างกฎ",
   "rule.id": "id",
   "rule.enabled": "เปิดใช้งาน",
-  "rule.debounce": "debounce s",
+  "rule.debounce": "ช่วงห่างขั้นต่ำ s",
   "rule.trigger": "ทริกเกอร์",
   "rule.conditions": "เงื่อนไข:",
   "rule.actions": "การทำงาน:",
@@ -218,7 +225,7 @@ const messages: Partial<Messages> = {
   "rule.gang": "ปุ่ม",
   "rule.phRuleId": "id-กฎ",
   "rule.phButton": "ปุ่ม",
-  "rule.phOffset": "offset min",
+  "rule.phOffset": "เวลาชดเชย min",
   "rule.phWindowStart": "HH:MM",
   "rule.phWindowEnd": "HH:MM",
   "rule.errNumberRequired": "{label}: ต้องเป็นตัวเลข",

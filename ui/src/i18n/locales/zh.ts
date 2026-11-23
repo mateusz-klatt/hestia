@@ -1,6 +1,7 @@
 import type { Messages } from "./en";
 
 const messages: Partial<Messages> = {
+  "header.title": "hestia",
   "header.confirmed": "{confirmed}/{total} 已确认",
   "header.unknown": "{unknown} 未知",
 
@@ -108,6 +109,11 @@ const messages: Partial<Messages> = {
   "rooms.editIcons": "编辑图标",
   "rooms.editIconsDone": "完成",
   "rooms.iconNone": "—",
+  "rooms.deviceCount.zero": "{n} 个设备",
+  "rooms.deviceCount.one": "{n} 个设备",
+  "rooms.deviceCount.two": "{n} 个设备",
+  "rooms.deviceCount.few": "{n} 个设备",
+  "rooms.deviceCount.many": "{n} 个设备",
   "rooms.deviceCount.other": "{n} 个设备",
 
   "ctl.on": "开启",
@@ -181,6 +187,7 @@ const messages: Partial<Messages> = {
   "auto.error": "错误 {status}",
   "auto.trig.scene": "场景 {id} @节点 {node}",
   "auto.trig.state": "节点 {node}{gang} {field} {op} {value}",
+  "auto.trig.stateGlobal": "{field} {op} {value}",
   "auto.trig.gang": " 按键 {ep}",
   "auto.trig.time": "在 {time}{days}",
   "auto.trig.cron": "cron {expr}",
@@ -196,7 +203,7 @@ const messages: Partial<Messages> = {
   "rule.wizardTitle": "规则向导",
   "rule.id": "id",
   "rule.enabled": "已启用",
-  "rule.debounce": "debounce s",
+  "rule.debounce": "最小触发间隔 s",
   "rule.trigger": "触发器",
   "rule.conditions": "条件:",
   "rule.actions": "操作:",
@@ -218,7 +225,7 @@ const messages: Partial<Messages> = {
   "rule.gang": "按键",
   "rule.phRuleId": "规则-id",
   "rule.phButton": "按钮",
-  "rule.phOffset": "offset min",
+  "rule.phOffset": "偏移 min",
   "rule.phWindowStart": "HH:MM",
   "rule.phWindowEnd": "HH:MM",
   "rule.errNumberRequired": "{label}: 需要数字",
