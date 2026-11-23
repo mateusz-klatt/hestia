@@ -92,7 +92,9 @@ from pydantic.json_schema import models_json_schema
 #         Charts and category summaries can report that label as its own entry.
 # 0.36.0: default-off owner-private paste receipts and informational bank links (migration 0022,
 #         down_revision 0021).
-CONTRACT_VERSION = "0.36.0"
+# 0.39.0: receipts device tokens and one-time pairing codes (migration 0023, temporary
+#         number; another change also uses 0023 and both are renumbered at merge). Additive.
+CONTRACT_VERSION = "0.39.0"
 OPENAPI_PATH = Path(__file__).resolve().parent.parent / "docs" / "api" / "openapi.json"
 
 # De-duplicated string literals (SonarPython S1192): the OpenAPI content-type, the paths reused
@@ -2571,6 +2573,9 @@ class BudgetReceiptParseTextRequest(BaseModel):
     model_config = _STRICT
     text: Annotated[str, Field(min_length=1, max_length=32768,
                                description="UTF-8 text is additionally capped at 32 KiB and 500 lines.")]
+    source_kind: Annotated[Literal["paste", "local_ocr"], Field(
+        description="Client vocabulary. paste is stored as live_text; local_ocr is stored as local_ocr.",
+    )] = "paste"
 
 
 class BudgetReceiptLineInput(BaseModel):
@@ -2721,10 +2726,59 @@ class BudgetReceiptDeleteResult(BaseModel):
     deleted: Literal[True]
 
 
+class BudgetReceiptDeviceBrowserRequest(BaseModel):
+    """Empty JSON object for pairing-code issuance and the device list."""
+
+    model_config = _STRICT
+
+
+class BudgetReceiptDevicePairResult(BaseModel):
+    model_config = _READ
+    code: Annotated[str, Field(min_length=8, max_length=8)]
+    expires_at: float
+    qr_payload: Annotated[str, Field(min_length=1, max_length=64)]
+
+
+class BudgetReceiptDeviceRedeemRequest(BaseModel):
+    model_config = _STRICT
+    code: Annotated[str, Field(min_length=8, max_length=8)]
+    device_name: Annotated[str, Field(min_length=1, max_length=64)]
+
+
+class BudgetReceiptDeviceRedeemResult(BaseModel):
+    model_config = _READ
+    token: Annotated[str, Field(min_length=43, max_length=43)]
+    token_id: BudgetReceiptId
+    scope: Literal["receipts"]
+    expires_at: float
+
+
+class BudgetReceiptDeviceToken(BaseModel):
+    model_config = _READ
+    token_id: BudgetReceiptId
+    device_name: Annotated[str, Field(min_length=1, max_length=64)]
+    created_at: float
+    last_used_at: float | None
+    expires_at: float
+
+
+class BudgetReceiptDeviceRevokeRequest(BaseModel):
+    model_config = _STRICT
+    token_id: BudgetReceiptId
+
+
+class BudgetReceiptDeviceRevokeResult(BaseModel):
+    model_config = _READ
+    ok: Literal[True]
+
+
 _RECEIPT_MODELS = (
     BudgetReceiptParseTextRequest, BudgetReceiptConfirmRequest, BudgetReceiptListRequest,
     BudgetReceiptSearchRequest, BudgetReceiptDeleteRequest, BudgetReceiptParseResult,
     BudgetReceiptDetailResult, BudgetReceiptConfirmResult, BudgetReceiptListResult, BudgetReceiptDeleteResult,
+    BudgetReceiptDeviceBrowserRequest, BudgetReceiptDevicePairResult, BudgetReceiptDeviceRedeemRequest,
+    BudgetReceiptDeviceRedeemResult, BudgetReceiptDeviceToken, BudgetReceiptDeviceRevokeRequest,
+    BudgetReceiptDeviceRevokeResult,
 )
 
 
@@ -2850,6 +2904,10 @@ _PATH_ROLES = {
     ("GET", "/api/budget/receipts/detail"): "admin",
     ("GET", "/api/budget/receipts/image"): "admin",
     ("POST", "/api/budget/receipts/delete"): "admin",
+    ("POST", "/api/budget/receipts/device-token/pair-code"): "admin",
+    ("POST", "/api/budget/receipts/device-token/redeem"): "public",
+    ("POST", "/api/budget/receipts/device-token/list"): "admin",
+    ("POST", "/api/budget/receipts/device-token/revoke"): "admin",
 
     ("GET", "/api/budget/enable-banking/callback"): "public",
     ("GET", "/api/budget/consent/pending"): "admin",
@@ -3504,10 +3562,16 @@ def _receipt_paths():
             "operationId": operation, "summary": summary,
             "description": "Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Requires an authenticated SQLite admin "
                            "owner, browser cookie and exact configured Origin before the body is read. "
+                           "A receipts device token may call this route without Origin when the cookie is absent. "
+                           "Cookie plus Authorization is 400 budget_auth_ambiguous. "
                            "411 means Content-Length is required and 415 means Content-Type must be application/json.",
             "requestBody": {"required": True, "content": {_APP_JSON: {"schema": _ref(request)}}},
             "responses": responses,
         }}
+        if name == "parse-text":
+            paths[prefix + name]["post"]["responses"]["429"] = _receipt_error(
+                "A receipts device token is limited to 30 parse-text requests per minute (Retry-After). "
+                "Browser cookie requests are not limited here.")
     receipt_query = [_budget_query("receipt_id", required=True,
                                    schema={"type": "string",
                                            "pattern": r"^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$"},
@@ -3529,7 +3593,74 @@ def _receipt_paths():
             "description": "Default-off owner-private read. Unknown and foreign receipt IDs both return 404.",
             "parameters": receipt_query, "responses": responses,
         }}
+    paths.update(_device_token_paths())
     return paths
+
+
+def _device_token_paths():
+    """Pairing is browser-only. Redeem is public and returns one generic failure."""
+    prefix = "/api/budget/receipts/device-token/"
+    framing = {
+        "411": _receipt_error("Content-Length is required."),
+        "413": _receipt_error("JSON body exceeds 4096 bytes."),
+        "415": _receipt_error("Content-Type must be application/json."),
+    }
+    browser = _budget_responses("BudgetError")
+    browser.update(framing)
+    pair = dict(browser)
+    pair["200"] = {"description": "One-time pairing code. The raw code is not stored.",
+                   "content": {_APP_JSON: {"schema": _ref("BudgetReceiptDevicePairResult")}}}
+    pair["409"] = _receipt_error(
+        "The owner already has 3 active pairing codes (device_pair_limit), or SQLite users are required.")
+    listed = dict(browser)
+    listed["200"] = {"description": "Unrevoked device tokens for the owner, including expired ones.",
+                     "content": {_APP_JSON: {"schema": {"type": "array", "items": _ref("BudgetReceiptDeviceToken")}}}}
+    revoke = dict(browser)
+    revoke["200"] = {"description": "Idempotent. An unknown id for this owner is still ok.",
+                     "content": {_APP_JSON: {"schema": _ref("BudgetReceiptDeviceRevokeResult")}}}
+    redeem_responses = _budget_responses("BudgetReceiptDeviceRedeemResult")
+    redeem_responses.update(framing)
+    redeem_responses["400"] = _receipt_error(
+        "Generic device_token_rejected. Unknown, expired, consumed and locked codes look the same.")
+    redeem_responses["429"] = _receipt_error(
+        "Redeem is rate limited per IP and globally (Retry-After). The error stays device_token_rejected.")
+    note = ("Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. With the flag off every route is 404. "
+            "411 means Content-Length is required and 415 means Content-Type must be application/json.")
+    return {
+        prefix + "pair-code": {"post": {
+            "operationId": "pairBudgetReceiptDevice",
+            "summary": "Issue one 5-minute pairing code for the signed-in admin owner.",
+            "description": note + " Browser cookie and exact Origin. At most 3 active codes.",
+            "requestBody": {"required": True, "content": {_APP_JSON: {
+                "schema": _ref("BudgetReceiptDeviceBrowserRequest")}}},
+            "responses": pair,
+        }},
+        prefix + "redeem": {"post": {
+            "operationId": "redeemBudgetReceiptDevice",
+            "summary": "Exchange a pairing code for a receipts-scoped bearer, once.",
+            "description": note + " No cookie and no Authorization. The bearer is returned once.",
+            "requestBody": {"required": True, "content": {_APP_JSON: {
+                "schema": _ref("BudgetReceiptDeviceRedeemRequest")}}},
+            "responses": redeem_responses,
+        }},
+        prefix + "list": {"post": {
+            "operationId": "listBudgetReceiptDevices",
+            "summary": "List the owner's unrevoked receipts device tokens.",
+            "description": note + " Browser cookie and exact Origin.",
+            "requestBody": {"required": True, "content": {_APP_JSON: {
+                "schema": _ref("BudgetReceiptDeviceBrowserRequest")}}},
+            "responses": listed,
+        }},
+        prefix + "revoke": {"post": {
+            "operationId": "revokeBudgetReceiptDevice",
+            "summary": "Revoke one receipts device token.",
+            "description": note + " The browser owner may revoke any of their tokens. "
+                           "A device token may revoke only itself; any other id is 403.",
+            "requestBody": {"required": True, "content": {_APP_JSON: {
+                "schema": _ref("BudgetReceiptDeviceRevokeRequest")}}},
+            "responses": revoke,
+        }},
+    }
 
 
 def _analytics_paths():

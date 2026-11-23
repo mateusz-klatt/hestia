@@ -14,6 +14,20 @@ import type { AnalyticsCategory, AnalyticsForecast, AnalyticsInbox, AnalyticsInb
   SpendingLimitSaveRequest, SpendingLimitSaved, TransactionFilter, TransferDecisionRequest, TransferDecisionResult,
   TransferList, TransferQueue } from "./analytics/model";
 
+export interface ReceiptDevice {
+  token_id: string;
+  device_name: string;
+  created_at: number;
+  last_used_at: number | null;
+  expires_at: number;
+}
+
+export interface ReceiptPair {
+  code: string;
+  expires_at: number;
+  qr_payload: string;
+}
+
 export type BudgetResult<T> =
   | { ok: true; data: T }
   | { ok: false; status: number; error: string; current?: unknown };
@@ -141,6 +155,11 @@ export const budgetApi = {
   /** Atomically marks or unmarks 1..100 owner inbox alert keys under anti-ABA reads_version CAS. */
   markInbox: (request: AnalyticsInboxMarkRequest) =>
     post<{ inbox: AnalyticsInboxMarkSaved }>("analytics/inbox-mark", request),
+  /** Unrevoked receipts devices. A 404 means the receipts flag is off. */
+  receiptDevices: () => post<ReceiptDevice[]>("receipts/device-token/list", {}),
+  pairReceiptDevice: () => post<ReceiptPair>("receipts/device-token/pair-code", {}),
+  revokeReceiptDevice: (tokenId: string) =>
+    post<{ ok: true }>("receipts/device-token/revoke", { token_id: tokenId }),
   setSelected: (account: BudgetAccount, selected: boolean) =>
     post<{ account: BudgetAccount }>("account-selection",
       { account_id: account.id, selected, expected_version: account.control_version }),

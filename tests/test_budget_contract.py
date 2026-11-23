@@ -214,9 +214,20 @@ class BudgetOpenApiTests(unittest.TestCase):
             self.assertEqual(methods[method]["x-required-role"], "admin")
             self.assertIn("413", methods[method]["responses"])
         self.assertEqual(set(receipts), {"/api/budget/receipts/" + name for name in
-                         ("parse-text", "confirm", "list", "search", "detail", "image", "delete")})
+                         ("parse-text", "confirm", "list", "search", "detail", "image", "delete",
+                          "device-token/pair-code", "device-token/redeem", "device-token/list",
+                          "device-token/revoke")})
         for path, methods in receipts.items():
             name = path.rsplit("/", 1)[1]
+            if path.startswith("/api/budget/receipts/device-token/"):
+                self.assertEqual(set(methods), {"post"})
+                expected = "public" if name == "redeem" else "admin"
+                self.assertEqual(methods["post"]["x-required-role"], expected)
+                self.assertIn("requestBody", methods["post"])
+                self.assertIn("Content-Length", methods["post"]["responses"]["411"]["description"])
+                self.assertIn("application/json", methods["post"]["responses"]["415"]["description"])
+                self.assertIn("bytes", methods["post"]["responses"]["413"]["description"])
+                continue
             method = "get" if name in ("detail", "image") else "post"
             self.assertEqual(set(methods), {method})
             self.assertEqual(methods[method]["x-required-role"], "admin")
@@ -240,7 +251,7 @@ class BudgetOpenApiTests(unittest.TestCase):
         self.assertIn("budget_receipt_quota_exceeded", parse_limit)
         self.assertIn("131072", receipts["/api/budget/receipts/confirm"]["post"]["responses"]["413"]["description"])
         self.assertIn("16384", receipts["/api/budget/receipts/list"]["post"]["responses"]["413"]["description"])
-        self.assertEqual(document["info"]["version"], "0.36.0")
+        self.assertEqual(document["info"]["version"], "0.39.0")
         detail = receipts["/api/budget/receipts/detail"]["get"]
         self.assertNotIn("raw text", detail["summary"])
         confirm = receipts["/api/budget/receipts/confirm"]["post"]
@@ -549,7 +560,8 @@ class BudgetOpenApiTests(unittest.TestCase):
                               "BudgetAnalyticsTransactionsByKeysRequest",
                               "BudgetReceiptParseTextRequest", "BudgetReceiptConfirmRequest", "BudgetReceiptLineInput",
                               "BudgetReceiptLinkRequest", "BudgetReceiptListRequest", "BudgetReceiptSearchRequest",
-                              "BudgetReceiptDeleteRequest"})
+                              "BudgetReceiptDeleteRequest", "BudgetReceiptDeviceBrowserRequest",
+                              "BudgetReceiptDeviceRedeemRequest", "BudgetReceiptDeviceRevokeRequest"})
         for name, schema in schemas.items():
             if name in request_names:
                 self.assertIs(schema["additionalProperties"], False)

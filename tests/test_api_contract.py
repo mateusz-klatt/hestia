@@ -56,10 +56,10 @@ class OpenApiArtifactTests(unittest.TestCase):
         )
 
     def test_monthly_budget_contract_chain_from_0_27_0(self):
-        """0.36.0 adds receipts on top of 0.35.0. 0.35.0 adds the one-off label on top of 0.34.0.
-        Earlier steps stay as published."""
+        """0.39.0 adds receipts device tokens on top of 0.36.0 receipts, which sit on 0.35.0.
+        Earlier steps stay as published. 0.39.0 and migration 0023 are temporary numbers."""
         document = api_contract.build_openapi()
-        self.assertEqual(document["info"]["version"], "0.36.0")
+        self.assertEqual(document["info"]["version"], "0.39.0")
         for path in [path for path in document["paths"] if path.startswith("/api/budget/receipts/")]:
             del document["paths"][path]
         for name in [name for name in document["components"]["schemas"] if name.startswith("BudgetReceipt")]:
@@ -635,6 +635,8 @@ class TolerantResponseContractTests(unittest.TestCase):
         "BudgetReceiptParseTextRequest", "BudgetReceiptConfirmRequest",
         "BudgetReceiptLineInput", "BudgetReceiptLinkRequest", "BudgetReceiptListRequest",
         "BudgetReceiptSearchRequest", "BudgetReceiptDeleteRequest",
+        "BudgetReceiptDeviceBrowserRequest", "BudgetReceiptDeviceRedeemRequest",
+        "BudgetReceiptDeviceRevokeRequest",
         "AddUserRequest", "ChangePasswordRequest", "ControlCover", "ControlLevel", "ControlRequest",
         "ControlSwitch", "ControlThermostat", "ControlThermostatPower", "IrRequest", "LoginRequest",
         "NameRequest", "ResetPasswordRequest", "RoomIconRequest", "RuleInput", "SceneRequest",

@@ -23,6 +23,7 @@ import { CategoriesView, rulesLabels } from "./analytics/rules";
 import { SpendingLimitsView, spendingLimitsLabels } from "./analytics/spending_limits";
 import { YearView, yearLabels } from "./analytics/year";
 import { hasAnalytics } from "./analytics/model";
+import { ReceiptDevices } from "./devices";
 import "./budget.css";
 
 const labels = {
@@ -526,6 +527,7 @@ export function Budget({ active, api = budgetApi, pollMs = 2000, principal,
         <CategoriesView api={api} accounts={accounts} connections={connections} text={rulesText} locale={locale} revision={revision} onAccessLoss={barrier} />
       ) : (
         <>
+        <ReceiptDevices api={api} locale={locale} revision={revision} />
         {connections.length === 0 ? <p className="budget-status">{text.empty}</p> : null}
         {connections.map((connection) => {
           const job = latestJob(jobs, connection.id);

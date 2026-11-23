@@ -100,18 +100,21 @@ class AnnotationLabelMigration0021Tests(unittest.TestCase):
         self.addCleanup(db.reset_engine_cache)
         self.path = Path(self.directory.name) / "m0021.db"
 
-    def test_single_head_is_0022(self):
+    def test_single_head_is_0023(self):
         cfg = Config()
         cfg.set_main_option("script_location", str(db._MIGRATIONS_DIR))
         script = ScriptDirectory.from_config(cfg)
-        self.assertEqual(script.get_heads(), ["0022"])
+        self.assertEqual(script.get_heads(), ["0023"])
         label = script.get_revision("0021")
         self.assertIsNotNone(label)
         self.assertEqual(label.down_revision, "0020")
         receipts = script.get_revision("0022")
         self.assertIsNotNone(receipts)
         self.assertEqual(receipts.down_revision, "0021")
-        self.assertNotIn("0023", {item.revision for item in script.walk_revisions()})
+        devices = script.get_revision("0023")
+        self.assertIsNotNone(devices)
+        self.assertEqual(devices.down_revision, "0022")
+        self.assertNotIn("0024", {item.revision for item in script.walk_revisions()})
 
     def _database_at_0020(self, *, leftover_temp=False):
         engine = db.make_engine(self.path)
@@ -209,7 +212,7 @@ class AnnotationLabelMigration0021Tests(unittest.TestCase):
         with engine.connect() as conn:
             self.assertIsNone(conn.exec_driver_sql(
                 "SELECT label FROM budget_annotations WHERE entry_reference='kept'").scalar())
-            self.assertEqual(conn.exec_driver_sql("SELECT version_num FROM alembic_version").scalar(), "0022")
+            self.assertEqual(conn.exec_driver_sql("SELECT version_num FROM alembic_version").scalar(), "0023")
         self._assert_integrity_and_no_batch_temp()
 
         def insert(reference, label):
@@ -294,7 +297,7 @@ class AnnotationLabelMigration0021Tests(unittest.TestCase):
             version = raw.execute("SELECT version_num FROM alembic_version").fetchone()
             label = raw.execute(
                 "SELECT label FROM budget_annotations WHERE entry_reference='kept'").fetchone()
-        self.assertEqual(version, ("0022",))
+        self.assertEqual(version, ("0023",))
         self.assertEqual(label, (None,))
         self.assertEqual(self._kept_row(), _KEPT_ROW)
         self._assert_integrity_and_no_batch_temp()

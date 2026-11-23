@@ -910,6 +910,64 @@ class BudgetReceiptLine(Base):
     net_line_total: Mapped[str]
 
 
+class BudgetReceiptDeviceToken(Base):
+    """Receipts-scoped device credential. ``token_hmac`` is an HMAC, never the bearer."""
+
+    __tablename__ = "budget_receipt_device_tokens"
+    __table_args__ = (
+        ForeignKeyConstraint(["owner"], ["users.username"]),
+        UniqueConstraint("token_hmac", name="uq_budget_receipt_device_tokens_hmac"),
+        Index("ix_budget_receipt_device_tokens_owner", "owner"),
+        CheckConstraint("length(device_name) BETWEEN 1 AND 64", name="ck_budget_receipt_device_tokens_name"),
+        CheckConstraint("length(token_hmac) = 64 AND token_hmac NOT GLOB '*[^0-9a-f]*'",
+                        name="ck_budget_receipt_device_tokens_hmac"),
+        CheckConstraint("expires_at <= hard_expires_at", name="ck_budget_receipt_device_tokens_expiry"),
+    )
+    id: Mapped[str] = mapped_column(primary_key=True)
+    owner: Mapped[str]
+    device_name: Mapped[str]
+    token_hmac: Mapped[str]
+    created_at: Mapped[float]
+    expires_at: Mapped[float]
+    hard_expires_at: Mapped[float]
+    sliding_written_at: Mapped[float]
+    last_used_at: Mapped[float | None]
+    revoked_at: Mapped[float | None]
+
+
+class BudgetReceiptPairCode(Base):
+    """One-time pairing code. ``code_hmac`` is an HMAC, never the code shown to the owner."""
+
+    __tablename__ = "budget_receipt_pair_codes"
+    __table_args__ = (
+        ForeignKeyConstraint(["owner"], ["users.username"]),
+        UniqueConstraint("code_hmac", name="uq_budget_receipt_pair_codes_hmac"),
+        Index("ix_budget_receipt_pair_codes_owner", "owner"),
+        CheckConstraint("length(code_hmac) = 64 AND code_hmac NOT GLOB '*[^0-9a-f]*'",
+                        name="ck_budget_receipt_pair_codes_hmac"),
+    )
+    id: Mapped[str] = mapped_column(primary_key=True)
+    owner: Mapped[str]
+    code_hmac: Mapped[str]
+    created_at: Mapped[float]
+    expires_at: Mapped[float]
+    consumed_at: Mapped[float | None]
+
+
+class BudgetReceiptPairLock(Base):
+    """Per-owner pairing lockout. A new pairing code clears it."""
+
+    __tablename__ = "budget_receipt_pair_locks"
+    __table_args__ = (
+        ForeignKeyConstraint(["owner"], ["users.username"]),
+        CheckConstraint("failures >= 0", name="ck_budget_receipt_pair_locks_failures"),
+        CheckConstraint("locked IN (0, 1)", name="ck_budget_receipt_pair_locks_locked"),
+    )
+    owner: Mapped[str] = mapped_column(primary_key=True)
+    failures: Mapped[int] = mapped_column(server_default=text("0"))
+    locked: Mapped[int] = mapped_column(server_default=text("0"))
+
+
 metadata = Base.metadata
 
 _MIGRATIONS_DIR = Path(__file__).resolve().parent / "migrations"
