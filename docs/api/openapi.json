@@ -10539,6 +10539,37 @@
             ],
             "title": "Currency"
           },
+          "document_kind": {
+            "anyOf": [
+              {
+                "enum": [
+                  "receipt",
+                  "invoice",
+                  "payment_confirmation"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Document Kind"
+          },
+          "due_date": {
+            "anyOf": [
+              {
+                "format": "date",
+                "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Due Date"
+          },
           "image_available": {
             "title": "Image Available",
             "type": "boolean"
@@ -10553,6 +10584,32 @@
               }
             ],
             "title": "Image Expires At"
+          },
+          "import_expires_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Import Expires At"
+          },
+          "invoice_number": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Invoice Number"
           },
           "lines": {
             "items": {
@@ -10692,7 +10749,11 @@
             "enum": [
               "live_text",
               "local_ocr",
-              "cloud_ai"
+              "cloud_ai",
+              "paste",
+              "photo",
+              "email",
+              "attachment"
             ],
             "title": "Source Kind",
             "type": "string"
@@ -10701,7 +10762,8 @@
             "enum": [
               "draft",
               "confirmed",
-              "needs_review"
+              "needs_review",
+              "imported"
             ],
             "title": "Status",
             "type": "string"
@@ -10779,6 +10841,451 @@
           "receipt"
         ],
         "title": "BudgetReceiptDetailResult",
+        "type": "object"
+      },
+      "BudgetReceiptDeviceBrowserRequest": {
+        "additionalProperties": false,
+        "description": "Empty JSON object for pairing-code issuance and the device list.",
+        "properties": {},
+        "title": "BudgetReceiptDeviceBrowserRequest",
+        "type": "object"
+      },
+      "BudgetReceiptDevicePairResult": {
+        "properties": {
+          "code": {
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{8}$",
+            "title": "Code",
+            "type": "string"
+          },
+          "expires_at": {
+            "title": "Expires At",
+            "type": "number"
+          },
+          "qr_payload": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Qr Payload",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "expires_at",
+          "qr_payload"
+        ],
+        "title": "BudgetReceiptDevicePairResult",
+        "type": "object"
+      },
+      "BudgetReceiptDeviceRedeemRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "description": "Eight Crockford base32 characters after uppercasing, stripping spaces and dashes, and mapping O to 0 and I or L to 1. U is rejected.",
+            "maxLength": 4096,
+            "minLength": 8,
+            "title": "Code",
+            "type": "string"
+          },
+          "device_name": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Device Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "device_name"
+        ],
+        "title": "BudgetReceiptDeviceRedeemRequest",
+        "type": "object"
+      },
+      "BudgetReceiptDeviceRedeemResult": {
+        "properties": {
+          "expires_at": {
+            "format": "date-time",
+            "title": "Expires At",
+            "type": "string"
+          },
+          "scope": {
+            "const": "receipts",
+            "title": "Scope",
+            "type": "string"
+          },
+          "token": {
+            "maxLength": 43,
+            "minLength": 43,
+            "title": "Token",
+            "type": "string"
+          },
+          "token_id": {
+            "pattern": "^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$",
+            "title": "Token Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "token",
+          "token_id",
+          "scope",
+          "expires_at"
+        ],
+        "title": "BudgetReceiptDeviceRedeemResult",
+        "type": "object"
+      },
+      "BudgetReceiptDeviceRevokeRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "token_id": {
+            "pattern": "^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$",
+            "title": "Token Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "token_id"
+        ],
+        "title": "BudgetReceiptDeviceRevokeRequest",
+        "type": "object"
+      },
+      "BudgetReceiptDeviceRevokeResult": {
+        "properties": {
+          "ok": {
+            "const": true,
+            "title": "Ok",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "title": "BudgetReceiptDeviceRevokeResult",
+        "type": "object"
+      },
+      "BudgetReceiptDeviceToken": {
+        "properties": {
+          "created_at": {
+            "title": "Created At",
+            "type": "number"
+          },
+          "device_name": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Device Name",
+            "type": "string"
+          },
+          "expires_at": {
+            "title": "Expires At",
+            "type": "number"
+          },
+          "last_used_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Used At"
+          },
+          "token_id": {
+            "pattern": "^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$",
+            "title": "Token Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "token_id",
+          "device_name",
+          "created_at",
+          "last_used_at",
+          "expires_at"
+        ],
+        "title": "BudgetReceiptDeviceToken",
+        "type": "object"
+      },
+      "BudgetReceiptGmailGrantRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "enum": [
+              "enable",
+              "disable"
+            ],
+            "title": "Action",
+            "type": "string"
+          },
+          "expected_version": {
+            "minimum": 1,
+            "title": "Expected Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "action",
+          "expected_version"
+        ],
+        "title": "BudgetReceiptGmailGrantRequest",
+        "type": "object"
+      },
+      "BudgetReceiptGmailGrantResult": {
+        "properties": {
+          "grant_generation": {
+            "title": "Grant Generation",
+            "type": "integer"
+          },
+          "grant_status": {
+            "enum": [
+              "disabled",
+              "active",
+              "revoked"
+            ],
+            "title": "Grant Status",
+            "type": "string"
+          },
+          "ok": {
+            "const": true,
+            "title": "Ok",
+            "type": "boolean"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "ok",
+          "grant_status",
+          "grant_generation",
+          "version"
+        ],
+        "title": "BudgetReceiptGmailGrantResult",
+        "type": "object"
+      },
+      "BudgetReceiptGmailRevokeRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_version": {
+            "minimum": 1,
+            "title": "Expected Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "expected_version"
+        ],
+        "title": "BudgetReceiptGmailRevokeRequest",
+        "type": "object"
+      },
+      "BudgetReceiptGmailStatus": {
+        "properties": {
+          "attention": {
+            "anyOf": [
+              {
+                "enum": [
+                  "authorization",
+                  "configuration",
+                  "identity_mismatch",
+                  "quota"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Attention"
+          },
+          "backoff_until": {
+            "title": "Backoff Until",
+            "type": "number"
+          },
+          "configured": {
+            "title": "Configured",
+            "type": "boolean"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "failures": {
+            "title": "Failures",
+            "type": "integer"
+          },
+          "google_revoke_affects_calendar_sync": {
+            "const": true,
+            "title": "Google Revoke Affects Calendar Sync",
+            "type": "boolean"
+          },
+          "google_revoke_url": {
+            "const": "https://myaccount.google.com/linkedapps",
+            "title": "Google Revoke Url",
+            "type": "string"
+          },
+          "grant_generation": {
+            "title": "Grant Generation",
+            "type": "integer"
+          },
+          "grant_status": {
+            "enum": [
+              "disabled",
+              "active",
+              "revoked"
+            ],
+            "title": "Grant Status",
+            "type": "string"
+          },
+          "last_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Error"
+          },
+          "last_http_status": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Http Status"
+          },
+          "last_sync_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Sync At"
+          },
+          "next_sync_at": {
+            "title": "Next Sync At",
+            "type": "number"
+          },
+          "pending_imported_count": {
+            "title": "Pending Imported Count",
+            "type": "integer"
+          },
+          "sync_phase": {
+            "enum": [
+              "idle",
+              "backfill",
+              "incremental",
+              "full_resync"
+            ],
+            "title": "Sync Phase",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "enabled",
+          "configured",
+          "grant_status",
+          "grant_generation",
+          "version",
+          "sync_phase",
+          "attention",
+          "last_sync_at",
+          "next_sync_at",
+          "backoff_until",
+          "failures",
+          "last_http_status",
+          "last_error",
+          "pending_imported_count",
+          "google_revoke_url",
+          "google_revoke_affects_calendar_sync"
+        ],
+        "title": "BudgetReceiptGmailStatus",
+        "type": "object"
+      },
+      "BudgetReceiptGmailSyncRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "force_full_resync": {
+            "default": false,
+            "title": "Force Full Resync",
+            "type": "boolean"
+          }
+        },
+        "title": "BudgetReceiptGmailSyncRequest",
+        "type": "object"
+      },
+      "BudgetReceiptGmailSyncResult": {
+        "properties": {
+          "attention": {
+            "anyOf": [
+              {
+                "enum": [
+                  "authorization",
+                  "configuration",
+                  "identity_mismatch",
+                  "quota"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Attention"
+          },
+          "has_more": {
+            "title": "Has More",
+            "type": "boolean"
+          },
+          "imported_count": {
+            "title": "Imported Count",
+            "type": "integer"
+          },
+          "next_sync_at": {
+            "title": "Next Sync At",
+            "type": "number"
+          },
+          "ok": {
+            "const": true,
+            "title": "Ok",
+            "type": "boolean"
+          },
+          "skipped_count": {
+            "title": "Skipped Count",
+            "type": "integer"
+          },
+          "sync_phase": {
+            "enum": [
+              "idle",
+              "backfill",
+              "incremental",
+              "full_resync"
+            ],
+            "title": "Sync Phase",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ok",
+          "sync_phase",
+          "imported_count",
+          "skipped_count",
+          "has_more",
+          "attention",
+          "next_sync_at"
+        ],
+        "title": "BudgetReceiptGmailSyncResult",
         "type": "object"
       },
       "BudgetReceiptLine": {
@@ -11054,6 +11561,23 @@
             "default": null,
             "title": "Cursor"
           },
+          "document_kind": {
+            "anyOf": [
+              {
+                "enum": [
+                  "receipt",
+                  "invoice",
+                  "payment_confirmation"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Document Kind"
+          },
           "limit": {
             "default": 50,
             "maximum": 200,
@@ -11092,7 +11616,8 @@
                 "enum": [
                   "draft",
                   "confirmed",
-                  "needs_review"
+                  "needs_review",
+                  "imported"
                 ],
                 "type": "string"
               },
@@ -11169,6 +11694,15 @@
       "BudgetReceiptParseTextRequest": {
         "additionalProperties": false,
         "properties": {
+          "source_kind": {
+            "description": "Defaults to paste, stored as live_text. local_ocr is stored as local_ocr.",
+            "enum": [
+              "paste",
+              "local_ocr"
+            ],
+            "title": "Source Kind",
+            "type": "string"
+          },
           "text": {
             "description": "UTF-8 text is additionally capped at 32 KiB and 500 lines.",
             "maxLength": 32768,
@@ -11248,6 +11782,37 @@
             ],
             "title": "Currency"
           },
+          "document_kind": {
+            "anyOf": [
+              {
+                "enum": [
+                  "receipt",
+                  "invoice",
+                  "payment_confirmation"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Document Kind"
+          },
+          "due_date": {
+            "anyOf": [
+              {
+                "format": "date",
+                "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Due Date"
+          },
           "image_available": {
             "title": "Image Available",
             "type": "boolean"
@@ -11262,6 +11827,32 @@
               }
             ],
             "title": "Image Expires At"
+          },
+          "import_expires_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Import Expires At"
+          },
+          "invoice_number": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Invoice Number"
           },
           "linked": {
             "title": "Linked",
@@ -11394,7 +11985,11 @@
             "enum": [
               "live_text",
               "local_ocr",
-              "cloud_ai"
+              "cloud_ai",
+              "paste",
+              "photo",
+              "email",
+              "attachment"
             ],
             "title": "Source Kind",
             "type": "string"
@@ -11403,7 +11998,8 @@
             "enum": [
               "draft",
               "confirmed",
-              "needs_review"
+              "needs_review",
+              "imported"
             ],
             "title": "Status",
             "type": "string"
@@ -22222,8 +22818,20 @@
     },
     "/api/budget/receipts/confirm": {
       "post": {
-        "description": "Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Requires an authenticated SQLite admin owner, browser cookie and exact configured Origin before the body is read. 411 means Content-Length is required and 415 means Content-Type must be application/json.",
+        "description": "Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Requires a SQLite admin owner's browser cookie with exact Origin, or a receipts device token. Cookie plus Authorization returns 400 budget_auth_ambiguous. 411 means Content-Length is required and 415 means Content-Type must be application/json.",
         "operationId": "confirmBudgetReceipt",
+        "parameters": [
+          {
+            "description": "Request native Gmail receipt values starting at 0.40.0. Earlier versions or an omitted header receive legacy receipt statuses and source kinds.",
+            "in": "header",
+            "name": "X-Hestia-Contract-Version",
+            "required": false,
+            "schema": {
+              "pattern": "^0\\.(0|[1-9][0-9]{0,2})\\.(0|[1-9][0-9]{0,2})$",
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -22263,7 +22871,7 @@
                 }
               }
             },
-            "description": "session required; middleware may return an empty body"
+            "description": "A missing or invalid credential, device_token_expired, or device_token_revoked."
           },
           "403": {
             "content": {
@@ -22352,7 +22960,7 @@
     },
     "/api/budget/receipts/delete": {
       "post": {
-        "description": "Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Requires an authenticated SQLite admin owner, browser cookie and exact configured Origin before the body is read. 411 means Content-Length is required and 415 means Content-Type must be application/json.",
+        "description": "Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Requires a SQLite admin owner's browser cookie with exact Origin, or a receipts device token. Cookie plus Authorization returns 400 budget_auth_ambiguous. 411 means Content-Length is required and 415 means Content-Type must be application/json.",
         "operationId": "deleteBudgetReceipt",
         "requestBody": {
           "content": {
@@ -22393,7 +23001,7 @@
                 }
               }
             },
-            "description": "session required; middleware may return an empty body"
+            "description": "A missing or invalid credential, device_token_expired, or device_token_revoked."
           },
           "403": {
             "content": {
@@ -22482,7 +23090,7 @@
     },
     "/api/budget/receipts/detail": {
       "get": {
-        "description": "Default-off owner-private read. Unknown and foreign receipt IDs both return 404.",
+        "description": "Default-off owner-private read using a browser cookie or receipts device token. Unknown and foreign receipt IDs both return 404. Cookie plus Authorization returns 400 budget_auth_ambiguous.",
         "operationId": "getBudgetReceiptDetail",
         "parameters": [
           {
@@ -22492,6 +23100,16 @@
             "required": true,
             "schema": {
               "pattern": "^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Request native Gmail receipt values starting at 0.40.0. Earlier versions or an omitted header receive legacy receipt statuses and source kinds.",
+            "in": "header",
+            "name": "X-Hestia-Contract-Version",
+            "required": false,
+            "schema": {
+              "pattern": "^0\\.(0|[1-9][0-9]{0,2})\\.(0|[1-9][0-9]{0,2})$",
               "type": "string"
             }
           }
@@ -22525,7 +23143,7 @@
                 }
               }
             },
-            "description": "session required; middleware may return an empty body"
+            "description": "A missing or invalid credential, device_token_expired, or device_token_revoked."
           },
           "403": {
             "content": {
@@ -22582,9 +23200,985 @@
         "x-required-role": "admin"
       }
     },
+    "/api/budget/receipts/device-token/list": {
+      "post": {
+        "description": "Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Cookie plus Authorization returns 400 budget_auth_ambiguous.  Browser cookie and exact Origin.",
+        "operationId": "listBudgetReceiptDevices",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BudgetReceiptDeviceBrowserRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/BudgetReceiptDeviceToken"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Unrevoked device tokens for the owner, including expired ones."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "session required; middleware may return an empty body"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "admin owner or browser-origin requirement failed; middleware may return an empty body"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "unknown, disabled or foreign resource"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "SQLite session users required"
+          },
+          "411": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Content-Length is required."
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "JSON body exceeds 4096 bytes."
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Content-Type must be application/json."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "budget configuration unavailable"
+          }
+        },
+        "summary": "List the owner's unrevoked receipts device tokens.",
+        "x-required-role": "admin"
+      }
+    },
+    "/api/budget/receipts/device-token/pair-code": {
+      "post": {
+        "description": "Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Cookie plus Authorization returns 400 budget_auth_ambiguous.  Browser cookie and exact Origin. At most 3 active codes.",
+        "operationId": "pairBudgetReceiptDevice",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BudgetReceiptDeviceBrowserRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetReceiptDevicePairResult"
+                }
+              }
+            },
+            "description": "One-time pairing code. The raw code is not stored."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "session required; middleware may return an empty body"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "admin owner or browser-origin requirement failed; middleware may return an empty body"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "unknown, disabled or foreign resource"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "The owner already has 3 active pairing codes (device_pair_limit), or SQLite users are required."
+          },
+          "411": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Content-Length is required."
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "JSON body exceeds 4096 bytes."
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Content-Type must be application/json."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "budget configuration unavailable"
+          }
+        },
+        "summary": "Issue one 5-minute pairing code for the signed-in admin owner.",
+        "x-required-role": "admin"
+      }
+    },
+    "/api/budget/receipts/device-token/redeem": {
+      "post": {
+        "description": "Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Cookie plus Authorization returns 400 budget_auth_ambiguous. Send an application/json body of at most 4096 bytes without cookie or Authorization. Redemption attempts are subject to per-IP backoff and global throttling.",
+        "operationId": "redeemBudgetReceiptDevice",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BudgetReceiptDeviceRedeemRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetReceiptDeviceRedeemResult"
+                }
+              }
+            },
+            "description": "One-time receipt device token with a sliding 90-day TTL and a 180-day hard cap."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Generic device_token_rejected for invalid framing, input or pairing state. Cookie plus Authorization returns 400 budget_auth_ambiguous."
+          },
+          "403": {
+            "description": "A browser session below the admin role floor is forbidden."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Receipts are disabled."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Rate limited per IP and globally (Retry-After). The error is device_token_rejected."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Internal error."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Budget configuration unavailable."
+          }
+        },
+        "summary": "Exchange a pairing code for a receipts-scoped bearer, once.",
+        "x-required-role": "public"
+      }
+    },
+    "/api/budget/receipts/device-token/revoke": {
+      "post": {
+        "description": "Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Cookie plus Authorization returns 400 budget_auth_ambiguous.  The browser owner may revoke any of their tokens. A device token may revoke only itself; any other id is 403.",
+        "operationId": "revokeBudgetReceiptDevice",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BudgetReceiptDeviceRevokeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetReceiptDeviceRevokeResult"
+                }
+              }
+            },
+            "description": "Idempotent. An unknown id for this owner is still ok."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "A missing or invalid credential, device_token_expired, or device_token_revoked."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "admin owner or browser-origin requirement failed; middleware may return an empty body"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "unknown, disabled or foreign resource"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "SQLite session users required"
+          },
+          "411": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Content-Length is required."
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "JSON body exceeds 4096 bytes."
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Content-Type must be application/json."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "budget configuration unavailable"
+          }
+        },
+        "summary": "Revoke one receipts device token.",
+        "x-required-role": "admin"
+      }
+    },
+    "/api/budget/receipts/gmail-grant": {
+      "post": {
+        "description": "Default-off with HESTIA_BUDGET_GMAIL_IMPORT_ENABLED. Requires an authenticated SQLite admin and a same-origin browser session. Send exact Origin and a JSON body of at most 4 KiB.",
+        "operationId": "setBudgetReceiptGmailGrant",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BudgetReceiptGmailGrantRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetReceiptGmailGrantResult"
+                }
+              }
+            },
+            "description": "Enable or disable the local Gmail grant"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "session required; middleware may return an empty body"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "admin owner or browser-origin requirement failed; middleware may return an empty body"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "unknown, disabled or foreign resource"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Version conflict or a missing authoritative SQLite users backend."
+          },
+          "411": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Content-Length is required."
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "JSON body exceeds 4096 bytes."
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Content-Type must be application/json."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Gmail quota, persisted backoff, or the sync cooldown applies."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "budget configuration unavailable"
+          }
+        },
+        "summary": "Enable or disable the local Gmail grant",
+        "x-required-role": "admin"
+      }
+    },
+    "/api/budget/receipts/gmail-revoke": {
+      "post": {
+        "description": "Default-off with HESTIA_BUDGET_GMAIL_IMPORT_ENABLED. Requires an authenticated SQLite admin and a same-origin browser session. Send exact Origin and a JSON body of at most 4 KiB.",
+        "operationId": "revokeBudgetReceiptGmailGrant",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BudgetReceiptGmailRevokeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetReceiptGmailGrantResult"
+                }
+              }
+            },
+            "description": "Revoke the local grant and purge unconfirmed imports"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "session required; middleware may return an empty body"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "admin owner or browser-origin requirement failed; middleware may return an empty body"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "unknown, disabled or foreign resource"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Version conflict or a missing authoritative SQLite users backend."
+          },
+          "411": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Content-Length is required."
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "JSON body exceeds 4096 bytes."
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Content-Type must be application/json."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "budget configuration unavailable"
+          }
+        },
+        "summary": "Revoke the local grant and purge unconfirmed imports",
+        "x-required-role": "admin"
+      }
+    },
+    "/api/budget/receipts/gmail-status": {
+      "get": {
+        "description": "Default-off with HESTIA_BUDGET_GMAIL_IMPORT_ENABLED. Requires an authenticated SQLite admin and a same-origin browser session. Use the returned version for grant changes. Manual Google revocation can affect Calendar Sync.",
+        "operationId": "getBudgetReceiptGmailStatus",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetReceiptGmailStatus"
+                }
+              }
+            },
+            "description": "owner-scoped stored state; no bank request"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "session required; middleware may return an empty body"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "admin owner or browser-origin requirement failed; middleware may return an empty body"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "unknown, disabled or foreign resource"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "SQLite users backend is required (budget_requires_sqlite_users)."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "budget configuration unavailable"
+          }
+        },
+        "summary": "Read safe Gmail import state",
+        "x-required-role": "admin"
+      }
+    },
+    "/api/budget/receipts/gmail-sync": {
+      "post": {
+        "description": "Default-off with HESTIA_BUDGET_GMAIL_IMPORT_ENABLED. Requires an authenticated SQLite admin and a same-origin browser session. Send exact Origin and a JSON body of at most 4 KiB.",
+        "operationId": "syncBudgetReceiptGmail",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BudgetReceiptGmailSyncRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetReceiptGmailSyncResult"
+                }
+              }
+            },
+            "description": "Run one bounded Gmail import batch"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "session required; middleware may return an empty body"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "admin owner or browser-origin requirement failed; middleware may return an empty body"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "unknown, disabled or foreign resource"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Grant is inactive, the sync is already running, or authoritative SQLite users are unavailable."
+          },
+          "411": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Content-Length is required."
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "JSON body exceeds 4096 bytes."
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Content-Type must be application/json."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Gmail quota, persisted backoff, or the sync cooldown applies."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "budget configuration unavailable"
+          }
+        },
+        "summary": "Run one bounded Gmail import batch",
+        "x-required-role": "admin"
+      }
+    },
     "/api/budget/receipts/image": {
       "get": {
-        "description": "Default-off owner-private read. Unknown and foreign receipt IDs both return 404.",
+        "description": "Default-off owner-private read using a browser cookie or receipts device token. Unknown and foreign receipt IDs both return 404. Cookie plus Authorization returns 400 budget_auth_ambiguous.",
         "operationId": "getBudgetReceiptImage",
         "parameters": [
           {
@@ -22628,7 +24222,7 @@
                 }
               }
             },
-            "description": "session required; middleware may return an empty body"
+            "description": "A missing or invalid credential, device_token_expired, or device_token_revoked."
           },
           "403": {
             "content": {
@@ -22687,8 +24281,20 @@
     },
     "/api/budget/receipts/list": {
       "post": {
-        "description": "Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Requires an authenticated SQLite admin owner, browser cookie and exact configured Origin before the body is read. 411 means Content-Length is required and 415 means Content-Type must be application/json.",
+        "description": "Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Requires a SQLite admin owner's browser cookie with exact Origin, or a receipts device token. Cookie plus Authorization returns 400 budget_auth_ambiguous. 411 means Content-Length is required and 415 means Content-Type must be application/json.",
         "operationId": "listBudgetReceipts",
+        "parameters": [
+          {
+            "description": "Request native Gmail receipt values starting at 0.40.0. Earlier versions or an omitted header receive legacy receipt statuses and source kinds.",
+            "in": "header",
+            "name": "X-Hestia-Contract-Version",
+            "required": false,
+            "schema": {
+              "pattern": "^0\\.(0|[1-9][0-9]{0,2})\\.(0|[1-9][0-9]{0,2})$",
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -22728,7 +24334,7 @@
                 }
               }
             },
-            "description": "session required; middleware may return an empty body"
+            "description": "A missing or invalid credential, device_token_expired, or device_token_revoked."
           },
           "403": {
             "content": {
@@ -22817,8 +24423,20 @@
     },
     "/api/budget/receipts/parse-text": {
       "post": {
-        "description": "Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Requires an authenticated SQLite admin owner, browser cookie and exact configured Origin before the body is read. 411 means Content-Length is required and 415 means Content-Type must be application/json.",
+        "description": "Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Requires a SQLite admin owner's browser cookie with exact Origin, or a receipts device token. Cookie plus Authorization returns 400 budget_auth_ambiguous. 411 means Content-Length is required and 415 means Content-Type must be application/json.",
         "operationId": "parseBudgetReceiptText",
+        "parameters": [
+          {
+            "description": "Request native Gmail receipt values starting at 0.40.0. Earlier versions or an omitted header receive legacy receipt statuses and source kinds.",
+            "in": "header",
+            "name": "X-Hestia-Contract-Version",
+            "required": false,
+            "schema": {
+              "pattern": "^0\\.(0|[1-9][0-9]{0,2})\\.(0|[1-9][0-9]{0,2})$",
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -22858,7 +24476,7 @@
                 }
               }
             },
-            "description": "session required; middleware may return an empty body"
+            "description": "A missing or invalid credential, device_token_expired, or device_token_revoked."
           },
           "403": {
             "content": {
@@ -22920,6 +24538,16 @@
             },
             "description": "Content-Type must be application/json."
           },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "A receipts device token is limited to 30 parse-text requests per minute (Retry-After). Browser cookie requests are not limited here."
+          },
           "500": {
             "content": {
               "application/json": {
@@ -22947,8 +24575,20 @@
     },
     "/api/budget/receipts/search": {
       "post": {
-        "description": "Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Requires an authenticated SQLite admin owner, browser cookie and exact configured Origin before the body is read. 411 means Content-Length is required and 415 means Content-Type must be application/json.",
+        "description": "Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Requires a SQLite admin owner's browser cookie with exact Origin, or a receipts device token. Cookie plus Authorization returns 400 budget_auth_ambiguous. 411 means Content-Length is required and 415 means Content-Type must be application/json.",
         "operationId": "searchBudgetReceipts",
+        "parameters": [
+          {
+            "description": "Request native Gmail receipt values starting at 0.40.0. Earlier versions or an omitted header receive legacy receipt statuses and source kinds.",
+            "in": "header",
+            "name": "X-Hestia-Contract-Version",
+            "required": false,
+            "schema": {
+              "pattern": "^0\\.(0|[1-9][0-9]{0,2})\\.(0|[1-9][0-9]{0,2})$",
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -22988,7 +24628,7 @@
                 }
               }
             },
-            "description": "session required; middleware may return an empty body"
+            "description": "A missing or invalid credential, device_token_expired, or device_token_revoked."
           },
           "403": {
             "content": {

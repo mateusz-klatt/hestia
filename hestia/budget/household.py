@@ -7,8 +7,9 @@ Decisions for this branch:
   0022 and deletes grants only. Receipt rows, category parents and one-off
   labels stay.
 - ``household grant`` and ``household revoke`` open the existing SQLite file and
-  run in one ``BEGIN IMMEDIATE`` transaction. They do not call ``init_db``, so
-  they cannot upgrade the database, load bank config, or take the acquisition lock.
+  run in one ``BEGIN IMMEDIATE`` transaction on revision 0023 or a known descendant.
+  They do not call ``init_db``, so they cannot upgrade the database, load bank
+  config, or take the acquisition lock.
 - An identical member and owner keep the current ``grant_id``. A different owner
   is refused until revoke. Revoke requires that member, owner and grant id.
   Regrant allocates a new id. Command output and logs use fixed status codes.
@@ -52,15 +53,16 @@ import re
 import secrets
 from pathlib import Path
 
+from alembic.script import ScriptDirectory
 from sqlalchemy import event, text
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
 
-from ..db import AppMeta, BudgetHouseholdMember, User, make_engine
+from ..db import AppMeta, BudgetHouseholdMember, User, _alembic_config, make_engine
 
 log = logging.getLogger("hestia.budget.household")
 
-SCHEMA_REVISION = "0026"
+SCHEMA_REVISION = "0023"
 _GRANT_BYTES = 32
 _USERS_MARKER = "users_authoritative"
 _GRANT_ID = re.compile(r"[0-9a-f]{64}\Z", re.ASCII)
@@ -175,7 +177,8 @@ def _require_lineage(session):
         versions = session.execute(text("SELECT version_num FROM alembic_version")).scalars().all()
     except OperationalError:
         raise HouseholdCommandError("household_schema_required") from None
-    if versions != [SCHEMA_REVISION]:
+    script = ScriptDirectory.from_config(_alembic_config(None))
+    if not any(versions == [revision.revision] for revision in script.walk_revisions(base=SCHEMA_REVISION)):
         raise HouseholdCommandError("household_schema_required")
     found = session.execute(text(
         "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'budget_household_members'")).first()

@@ -74,10 +74,10 @@ class CategoryParentMigrationTests(unittest.TestCase):
 
 
 class CategoryParentInitDbTests(unittest.TestCase):
-    """Category parent through real ``init_db``. Current head includes labels, receipts, and grants.
+    """Category parent through real ``init_db``.
 
     Production turns foreign keys on, and child rows reference categories. The runner
-    upgrades to that head with foreign keys off inside one transaction, then checks them.
+    upgrades to head with foreign keys off inside one transaction, then checks them.
     """
 
     def setUp(self):

@@ -77,7 +77,7 @@ class TranslationMigrationTests(unittest.TestCase):
         cfg = Config()
         cfg.set_main_option("script_location", str(db._MIGRATIONS_DIR))
         revision = ScriptDirectory.from_config(cfg).get_revision("0026")
-        self.assertEqual(revision.down_revision, "0023")
+        self.assertEqual(revision.down_revision, "0025")
         engine, sessions = db.init_db(self.path)
         with sessions.begin() as session:
             session.add(db.User(username="owner", password_hash="unused", role="admin"))
@@ -109,7 +109,7 @@ class TranslationMigrationTests(unittest.TestCase):
             self.assertEqual(session.get(db.BudgetCategory, "other").name, "Other")
         engine.dispose()
 
-        db.downgrade_db(self.path, "0023")
+        db.downgrade_db(self.path, "0025")
         with closing(sqlite3.connect(self.path)) as raw:
             tables = {row[0] for row in raw.execute("SELECT name FROM sqlite_master WHERE type='table'")}
             self.assertNotIn("budget_category_translations", tables)

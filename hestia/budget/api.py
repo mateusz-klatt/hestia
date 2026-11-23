@@ -70,7 +70,7 @@ def _secret(session_secret):
     return secret
 
 
-def _browser(request, user, secret):
+def _browser(request, user, secret, *, allow_same_origin_fetch=False):
     if "Authorization" in request.headers:
         raise _Rejected(403, "budget_browser_session_required")
     token = request.cookies.get("hestia_session", "")
@@ -86,7 +86,13 @@ def _browser(request, user, secret):
             raise ValueError
     except ValueError:
         raise BudgetConfigError("Budget HTTP requires a fixed HTTPS public origin") from None
-    if request.headers.getall("Origin", []) != [origin]:
+    origins = request.headers.getall("Origin", [])
+    if origins == [origin]:
+        return
+    # Same-origin browser GETs usually omit Origin. Fetch Metadata is set by
+    # the browser; JS in a different origin cannot forge a same-origin value.
+    if not (allow_same_origin_fetch and not origins
+            and request.headers.getall("Sec-Fetch-Site", []) == ["same-origin"]):
         raise _Rejected(403, "budget_origin_required")
 
 
@@ -210,7 +216,7 @@ def _failure(exc, operation):
 
 
 def register(app, read_json_body, *, auth_enabled, session_secret, secure_cookie=lambda: False):
-    from . import analytics_api, consent_api, receipt_api
+    from . import analytics_api, consent_api, gmail_api, receipt_api
     async def private_headers(request, response):
         if request.path == PREFIX or request.path.startswith(PREFIX + "/"):
             response.headers.update(PRIVATE_HEADERS)
@@ -252,6 +258,7 @@ def register(app, read_json_body, *, auth_enabled, session_secret, secure_cookie
     analytics_api.register(app, read_json_body, auth_enabled=auth_enabled, session_secret=session_secret)
     household_api.register(app, read_json_body, auth_enabled=auth_enabled, session_secret=session_secret)
     receipt_api.register(app, read_json_body, auth_enabled=auth_enabled, session_secret=session_secret)
+    gmail_api.register(app, read_json_body, auth_enabled=auth_enabled, session_secret=session_secret)
     jobs.register(app, JOBS_KEY, auth_enabled=auth_enabled)
     for operation in READS:
         app.router.add_get(PREFIX + "/" + operation, handle, allow_head=False)

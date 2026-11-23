@@ -20,11 +20,14 @@ _EVIDENCE_KEYS = (
 )
 
 
-def audit_payload(row, action):
-    return {
+def audit_payload(row, action, actor=None):
+    payload = {
         "receipt_id": row.id, "action": action, "status": row.status, "version": row.version,
         "linked": row.linked_account_id is not None, "source_kind": row.source_kind,
     }
+    if actor is not None:
+        payload["actor"] = actor
+    return payload
 
 
 def write_audit(session, owner, row, action, before, after, changed_at):

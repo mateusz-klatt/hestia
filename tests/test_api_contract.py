@@ -56,7 +56,7 @@ class OpenApiArtifactTests(unittest.TestCase):
         )
 
     def test_monthly_budget_contract_chain_from_0_27_0(self):
-        """0.41.0 adds translations above the 0.38.0 counterparty-account contract."""
+        """Remove each additive surface before verifying earlier contract snapshots."""
         document = api_contract.build_openapi()
         self.assertEqual(document["info"]["version"], "0.41.0")
         schemas = document["components"]["schemas"]
@@ -83,7 +83,7 @@ class OpenApiArtifactTests(unittest.TestCase):
             schemas[schema]["properties"].pop(field)
             if field in schemas[schema].get("required", []):
                 schemas[schema]["required"].remove(field)
-        document["info"]["version"] = "0.38.0"
+        document["info"]["version"] = "0.40.0"
         schemas["Settings"]["description"] = (
             "GET /api/settings — the logged-in user's UI prefs. All three keys are ALWAYS present, null when\n"
             "unset (an unauthenticated / no-row request returns all-null, never an error)."
@@ -116,7 +116,6 @@ class OpenApiArtifactTests(unittest.TestCase):
             del document["paths"][path]
         for name in [key for key in document["components"]["schemas"] if key.startswith("BudgetHousehold")]:
             del document["components"]["schemas"][name]
-        document["info"]["version"] = "0.36.0"
         for path in [path for path in document["paths"] if path.startswith("/api/budget/receipts/")]:
             del document["paths"][path]
         for name in [name for name in document["components"]["schemas"] if name.startswith("BudgetReceipt")]:
@@ -697,6 +696,9 @@ class TolerantResponseContractTests(unittest.TestCase):
         "BudgetReceiptParseTextRequest", "BudgetReceiptConfirmRequest",
         "BudgetReceiptLineInput", "BudgetReceiptLinkRequest", "BudgetReceiptListRequest",
         "BudgetReceiptSearchRequest", "BudgetReceiptDeleteRequest",
+        "BudgetReceiptDeviceBrowserRequest", "BudgetReceiptDeviceRedeemRequest",
+        "BudgetReceiptDeviceRevokeRequest",
+        "BudgetReceiptGmailGrantRequest", "BudgetReceiptGmailRevokeRequest", "BudgetReceiptGmailSyncRequest",
         "AddUserRequest", "ChangePasswordRequest", "ControlCover", "ControlLevel", "ControlRequest",
         "ControlSwitch", "ControlThermostat", "ControlThermostatPower", "IrRequest", "LoginRequest",
         "NameRequest", "ResetPasswordRequest", "RoomIconRequest", "RuleInput", "SceneRequest",

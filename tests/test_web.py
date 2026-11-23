@@ -2078,6 +2078,15 @@ SPOUSE_ROUTE_STATUS = {
     ("GET", "/api/budget/receipts/detail"): 403,
     ("GET", "/api/budget/receipts/image"): 403,
     ("POST", "/api/budget/receipts/delete"): 403,
+    ("POST", "/api/budget/receipts/device-token/pair-code"): 403,
+    ("POST", "/api/budget/receipts/device-token/redeem"): 403,
+    ("POST", "/api/budget/receipts/device-token/list"): 403,
+    ("POST", "/api/budget/receipts/device-token/revoke"): 403,
+
+    ("GET", "/api/budget/receipts/gmail-status"): 403,
+    ("POST", "/api/budget/receipts/gmail-grant"): 403,
+    ("POST", "/api/budget/receipts/gmail-revoke"): 403,
+    ("POST", "/api/budget/receipts/gmail-sync"): 403,
     ("POST", "/api/budget/analytics/transfer-decision"): 403,
     ("POST", "/api/budget/background-selection"): 403,
     ("POST", "/api/budget/connection-state"): 403,
@@ -2203,6 +2212,15 @@ class AuthzTests(_WebTestBase):
         self.assertEqual(self._get("/api/does-not-exist", "operator"), 403)
         self.assertEqual(self._get("/api/does-not-exist", "admin"), 404)
 
+    def test_receipt_redeem_rejects_admin_and_removed_account_cookies(self):
+        with mock.patch.dict(os.environ, {"HESTIA_BUDGET_HTTP_ENABLED": "1", "HESTIA_BUDGET_RECEIPTS_ENABLED": "1"}):
+            for role in ("admin", None):
+                self.role = role
+                status, _, body = _post(self.web.address, "/api/budget/receipts/device-token/redeem", {},
+                                        headers={"Cookie": self.cookie})
+                self.assertEqual(status, 400)
+                self.assertEqual(json.loads(body), {"ok": False, "error": "device_token_rejected"})
+
 
 class HouseholdRouteTests(_WebTestBase):
     def test_household_member_status_is_classified_for_every_route(self):
@@ -2215,6 +2233,7 @@ class HouseholdRouteTests(_WebTestBase):
             "HESTIA_PERSIST": "sqlite",
             "HESTIA_BUDGET_HTTP_ENABLED": "1",
             "HESTIA_BUDGET_ANALYTICS_ENABLED": "1",
+            "HESTIA_BUDGET_RECEIPTS_ENABLED": "1",
             "HESTIA_BUDGET_MONTH_CONFIG": "",
             "HESTIA_BUDGET_CONSENT_ENABLED": "0",
         }
@@ -2247,7 +2266,11 @@ class HouseholdRouteTests(_WebTestBase):
                     self.assertEqual(actual, expected)
 
     def _member_status(self, method, path, token, grant_id):
-        headers = {"Authorization": f"Bearer {token}", household_api.GRANT_HEADER: grant_id}
+        headers = {household_api.GRANT_HEADER: grant_id}
+        if path.startswith("/api/budget/"):
+            headers["Cookie"] = f"{web._SESSION_COOKIE}={token}"
+        else:
+            headers["Authorization"] = f"Bearer {token}"
         body = None
         if method in web._MUTATING_METHODS:
             controls = {

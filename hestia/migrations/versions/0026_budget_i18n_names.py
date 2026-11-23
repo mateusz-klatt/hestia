@@ -1,7 +1,7 @@
 """Budget name and label translations, plus per-user display languages.
 
 Revision ID: 0026
-Revises: 0023
+Revises: 0025
 
 Downgrading removes translations and language preferences. Canonical names,
 labels, and other settings remain available.
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 from hestia.db import annotation_label_check_sql
 
 revision = "0026"
-down_revision = "0023"
+down_revision = "0025"
 branch_labels = None
 depends_on = None
 

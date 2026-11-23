@@ -20,10 +20,12 @@ from sqlalchemy import delete, exists, func, literal_column, or_, select
 from sqlalchemy.exc import IntegrityError
 
 from ..db import (BudgetAccount as Account, BudgetConnection as Connection, BudgetReceipt as Receipt,
-                  BudgetReceiptLine as Line, BudgetShop as Shop, BudgetTransaction as Transaction,
-                  BudgetTransferLeg as Leg)
+                  BudgetReceiptDeviceToken as DeviceToken, BudgetReceiptLine as Line, BudgetShop as Shop,
+                  BudgetTransaction as Transaction, BudgetTransferLeg as Leg)
 from .analytics_core import (AnalyticsError, canonical_money, compare_money, financial_fingerprint, negate_money,
                              sum_money)
+from .device_token import DeviceTokenError, write_device_audit
+from .gmail_store import retain_imports, tombstone_receipt
 from .receipt_parser import (CONFIRMED_TEXT_TTL_SECONDS, DRAFT_TTL_SECONDS, MAX_RECEIPT_LINES, ReceiptError,
                              merchant_tokens, normalize_shop_name, parse_receipt, redact_digit_field,
                              validate_confirm)
@@ -49,7 +51,8 @@ _SUMMARY_FIELDS = (
     "receipt_id", "shop_id", "chain_key", "raw_shop_name", "raw_nip", "receipt_kind", "receipt_date",
     "receipt_time", "total_amount", "currency", "payment_method", "status", "source_kind", "linked",
     "linked_account_id", "linked_entry_ref", "version", "created_at", "updated_at", "image_available",
-    "image_expires_at", "raw_text_expires_at", "math_delta",
+    "image_expires_at", "raw_text_expires_at", "math_delta", "document_kind", "invoice_number", "due_date",
+    "import_expires_at",
 )
 
 
@@ -104,12 +107,27 @@ def _line_dict(row):
 _DIGEST_HEX = re.compile(r"[0-9a-f]{64}")
 
 class BudgetReceiptStore(BudgetHTTPStore):
-    def __init__(self, sessions, *, clock, cursor_secret):
+    def __init__(self, sessions, *, clock, cursor_secret, device_id=None):
         super().__init__(sessions, clock=clock, cursor_secret=cursor_secret)
+        self._device_id = device_id
+        self._actor = f"device:{device_id}" if device_id is not None else None
         self._receipt_cursor_key = hashlib.sha256(_CURSOR_DOMAIN + b"\0" + cursor_secret).digest()
         material = hashlib.sha256(_CANDIDATE_DOMAIN + b"\0" + cursor_secret).digest()
         self._token_key = _subkey(material, _TOKEN_INFO)
         self._evidence_key = _subkey(material, _EVIDENCE_INFO)
+
+    def _owner(self, session, owner):
+        # The middleware authenticates before any body read. Check the token's
+        # current state again under the receipt operation's transaction.
+        if self._device_id is not None:
+            token = session.get(DeviceToken, self._device_id)
+            if token is None or token.owner != owner:
+                raise DeviceTokenError(401, "device_token_invalid")
+            if token.revoked_at is not None:
+                raise DeviceTokenError(401, "device_token_revoked")
+            if self._now() >= min(token.expires_at, token.hard_expires_at):
+                raise DeviceTokenError(401, "device_token_expired")
+        super()._owner(session, owner)
 
     def _now(self):
         now = self.clock()
@@ -142,7 +160,7 @@ class BudgetReceiptStore(BudgetHTTPStore):
 
     @staticmethod
     def _math_delta(session, row):
-        if row.total_amount is None:
+        if row.total_amount is None or row.status == "imported":
             return None
         net = sum_money(session.scalars(select(Line.net_line_total).where(
             Line.receipt_id == row.id, Line.owner == row.owner)))
@@ -162,6 +180,8 @@ class BudgetReceiptStore(BudgetHTTPStore):
             "version": row.version, "created_at": row.created_at, "updated_at": row.updated_at,
             "image_available": row.image_relpath is not None, "image_expires_at": row.image_expires_at,
             "raw_text_expires_at": row.raw_text_expires_at, "math_delta": self._math_delta(session, row),
+            "document_kind": row.document_kind, "invoice_number": redact_digit_field(row.invoice_number),
+            "due_date": row.due_date, "import_expires_at": row.import_expires_at,
         }
         return {key: values[key] for key in _SUMMARY_FIELDS}
 
@@ -202,9 +222,14 @@ class BudgetReceiptStore(BudgetHTTPStore):
         with self.transaction() as session:
             if owner is not None:
                 self._owner(session, owner)
-            return self._purge(session, owner, self._now())
+            now = self._now()
+            retain_imports(session, owner, now)
+            return self._purge(session, owner, now)
 
-    def parse_text(self, owner, text):
+    def parse_text(self, owner, text, *, source_kind="paste"):
+        stored_kind = {"paste": "live_text", "local_ocr": "local_ocr"}.get(source_kind)
+        if stored_kind is None:
+            raise ReceiptError()
         parsed = parse_receipt(text)
         candidates = self._read_candidates(owner, parsed)
         with self.transaction() as session:
@@ -222,7 +247,7 @@ class BudgetReceiptStore(BudgetHTTPStore):
                 receipt_kind=parsed["receipt_kind"], receipt_date=parsed["receipt_date"],
                 receipt_time=parsed["receipt_time"], total_amount=parsed["total_amount"],
                 currency=parsed["currency"], payment_method=parsed["payment_method"], status="draft",
-                source_kind="live_text", image_relpath=None, image_expires_at=None,
+                source_kind=stored_kind, image_relpath=None, image_expires_at=None,
                 raw_ocr_text=None, raw_text_expires_at=None,
                 linked_account_id=None, linked_entry_ref=None, linked_fingerprint=None, version=1,
                 created_at=now, updated_at=now,
@@ -234,7 +259,7 @@ class BudgetReceiptStore(BudgetHTTPStore):
                     key: value for key, value in values.items() if key != "line_no"
                 }, line_no=values["line_no"]))
             session.flush()
-            write_audit(session, owner, row, "create", None, audit_payload(row, "create"), now)
+            write_audit(session, owner, row, "create", None, audit_payload(row, "create", self._actor), now)
             detail = self._detail(session, row)
         return {"receipt_id": identifier, "draft": detail, "candidates": candidates, "version": 1}
 
@@ -482,13 +507,14 @@ class BudgetReceiptStore(BudgetHTTPStore):
                 row.linked_entry_ref = link["entry_reference"]
                 row.linked_fingerprint, row.linked_evidence = fingerprint
             row.status, row.version, row.updated_at = "confirmed", row.version + 1, now
+            row.import_expires_at = None
             if row_was_draft:
                 row.image_expires_at = now + CONFIRMED_TEXT_TTL_SECONDS
             try:
                 session.flush()
             except IntegrityError:
                 raise ReceiptError("budget_receipt_tx_already_linked", 409) from None
-            write_audit(session, owner, row, "confirm", before, audit_payload(row, "confirm"), now)
+            write_audit(session, owner, row, "confirm", before, audit_payload(row, "confirm", self._actor), now)
             return {"ok": True, "receipt": self._detail(session, row)}
 
     def _encode_cursor(self, owner, context, row):
@@ -547,7 +573,8 @@ class BudgetReceiptStore(BudgetHTTPStore):
 
     @staticmethod
     def _filters(values, *, search):
-        allowed = {"query", "limit", "cursor"} if search else {"month", "status", "linked", "limit", "cursor"}
+        allowed = ({"query", "limit", "cursor"} if search
+                   else {"month", "status", "linked", "document_kind", "limit", "cursor"})
         if not isinstance(values, dict) or set(values) - allowed:
             raise ReceiptError()
         limit = values.get("limit", 50)
@@ -561,7 +588,10 @@ class BudgetReceiptStore(BudgetHTTPStore):
             except ValueError:
                 raise ReceiptError() from None
         status = values.get("status")
-        if status is not None and status not in ("draft", "confirmed", "needs_review"):
+        if status is not None and status not in ("draft", "confirmed", "needs_review", "imported"):
+            raise ReceiptError()
+        kind = values.get("document_kind")
+        if kind is not None and kind not in ("receipt", "invoice", "payment_confirmation"):
             raise ReceiptError()
         linked = values.get("linked")
         if linked is not None and type(linked) is not bool:
@@ -572,12 +602,14 @@ class BudgetReceiptStore(BudgetHTTPStore):
         context_values = {"query": fold_for_match(query.strip())} if search else {
             "month": month, "status": status, "linked": linked,
         }
+        if kind is not None:
+            context_values["document_kind"] = kind
         context = hashlib.sha256(json.dumps(context_values, sort_keys=True, ensure_ascii=True,
                                             separators=(",", ":")).encode("ascii")).hexdigest()
-        return limit, month, status, linked, query, context
+        return limit, month, status, linked, query, kind, context
 
     def _list(self, owner, values, *, search):
-        limit, month, status, linked, query, context = self._filters(values, search=search)
+        limit, month, status, linked, query, kind, context = self._filters(values, search=search)
         with self.transaction() as session:
             self._owner(session, owner)
             now = self._now()
@@ -588,6 +620,8 @@ class BudgetReceiptStore(BudgetHTTPStore):
                 query_obj = query_obj.where(Receipt.receipt_date >= month + "-01", Receipt.receipt_date <= month + "-31")
             if status is not None:
                 query_obj = query_obj.where(Receipt.status == status)
+            if kind is not None:
+                query_obj = query_obj.where(Receipt.document_kind == kind)
             if linked is not None:
                 query_obj = query_obj.where(Receipt.linked_account_id.is_not(None) if linked
                                             else Receipt.linked_account_id.is_(None))
@@ -659,9 +693,12 @@ class BudgetReceiptStore(BudgetHTTPStore):
             row = self._owned(session, owner, values["receipt_id"])
             if row.version != values["expected_version"]:
                 raise ReceiptError("budget_receipt_conflict", 409)
+            tombstone_receipt(session, owner, row.id)
             session.execute(delete(Line).where(Line.receipt_id == row.id, Line.owner == owner))
             erase_receipt_audit(session, owner, row.id)
             session.delete(row)
+            if self._device_id is not None:
+                write_device_audit(session, owner, self._device_id, "receipt_delete", now)
             session.flush()
             return {"ok": True, "deleted": True}
 

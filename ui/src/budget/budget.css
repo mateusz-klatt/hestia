@@ -206,6 +206,11 @@
   .budget-month-dashboard-table tbody td { display: table-cell; padding: .4rem .5rem; white-space: nowrap; }
   .budget-month-dashboard-table tbody td::before { content: none; }
 }
+.budget-devices { border: 1px solid var(--border); border-radius: .7rem; padding: .9rem 1rem; display: grid; gap: .6rem; }
+.budget-devices > header { display: flex; justify-content: space-between; align-items: center; gap: .75rem; }
+.budget-devices h3 { margin: 0; font-size: 1.05rem; }
+.budget-pair-code { font-family: ui-monospace, monospace; font-size: 1.4rem; letter-spacing: .18rem; margin: 0; }
+.budget-qr { width: 11rem; height: 11rem; background: #fff; }
 @media (max-width: 420px) {
   .budget-month-dashboard .budget-total dl { grid-template-columns: minmax(0, 1fr); gap: .15rem; }
   .budget-month-dashboard .budget-total dd { text-align: start; }

@@ -280,14 +280,21 @@
         send a photo to its provider only after the owner consents for that receipt.</p>
 
       <h3 id="gmail">Gmail receipt import (when enabled)</h3>
-      <p>This planned feature will require the owner to authorise access to their own Google
-        Account with the read-only <code>gmail.readonly</code> scope. This permission allows
-        mailbox reads. Hestia will fetch only messages likely to contain receipts, using a Gmail
-        label or a list of approved senders, and read them to extract receipt details.</p>
-      <p>From these messages, Hestia will store only the parsed receipt and a keyed hash of the
-        Message-ID to avoid duplicate imports. Hestia will never store message bodies or email
-        addresses from the messages. The owner can revoke access in their
-        <a href="https://myaccount.google.com/linkedapps">Google Account</a>.</p>
+      <p>The owner authorises access to their own Google Account with the read-only
+        <code>gmail.readonly</code> scope and opts in separately inside Hestia. Hestia checks the
+        mailbox identity each time it syncs. Hestia will fetch only messages likely to contain
+        receipts, using a Gmail label or a list of approved senders, and read them to extract
+        receipt details. It can unwrap forwarded messages from the spouse addresses the owner
+        explicitly approves.</p>
+      <p>Hestia stores structured receipt and invoice fields and a keyed hash of the Gmail
+        message ID to avoid duplicate imports. It stores no message bodies, attachments or email
+        addresses from those messages. Unconfirmed imports expire after 30 days. Hestia keeps the
+        keyed message hashes for up to 400 days to prevent re-imports.</p>
+      <p>The owner can pause or revoke the Hestia grant. Revocation stops Gmail import and clears
+        local access tokens, sync state, unconfirmed imports and message hashes. Confirmed receipts
+        remain until deleted by the owner. Removing Google-side access in the owner's
+        <a href="https://myaccount.google.com/linkedapps">Google Account</a> can also disconnect
+        Calendar Sync if it uses the same OAuth client and require Calendar consent again.</p>
       <p>Cloudflare and the Apache reverse proxy may process requests and responses that contain
         imported receipt data to deliver and secure the application, as described in
         <a href="#recipients">section 3</a>.</p>

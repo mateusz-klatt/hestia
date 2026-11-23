@@ -10,6 +10,7 @@ import json
 import os
 import shutil
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -871,6 +872,74 @@ class RolesTests(unittest.TestCase):
                 row = s.get(db.User, "mama")
             self.assertEqual(row.password_hash, "new-hash")
             self.assertEqual(row.role, "admin")                            # role preserved
+
+    def test_password_writes_roll_back_device_revocation_and_preserve_cached_pool(self):
+        engine, sessions = db.init_db(self.db)
+        store_sql.cutover_users(engine, {"owner": "original"})
+        with sessions.begin() as session:
+            session.add(db.BudgetReceiptDeviceToken(
+                id="device", owner="owner", device_name="Vesta", token_hmac="1" * 64,
+                created_at=1, sliding_written_at=1, expires_at=2, hard_expires_at=3,
+            ))
+            session.add(db.BudgetReceiptPairCode(
+                id="pair", owner="owner", code_hmac="2" * 64, created_at=1, expires_at=2,
+            ))
+
+        revoke = store_sql._revoke_receipt_devices
+
+        def fail_after_revocation(session, owner):
+            revoke(session, owner)
+            session.flush()
+            self.assertEqual(session.get(db.User, owner).password_hash, "replacement")
+            self.assertIsNotNone(session.get(db.BudgetReceiptDeviceToken, "device").revoked_at)
+            self.assertIsNotNone(session.get(db.BudgetReceiptPairCode, "pair").consumed_at)
+            raise RuntimeError("abort account change")
+
+        for write in (store_sql.set_user_password, store_sql.set_user_db):
+            with self.subTest(write=write.__name__):
+                with mock.patch.object(engine, "dispose") as dispose, mock.patch.object(
+                    store_sql, "_revoke_receipt_devices", side_effect=fail_after_revocation,
+                ):
+                    with self.assertRaisesRegex(RuntimeError, "abort account change"):
+                        write("owner", "replacement", path=self.db)
+                dispose.assert_not_called()
+                with sessions() as session:
+                    self.assertEqual(session.get(db.User, "owner").password_hash, "original")
+                    self.assertIsNone(session.get(db.BudgetReceiptDeviceToken, "device").revoked_at)
+                    self.assertIsNone(session.get(db.BudgetReceiptPairCode, "pair").consumed_at)
+
+    def test_cli_reset_and_disable_invalidate_only_affected_receipt_credentials(self):
+        engine, sessions = db.init_db(self.db)
+        owners = ("cli_reset", "disabled", "unchanged")
+        store_sql.cutover_users(engine, dict.fromkeys(owners, "old-hash"))
+        now = time.time()
+        with sessions.begin() as session:
+            for index, owner in enumerate(owners):
+                session.add(db.BudgetReceiptDeviceToken(
+                    id=owner, owner=owner, device_name="Vesta", token_hmac=f"{index:064x}",
+                    created_at=now, sliding_written_at=now, expires_at=now + 3600,
+                    hard_expires_at=now + 7200,
+                ))
+                session.add(db.BudgetReceiptPairCode(
+                    id=owner, owner=owner, code_hmac=f"{index:064x}",
+                    created_at=now, expires_at=now + 300,
+                ))
+
+        store_sql.set_user_db("cli_reset", "new-hash", "admin", path=self.db)
+        self.assertEqual(store_sql.set_user_disabled("disabled", True, path=self.db), "ok")
+        self.assertEqual(store_sql.set_user_disabled("disabled", False, path=self.db), "ok")
+
+        with sessions() as session:
+            revoked = dict(session.execute(select(
+                db.BudgetReceiptDeviceToken.owner, db.BudgetReceiptDeviceToken.revoked_at,
+            )).all())
+            consumed = dict(session.execute(select(
+                db.BudgetReceiptPairCode.owner, db.BudgetReceiptPairCode.consumed_at,
+            )).all())
+        self.assertIsNotNone(revoked["cli_reset"])
+        self.assertIsNotNone(revoked["disabled"])
+        self.assertIsNone(revoked["unchanged"])
+        self.assertEqual(consumed, revoked)
 
 
 if __name__ == "__main__":  # pragma: no cover

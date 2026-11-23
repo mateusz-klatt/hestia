@@ -897,17 +897,18 @@ class BudgetReceipt(Base):
                         name="ck_budget_receipts_currency"),
         CheckConstraint("payment_method IS NULL OR payment_method IN ('card', 'blik', 'cash', 'mixed', 'unknown')",
                         name="ck_budget_receipts_payment"),
-        CheckConstraint("status IN ('draft', 'confirmed', 'needs_review')", name="ck_budget_receipts_status"),
-        CheckConstraint("source_kind IN ('live_text', 'local_ocr', 'cloud_ai')", name="ck_budget_receipts_source"),
+        CheckConstraint("status IN ('draft', 'confirmed', 'needs_review', 'imported')", name="ck_budget_receipts_status"),
+        CheckConstraint("source_kind IN ('live_text', 'local_ocr', 'cloud_ai', 'paste', 'photo', 'email', 'attachment')",
+                        name="ck_budget_receipts_source"),
         CheckConstraint(
-            "status = 'draft' OR (receipt_date IS NOT NULL AND total_amount IS NOT NULL "
+            "status IN ('draft', 'imported') OR (receipt_date IS NOT NULL AND total_amount IS NOT NULL "
             "AND currency IS NOT NULL AND payment_method IS NOT NULL)",
             name="ck_budget_receipts_confirmed_fields",
         ),
         CheckConstraint(
             "(linked_account_id IS NULL AND linked_entry_ref IS NULL AND linked_fingerprint IS NULL "
             "AND linked_evidence IS NULL) "
-            "OR (status != 'draft' AND linked_account_id IS NOT NULL AND linked_entry_ref IS NOT NULL "
+            "OR (status IN ('confirmed', 'needs_review') AND linked_account_id IS NOT NULL AND linked_entry_ref IS NOT NULL "
             "AND linked_fingerprint IS NOT NULL AND linked_evidence IS NOT NULL)",
             name="ck_budget_receipts_link_fields",
         ),
@@ -920,6 +921,13 @@ class BudgetReceipt(Base):
             name="ck_budget_receipts_raw_text_expiry",
         ),
         CheckConstraint("version >= 1", name="ck_budget_receipts_version"),
+        CheckConstraint("document_kind IN ('receipt', 'invoice', 'payment_confirmation')",
+                        name="ck_budget_receipts_document_kind"),
+        CheckConstraint("import_expires_at IS NULL OR import_expires_at >= 0", name="ck_budget_receipts_import_expiry"),
+        CheckConstraint("invoice_number IS NULL OR length(invoice_number) BETWEEN 1 AND 128",
+                        name="ck_budget_receipts_invoice_number"),
+        CheckConstraint("due_date IS NULL OR due_date GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'",
+                        name="ck_budget_receipts_due_date"),
     )
     id: Mapped[str] = mapped_column(primary_key=True)
     owner: Mapped[str]
@@ -934,6 +942,10 @@ class BudgetReceipt(Base):
     payment_method: Mapped[str | None]
     status: Mapped[str]
     source_kind: Mapped[str]
+    document_kind: Mapped[str] = mapped_column(server_default=text("'receipt'"))
+    import_expires_at: Mapped[float | None]
+    invoice_number: Mapped[str | None]
+    due_date: Mapped[str | None]
     image_relpath: Mapped[str | None]
     image_expires_at: Mapped[float | None]
     raw_ocr_text: Mapped[str | None] = mapped_column(Text)
@@ -974,6 +986,148 @@ class BudgetReceiptLine(Base):
     gross_line_total: Mapped[str]
     discount_amount: Mapped[str] = mapped_column(server_default=text("'0'"))
     net_line_total: Mapped[str]
+
+
+class BudgetReceiptDeviceToken(Base):
+    """Receipts-scoped device credential. ``token_hmac`` is an HMAC, never the bearer."""
+
+    __tablename__ = "budget_receipt_device_tokens"
+    __table_args__ = (
+        ForeignKeyConstraint(["owner"], ["users.username"]),
+        UniqueConstraint("token_hmac", name="uq_budget_receipt_device_tokens_hmac"),
+        Index("ix_budget_receipt_device_tokens_owner", "owner"),
+        CheckConstraint("length(device_name) BETWEEN 1 AND 64", name="ck_budget_receipt_device_tokens_name"),
+        CheckConstraint("length(token_hmac) = 64 AND token_hmac NOT GLOB '*[^0-9a-f]*'",
+                        name="ck_budget_receipt_device_tokens_hmac"),
+        CheckConstraint("expires_at <= hard_expires_at", name="ck_budget_receipt_device_tokens_expiry"),
+    )
+    id: Mapped[str] = mapped_column(primary_key=True)
+    owner: Mapped[str]
+    device_name: Mapped[str]
+    token_hmac: Mapped[str]
+    created_at: Mapped[float]
+    expires_at: Mapped[float]
+    hard_expires_at: Mapped[float]
+    sliding_written_at: Mapped[float]
+    last_used_at: Mapped[float | None]
+    revoked_at: Mapped[float | None]
+
+
+class BudgetReceiptPairCode(Base):
+    """One-time pairing code. ``code_hmac`` is an HMAC, never the code shown to the owner."""
+
+    __tablename__ = "budget_receipt_pair_codes"
+    __table_args__ = (
+        ForeignKeyConstraint(["owner"], ["users.username"]),
+        UniqueConstraint("code_hmac", name="uq_budget_receipt_pair_codes_hmac"),
+        Index("ix_budget_receipt_pair_codes_owner", "owner"),
+        CheckConstraint("length(code_hmac) = 64 AND code_hmac NOT GLOB '*[^0-9a-f]*'",
+                        name="ck_budget_receipt_pair_codes_hmac"),
+    )
+    id: Mapped[str] = mapped_column(primary_key=True)
+    owner: Mapped[str]
+    code_hmac: Mapped[str]
+    created_at: Mapped[float]
+    expires_at: Mapped[float]
+    consumed_at: Mapped[float | None]
+
+class BudgetGmailState(Base):
+    """Per-owner local grant and resumable sync checkpoints."""
+
+    __tablename__ = "budget_gmail_state"
+    __table_args__ = (
+        CheckConstraint("grant_status IN ('disabled', 'active', 'revoked')", name="ck_budget_gmail_state_grant_status"),
+        CheckConstraint("grant_generation >= 0", name="ck_budget_gmail_state_grant_generation"),
+        CheckConstraint("granted_at IS NULL OR granted_at >= 0", name="ck_budget_gmail_state_granted_at"),
+        CheckConstraint("revoked_at IS NULL OR revoked_at >= 0", name="ck_budget_gmail_state_revoked_at"),
+        CheckConstraint("mailbox_hmac IS NULL OR (length(mailbox_hmac) = 64 AND mailbox_hmac NOT GLOB '*[^0-9a-f]*')",
+                        name="ck_budget_gmail_state_mailbox_hmac"),
+        CheckConstraint("sync_phase IN ('idle', 'backfill', 'incremental', 'full_resync')",
+                        name="ck_budget_gmail_state_sync_phase"),
+        CheckConstraint("history_id IS NULL OR length(history_id) BETWEEN 1 AND 64", name="ck_budget_gmail_state_history_id"),
+        CheckConstraint("pending_history_id IS NULL OR length(pending_history_id) BETWEEN 1 AND 64",
+                        name="ck_budget_gmail_state_pending_history_id"),
+        CheckConstraint("resume_page_token IS NULL OR length(resume_page_token) BETWEEN 1 AND 512",
+                        name="ck_budget_gmail_state_resume_page_token"),
+        CheckConstraint("history_page_token IS NULL OR length(history_page_token) BETWEEN 1 AND 512",
+                        name="ck_budget_gmail_state_history_page_token"),
+        CheckConstraint("scope_scan_page_token IS NULL OR length(scope_scan_page_token) BETWEEN 1 AND 512",
+                        name="ck_budget_gmail_state_scope_scan_page_token"),
+        CheckConstraint("scope_scan_query_hmac IS NULL OR (length(scope_scan_query_hmac) = 64 "
+                        "AND scope_scan_query_hmac NOT GLOB '*[^0-9a-f]*')", name="ck_budget_gmail_state_scope_scan_query_hmac"),
+        CheckConstraint("resume_cutoff_ts IS NULL OR resume_cutoff_ts >= 0", name="ck_budget_gmail_state_resume_cutoff_ts"),
+        CheckConstraint("batch_processed_count >= 0", name="ck_budget_gmail_state_batch_processed_count"),
+        CheckConstraint("last_sync_at IS NULL OR last_sync_at >= 0", name="ck_budget_gmail_state_last_sync_at"),
+        CheckConstraint("last_attempt_at IS NULL OR last_attempt_at >= 0", name="ck_budget_gmail_state_last_attempt_at"),
+        CheckConstraint("next_sync_at >= 0", name="ck_budget_gmail_state_next_sync_at"),
+        CheckConstraint("backoff_until >= 0", name="ck_budget_gmail_state_backoff_until"),
+        CheckConstraint("failures >= 0", name="ck_budget_gmail_state_failures"),
+        CheckConstraint("attention IS NULL OR attention IN ('authorization', 'configuration', 'identity_mismatch', 'quota')",
+                        name="ck_budget_gmail_state_attention"),
+        CheckConstraint("last_http_status IS NULL OR last_http_status BETWEEN 100 AND 599",
+                        name="ck_budget_gmail_state_last_http_status"),
+        CheckConstraint("last_error IS NULL OR length(last_error) <= 64", name="ck_budget_gmail_state_last_error"),
+        CheckConstraint("backfill_completed_at IS NULL OR backfill_completed_at >= 0",
+                        name="ck_budget_gmail_state_backfill_completed_at"),
+        CheckConstraint("version >= 1", name="ck_budget_gmail_state_version"),
+    )
+    owner: Mapped[str] = mapped_column(ForeignKey("users.username"), primary_key=True)
+    grant_status: Mapped[str] = mapped_column(server_default=text("'disabled'"))
+    grant_generation: Mapped[int] = mapped_column(server_default=text("0"))
+    granted_at: Mapped[float | None]
+    revoked_at: Mapped[float | None]
+    mailbox_hmac: Mapped[str | None]
+    sync_phase: Mapped[str] = mapped_column(server_default=text("'idle'"))
+    history_id: Mapped[str | None]
+    pending_history_id: Mapped[str | None]
+    resume_page_token: Mapped[str | None]
+    history_page_token: Mapped[str | None]
+    scope_scan_page_token: Mapped[str | None]
+    scope_scan_query_hmac: Mapped[str | None]
+    resume_cutoff_ts: Mapped[float | None]
+    batch_processed_count: Mapped[int] = mapped_column(server_default=text("0"))
+    last_sync_at: Mapped[float | None]
+    last_attempt_at: Mapped[float | None]
+    next_sync_at: Mapped[float] = mapped_column(server_default=text("0"))
+    backoff_until: Mapped[float] = mapped_column(server_default=text("0"))
+    failures: Mapped[int] = mapped_column(server_default=text("0"))
+    attention: Mapped[str | None]
+    last_http_status: Mapped[int | None]
+    last_error: Mapped[str | None]
+    backfill_completed_at: Mapped[float | None]
+    version: Mapped[int] = mapped_column(server_default=text("1"))
+
+
+class BudgetGmailMessage(Base):
+    """Owner-scoped HMAC dedupe ledger and structured receipt provenance."""
+
+    __tablename__ = "budget_gmail_messages"
+    __table_args__ = (
+        Index("ix_budget_gmail_messages_owner_date", "owner", "internal_date"),
+        Index("ix_budget_gmail_messages_owner_rfc", "owner", "rfc_message_id_hmac",
+              sqlite_where=text("rfc_message_id_hmac IS NOT NULL")),
+        ForeignKeyConstraint(["receipt_id", "owner"], ["budget_receipts.id", "budget_receipts.owner"],
+                             name="fk_budget_gmail_messages_receipt_owner"),
+        CheckConstraint("length(gmail_id_hmac) = 64 AND gmail_id_hmac NOT GLOB '*[^0-9a-f]*'",
+                        name="ck_budget_gmail_messages_gmail_id_hmac"),
+        CheckConstraint("rfc_message_id_hmac IS NULL OR (length(rfc_message_id_hmac) = 64 "
+                        "AND rfc_message_id_hmac NOT GLOB '*[^0-9a-f]*')", name="ck_budget_gmail_messages_rfc_message_id_hmac"),
+        CheckConstraint("internal_date >= 0", name="ck_budget_gmail_messages_internal_date"),
+        CheckConstraint("trust_path IN ('direct_allowlist', 'spouse_forward', 'untrusted')",
+                        name="ck_budget_gmail_messages_trust_path"),
+        CheckConstraint("outcome IN ('imported', 'skipped_non_receipt', 'skipped_untrusted_sender', "
+                        "'skipped_oversized', 'skipped_duplicate', 'parse_failed', 'deleted')",
+                        name="ck_budget_gmail_messages_outcome"),
+        CheckConstraint("created_at >= 0", name="ck_budget_gmail_messages_created_at"),
+    )
+    owner: Mapped[str] = mapped_column(ForeignKey("users.username"), primary_key=True)
+    gmail_id_hmac: Mapped[str] = mapped_column(primary_key=True)
+    rfc_message_id_hmac: Mapped[str | None]
+    internal_date: Mapped[float]
+    trust_path: Mapped[str]
+    outcome: Mapped[str]
+    receipt_id: Mapped[str | None]
+    created_at: Mapped[float]
 
 
 metadata = Base.metadata

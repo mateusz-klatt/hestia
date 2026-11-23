@@ -151,7 +151,8 @@ def _is_public_route(method: str, path: str) -> bool:
         return True
     if method == "GET":
         return path in ("/", "/ui/") or path in consent_api.PUBLIC_GET or path.startswith("/assets/")
-    return method == "POST" and path in ("/api/login", "/api/logout")
+    return method == "POST" and path in ("/api/login", "/api/logout",
+                                        "/api/budget/receipts/device-token/redeem")
 
 
 # RBAC route policy (#73). The MINIMUM role for each non-public route, kept adjacent to make_app's route
@@ -226,6 +227,14 @@ _ROUTE_MIN_ROLE = {
     ("GET", "/api/budget/receipts/detail"): _ADMIN,
     ("GET", "/api/budget/receipts/image"): _ADMIN,
     ("POST", "/api/budget/receipts/delete"): _ADMIN,
+    ("POST", "/api/budget/receipts/device-token/pair-code"): _ADMIN,
+    ("POST", "/api/budget/receipts/device-token/list"): _ADMIN,
+    ("POST", "/api/budget/receipts/device-token/revoke"): _ADMIN,
+
+    ("POST", "/api/budget/receipts/gmail-grant"): _ADMIN,
+    ("POST", "/api/budget/receipts/gmail-revoke"): _ADMIN,
+    ("POST", "/api/budget/receipts/gmail-sync"): _ADMIN,
+    ("GET", "/api/budget/receipts/gmail-status"): _ADMIN,
     ("GET", "/api/budget/connections"): _ADMIN,
     ("GET", "/api/budget/accounts"): _ADMIN,
     ("GET", "/api/budget/status"): _ADMIN,
@@ -312,16 +321,49 @@ async def _auth_middleware(request, handler):
     whose role is below the route's floor → 403. No-op when auth is off (loopback/dev stays fully open).
     The token comes from the bearer header or the session cookie (see ``_request_token``). Runs OUTERMOST
     so an unauthenticated/unauthorized request is rejected before it reaches any handler."""
-    if not _AUTH_ENABLED or _is_public_route(request.method, request.path):
+    from .budget import device_token
+    if device_token.receipts_path(request.path) and not device_token.receipts_enabled():
+        return device_token.disabled_response()
+    authorization = request.headers.get("Authorization", "")
+    if _AUTH_ENABLED and "Authorization" in request.headers:
+        target = request.raw_path.partition("?")[0]
+        decision = await asyncio.to_thread(
+            device_token.decide,
+            request.method, target, request.headers, request.cookies, _SESSION_SECRET,
+            _now(),
+        )
+        if decision["action"] == "response":
+            return device_token.json_error(decision)
+        if decision["action"] == "accept":
+            request[device_token.REQUEST_KEY] = decision["token_id"]
+            request[_USER_KEY] = decision["owner"]
+            request[_ROLE_KEY] = _ADMIN
+            return await handler(request)
+        if (request.path.startswith("/api/budget/")
+                and (request.method, target) not in (
+                    ("POST", device_token.REDEEM_PATH), ("GET", consent_api.CALLBACK),
+                )
+                and authorization.startswith(_BEARER_PREFIX)
+                and auth.verify_session(authorization[len(_BEARER_PREFIX):], now=_now(), secret=_SESSION_SECRET)):
+            return device_token.json_error({"status": 403, "code": "budget_browser_session_required"})
+    public = _is_public_route(request.method, request.path)
+    # A redeem request carrying a browser session must also clear the owner
+    # role floor. The handler returns the generic rejection for any cookie.
+    redeem_cookie = public and request.path == device_token.REDEEM_PATH and _SESSION_COOKIE in request.cookies
+    if not _AUTH_ENABLED or (public and not redeem_cookie):
         return await handler(request)
     user = auth.verify_session(_request_token(request), now=_now(), secret=_SESSION_SECRET)
     if user is None:
+        if redeem_cookie:
+            return await handler(request)
         return _empty(HTTPStatus.UNAUTHORIZED)
     # Resolve the role fresh on EVERY authenticated request (offloaded off the loop): a demotion or a
     # removed account takes effect immediately, instead of living on in the 30-day signed cookie.
     role = await asyncio.get_running_loop().run_in_executor(
         None, lambda: store_sql.current_user_role(user))
     if role is None:                              # the account is gone → the still-signed cookie is moot
+        if redeem_cookie:
+            return await handler(request)
         return _empty(HTTPStatus.UNAUTHORIZED)
     request[_USER_KEY] = user                     # for /api/whoami + the audit actor
     request[_ROLE_KEY] = role                     # for /api/whoami + the floor check below

@@ -204,7 +204,9 @@ class BudgetOpenApiTests(unittest.TestCase):
         analytics_reads = {"overview", "transactions", "categories", "rules", "transfers", "recurring",
                            "spending-limits", "mortgages", "inbox", "quarantine", "forecast",
                            "monthly-budget", "monthly-budget/charts"}
-        analytics_writes = {"transactions-by-keys", "category-create", "category-update", "annotation", "rule-preview",
+        analytics_writes = {"transactions-by-keys", "category-create", "category-update", "category-translation-set",
+                            "category-translation-delete", "label-translation-set", "label-translation-delete",
+                            "translation-import", "annotation", "rule-preview",
                             "rule-save", "rule-batch-preview", "rule-batch-save",
                             "transfer-decision", "spending-limit-save", "mortgage-save", "mortgage-payment-set",
                             "inbox-mark"}
@@ -229,10 +231,27 @@ class BudgetOpenApiTests(unittest.TestCase):
                 self.assertEqual(names[0], "X-Budget-Grant")
                 self.assertTrue(methods["get"]["parameters"][0]["required"])
         self.assertEqual(set(receipts), {"/api/budget/receipts/" + name for name in
-                         ("parse-text", "confirm", "list", "search", "detail", "image", "delete")})
+                         ("parse-text", "confirm", "list", "search", "detail", "image", "delete",
+                          "device-token/pair-code", "device-token/redeem", "device-token/list",
+                          "device-token/revoke", "gmail-status", "gmail-grant", "gmail-sync", "gmail-revoke")})
         for path, methods in receipts.items():
             name = path.rsplit("/", 1)[1]
-            method = "get" if name in ("detail", "image") else "post"
+            if path.startswith("/api/budget/receipts/device-token/"):
+                self.assertEqual(set(methods), {"post"})
+                expected = "public" if name == "redeem" else "admin"
+                self.assertEqual(methods["post"]["x-required-role"], expected)
+                self.assertIn("requestBody", methods["post"])
+                responses = methods["post"]["responses"]
+                if name == "redeem":
+                    self.assertNotIn("415", responses)
+                    self.assertIn("device_token_rejected", responses["400"]["description"])
+                    self.assertIn("Retry-After", responses["429"]["description"])
+                else:
+                    self.assertIn("Content-Length", responses["411"]["description"])
+                    self.assertIn("application/json", responses["415"]["description"])
+                    self.assertIn("bytes", responses["413"]["description"])
+                continue
+            method = "get" if name in ("detail", "image", "gmail-status") else "post"
             self.assertEqual(set(methods), {method})
             self.assertEqual(methods[method]["x-required-role"], "admin")
             if method == "post":
@@ -255,6 +274,16 @@ class BudgetOpenApiTests(unittest.TestCase):
         self.assertIn("budget_receipt_quota_exceeded", parse_limit)
         self.assertIn("131072", receipts["/api/budget/receipts/confirm"]["post"]["responses"]["413"]["description"])
         self.assertIn("16384", receipts["/api/budget/receipts/list"]["post"]["responses"]["413"]["description"])
+        self.assertEqual(document["info"]["version"], contract.CONTRACT_VERSION)
+        receipt_schemas = document["components"]["schemas"]
+        self.assertEqual(receipt_schemas["BudgetReceiptDeviceRedeemResult"]["properties"]["expires_at"]["format"],
+                         "date-time")
+        parse_schema = receipt_schemas["BudgetReceiptParseTextRequest"]
+        source_kind = parse_schema["properties"]["source_kind"]
+        self.assertEqual(source_kind["enum"], ["paste", "local_ocr"])
+        self.assertNotIn("source_kind", parse_schema["required"])
+        self.assertNotIn("default", source_kind)  # The TS generator keeps it optional.
+        self.assertEqual(contract.BudgetReceiptParseTextRequest(text="test").source_kind, "paste")
         detail = receipts["/api/budget/receipts/detail"]["get"]
         self.assertNotIn("raw text", detail["summary"])
         confirm = receipts["/api/budget/receipts/confirm"]["post"]
@@ -265,7 +294,13 @@ class BudgetOpenApiTests(unittest.TestCase):
         detail_result = document["components"]["schemas"]["BudgetReceiptDetailResult"]
         self.assertNotIn("candidates", detail_result["required"])
         self.assertNotIn("default", detail_result["properties"]["candidates"])
-        self.assertEqual(document["info"]["version"], "0.38.0")
+        for name in ("parse-text", "confirm", "list", "search", "detail"):
+            operation = next(iter(receipts["/api/budget/receipts/" + name].values()))
+            version, = [parameter for parameter in operation["parameters"] if parameter["in"] == "header"]
+            self.assertEqual(version["name"], "X-Hestia-Contract-Version")
+            self.assertFalse(version["required"])
+        self.assertNotIn("parameters", receipts["/api/budget/receipts/gmail-status"]["get"])
+        self.assertIn("429", receipts["/api/budget/receipts/gmail-sync"]["post"]["responses"])
         batch = analytics["/api/budget/analytics/rule-batch-preview"]["post"]["description"]
         self.assertIn("1..100", batch)
         self.assertIn("All-or-nothing", batch)
@@ -332,7 +367,7 @@ class BudgetOpenApiTests(unittest.TestCase):
 
     def test_forecast_schemas_pin_wire_fields_and_bounds(self):
         schemas = contract.build_openapi()["components"]["schemas"]
-        optional_keys = {"Summary": {"baseline_conflicts"}}
+        optional_keys = {"Summary": {"baseline_conflicts"}, "Item": {"display_name"}}
         for suffix, keys in {
             "": {"evaluation_date", "evaluation_timezone", "horizon_months", "start_month", "end_month",
                  "ledger_as_of", "freshness_stale", "stale_account_ids", "stale_account_ids_truncated",
@@ -344,7 +379,7 @@ class BudgetOpenApiTests(unittest.TestCase):
             "Deduplication": {"schedule_id", "schedule_label", "recurring_label", "amount", "currency",
                               "matched_due_date", "last_observed_date", "day_distance", "account_stale"},
             "Month": {"month", "currencies", "items"},
-            "Item": {"source", "schedule_id", "label", "amount", "currency", "expected_date", "confidence",
+            "Item": {"source", "schedule_id", "label", "display_name", "amount", "currency", "expected_date", "confidence",
                      "past_due", "account_stale"},
             "BaselineConflict": {"category_id", "reason"},
         }.items():
@@ -411,7 +446,7 @@ class BudgetOpenApiTests(unittest.TestCase):
         schemas = contract.build_openapi()["components"]["schemas"]
         optional_keys = {"Configuration": {"income_window"},
                          "Coverage": {"pending_row_keys", "pending_row_keys_truncated"},
-                         "CategorySpend": {"one_off", "one_off_key"}}
+                         "CategorySpend": {"one_off", "one_off_key", "display_name", "display_label"}}
         for suffix, keys in {
             "": {"period", "start", "end", "cutoff", "current_month", "evaluated_at", "evaluation_date",
                  "evaluation_timezone", "currency", "available_currencies", "configuration", "coverage",
@@ -428,7 +463,7 @@ class BudgetOpenApiTests(unittest.TestCase):
             "Pace": {"basis", "budget", "status", "daily_rate", "projected_month_spend", "exhaustion_day"},
             "CategoryLimit": {"monthly_limit", "remaining", "over_by", "percent_used_floor",
                               "warning_percent", "status"},
-            "CategorySpend": {"category_id", "name", "archived", "expenses", "refunds", "net_spending", "limit",
+            "CategorySpend": {"category_id", "name", "display_name", "display_label", "archived", "expenses", "refunds", "net_spending", "limit",
                               "one_off", "one_off_key"},
             "PassThrough": {"rent_category_id", "mortgage_category_id", "rent_received", "mortgage_debits",
                             "mortgage_refunds", "unapplied_mortgage_refunds", "matched", "unapplied_rent",
@@ -517,13 +552,14 @@ class BudgetOpenApiTests(unittest.TestCase):
             self.assertIn("monthly-budget/charts", responses["409"]["description"])
 
         schemas = doc["components"]["schemas"]
-        optional = {"SeriesCategory": {"name", "one_off", "one_off_key"}}
+        optional = {"SeriesCategory": {"name", "one_off", "one_off_key", "display_name", "display_label"},
+                    "CategoryLabel": {"display_name"}}
         for suffix, keys in {
             "DailyPoint": {"date", "cumulative_spent"},
-            "SeriesCategory": {"category_id", "net_spending", "name", "one_off", "one_off_key"},
+            "SeriesCategory": {"category_id", "net_spending", "name", "display_name", "display_label", "one_off", "one_off_key"},
             "SeriesMonth": {"period", "has_activity", "is_current_month", "income_estimate_partial",
                             "provisional", "start_budget", "spent", "categories"},
-            "CategoryLabel": {"category_id", "name", "archived"},
+            "CategoryLabel": {"category_id", "name", "display_name", "archived"},
             "Series": {"daily", "months", "category_labels"},
             "Charts": {"budget", "series"},
         }.items():
@@ -562,9 +598,15 @@ class BudgetOpenApiTests(unittest.TestCase):
                               "BudgetAnalyticsMortgageSaveRequest", "BudgetAnalyticsMortgagePaymentSetRequest",
                               "BudgetAnalyticsInboxKeyRequest", "BudgetAnalyticsInboxMarkRequest",
                               "BudgetAnalyticsTransactionsByKeysRequest",
+                              "BudgetCategoryTranslationSetRequest", "BudgetCategoryTranslationDeleteRequest",
+                              "BudgetLabelTranslationSetRequest", "BudgetLabelTranslationDeleteRequest",
+                              "BudgetCategoryTranslationImportEntry", "BudgetLabelTranslationImportEntry",
+                              "BudgetTranslationImportRequest",
                               "BudgetReceiptParseTextRequest", "BudgetReceiptConfirmRequest", "BudgetReceiptLineInput",
                               "BudgetReceiptLinkRequest", "BudgetReceiptListRequest", "BudgetReceiptSearchRequest",
-                              "BudgetReceiptDeleteRequest"})
+                              "BudgetReceiptDeleteRequest", "BudgetReceiptDeviceBrowserRequest",
+                              "BudgetReceiptDeviceRedeemRequest", "BudgetReceiptDeviceRevokeRequest", "BudgetReceiptGmailGrantRequest",
+                              "BudgetReceiptGmailRevokeRequest", "BudgetReceiptGmailSyncRequest"})
         for name, schema in schemas.items():
             if name in request_names:
                 self.assertIs(schema["additionalProperties"], False)
