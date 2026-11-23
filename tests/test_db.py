@@ -17,6 +17,7 @@ from unittest import mock
 from alembic import command
 from alembic.autogenerate import compare_metadata
 from alembic.runtime.migration import MigrationContext
+from alembic.script import ScriptDirectory
 from sqlalchemy import inspect
 from sqlalchemy.dialects.sqlite.pysqlite import SQLiteDialect_pysqlite
 from sqlalchemy.exc import IntegrityError, OperationalError
@@ -167,14 +168,20 @@ class DbSchemaTests(unittest.TestCase):
         fresh_engine, _ = db.init_db(self.path)
         self.assertIsNot(fresh_engine, first_engine)
 
-        db.reset_engine_cache()
+    def test_downgrade_db_requires_explicit_path_without_touching_default(self):
         env_target = self.dir / "env_target.db"
         with mock.patch.dict(os.environ, {"HESTIA_DB": str(env_target)}):
             env_engine, _ = db.init_db(None)
-            db.downgrade_db(None, "0019")
-            self.assertEqual(db._ENGINE_CACHE, {})
-            reopened, _ = db.init_db(None)
-            self.assertIsNot(reopened, env_engine)
+            for bad_path in (None, "", "   "):
+                with self.subTest(path=bad_path), mock.patch.object(db, "_resolve_db_target") as resolve:
+                    with self.assertRaisesRegex(ValueError, "explicit database path"):
+                        db.downgrade_db(bad_path, "0019")
+                    resolve.assert_not_called()
+            self.assertIs(db.init_db(None)[0], env_engine)
+            with env_engine.connect() as connection:
+                head = ScriptDirectory.from_config(db._alembic_config(connection)).get_current_head()
+                self.assertEqual(connection.exec_driver_sql(
+                    "SELECT version_num FROM alembic_version").scalar(), head)
 
     def test_commit_failure_rolls_back_and_restores_foreign_keys(self):
         setup_engine = db.make_engine(self.path)
