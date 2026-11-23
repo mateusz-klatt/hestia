@@ -356,15 +356,18 @@ def unwrap_trusted_forward(message, *, sender_allowlist=(), render_html=None):
     """Return the final original and whether it needs manual review."""
     current = message
     manual = False
-    for depth in range(_MAX_FORWARD_DEPTH + 1):
+    for _ in range(_MAX_FORWARD_DEPTH):
         original = _forwarded_original(current, render_html)
         if original is None:
-            return (current, manual) if depth else None
-        if original is _INVALID_FORWARD or depth == _MAX_FORWARD_DEPTH:
+            break
+        if original is _INVALID_FORWARD:
             return None
         address = _forward_sender(original)
         if address is None:
             return None
         manual |= address not in sender_allowlist
         current = original
-    return None
+    else:
+        if _forwarded_original(current, render_html) is not None:
+            return None
+    return (current, manual) if current is not message else None

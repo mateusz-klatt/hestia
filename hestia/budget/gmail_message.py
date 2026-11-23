@@ -117,12 +117,9 @@ class GmailMessageProcessor:
                                getattr(self.settings, "owner_mailbox", None))
 
     def _manual_forward(self, outer, inner, pending):
-        domain = forward_sender_domain(inner)
-        if domain is None:
-            return replace(pending, outcome="skipped_non_receipt")
         attached = any(part.get_content_type() == "message/rfc822" for part in mime_parts(outer))
-        return replace(pending, outcome="imported", invoice=None, forwarded_manually=True, sender_domain=domain,
-                       source_kind="attachment" if attached else "email")
+        return replace(pending, outcome="imported", invoice=None, forwarded_manually=True,
+                       sender_domain=forward_sender_domain(inner), source_kind="attachment" if attached else "email")
 
     def _invoice(self, message, pending):
         for kind, part in _document_parts(message):

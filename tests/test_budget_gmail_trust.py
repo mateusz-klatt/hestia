@@ -318,9 +318,18 @@ class GmailTrustTests(unittest.TestCase):
         self.assertEqual(original["From"], MERCHANT)
         renderer.assert_called_once_with(b"<html><body>Synthetic HTML</body></html>\n")
         renderer.reset_mock()
+        outer.set_content(" \n", subtype="html")
+        self.assertIsNone(unwrap_trusted_forward(outer, sender_allowlist=DIRECT, render_html=renderer))
+        renderer.assert_not_called()
+
         outer.set_content("é" * (1024 * 1024 // 2 + 1), charset="iso-8859-1", subtype="html")
         self.assertIsNone(unwrap_trusted_forward(outer, render_html=renderer))
         renderer.assert_not_called()
+
+    def test_inline_and_attached_originals_at_the_same_level_are_ambiguous(self):
+        outer = _message(SPOUSE, _inline())
+        outer.add_attachment(_message())
+        self.assertIsNone(unwrap_trusted_forward(outer, sender_allowlist=DIRECT))
 
     def test_alternative_inline_bodies_must_agree_on_the_original(self):
         outer = _message(SPOUSE, _inline())
