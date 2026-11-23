@@ -6,7 +6,7 @@ import unittest
 
 from hestia import db
 from hestia.budget import analytics_views
-from hestia.budget.analytics_core import (AnalyticsError, compile_rules, counterparty_account_evidence,
+from hestia.budget.analytics_core import (AnalyticsError, canonical_counterparty_account, compile_rules, counterparty_account_evidence,
     counterparty_account_key, counterparty_key_id, counterparty_rule_from_identification, counterparty_rule_parts,
     counterparty_rule_value, first_matching_rule, mask_counterparty_account, match_texts,
     normalize_counterparty_account, rule_matches)
@@ -16,6 +16,8 @@ from tests.test_budget_analytics_views import ProjectionCase
 
 SYNTHETIC_IBAN = "PL" + "0" * 22 + "1234"
 OTHER_IBAN = "PL" + "0" * 22 + "5678"
+POLISH_BBAN = "0" * 26
+POLISH_IBAN = "PL04" + POLISH_BBAN
 SECRET = b"synthetic-only-32-byte-rule-key-value"
 
 
@@ -32,6 +34,7 @@ def account_rule(value=SYNTHETIC_IBAN, **changes):
 class CounterpartyAccountCoreTests(unittest.TestCase):
     def test_normalisation_mask_hmac_and_stored_display_round_trip(self):
         self.assertEqual(normalize_counterparty_account(spaced(SYNTHETIC_IBAN)), SYNTHETIC_IBAN)
+        self.assertEqual(normalize_counterparty_account(spaced(SYNTHETIC_IBAN).replace(" ", "-")), SYNTHETIC_IBAN)
         self.assertEqual(mask_counterparty_account(spaced(SYNTHETIC_IBAN)), "PL** … 1234")
         key = counterparty_account_key(spaced(SYNTHETIC_IBAN), SECRET)
         self.assertEqual(key, counterparty_account_key(SYNTHETIC_IBAN, SECRET))
@@ -42,6 +45,18 @@ class CounterpartyAccountCoreTests(unittest.TestCase):
         self.assertEqual(counterparty_rule_value(key_id, key, "PL** … 1234"), stored)
         self.assertLessEqual(len(stored), 256)
         self.assertNotIn(SYNTHETIC_IBAN, stored)
+
+    def test_polish_bban_aliases_and_canonical_schemes_deduplicate_without_collisions(self):
+        self.assertEqual(canonical_counterparty_account(POLISH_BBAN, "BBAN"), ("IBAN", POLISH_IBAN))
+        self.assertEqual(canonical_counterparty_account(POLISH_IBAN, "IBAN"), ("IBAN", POLISH_IBAN))
+        self.assertEqual(counterparty_account_key(POLISH_BBAN, SECRET, "BBAN"),
+                         counterparty_account_key(POLISH_IBAN, SECRET, "IBAN"))
+        self.assertNotEqual(counterparty_account_key("ABCDEF1234", SECRET, "BBAN"),
+                            counterparty_account_key("ABCDEF1234", SECRET, "OTHER"))
+        self.assertEqual(counterparty_account_key(SYNTHETIC_IBAN, SECRET, "OTHER"),
+                         counterparty_account_key(SYNTHETIC_IBAN, SECRET))
+        with self.assertRaises(AnalyticsError):
+            canonical_counterparty_account("ABCDEF1234", "not a scheme")
 
     def test_short_identification_masks_reveal_only_two_characters(self):
         for length in range(6, 12):
@@ -54,7 +69,7 @@ class CounterpartyAccountCoreTests(unittest.TestCase):
         self.assertEqual(mask_counterparty_account("PL" + "0" * 8 + "12"), "PL** … 0012")
 
     def test_helper_validation_is_fixed_and_value_free(self):
-        for value in (None, "", "PL12", "PL-123456", "PL" + "0" * 130, 123456):
+        for value in (None, "", "PL12", "PL!123456", "PL" + "0" * 130, 123456):
             with self.subTest(value=value), self.assertRaises(AnalyticsError) as raised:
                 normalize_counterparty_account(value)
             self.assertEqual(str(raised.exception), "budget_analytics_invalid_request")
@@ -97,7 +112,7 @@ class CounterpartyAccountCoreTests(unittest.TestCase):
                          ("budget_analytics_rule_key_unavailable", 400))
 
     def test_matching_uses_any_valid_account_and_ignores_non_iban_like_identifiers(self):
-        metadata = {"creditor_accounts": [identity("not-an-iban"), identity(OTHER_IBAN), identity(SYNTHETIC_IBAN)]}
+        metadata = {"creditor_accounts": [identity("x"), identity(OTHER_IBAN), identity(SYNTHETIC_IBAN)]}
         evidence = counterparty_account_evidence(payload(), metadata, SECRET)
         self.assertEqual(len(evidence), 2)
         self.assertTrue(rule_matches(account_rule(), payload(), metadata, account_secret=SECRET))
@@ -149,6 +164,25 @@ class CounterpartyAccountProjectionTests(ProjectionCase):
                               or (row.before_json + row.after_json) for row in stored_rows])
         self.assertNotIn(SYNTHETIC_IBAN, durable)
         self.assertNotIn(spaced(SYNTHETIC_IBAN), durable)
+
+    def test_bban_and_iban_aliases_produce_one_row_key_and_match_end_to_end(self):
+        self.add_transaction("a", "polish-debit")
+        formatted_bban = "-".join(POLISH_BBAN[index:index + 4] for index in range(0, len(POLISH_BBAN), 4))
+        self.metadata("a", "polish-debit", {"creditor_accounts": [
+            {"scheme": "BBAN", "identification": formatted_bban},
+            {"scheme": "IBAN", "identification": spaced(POLISH_IBAN)},
+        ]})
+        body = self.store.transactions("owner", "2026")
+        row = body["transactions"][0]
+        self.assertEqual(row["counterparty_account"], "PL** … 0000")
+        self.assertRegex(row["counterparty_account_key"], r"^[0-9a-f]{64}$")
+        self.assertNotIn(POLISH_BBAN, json.dumps(body))
+        candidate = self.candidate(field="counterparty_account", operator="equals", value=formatted_bban)
+        preview = self.store.preview_rule("owner", candidate)
+        self.assertEqual(preview["affected_count"], 1)
+        saved = self.store.save_rule("owner", preview["preview_id"])
+        row = self.store.transactions("owner", "2026")["transactions"][0]
+        self.assertEqual((row["effective"]["source"], row["effective"]["rule_id"]), ("rule", saved["id"]))
 
     def test_key_creation_multi_account_privacy_and_secret_rotation(self):
         self.add_transaction("a", "debit")
@@ -226,7 +260,7 @@ class CounterpartyAccountProjectionTests(ProjectionCase):
     def test_validation_and_malformed_storage_fail_closed(self):
         invalid = (
             self.candidate(field="counterparty_account", operator="contains", value=SYNTHETIC_IBAN),
-            self.candidate(field="counterparty_account", operator="equals", value="not-an-iban"),
+            self.candidate(field="counterparty_account", operator="equals", value="x"),
             self.candidate(field="counterparty_account", operator="equals", value="PL** … 1234",
                            counterparty_account_key="A" * 64),
             self.candidate(field="counterparty_account", operator="equals",

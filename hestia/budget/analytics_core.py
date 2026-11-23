@@ -195,10 +195,29 @@ _STORED_ACCOUNT = re.compile(r"cpacct:v2:([0-9a-f]{16}):([0-9a-f]{64}):(" + _ACC
 def normalize_counterparty_account(value):
     if not isinstance(value, str):
         raise AnalyticsError()
-    normalized = "".join(value.split()).upper()
+    normalized = "".join(value.replace("-", "").split()).upper()
     if _ACCOUNT_IDENTIFICATION.fullmatch(normalized) is None:
         raise AnalyticsError()
     return normalized
+
+
+def _iban_check_digits(bban):
+    converted = bban + "2521" + "00"
+    return 98 - int(converted) % 97
+
+
+def canonical_counterparty_account(value, scheme=None):
+    normalized = normalize_counterparty_account(value)
+    if re.fullmatch(r"[A-Z]{2}[0-9]{2}[A-Z0-9]{11,30}", normalized, re.ASCII):
+        return "IBAN", normalized
+    if (re.fullmatch(r"[0-9]{26}", normalized, re.ASCII)
+            and (scheme is None or (isinstance(scheme, str) and scheme.upper() == "BBAN"))):
+        return "IBAN", f"PL{_iban_check_digits(normalized):02d}{normalized}"
+    if scheme is None:
+        return "OTHER", normalized
+    if not isinstance(scheme, str) or re.fullmatch(r"[A-Za-z0-9]{1,32}", scheme, re.ASCII) is None:
+        raise AnalyticsError()
+    return scheme.upper(), normalized
 
 
 def mask_counterparty_account(value):
@@ -214,12 +233,13 @@ def counterparty_key_id(secret):
     return hashlib.sha256(_ACCOUNT_KEY_ID_DOMAIN + secret).hexdigest()[:16]
 
 
-def counterparty_account_key(value, secret):
-    normalized = normalize_counterparty_account(value)
+def counterparty_account_key(value, secret, scheme=None):
+    canonical_scheme, normalized = canonical_counterparty_account(value, scheme)
     if not isinstance(secret, bytes) or not secret:
         raise AnalyticsError("budget_analytics_data_error", 500)
     key = hashlib.sha256(_ACCOUNT_KEY_DOMAIN + secret).digest()
-    return hmac.new(key, _ACCOUNT_PAYLOAD_PREFIX + normalized.encode("ascii"), hashlib.sha256).hexdigest()
+    payload = canonical_scheme.encode("ascii") + b"\0" + normalized.encode("ascii")
+    return hmac.new(key, _ACCOUNT_PAYLOAD_PREFIX + payload, hashlib.sha256).hexdigest()
 
 
 def counterparty_rule_value(key_id, key, masked):
@@ -238,8 +258,9 @@ def counterparty_rule_parts(value):
 
 
 def counterparty_rule_from_identification(value, secret):
-    normalized = normalize_counterparty_account(value)
-    return counterparty_rule_value(counterparty_key_id(secret), counterparty_account_key(normalized, secret),
+    canonical_scheme, normalized = canonical_counterparty_account(value)
+    return counterparty_rule_value(counterparty_key_id(secret),
+                                   counterparty_account_key(normalized, secret, canonical_scheme),
                                    mask_counterparty_account(normalized))
 
 
@@ -248,10 +269,11 @@ def counterparty_account_evidence(payload, metadata, secret):
     evidence = {}
     for account in (metadata or {}).get(field, []):
         try:
-            normalized = normalize_counterparty_account(account["identification"])
+            canonical_scheme, normalized = canonical_counterparty_account(account["identification"], account["scheme"])
         except AnalyticsError:
             continue
-        evidence[counterparty_account_key(normalized, secret)] = mask_counterparty_account(normalized)
+        key = counterparty_account_key(normalized, secret, canonical_scheme)
+        evidence[key] = mask_counterparty_account(normalized)
     return tuple(sorted(evidence.items()))
 
 
