@@ -558,6 +558,37 @@ class CounterpartyAccountProjectionTests(ProjectionCase):
                 operator="equals", value=unavailable["value"], counterparty_account_key="ab" * 32,
                 category_id=category, kind="expense", priority=3, enabled=False))
         self.assertEqual(changed_key.exception.status, 400)
+        digest = unavailable["counterparty_account_key"]
+        mask = unavailable["value"]
+        for bad in (OTHER_IBAN, "XX** … 9999"):
+            with self.subTest(value=bad), self.assertRaises(AnalyticsError) as raised:
+                missing.preview_rule("owner", self.candidate(
+                    rule_id=unavailable["id"], expected_version=unavailable["version"], field="counterparty_account",
+                    operator="equals", value=bad, counterparty_account_key=digest, category_id=category,
+                    kind="expense", priority=3, enabled=False))
+            self.assertEqual(raised.exception.status, 400)
+        self.assertEqual({row.id: row.value for row in self.rows(db.BudgetRule)}, stored)
+
+        def edit(priority, **changes):
+            candidate = self.candidate(
+                rule_id=unavailable["id"], expected_version=changes.pop("expected_version"), field="counterparty_account",
+                operator="equals", counterparty_account_key=digest, category_id=category, kind="expense",
+                priority=priority, enabled=False)
+            candidate.update(changes)
+            return missing.save_rule("owner", missing.preview_rule("owner", candidate)["preview_id"])
+
+        repeated = edit(2, expected_version=unavailable["version"], value=mask)
+        self.assertEqual((repeated["priority"], repeated["value"], repeated["counterparty_account_key"]), (2, mask, digest))
+        blank = edit(1, expected_version=repeated["version"], value="")
+        self.assertEqual((blank["priority"], blank["counterparty_account_key"]), (1, digest))
+        omitted = self.candidate(
+            rule_id=unavailable["id"], expected_version=blank["version"], field="counterparty_account",
+            operator="equals", counterparty_account_key=digest, category_id=category, kind="expense",
+            priority=0, enabled=False)
+        del omitted["value"]
+        omitted_saved = missing.save_rule("owner", missing.preview_rule("owner", omitted)["preview_id"])
+        self.assertEqual((omitted_saved["priority"], omitted_saved["value"], omitted_saved["counterparty_account_key"]),
+                         (0, mask, digest))
         self.assertEqual({row.id: row.value for row in self.rows(db.BudgetRule)}, stored)
         self.assertEqual({row.id: row.enabled for row in self.rows(db.BudgetRule)},
                          {disabled["id"]: False, unavailable["id"]: False})

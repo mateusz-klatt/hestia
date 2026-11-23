@@ -560,6 +560,9 @@ class BudgetAnalyticsStore(BudgetHTTPStore):
         raise AnalyticsError()
 
     def _rule_candidate(self, session, owner, value, *, allow_stored=False):
+        # The contract's value is optional and defaults to empty. A direct caller may omit it.
+        if isinstance(value, dict) and "value" not in value:
+            value = {**value, "value": ""}
         if not isinstance(value, dict) or set(value) not in (_RULE_FIELDS, _RULE_FIELDS | {"counterparty_account_key"}):
             raise AnalyticsError()
         value = dict(value)
@@ -576,9 +579,12 @@ class BudgetAnalyticsStore(BudgetHTTPStore):
                 raise AnalyticsError()
             row = None if value["rule_id"] is None else self._owned(session, Rule, owner, value["rule_id"])
             if _same_account_digest(row, key):
-                # Same account: keep the stored kid, digest and mask. Priority, category and enabled
-                # can change without current evidence or a usable key; a different account cannot.
-                value["value"] = row.value
+                # Same digest keeps the stored kid and mask. The submitted text may only repeat that
+                # mask, or be empty. Any other account text is a different account and needs a new key.
+                stored_kid, stored_key, stored_mask = counterparty_rule_parts(row.value)
+                if raw not in ("", stored_mask):
+                    raise AnalyticsError()
+                value["value"] = counterparty_rule_value(stored_kid, stored_key, stored_mask)
             elif key is not None:
                 if raw.lstrip().startswith("cpacct:"):
                     raise AnalyticsError()
