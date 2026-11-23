@@ -22,7 +22,9 @@ import base64
 import getpass
 import hashlib
 import hmac
+import ipaddress
 import json
+import math
 import os
 import sys
 from pathlib import Path
@@ -41,8 +43,44 @@ _DKLEN = 32
 _DUMMY_PASSWORD = "hestia-dummy-password"
 
 SESSION_TTL = 30 * 24 * 3600.0   # 30-day "remember me" cookie
+LOGIN_ATTEMPTS = 10
+LOGIN_WINDOW = 60
+_MAX_LOGIN_BUCKETS = 4096
 
 DEFAULT_USERS_FILE = "/data/users.json"
+
+
+class LoginLimiter:
+    """Bounded attempt budget shared by password endpoints on one web event loop."""
+
+    def __init__(self):
+        self._attempts = {}
+
+    def take(self, username: str, ip: str, now: float) -> int | None:
+        try:
+            address = ipaddress.ip_address(ip)
+        except ValueError:
+            address = None
+        if isinstance(address, ipaddress.IPv6Address):
+            address = address.ipv4_mapped or ipaddress.ip_network((address, 64), strict=False)
+        key = (hashlib.sha256(username.encode("utf-8", errors="surrogatepass")).digest(), str(address))
+        # Entries are inserted in deadline order. Updating a count keeps its position.
+        while self._attempts:
+            oldest = next(iter(self._attempts))
+            if self._attempts[oldest][0] > now:
+                break
+            del self._attempts[oldest]
+        attempt = self._attempts.get(key)
+        if attempt is None:
+            if len(self._attempts) >= _MAX_LOGIN_BUCKETS:
+                deadline, _ = next(iter(self._attempts.values()))
+                return math.ceil(deadline - now)
+            attempt = now + LOGIN_WINDOW, 0
+        deadline, count = attempt
+        if count >= LOGIN_ATTEMPTS:
+            return math.ceil(deadline - now)
+        self._attempts[key] = deadline, count + 1
+        return None
 
 
 def _b64e(raw: bytes) -> str:

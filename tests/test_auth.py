@@ -20,6 +20,25 @@ from hestia import auth, db, store_sql
 SECRET = b"unit-test-secret"
 
 
+class LoginLimiterTests(unittest.TestCase):
+    def test_attempts_share_ipv6_prefix_and_expire(self):
+        limiter = auth.LoginLimiter()
+        for _ in range(auth.LOGIN_ATTEMPTS):
+            self.assertIsNone(limiter.take("owner", "2001:db8::1", 1))
+        self.assertEqual(limiter.take("owner", "2001:db8::2", 2), auth.LOGIN_WINDOW - 1)
+        self.assertIsNone(limiter.take("other", "2001:db8::2", 2))
+        self.assertIsNone(limiter.take("owner", "2001:db8:0:1::2", 2))
+        self.assertIsNone(limiter.take("owner", "2001:db8::2", 1 + auth.LOGIN_WINDOW))
+
+    def test_bounded_keys_fail_closed_without_evicting_active_buckets(self):
+        limiter = auth.LoginLimiter()
+        with mock.patch.object(auth, "_MAX_LOGIN_BUCKETS", 1):
+            self.assertIsNone(limiter.take("owner", "192.0.2.1", 0))
+            self.assertIsNone(limiter.take("owner", "::ffff:192.0.2.1", 1))
+            self.assertEqual(limiter.take("other", "invalid", 1), auth.LOGIN_WINDOW - 1)
+            self.assertIsNone(limiter.take("other", "invalid", auth.LOGIN_WINDOW))
+
+
 class PasswordTests(unittest.TestCase):
     def test_round_trip(self):
         self.assertTrue(auth.verify_password("hunter2", auth.hash_password("hunter2")))
