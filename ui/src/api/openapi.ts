@@ -4444,6 +4444,11 @@ export interface components {
         };
         /** BudgetReceiptDetailResult */
         BudgetReceiptDetailResult: {
+            /**
+             * Candidates
+             * @default null
+             */
+            candidates: components["schemas"]["BudgetReceiptCandidate"][] | null;
             receipt: components["schemas"]["BudgetReceiptDetail"];
         };
         /** BudgetReceiptLine */
