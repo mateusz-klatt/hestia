@@ -2698,7 +2698,9 @@ class BudgetReceiptDetailResult(BaseModel):
     model_config = _READ
     receipt: BudgetReceiptDetail
     # Present only when the receipt is needs_review, so it can re-issue a token for its own link.
-    candidates: list[BudgetReceiptCandidate] | None = None
+    candidates: Annotated[
+        list[BudgetReceiptCandidate] | None, Field(default=None, json_schema_extra=_OMIT),
+    ] = None
 
 
 class BudgetReceiptConfirmResult(BaseModel):
@@ -3513,7 +3515,7 @@ def _receipt_paths():
                                    description="Opaque owned receipt UUID.")]
     for name, operation, response, summary in (
         ("detail", "getBudgetReceiptDetail", "BudgetReceiptDetailResult",
-         "Read one owned receipt, its structured lines and redacted raw text."),
+         "Read one owned receipt and its structured lines."),
         ("image", "getBudgetReceiptImage", None,
          "Read one owned WebP image; v1a has no stored images and therefore returns 404."),
     ):

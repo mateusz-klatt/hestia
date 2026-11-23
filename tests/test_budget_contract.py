@@ -241,6 +241,11 @@ class BudgetOpenApiTests(unittest.TestCase):
         self.assertIn("131072", receipts["/api/budget/receipts/confirm"]["post"]["responses"]["413"]["description"])
         self.assertIn("16384", receipts["/api/budget/receipts/list"]["post"]["responses"]["413"]["description"])
         self.assertEqual(document["info"]["version"], "0.36.0")
+        detail = receipts["/api/budget/receipts/detail"]["get"]
+        self.assertNotIn("raw text", detail["summary"])
+        detail_result = document["components"]["schemas"]["BudgetReceiptDetailResult"]
+        self.assertNotIn("candidates", detail_result["required"])
+        self.assertNotIn("default", detail_result["properties"]["candidates"])
         batch = analytics["/api/budget/analytics/rule-batch-preview"]["post"]["description"]
         self.assertIn("1..100", batch)
         self.assertIn("All-or-nothing", batch)

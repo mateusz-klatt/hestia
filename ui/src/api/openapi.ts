@@ -952,7 +952,7 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Read one owned receipt, its structured lines and redacted raw text.
+         * Read one owned receipt and its structured lines.
          * @description Default-off owner-private read. Unknown and foreign receipt IDs both return 404.
          */
         get: operations["getBudgetReceiptDetail"];
@@ -4444,11 +4444,8 @@ export interface components {
         };
         /** BudgetReceiptDetailResult */
         BudgetReceiptDetailResult: {
-            /**
-             * Candidates
-             * @default null
-             */
-            candidates: components["schemas"]["BudgetReceiptCandidate"][] | null;
+            /** Candidates */
+            candidates?: components["schemas"]["BudgetReceiptCandidate"][] | null;
             receipt: components["schemas"]["BudgetReceiptDetail"];
         };
         /** BudgetReceiptLine */

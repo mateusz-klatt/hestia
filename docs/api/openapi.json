@@ -8202,7 +8202,6 @@
                 "type": "null"
               }
             ],
-            "default": null,
             "title": "Candidates"
           },
           "receipt": {
@@ -17471,7 +17470,7 @@
             "description": "budget configuration unavailable"
           }
         },
-        "summary": "Read one owned receipt, its structured lines and redacted raw text.",
+        "summary": "Read one owned receipt and its structured lines.",
         "x-required-role": "admin"
       }
     },
