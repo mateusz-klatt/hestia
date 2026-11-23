@@ -14,7 +14,7 @@ import type { BudgetAccount, BudgetBalances, BudgetCapabilities, BudgetConnectio
 import { ConsentHealthPanel } from "./consent_health";
 import { ForecastView } from "./analytics/forecast";
 import { InboxView } from "./analytics/inbox";
-import { MonthView, monthLabels } from "./analytics/month";
+import { MonthView } from "./analytics/month";
 import { MonthBudgetView } from "./analytics/month_budget";
 import { MortgagesView } from "./analytics/mortgages";
 import { QuarantineView } from "./analytics/quarantine";
@@ -123,14 +123,10 @@ const labels = {
 };
 type Labels = typeof labels.en;
 
-function pick(): { text: Labels;
-  month: typeof monthLabels.en;
-  locale: string } {
+function pick(): { text: Labels; locale: string } {
   const locale = currentLocale();
   const pl = locale.startsWith("pl");
-  return { text: pl ? labels.pl : labels.en,
-    month: pl ? monthLabels.pl : monthLabels.en,
-    locale };
+  return { text: pl ? labels.pl : labels.en, locale };
 }
 
 type View = "monthly_budget" | "accounts" | "inbox" | "month" | "year" | "limits" | "recurring" | "mortgages" | "forecast" | "quarantine" | "rules";
@@ -178,8 +174,7 @@ export interface BudgetProps {
 
 export function Budget({ active, api = budgetApi, pollMs = 2000, principal,
   navigate = (url) => { window.location.assign(url); }, completeUrl = "/budget/connect/complete" }: BudgetProps) {
-  const { text, month: monthText,
-    locale } = pick();
+  const { text, locale } = pick();
   const [load, setLoad] = useState<Load>("loading");
   const [connections, setConnections] = useState<BudgetConnection[]>([]);
   const [capabilities, setCapabilities] = useState<BudgetCapabilities | null>(null);
@@ -501,7 +496,7 @@ export function Budget({ active, api = budgetApi, pollMs = 2000, principal,
           onOpenLimits={() => { setView("limits"); }} />
       ) : shownView === "month" ? (
         <MonthView key={`${focusMonth ?? "current"}-${focusCurrency ?? "all"}-${focusProvisional === undefined ? "full" : `provisional:${String(focusProvisional.keys.length)}:${focusProvisional.truncated ? "1" : "0"}`}`}
-          api={api} accounts={accounts} connections={connections} text={monthText} locale={locale} revision={revision}
+          api={api} accounts={accounts} connections={connections} locale={locale} revision={revision}
           onAccessLoss={barrier} initialMonth={focusMonth} initialCurrency={focusCurrency}
           initialProvisionalKeys={focusProvisional?.keys}
           initialProvisionalTotal={focusProvisional?.total}

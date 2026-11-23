@@ -18,7 +18,7 @@ import {
 import type { ExportContext, ExportRecord } from "./export_rows";
 import { buildWorkbook, crc32, excelSerial, sheetTitle } from "./xlsx_writer";
 import type { XlsxCell } from "./xlsx_writer";
-import { TransactionsPanel, transactionLabels } from "./transactions";
+import { TransactionsPanel } from "./transactions";
 import { YearView } from "./year";
 
 const categories: AnalyticsCategory[] = [
@@ -647,7 +647,7 @@ describe("export buttons on the month and year views", () => {
     };
     await act(async () => {
       root.render(<TransactionsPanel api={api} period="2026-11" currencies={["PLN"]} accounts={accounts} connections={connections}
-        text={transactionLabels.en} locale="en" revision={0} onAccessLoss={() => false} onChanged={() => {}} />);
+        locale="en" revision={0} onAccessLoss={() => false} onChanged={() => {}} />);
       await Promise.resolve();
     });
     await flushView();
@@ -686,7 +686,7 @@ describe("export buttons on the month and year views", () => {
     };
     await act(async () => {
       root.render(<TransactionsPanel api={api} period="2026-11" currencies={["PLN"]} accounts={accounts} connections={connections}
-        text={transactionLabels.en} locale="en" revision={0} onAccessLoss={() => false} onChanged={() => {}}
+        locale="en" revision={0} onAccessLoss={() => false} onChanged={() => {}}
         initialCurrency="PLN" initialProvisionalKeys={keys} />);
       await Promise.resolve();
     });

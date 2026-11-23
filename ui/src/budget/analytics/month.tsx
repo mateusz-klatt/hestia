@@ -1,22 +1,14 @@
 // The month view (2D): one calendar month's overview and its entries. A saved correction re-reads both, so the
 // totals shown always come from the server after the change.
 import { useCallback, useState } from "react";
+import { t } from "../../i18n";
 import type { BudgetApi } from "../api";
 import type { BudgetAccount, BudgetConnection } from "../model";
 import { currentMonth, isMonth, monthLabel, shiftMonth } from "./model";
 import type { RuleCandidate } from "./model";
 import { OverviewPanel } from "./overview";
-import { TransactionsPanel, transactionLabels } from "./transactions";
-import type { TransactionLabels } from "./transactions";
+import { TransactionsPanel } from "./transactions";
 import { TransfersPanel } from "./transfers";
-
-export const monthLabels = {
-  en: { previous: "Previous month", next: "Next month", entries: transactionLabels.en },
-  pl: { previous: "Poprzedni miesiąc", next: "Następny miesiąc", entries: transactionLabels.pl },
-};
-export interface MonthLabels {
-  previous: string; next: string; entries: TransactionLabels;
-}
 
 export interface MonthViewProps {
   api: Pick<BudgetApi,
@@ -24,7 +16,6 @@ export interface MonthViewProps {
     | "decideTransfer">;
   accounts: readonly BudgetAccount[];
   connections?: readonly BudgetConnection[] | undefined;
-  text: MonthLabels;
   locale: string;
   /** Bumped after every completed budget reload. */
   revision: number;
@@ -44,7 +35,7 @@ export interface MonthViewProps {
   onCreateRule?: ((candidate: RuleCandidate) => void) | undefined;
 }
 
-export function MonthView({ api, accounts, connections = [], text, locale, revision, onAccessLoss, initialMonth,
+export function MonthView({ api, accounts, connections = [], locale, revision, onAccessLoss, initialMonth,
   initialCurrency, initialProvisionalKeys, initialProvisionalTotal, initialProvisionalTruncated,
   today = () => new Date(), onCreateRule }: MonthViewProps) {
   const latest = currentMonth(today());
@@ -62,16 +53,16 @@ export function MonthView({ api, accounts, connections = [], text, locale, revis
   return (
     <section className="budget-month" aria-label={monthLabel(month, locale)}>
       <nav className="budget-month-nav">
-        <button type="button" aria-label={text.previous} onClick={() => { setMonth((value) => shiftMonth(value, -1)); }}>◀</button>
+        <button type="button" aria-label={t("budget.month.previous")} onClick={() => { setMonth((value) => shiftMonth(value, -1)); }}>◀</button>
         <h3>{monthLabel(month, locale)}</h3>
-        <button type="button" aria-label={text.next} disabled={month >= latest}
+        <button type="button" aria-label={t("budget.month.next")} disabled={month >= latest}
           onClick={() => { setMonth((value) => (isMonth(value) && value < latest ? shiftMonth(value, 1) : value)); }}>▶</button>
       </nav>
       <OverviewPanel overview={overview} period={month} current={month === latest} accounts={accounts} connections={connections}
         locale={locale} revision={revision + changes} onAccessLoss={onAccessLoss} onCurrencies={setCurrencies} loadCategories={loadCategories} />
       <TransfersPanel api={api} period={month} accounts={accounts} connections={connections} locale={locale}
         revision={revision + changes} onAccessLoss={onAccessLoss} onChanged={changed} />
-      <TransactionsPanel api={api} period={month} currencies={currencies} accounts={accounts} connections={connections} text={text.entries}
+      <TransactionsPanel api={api} period={month} currencies={currencies} accounts={accounts} connections={connections}
         locale={locale} revision={revision + changes} onAccessLoss={onAccessLoss} onChanged={changed}
         initialCurrency={initialCurrency} initialProvisionalKeys={provisionalKeys}
         initialProvisionalTotal={provisionalTotal} initialProvisionalTruncated={provisionalTruncated}

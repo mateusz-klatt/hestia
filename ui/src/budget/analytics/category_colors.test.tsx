@@ -46,7 +46,7 @@ import {
 import type { AnalyticsCategory } from "./model";
 import { MonthBudgetView } from "./month_budget";
 import { MonthBudgetCharts, buildCategoryChartModel } from "./month_budget_charts";
-import { TransactionsPanel, transactionLabels } from "./transactions";
+import { TransactionsPanel } from "./transactions";
 import { YearView } from "./year";
 
 const sampleTree: CategoryColorInput[] = [
@@ -729,7 +729,6 @@ describe("CategorySwatch and CategoryBadge render", () => {
           period="2026-11"
           currencies={["PLN"]}
           accounts={[account({ id: "acc-1" })]}
-          text={transactionLabels.en}
           locale="en"
           revision={0}
           onAccessLoss={() => false}

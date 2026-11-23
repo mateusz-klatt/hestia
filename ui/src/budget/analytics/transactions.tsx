@@ -1,6 +1,7 @@
 // A period's entries with the owner's category/kind corrections (2D). Rows come from the server one bounded page
 // at a time; a correction is an explicit, versioned decision, and a conflict reloads instead of overwriting.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { t, tPlural } from "../../i18n";
 import type { BudgetApi } from "../api";
 import type { BudgetAccount, BudgetConnection } from "../model";
 import { formatAmount, transactionDate, transactionText } from "../model";
@@ -8,77 +9,12 @@ import { CategoryBadge } from "./category_badge";
 import { buildCategoryColors } from "./category_colors";
 import { ExportMenu } from "./export_menu";
 import { exportBasename } from "./export_rows";
-import { ANALYTICS_ERROR, EFFECTIVE_KINDS, NO_FILTER, RELOAD_ERRORS, UNCATEGORISED, annotationRequest, canPair, canonicalAmount,
+import { ANALYTICS_ERROR, EFFECTIVE_KINDS, NO_FILTER, RELOAD_ERRORS, TRANSACTION_KIND_KEYS,
+  TRANSACTION_TRANSFER_STATUS_KEYS, UNCATEGORISED, annotationRequest, canPair, canonicalAmount,
   counterparty, counterpartyRuleCandidate, accountName as nameOf, currentChoice, daysBetween, kindChoice, kindChoicesFor, labelOf, manualPairRequest,
   pairCandidates, pairDate, pairPeriods, transactionRowKey } from "./model";
 import type { AnalyticsCategory, AnalyticsTransaction, AnalyticsTransactionsByKeysRequest, CategoryChoice, KindChoice,
   RuleCandidate, TransactionFilter } from "./model";
-
-const kindsEn = { auto: "Automatic", expense: "Expense", income: "Income", refund: "Refund", excluded: "Leave out of the budget",
-  unclassified_credit: "To classify", transfer: "Own transfer" };
-const kindsPl = { auto: "Automatycznie", expense: "Wydatek", income: "Wpływ", refund: "Zwrot", excluded: "Pomiń w budżecie",
-  unclassified_credit: "Do sklasyfikowania", transfer: "Przelew własny" };
-
-export const transactionLabels = {
-  en: {
-    title: "Transactions", currency: "Currency", category: "Category", kind: "Type", search: "Search", apply: "Apply",
-    provisionalOnly: "Unconfirmed or provisional only",
-    all: "All", uncategorised: "Uncategorised", automatic: "Automatic (rules)", kinds: kindsEn,
-    edit: "Change", save: "Save", cancel: "Cancel", archived: "archived", total: (count: number) => `${String(count)} entries`,
-    date: "Date", amount: "Amount", sort: "Sort", sortAsc: "ascending", sortDesc: "descending",
-    loadingMore: (count: number) => `Loading… ${String(count)}`,
-    truncated: (shown: number, total: number) => `Showing ${String(shown)} of ${String(total)} entries.`,
-    provisionalTruncated: (shown: number, total: number) => `Showing first ${String(shown)} of ${String(total)}.`,
-    manual: "set by you", rule: "by rule", stale: "the bank changed this entry; check your choice",
-    transfer: { none: "", suggested: "possible own transfer", accepted: "own transfer", review: "own transfer to re-check",
-      boundary: "other side on an excluded account", rejected: "", undone: "" },
-    ambiguous: "fits several pairs; choose in own transfers",
-    more: "Load more", retry: "Retry", empty: "No entries match.", loading: "Loading entries…", error: "Entries could not be loaded.",
-    conflict: "This changed elsewhere; the latest state was loaded.", saveError: "Could not save. Try again.",
-    changed: "The bank changed this entry; the latest state was loaded.", account: "Account",
-    pair: "Pair as own transfer", pairTitle: "Matching credits within 3 days", pairLoading: "Looking for matching entries…",
-    pairEmpty: "No matching credit within 3 days on another account.",
-    pairLimited: "Only part of the period was searched; some entries may be missing.", pairError: "Matching entries could not be loaded.",
-    pairConfirm: "Confirm this pair",
-    pairDays: (count: number) => (count === 0 ? "same day" : `${String(count)} ${count === 1 ? "day" : "days"} apart`),
-    pairReserved: "One of these entries is already in another pair; the latest state was loaded.",
-    pairExisting: "These two entries already have a decision; see the own-transfer queues.",
-    pairInvalid: "These entries cannot be paired (amount, currency, dates or account differ).",
-    oneOffLabel: "One-off label",
-    oneOffHint: "The amount shows under this name in the bars instead of Other.",
-    accountRule: "Create rule from recipient account",
-  },
-  pl: {
-    title: "Transakcje", currency: "Waluta", category: "Kategoria", kind: "Rodzaj", search: "Szukaj", apply: "Zastosuj",
-    provisionalOnly: "Tylko niepotwierdzone (wynik wstępny)",
-    all: "Wszystkie", uncategorised: "Bez kategorii", automatic: "Automatycznie (reguły)", kinds: kindsPl,
-    edit: "Zmień", save: "Zapisz", cancel: "Anuluj", archived: "archiwalna", total: (count: number) => `Pozycji: ${String(count)}`,
-    date: "Data", amount: "Kwota", sort: "Sortowanie", sortAsc: "rosnąco", sortDesc: "malejąco",
-    loadingMore: (count: number) => `Wczytywanie… ${String(count)}`,
-    truncated: (shown: number, total: number) => `Pokazano ${String(shown)} z ${String(total)} pozycji.`,
-    provisionalTruncated: (shown: number, total: number) => `Pokazano pierwsze ${String(shown)} z ${String(total)}.`,
-    manual: "ustawione przez Ciebie", rule: "z reguły", stale: "bank zmienił tę pozycję; sprawdź swój wybór",
-    transfer: { none: "", suggested: "możliwy przelew własny", accepted: "przelew własny",
-      review: "przelew własny do sprawdzenia", boundary: "druga strona na koncie wykluczonym", rejected: "", undone: "" },
-    ambiguous: "pasuje do kilku par; wybierz w przelewach własnych",
-    more: "Wczytaj więcej", retry: "Ponów", empty: "Brak pasujących pozycji.", loading: "Wczytywanie pozycji…",
-    error: "Nie udało się wczytać pozycji.", conflict: "Zmieniono to w innym miejscu; wczytano aktualny stan.",
-    saveError: "Nie udało się zapisać. Spróbuj ponownie.", changed: "Bank zmienił tę pozycję; wczytano aktualny stan.",
-    account: "Konto",
-    pair: "Paruj jako przelew własny", pairTitle: "Pasujące wpływy w ciągu 3 dni", pairLoading: "Szukam pasujących pozycji…",
-    pairEmpty: "Brak pasującego wpływu w ciągu 3 dni na innym koncie.",
-    pairLimited: "Przeszukano tylko część okresu; części pozycji może brakować.", pairError: "Nie udało się wczytać pasujących pozycji.",
-    pairConfirm: "Potwierdź tę parę",
-    pairDays: (count: number) => (count === 0 ? "ten sam dzień" : `${String(count)} ${count === 1 ? "dzień" : "dni"} różnicy`),
-    pairReserved: "Jedna z tych pozycji jest już w innej parze; wczytano aktualny stan.",
-    pairExisting: "Te dwie pozycje mają już decyzję; zobacz kolejki przelewów własnych.",
-    pairInvalid: "Tych pozycji nie można sparować (różnią się kwota, waluta, daty lub konto).",
-    oneOffLabel: "Etykieta jednorazowa",
-    oneOffHint: "Kwota pojawi się pod tą etykietą na słupkach zamiast w Pozostałe.",
-    accountRule: "Utwórz regułę z konta odbiorcy",
-  },
-};
-export type TransactionLabels = typeof transactionLabels.en;
 
 /** Background pagination stops once this many rows are in memory; remaining pages load on demand. */
 export const TRANSACTION_ROW_CAP = 5000;
@@ -90,10 +26,10 @@ export interface TransactionSort { key: TransactionSortKey; direction: Transacti
 
 const SORT_KEYS: readonly TransactionSortKey[] = ["date", "category", "amount"];
 
-function sortLabel(text: TransactionLabels, key: TransactionSortKey): string {
-  if (key === "date") return text.date;
-  if (key === "category") return text.category;
-  return text.amount;
+function sortLabel(key: TransactionSortKey): string {
+  if (key === "date") return t("budget.transactions.date");
+  if (key === "category") return t("budget.transactions.category");
+  return t("budget.transactions.amount");
 }
 
 export function nextSort(current: TransactionSort | null, key: TransactionSortKey): TransactionSort {
@@ -166,7 +102,6 @@ export interface TransactionsProps {
   currencies: readonly string[];
   accounts: readonly BudgetAccount[];
   connections?: readonly BudgetConnection[] | undefined;
-  text: TransactionLabels;
   locale: string;
   revision: number;
   onAccessLoss: (result: { ok: boolean; status?: number; error?: string }) => boolean;
@@ -230,7 +165,7 @@ function orderRows(
   return sort === null ? [...rows] : sortTransactions(rows, sort, categoryName, locale);
 }
 
-export function TransactionsPanel({ api, period, currencies, accounts, connections = [], text, locale, revision, onAccessLoss,
+export function TransactionsPanel({ api, period, currencies, accounts, connections = [], locale, revision, onAccessLoss,
   onChanged, rowCap = TRANSACTION_ROW_CAP, initialCurrency, initialProvisionalKeys, initialProvisionalTotal,
   initialProvisionalTruncated, focusOnMount = false, onCreateRule }: TransactionsProps) {
   const startingFilter: TransactionFilter = initialCurrency === undefined ? NO_FILTER : { ...NO_FILTER, currency: initialCurrency };
@@ -420,11 +355,11 @@ export function TransactionsPanel({ api, period, currencies, accounts, connectio
   const categoryNames = useMemo(() => new Map(categories.map((item) => [item.id, item.name])), [categories]);
   const categoryColors = useMemo(() => buildCategoryColors(categories), [categories]);
   const categoryName = useCallback(
-    (id: string | null) => (id === null ? text.uncategorised : (categoryNames.get(id) ?? text.uncategorised)),
-    [categoryNames, text.uncategorised],
+    (id: string | null) => (id === null ? t("budget.transactions.uncategorised") : (categoryNames.get(id) ?? t("budget.transactions.uncategorised"))),
+    [categoryNames],
   );
-  const accountName = (id: string) => nameOf(accounts, connections, id, text.account);
-  const kindText = (kind: string) => labelOf(text.kinds, kind);
+  const accountName = (id: string) => nameOf(accounts, connections, id, t("budget.transactions.account"));
+  const kindText = (kind: string) => labelOf(TRANSACTION_KIND_KEYS, kind);
   const matchingRows = useMemo(() => {
     if (provisionalKeySet === null) return page.rows;
     return page.rows.filter((row) => provisionalKeySet.has(rowKey(row)));
@@ -464,8 +399,8 @@ export function TransactionsPanel({ api, period, currencies, accounts, connectio
     setBusy(null);
     if (accessLost) return;
     if (!result.ok) {
-      setNotice(result.error === ANALYTICS_ERROR.sourceChanged ? text.changed
-        : RELOAD_ERRORS.has(result.error) ? text.conflict : text.saveError);
+      setNotice(result.error === ANALYTICS_ERROR.sourceChanged ? t("budget.transactions.changed")
+        : RELOAD_ERRORS.has(result.error) ? t("budget.transactions.conflict") : t("budget.transactions.saveError"));
       if (RELOAD_ERRORS.has(result.error)) {
         staleReloads.current = 0;
         setReloads((current) => current + 1);
@@ -474,7 +409,7 @@ export function TransactionsPanel({ api, period, currencies, accounts, connectio
     }
     setEditing(null);
     setFrozenOrder(null);
-  }, [api, onAccessLoss, onChanged, text]);
+  }, [api, onAccessLoss, onChanged]);
 
   const confirmPair = useCallback(async (debit: AnalyticsTransaction, credit: AnalyticsTransaction) => {
     const generationToken = generation.current;
@@ -490,10 +425,10 @@ export function TransactionsPanel({ api, period, currencies, accounts, connectio
     if (!result.ok) {
       const reserved = result.error === ANALYTICS_ERROR.legReserved;
       const existing = result.error === ANALYTICS_ERROR.conflict;
-      setNotice(result.error === ANALYTICS_ERROR.sourceChanged ? text.changed
-        : reserved ? text.pairReserved : existing ? text.pairExisting
-          : result.error === ANALYTICS_ERROR.invalidRequest ? text.pairInvalid
-            : RELOAD_ERRORS.has(result.error) ? text.conflict : text.saveError);
+      setNotice(result.error === ANALYTICS_ERROR.sourceChanged ? t("budget.transactions.changed")
+        : reserved ? t("budget.transactions.pairReserved") : existing ? t("budget.transactions.pairExisting")
+          : result.error === ANALYTICS_ERROR.invalidRequest ? t("budget.transactions.pairInvalid")
+            : RELOAD_ERRORS.has(result.error) ? t("budget.transactions.conflict") : t("budget.transactions.saveError"));
       if (RELOAD_ERRORS.has(result.error)) {
         staleReloads.current = 0;
         setReloads((current) => current + 1);
@@ -503,7 +438,7 @@ export function TransactionsPanel({ api, period, currencies, accounts, connectio
     picker.current += 1;
     setPairing(null);
     setFrozenOrder(null);
-  }, [api, onAccessLoss, onChanged, text]);
+  }, [api, onAccessLoss, onChanged]);
 
   useEffect(() => {
     if (!focusOnMount) return;
@@ -539,39 +474,39 @@ export function TransactionsPanel({ api, period, currencies, accounts, connectio
   };
   const truncatedNotice = !page.loading && !page.failed && page.cursor !== null ? (
     <div className="budget-notice budget-entries-action" role="note">
-      <span>{text.truncated(page.rows.length, page.total)}</span>
-      <button type="button" onClick={more}>{text.more}</button>
+      <span>{t("budget.transactions.truncated", { shown: page.rows.length, total: page.total })}</span>
+      <button type="button" onClick={more}>{t("budget.transactions.more")}</button>
     </div>
   ) : null;
 
   return (
-    <section className="budget-entries" aria-label={text.title} ref={sectionRef}>
+    <section className="budget-entries" aria-label={t("budget.transactions.title")} ref={sectionRef}>
       <header className="budget-entries-head">
-        <h4>{text.title}</h4>
+        <h4>{t("budget.transactions.title")}</h4>
         <ExportMenu filename={exportBasename(period)} periods={[period]} filter={filter}
           rowKeys={activeProvisionalKeys} accounts={accounts} connections={connections} api={api} onAccessLoss={onAccessLoss} />
       </header>
       <form className="budget-range" onSubmit={(event) => { event.preventDefault(); setFilter(draft); }}>
-        <label>{text.currency}
+        <label>{t("budget.transactions.currency")}
           <select name="currency" value={draft.currency} onChange={(event) => { setDraft({ ...draft, currency: event.currentTarget.value }); }}>
-            <option value="">{text.all}</option>
+            <option value="">{t("budget.transactions.all")}</option>
             {currencyOptions.map((currency) => <option key={currency} value={currency}>{currency}</option>)}
           </select>
         </label>
-        <label>{text.category}
+        <label>{t("budget.transactions.category")}
           <select name="category" value={draft.category} onChange={(event) => { setDraft({ ...draft, category: event.currentTarget.value }); }}>
-            <option value="">{text.all}</option>
-            <option value={UNCATEGORISED}>{text.uncategorised}</option>
+            <option value="">{t("budget.transactions.all")}</option>
+            <option value={UNCATEGORISED}>{t("budget.transactions.uncategorised")}</option>
             {categories.filter((item) => !item.archived).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
           </select>
         </label>
-        <label>{text.kind}
+        <label>{t("budget.transactions.kind")}
           <select name="kind" value={draft.kind} onChange={(event) => { setDraft({ ...draft, kind: event.currentTarget.value }); }}>
-            <option value="">{text.all}</option>
+            <option value="">{t("budget.transactions.all")}</option>
             {EFFECTIVE_KINDS.map((kind) => <option key={kind} value={kind}>{kindText(kind)}</option>)}
           </select>
         </label>
-        <label>{text.search}
+        <label>{t("budget.transactions.search")}
           <input name="query" type="search" maxLength={100} value={draft.query}
             onChange={(event) => { setDraft({ ...draft, query: event.currentTarget.value }); }} />
         </label>
@@ -584,41 +519,46 @@ export function TransactionsPanel({ api, period, currencies, accounts, connectio
                 setFrozenOrder(null);
                 setPairing(null);
               }} />
-            {text.provisionalOnly}
+            {t("budget.transactions.provisionalOnly")}
           </label>
         )}
-        <button type="submit">{text.apply}</button>
+        <button type="submit">{t("budget.transactions.apply")}</button>
       </form>
       {notice === null ? null : <p className="budget-notice" role="alert">{notice}</p>}
       {activeProvisionalKeys !== undefined && initialProvisionalTruncated === true ? (
         <div className="budget-notice budget-entries-action" role="note">
-          <span>{text.provisionalTruncated(activeProvisionalKeys.length, initialProvisionalTotal ?? activeProvisionalKeys.length)}</span>
+          <span>{t("budget.transactions.provisionalTruncated", {
+            shown: activeProvisionalKeys.length,
+            total: initialProvisionalTotal ?? activeProvisionalKeys.length,
+          })}</span>
         </div>
       ) : null}
       {page.failed ? (
         <div className="budget-notice budget-entries-action" role="alert">
-          <span>{text.error}</span>
-          <button type="button" onClick={retry}>{text.retry}</button>
+          <span>{t("budget.transactions.error")}</span>
+          <button type="button" onClick={retry}>{t("budget.transactions.retry")}</button>
         </div>
       ) : null}
-      {page.loading && shownRows.length === 0 ? <p className="budget-muted" role="status">{text.loading}</p> : null}
+      {page.loading && shownRows.length === 0 ? <p className="budget-muted" role="status">{t("budget.transactions.loading")}</p> : null}
       {!page.loading && !page.failed && shownRows.length === 0 ? (
         <>
-          <p className="budget-muted">{text.empty}</p>
+          <p className="budget-muted">{t("budget.transactions.empty")}</p>
           {truncatedNotice}
         </>
       ) : null}
       {shownRows.length === 0 ? null : (
         <>
-          <p className="budget-muted">{text.total(shownTotal)}</p>
-          {page.loading ? <p className="budget-muted" role="status">{text.loadingMore(page.rows.length)}</p> : null}
+          <p className="budget-muted">{t("budget.transactions.total", { count: shownTotal })}</p>
+          {page.loading ? <p className="budget-muted" role="status">{t("budget.transactions.loadingMore", { count: page.rows.length })}</p> : null}
           {truncatedNotice}
-          <div className="budget-views budget-sort" role="group" aria-label={text.sort}>
+          <div className="budget-views budget-sort" role="group" aria-label={t("budget.transactions.sort")}>
             {SORT_KEYS.map((key) => {
               const active = sort?.key === key;
               const direction = active ? sort.direction : undefined;
-              const label = sortLabel(text, key);
-              const directionText = direction === "asc" ? text.sortAsc : direction === "desc" ? text.sortDesc : undefined;
+              const label = sortLabel(key);
+              const directionText = direction === "asc"
+                ? t("budget.transactions.sortAsc")
+                : direction === "desc" ? t("budget.transactions.sortDesc") : undefined;
               return (
                 <button
                   type="button"
@@ -633,10 +573,11 @@ export function TransactionsPanel({ api, period, currencies, accounts, connectio
               );
             })}
           </div>
-          <ul className="budget-entry-list" aria-label={text.title}>
+          <ul className="budget-entry-list" aria-label={t("budget.transactions.title")}>
             {shownRows.map((row) => {
               const key = rowKey(row);
-              const transfer = labelOf(text.transfer, row.transfer.status === "none" ? "" : row.transfer.status);
+              const transferKey = TRANSACTION_TRANSFER_STATUS_KEYS[row.transfer.status];
+              const transfer = transferKey === undefined ? "" : t(transferKey);
               const accountCandidate = counterpartyRuleCandidate(row);
               return (
                 <li key={key} className="budget-entry">
@@ -659,30 +600,30 @@ export function TransactionsPanel({ api, period, currencies, accounts, connectio
                     />
                     {row.effective.kind === "expense" || row.effective.kind === "income" ? null
                       : <span className="budget-chip">{kindText(row.effective.kind)}</span>}
-                    {row.effective.source === "manual" ? <span>{text.manual}</span> : null}
-                    {row.effective.source === "rule" ? <span>{text.rule}</span> : null}
+                    {row.effective.source === "manual" ? <span>{t("budget.transactions.manual")}</span> : null}
+                    {row.effective.source === "rule" ? <span>{t("budget.transactions.rule")}</span> : null}
                     {transfer === "" ? null : <span className="budget-chip">{transfer}</span>}
-                    {row.transfer.ambiguous ? <span className="budget-warn">{text.ambiguous}</span> : null}
+                    {row.transfer.ambiguous ? <span className="budget-warn">{t("budget.transactions.ambiguous")}</span> : null}
                     {oneOffLabel(row) === "" ? null : <span className="budget-chip budget-one-off">{oneOffLabel(row)}</span>}
-                    {row.annotation.stale ? <span className="budget-warn">{text.stale}</span> : null}
+                    {row.annotation.stale ? <span className="budget-warn">{t("budget.transactions.stale")}</span> : null}
                     {editing === key ? null : (
-                      <button type="button" disabled={busy !== null} onClick={() => { startEditing(key); }}>{text.edit}</button>
+                      <button type="button" disabled={busy !== null} onClick={() => { startEditing(key); }}>{t("budget.transactions.edit")}</button>
                     )}
                     {canPair(row) && pairing !== key ? (
-                      <button type="button" disabled={busy !== null} onClick={() => { openPairs(row); }}>{text.pair}</button>
+                      <button type="button" disabled={busy !== null} onClick={() => { openPairs(row); }}>{t("budget.transactions.pair")}</button>
                     ) : null}
                     {editing === key || onCreateRule === undefined || accountCandidate === null ? null : (
                       <button type="button" disabled={busy !== null} title={row.counterparty_account ?? undefined}
-                        onClick={() => { onCreateRule(accountCandidate); }}>{text.accountRule}</button>
+                        onClick={() => { onCreateRule(accountCandidate); }}>{t("budget.transactions.accountRule")}</button>
                     )}
                   </div>
                   {editing === key ? (
-                    <Editor row={row} categories={categories} text={text} kindText={kindText} saving={busy === key}
+                    <Editor row={row} categories={categories} kindText={kindText} saving={busy === key}
                       onSave={(category, kind, label) => { void save(row, category, kind, label); }} onCancel={stopEditing}
                       onCreateRule={onCreateRule} />
                   ) : null}
                   {pairing === key ? (
-                    <PairPicker debit={row} page={pairPage} accounts={accounts} connections={connections} text={text} locale={locale}
+                    <PairPicker debit={row} page={pairPage} accounts={accounts} connections={connections} locale={locale}
                       disabled={busy !== null} onConfirm={(credit) => { void confirmPair(row, credit); }} onCancel={closePairs} />
                   ) : null}
                 </li>
@@ -700,28 +641,28 @@ interface PairPickerProps {
   page: PairPage;
   accounts: readonly BudgetAccount[];
   connections: readonly BudgetConnection[];
-  text: TransactionLabels;
   locale: string;
   disabled: boolean;
   onConfirm: (credit: AnalyticsTransaction) => void;
   onCancel: () => void;
 }
 
-function PairPicker({ debit, page, accounts, connections, text, locale, disabled, onConfirm, onCancel }: PairPickerProps) {
+function PairPicker({ debit, page, accounts, connections, locale, disabled, onConfirm, onCancel }: PairPickerProps) {
   const candidates = pairCandidates(debit, page.rows);
   const debitDate = pairDate(debit);
   return (
-    <div className="budget-pair-picker" aria-label={text.pairTitle}>
-      <p className="budget-muted">{text.pairTitle}</p>
-      {page.limited ? <p className="budget-notice" role="note">{text.pairLimited}</p> : null}
-      {page.loading ? <p className="budget-muted" role="status">{text.pairLoading}</p> : null}
-      {page.failed ? <p className="budget-notice" role="alert">{text.pairError}</p> : null}
-      {!page.loading && !page.failed && candidates.length === 0 ? <p className="budget-muted">{text.pairEmpty}</p> : null}
+    <div className="budget-pair-picker" aria-label={t("budget.transactions.pairTitle")}>
+      <p className="budget-muted">{t("budget.transactions.pairTitle")}</p>
+      {page.limited ? <p className="budget-notice" role="note">{t("budget.transactions.pairLimited")}</p> : null}
+      {page.loading ? <p className="budget-muted" role="status">{t("budget.transactions.pairLoading")}</p> : null}
+      {page.failed ? <p className="budget-notice" role="alert">{t("budget.transactions.pairError")}</p> : null}
+      {!page.loading && !page.failed && candidates.length === 0 ? <p className="budget-muted">{t("budget.transactions.pairEmpty")}</p> : null}
       {!page.loading && !page.failed && candidates.length > 0 ? (
         <ul className="budget-entry-list">
           {candidates.map((credit) => {
             const creditDate = pairDate(credit);
             if (debitDate === null || creditDate === null) return null;
+            const days = daysBetween(debitDate, creditDate);
             return (
               <li key={rowKey(credit)} className="budget-entry">
                 <div className="budget-entry-main">
@@ -730,16 +671,16 @@ function PairPicker({ debit, page, accounts, connections, text, locale, disabled
                   <strong className="is-credit">{formatAmount(credit.amount, credit.currency, locale, credit.credit_debit_indicator)}</strong>
                 </div>
                 <div className="budget-entry-facts">
-                  <span>{nameOf(accounts, connections, credit.account_id, text.account)}</span>
-                  <span>{text.pairDays(daysBetween(debitDate, creditDate))}</span>
-                  <button type="button" className="budget-primary" disabled={disabled} onClick={() => { onConfirm(credit); }}>{text.pairConfirm}</button>
+                  <span>{nameOf(accounts, connections, credit.account_id, t("budget.transactions.account"))}</span>
+                  <span>{days === 0 ? t("budget.transactions.pairDaysSame") : tPlural("budget.transactions.pairDays", days)}</span>
+                  <button type="button" className="budget-primary" disabled={disabled} onClick={() => { onConfirm(credit); }}>{t("budget.transactions.pairConfirm")}</button>
                 </div>
               </li>
             );
           })}
         </ul>
       ) : null}
-      <div><button type="button" disabled={disabled} onClick={onCancel}>{text.cancel}</button></div>
+      <div><button type="button" disabled={disabled} onClick={onCancel}>{t("budget.transactions.cancel")}</button></div>
     </div>
   );
 }
@@ -747,7 +688,6 @@ function PairPicker({ debit, page, accounts, connections, text, locale, disabled
 interface EditorProps {
   row: AnalyticsTransaction;
   categories: readonly AnalyticsCategory[];
-  text: TransactionLabels;
   kindText: (kind: string) => string;
   saving: boolean;
   onSave: (category: CategoryChoice, kind: KindChoice, label: string) => void;
@@ -770,7 +710,7 @@ function decode(value: string): CategoryChoice {
   return { mode: "manual", category_id: value.startsWith("cat:") ? value.slice(4) : null };
 }
 
-function Editor({ row, categories, text, kindText, saving, onSave, onCancel, onCreateRule }: EditorProps) {
+function Editor({ row, categories, kindText, saving, onSave, onCancel, onCreateRule }: EditorProps) {
   const [category, setCategory] = useState(encode(currentChoice(row)));
   const kinds = kindChoicesFor(row.credit_debit_indicator);
   const [kind, setKind] = useState<KindChoice>(row.annotation.mode === "manual"
@@ -794,32 +734,32 @@ function Editor({ row, categories, text, kindText, saving, onSave, onCancel, onC
   };
   return (
     <form className="budget-entry-editor" onSubmit={(event) => { event.preventDefault(); onSave(decode(category), kind, label); }}>
-      <label>{text.category}
+      <label>{t("budget.transactions.category")}
         <select name="category_id" value={category} disabled={saving} onChange={(event) => { chooseCategory(event.currentTarget.value); }}>
-          <option value="auto">{text.automatic}</option>
-          <option value="none">{text.uncategorised}</option>
+          <option value="auto">{t("budget.transactions.automatic")}</option>
+          <option value="none">{t("budget.transactions.uncategorised")}</option>
           {offered.map((item) => (
-            <option key={item.id} value={`cat:${item.id}`}>{item.archived ? `${item.name} (${text.archived})` : item.name}</option>
+            <option key={item.id} value={`cat:${item.id}`}>{item.archived ? `${item.name} (${t("budget.transactions.archived")})` : item.name}</option>
           ))}
         </select>
       </label>
-      <label>{text.kind}
+      <label>{t("budget.transactions.kind")}
         <select name="kind" value={kind} disabled={saving}
           onChange={(event) => { chooseKind(kindChoice(event.currentTarget.value, row.credit_debit_indicator)); }}>
           {kinds.map((item) => <option key={item} value={item}>{kindText(item)}</option>)}
         </select>
       </label>
-      <label>{text.oneOffLabel}
+      <label>{t("budget.transactions.oneOffLabel")}
         <input name="one_off_label" type="text" maxLength={80} value={label} disabled={saving}
           onChange={(event) => { setLabel(event.currentTarget.value); }} />
       </label>
-      <p className="budget-muted">{text.oneOffHint}</p>
+      <p className="budget-muted">{t("budget.transactions.oneOffHint")}</p>
       {onCreateRule === undefined || accountCandidate === null ? null : (
         <button type="button" disabled={saving} title={row.counterparty_account ?? undefined}
-          onClick={() => { onCreateRule(accountCandidate); }}>{text.accountRule}</button>
+          onClick={() => { onCreateRule(accountCandidate); }}>{t("budget.transactions.accountRule")}</button>
       )}
-      <button type="submit" className="budget-primary" disabled={saving}>{text.save}</button>
-      <button type="button" disabled={saving} onClick={onCancel}>{text.cancel}</button>
+      <button type="submit" className="budget-primary" disabled={saving}>{t("budget.transactions.save")}</button>
+      <button type="button" disabled={saving} onClick={onCancel}>{t("budget.transactions.cancel")}</button>
     </form>
   );
 }
