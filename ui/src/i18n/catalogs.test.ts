@@ -86,18 +86,48 @@ const identicalStrings: Partial<Record<MessageKey, IdenticalString>> = {
 
   "budget.mortgages.edit": { value: "Edit", locales: ["id", "ms"] },
 
+  "budget.main.account": { value: "Account", locales: ["fil"] },
+
+  "budget.main.kinds.savings": { value: "Savings", locales: ["fil"] },
+
+  "budget.main.kinds.credit_card": { value: "Credit card", locales: ["fil"] },
+
+  "budget.overview.account": { value: "Account", locales: ["fil"] },
+
+  "budget.transfers.account": { value: "Account", locales: ["fil"] },
+
+  "budget.transactions.kinds.refund": { value: "Refund", locales: ["fil"] },
+
+  "budget.transactions.account": { value: "Account", locales: ["fil"] },
+
+  "budget.export.accountFallback": { value: "Account", locales: ["fil"] },
+
+  "budget.export.colAccount": { value: "Account", locales: ["fil"] },
+
+  "budget.export.types.refund": { value: "refund", locales: ["fil"] },
+
+  "budget.rules.kinds.refund": { value: "Refund", locales: ["fil"] },
+
+  "budget.rules.account": { value: "Account", locales: ["fil"] },
+
+  "budget.recurring.account": { value: "Account", locales: ["fil"] },
+
+  "budget.quarantine.account": { value: "Account", locales: ["fil"] },
+
+  "budget.forecast.account": { value: "Account", locales: ["fil"] },
+
   // PHASE-2: add other locales once budget.* is translated if legitimately identical in those languages.
-  "budget.main.scopeWithState": { value: "{scope}: {state}", locales: ["pl", "ja", "id", "vi", "sw", "ms", "th", "ko", "zh"] },
-  "budget.year.noData": { value: "—", locales: ["pl", "ja", "id", "vi", "sw", "ms", "th", "ko", "zh"] },
-  "budget.export.xlsx": { value: "XLSX", locales: ["pl", "ja", "id", "vi", "sw", "ms", "th", "ko", "zh"] },
-  "budget.export.csv": { value: "CSV", locales: ["pl", "ja", "id", "vi", "sw", "ms", "th", "ko", "zh"] },
+  "budget.main.scopeWithState": { value: "{scope}: {state}", locales: ["pl", "ja", "id", "vi", "sw", "ms", "th", "ko", "zh", "fil"] },
+  "budget.year.noData": { value: "—", locales: ["pl", "ja", "id", "vi", "sw", "ms", "th", "ko", "zh", "fil"] },
+  "budget.export.xlsx": { value: "XLSX", locales: ["pl", "ja", "id", "vi", "sw", "ms", "th", "ko", "zh", "fil"] },
+  "budget.export.csv": { value: "CSV", locales: ["pl", "ja", "id", "vi", "sw", "ms", "th", "ko", "zh", "fil"] },
   "budget.export.colStatus": { value: "Status", locales: ["pl", "id", "ms"] },
-  "budget.rules.conditionSummary": { value: "{field} {operator} „{value}”", locales: ["pl", "ja", "id", "vi", "sw", "ms", "th", "ko", "zh"] },
-  "budget.mortgages.windowRange": { value: "{start} – {end}", locales: ["pl", "ja", "id", "vi", "sw", "ms", "th", "ko", "zh"] },
+  "budget.rules.conditionSummary": { value: "{field} {operator} „{value}”", locales: ["pl", "ja", "id", "vi", "sw", "ms", "th", "ko", "zh", "fil"] },
+  "budget.mortgages.windowRange": { value: "{start} – {end}", locales: ["pl", "ja", "id", "vi", "sw", "ms", "th", "ko", "zh", "fil"] },
   "budget.monthBudget.limitColumn": { value: "Limit", locales: ["pl"] },
-  "budget.monthBudget.noLimit": { value: "—", locales: ["pl", "ja", "id", "vi", "sw", "ms", "th", "ko", "zh"] },
+  "budget.monthBudget.noLimit": { value: "—", locales: ["pl", "ja", "id", "vi", "sw", "ms", "th", "ko", "zh", "fil"] },
   "budget.monthBudget.statusColumn": { value: "Status", locales: ["pl", "id", "ms"] },
-  "budget.monthBudget.noValue": { value: "—", locales: ["pl", "ja", "id", "vi", "sw", "ms", "th", "ko", "zh"] },
+  "budget.monthBudget.noValue": { value: "—", locales: ["pl", "ja", "id", "vi", "sw", "ms", "th", "ko", "zh", "fil"] },
 };
 
 // PHASE-2: budget.* translations pending
