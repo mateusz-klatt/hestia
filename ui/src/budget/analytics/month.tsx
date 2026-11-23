@@ -5,21 +5,17 @@ import type { BudgetApi } from "../api";
 import type { BudgetAccount, BudgetConnection } from "../model";
 import { currentMonth, isMonth, monthLabel, shiftMonth } from "./model";
 import type { RuleCandidate } from "./model";
-import { OverviewPanel, overviewLabels } from "./overview";
-import type { OverviewLabels } from "./overview";
+import { OverviewPanel } from "./overview";
 import { TransactionsPanel, transactionLabels } from "./transactions";
 import type { TransactionLabels } from "./transactions";
-import { TransfersPanel, transferLabels } from "./transfers";
-import type { TransferLabels } from "./transfers";
+import { TransfersPanel } from "./transfers";
 
 export const monthLabels = {
-  en: { previous: "Previous month", next: "Next month", overview: overviewLabels.en, transfers: transferLabels.en,
-    entries: transactionLabels.en },
-  pl: { previous: "Poprzedni miesiąc", next: "Następny miesiąc", overview: overviewLabels.pl, transfers: transferLabels.pl,
-    entries: transactionLabels.pl },
+  en: { previous: "Previous month", next: "Next month", entries: transactionLabels.en },
+  pl: { previous: "Poprzedni miesiąc", next: "Następny miesiąc", entries: transactionLabels.pl },
 };
 export interface MonthLabels {
-  previous: string; next: string; overview: OverviewLabels; transfers: TransferLabels; entries: TransactionLabels;
+  previous: string; next: string; entries: TransactionLabels;
 }
 
 export interface MonthViewProps {
@@ -71,9 +67,9 @@ export function MonthView({ api, accounts, connections = [], text, locale, revis
         <button type="button" aria-label={text.next} disabled={month >= latest}
           onClick={() => { setMonth((value) => (isMonth(value) && value < latest ? shiftMonth(value, 1) : value)); }}>▶</button>
       </nav>
-      <OverviewPanel overview={overview} period={month} current={month === latest} accounts={accounts} connections={connections} text={text.overview}
+      <OverviewPanel overview={overview} period={month} current={month === latest} accounts={accounts} connections={connections}
         locale={locale} revision={revision + changes} onAccessLoss={onAccessLoss} onCurrencies={setCurrencies} loadCategories={loadCategories} />
-      <TransfersPanel api={api} period={month} accounts={accounts} connections={connections} text={text.transfers} locale={locale}
+      <TransfersPanel api={api} period={month} accounts={accounts} connections={connections} locale={locale}
         revision={revision + changes} onAccessLoss={onAccessLoss} onChanged={changed} />
       <TransactionsPanel api={api} period={month} currencies={currencies} accounts={accounts} connections={connections} text={text.entries}
         locale={locale} revision={revision + changes} onAccessLoss={onAccessLoss} onChanged={changed}
