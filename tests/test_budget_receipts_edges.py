@@ -312,7 +312,7 @@ class StoreEdgeTests(AnalyticsCase):
         with self.sessions() as session:
             self.assertEqual(self.receipts._candidates(session, "owner", preview, {}), [])
         parsed = self.draft()
-        text_remit = next(item for item in parsed["candidates"] if item["entry_reference"] == "text-remit")
+        text_remit = next(item for item in parsed["candidates"] if item["entry_reference"] == hashlib.sha256(b"text-remit").hexdigest())
         self.assertNotIn("remittance_information", text_remit)
         self.assertNotIn("Synthetic", json.dumps(text_remit))
         with mock.patch("hestia.budget.receipt_store.link_evidence", side_effect=AnalyticsError()):

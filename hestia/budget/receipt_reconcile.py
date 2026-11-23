@@ -119,6 +119,13 @@ def _creditor_digest(creditor):
     return hashlib.sha256(creditor.encode("utf-8")).hexdigest()
 
 
+def entry_reference_digest(entry_reference):
+    """Sha256 of the provider reference. The receipt row still stores the raw key."""
+    if not isinstance(entry_reference, str):
+        return None
+    return hashlib.sha256(entry_reference.encode("utf-8")).hexdigest()
+
+
 def link_evidence(owner, account_id, entry_reference, payload, shop_name, nip, creditor, fingerprint):
     payload = payload if isinstance(payload, dict) else {}
     if fingerprint is not None and (
@@ -126,7 +133,7 @@ def link_evidence(owner, account_id, entry_reference, payload, shop_name, nip, c
             or any(char not in "0123456789abcdef" for char in fingerprint)):
         raise AnalyticsError()
     evidence = {
-        "owner": owner, "account_id": account_id, "entry_reference": entry_reference,
+        "owner": owner, "account_id": account_id, "entry_reference": entry_reference_digest(entry_reference),
         "transaction_date": _bound_date(payload.get("transaction_date")),
         "booking_date": _bound_date(payload.get("booking_date")),
         "value_date": _bound_date(payload.get("value_date")),

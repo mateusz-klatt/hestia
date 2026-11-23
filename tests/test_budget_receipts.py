@@ -64,6 +64,10 @@ def _scan_text_columns(test, row):
             _assert_digit_cap(test, getattr(row, column.key), column.key)
 
 
+def reference_digest(value):
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
 def confirm_values(parsed, *, link=None, **changes):
     draft = parsed["draft"]
     values = {key: draft[key] for key in (
@@ -71,9 +75,11 @@ def confirm_values(parsed, *, link=None, **changes):
         "currency", "payment_method",
     )}
     if link is not None and "candidate_token" not in link:
+        presented = link.get("entry_reference")
+        digested = reference_digest(presented) if isinstance(presented, str) else None
         match = next((item for item in parsed.get("candidates", [])
                       if item["account_id"] == link.get("account_id")
-                      and item["entry_reference"] == link.get("entry_reference")
+                      and item["entry_reference"] in {presented, digested}
                       and item.get("candidate_token")), None)
         if match is not None:
             link = {**link, "candidate_token": match["candidate_token"]}
@@ -255,12 +261,12 @@ NR KARTY ****5555
     def test_receipt_match_friday_purchase_booked_monday(self):
         self.add_transaction("a", "monday", amount="100", booking_date="2026-11-23", transaction_date=None)
         parsed = self.draft(day="2026-11-20")
-        monday = next(item for item in parsed["candidates"] if item["entry_reference"] == "monday")
+        monday = next(item for item in parsed["candidates"] if item["entry_reference"] == reference_digest("monday"))
         self.assertEqual(monday["date_distance"], 3)
         self.add_transaction("a", "friday-evidence", amount="100", booking_date="2026-11-23",
                              transaction_date="2026-11-20")
         parsed = self.draft(day="2026-11-20")
-        closest = next(item for item in parsed["candidates"] if item["entry_reference"] == "friday-evidence")
+        closest = next(item for item in parsed["candidates"] if item["entry_reference"] == reference_digest("friday-evidence"))
         self.assertEqual(closest["date_distance"], 0)
         confirmed = self.receipts.confirm("owner", confirm_values(parsed, link=self.link(reference="monday")))
         self.assertTrue(confirmed["receipt"]["linked"])
@@ -275,7 +281,8 @@ NR KARTY ****5555
             self.receipts.confirm("owner", confirm_values(parsed, link=self.link()))
         self.assertEqual(invalid.exception.status, 400)
         result = self.receipts.confirm("owner", confirm_values(parsed, link=self.link("b", "credit")))
-        self.assertEqual(result["receipt"]["linked_entry_ref"], "credit")
+        self.assertEqual(result["receipt"]["linked_entry_ref"], reference_digest("credit"))
+        self.assertEqual(self.receipt_row(result["receipt"]["receipt_id"]).linked_entry_ref, "credit")
 
     def test_receipt_match_excludes_transfer_legs(self):
         self.decide()
@@ -548,7 +555,7 @@ NR KARTY ****5555
     def test_receipt_match_allows_excluded_category_purchase(self):
         self.annotation(kind="excluded")
         parsed = self.draft()
-        self.assertIn("debit", {item["entry_reference"] for item in parsed["candidates"]})
+        self.assertIn(reference_digest("debit"), {item["entry_reference"] for item in parsed["candidates"]})
         result = self.receipts.confirm("owner", confirm_values(parsed, link=self.link()))
         self.assertEqual(result["receipt"]["status"], "confirmed")
 
@@ -1022,7 +1029,7 @@ NR KARTY ****5555
         self.add_transaction("a", "window", amount="100", booking_date="2026-11-10",
                              value_date="2026-11-10", transaction_date="2026-11-20")
         parsed = self.draft(day="2026-11-20")
-        candidate = next(item for item in parsed["candidates"] if item["entry_reference"] == "window")
+        candidate = next(item for item in parsed["candidates"] if item["entry_reference"] == reference_digest("window"))
         link = {"account_id": candidate["account_id"], "entry_reference": "window",
                 "candidate_token": candidate["candidate_token"]}
         merchant = confirm_values(parsed, link=link, raw_shop_name="INNY SKLEP")
@@ -1088,7 +1095,7 @@ NR KARTY ****5555
         self.assertNotIn("debit", {item["entry_reference"] for item in again["candidates"]})
         detail = self.receipts.detail("owner", identifier)
         api_contract.BudgetReceiptDetailResult.model_validate(detail)
-        match = next(item for item in detail["candidates"] if item["entry_reference"] == "debit")
+        match = next(item for item in detail["candidates"] if item["entry_reference"] == reference_digest("debit"))
         stale = confirm_values(parsed, link=self.link(), expected_version=version)
         with self.assertRaises(ReceiptError) as rejected:
             self.receipts.confirm("owner", stale)
@@ -1107,18 +1114,25 @@ NR KARTY ****5555
         from hestia.budget.receipt_reconcile import reconcile_receipt_links
 
         reference = "Ż" * 450
+        digest = reference_digest(reference)
         self.add_transaction("a", reference, amount="100", entry_reference=reference, booking_date="2026-11-30")
         parsed = self.draft()
-        candidate = next(item for item in parsed["candidates"] if item["entry_reference"] == reference)
+        candidate = next(item for item in parsed["candidates"] if item["entry_reference"] == digest)
         token = candidate["candidate_token"]
         self.assertEqual(len(token), 43)
         self.assertLessEqual(len(token), 4096)
         self.assertNotIn(".", token)
         self.assertNotIn(reference, token)
-        link = {"account_id": candidate["account_id"], "entry_reference": reference, "candidate_token": token}
+        self.assertNotIn(reference, json.dumps(candidate))
+        link = {"account_id": candidate["account_id"], "entry_reference": digest, "candidate_token": token}
         saved = self.receipts.confirm("owner", confirm_values(parsed, link=link))["receipt"]
-        evidence = json.loads(self.receipt_row(parsed["receipt_id"]).linked_evidence)
-        self.assertEqual(evidence["entry_reference"], reference)
+        stored = self.receipt_row(parsed["receipt_id"])
+        self.assertEqual(stored.linked_entry_ref, reference)
+        evidence = json.loads(stored.linked_evidence)
+        self.assertEqual(evidence["entry_reference"], digest)
+        self.assertNotIn(reference, stored.linked_evidence)
+        self.assertEqual(saved["linked_entry_ref"], digest)
+        self.assertNotIn(reference, json.dumps(saved))
         self.assertEqual(evidence["remittance_digest"], hashlib.sha256(
             json.dumps(["Synthetic SHOP"], ensure_ascii=True, separators=(",", ":")).encode("ascii")).hexdigest())
         self.assertNotIn("remittance_information", evidence)
@@ -1128,7 +1142,7 @@ NR KARTY ****5555
         self.assertTrue(saved["linked"])
 
         preview = self.draft(item="MLEKO INNE")
-        issued = next(item for item in preview["candidates"] if item["entry_reference"] == "debit")
+        issued = next(item for item in preview["candidates"] if item["entry_reference"] == reference_digest("debit"))
         debit = {"account_id": issued["account_id"], "entry_reference": "debit",
                  "candidate_token": issued["candidate_token"]}
         self.change_transaction(remittance_information=["Corrected synthetic text"])
@@ -1147,7 +1161,7 @@ NR KARTY ****5555
         fresh = self.draft(item="MLEKO TRZECIE")
         fresh_link = self.link()
         fresh_link["candidate_token"] = next(
-            item["candidate_token"] for item in fresh["candidates"] if item["entry_reference"] == "debit")
+            item["candidate_token"] for item in fresh["candidates"] if item["entry_reference"] == reference_digest("debit"))
         with self.sessions.begin() as session:
             session.delete(session.get(db.BudgetTransaction, (self.accounts["a"], "debit")))
         with self.assertRaises(ReceiptError) as missing:
@@ -1166,11 +1180,25 @@ NR KARTY ****5555
             self.assertEqual(reconcile_receipt_links(session, "owner", self.now + 1), 0)
         self.assert_latched(rebound["receipt_id"], confirmed["version"])
 
+    def test_unknown_presented_reference_is_stale(self):
+        parsed = self.draft()
+        token = next(item["candidate_token"] for item in parsed["candidates"]
+                     if item["entry_reference"] == reference_digest("debit"))
+        account = self.accounts["a"]
+        for presented in ("missing-ref", "g" * 64, "0" * 64):
+            link = {"account_id": account, "entry_reference": presented, "candidate_token": token}
+            with self.subTest(presented=presented[:12]):
+                with self.assertRaises(ReceiptError) as rejected:
+                    self.receipts.confirm("owner", confirm_values(parsed, link=link))
+                self.assertEqual((rejected.exception.code, rejected.exception.status),
+                                 ("budget_receipt_stale_source", 409))
+                self.assertEqual(self.receipt_row(parsed["receipt_id"]).status, "draft")
+
     def test_long_remittance_still_yields_a_candidate_and_confirms(self):
         remittance = "S" * 4096
         self.change_transaction(remittance_information=[remittance])
         parsed = self.draft()
-        candidate = next(item for item in parsed["candidates"] if item["entry_reference"] == "debit")
+        candidate = next(item for item in parsed["candidates"] if item["entry_reference"] == reference_digest("debit"))
         self.assertNotIn("remittance_information", candidate)
         self.assertNotIn("creditor_name", candidate)
         self.assertNotIn(remittance, json.dumps(candidate))
@@ -1188,7 +1216,7 @@ NR KARTY ****5555
     def test_creditor_metadata_must_match_the_ledger_fingerprint(self):
         self.metadata("a", "debit", {"creditor_name": "BIEDRONKA GROCER"})
         parsed = self.draft()
-        match = next(item for item in parsed["candidates"] if item["entry_reference"] == "debit")
+        match = next(item for item in parsed["candidates"] if item["entry_reference"] == reference_digest("debit"))
         self.assertTrue(match["merchant_token_hit"])
         self.assertNotIn("creditor_name", match)
         self.assertNotIn("BIEDRONKA GROCER", json.dumps(match))
@@ -1197,7 +1225,7 @@ NR KARTY ****5555
         hidden = self.draft(total="8", item="MLEKO INNE")
         self.assertNotIn("BIEDRONKA GROCER", json.dumps(hidden["candidates"]))
         again = self.receipts.parse_text("owner", receipt_text())
-        debit = next(item for item in again["candidates"] if item["entry_reference"] == "debit")
+        debit = next(item for item in again["candidates"] if item["entry_reference"] == reference_digest("debit"))
         self.assertNotIn("creditor_name", debit)
         self.assertNotIn("BIEDRONKA GROCER", json.dumps(debit))
         with self.assertRaises(ReceiptError) as stale:

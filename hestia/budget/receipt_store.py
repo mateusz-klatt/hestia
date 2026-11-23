@@ -22,8 +22,8 @@ from .analytics_core import (AnalyticsError, canonical_money, compare_money, fin
 from .receipt_parser import (CONFIRMED_TEXT_TTL_SECONDS, DRAFT_TTL_SECONDS, MAX_RECEIPT_LINES, ReceiptError,
                              merchant_tokens, normalize_shop_name, parse_receipt, redact_digit_field,
                              validate_confirm)
-from .receipt_reconcile import (audit_payload, creditor_name, evidence_json, erase_receipt_audit, link_evidence,
-                                write_audit)
+from .receipt_reconcile import (audit_payload, creditor_name, entry_reference_digest, evidence_json,
+                                erase_receipt_audit, link_evidence, write_audit)
 from .views import BudgetHTTPStore
 
 MAX_DRAFTS = 20
@@ -138,7 +138,8 @@ class BudgetReceiptStore(BudgetHTTPStore):
             "receipt_date": row.receipt_date, "receipt_time": row.receipt_time, "total_amount": row.total_amount,
             "currency": row.currency, "payment_method": row.payment_method, "status": row.status,
             "source_kind": row.source_kind, "linked": row.linked_account_id is not None,
-            "linked_account_id": row.linked_account_id, "linked_entry_ref": row.linked_entry_ref,
+            "linked_account_id": row.linked_account_id,
+            "linked_entry_ref": entry_reference_digest(row.linked_entry_ref),
             "version": row.version, "created_at": row.created_at, "updated_at": row.updated_at,
             "image_available": row.image_relpath is not None, "image_expires_at": row.image_expires_at,
             "raw_text_expires_at": row.raw_text_expires_at, "math_delta": self._math_delta(session, row),
@@ -298,7 +299,8 @@ class BudgetReceiptStore(BudgetHTTPStore):
             haystack = fold_for_match(description + " " + (creditor or ""))
             hit = any(token in haystack for token in tokens)
             candidate = {
-                "account_id": transaction.account_id, "entry_reference": transaction.entry_reference,
+                "account_id": transaction.account_id,
+                "entry_reference": entry_reference_digest(transaction.entry_reference),
                 "amount": canonical_money(payload["amount"]), "currency": payload["currency"],
                 "credit_debit_indicator": direction,
                 "transaction_date": evidence["transaction_date"],
@@ -357,13 +359,30 @@ class BudgetReceiptStore(BudgetHTTPStore):
             raise ReceiptError()
         return token
 
+    def _linked_transaction(self, session, account_id, presented):
+        """Bank row addressed by its provider reference or by the digest clients see."""
+        direct = session.get(Transaction, (account_id, presented))
+        if direct is not None:
+            return direct
+        if len(presented) != 64 or any(char not in "0123456789abcdef" for char in presented):
+            return None
+        matches = []
+        for reference in session.scalars(select(Transaction.entry_reference).where(
+                Transaction.account_id == account_id)):
+            if entry_reference_digest(reference) == presented:
+                matches.append(reference)
+        if len(matches) != 1:
+            return None
+        return session.get(Transaction, (account_id, matches[0]))
+
     def _confirmed_link(self, session, owner, cleaned, link, row):
         token = link["candidate_token"]
         if not isinstance(token, str) or _CANDIDATE_TOKEN.fullmatch(token) is None:
             raise ReceiptError()
-        transaction = session.get(Transaction, (link["account_id"], link["entry_reference"]))
+        transaction = self._linked_transaction(session, link["account_id"], link["entry_reference"])
         if transaction is None:
             raise ReceiptError("budget_receipt_stale_source", 409)
+        link["entry_reference"] = transaction.entry_reference
         try:
             payload = _json(transaction.payload_json)
             fingerprint = None if transaction.uncertain else financial_fingerprint(payload)
