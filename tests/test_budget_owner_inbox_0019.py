@@ -33,6 +33,24 @@ def _key(item):
 
 
 class OwnerInboxPureTests(unittest.TestCase):
+    def test_device_entry_validates_names_and_timestamps(self):
+        for name in ("Vesta", "Żółw 📱", "x" * 64):
+            for moment in (0, 0.0, 1_700_000_000.5):
+                entry = inbox_mod.device_entry("alice", "device-1", name, moment)
+                self.assertEqual(entry["params"], {"status": "added", "device_name": name,
+                                                  "date": "1970-01-01" if moment == 0 else "2023-11-14"})
+        for name in (None, 1, "", "x" * 65, "bad\nname", "bad\tname", "bad\x00name", "bad\x7fname", "bad\u200bname"):
+            with self.subTest(name=name), self.assertRaises(inbox_mod.OwnerInboxDataError):
+                inbox_mod.device_entry("alice", "device-1", name, 0)
+        for moment in (None, "0", True, False, -1, -0.1, float("nan"), float("inf"), float("-inf"),
+                       1e300, 10 ** 400):
+            with self.subTest(moment=moment), self.assertRaises(inbox_mod.OwnerInboxDataError):
+                inbox_mod.device_entry("alice", "device-1", "Vesta", moment)
+        with mock.patch.object(inbox_mod, "datetime") as clock:
+            clock.fromtimestamp.side_effect = OSError("out of range")
+            with self.assertRaises(inbox_mod.OwnerInboxDataError):
+                inbox_mod.device_entry("alice", "device-1", "Vesta", 0)
+
     def test_opaque_ids_milestones_params_digest_sorting_and_validation(self):
         s1 = inbox_mod.opaque_subject_id("alice", inbox_mod.KIND_CONSENT, "conn-1")
         s2 = inbox_mod.opaque_subject_id("bob", inbox_mod.KIND_CONSENT, "conn-1")
