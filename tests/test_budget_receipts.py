@@ -486,6 +486,23 @@ NR KARTY ****5555
         self.assertIn("SUMA PLN 5,00", split_redacted)
         self.assertIn("7791011327", split_redacted)
 
+    def test_pan_table_keeps_prices_and_redacts_punctuated_cards(self):
+        cases = {
+            ",4111 1111 1111 1111": ",[REDACTED]",
+            "Karta:4111111111111111": "Karta:[REDACTED]",
+            "KARTA\n12,99": "KARTA\n12,99",
+            "NR\nKARTY ,4111\n,1111 ,1111": "NR\nKARTY ,[REDACTED]\n,[REDACTED] ,[REDACTED]",
+            "2 x 3,50": "2 x 3,50",
+            "12.99 15.49": "12.99 15.49",
+            "MLEKO 3,49 2 szt": "MLEKO 3,49 2 szt",
+            "4111-1111-1111-1111": "[REDACTED]",
+            "****1234": "[REDACTED]",
+            "1234****": "[REDACTED]",
+        }
+        for raw, expected in cases.items():
+            with self.subTest(raw=raw):
+                self.assertEqual(redact_pan(raw), expected)
+
     def test_pan_scan_is_bounded_before_a_long_mask_run(self):
         import time
         started = time.perf_counter()
@@ -526,7 +543,7 @@ NR KARTY ****5555
                 "SUMA PLN 5,00\n")
         wide = parse_receipt(
             "BIEDRONKA\nNIP 7791011327\n2026-11-30 12:34\n"
-            "MLEKO 1 x 999999999,9999 999999999,9999 A\nSUMA PLN 999999999,9999\n")
+            "MLEKO 1 x 999999999,9999 = 999999999,9999 A\nSUMA PLN 999999999,9999\n")
         self.assertEqual(wide["lines"][0]["unit_price_raw"], "999999999.9999")
         self.assertEqual(wide["total_amount"], "999999999.9999")
         folded = "ß" * 128

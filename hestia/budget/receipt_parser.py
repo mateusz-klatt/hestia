@@ -37,10 +37,9 @@ _DATE_ISO = re.compile(r"(?<![0-9])([0-9]{4})-([0-9]{2})-([0-9]{2})(?![0-9])", r
 _DATE_PL = re.compile(r"(?<![0-9])([0-9]{2})[-.]([0-9]{2})[-.]([0-9]{4})(?![0-9])", re.ASCII)
 _TIME = re.compile(r"(?<![0-9])((?:[01][0-9]|2[0-3]):[0-5][0-9])(?![0-9])", re.ASCII)
 _NIP = re.compile(r"\bNIP\s*:?\s*([0-9][0-9 -]{8,16}[0-9])\b", re.IGNORECASE | re.ASCII)
-# A PAN run is digits, a mask sequence, and the separators between them.
-# Whitespace covers ASCII and Unicode spaces. Dashes U+2010–U+2015, "-" and "."
-# join a run. A comma does not, so "12,99" stays a price. Line breaks do not,
-# so a NIP and a date on adjacent lines stay apart.
+# Inside a card run the only separators are spaces (including the Unicode spaces
+# Live Text inserts) and hyphens. A dot or comma ends the run. A short money
+# token is never part of a card run, so a price is not split in half.
 _PAN_NEWLINES = frozenset("\n\r\u2028\u2029")
 _PAN_DASHES = frozenset("-‐‑‒–—―")
 _PAN_MASKS = frozenset("*Xx•●#")
@@ -96,9 +95,10 @@ def fold_text(value):
 
 
 def _pan_separator(char):
-    if char in _PAN_NEWLINES:
+    """Space or hyphen. A dot, a comma and a line break end the run."""
+    if char in _PAN_NEWLINES or char in ".,":
         return False
-    return char == "." or char in _PAN_DASHES or char.isspace()
+    return char in _PAN_DASHES or char.isspace()
 
 
 def _pan_digit(char):
@@ -128,25 +128,52 @@ def _digit_length(text, index):
     return end - index
 
 
+def _money_cover(text):
+    """Mark ``\\d{1,6}[,.]\\d{2}`` so neither side can join a card run."""
+    cover = bytearray(len(text))
+    length = len(text)
+    index = 0
+    while index < length:
+        if not ("0" <= text[index] <= "9") or (index and "0" <= text[index - 1] <= "9"):
+            index += 1
+            continue
+        cursor = index
+        digits = 0
+        while cursor < length and "0" <= text[cursor] <= "9":
+            digits += 1
+            cursor += 1
+        if 1 <= digits <= 6 and cursor < length and text[cursor] in ",.":
+            fraction = cursor + 1
+            frac_digits = 0
+            while fraction < length and "0" <= text[fraction] <= "9":
+                frac_digits += 1
+                fraction += 1
+            if frac_digits == 2 and (fraction == length or not ("0" <= text[fraction] <= "9")):
+                cover[index:fraction] = b"\x01" * (fraction - index)
+                index = fraction
+                continue
+        index = cursor if cursor > index else index + 1
+    return cover
+
+
 def _symbol_runs(text):
     """Maximal digit, mask and separator runs. One forward pass.
 
     A solitary mask stays an operator (``2 x 3,50``). Two or more mask
-    characters form a mask sequence. The whole run is a secret when it holds
-    13 or more digit and mask symbols and at least one digit, or when a mask
-    sequence of two or more sits next to two or more digits (``****1234``).
+    characters form a mask sequence. Punctuation before a run does not hide it.
+    The whole run is a secret when it holds 13 or more digit and mask symbols
+    and at least one digit, or when a mask sequence sits next to two or more
+    digits (``****1234``). Four or more digits, or any mask sequence, is
+    card-shaped and can be removed after a card label.
     """
+    money = _money_cover(text)
     found = []
     length = len(text)
     index = 0
     while index < length:
-        # A comma keeps the fractional part of a price out of the next run:
-        # "9999,9999 999999999" must not become one 13-symbol run.
-        if index and text[index - 1] == "," and _mask_length(text, index) == 0:
-            count = _digit_length(text, index)
-            if count:
-                index += count
-                continue
+        if money[index]:
+            index += 1
+            continue
         masks = _mask_length(text, index)
         if masks == 1 or (masks == 0 and _digit_length(text, index) == 0):
             index += 1
@@ -154,13 +181,15 @@ def _symbol_runs(text):
         start = index
         symbols = 0
         digits = 0
+        mask_symbols = 0
         previous = None
         previous_len = 0
         adjacent = False
-        while index < length:
+        while index < length and not money[index]:
             masks = _mask_length(text, index)
             if masks >= 2:
                 symbols += masks
+                mask_symbols += masks
                 if previous == "d" and previous_len >= 2:
                     adjacent = True
                 previous, previous_len = "m", masks
@@ -177,15 +206,15 @@ def _symbol_runs(text):
                 previous, previous_len = "d", count
                 index += count
                 continue
-            if _pan_separator(text[index]):
+            if text[index] and _pan_separator(text[index]):
                 gap = index + 1
-                while gap < length and _pan_separator(text[gap]):
+                while gap < length and not money[gap] and _pan_separator(text[gap]):
                     gap += 1
-                if gap < length and (_mask_length(text, gap) >= 2 or _digit_length(text, gap)):
+                if gap < length and not money[gap] and (_mask_length(text, gap) >= 2 or _digit_length(text, gap)):
                     index = gap
                     continue
             break
-        found.append((start, index, adjacent or (digits > 0 and symbols >= 13)))
+        found.append((start, index, adjacent or (digits > 0 and symbols >= 13), digits >= 4 or mask_symbols >= 2))
     return found
 
 
@@ -244,13 +273,10 @@ def _pan_spans(text):
         offset += len(line) + 1
     spans = []
     line_no = 0
-    seen = [False] * len(lines)
-    for start, end, secret in runs:
+    for start, end, secret, cardlike in runs:
         while line_no + 1 < len(bases) and start >= bases[line_no + 1]:
             line_no += 1
-        first = not seen[line_no]
-        seen[line_no] = True
-        if secret or label[line_no] or (follow[line_no] and first):
+        if secret or (cardlike and (label[line_no] or follow[line_no])):
             spans.append((start, end))
     return spans
 
