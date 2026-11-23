@@ -481,12 +481,15 @@ class BudgetTransactionMetadata(Base):
 
 
 class BudgetCategory(Base):
-    """Owner category. ``parent_id`` is an optional same-table parent (depth is enforced in the store)."""
+    """Owner category. Parent depth is store-enforced; ``color_hue`` is meaningful only at the root."""
 
     __tablename__ = "budget_categories"
     __table_args__ = (
         UniqueConstraint("owner", "name_key"),
         CheckConstraint("parent_id IS NULL OR parent_id != id", name="ck_budget_categories_parent_not_self"),
+        CheckConstraint("color_hue IS NULL OR (color_hue >= 0 AND color_hue <= 359)",
+                        name="ck_budget_categories_color_hue_range"),
+        CheckConstraint("parent_id IS NULL OR color_hue IS NULL", name="ck_budget_categories_color_hue_root"),
         Index("ix_budget_categories_parent_id", "parent_id"),
     )
     id: Mapped[str] = mapped_column(primary_key=True)
@@ -498,6 +501,7 @@ class BudgetCategory(Base):
     created_at: Mapped[float]
     updated_at: Mapped[float]
     parent_id: Mapped[str | None] = mapped_column(ForeignKey("budget_categories.id", name="fk_budget_categories_parent_id"))
+    color_hue: Mapped[int | None]
 
 
 class BudgetCategoryLimit(Base):

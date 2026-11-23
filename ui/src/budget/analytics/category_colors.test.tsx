@@ -14,6 +14,7 @@ import {
   accessibleBadgeText,
   buildCategoryColorMap,
   buildCategoryColors,
+  categoryHueToHex,
   categoryNameKey,
   contrastRatio,
   hatchedBadgeGradient,
@@ -123,6 +124,35 @@ describe("category_colors", () => {
     for (const item of baselineCategories) {
       if (item.id === "cat-0" || item.id === "cat-15") continue;
       expect(reducedMap.get(item.id)).toEqual(baseMap.get(item.id));
+    }
+  });
+
+  it("uses each persisted server hue without moving other roots or changing descendant shading", () => {
+    const items: CategoryColorInput[] = [
+      { id: "server", parent_id: null, color_hue: 137 },
+      { id: "server-child", parent_id: "server" },
+      { id: "fallback", parent_id: null, color_hue: null },
+      { id: "cash", parent_id: null, name: "Gotówka (bankomat)", color_hue: 222 },
+      { id: "cash-null", parent_id: null, name: "Gotówka (bankomat)", color_hue: null },
+    ];
+    const colors = buildCategoryColors(items);
+    expect(colors.get("server").background).toBe(categoryHueToHex(137));
+    expect(colors.get("server").oklch).toEqual({ l: 0.55, c: 0.16, h: 137 });
+    expect(hueDistance(colors.get("server-child").oklch.h, 137)).toBeLessThanOrEqual(15);
+    expect(colors.get("server-child").oklch.l).toBeGreaterThan(colors.get("server").oklch.l);
+    expect(colors.get("fallback")).toEqual(buildCategoryColors([{ id: "fallback", parent_id: null }]).get("fallback"));
+    expect(colors.get("cash").background).toBe(categoryHueToHex(222));
+    expect(colors.get("cash-null").background).toBe(CASH_ATM_COLOR);
+    expect(buildCategoryColors([...items, { id: "added", parent_id: null, color_hue: 300 }]).get("server"))
+      .toEqual(colors.get("server"));
+    expect(buildCategoryColors(items, { overrides: { server: "#1e88e5" } }).get("server").background).toBe("#1e88e5");
+  });
+
+  it("keeps badge text AA-compliant at the server anchor for every hue", () => {
+    for (let hue = 0; hue < 360; hue += 1) {
+      const background = categoryHueToHex(hue);
+      const text = accessibleBadgeText(background);
+      expect(contrastRatio(background, text), `hue ${String(hue)}`).toBeGreaterThanOrEqual(4.5);
     }
   });
 

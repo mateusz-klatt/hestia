@@ -21,6 +21,8 @@ from pathlib import Path
 import sqlite3
 import tempfile
 import unittest
+
+from tests.migration_head import HEAD
 from unittest import mock
 
 from alembic import command
@@ -104,12 +106,10 @@ class AnnotationLabelMigration0021Tests(unittest.TestCase):
         cfg = Config()
         cfg.set_main_option("script_location", str(db._MIGRATIONS_DIR))
         script = ScriptDirectory.from_config(cfg)
-        self.assertEqual(script.get_heads(), ["0026"])
-        followups = script.get_revision("0026")
-        self.assertIsNotNone(followups)
-        self.assertEqual(followups.down_revision, "0025")
+        self.assertEqual(script.get_heads(), [HEAD])
+        hues = script.get_revision("0026")
+        self.assertEqual(hues.down_revision, "0025")
         devices = script.get_revision("0025")
-        self.assertIsNotNone(devices)
         self.assertEqual(devices.down_revision, "0024")
         gmail = script.get_revision("0024")
         self.assertIsNotNone(gmail)
@@ -220,7 +220,7 @@ class AnnotationLabelMigration0021Tests(unittest.TestCase):
         with engine.connect() as conn:
             self.assertIsNone(conn.exec_driver_sql(
                 "SELECT label FROM budget_annotations WHERE entry_reference='kept'").scalar())
-            self.assertEqual(conn.exec_driver_sql("SELECT version_num FROM alembic_version").scalar(), "0026")
+            self.assertEqual(conn.exec_driver_sql("SELECT version_num FROM alembic_version").scalar(), HEAD)
         self._assert_integrity_and_no_batch_temp()
 
         def insert(reference, label):
@@ -305,7 +305,7 @@ class AnnotationLabelMigration0021Tests(unittest.TestCase):
             version = raw.execute("SELECT version_num FROM alembic_version").fetchone()
             label = raw.execute(
                 "SELECT label FROM budget_annotations WHERE entry_reference='kept'").fetchone()
-        self.assertEqual(version, ("0026",))
+        self.assertEqual(version, (HEAD,))
         self.assertEqual(label, (None,))
         self.assertEqual(self._kept_row(), _KEPT_ROW)
         self._assert_integrity_and_no_batch_temp()

@@ -165,6 +165,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/budget/analytics/category-colors-spread": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Save an owner-private local classification
+         * @description Requires the exact admin owner, browser cookie and configured HTTPS Origin. Version and source fingerprints prevent stale changes. No bank request is made.
+         */
+        post: operations["spreadBudgetAnalyticsCategoryColors"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/budget/analytics/category-create": {
         parameters: {
             query?: never;
@@ -2338,6 +2358,8 @@ export interface components {
         BudgetAnalyticsCategory: {
             /** Archived */
             archived: boolean;
+            /** Color Hue */
+            color_hue?: number | null;
             /** Created At */
             created_at: number;
             /** Id */
@@ -2350,6 +2372,18 @@ export interface components {
             updated_at: number;
             /** Version */
             version: number;
+        };
+        /** BudgetAnalyticsCategoryColorSpreadRequest */
+        BudgetAnalyticsCategoryColorSpreadRequest: Record<string, never>;
+        /** BudgetAnalyticsCategoryColorSpreadResult */
+        BudgetAnalyticsCategoryColorSpreadResult: {
+            /** Categories */
+            categories: components["schemas"]["BudgetAnalyticsCategory"][];
+            /**
+             * Ok
+             * @constant
+             */
+            ok: true;
         };
         /** BudgetAnalyticsCategoryCreateRequest */
         BudgetAnalyticsCategoryCreateRequest: {
@@ -2377,6 +2411,8 @@ export interface components {
             archived: boolean;
             /** Changed */
             changed: boolean;
+            /** Color Hue */
+            color_hue?: number | null;
             /** Created At */
             created_at: number;
             /** Id */
@@ -2417,6 +2453,8 @@ export interface components {
             archived: boolean;
             /** Category Id */
             category_id: string;
+            /** Color Hue */
+            color_hue?: number | null;
             /** Expected Version */
             expected_version: number;
             /** Name */
@@ -3005,6 +3043,8 @@ export interface components {
             archived: boolean;
             /** Category Id */
             category_id: string | null;
+            /** Color Hue */
+            color_hue?: number | null;
             /** Expenses */
             expenses: string;
             limit: components["schemas"]["BudgetAnalyticsMonthlyBudgetCategoryLimit"] | null;
@@ -4684,6 +4724,8 @@ export interface components {
         BudgetHouseholdCategory: {
             /** Archived */
             archived: boolean;
+            /** Color Hue */
+            color_hue: number | null;
             /** Id */
             id: string;
             /** Label */
@@ -4695,6 +4737,8 @@ export interface components {
             archived: boolean;
             /** Category Id */
             category_id: string;
+            /** Color Hue */
+            color_hue: number | null;
             /** Name */
             name: string;
         };
@@ -4834,6 +4878,8 @@ export interface components {
             archived: boolean;
             /** Category Id */
             category_id: string | null;
+            /** Color Hue */
+            color_hue: number | null;
             /** Currency */
             currency: string;
             /** Expenses */
@@ -7538,6 +7584,102 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["BudgetAnalyticsCategories"];
+                };
+            };
+            /** @description invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description session required; middleware may return an empty body */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description admin owner or browser-origin requirement failed; middleware may return an empty body */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description unknown, disabled or foreign resource */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Version, financial source, reserved transfer leg, preview or cursor changed; reload and review. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Explicit analytics processing or owner configuration limit; no partial totals. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description budget configuration unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+        };
+    };
+    spreadBudgetAnalyticsCategoryColors: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BudgetAnalyticsCategoryColorSpreadRequest"];
+            };
+        };
+        responses: {
+            /** @description owner-scoped stored state; no bank request */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetAnalyticsCategoryColorSpreadResult"];
                 };
             };
             /** @description invalid request */

@@ -34,9 +34,9 @@ class GmailScheduleMigrationTests(unittest.TestCase):
 
     def test_populated_0025_to_0026_to_0025_roundtrip(self):
         db.init_db(self.path)
-        db.downgrade_db(self.path, "0025")
+        db.downgrade_db(self.path, "0026")
         original = self._open()
-        self._assert_clean(original, "0025")
+        self._assert_clean(original, "0026")
         with original.begin() as connection:
             connection.exec_driver_sql(
                 "INSERT INTO users (username, password_hash, role) VALUES ('owner', 'synthetic', 'admin')"
@@ -82,7 +82,7 @@ class GmailScheduleMigrationTests(unittest.TestCase):
 
         before = snapshot(original)
         upgraded, _ = db.init_db(self.path)
-        self._assert_clean(upgraded, "0026")
+        self._assert_clean(upgraded, "0027")
         self.assertEqual(snapshot(upgraded), before)
         with upgraded.begin() as connection:
             self.assertEqual(connection.exec_driver_sql(
@@ -101,9 +101,9 @@ class GmailScheduleMigrationTests(unittest.TestCase):
             with self.subTest(statement=statement), self.assertRaises(IntegrityError), upgraded.begin() as connection:
                 connection.exec_driver_sql(statement)
 
-        db.downgrade_db(self.path, "0025")
+        db.downgrade_db(self.path, "0026")
         downgraded = self._open()
-        self._assert_clean(downgraded, "0025")
+        self._assert_clean(downgraded, "0026")
         self.assertEqual(snapshot(downgraded), before)
         for table in tables:
             self.assertEqual([column["name"] for column in inspect(downgraded).get_columns(table)], columns[table])
@@ -137,20 +137,20 @@ class GmailScheduleMigrationTests(unittest.TestCase):
         self.assertNotIn(b"billing@corner-shop.example", stored)
         self.assertNotIn(b"Please pay this shop bill", stored)
         with self.assertRaisesRegex(RuntimeError, "manual forwards"):
-            db.downgrade_db(self.path, "0025")
+            db.downgrade_db(self.path, "0026")
         _engine, sessions = db.init_db(self.path)
         with sessions.begin() as session:
             session.execute(db.BudgetGmailMessage.__table__.delete())
             session.execute(db.BudgetReceipt.__table__.delete())
         db.reset_engine_cache()
-        db.downgrade_db(self.path, "0025")
-        self._assert_clean(self._open(), "0025")
+        db.downgrade_db(self.path, "0026")
+        self._assert_clean(self._open(), "0026")
 
     def test_leftover_batch_table_does_not_block_upgrade(self):
         db.init_db(self.path)
         db.reset_engine_cache()
-        db.downgrade_db(self.path, "0025")
+        db.downgrade_db(self.path, "0026")
         with self._open().begin() as connection:
             connection.exec_driver_sql('CREATE TABLE "_alembic_tmp_budget_gmail_state" (id TEXT)')
         engine, _ = db.init_db(self.path)
-        self._assert_clean(engine, "0026")
+        self._assert_clean(engine, "0027")

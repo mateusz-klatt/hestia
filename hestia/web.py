@@ -204,6 +204,7 @@ _ROUTE_MIN_ROLE = {
     ("GET", "/api/budget/household/monthly-budget-settings"): _VIEWER,
     ("POST", "/api/budget/analytics/category-create"): _ADMIN,
     ("POST", "/api/budget/analytics/category-update"): _ADMIN,
+    ("POST", "/api/budget/analytics/category-colors-spread"): _ADMIN,
     ("POST", "/api/budget/analytics/annotation"): _ADMIN,
     ("POST", "/api/budget/analytics/rule-preview"): _ADMIN,
     ("POST", "/api/budget/analytics/rule-save"): _ADMIN,

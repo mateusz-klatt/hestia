@@ -5,6 +5,7 @@ import { categoryParentId } from "./category_tree";
 export interface CategoryColorInput {
   id: string;
   parent_id?: string | null;
+  color_hue?: number | null | undefined;
   /**
    * Display name. Hashing ignores it. It is read only to recognise the technical
    * cash root, because the API category has no system flag and does not expose `name_key`.
@@ -35,10 +36,7 @@ export interface CategoryColor {
   hatched: boolean;
 }
 
-/**
- * Hook for a later optional per-root user colour override (maps root category id -> CSS hex `#rrggbb` or `#rgb`).
- * UI editing and persistence are deliberately deferred beyond v1.
- */
+/** Optional caller-side CSS override (maps root category id -> `#rrggbb` or `#rgb`). */
 export type CategoryColorOverrides =
   | ReadonlyMap<string, string>
   | Readonly<Record<string, string>>;
@@ -78,6 +76,8 @@ const DEEP_HUE_OFFSETS = [4, -4, 7, -7] as const;
 const SIBLING_LIGHTNESS_OFFSETS = [-0.018, 0.018, -0.009, 0.009, 0] as const;
 const MAX_SIBLING_HUE_SHIFT_DEG = 14;
 const NEUTRAL_OKLCH: OklchColor = { l: 0.56, c: 0.015, h: 65 };
+const SERVER_ROOT_LIGHTNESS = 0.55;
+const SERVER_ROOT_CHROMA = 0.16;
 
 const CURATED_ROOT_HUES: readonly { name: string; oklch: OklchColor }[] = [
   { name: "terracotta", oklch: { l: 0.55, c: 0.16, h: 32 } },
@@ -168,6 +168,10 @@ export function oklchToHex(l: number, c: number, h: number): string {
     linearChannelToSrgbByte(best[1]),
     linearChannelToSrgbByte(best[2]),
   ]);
+}
+
+export function categoryHueToHex(hue: number): string {
+  return oklchToHex(SERVER_ROOT_LIGHTNESS, SERVER_ROOT_CHROMA, hue);
 }
 
 /** Parse `#rgb` or `#rrggbb` into normalized 8-bit RGB channels and canonical lowercase `#rrggbb`. */
@@ -280,6 +284,7 @@ function technicalCashOverrides(categories: readonly CategoryColorInput[]): Cate
   const overrides: Record<string, string> = {};
   for (const item of categories) {
     if (item.name === undefined || !isColorRoot(item, ids)) continue;
+    if (item.color_hue !== null && item.color_hue !== undefined) continue;
     if (categoryNameKey(item.name) !== CASH_ATM_NAME_KEY) continue;
     overrides[item.id] = CASH_ATM_COLOR;
   }
@@ -363,13 +368,17 @@ function shadeForDescendant(
 
 function rootBaseColor(
   id: string,
+  serverHue?: number | null,
   overrides?: CategoryColorOverrides,
   technical?: CategoryColorOverrides,
 ): { oklch: OklchColor; background: string } {
-  // An explicit caller override wins. An invalid one falls through to the technical cash colour, then the hash.
   const override = parseOverrideColor(lookupOverride(overrides, id))
     ?? parseOverrideColor(lookupOverride(technical, id));
   if (override !== null) return override;
+  if (serverHue !== null && serverHue !== undefined) {
+    const oklch = { l: SERVER_ROOT_LIGHTNESS, c: SERVER_ROOT_CHROMA, h: normalizeHue(serverHue) };
+    return { oklch, background: categoryHueToHex(serverHue) };
+  }
   const slot = fnv1a32(id) % CATEGORY_PALETTE.length;
   const swatch = CATEGORY_PALETTE[slot] ?? CATEGORY_PALETTE[0];
   if (swatch === undefined) return { oklch: NEUTRAL_OKLCH, background: NEUTRAL_BACKGROUND };
@@ -377,7 +386,7 @@ function rootBaseColor(
 }
 
 function fallbackRootColor(id: string, overrides?: CategoryColorOverrides): CategoryColor {
-  const base = rootBaseColor(id, overrides);
+  const base = rootBaseColor(id, undefined, overrides);
   return {
     background: base.background,
     text: accessibleBadgeText(base.background),
@@ -399,11 +408,11 @@ interface WalkFrame {
 
 /**
  * Assign deterministic colours to a category tree:
- * - Each root independently takes a curated hue via `fnv1a(root.id) % paletteSize` (stable across root additions/removals).
+ * - A root uses its server `color_hue` when present, otherwise `fnv1a(root.id) % paletteSize` for backward compatibility.
  * - Descendants shade their parent's hue monotonically through level 3 and wrap alternation deeper down.
- * - The technical cash root (`CASH_ATM_NAME_KEY`) takes a fixed slate. That override is by name_key, not by which roots are on screen.
+ * - The technical cash root (`CASH_ATM_NAME_KEY`) takes fixed slate only while its server hue is null.
  * - Valid optional overrides replace only their own root's base colour and propagate shades to its descendants.
- *   An explicit override wins over the cash default.
+ *   An explicit caller override wins over both the server hue and the cash default.
  */
 export function buildCategoryColorMap(
   categories: readonly CategoryColorInput[],
@@ -434,7 +443,8 @@ export function buildCategoryColorMap(
 
   const walkComponent = (seedId: string) => {
     if (resolved.has(seedId)) return;
-    const { oklch: rootOklch, background: rootBackground } = rootBaseColor(seedId, options?.overrides, technical);
+    const { oklch: rootOklch, background: rootBackground } = rootBaseColor(
+      seedId, byId.get(seedId)?.color_hue, options?.overrides, technical);
     const stack: WalkFrame[] = [{ id: seedId, depth: 0, hueBias: 0, siblingIndex: 0, siblingCount: 1 }];
     while (stack.length > 0) {
       const frame = stack.pop();

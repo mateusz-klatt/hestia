@@ -27,10 +27,11 @@ function fakeApi() {
     categories: vi.fn<BudgetApi["categories"]>(() => ok({ categories: categoryList })),
     createCategory: vi.fn<BudgetApi["createCategory"]>(() => ok({ category })),
     updateCategory: vi.fn<BudgetApi["updateCategory"]>(() => ok({ category: { ...category, id: "cat-food", version: 2 } })),
+    spreadCategoryColors: vi.fn<BudgetApi["spreadCategoryColors"]>(() => ok({ categories: categoryList })),
     rules: vi.fn<BudgetApi["rules"]>(() => ok({ rules: [rule] })),
     previewRule: vi.fn<BudgetApi["previewRule"]>(() => ok({ preview })),
     saveRule: vi.fn<BudgetApi["saveRule"]>(() => ok({ rule: saved })),
-  } satisfies Pick<BudgetApi, "categories" | "createCategory" | "updateCategory" | "rules" | "previewRule" | "saveRule">;
+  } satisfies Pick<BudgetApi, "categories" | "createCategory" | "updateCategory" | "spreadCategoryColors" | "rules" | "previewRule" | "saveRule">;
 }
 
 let host: HTMLElement;
@@ -125,6 +126,44 @@ describe("categories", () => {
     expect(api.updateCategory).toHaveBeenLastCalledWith({ category_id: "cat-old", name: "Synthetic Old", archived: false, expected_version: 3, parent_id: null });
   });
 
+  it("sets a root hue with a live preview and clears it back to automatic", async () => {
+    const api = fakeApi();
+    await show(api);
+    const panel = section("Categories");
+    await click(button("Rename", panel));
+    const editor = panel.querySelector("li form");
+    const hue = field(editor as HTMLElement, "Colour hue") as HTMLInputElement;
+    expect(hue.type).toBe("range");
+    await type(hue, "123");
+    expect(hue.value).toBe("123");
+    expect(editor?.textContent).toContain("123°");
+    await act(async () => { (editor as HTMLFormElement).requestSubmit(); await Promise.resolve(); });
+    await settle();
+    expect(api.updateCategory).toHaveBeenCalledWith({
+      category_id: "cat-food", name: "Synthetic Food", archived: false, expected_version: 1, parent_id: null, color_hue: 123,
+    });
+
+    await click(button("Rename", panel));
+    const clearing = panel.querySelector("li form");
+    await click(button("Automatic colour", clearing as HTMLElement));
+    expect(button("Automatic colour", clearing as HTMLElement).disabled).toBe(true);
+    await act(async () => { (clearing as HTMLFormElement).requestSubmit(); await Promise.resolve(); });
+    await settle();
+    expect(api.updateCategory).toHaveBeenLastCalledWith({
+      category_id: "cat-food", name: "Synthetic Food", archived: false, expected_version: 1, parent_id: null, color_hue: null,
+    });
+  });
+
+  it("spreads root colours only on request and reloads the categories", async () => {
+    const api = fakeApi();
+    await show(api);
+    const spread = button("Spread colours evenly", section("Categories"));
+    expect(spread.disabled).toBe(false);
+    await click(spread);
+    expect(api.spreadCategoryColors).toHaveBeenCalledTimes(1);
+    expect(api.categories).toHaveBeenCalledTimes(2);
+  });
+
   it("reloads after a conflict and refuses an empty rename", async () => {
     const api = fakeApi();
     await show(api);
@@ -187,6 +226,7 @@ describe("categories", () => {
     const panel = section("Kategorie");
     expect(panel.textContent).toContain("Kategoria nadrzędna");
     expect(panel.textContent).toContain("Najwyższy poziom");
+    expect(panel.textContent).toContain("Rozłóż kolory równomiernie");
     expect(rulesLabels.pl.archiveBlocked).toBe("Najpierw przenieś jej podkategorie. Zarchiwizowane też trzeba przenieść.");
   });
 });

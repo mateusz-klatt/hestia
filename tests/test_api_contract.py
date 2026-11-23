@@ -58,7 +58,16 @@ class OpenApiArtifactTests(unittest.TestCase):
     def test_monthly_budget_contract_chain_from_0_27_0(self):
         """Remove additive receipts and household surfaces before verifying earlier contract snapshots."""
         document = api_contract.build_openapi()
-        self.assertEqual(document["info"]["version"], "0.43.0")
+        self.assertEqual(document["info"]["version"], "0.42.0")
+        del document["paths"]["/api/budget/analytics/category-colors-spread"]
+        for name in ("BudgetAnalyticsCategoryColorSpreadRequest", "BudgetAnalyticsCategoryColorSpreadResult"):
+            del document["components"]["schemas"][name]
+        for name in ("BudgetAnalyticsCategory", "BudgetAnalyticsCategorySaved",
+                     "BudgetAnalyticsCategoryUpdateRequest", "BudgetAnalyticsMonthlyBudgetCategorySpend"):
+            schema = document["components"]["schemas"][name]
+            schema["properties"].pop("color_hue")
+            if "required" in schema and "color_hue" in schema["required"]:
+                schema["required"].remove("color_hue")
         for name in ("BudgetAnalyticsRule", "BudgetAnalyticsRuleSaved"):
             schema = document["components"]["schemas"][name]
             self.assertNotIn("inactive_reason", schema["required"])
@@ -649,7 +658,7 @@ class TolerantResponseContractTests(unittest.TestCase):
 
     REQUEST_ONLY = {
         "BudgetAnalyticsCategoryCreateRequest", "BudgetAnalyticsCategoryUpdateRequest",
-        "BudgetAnalyticsAnnotationRequest", "BudgetAnalyticsRulePreviewRequest", "BudgetAnalyticsRuleSaveRequest",
+        "BudgetAnalyticsCategoryColorSpreadRequest", "BudgetAnalyticsAnnotationRequest", "BudgetAnalyticsRulePreviewRequest", "BudgetAnalyticsRuleSaveRequest",
         "BudgetAnalyticsRuleBatchPreviewRequest", "BudgetAnalyticsRuleBatchSaveRequest",
         "BudgetAnalyticsTransferDecisionRequest", "BudgetAnalyticsLegRequest",
         "BudgetAnalyticsSpendingLimitSaveRequest", "BudgetAnalyticsMortgageSaveRequest",

@@ -234,12 +234,13 @@ class HouseholdCommandTests(unittest.TestCase):
                     db.User(username="viewer", password_hash="unused", role="viewer"),
                 ])
                 session.flush()
-                session.add_all([
-                    db.BudgetCategory(id="cat-salary", owner="alice", name=SALARY_NAME, name_key="wynagrodzenie",
-                                      archived=False, version=1, created_at=1, updated_at=1),
-                    db.BudgetOwnerInboxRead(owner="alice", kind="mortgage_due", subject_id="ab" * 32,
-                                            milestone="due", read_at=1),
-                ])
+                session.add(db.BudgetOwnerInboxRead(owner="alice", kind="mortgage_due", subject_id="ab" * 32,
+                                                    milestone="due", read_at=1))
+            with engine.begin() as connection:
+                connection.exec_driver_sql(
+                    "INSERT INTO budget_categories "
+                    "(id, owner, name, name_key, archived, version, created_at, updated_at, parent_id) "
+                    "VALUES ('cat-salary', 'alice', ?, 'wynagrodzenie', 0, 1, 1, 1, NULL)", (SALARY_NAME,))
         finally:
             engine.dispose()
 
@@ -247,6 +248,8 @@ class HouseholdCommandTests(unittest.TestCase):
         self._assert_migration_clean()
         with upgraded.connect() as conn:
             self.assertEqual(conn.exec_driver_sql("SELECT version_num FROM alembic_version").scalar(), _head_revision())
+            self.assertEqual(conn.exec_driver_sql(
+                "SELECT color_hue FROM budget_categories WHERE id='cat-salary'").scalar(), 20)
         with sessions.begin() as session:
             session.add(db.BudgetHouseholdMember(member_username="viewer", owner="alice", grant_id="cd" * 32))
         with self.assertRaises(IntegrityError):
@@ -416,6 +419,12 @@ class HouseholdAPITests(unittest.IsolatedAsyncioTestCase):
         access = bodies["access"]
         self.assertEqual(set(access), {"grant_id"})
         self.assertEqual(access["grant_id"], self.grant_id)
+        owner_hues = {entity_alias(SECRET, self.grant_id, "category", row["id"]): row["color_hue"]
+                      for row in (self.salary, self.zus, self.groceries, self.coded_salary, self.benefit, self.benefit_code)}
+        self.assertEqual({row["id"]: row["color_hue"] for row in bodies["categories"]["categories"]}, owner_hues)
+        for row in bodies["overview"]["categories"]:
+            if row["category_id"] is not None:
+                self.assertEqual(row["color_hue"], owner_hues[row["category_id"]])
         labels = {row["label"] for row in bodies["categories"]["categories"]}
         self.assertIn("salary", labels)
         self.assertIn("child_benefit", labels)
@@ -444,6 +453,9 @@ class HouseholdAPITests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("series", owner_month_body)
         self.assertNotIn("_series_daily", owner_month_body)
         home_month = bodies["monthly-budget"]
+        for row in (*home_month["budget"]["category_spend"], *home_month["series"]["category_labels"]):
+            if row["category_id"] is not None:
+                self.assertEqual(row["color_hue"], owner_hues[row["category_id"]])
         self.assertEqual(home_month["budget"]["summary"], owner_month_body["summary"])
         spent = home_month["budget"]["summary"]["spent"] if home_month["budget"]["summary"] else None
         if spent is None:

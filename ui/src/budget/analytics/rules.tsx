@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { BudgetApi, BudgetResult } from "../api";
 import type { BudgetAccount, BudgetConnection } from "../model";
 import { CategoryBadge, CategorySwatch } from "./category_badge";
-import { buildCategoryColors } from "./category_colors";
+import { buildCategoryColors, categoryHueToHex } from "./category_colors";
 import { listCategoryTree, parentChoices } from "./category_tree";
 import type { ParentChoice } from "./category_tree";
 import { ANALYTICS_ERROR, CATEGORY_NAME_MAX, KIND_CHOICES, RELOAD_ERRORS, accountName as nameOf, labelOf, RULE_FIELDS, RULE_OPERATORS, RULE_PRIORITY_MAX, RULE_VALUE_MAX, ruleCandidate,
@@ -15,7 +15,8 @@ export const rulesLabels = {
   en: {
     categories: "Categories", rules: "Rules", name: "Name", add: "Add category", rename: "Rename", save: "Save", cancel: "Cancel",
     archive: "Archive", restore: "Restore", archived: "archived", noCategories: "No categories yet.",
-    parent: "Parent category", noParent: "Top level",
+    parent: "Parent category", noParent: "Top level", colorHue: "Colour hue", automaticColor: "Automatic colour",
+    spreadColors: "Spread colours evenly",
     archiveBlocked: "Move its subcategories first. Archived subcategories still have to be moved.",
     rulesHelp: "Rules sort new and existing entries automatically. Your own choice on an entry always wins over a rule.",
     noRules: "No rules yet.", newRule: "New rule", edit: "Edit", field: "When", operator: "", value: "text",
@@ -37,7 +38,8 @@ export const rulesLabels = {
   pl: {
     categories: "Kategorie", rules: "Reguły", name: "Nazwa", add: "Dodaj kategorię", rename: "Zmień nazwę", save: "Zapisz",
     cancel: "Anuluj", archive: "Archiwizuj", restore: "Przywróć", archived: "archiwalna", noCategories: "Nie ma jeszcze kategorii.",
-    parent: "Kategoria nadrzędna", noParent: "Najwyższy poziom",
+    parent: "Kategoria nadrzędna", noParent: "Najwyższy poziom", colorHue: "Odcień koloru", automaticColor: "Kolor automatyczny",
+    spreadColors: "Rozłóż kolory równomiernie",
     archiveBlocked: "Najpierw przenieś jej podkategorie. Zarchiwizowane też trzeba przenieść.",
     rulesHelp: "Reguły porządkują nowe i dotychczasowe pozycje automatycznie. Twój ręczny wybór przy pozycji zawsze ma pierwszeństwo.",
     noRules: "Nie ma jeszcze reguł.", newRule: "Nowa reguła", edit: "Edytuj", field: "Gdy", operator: "", value: "tekst",
@@ -63,7 +65,7 @@ type Loss = (result: { ok: boolean; status?: number; error?: string }) => boolea
 type Listed<T> = T[] | "loading" | "error";
 
 export interface CategoriesViewProps {
-  api: Pick<BudgetApi, "categories" | "createCategory" | "updateCategory" | "rules" | "previewRule" | "saveRule">;
+  api: Pick<BudgetApi, "categories" | "createCategory" | "updateCategory" | "spreadCategoryColors" | "rules" | "previewRule" | "saveRule">;
   accounts: readonly BudgetAccount[];
   connections?: readonly BudgetConnection[] | undefined;
   text: RulesLabels;
@@ -136,7 +138,7 @@ function failure(text: RulesLabels, error: string): string {
 
 interface CategoriesProps {
   categories: Listed<AnalyticsCategory>;
-  api: Pick<BudgetApi, "createCategory" | "updateCategory">;
+  api: Pick<BudgetApi, "createCategory" | "updateCategory" | "spreadCategoryColors">;
   run: Run;
   text: RulesLabels;
   locale: string;
@@ -164,13 +166,15 @@ function ParentField({ label, none, value, choices, disabled, onChange }: {
 function CategoriesPanel({ categories, api, run, text, locale, onSaved, epoch }: CategoriesProps) {
   const [draft, setDraft] = useState("");
   const [draftParent, setDraftParent] = useState("");
-  const [renaming, setRenaming] = useState<{ id: string; name: string; parent: string } | null>(null);
+  const [renaming, setRenaming] = useState<{
+    id: string; name: string; parent: string; hue: number; hueChange: "keep" | "set" | "clear";
+  } | null>(null);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   // A reload settles whatever was pending: its answer is discarded, so its controls must not stay locked.
   useEffect(() => { setBusy(false); }, [epoch]);
 
-  const save = async (action: () => Promise<BudgetResult<{ category: AnalyticsCategory }>>, done: () => void) => {
+  const save = async <T,>(action: () => Promise<BudgetResult<T>>, done: () => void) => {
     setBusy(true);
     setNotice(null);
     const result = await run(action);
@@ -180,16 +184,21 @@ function CategoriesPanel({ categories, api, run, text, locale, onSaved, epoch }:
     done();
     onSaved();
   };
-  const update = (category: AnalyticsCategory, changes: { name?: string; archived?: boolean; parent_id?: string | null }) =>
-    () => api.updateCategory({
-      category_id: category.id, name: changes.name ?? category.name, archived: changes.archived ?? category.archived,
-      expected_version: category.version,
-      parent_id: changes.parent_id === undefined ? category.parent_id : changes.parent_id,
-    });
+  const update = (category: AnalyticsCategory, changes: {
+    name?: string; archived?: boolean; parent_id?: string | null; color_hue?: number | null | undefined;
+  }) => () => api.updateCategory({
+    category_id: category.id, name: changes.name ?? category.name, archived: changes.archived ?? category.archived,
+    expected_version: category.version,
+    parent_id: changes.parent_id === undefined ? category.parent_id : changes.parent_id,
+    ...(changes.color_hue === undefined ? {} : { color_hue: changes.color_hue }),
+  });
 
   return (
     <section className="budget-entries" aria-label={text.categories}>
       <h4>{text.categories}</h4>
+      <button type="button" disabled={busy || !Array.isArray(categories)
+        || !categories.some((category) => category.parent_id === null && !category.archived)}
+        onClick={() => { void save(() => api.spreadCategoryColors(), () => undefined); }}>{text.spreadColors}</button>
       {notice === null ? null : <p className="budget-notice" role="alert">{notice}</p>}
       {categories === "loading" ? <p className="budget-muted" role="status">{text.loading}</p> : null}
       {categories === "error" ? <p className="budget-notice" role="alert">{text.error}</p> : null}
@@ -209,16 +218,34 @@ function CategoriesPanel({ categories, api, run, text, locale, onSaved, epoch }:
                         void save(update(category, {
                           name: renaming.name.trim(),
                           parent_id: renaming.parent === "" ? null : renaming.parent,
+                          color_hue: renaming.parent !== "" || renaming.hueChange === "keep" ? undefined
+                            : renaming.hueChange === "clear" ? null : renaming.hue,
                         }), () => { setRenaming(null); });
                       }
                     }}>
                       <label>{text.name}
                         <input name="category_name" maxLength={CATEGORY_NAME_MAX} value={renaming.name}
-                          onChange={(event) => { setRenaming({ id: category.id, name: event.currentTarget.value, parent: renaming.parent }); }} />
+                          onChange={(event) => { setRenaming({ ...renaming, name: event.currentTarget.value }); }} />
                       </label>
                       <ParentField label={text.parent} none={text.noParent} value={renaming.parent} disabled={busy}
                         choices={parentChoices(categories, category.id, locale)}
-                        onChange={(parent) => { setRenaming({ id: category.id, name: renaming.name, parent }); }} />
+                        onChange={(parent) => { setRenaming({ ...renaming, parent }); }} />
+                      {renaming.parent === "" ? (
+                        <label>{text.colorHue}
+                          <span className="budget-entry-facts">
+                            <CategorySwatch color={{ background: categoryHueToHex(renaming.hue), hatched: false }} />
+                            <input name="color_hue" type="range" min="0" max="359" step="1" value={renaming.hue}
+                              disabled={busy} onChange={(event) => {
+                                setRenaming({ ...renaming, hue: Number(event.currentTarget.value), hueChange: "set" });
+                              }} />
+                            <output>{renaming.hue}°</output>
+                          </span>
+                        </label>
+                      ) : null}
+                      {renaming.parent === "" ? (
+                        <button type="button" disabled={busy || renaming.hueChange === "clear"}
+                          onClick={() => { setRenaming({ ...renaming, hueChange: "clear" }); }}>{text.automaticColor}</button>
+                      ) : null}
                       <button type="submit" className="budget-primary" disabled={busy || !validCategoryName(renaming.name)}>{text.save}</button>
                       <button type="button" disabled={busy} onClick={() => { setRenaming(null); }}>{text.cancel}</button>
                     </form>
@@ -227,7 +254,10 @@ function CategoriesPanel({ categories, api, run, text, locale, onSaved, epoch }:
                       <CategorySwatch color={categoryColors.get(category.id)} />
                       <strong className={category.archived ? "budget-muted" : undefined}>{category.name}</strong>
                       {category.archived ? <span>({text.archived})</span> : null}
-                      <button type="button" disabled={busy} onClick={() => { setRenaming({ id: category.id, name: category.name, parent: category.parent_id ?? "" }); }}>{text.rename}</button>
+                      <button type="button" disabled={busy} onClick={() => {
+                        setRenaming({ id: category.id, name: category.name, parent: category.parent_id ?? "",
+                          hue: category.color_hue ?? 20, hueChange: "keep" });
+                      }}>{text.rename}</button>
                       <button type="button" disabled={busy || archiveBlocked} title={archiveBlocked ? text.archiveBlocked : undefined}
                         onClick={() => { void save(update(category, { archived: !category.archived }), () => undefined); }}>
                         {category.archived ? text.restore : text.archive}

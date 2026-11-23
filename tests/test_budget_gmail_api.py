@@ -278,7 +278,7 @@ class GmailHTTPTests(IsolatedAsyncioTestCase):
                 raw_shop_name="przekazane ręcznie", forwarded_manually=1,
                 forwarded_sender_domain="corner-shop.example",
             ))
-        for version in (None, "0.40.0", "0.43.0"):
+        for version in (None, "0.40.0", "0.42.0"):
             with self.subTest(version=version):
                 headers = self.headers()
                 if version is not None:
@@ -304,7 +304,9 @@ class GmailHTTPTests(IsolatedAsyncioTestCase):
                 self.assertNotIn("billing@corner-shop.example", await detail.text())
 
     async def test_receipt_version_is_validated_before_reading_body(self):
-        for version in ("bad", "1.0.0", "0.43.1", "0.040.0"):
+        major, minor, patch = (int(part) for part in api_contract.CONTRACT_VERSION.split("."))
+        newer = f"{major}.{minor}.{patch + 1}"  # one patch above the served contract
+        for version in ("bad", "1.0.0", newer, "0.040.0"):
             with self.subTest(version=version):
                 headers = self.headers() | {"X-Hestia-Contract-Version": version}
                 response = await self.client.post(receipt_api.PREFIX + "/parse-text", data="not JSON", headers=headers)
