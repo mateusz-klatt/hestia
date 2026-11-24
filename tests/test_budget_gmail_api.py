@@ -43,7 +43,7 @@ class GmailHTTPTests(IsolatedAsyncioTestCase):
         self.settings.write_text(json.dumps({
             "owner": "alice", "owner_mailbox": MAILBOX, "client_id_env": "SYNTHETIC_CLIENT_ID",
             "client_secret_env": "SYNTHETIC_CLIENT_SECRET", "refresh_token_env": "SYNTHETIC_REFRESH_FILE",
-            "sender_allowlist": ["@merchant.example.test"], "spouse_forward_senders": ["spouse@example.test"],
+            "sender_allowlist": ["@merchant.example.test", "@respectenergy.pl"], "spouse_forward_senders": ["spouse@example.test"],
         }), encoding="utf-8")
         self.settings.chmod(0o600)
         self.env = {
@@ -401,7 +401,7 @@ class GmailHTTPTests(IsolatedAsyncioTestCase):
             session.connection().exec_driver_sql("PRAGMA wal_checkpoint(TRUNCATE)")
         stored = Path(self.env["HESTIA_DB"]).read_bytes()
         self.assertNotIn(b"synthetic-body-only-marker", stored)
-        self.assertNotIn(b"billing@merchant.example.test", stored)
+        self.assertNotIn(b"billing@respectenergy.pl", stored)
         after = await (await self.call("gmail-status")).json()
         self.assertEqual((after["sync_phase"], after["pending_imported_count"], after["batch_processed_count"],
                           after["parse_failed_reasons"]),
@@ -566,8 +566,9 @@ class GmailHTTPTests(IsolatedAsyncioTestCase):
 
 
 def _scheduled_invoice():
-    sender = "billing@merchant.example.test"
-    domain = "merchant.example.test"
+    # The issuer must match the authenticated sender domain.
+    sender = "billing@respectenergy.pl"
+    domain = "respectenergy.pl"
     body = (
         "Wystawca: Respect Energy\n"
         "Numer dokumentu: RE/2026/00042\n"

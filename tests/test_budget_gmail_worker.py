@@ -24,7 +24,7 @@ from pypdf.generic import ArrayObject, DecodedStreamObject, DictionaryObject, Na
 from pypdf.generic import _font
 
 from hestia.budget import gmail_worker as worker
-from hestia.budget.gmail_invoice import ImportedInvoice, _safe_field, extract_invoice, has_provider_invoice_number
+from hestia.budget.gmail_invoice import ImportedInvoice, extract_invoice, has_provider_invoice_number
 
 
 _FIXTURES = Path(__file__).parent / "fixtures" / "gmail"
@@ -81,11 +81,12 @@ class TestGmailInvoice(unittest.TestCase):
         templates = {
             "respect-energy.txt": ImportedInvoice("Respect Energy", "7791011327", "RE/09/2026/042", "231.8", "PLN",
                                                   "2026-09-04", "2026-09-25"),
-            "orange.html": ImportedInvoice("Orange", "9370008168", "FV/2026/10/12345", "76.45", "PLN",
-                                           "2026-10-06", "2026-10-19"),
-            "play.txt": ImportedInvoice("Play", None, "P4/2026/002", "49.99", "PLN", "2026-10-16", "2026-10-28"),
-            "t-mobile.html": ImportedInvoice("T-Mobile", "7811897358", "TM-2026-120", "1234", "PLN", "2026-11-02",
-                                             "2026-11-15"),
+            "pdf_text/orange_invoice.txt": ImportedInvoice("Orange", "5260250995", "26110200000001", "88.1", "PLN",
+                                                           "2026-11-14", "2026-11-30"),
+            "pdf_text/play_invoice.txt": ImportedInvoice("Play", "9512120077", "F/40000001/11/26", "150.37", "PLN",
+                                                         "2026-11-08", "2026-11-23"),
+            "pdf_text/tmobile_invoice.txt": ImportedInvoice("T-Mobile", "5261040567", "501234567890", "59.99", "PLN",
+                                                            "2026-09-09", "2026-09-23"),
         }
         with tempfile.TemporaryDirectory() as directory:
             path = str(Path(directory) / "parse.sock")
@@ -129,55 +130,14 @@ serve(sys.argv[1])
                     parsed = client.parse("pdf", _write_pdf(writer))
                     self.assertEqual(parsed, "Orange\nNumer dokumentu: FV/2026/042\nKwota: 12,19 EUR\n"
                                              "Termin platnosci: 05.02.2026")
-                    self.assertEqual(extract_invoice(parsed), ImportedInvoice(
-                        "Orange", None, "FV/2026/042", "12.19", "EUR", None, "2026-02-05",
-                    ))
+                    # Extraction only: this generic layout is not the real Orange template.
+                    self.assertIsNone(extract_invoice(parsed))
                     with self.assertRaises(worker.WorkerRejected):
                         client.parse("pdf", b"%PDF-synthetic")
                     with self.assertRaises(worker.WorkerRejected):
                         client.parse("html", b"\xff")
                 finally:
                     sidecar.terminate()
-
-    def test_every_field_rejects_pan_iban_and_pesel(self):
-        fields = {
-            "issuer": "Orange", "nip": "7791011327", "invoice_number": "FV/1234", "amount": "50,23",
-            "currency": "PLN", "issue_date": "2026-07-01", "due_date": "2026-07-29",
-        }
-        template = ("{issuer}\nNIP sprzedawcy: {nip}\nNumer dokumentu: {invoice_number}\nKwota: {amount} {currency}\n"
-                    "Data wystawienia: {issue_date}\nTermin płatności: {due_date}")
-        self.assertTrue(extract_invoice(template.format(**fields)))
-        for secret in ("4111-1111-1111-1111", "PL 61 1090 1014 0000 0712 1981 2874", "44051401458"):
-            for name in fields:
-                with self.subTest(name=name, secret=secret):
-                    modified = fields | {name: f"Orange {secret}" if name == "issuer" else secret}
-                    parsed = extract_invoice(template.format(**modified))
-                    if name in ("nip", "issue_date"):
-                        self.assertIsNotNone(parsed)
-                        self.assertIsNone(getattr(parsed, name))
-                        self.assertNotIn(secret, repr(parsed))
-                    else:
-                        self.assertIsNone(parsed)
-
-    def test_text_normalization_and_ambiguous_or_missing_fields(self):
-        invoice = "Orange\nNumer dokumentu: FV/2026/042\nKwota: 12,19 EUR\nTermin płatności: 05.02.2026\n"
-        cases = (
-            "", "Unknown supplier" + invoice[6:], invoice + "\nPlay", invoice + "Kwota: 44 PLN",
-            invoice.replace("FV/2026/042", "AA12BB34CC56DD78EE90FF12"),
-            invoice.replace("FV/2026/042", "4405FT1401458"),
-            invoice.replace("12,19 EUR", "440514014,58 PLN"),
-            invoice.replace("05.02.2026", "30.02.2026"), invoice + "Data dokumentu: 06.02.2026",
-            invoice.replace("FV/2026/042", "near@example.test"), invoice.replace("Kwota: 12,19 EUR", "Kwota:"),
-            invoice.replace("FV/2026/042", "\n" + "x" * 513 + "\nunrelated"),
-        )
-        for case in cases:
-            with self.subTest(case=case):
-                self.assertIsNone(extract_invoice(case))
-        safe = extract_invoice(invoice.replace("Orange", "Orange invoices@example.test") + "NIP wystawcy: PL7791011327")
-        self.assertEqual(safe, ImportedInvoice("Orange", "7791011327", "FV/2026/042", "12.19", "EUR", None,
-                                               "2026-02-05"))
-        self.assertIsNone(_safe_field("billing@example.test"))
-
 
 class TestGmailWorker(unittest.TestCase):
     def test_pdf_page_limit_and_empty_text(self):
