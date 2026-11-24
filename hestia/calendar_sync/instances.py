@@ -17,11 +17,12 @@ from .events import default_instance, original_start_key, to_ical
 
 INSTANCE_LIMIT = 2000
 OCCURRENCE_BOUND = 5000
+REPLAY_BOUND = 200000
 _UTC = timezone.utc
 _MIN_UTC = datetime.min.replace(tzinfo=_UTC)
 _MAX_UTC = datetime.max.replace(tzinfo=_UTC)
 _TIME_SELECTORS = {"BYHOUR", "BYMINUTE", "BYSECOND"}
-_HIGH_FREQUENCIES = {"SECONDLY", "MINUTELY"}
+_HIGH_FREQUENCIES = {"SECONDLY", "MINUTELY", "HOURLY"}
 _FREQUENCY_SECONDS = {
     "HOURLY": 3600,
     "DAILY": 86400,
@@ -119,6 +120,8 @@ def _calendar(payload: dict, uid: str) -> Calendar:
     content = _library_payload(payload)
     calendar = Calendar.from_ical(to_ical(content, uid, explicit_end=True))
     components = calendar.walk("VEVENT")
+    if "date" not in content["start"]:
+        components[0]["DTEND"] = vDDDTypes(_key(content["end"], False))
     for component, exception in zip(components[1:], content.get("exceptions", [])):
         if "DTSTART" not in component:
             default = default_instance(content, exception["originalStartTime"])
@@ -335,17 +338,62 @@ def _occurrence_upper_bound(payload: dict, start: datetime, end: datetime) -> in
     return bound
 
 
+def _replay_upper_bound(payload: dict, end: datetime) -> int:
+    content = _library_payload(payload)
+    all_day = "date" in content["start"]
+    starting = _key(content["start"], all_day)
+    if all_day:
+        starting = datetime.combine(starting, time.min, tzinfo=_UTC)
+    seconds = max(0, (end - starting).total_seconds())
+    bound = 0
+    for line in content.get("recurrence", []):
+        if _kind(line) != "RRULE":
+            continue
+        _, body = line.split(":", 1)
+        parts = dict(part.split("=", 1) for part in body.split(";"))
+        estimated = ceil(seconds / (_FREQUENCY_SECONDS[parts["FREQ"]] * int(parts.get("INTERVAL", "1")))) + 1
+        for selector in ("BYDAY", "BYMONTHDAY", "BYHOUR", "BYMINUTE", "BYSETPOS"):
+            if selector in parts:
+                estimated *= len(parts[selector].split(","))
+        bound += min(int(parts["COUNT"]), estimated) if "COUNT" in parts else estimated
+    return bound
+
+
+def _override_member(event: dict, queries: list, explicit: set, slots: set, original: datetime) -> bool:
+    if original in explicit or original in slots:
+        return True
+    try:
+        stop = original + timedelta(seconds=1)
+    except OverflowError:
+        return False
+    for content, until in queries:
+        if until is not None and original > until or _replay_upper_bound(content, original) > REPLAY_BOUND:
+            continue
+        for series in of(_calendar(content, event["uid"])).series:
+            for occurrence in series.between(original, stop):
+                component = occurrence.as_component(False)
+                recurrence_id = _time_dict(component["RECURRENCE-ID"], event["payload"]["start"]["timeZone"],
+                                           event["payload"]["start"]["timeZone"])
+                if _key(recurrence_id, False) == original:
+                    return True
+    return False
+
+
 def _expand_event(event: dict, window: _Window) -> tuple[list[dict], bool]:
     payload = event["payload"]
     if not payload.get("recurrence"):
         return ([_instance(event, payload, None)] if _overlaps(payload, window) else []), False
     if _high_frequency(payload):
-        _LOG.warning("Calendar event %s uses SECONDLY or MINUTELY recurrence; using DTSTART only", event["id"])
+        _LOG.warning("Calendar event %s uses SECONDLY, MINUTELY or HOURLY recurrence; using DTSTART only", event["id"])
         first = _first_instance(event, window)
         return ([first] if first is not None else []), True
     query_start, query_end = _query_bounds(window)
     if _occurrence_upper_bound(payload, query_start, query_end) > OCCURRENCE_BOUND:
         _LOG.warning("Calendar event %s exceeds the instance occurrence bound; using DTSTART only", event["id"])
+        first = _first_instance(event, window)
+        return ([first] if first is not None else []), True
+    if _replay_upper_bound(payload, query_end) > REPLAY_BOUND:
+        _LOG.warning("Calendar event %s exceeds the recurrence replay bound; using DTSTART only", event["id"])
         first = _first_instance(event, window)
         return ([first] if first is not None else []), True
 
@@ -355,6 +403,7 @@ def _expand_event(event: dict, window: _Window) -> tuple[list[dict], bool]:
     overrides = ({_key(item["originalStartTime"], False): item for item in payload.get("exceptions", [])}
                  if timed else {})
     seen_overrides = set()
+    series_slots = set()
     second_fold = _second_fold_start(payload)
     matches = []
     identifiers = set()
@@ -374,6 +423,7 @@ def _expand_event(event: dict, window: _Window) -> tuple[list[dict], bool]:
                     recurrence_id = _time_dict(component["RECURRENCE-ID"], payload["start"]["timeZone"],
                                                payload["start"]["timeZone"])
                     original = _key(recurrence_id, False)
+                    series_slots.add(original)
                     if until is not None and original not in explicit and original > until:
                         continue
                     if original in exdates:
@@ -394,8 +444,12 @@ def _expand_event(event: dict, window: _Window) -> tuple[list[dict], bool]:
     if second_fold is not None:
         add(_first_instance(event, window))
     for original, exception in overrides.items():
-        if original not in seen_overrides and original not in exdates:
-            add(_stored_override(event, exception, original, window))
+        if original in seen_overrides or original in exdates:
+            continue
+        if not _override_member(event, queries, explicit, series_slots, original):
+            _LOG.debug("Skipping orphan override for calendar event %s at %s", event["id"], original.isoformat())
+            continue
+        add(_stored_override(event, exception, original, window))
     matches.sort(key=lambda instance: _sort_key(instance, window))
     return matches[:INSTANCE_LIMIT + 1], False
 
