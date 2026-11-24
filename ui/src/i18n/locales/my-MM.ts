@@ -732,7 +732,7 @@ const messages: Partial<Messages> = {
   "budget.rules.fields.mcc": "ကတ်လက်ခံဆိုင် အမျိုးအစားကုဒ်",
   "budget.rules.operators.contains": "ပါဝင်သည်",
   "budget.rules.operators.equals": "တူညီသည်",
-  "budget.rules.conditionSummary": "{field} {operator} „{value}”",
+  "budget.rules.conditionSummary": "{field} {operator} “{value}”",
   "budget.rules.category": "အမျိုးအစား",
   "budget.rules.keep": "အမျိုးအစား မပြောင်း",
   "budget.rules.kind": "အမျိုးအမည်",

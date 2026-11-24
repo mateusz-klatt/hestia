@@ -732,7 +732,7 @@ const messages: Partial<Messages> = {
   "budget.rules.fields.mcc": "code ng kategorya ng merchant ng card",
   "budget.rules.operators.contains": "naglalaman ng",
   "budget.rules.operators.equals": "katumbas ng",
-  "budget.rules.conditionSummary": "{field} {operator} „{value}”",
+  "budget.rules.conditionSummary": "{field} {operator} “{value}”",
   "budget.rules.category": "Kategorya",
   "budget.rules.keep": "Walang pagbabago sa kategorya",
   "budget.rules.kind": "Uri",

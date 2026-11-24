@@ -732,7 +732,7 @@ const messages: Partial<Messages> = {
   "budget.rules.fields.mcc": "รหัสประเภทร้านค้าที่รับบัตร",
   "budget.rules.operators.contains": "มี",
   "budget.rules.operators.equals": "เท่ากับ",
-  "budget.rules.conditionSummary": "{field} {operator} „{value}”",
+  "budget.rules.conditionSummary": "{field} {operator} “{value}”",
   "budget.rules.category": "หมวดหมู่",
   "budget.rules.keep": "ไม่เปลี่ยนหมวดหมู่",
   "budget.rules.kind": "ประเภท",

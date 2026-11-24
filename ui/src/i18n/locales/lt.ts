@@ -731,7 +731,7 @@ const messages: Partial<Messages> = {
   "budget.rules.fields.mcc": "kortelių prekybininko kodas",
   "budget.rules.operators.contains": "turi",
   "budget.rules.operators.equals": "lygu",
-  "budget.rules.conditionSummary": "{field} {operator} „{value}”",
+  "budget.rules.conditionSummary": "{field} {operator} „{value}“",
   "budget.rules.category": "Kategorija",
   "budget.rules.keep": "Kategorijos nekeisti",
   "budget.rules.kind": "Tipas",

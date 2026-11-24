@@ -732,7 +732,7 @@ const messages: Partial<Messages> = {
   "budget.rules.fields.mcc": "kodi i tregtarit të kartës",
   "budget.rules.operators.contains": "përmban",
   "budget.rules.operators.equals": "është e barabartë me",
-  "budget.rules.conditionSummary": "{field} {operator} „{value}”",
+  "budget.rules.conditionSummary": "{field} {operator} “{value}”",
   "budget.rules.category": "Kategoria",
   "budget.rules.keep": "Pa ndryshim kategorie",
   "budget.rules.kind": "Lloji",

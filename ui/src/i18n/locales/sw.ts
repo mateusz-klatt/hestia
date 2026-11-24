@@ -731,7 +731,7 @@ const messages: Partial<Messages> = {
   "budget.rules.fields.mcc": "msimbo wa kategoria ya mfanyabiashara wa kadi",
   "budget.rules.operators.contains": "ina",
   "budget.rules.operators.equals": "ni sawa na",
-  "budget.rules.conditionSummary": "{field} {operator} „{value}”",
+  "budget.rules.conditionSummary": "{field} {operator} “{value}”",
   "budget.rules.category": "Kategoria",
   "budget.rules.keep": "Usibadilishe kategoria",
   "budget.rules.kind": "Aina",

@@ -731,7 +731,7 @@ const messages: Partial<Messages> = {
   "budget.rules.fields.mcc": "kód obchodníka pri platbe kartou",
   "budget.rules.operators.contains": "obsahuje",
   "budget.rules.operators.equals": "rovná sa",
-  "budget.rules.conditionSummary": "{field} {operator} „{value}”",
+  "budget.rules.conditionSummary": "{field} {operator} „{value}“",
   "budget.rules.category": "Kategória",
   "budget.rules.keep": "Bez zmeny kategórie",
   "budget.rules.kind": "Typ",

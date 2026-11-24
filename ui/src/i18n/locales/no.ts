@@ -731,7 +731,7 @@ const messages: Partial<Messages> = {
   "budget.rules.fields.mcc": "brukerstedskode for kort",
   "budget.rules.operators.contains": "inneholder",
   "budget.rules.operators.equals": "er lik",
-  "budget.rules.conditionSummary": "{field} {operator} „{value}”",
+  "budget.rules.conditionSummary": "{field} {operator} «{value}»",
   "budget.rules.category": "Kategori",
   "budget.rules.keep": "Ingen kategoriendring",
   "budget.rules.kind": "Type",

@@ -730,7 +730,7 @@ const messages: Partial<Messages> = {
   "budget.rules.fields.mcc": "kortets handlarkod",
   "budget.rules.operators.contains": "innehåller",
   "budget.rules.operators.equals": "är lika med",
-  "budget.rules.conditionSummary": "{field} {operator} „{value}”",
+  "budget.rules.conditionSummary": "{field} {operator} ”{value}”",
   "budget.rules.category": "Kategori",
   "budget.rules.keep": "Ingen kategoriändring",
   "budget.rules.kind": "Typ",

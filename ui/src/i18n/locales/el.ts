@@ -732,7 +732,7 @@ const messages: Partial<Messages> = {
   "budget.rules.fields.mcc": "κωδικός εμπόρου κάρτας",
   "budget.rules.operators.contains": "περιέχει",
   "budget.rules.operators.equals": "ισούται με",
-  "budget.rules.conditionSummary": "{field} {operator} „{value}”",
+  "budget.rules.conditionSummary": "{field} {operator} «{value}»",
   "budget.rules.category": "Κατηγορία",
   "budget.rules.keep": "Χωρίς αλλαγή κατηγορίας",
   "budget.rules.kind": "Τύπος",

@@ -731,7 +731,7 @@ const messages: Partial<Messages> = {
   "budget.rules.fields.mcc": "flokkunarkóði kortasöluaðila",
   "budget.rules.operators.contains": "inniheldur",
   "budget.rules.operators.equals": "er jafnt og",
-  "budget.rules.conditionSummary": "{field} {operator} „{value}”",
+  "budget.rules.conditionSummary": "{field} {operator} „{value}“",
   "budget.rules.category": "Flokkur",
   "budget.rules.keep": "Engin breyting á flokki",
   "budget.rules.kind": "Tegund",

@@ -732,7 +732,7 @@ const messages: Partial<Messages> = {
   "budget.rules.fields.mcc": "kod kategori pedagang kad",
   "budget.rules.operators.contains": "mengandungi",
   "budget.rules.operators.equals": "sama dengan",
-  "budget.rules.conditionSummary": "{field} {operator} „{value}”",
+  "budget.rules.conditionSummary": "{field} {operator} “{value}”",
   "budget.rules.category": "Kategori",
   "budget.rules.keep": "Tiada perubahan kategori",
   "budget.rules.kind": "Jenis",

@@ -731,7 +731,7 @@ const messages: Partial<Messages> = {
   "budget.rules.fields.mcc": "קוד בית העסק בכרטיס",
   "budget.rules.operators.contains": "מכיל",
   "budget.rules.operators.equals": "שווה ל",
-  "budget.rules.conditionSummary": "{field} {operator} „{value}”",
+  "budget.rules.conditionSummary": "{field} {operator} “{value}”",
   "budget.rules.category": "קטגוריה",
   "budget.rules.keep": "ללא שינוי קטגוריה",
   "budget.rules.kind": "סוג",

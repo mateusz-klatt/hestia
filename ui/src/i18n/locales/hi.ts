@@ -732,7 +732,7 @@ const messages: Partial<Messages> = {
   "budget.rules.fields.mcc": "कार्ड व्यापारी कोड",
   "budget.rules.operators.contains": "में शामिल है",
   "budget.rules.operators.equals": "बराबर है",
-  "budget.rules.conditionSummary": "{field} {operator} „{value}”",
+  "budget.rules.conditionSummary": "{field} {operator} “{value}”",
   "budget.rules.category": "श्रेणी",
   "budget.rules.keep": "श्रेणी न बदलें",
   "budget.rules.kind": "प्रकार",

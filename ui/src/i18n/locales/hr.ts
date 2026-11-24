@@ -732,7 +732,7 @@ const messages: Partial<Messages> = {
   "budget.rules.fields.mcc": "kod trgovca kartičnog plaćanja",
   "budget.rules.operators.contains": "sadrži",
   "budget.rules.operators.equals": "jednako je",
-  "budget.rules.conditionSummary": "{field} {operator} „{value}”",
+  "budget.rules.conditionSummary": "{field} {operator} „{value}“",
   "budget.rules.category": "Kategorija",
   "budget.rules.keep": "Bez promjene kategorije",
   "budget.rules.kind": "Vrsta",

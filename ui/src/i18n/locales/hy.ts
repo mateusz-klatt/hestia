@@ -732,7 +732,7 @@ const messages: Partial<Messages> = {
   "budget.rules.fields.mcc": "քարտային վաճառողի կոդ",
   "budget.rules.operators.contains": "պարունակում է",
   "budget.rules.operators.equals": "հավասար է",
-  "budget.rules.conditionSummary": "{field} {operator} „{value}”",
+  "budget.rules.conditionSummary": "{field} {operator} «{value}»",
   "budget.rules.category": "Կատեգորիա",
   "budget.rules.keep": "Առանց կատեգորիայի փոփոխության",
   "budget.rules.kind": "Տեսակ",

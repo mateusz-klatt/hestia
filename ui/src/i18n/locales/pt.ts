@@ -730,7 +730,7 @@ const messages: Partial<Messages> = {
   "budget.rules.fields.mcc": "código do estabelecimento do cartão",
   "budget.rules.operators.contains": "contém",
   "budget.rules.operators.equals": "é igual a",
-  "budget.rules.conditionSummary": "{field} {operator} „{value}”",
+  "budget.rules.conditionSummary": "{field} {operator} «{value}»",
   "budget.rules.category": "Categoria",
   "budget.rules.keep": "Sem alteração de categoria",
   "budget.rules.kind": "Tipo",

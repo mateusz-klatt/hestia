@@ -732,7 +732,7 @@ const messages: Partial<Messages> = {
   "budget.rules.fields.mcc": "mã ngành đơn vị chấp nhận thẻ",
   "budget.rules.operators.contains": "chứa",
   "budget.rules.operators.equals": "bằng",
-  "budget.rules.conditionSummary": "{field} {operator} „{value}”",
+  "budget.rules.conditionSummary": "{field} {operator} “{value}”",
   "budget.rules.category": "Danh mục",
   "budget.rules.keep": "Không đổi danh mục",
   "budget.rules.kind": "Loại",

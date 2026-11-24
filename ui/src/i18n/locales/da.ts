@@ -731,7 +731,7 @@ const messages: Partial<Messages> = {
   "budget.rules.fields.mcc": "forretningskode for kortbetaling",
   "budget.rules.operators.contains": "indeholder",
   "budget.rules.operators.equals": "er lig med",
-  "budget.rules.conditionSummary": "{field} {operator} „{value}”",
+  "budget.rules.conditionSummary": "{field} {operator} »{value}«",
   "budget.rules.category": "Kategori",
   "budget.rules.keep": "Ingen kategoriændring",
   "budget.rules.kind": "Type",

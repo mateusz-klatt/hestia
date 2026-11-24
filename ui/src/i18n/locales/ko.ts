@@ -732,7 +732,7 @@ const messages: Partial<Messages> = {
   "budget.rules.fields.mcc": "카드 가맹점 업종 코드",
   "budget.rules.operators.contains": "포함",
   "budget.rules.operators.equals": "일치",
-  "budget.rules.conditionSummary": "{field} {operator} „{value}”",
+  "budget.rules.conditionSummary": "{field} {operator} “{value}”",
   "budget.rules.category": "분류",
   "budget.rules.keep": "분류 변경 안 함",
   "budget.rules.kind": "유형",

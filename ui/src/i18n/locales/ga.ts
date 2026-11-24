@@ -732,7 +732,7 @@ const messages: Partial<Messages> = {
   "budget.rules.fields.mcc": "cód ceannaí cárta",
   "budget.rules.operators.contains": "tá ann",
   "budget.rules.operators.equals": "is ionann agus",
-  "budget.rules.conditionSummary": "{field} {operator} „{value}”",
+  "budget.rules.conditionSummary": "{field} {operator} “{value}”",
   "budget.rules.category": "Catagóir",
   "budget.rules.keep": "Gan athrú catagóire",
   "budget.rules.kind": "Cineál",

@@ -731,7 +731,7 @@ const messages: Partial<Messages> = {
   "budget.rules.fields.mcc": "karšu tirgotāja kods",
   "budget.rules.operators.contains": "satur",
   "budget.rules.operators.equals": "vienāds ar",
-  "budget.rules.conditionSummary": "{field} {operator} „{value}”",
+  "budget.rules.conditionSummary": "{field} {operator} “{value}”",
   "budget.rules.category": "Kategorija",
   "budget.rules.keep": "Nemainīt kategoriju",
   "budget.rules.kind": "Veids",

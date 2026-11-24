@@ -731,7 +731,7 @@ const messages: Partial<Messages> = {
   "budget.rules.fields.mcc": "کد پذیرندهٔ کارت",
   "budget.rules.operators.contains": "شامل",
   "budget.rules.operators.equals": "برابر با",
-  "budget.rules.conditionSummary": "{field} {operator} „{value}”",
+  "budget.rules.conditionSummary": "{field} {operator} «{value}»",
   "budget.rules.category": "دسته",
   "budget.rules.keep": "بدون تغییر دسته",
   "budget.rules.kind": "نوع",

@@ -731,7 +731,7 @@ const messages: Partial<Messages> = {
   "budget.rules.fields.mcc": "kart işyeri kodu",
   "budget.rules.operators.contains": "içerir",
   "budget.rules.operators.equals": "eşittir",
-  "budget.rules.conditionSummary": "{field} {operator} „{value}”",
+  "budget.rules.conditionSummary": "{field} {operator} “{value}”",
   "budget.rules.category": "Kategori",
   "budget.rules.keep": "Kategori değişmesin",
   "budget.rules.kind": "Tür",

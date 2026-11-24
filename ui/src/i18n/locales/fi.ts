@@ -731,7 +731,7 @@ const messages: Partial<Messages> = {
   "budget.rules.fields.mcc": "korttimaksun kauppiastunnus",
   "budget.rules.operators.contains": "sisältää",
   "budget.rules.operators.equals": "on yhtä kuin",
-  "budget.rules.conditionSummary": "{field} {operator} „{value}”",
+  "budget.rules.conditionSummary": "{field} {operator} ”{value}”",
   "budget.rules.category": "Luokka",
   "budget.rules.keep": "Ei luokan muutosta",
   "budget.rules.kind": "Tyyppi",
