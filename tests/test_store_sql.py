@@ -329,11 +329,13 @@ class Phase4UsersTests(unittest.TestCase):
 
     def test_cutover_users_marks_and_mirrors(self):
         engine, _ = db.init_db(self.db)
+        with Session(engine) as s, s.begin():
+            s.add(db.User(username="stale", password_hash="old"))
         store_sql.cutover_users(engine, {"tata": "h1", "mama": "h2"})
         self.assertTrue(store_sql.is_users_db_authoritative(engine))
         self.assertEqual(store_sql.load_users_db(engine), {"tata": "h1", "mama": "h2"})
-        store_sql.cutover_users(engine, {"tata": "h1"})   # replace-mirror: mama dropped
-        self.assertEqual(store_sql.load_users_db(engine), {"tata": "h1"})
+        store_sql.cutover_users(engine, {"tata": "stale"})   # already authoritative: must not overwrite/drop
+        self.assertEqual(store_sql.load_users_db(engine), {"tata": "h1", "mama": "h2"})
 
     def test_set_user_db_upserts(self):
         with mock.patch.dict(os.environ, {"HESTIA_DB": str(self.db)}):
@@ -1191,9 +1193,12 @@ class AuthorizationBridgeTests(unittest.TestCase):
             store_sql.set_user_db("op", "h2", "operator")
             store_sql.set_user_db("view", "h3", "viewer")
 
-            # Before catalog_compat: sync_legacy_grants and provision leave permission_grants untouched.
+            # Legacy phase: provision sets budget_owner and seeds all 6 direct self grants (no role grants yet).
             self.assertEqual(store_sql.provision_budget_owner("owner"), "ok")
-            self.assertEqual(self._grants_of("owner"), {})
+            self.assertEqual(
+                set(self._grants_of("owner")),
+                {(pid, "owner") for pid in store_sql._LEGACY_SELF_BUDGET_GRANTS},
+            )
 
             # Populate unrelated custom grant + household row before switching to catalog_compat.
             with Session(engine) as s, s.begin():
@@ -1293,10 +1298,18 @@ class AuthorizationBridgeTests(unittest.TestCase):
                 s.add(db.PermissionGrant(username="del", permission_id="budget.receipts.add", target_owner="alice"))
 
             self.assertEqual(store_sql.provision_budget_owner("ghost"), "not_found")
+            self.assertEqual(store_sql.provision_budget_owner("\ud800"), "not_found")
             self.assertEqual(store_sql.provision_budget_owner("dis_adm"), "disabled")
             self.assertEqual(store_sql.provision_budget_owner("op"), "not_admin")
             self.assertEqual(store_sql.provision_budget_owner("dorm"), "conflict")
             self.assertEqual(store_sql.provision_budget_owner("del"), "conflict")
+
+            # Default legacy phase seeds all 6 direct self grants in the owner transaction.
+            self.assertEqual(store_sql.provision_budget_owner("admin2"), "ok")
+            self.assertEqual(
+                set(self._grants_of("admin2")),
+                {(pid, "admin2") for pid in store_sql._LEGACY_SELF_BUDGET_GRANTS},
+            )
 
             self._set_meta("authz_policy_phase", "catalog_compat")
             self.assertEqual(store_sql.provision_budget_owner("alice"), "ok")
@@ -1378,6 +1391,128 @@ class AuthorizationBridgeTests(unittest.TestCase):
             )
             with self.assertRaises(authz.PolicyPhaseUnsupported):
                 store_sql.finish_sqlite_login(snap, native=False, now=1.0, secret=b"sec")
+
+    def test_load_auth_state_and_snapshot_keep_single_snapshot_under_interleaving(self):
+        engine, _ = db.init_db(self.db)
+        store_sql.cutover_users(engine, {"tata": "h1"})
+        with mock.patch.dict(os.environ, {"HESTIA_PERSIST": "sqlite", "HESTIA_DB": str(self.db)}):
+            real_req = authz.require_supported_policy_phase
+            fired = {"auth_state": False}
+
+            def interleave_v2_and_reset(session):
+                res = real_req(session)
+                if not fired["auth_state"]:
+                    fired["auth_state"] = True
+                    store_sql.activate_sessions_v2(path=self.db)
+                    self.assertTrue(store_sql.set_user_password("tata", "h2"))
+                return res
+
+            with mock.patch("hestia.authz.require_supported_policy_phase", side_effect=interleave_v2_and_reset):
+                state = store_sql.load_auth_state("tata")
+            # Must never see session_phase="legacy" paired with generation=1 from a newer snapshot.
+            self.assertEqual((state.session_phase, state.generation), ("legacy", 0))
+            after = store_sql.load_auth_state("tata")
+            self.assertEqual((after.session_phase, after.generation), ("v2", 1))
+
+            # Single-snapshot read also protects load_login_snapshot from torn hash vs generation.
+            fired["snap"] = False
+
+            def interleave_reset_during_snapshot(session):
+                res = real_req(session)
+                if not fired["snap"]:
+                    fired["snap"] = True
+                    self.assertTrue(store_sql.set_user_password("tata", "h3"))
+                return res
+
+            with mock.patch("hestia.authz.require_supported_policy_phase", side_effect=interleave_reset_during_snapshot):
+                snap = store_sql.load_login_snapshot("tata")
+            self.assertEqual((snap.password_hash, snap.generation), ("h2", 1))
+            self.assertIsNone(store_sql.finish_sqlite_login(snap, native=False, now=1.0, secret=b"sec"))
+
+            # Unencodable usernames are treated as ineligible without SQLite binding errors.
+            self.assertFalse(store_sql.load_auth_state("\ud800").enabled)
+            self.assertIsNone(store_sql.load_login_snapshot("\ud800").password_hash)
+
+    def test_concurrent_cutover_rechecks_authority_under_begin_immediate(self):
+        import sqlite3
+        import threading
+
+        reg_json, auto_json = self.dir / "registry.json", self.dir / "automations.json"
+        Registry(reg_json, mode="proxy").save()
+        AutomationStore(auto_json).save()
+        self.users_json.write_text('{"tata": "stale-pw"}', encoding="utf-8")
+
+        # 1. Interleaved second open_stores boot after first boot already cut over + password reset.
+        real_load_users = auth.load_users
+        boot2_reg = Registry.load(reg_json)
+        boot2_store = AutomationStore.load(auto_json)
+        raced_reset = {"done": False}
+
+        def race_first_boot(path=None):
+            data = real_load_users(path)
+            if not raced_reset["done"]:
+                raced_reset["done"] = True
+                engine, _ = db.init_db(self.db)
+                store_sql.cutover_import(
+                    engine,
+                    Registry(reg_json, mode="standalone"),
+                    AutomationStore(auto_json),
+                    {"tata": "initial-pw"},
+                )
+                store_sql.cutover_users(engine, {"tata": "initial-pw"})
+                self.assertTrue(store_sql.set_user_password("tata", "reset-pw"))
+                self.assertEqual(store_sql.add_user("bob", "bob-pw", "viewer"), "ok")
+            return data
+
+        with mock.patch.dict(os.environ, {"HESTIA_PERSIST": "sqlite", "HESTIA_DB": str(self.db)}), \
+             mock.patch("hestia.auth.load_users", side_effect=race_first_boot):
+            reg, _ = store_sql.open_stores(
+                registry_path=reg_json,
+                automations_path=auto_json,
+                users_path=self.users_json,
+                persist="sqlite",
+            )
+            self.assertEqual(reg.mode, "standalone")
+            self.assertEqual(store_sql.current_users(), {"tata": "reset-pw", "bob": "bob-pw"})
+
+        # Direct delayed cutover_import / cutover_users with stale snapshots also no-op.
+        engine, _ = db.init_db(self.db)
+        store_sql.cutover_import(engine, boot2_reg, boot2_store, {"tata": "stale-pw"})
+        store_sql.cutover_users(engine, {"tata": "stale-pw"})
+        self.assertEqual(store_sql.read_mode(engine), "standalone")
+        self.assertEqual(store_sql.load_users_db(engine), {"tata": "reset-pw", "bob": "bob-pw"})
+        engine.dispose()
+
+        # 2. Connection-level BEGIN IMMEDIATE blocks delayed boot until first writer commits authority.
+        db2_path = self.dir / "race_lock.db"
+        engine2, _ = db.init_db(db2_path)
+        lock_conn = sqlite3.connect(str(db2_path), isolation_level=None, timeout=5.0)
+        lock_conn.execute("PRAGMA busy_timeout=5000")
+        lock_conn.execute("BEGIN IMMEDIATE")
+        errors: list[BaseException] = []
+
+        def delayed_cutover():
+            try:
+                store_sql.cutover_users(engine2, {"tata": "stale-pw"})
+            except BaseException as exc:  # pragma: no cover - failure guard
+                errors.append(exc)
+
+        thread = threading.Thread(target=delayed_cutover)
+        thread.start()
+        time.sleep(0.05)
+        self.assertTrue(thread.is_alive())
+        lock_conn.execute(
+            "INSERT INTO users (username, password_hash, role, disabled, credential_generation, budget_owner) "
+            "VALUES ('tata', 'winner-pw', 'admin', 0, 0, 0)"
+        )
+        lock_conn.execute("INSERT INTO app_meta (key, value) VALUES ('users_authoritative', '1')")
+        lock_conn.execute("COMMIT")
+        lock_conn.close()
+        thread.join(timeout=5.0)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(errors, [])
+        self.assertEqual(store_sql.load_users_db(engine2), {"tata": "winner-pw"})
+        engine2.dispose()
 
 
 if __name__ == "__main__":  # pragma: no cover

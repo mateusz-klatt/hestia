@@ -328,20 +328,30 @@ _CORE_BROWSER_ROUTES = _CORE_BROWSER_READ_ROUTES | _CORE_BROWSER_MUTATION_ROUTES
 
 
 def _canonical_origin_tuple(origin: str) -> "tuple[str, str, int] | None":
-    if not origin or not origin.isascii() or any(ch.isspace() for ch in origin) or "\\" in origin:
+    if (
+        not origin
+        or not origin.isascii()
+        or any(ord(ch) <= 32 or ord(ch) == 127 for ch in origin)
+        or "\\" in origin
+    ):
         return None
     if "://" not in origin:
         return None
-    _, authority = origin.split("://", 1)
-    if not authority or any(ch in authority for ch in ("/", "?", "#", "@")):
+    raw_scheme, authority = origin.split("://", 1)
+    scheme = raw_scheme.lower()
+    if (
+        scheme not in ("http", "https")
+        or not authority
+        or authority.endswith(":")
+        or any(ch in authority for ch in ("/", "?", "#", "@"))
+    ):
         return None
     try:
         parsed = urlsplit(origin)
         port = parsed.port
     except ValueError:
         return None
-    scheme = parsed.scheme.lower()
-    if scheme not in ("http", "https") or not parsed.hostname:
+    if not parsed.hostname:
         return None
     if port is not None and not 1 <= port <= 65535:
         return None

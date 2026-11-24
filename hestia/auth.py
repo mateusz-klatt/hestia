@@ -509,9 +509,6 @@ def _cli_budget_owner(args: list) -> int:
         print("usage: python -m hestia.auth budget-owner <username>", file=sys.stderr)
         return 2
     username = args[0]
-    if not username or "|" in username or "/" in username:
-        print("invalid username (no empty, '|' or '/')", file=sys.stderr)
-        return 2
     if os.environ.get("HESTIA_PERSIST", "json").lower() != "sqlite":
         print("budget-owner requires the SQLite backend (HESTIA_PERSIST=sqlite)", file=sys.stderr)
         return 1

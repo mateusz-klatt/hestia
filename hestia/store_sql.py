@@ -16,6 +16,7 @@ never stop the JSON-backed house from booting (the live path stays on JSON in Ph
 """
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import dataclass
 import json
 import logging
@@ -23,7 +24,7 @@ import os
 from pathlib import Path
 import time
 
-from sqlalchemy import delete, event, func, select, update
+from sqlalchemy import delete, event, func, select, text, update
 from sqlalchemy.orm import Session
 
 from . import auth, authz
@@ -265,13 +266,52 @@ def load_automations(engine, path, *, writer) -> AutomationStore:
     return store
 
 
+def _valid_username(username) -> bool:
+    """Return True iff ``username`` is a non-empty UTF-8-encodable string safe for SQLite binding."""
+    if not isinstance(username, str) or not username:
+        return False
+    try:
+        username.encode("utf-8")
+    except UnicodeEncodeError:
+        return False
+    return True
+
+
+@contextmanager
+def _read_snapshot(engine):
+    """Run multiple SQLite reads in one explicit ``BEGIN`` snapshot."""
+    with Session(engine) as session:
+        session.execute(text("BEGIN"))
+        try:
+            yield session
+        finally:
+            session.rollback()
+
+
+@contextmanager
+def _immediate_transaction(engine):
+    """Run work inside an explicit ``BEGIN IMMEDIATE`` write transaction on ``engine``."""
+    with Session(engine) as session:
+        session.execute(text("BEGIN IMMEDIATE"))
+        try:
+            yield session
+            session.commit()
+        except BaseException:
+            session.rollback()
+            raise
+
+
 def cutover_import(engine, registry: Registry, store: AutomationStore, users: dict) -> None:
     """One-time: replace-mirror the current JSON-loaded state into the DB and set the authority
     marker, in ONE transaction — after this the DB is the source of truth for registry+automations.
     The mode mirrored here is the JSON registry's persisted mode; the shipped docker-compose leaves
     HESTIA_MODE unset so the DB mode stays the single source of truth (an env override that is later
     removed would surface the DB mode on the next boot — don't mix HESTIA_MODE with the sqlite backend)."""
-    with Session(engine) as session, session.begin():
+    with _immediate_transaction(engine) as session:
+        auth_session_phase(session)
+        authz.require_supported_policy_phase(session)
+        if session.get(AppMeta, _AUTHORITATIVE) is not None:
+            return
         mirror_json_to_db(session, registry=registry, store=store, users=users)
         _upsert(session, AppMeta, "key", _AUTHORITATIVE, {"value": "1"})
 
@@ -285,18 +325,20 @@ def open_stores(*, registry_path, automations_path, users_path, persist=None):
     if persist != "sqlite":
         return Registry.load(registry_path), AutomationStore.load(automations_path)
     engine, _ = init_db()
-    with Session(engine) as session:
+    with _read_snapshot(engine) as session:
         auth_session_phase(session)
         authz.require_supported_policy_phase(session)
-    if not is_db_authoritative(engine):
+        registry_auth = session.get(AppMeta, _AUTHORITATIVE) is not None
+        users_auth = session.get(AppMeta, _USERS_AUTHORITATIVE) is not None
+    if not registry_auth:
         cutover_import(engine, Registry.load(registry_path), AutomationStore.load(automations_path),
                        auth.load_users(Path(users_path)))
-    if not is_users_db_authoritative(engine):   # Phase 4: flip users (independent of the registry cutover)
+    if not users_auth:                          # Phase 4: flip users (independent of the registry cutover)
         users = auth.load_users(Path(users_path))
-        if users:                                # only promote a REAL, non-empty users.json: load_users returns
-            cutover_users(engine, users)         # {} for a missing/unreadable/malformed file, and promoting that
-            #                                      would wipe the DB users + set the marker → permanent lockout.
-            #                                      Empty/bad → skip (stay on JSON, retry next boot).
+        if users:                               # only promote a REAL, non-empty users.json: load_users returns
+            cutover_users(engine, users)        # {} for a missing/unreadable/malformed file, and promoting that
+            #                                     would wipe the DB users + set the marker → permanent lockout.
+            #                                     Empty/bad → skip (stay on JSON, retry next boot).
     return (load_registry(engine, registry_path, writer=registry_db_writer(engine)),
             load_automations(engine, automations_path, writer=automations_db_writer(engine)))
 
@@ -432,9 +474,11 @@ def load_users_db(engine) -> dict:
 
 def cutover_users(engine, users: dict) -> None:
     """One-time: replace-mirror users.json into the DB and set the users authority marker (one txn)."""
-    with Session(engine) as session, session.begin():
+    with _immediate_transaction(engine) as session:
         auth_session_phase(session)
         authz.require_supported_policy_phase(session)
+        if session.get(AppMeta, _USERS_AUTHORITATIVE) is not None:
+            return
         for username, password_hash in users.items():
             # legacy (pre-roles) JSON accounts -> admin so the operator keeps full access after cutover
             _upsert(session, User, "username", username,
@@ -604,7 +648,7 @@ def set_user_disabled(username: str, disabled: bool, *, path=None) -> str:
 def load_auth_state(username, *, users_path=None) -> AuthState:
     """Load the active authentication and session-bridge state for ``username``."""
     persist = os.environ.get("HESTIA_PERSIST", "json").lower()
-    valid_name = isinstance(username, str) and bool(username)
+    valid_name = _valid_username(username)
     if persist != "sqlite":
         present = valid_name and username in auth.load_users(Path(users_path) if users_path is not None else None)
         return AuthState(
@@ -616,7 +660,7 @@ def load_auth_state(username, *, users_path=None) -> AuthState:
             generation=0,
         )
     engine, _ = init_db()
-    with Session(engine) as session:
+    with _read_snapshot(engine) as session:
         s_phase = auth_session_phase(session)
         p_phase = authz.require_supported_policy_phase(session)
         if session.get(AppMeta, _USERS_AUTHORITATIVE) is not None:
@@ -644,7 +688,7 @@ def load_auth_state(username, *, users_path=None) -> AuthState:
 def load_login_snapshot(username, *, users_path=None) -> LoginSnapshot:
     """Capture the pre-scrypt credential snapshot for ``username`` without holding a write lock."""
     persist = os.environ.get("HESTIA_PERSIST", "json").lower()
-    valid_name = isinstance(username, str) and bool(username)
+    valid_name = _valid_username(username)
     clean_name = username if valid_name else ""
     if persist != "sqlite":
         users = auth.load_users(Path(users_path) if users_path is not None else None)
@@ -658,7 +702,7 @@ def load_login_snapshot(username, *, users_path=None) -> LoginSnapshot:
         )
     resolved = db_path()
     engine, _ = init_db()
-    with Session(engine) as session:
+    with _read_snapshot(engine) as session:
         s_phase = auth_session_phase(session)
         p_phase = authz.require_supported_policy_phase(session)
         if session.get(AppMeta, _USERS_AUTHORITATIVE) is not None:
@@ -746,7 +790,7 @@ def activate_sessions_v2(*, path=None) -> str:
 
 
 def provision_budget_owner(username: str, *, path=None) -> str:
-    """Provision an enabled legacy admin as a budget owner and reconcile compatible self grants."""
+    """Provision an enabled legacy admin as a budget owner and seed direct self grants."""
     engine = _immediate_engine(path)
     try:
         with Session(engine) as session, session.begin():
@@ -754,7 +798,7 @@ def provision_budget_owner(username: str, *, path=None) -> str:
             authz.require_supported_policy_phase(session)
             if session.get(AppMeta, _USERS_AUTHORITATIVE) is None:
                 return "users_not_authoritative"
-            row = session.get(User, username)
+            row = session.get(User, username) if _valid_username(username) else None
             if row is None:
                 return "not_found"
             if row.disabled:
@@ -783,6 +827,16 @@ def provision_budget_owner(username: str, *, path=None) -> str:
             if other_grant_target is not None or dormant_household is not None:
                 return "conflict"
             row.budget_owner = True
+            existing_self = set(
+                session.execute(
+                    select(PermissionGrant.permission_id).where(
+                        PermissionGrant.username == username,
+                        PermissionGrant.target_owner == username,
+                    )
+                ).scalars()
+            )
+            for pid in sorted(_LEGACY_SELF_BUDGET_GRANTS - existing_self):
+                session.add(PermissionGrant(username=username, permission_id=pid, target_owner=username))
             sync_legacy_grants(session)
             return "ok"
     finally:

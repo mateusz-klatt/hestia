@@ -478,18 +478,40 @@ class CliSqliteTests(unittest.TestCase):
             self.assertEqual(auth._cli(["activate-sessions-v2"]), 0)  # idempotent repeat
 
     def test_budget_owner_cli(self):
+        from sqlalchemy import select
         self.assertEqual(auth._cli(["budget-owner"]), 2)
-        self.assertEqual(auth._cli(["budget-owner", "bad|name"]), 2)
         with mock.patch.dict(os.environ, {"HESTIA_PERSIST": "json"}):
             self.assertEqual(auth._cli(["budget-owner", "tata"]), 1)
         other = self.dir / "fresh_owner.db"
         with mock.patch.dict(os.environ, {"HESTIA_DB": str(other)}):
             self.assertEqual(auth._cli(["budget-owner", "tata"]), 1)
+        self.assertEqual(auth._cli(["budget-owner", "ghost|name"]), 1)
+        self.assertEqual(auth._cli(["budget-owner", ""]), 1)
         self.assertEqual(auth._cli(["add", "kid", "--role", "viewer"], prompt=_Prompt("pw", "pw")), 0)
         self.assertEqual(auth._cli(["budget-owner", "ghost"]), 1)
         self.assertEqual(auth._cli(["budget-owner", "kid"]), 1)
         self.assertEqual(auth._cli(["budget-owner", "tata"]), 0)
         self.assertEqual(auth._cli(["budget-owner", "tata"]), 0)  # idempotent repeat
+
+        # Existing JSON-imported usernames containing '|' are accepted via locked DB lookup.
+        pipe_db = self.dir / "pipe_owner.db"
+        with mock.patch.dict(os.environ, {"HESTIA_PERSIST": "sqlite", "HESTIA_DB": str(pipe_db)}):
+            eng, _ = db.init_db(pipe_db)
+            store_sql.cutover_users(eng, {"legacy|owner": auth.hash_password("pw")})
+            eng.dispose()
+            self.assertEqual(auth._cli(["budget-owner", "legacy|owner"]), 0)
+            eng, sessions = db.init_db(pipe_db)
+            with sessions() as s:
+                user_row = s.get(db.User, "legacy|owner")
+                self.assertTrue(user_row.budget_owner)
+                grants = {
+                    (g.permission_id, g.target_owner)
+                    for g in s.execute(
+                        select(db.PermissionGrant).where(db.PermissionGrant.username == "legacy|owner")
+                    ).scalars()
+                }
+            self.assertEqual(grants, {(pid, "legacy|owner") for pid in store_sql._LEGACY_SELF_BUDGET_GRANTS})
+            eng.dispose()
 
     def test_cli_fails_closed_with_fixed_error_on_unsupported_policy_phase(self):
         import io

@@ -2969,7 +2969,20 @@ class SessionBridgeWebTests(unittest.IsolatedAsyncioTestCase):
             )
             self.assertEqual(good_cfg.status, 400)  # cleared auth & origin, reached body validation
 
-        for bad_cfg in ("not-a-url", "ftp://hestia.example", "https://hestia.example/path", "https://hestia.example:0", "https://hestia.example:99999", "https://u@hestia.example", "https://bad host"):
+        for bad_cfg in (
+            "not-a-url",
+            "ftp://hestia.example",
+            "https://hestia.example/path",
+            "https://hestia.example:0",
+            "https://hestia.example:99999",
+            "https://u@hestia.example",
+            "https://bad host",
+            "\x01https://hestia.example",
+            "\x7fhttps://hestia.example",
+            "https://\x01hestia.example",
+            "https://hestia.example:",
+            "https://:8080",
+        ):
             with mock.patch.dict(os.environ, {"HESTIA_PUBLIC_ORIGIN": bad_cfg}):
                 cfg_err = await self.client.post(
                     "/api/name", json={}, headers={"Cookie": f"hestia_session={b_cookie}", "Origin": direct_origin}
@@ -3066,6 +3079,57 @@ class SessionBridgeWebTests(unittest.IsolatedAsyncioTestCase):
             direct_resp = await web._login(login_req)
         self.assertEqual(direct_resp.status, 503)
         self.assertEqual(json.loads(direct_resp.body)["error"], "authorization_bridge_incompatible")
+
+    async def test_login_surrogate_username_runs_dummy_scrypt_and_returns_401(self):
+        verify_calls = []
+        real_verify = auth.verify_password
+
+        def track_verify(password, stored):
+            verify_calls.append(stored)
+            return real_verify(password, stored)
+
+        with mock.patch("hestia.auth.verify_password", side_effect=track_verify):
+            resp = await self.client.post(
+                "/api/login",
+                data='{"user": "\\ud800", "password": "wrong"}',
+                headers={"Content-Type": "application/json"},
+            )
+        self.assertEqual(resp.status, 401)
+        self.assertEqual((await resp.json())["error"], "invalid credentials")
+        self.assertEqual(verify_calls, [auth._DUMMY_STORED])
+
+    async def test_middleware_v1_revocation_race_keeps_single_snapshot(self):
+        login_v1 = await self.client.post("/api/login", json={"user": "admin", "password": "adminpw12345"})
+        self.assertEqual(login_v1.status, 200)
+        v1_cookie = login_v1.cookies["hestia_session"].value
+        self.client.session.cookie_jar.clear()
+
+        real_load = store_sql.load_auth_state
+        real_req = authz.require_supported_policy_phase
+        seen_states = []
+        interleaved = {"done": False}
+
+        def interleave(session):
+            phase = real_req(session)
+            if not interleaved["done"]:
+                interleaved["done"] = True
+                store_sql.activate_sessions_v2(path=self.db_path)
+                store_sql.set_user_password("admin", auth.hash_password("adminpw-reset"), path=self.db_path)
+            return phase
+
+        def capture_state(*args, **kwargs):
+            state = real_load(*args, **kwargs)
+            seen_states.append((state.session_phase, state.generation))
+            return state
+
+        with mock.patch("hestia.store_sql.load_auth_state", side_effect=capture_state), \
+             mock.patch("hestia.authz.require_supported_policy_phase", side_effect=interleave):
+            first = await self.client.get("/api/whoami", headers={"Cookie": f"hestia_session={v1_cookie}"})
+            self.assertEqual(first.status, 200)
+        self.assertEqual(seen_states, [("legacy", 0)])
+
+        revoked = await self.client.get("/api/whoami", headers={"Cookie": f"hestia_session={v1_cookie}"})
+        self.assertEqual(revoked.status, 401)
 
 
 if __name__ == "__main__":
