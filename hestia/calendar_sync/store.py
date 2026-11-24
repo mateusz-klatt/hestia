@@ -115,13 +115,16 @@ class SyncStore:
                 "payload": json.loads(event.payload_json), "revision": event.revision,
                 "deleted": event.deleted, "modified_at": event.modified_at}
 
-    def list_events(self, group, include_deleted=False):
+    def list_events(self, group, include_deleted=False, *, limit=None):
         with self.sessions() as s:
             self._require_group(s, group)
             query = select(Event).where(Event.group_id == group)
             if not include_deleted:
                 query = query.where(Event.deleted.is_(False))
-            return [self._event_dict(row) for row in s.scalars(query.order_by(Event.id))]
+            query = query.order_by(Event.id)
+            if limit is not None:
+                query = query.limit(limit)
+            return [self._event_dict(row) for row in s.scalars(query)]
 
     @staticmethod
     def _require_group(s, group):

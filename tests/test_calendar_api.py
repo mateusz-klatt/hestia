@@ -961,7 +961,101 @@ class CalendarApiTests(unittest.IsolatedAsyncioTestCase):
             cap_result = instance_expander.expand_events(cap_events, date(2026, 1, 1), date(2026, 1, 2))
         self.assertLess(time.monotonic() - started, 1)
         self.assertEqual(cap_result, {"instances": [], "truncated": True})
-        self.assertIn("5000 event limit", "\n".join(cap_logs.output))
+        self.assertIn("processing limit", "\n".join(cap_logs.output))
+
+    async def test_instances_sql_limit_avoids_decoding_beyond_5001_rows(self):
+        from hestia.calendar_sync.store import SyncStore
+
+        old_payload = {"summary": "Old", "start": {"date": "2025-12-01"}, "end": {"date": "2025-12-02"}}
+        in_window = {"summary": "Late row", "start": {"date": "2026-01-01"}, "end": {"date": "2026-01-02"}}
+        store = api._store()
+        with store.transaction() as session:
+            session.add_all([
+                db.CalendarEvent(
+                    id=f"row-{i:04d}", group_id="family", uid=f"row-{i:04d}@hestia",
+                    payload_json=json.dumps(in_window if i == 5001 else old_payload),
+                    fingerprint=f"fp-row-{i:04d}", deleted=False, deleted_at=None,
+                    revision=1, modified_at=0.0, source="local",
+                )
+                for i in range(5005)
+            ])
+        started = time.monotonic()
+        with mock.patch.object(SyncStore, "_event_dict", wraps=SyncStore._event_dict) as decoder:
+            with mock.patch.object(SyncStore, "list_events", wraps=store.list_events) as listed:
+                response = await self.instances("from=2026-01-01&to=2026-01-02")
+        self.assertLess(time.monotonic() - started, 2)
+        self.assertEqual(response.status, 200)
+        state = await response.json()
+        self.assertEqual(state["instances"], [])
+        self.assertTrue(state["truncated"])
+        self.assertEqual(listed.call_args.kwargs.get("limit"), instance_expander.MAX_REQUEST_EVENTS + 1)
+        self.assertEqual(decoder.call_count, instance_expander.MAX_REQUEST_EVENTS + 1)
+
+    async def test_instances_92_day_5000_daily_series_hits_constructed_instance_budget_fast(self):
+        daily_payload = {"summary": "92d daily",
+                         "start": {"dateTime": "2026-01-01T09:00:00+00:00", "timeZone": "UTC"},
+                         "end": {"dateTime": "2026-01-01T10:00:00+00:00", "timeZone": "UTC"},
+                         "recurrence": ["RRULE:FREQ=DAILY"]}
+        self._seed_group_events(5000, "d92", daily_payload)
+        started = time.monotonic()
+        with self.assertLogs("hestia.calendar_sync.instances", level="WARNING") as logs:
+            response = await self.instances("from=2026-01-01&to=2026-04-03")
+        self.assertLess(time.monotonic() - started, 2)
+        self.assertEqual(response.status, 200)
+        state = await response.json()
+        self.assertTrue(state["truncated"])
+        self.assertEqual(len(state["instances"]), 2000)
+        self.assertEqual(state["instances"][0]["start"],
+                         {"dateTime": "2026-01-01T09:00:00+00:00", "timeZone": "UTC"})
+        self.assertIn("constructed instance limit", "\n".join(logs.output))
+
+        # Pending-override loop also stops and truncates if constructed instance budget hits zero mid-event.
+        pending_event = {
+            "id": "pend", "uid": "pend", "revision": 1, "group_id": "family",
+            "payload": {"summary": "Pending",
+                        "start": {"dateTime": "2026-01-01T09:00:00+00:00", "timeZone": "UTC"},
+                        "end": {"dateTime": "2026-01-01T10:00:00+00:00", "timeZone": "UTC"},
+                        "recurrence": ["RRULE:FREQ=DAILY;COUNT=1"],
+                        "exceptions": [
+                            {"originalStartTime": {"dateTime": "2026-01-10T09:00:00+00:00"}, "summary": "M1",
+                             "start": {"dateTime": "2026-01-02T09:00:00+00:00", "timeZone": "UTC"},
+                             "end": {"dateTime": "2026-01-02T10:00:00+00:00", "timeZone": "UTC"}},
+                            {"originalStartTime": {"dateTime": "2026-01-11T09:00:00+00:00"}, "summary": "M2",
+                             "start": {"dateTime": "2026-01-03T09:00:00+00:00", "timeZone": "UTC"},
+                             "end": {"dateTime": "2026-01-03T10:00:00+00:00", "timeZone": "UTC"}},
+                        ]},
+        }
+        budget = instance_expander._ReplayBudget(instances_remaining=2)
+        window = instance_expander._make_window(date(2026, 1, 1), date(2026, 1, 5), "UTC")
+        with self.assertLogs("hestia.calendar_sync.instances", level="WARNING"):
+            partial, truncated = instance_expander._expand_event(pending_event, window, budget)
+        self.assertTrue(truncated)
+        self.assertEqual(len(partial), 2)
+
+    def test_expand_events_5000_series_with_4000_cancellations_charges_before_indexing(self):
+        cancellations = [
+            {"originalStartTime": {"dateTime": f"{2000 + (i // 365):04d}-{((i % 365) // 28) % 12 + 1:02d}-{(i % 28) + 1:02d}T09:00:00+00:00"},
+             "status": "cancelled"}
+            for i in range(4000)
+        ]
+        shared_payload = {"summary": "Cancelled history",
+                          "start": {"dateTime": "2000-01-01T09:00:00+00:00", "timeZone": "UTC"},
+                          "end": {"dateTime": "2000-01-01T10:00:00+00:00", "timeZone": "UTC"},
+                          "recurrence": ["RRULE:FREQ=DAILY"],
+                          "exceptions": cancellations}
+        events = [
+            {"id": f"ov{i:04d}", "uid": f"ov{i:04d}", "revision": 1, "group_id": "family", "payload": shared_payload}
+            for i in range(5000)
+        ]
+        started = time.monotonic()
+        with mock.patch.object(instance_expander, "_key", wraps=instance_expander._key) as keyed:
+            with self.assertLogs("hestia.calendar_sync.instances", level="WARNING"):
+                result = instance_expander.expand_events(events, date(2026, 1, 1), date(2026, 1, 2))
+        self.assertLess(time.monotonic() - started, 2)
+        self.assertTrue(result["truncated"])
+        self.assertEqual([item["event_id"] for item in result["instances"]], ["ov0000"])
+        # Only event 0 (~400k override cost <= 600k) indexed exceptions; the other 4,999 skipped before any dict build.
+        self.assertLess(keyed.call_count, 5000)
 
     async def test_instances_codex_1000_etc_gmt5_series_reuse_zone_without_vtimezone(self):
         from icalendar import Timezone as ICalTimezone
@@ -1348,8 +1442,10 @@ class CalendarApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status, 200)
         response = await self.instances("from=9999-12-30&to=9999-12-31&tz=America/New_York")
         self.assertEqual(response.status, 200)
-        self.assertIsNone(instance_expander._base_end({"start": {"date": "9999-12-30"}, "end": {"date": "9999-12-31"}},
-                                                       {"date": "9999-12-31"}))
+        win = instance_expander._make_window(date(9999, 12, 30), date(9999, 12, 31), "UTC")
+        overflow_event = {"id": "max", "uid": "max", "revision": 1, "group_id": "family",
+                          "payload": {"summary": "Max", "start": {"date": "9999-12-30"}, "end": {"date": "9999-12-31"}}}
+        self.assertIsNone(instance_expander._occurrence_instance(overflow_event, date(9999, 12, 31), timedelta(days=1), win, None, None))
 
     async def test_instances_incompatible_rule_does_not_fail_group(self):
         incompatible = await self.create({"summary": "Incompatible library rule",

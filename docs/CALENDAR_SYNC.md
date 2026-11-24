@@ -249,25 +249,29 @@ zwraca wyłącznie `DTSTART` (z obsługą `EXDATE` i wyjątków dla `DTSTART`) z
 Jeśli górne oszacowanie liczby wystąpień w poszerzonym oknie (z uwzględnieniem
 lookbacku od `query_start - czas_trwania`) przekracza 5000 albo szacowany koszt
 badania zdarzenia przekracza pozostały wspólny budżet żądania (`REQUEST_REPLAY_BUDGET`,
-600000 jednostek sprawdzeń dni na całe żądanie dla maksymalnie `5000` wydarzeń
-przetwarzanych w ustalonej kolejności identyfikatorów), stosowane jest cięcie pracy:
-- gdy pozostały budżet nie pokrywa nawet kosztu jawnych dat `RDATE`/`EXDATE` zdarzenia
-  (po 300 jednostek na każdą datę policzoną przed parsowaniem), zdarzenie jest w całości
-  pomijane bez parsowania `RDATE`/`EXDATE` i bez emitowania `DTSTART` (aby uniknąć
+600000 jednostek sprawdzeń dni oraz osobny limit `50000` skonstruowanych wystąpień na
+całe żądanie dla maksymalnie `5000` wydarzeń pobieranych z bazy z `LIMIT 5001` w
+ustalonej kolejności identyfikatorów), stosowane jest cięcie pracy:
+- gdy pozostały budżet nie pokrywa nawet kosztu jawnych dat `RDATE`/`EXDATE` (po 300
+  jednostek) i zapisanych wyjątków zdarzenia (po 100 jednostek na wyjątek przed
+  zbudowaniem jakichkolwiek map), zdarzenie jest w całości pomijane bez parsowania
+  `RDATE`/`EXDATE` ani indeksowania wyjątków i bez emitowania `DTSTART` (aby uniknąć
   pokazania wykluczonego wystąpienia), z ustawieniem `truncated: true`;
 - w przeciwnym razie fallback zwraca samo `DTSTART` (z odjęciem kosztu parsowanych
-  `EXDATE`, bez wywoływania biblioteki i bez pomniejszania budżetu dla kolejnych
-  mniejszych lub niecyklicznych wydarzeń).
+  `EXDATE` i wyjątków, bez wywoływania biblioteki i bez pomniejszania budżetu dla
+  kolejnych mniejszych lub niecyklicznych wydarzeń).
 Koszt zdarzenia sumuje sprawdzenia dni z `RRULE` od `min(DTSTART, query_start -
 czas_trwania)` do końca poszerzonego okna (bez przesuwania `DTSTART`, aby zachować
 fazy `COUNT`/`INTERVAL`: `okresy * dni_w_okresie * 1` kandydat dziennie, gdzie `DAILY=1`,
-`WEEKLY=7`, `MONTHLY=31`, `YEARLY=366`) oraz policzoną przed parsowaniem liczbę `RDATE`
-i `EXDATE`. Rozwijanie przekazuje strefy `ZoneInfo` bezpośrednio do `icalendar` bez
+`WEEKLY=7`, `MONTHLY=31`, `YEARLY=366`), policzoną przed parsowaniem liczbę `RDATE`
+i `EXDATE` oraz liczbę wyjątków (indeksowanych po wstępnym odfiltrowaniu do poszerzonego
+okna). Rozwijanie przekazuje strefy `ZoneInfo` bezpośrednio do `icalendar` bez
 budowania `VTIMEZONE` na każde zdarzenie (a serializacja `to_ical` buforuje `VTIMEZONE`
-w pamięci podręcznej LRU). Po przekroczeniu limitu `5000` przetworzonych wydarzeń pętla
-kończy pracę i ustawia `truncated: true`. Zmieniony wyjątek zastępuje swoje pierwotne
-wystąpienie, a kontrola osieroconych wyjątków używa tego samego wyłącznego końca
-poszerzonego okna co wywołanie biblioteki.
+w pamięci podręcznej LRU). Po przekroczeniu limitu `5000` wydarzeń w SQL lub `50000`
+skonstruowanych wystąpień w żądaniu rozwijanie przerywa pracę i ustawia `truncated: true`,
+używając ograniczonego wyboru `heapq.nsmallest` zamiast pełnego sortowania. Zmieniony wyjątek
+zastępuje swoje pierwotne wystąpienie, a kontrola osieroconych wyjątków używa tego
+samego wyłącznego końca poszerzonego okna co wywołanie biblioteki.
 Odległy `RECURRENCE-ID` nie poszerza generowania, ale zapisany wyjątek trafiający w
 żądane okno może zostać zwrócony jako samodzielne wystąpienie. Uwzględniane są także
 wystąpienia zaczynające się przed oknem, ale nachodzące na nie. Daty całodniowe
