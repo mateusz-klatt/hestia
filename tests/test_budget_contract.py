@@ -7,6 +7,7 @@ import unittest
 
 from hestia import api_contract as contract
 from hestia import db
+from hestia.budget.gmail_store import PARSE_FAILED_REASONS
 from hestia.budget.store import BudgetControlConflict, BudgetStore
 from hestia.budget.views import BudgetHTTPStore
 from tests.test_budget_store import configuration, prepare_selected, snapshot, transaction
@@ -313,6 +314,26 @@ class BudgetOpenApiTests(unittest.TestCase):
                          {"ok", "sync_phase", "version"})
         self.assertIn("batch_processed_count", document["components"]["schemas"]["BudgetReceiptGmailStatus"]["required"])
         self.assertIn("parse_failed_reasons", document["components"]["schemas"]["BudgetReceiptGmailStatus"]["required"])
+        reasons_schema = document["components"]["schemas"]["BudgetReceiptGmailStatus"]["properties"]["parse_failed_reasons"]
+        self.assertEqual(reasons_schema["propertyNames"]["enum"], list(PARSE_FAILED_REASONS))
+        self.assertIn("other", reasons_schema["propertyNames"]["enum"])
+        base_gmail_status = {
+            "enabled": True, "configured": True, "grant_status": "active", "grant_generation": 1, "version": 2,
+            "sync_phase": "idle", "attention": None, "last_sync_at": 1.0, "next_sync_at": 2.0,
+            "backoff_until": 0.0, "failures": 0, "last_http_status": None, "last_error": None,
+            "pending_imported_count": 0, "batch_processed_count": 0,
+            "google_revoke_url": "https://myaccount.google.com/linkedapps",
+            "google_revoke_affects_calendar_sync": True,
+        }
+        validated_status = contract.BudgetReceiptGmailStatus.model_validate({
+            **base_gmail_status, "parse_failed_reasons": {reason: 1 for reason in PARSE_FAILED_REASONS},
+        })
+        self.assertEqual(set(validated_status.parse_failed_reasons), set(PARSE_FAILED_REASONS))
+        for bad_reason in ("unknown", "arbitrary", "raw_detail"):
+            with self.subTest(bad_reason=bad_reason), self.assertRaises(ValueError):
+                contract.BudgetReceiptGmailStatus.model_validate({
+                    **base_gmail_status, "parse_failed_reasons": {bad_reason: 1},
+                })
         sync_req = document["components"]["schemas"]["BudgetReceiptGmailSyncRequest"]
         self.assertEqual(set(sync_req["properties"]), {"force_full_resync", "retry_parse_failed"})
         self.assertEqual(sync_req.get("required", []), [])
@@ -324,6 +345,12 @@ class BudgetOpenApiTests(unittest.TestCase):
         for invalid in ({"retry_parse_failed": "true"}, {"retry_parse_failed": 1}, {"retry_parse_failed": None}):
             with self.subTest(invalid=invalid), self.assertRaises(ValueError):
                 contract.BudgetReceiptGmailSyncRequest.model_validate(invalid)
+        ts_path = Path(__file__).resolve().parent.parent / "ui" / "src" / "api" / "openapi.ts"
+        ts_text = ts_path.read_text(encoding="utf-8")
+        status_block = ts_text.split("BudgetReceiptGmailStatus: {", 1)[1].split("\n        };", 1)[0]
+        sync_req_block = ts_text.split("BudgetReceiptGmailSyncRequest: {", 1)[1].split("\n        };", 1)[0]
+        self.assertIn("parse_failed_reasons:", status_block)
+        self.assertIn("retry_parse_failed:", sync_req_block)
         batch = analytics["/api/budget/analytics/rule-batch-preview"]["post"]["description"]
         self.assertIn("1..100", batch)
         self.assertIn("All-or-nothing", batch)

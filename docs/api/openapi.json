@@ -11433,6 +11433,19 @@
             "additionalProperties": {
               "type": "integer"
             },
+            "propertyNames": {
+              "enum": [
+                "charset_error",
+                "message_defects",
+                "mime_error",
+                "other",
+                "part_defects",
+                "pdf_unsupported",
+                "recursion",
+                "unicode_error",
+                "worker_rejected"
+              ]
+            },
             "title": "Parse Failed Reasons",
             "type": "object"
           },

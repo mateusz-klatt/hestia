@@ -26,6 +26,7 @@ from typing import Annotated, Literal
 from pydantic import AfterValidator, AwareDatetime, BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, WrapValidator
 from pydantic.json_schema import models_json_schema
 
+from .budget.gmail_store import PARSE_FAILED_REASONS
 from .budget.i18n import LANGUAGES, validate_languages
 
 # The contract's own version, independent of the app release — bumped when the wire shape changes.
@@ -2783,6 +2784,7 @@ BudgetReceiptDocumentKind = Literal["receipt", "invoice", "payment_confirmation"
 BudgetReceiptGmailGrantStatus = Literal["disabled", "active", "revoked"]
 BudgetReceiptGmailSyncPhase = Literal["idle", "backfill", "incremental", "full_resync"]
 BudgetReceiptGmailAttention = Literal["authorization", "configuration", "identity_mismatch", "quota"]
+BudgetReceiptGmailParseFailedReason = Literal[*PARSE_FAILED_REASONS]
 
 
 class BudgetReceiptParseTextRequest(BaseModel):
@@ -3061,7 +3063,7 @@ class BudgetReceiptGmailStatus(BaseModel):
     last_error: str | None
     pending_imported_count: int
     batch_processed_count: int
-    parse_failed_reasons: dict[str, int]
+    parse_failed_reasons: dict[BudgetReceiptGmailParseFailedReason, int]
     google_revoke_url: Literal["https://myaccount.google.com/linkedapps"]
     google_revoke_affects_calendar_sync: Literal[True]
 
