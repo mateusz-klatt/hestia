@@ -1,6 +1,7 @@
 """Receipts device tokens: secrets at rest, pairing lockout, and bearer scope."""
 from __future__ import annotations
 
+import asyncio
 import base64
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
@@ -587,6 +588,49 @@ class DeviceTokenHTTPTests(fixture.unittest.IsolatedAsyncioTestCase):
         stored = json.dumps(self._stored_text())
         self.assertTrue(all(secret not in stored for secret in (LOGIN_PASSWORD, first["token"], second["token"])))
 
+    async def test_password_login_rotates_only_the_newest_active_token_with_the_same_name(self):
+        self._set_login_passwords("alice")
+        start = int(web._now())
+        with mock.patch.object(device_token, "now", side_effect=range(start, start + 10)):
+            paired = []
+            for _ in range(2):
+                code = await self._pair()
+                response = await self._redeem(code["code"], name="Shared")
+                _status(response, 200)
+                paired.append(await response.json())
+            replacement = await self._logged_in_device(name="Shared")
+
+        records = {row.id: row for row in self.rows(db.BudgetReceiptDeviceToken)}
+        self.assertIsNone(records[paired[0]["token_id"]].revoked_at)
+        self.assertIsNotNone(records[paired[1]["token_id"]].revoked_at)
+        self.assertIsNone(records[replacement["token_id"]].revoked_at)
+        active = {token_id for token_id, row in records.items() if row.revoked_at is None}
+        self.assertEqual(active, {paired[0]["token_id"], replacement["token_id"]})
+
+    async def test_rotation_audit_follows_the_replaced_token_not_an_older_sibling(self):
+        self._set_login_passwords("alice")
+        start = int(web._now())
+        with mock.patch.dict(os.environ, {analytics_api.FLAG: "1"}), \
+                mock.patch.object(device_token, "now", side_effect=range(start, start + 10)):
+            older = await self._logged_in_device(name="Shared")
+            code = await self._pair()
+            response = await self._redeem(code["code"], name="Shared")
+            _status(response, 200)
+            newer = await response.json()
+            replacement = await self._logged_in_device(name="Shared")
+            inbox = await self.client.get(analytics_api.PREFIX + "/inbox", headers=self.headers())
+            _status(inbox, 200)
+            alerts = {item["ref"]["token_id"] for item in (await inbox.json())["items"]
+                      if item["kind"] == "device_added"}
+
+        records = {row.id: row for row in self.rows(db.BudgetReceiptDeviceToken)}
+        self.assertIsNone(records[older["token_id"]].revoked_at)
+        self.assertIsNotNone(records[newer["token_id"]].revoked_at)
+        actions = {row.action for row in self.rows(db.BudgetAnalyticsAudit)
+                   if row.subject_id == replacement["token_id"]}
+        self.assertEqual(actions, {device_token.NEW_DEVICE_LOGIN})
+        self.assertIn(replacement["token_id"], alerts)
+
     async def test_new_device_inbox_item_is_owner_private_and_can_be_marked_read(self):
         self._set_login_passwords("alice")
         grant = household.grant_member("viewer", "alice")["grant_id"]
@@ -661,8 +705,55 @@ class DeviceTokenHTTPTests(fixture.unittest.IsolatedAsyncioTestCase):
                         inbox = await self.client.get(analytics_api.PREFIX + "/inbox", headers=self.headers())
                         self.assertFalse(any(item["ref"].get("token_id") == again["token_id"]
                                              for item in (await inbox.json())["items"]))
+                    with self.sessions.begin() as session:
+                        active = session.scalars(select(db.BudgetReceiptDeviceToken).where(
+                            db.BudgetReceiptDeviceToken.owner == "alice",
+                            db.BudgetReceiptDeviceToken.revoked_at.is_(None)))
+                        for row in active:
+                            row.revoked_at = row.created_at
 
-    async def test_password_login_caps_tokens_across_issuance_methods_and_evicts_lru(self):
+    async def test_password_login_at_cap_rejects_new_device_without_side_effects_and_allows_rotation(self):
+        self._set_login_passwords("alice")
+        with mock.patch.dict(os.environ, {analytics_api.FLAG: "1"}):
+            devices = [await self._logged_in_device(name=f"Device {i}") for i in range(5)]
+            tokens_before = {(row.id, row.revoked_at) for row in self.rows(db.BudgetReceiptDeviceToken)}
+            audits_before = {(row.owner, row.subject_id, row.action) for row in self.rows(db.BudgetAnalyticsAudit)}
+            inbox_path = analytics_api.PREFIX + "/inbox"
+            inbox_before = (await (await self.client.get(inbox_path, headers=self.headers())).json())["items"]
+
+            response = await self._login_device(name="New Device")
+            self.assertEqual((response.status, await response.json()),
+                             (409, {"ok": False, "error": "device_token_limit_reached"}))
+            self.assert_private_headers(response)
+            self.assertEqual({(row.id, row.revoked_at) for row in self.rows(db.BudgetReceiptDeviceToken)}, tokens_before)
+            self.assertEqual({(row.owner, row.subject_id, row.action) for row in self.rows(db.BudgetAnalyticsAudit)},
+                             audits_before)
+            inbox_after = await self.client.get(inbox_path, headers=self.headers())
+            _status(inbox_after, 200)
+            self.assertEqual((await inbox_after.json())["items"], inbox_before)
+
+            replacement = await self._logged_in_device(name="Device 4")
+        records = {row.id: row for row in self.rows(db.BudgetReceiptDeviceToken)}
+        active = {token_id for token_id, row in records.items() if row.revoked_at is None}
+        self.assertEqual(len(active), 5)
+        self.assertIn(replacement["token_id"], active)
+        self.assertNotIn(devices[4]["token_id"], active)
+
+    async def test_concurrent_password_logins_cannot_exceed_the_cap(self):
+        self._set_login_passwords("alice")
+        for index in range(device_token.MAX_ACTIVE_TOKENS - 1):
+            await self._logged_in_device(name=f"Device {index}")
+        responses = await asyncio.gather(
+            self._login_device(name="Concurrent A"), self._login_device(name="Concurrent B"))
+        self.assertEqual(sorted(response.status for response in responses), [200, 409])
+        for response in responses:
+            if response.status == 409:
+                self.assertEqual(await response.json(), {"ok": False, "error": "device_token_limit_reached"})
+        rows = self.rows(db.BudgetReceiptDeviceToken)
+        self.assertEqual(len(rows), device_token.MAX_ACTIVE_TOKENS)
+        self.assertEqual(sum(row.revoked_at is None for row in rows), device_token.MAX_ACTIVE_TOKENS)
+
+    async def test_redeem_at_cap_still_evicts_lru(self):
         self._set_login_passwords("alice")
         start = int(web._now())
         with mock.patch.object(device_token, "now", side_effect=range(start, start + 20)):

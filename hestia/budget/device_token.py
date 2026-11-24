@@ -492,19 +492,27 @@ class DeviceTokenStore:
         if rotate:
             # A name alone is not proof of an existing password login. Pairing
             # and expired credentials must still produce a new-device alert.
-            rotated = session.scalar(select(DeviceToken.id).where(
+            replacing = session.scalar(select(DeviceToken).where(
                 DeviceToken.owner == owner, DeviceToken.device_name == name, DeviceToken.revoked_at.is_(None),
                 DeviceToken.expires_at > moment, DeviceToken.hard_expires_at > moment,
-                select(BudgetAnalyticsAudit.id).where(
-                    BudgetAnalyticsAudit.owner == owner,
-                    BudgetAnalyticsAudit.subject_id == DeviceToken.id,
-                    BudgetAnalyticsAudit.subject_type == "receipt_device_token",
-                    BudgetAnalyticsAudit.action == NEW_DEVICE_LOGIN,
-                ).exists(),
+            ).order_by(DeviceToken.created_at.desc(), DeviceToken.id.desc()).limit(1))
+            # Only the token actually being replaced decides whether this is a
+            # rotation: an older password-login sibling must not hide the alert.
+            rotated = replacing is not None and session.scalar(select(BudgetAnalyticsAudit.id).where(
+                BudgetAnalyticsAudit.owner == owner,
+                BudgetAnalyticsAudit.subject_id == replacing.id,
+                BudgetAnalyticsAudit.subject_type == "receipt_device_token",
+                BudgetAnalyticsAudit.action == NEW_DEVICE_LOGIN,
             ).limit(1)) is not None
-            session.execute(update(DeviceToken).where(
-                DeviceToken.owner == owner, DeviceToken.device_name == name, DeviceToken.revoked_at.is_(None),
-            ).values(revoked_at=moment))
+            if replacing is None:
+                active = session.scalar(select(func.count()).select_from(DeviceToken).where(
+                    DeviceToken.owner == owner, DeviceToken.revoked_at.is_(None),
+                    DeviceToken.expires_at > moment, DeviceToken.hard_expires_at > moment,
+                ))
+                if active >= MAX_ACTIVE_TOKENS:
+                    raise DeviceTokenError(409, "device_token_limit_reached")
+            else:
+                replacing.revoked_at = moment
         overflow = session.scalars(select(DeviceToken).where(
             DeviceToken.owner == owner, DeviceToken.revoked_at.is_(None),
             DeviceToken.expires_at > moment, DeviceToken.hard_expires_at > moment,

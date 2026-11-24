@@ -109,7 +109,8 @@ from .budget.i18n import LANGUAGES, validate_languages
 # 0.44.0: password-based receipt device login, pairing-code cancellation, and owner device alerts (migration 0028, down_revision 0027).
 # 0.45.0: ordered per-user budget display languages, category and one-off label translations
 #         (migration 0029, down_revision 0028), resolved display fields and admin bulk import.
-CONTRACT_VERSION = "0.45.0"
+# 0.46.0: additive 409 device_token_limit_reached response for new password-login device names at the active cap.
+CONTRACT_VERSION = "0.46.0"
 OPENAPI_PATH = Path(__file__).resolve().parent.parent / "docs" / "api" / "openapi.json"
 
 # De-duplicated string literals (SonarPython S1192): the OpenAPI content-type, the paths reused
@@ -4289,6 +4290,8 @@ def _device_token_paths():
         "400": _receipt_error("Invalid JSON request or budget_auth_ambiguous if Cookie or Authorization is present."),
         "401": _receipt_error("Generic device_token_rejected for invalid credentials or an ineligible account."),
         "404": _receipt_error("Budget HTTP or receipts are disabled."),
+        "409": _receipt_error("The owner has 5 active tokens and this is a new device name "
+                              "(device_token_limit_reached). Same-name rotation is still allowed."),
         "408": _receipt_error("Request body read timed out."),
         "429": {**_receipt_error("Too many password attempts (device_token_rate_limited)."),
                 "headers": _LOGIN_RETRY_HEADERS},
@@ -4319,7 +4322,8 @@ def _device_token_paths():
             "description": ("Requires budget HTTP and receipts. Send uncompressed application/json (at most 4096 bytes) "
                             "without Cookie or Authorization. Shares the /api/login quota of 10 attempts per minute "
                             "per username and IPv4 address or IPv6 /64. An unrevoked token with the same device name "
-                            "is rotated. At five active tokens, issuance revokes the least recently used token."),
+                            "is rotated. At five active tokens, a new device name is rejected with 409 "
+                            "device_token_limit_reached; same-name rotation remains allowed."),
             "requestBody": {"required": True, "content": {_APP_JSON: {
                 "schema": _ref("BudgetReceiptDeviceLoginRequest")}}},
             "responses": login,
