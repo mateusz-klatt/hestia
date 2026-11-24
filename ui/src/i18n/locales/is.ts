@@ -1107,7 +1107,7 @@ const messages: Partial<Messages> = {
   "budget.monthBudget.paceBasisReceived": "Miðað við móttekið ráðstöfunarfé",
   "budget.monthBudget.paceBasisReceivedPlusExpected": "Miðað við móttekið ráðstöfunarfé + væntanlegt",
   "budget.monthBudget.paceBudget": "Viðmiðunarfé fyrir útgjaldahraða",
-  "budget.monthBudget.dailyRate": "Dagleg útgjöld",
+  "budget.monthBudget.dailyRate": "Meðalútgjöld á dag",
   "budget.monthBudget.perDay": "{amount} / dag",
   "budget.monthBudget.projectedSpend": "Framreiknuð mánaðarútgjöld",
   "budget.monthBudget.paceRunsOutBeforeEnd": "Á þessum hraða verður ráðstöfunarféð uppurið fyrir mánaðarlok.",
