@@ -2955,20 +2955,21 @@ class SessionBridgeWebTests(unittest.IsolatedAsyncioTestCase):
                 ok = await self.client.post(path, **kwargs, headers=ok_hdrs)
                 self.assertNotIn(ok.status, (401, 403))
 
-        # Configured HESTIA_PUBLIC_ORIGIN (DNS, IPv6, IPv4, trailing slash) and malformed origin handling.
-        for cfg_origin, hdr_origin in (
-            ("https://hestia.example:8443", "https://hestia.example:8443"),
-            ("https://hestia.klatt.ie", "https://hestia.klatt.ie"),
-            ("https://hestia.klatt.ie/", "https://hestia.klatt.ie"),
-            ("https://[::1]:8443", "https://[::1]:8443"),
-            ("https://[::1]", "https://[::1]"),
-            ("http://192.168.1.10:8080", "http://192.168.1.10:8080"),
+        # Configured HESTIA_PUBLIC_ORIGIN (DNS, terminal dot, IPv6, IPv4, trailing slash) and malformed origin handling.
+        for cfg_origin, hdr_origin, mismatched_origin in (
+            ("https://hestia.example:8443", "https://hestia.example:8443", direct_origin),
+            ("https://hestia.klatt.ie", "https://hestia.klatt.ie", "https://hestia.klatt.ie/"),
+            ("https://hestia.klatt.ie/", "https://hestia.klatt.ie", "https://hestia.klatt.ie."),
+            ("https://hestia.example.", "https://hestia.example.", "https://hestia.example"),
+            ("https://[::1]:8443", "https://[::1]:8443", direct_origin),
+            ("https://[::1]", "https://[::1]", direct_origin),
+            ("http://192.168.1.10:8080", "http://192.168.1.10:8080", direct_origin),
         ):
             with mock.patch.dict(os.environ, {"HESTIA_PUBLIC_ORIGIN": cfg_origin}):
                 bad_origin = await self.client.post(
-                    "/api/name", json={}, headers={"Cookie": f"hestia_session={b_cookie}", "Origin": direct_origin}
+                    "/api/name", json={}, headers={"Cookie": f"hestia_session={b_cookie}", "Origin": mismatched_origin}
                 )
-                self.assertEqual(bad_origin.status, 403)
+                self.assertEqual(bad_origin.status, 403, f"expected 403 for {mismatched_origin!r} vs {cfg_origin!r}")
                 self.assertEqual((await bad_origin.json())["error"], "origin_required")
                 good_cfg = await self.client.post(
                     "/api/name",
@@ -2991,7 +2992,10 @@ class SessionBridgeWebTests(unittest.IsolatedAsyncioTestCase):
             ("https://-bad.example", direct_origin),
             ("https://bad-.example", direct_origin),
             ("https://bad_host.example", direct_origin),
-            ("https://hestia.example.", direct_origin),
+            ("https://.", direct_origin),
+            ("https://..", direct_origin),
+            ("https://hestia.example..", direct_origin),
+            ("http://192.168.1.10.", direct_origin),
             ("https://héllo.example", direct_origin),
             ("https://" + ("a" * 64) + ".example", direct_origin),
             ("https://" + ("a." * 126) + "bb", direct_origin),
@@ -3005,6 +3009,7 @@ class SessionBridgeWebTests(unittest.IsolatedAsyncioTestCase):
             ("https://hestia.example:0", direct_origin),
             ("https://hestia.example:65536", direct_origin),
             ("https://hestia.example:99999", direct_origin),
+            ("https://hestia.example:" + ("9" * 4301), direct_origin),
             ("https://hestia.example:abc", direct_origin),
             ("https://u@hestia.example", direct_origin),
             ("https://bad host", direct_origin),
@@ -3020,6 +3025,22 @@ class SessionBridgeWebTests(unittest.IsolatedAsyncioTestCase):
                 )
                 self.assertEqual(cfg_err.status, 503, f"expected 503 for {bad_cfg!r}")
                 self.assertEqual((await cfg_err.json())["error"], "auth_origin_unavailable")
+
+        # Malformed request Origin (4301-digit port / trailing slash) and fallback Host (4301-digit port / trailing slash) -> 403.
+        with mock.patch.dict(os.environ, {"HESTIA_PUBLIC_ORIGIN": "https://hestia.example"}):
+            huge_origin_resp = await self.client.post(
+                "/api/name",
+                json={},
+                headers={"Cookie": f"hestia_session={b_cookie}", "Origin": "https://hestia.example:" + ("9" * 4301)},
+            )
+            self.assertEqual(huge_origin_resp.status, 403)
+            self.assertEqual((await huge_origin_resp.json())["error"], "origin_required")
+        for bad_fallback_host in ("hestia.example/", "hestia.example:" + ("9" * 4301)):
+            fallback_err = web._check_core_origin(
+                SimpleNamespace(scheme="https", headers=mock.Mock(getall=lambda k, d=None, h=bad_fallback_host: [] if k == "Origin" else [h]))
+            )
+            self.assertIsNotNone(fallback_err)
+            self.assertEqual(fallback_err.status, 403)
 
         # Non-browser-only routes allow v2 native, v2 browser without Origin, and live v1 compatibility cookies.
         for path, method, body in (

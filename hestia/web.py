@@ -352,13 +352,15 @@ def _parse_canonical_host(authority: str) -> "tuple[str, str | None] | None":
     if has_port and ":" in port_part:
         return None
     port_str = port_part if has_port else None
-    if not host_raw or len(host_raw) > 253:
+    has_terminal_dot = host_raw.endswith(".")
+    dns_raw = host_raw[:-1] if has_terminal_dot else host_raw
+    if not dns_raw or len(dns_raw) > 253:
         return None
     try:
         host_raw.encode("idna")
     except UnicodeError:
         return None
-    labels = host_raw.split(".")
+    labels = dns_raw.split(".")
     if not all(_HOST_LABEL_RE.fullmatch(label) for label in labels):
         return None
     try:
@@ -369,7 +371,7 @@ def _parse_canonical_host(authority: str) -> "tuple[str, str | None] | None":
         return host_raw.lower(), port_str
 
 
-def _canonical_origin_tuple(origin: str) -> "tuple[str, str, int] | None":
+def _canonical_origin_tuple(origin: str, *, allow_trailing_slash: bool = False) -> "tuple[str, str, int] | None":
     if (
         not origin
         or not origin.isascii()
@@ -383,7 +385,7 @@ def _canonical_origin_tuple(origin: str) -> "tuple[str, str, int] | None":
     if scheme not in ("http", "https") or "?" in rest or "#" in rest:
         return None
     authority, has_slash, tail = rest.partition("/")
-    if (has_slash and tail) or not authority or "@" in authority:
+    if (has_slash and (not allow_trailing_slash or bool(tail))) or not authority or "@" in authority:
         return None
     parsed = _parse_canonical_host(authority)
     if parsed is None:
@@ -392,7 +394,7 @@ def _canonical_origin_tuple(origin: str) -> "tuple[str, str, int] | None":
     default_port = 80 if scheme == "http" else 443
     if port_str is None:
         return scheme, canonical_host, default_port
-    if not port_str or not port_str.isdigit():
+    if not port_str or len(port_str) > 5 or not port_str.isdigit():
         return None
     port = int(port_str)
     if not 1 <= port <= 65535:
@@ -403,7 +405,7 @@ def _canonical_origin_tuple(origin: str) -> "tuple[str, str, int] | None":
 def _check_core_origin(request) -> "web.Response | None":
     configured = os.environ.get("HESTIA_PUBLIC_ORIGIN")
     if configured is not None and configured != "":
-        expected = _canonical_origin_tuple(configured)
+        expected = _canonical_origin_tuple(configured, allow_trailing_slash=True)
         if expected is None:
             return _json(HTTPStatus.SERVICE_UNAVAILABLE, {"ok": False, "error": "auth_origin_unavailable"})
     else:
