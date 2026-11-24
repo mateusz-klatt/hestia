@@ -98,6 +98,12 @@ class IssuerInvoiceFixtureTests(unittest.TestCase):
                            "Numer faktury\u2003\n korygującej: 509100000001"):
                 with self.subTest(issuer=issuer, marker=marker):
                     self.assertIsNone(extract_invoice(invoice + "\n" + marker))
+            with self.subTest(issuer=issuer, marker="line item"):
+                self.assertEqual(
+                    extract_invoice(invoice + "\nUsługi telekomunikacyjne - korekta 14 lis 2026 1 23% -7,11 -8,75\n"),
+                    extract_invoice(invoice),
+                )
+                self.assertIsNone(extract_invoice(invoice + "\nKOREKTA FAKTURY nr 1\n"))
 
     def test_correction_detection_skips_long_lines_without_joining_words(self):
         invoice = _fixture("tmobile_invoice.txt")

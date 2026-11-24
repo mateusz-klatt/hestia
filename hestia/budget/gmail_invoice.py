@@ -41,7 +41,12 @@ _FORWARDED_INVOICE_NUMBERS = {
     "T-Mobile": re.compile(r"[0-9]{12}", re.ASCII),
 }
 _ACCOUNT_WORD = re.compile(r"rachunk|konto|IBAN", re.IGNORECASE)
-_CORRECTION = re.compile(r"\b(?:faktura\s+korygująca|korekta|faktury\s+korygującej)\b", re.IGNORECASE)
+# "Korekta" alone marks a correction only as a heading line. Regular invoices
+# list prorated adjustments such as "Usługi telekomunikacyjne - korekta".
+_CORRECTION = re.compile(
+    r"\b(?:faktura\s+korygująca|faktury\s+korygującej)\b|^[ \t]*korekta(?:[ \t]+faktury\b[^\n]*)?[ \t]*$",
+    re.IGNORECASE | re.MULTILINE,
+)
 _SKIPPED_LINE = "\0"
 _LABEL = re.compile(
     r"(?<!\w)(?:"
