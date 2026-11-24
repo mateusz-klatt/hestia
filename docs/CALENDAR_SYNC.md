@@ -219,15 +219,22 @@ czas floating jest rozwiązywany przez strefę wydarzenia lub regułę strefy ź
 Rozwijane są `RRULE` i `RDATE` przez bibliotekę `recurring-ical-events`, pomijane
 `EXDATE` oraz wszystkie odwołane wystąpienia. Nieistniejąca godzina przy wiosennej
 zmianie czasu jest przesuwana z użyciem wcześniejszego przesunięcia UTC i liczy się
-do `COUNT` zgodnie z erratą RFC 5545. Reguły `SECONDLY`, `MINUTELY` i `HOURLY` nie są
-rozwijane: zwracany jest tylko `DTSTART` z `truncated: true` i wpisem do dziennika.
+do `COUNT` zgodnie z erratą RFC 5545. Przed wywołaniem biblioteki każda reguła `RRULE`
+musi pasować do konserwatywnej białej listy: `FREQ` z zestawu `DAILY`, `WEEKLY`,
+`MONTHLY`, `YEARLY` oraz parametry `INTERVAL`, `COUNT`, `UNTIL`, `WKST`, `BYDAY`
+(z liczebnikami porządkowymi tylko dla `MONTHLY` i `YEARLY`), `BYMONTHDAY` i `BYMONTH`.
+`BYSETPOS` jest dozwolone wyłącznie dla `MONTHLY` (zakres `1 <= |pos| <= 5`) i `YEARLY`
+(zakres `1 <= |pos| <= 53`), wyłącznie w połączeniu z `BYDAY`. Reguły spoza białej
+listy — m.in. `SECONDLY`, `MINUTELY`, `HOURLY`, `BYYEARDAY`, `BYWEEKNO`, `BYHOUR`,
+`BYMINUTE`, `BYSECOND`, inne użycia `BYSETPOS`, porządkowe `BYDAY` przy `DAILY`/`WEEKLY`
+oraz niemożliwe pary `BYMONTH` i `BYMONTHDAY` (lub wartości spoza zakresu) — korzystają
+z fallbacku zwracającego tylko `DTSTART` z `truncated: true` i wpisem do dziennika.
 Jeśli górne oszacowanie liczby wystąpień w poszerzonym oknie przekracza 5000 albo
-szacowana liczba kroków replay od `DTSTART`, powiększona o wielokrotność selektorów BY*,
-przekracza 200000, stosowany jest ten sam fallback bez wywoływania biblioteki. Dla `BYDAY`
-przyjmujemy konserwatywnie 53 okresy w roku i 5 w miesiącu, a `COUNT` nie zmniejsza
-budżetu badanych okresów. Przed rozwinięciem odrzucamy niemożliwe kombinacje `BYMONTH` i
-`BYMONTHDAY`; inne sprzeczne selektory BY* nie mają osobnej analizy i są objęte jedynie
-konserwatywnym budżetem. Zmieniony wyjątek zastępuje swoje pierwotne wystąpienie.
+szacowana liczba badanych kroków replay od `DTSTART` do końca poszerzonego okna
+przekracza 200000, stosowany jest ten sam fallback bez wywoływania biblioteki. Szacunek
+okresów przyjmuje konserwatywnie do 366 dni w roku, 31 w miesiącu, 7 w tygodniu i 1
+dziennie przy selektorach `BYDAY`/`BYMONTHDAY` (oraz `BYMONTH` dla `YEARLY`), a `COUNT`
+nie zmniejsza budżetu badanych okresów. Zmieniony wyjątek zastępuje swoje pierwotne wystąpienie.
 Odległy `RECURRENCE-ID` nie poszerza generowania, ale zapisany wyjątek trafiający w
 żądane okno może zostać zwrócony jako samodzielne wystąpienie. Uwzględniane są także
 wystąpienia zaczynające się przed oknem, ale nachodzące na nie. Daty całodniowe
@@ -236,10 +243,11 @@ ograniczona do 2000 najwcześniejszych wystąpień. `truncated: true` sygnalizuj
 niepełne rozwinięcie po przekroczeniu budżetu pracy albo pominięcie niezgodnej reguły;
 takie zdarzenie jest raportowane w dzienniku serwera i nie blokuje pozostałych.
 
-Znane ograniczenia: fallback `SECONDLY`/`MINUTELY`/`HOURLY` obejmuje tylko `DTSTART`,
-więc później aktywowane wyjątki odwołanego wzorca pozostają w nim pominięte. Wystąpienia
-oddalone o mniej niż czas trwania zdarzenia od `0001-01-01` mogą zostać pominięte, gdy
-obliczenie granicznego czasu UTC wyszłoby poza obsługiwany zakres dat.
+Znane ograniczenia: fallback nieobsługiwanych reguł (m.in. `SECONDLY`/`MINUTELY`/`HOURLY`
+lub reguł spoza białej listy) obejmuje tylko `DTSTART`, więc później aktywowane wyjątki
+odwołanego wzorca pozostają w nim pominięte. Wystąpienia oddalone o mniej niż czas trwania
+zdarzenia od `0001-01-01` mogą zostać pominięte, gdy obliczenie granicznego czasu UTC
+wyszłoby poza obsługiwany zakres dat.
 
 Nieprawidłowa data, odwrócony zakres lub zakres dłuższy niż 92 dni zwraca `400`
 z `{"error": "invalid_calendar_event"}`. Nieznana grupa zwraca `400` z

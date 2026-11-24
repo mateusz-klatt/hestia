@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
 import logging
 from math import ceil
+import re
 from zoneinfo import ZoneInfo
 
 from icalendar import Calendar, vDDDTypes, vRecur
@@ -21,15 +22,22 @@ REPLAY_BOUND = 200000
 _UTC = timezone.utc
 _MIN_UTC = datetime.min.replace(tzinfo=_UTC)
 _MAX_UTC = datetime.max.replace(tzinfo=_UTC)
-_TIME_SELECTORS = {"BYHOUR", "BYMINUTE", "BYSECOND"}
-_HIGH_FREQUENCIES = {"SECONDLY", "MINUTELY", "HOURLY"}
+_ALLOWED_FREQUENCIES = {"DAILY", "WEEKLY", "MONTHLY", "YEARLY"}
+_ALLOWED_RULE_KEYS = {
+    "FREQ", "INTERVAL", "COUNT", "UNTIL", "WKST",
+    "BYDAY", "BYMONTHDAY", "BYMONTH", "BYSETPOS",
+}
+_WEEKDAYS = {"MO", "TU", "WE", "TH", "FR", "SA", "SU"}
+_BYDAY_RE = re.compile(r"([+-]?\d+)?(MO|TU|WE|TH|FR|SA|SU)\Z")
+_MONTH_DAY_LIMITS = {2: 29, 4: 30, 6: 30, 9: 30, 11: 30}
 _FREQUENCY_SECONDS = {
-    "HOURLY": 3600,
     "DAILY": 86400,
     "WEEKLY": 7 * 86400,
     "MONTHLY": 28 * 86400,
     "YEARLY": 365 * 86400,
 }
+_DAY_CANDIDATES = {"DAILY": 1, "WEEKLY": 7, "MONTHLY": 31, "YEARLY": 366}
+_DAY_SELECTORS = {"BYDAY", "BYMONTHDAY"}
 _LOG = logging.getLogger(__name__)
 
 
@@ -92,15 +100,6 @@ def _library_payload(payload: dict) -> dict:
     content = deepcopy(payload)
     content["exceptions"] = []
     content["recurrence"] = [line for line in content.get("recurrence", []) if _kind(line) != "EXDATE"]
-    if "date" not in content["start"]:
-        return content
-    recurrence = []
-    for line in content["recurrence"]:
-        name, body = line.split(":", 1)
-        if _kind(line) == "RRULE":
-            body = ";".join(part for part in body.split(";") if part.split("=", 1)[0] not in _TIME_SELECTORS)
-        recurrence.append(name + ":" + body)
-    content["recurrence"] = recurrence
     return content
 
 
@@ -226,15 +225,89 @@ def _stored_override(event: dict, exception: dict, original) -> dict | None:
     return _instance(event, exception, recurrence_id)
 
 
-def _high_frequency(payload: dict) -> bool:
+def _rrule_parts(line: str) -> dict[str, str] | None:
+    _, body = line.split(":", 1)
+    parts: dict[str, str] = {}
+    for item in body.upper().split(";"):
+        if "=" not in item:
+            return None
+        key, value = item.split("=", 1)
+        if key in parts:
+            return None
+        parts[key] = value
+    return parts
+
+
+def _parse_int_list(
+    raw: str, minimum: int, maximum: int | None = None, *, allow_negative: bool = False
+) -> list[int] | None:
+    values = []
+    for token in raw.split(","):
+        try:
+            value = int(token)
+        except ValueError:
+            return None
+        magnitude = abs(value) if allow_negative else value
+        if magnitude < minimum or (maximum is not None and magnitude > maximum):
+            return None
+        values.append(value)
+    return values
+
+
+def _rrule_rejection_reason(parts: dict[str, str] | None) -> str | None:
+    if parts is None:
+        return "has malformed recurrence parameters"
+    frequency = parts.get("FREQ")
+    if frequency not in _ALLOWED_FREQUENCIES:
+        return f"uses unsupported recurrence frequency {frequency or 'missing'}"
+    disallowed = set(parts) - _ALLOWED_RULE_KEYS
+    if disallowed:
+        return f"uses unsupported recurrence parameters ({', '.join(sorted(disallowed))})"
+    if "COUNT" in parts and "UNTIL" in parts:
+        return "uses both COUNT and UNTIL"
+    for key in ("INTERVAL", "COUNT"):
+        if key in parts:
+            parsed = _parse_int_list(parts[key], 1)
+            if parsed is None or len(parsed) != 1:
+                return f"uses invalid {key} parameter"
+    if "WKST" in parts and parts["WKST"] not in _WEEKDAYS:
+        return "uses invalid WKST parameter"
+    months = _parse_int_list(parts["BYMONTH"], 1, 12) if "BYMONTH" in parts else None
+    if "BYMONTH" in parts and months is None:
+        return "uses invalid BYMONTH parameter"
+    month_days = _parse_int_list(parts["BYMONTHDAY"], 1, 31, allow_negative=True) if "BYMONTHDAY" in parts else None
+    if "BYMONTHDAY" in parts and month_days is None:
+        return "uses invalid BYMONTHDAY parameter"
+    if months is not None and month_days is not None and not any(
+        1 <= abs(day) <= _MONTH_DAY_LIMITS.get(month, 31) for month in months for day in month_days
+    ):
+        return "has impossible month/day recurrence selectors"
+    limit = 5 if frequency == "MONTHLY" else 53
+    if "BYDAY" in parts:
+        for token in parts["BYDAY"].split(","):
+            match = _BYDAY_RE.fullmatch(token)
+            if match is None:
+                return "uses invalid BYDAY parameter"
+            ordinal = match.group(1)
+            if ordinal is not None:
+                if frequency not in {"MONTHLY", "YEARLY"} or not (1 <= abs(int(ordinal)) <= limit):
+                    return "uses unsupported BYDAY ordinal"
+    if "BYSETPOS" in parts:
+        if frequency not in {"MONTHLY", "YEARLY"} or "BYDAY" not in parts:
+            return "uses unsupported BYSETPOS combination"
+        if _parse_int_list(parts["BYSETPOS"], 1, limit, allow_negative=True) is None:
+            return "uses out-of-range BYSETPOS parameter"
+    return None
+
+
+def _unsupported_rule_reason(payload: dict) -> str | None:
     for line in payload.get("recurrence", []):
         if _kind(line) != "RRULE":
             continue
-        _, body = line.split(":", 1)
-        parts = dict(part.split("=", 1) for part in body.split(";"))
-        if parts.get("FREQ") in _HIGH_FREQUENCIES:
-            return True
-    return False
+        reason = _rrule_rejection_reason(_rrule_parts(line))
+        if reason is not None:
+            return reason
+    return None
 
 
 def _first_instance(event: dict, window: _Window) -> dict | None:
@@ -270,6 +343,13 @@ def _second_fold_start(payload: dict) -> datetime | None:
     return None
 
 
+def _shift_date(day: date, days: int) -> date:
+    try:
+        return day + timedelta(days=days)
+    except OverflowError:
+        return date.min if days < 0 else date.max
+
+
 def _query_bounds(window: _Window) -> tuple[datetime, datetime]:
     try:
         lower = window.lower - timedelta(days=1)
@@ -292,8 +372,7 @@ def _occurrence_upper_bound(payload: dict, start: datetime, end: datetime) -> in
             continue
         if kind != "RRULE":
             continue
-        _, body = line.split(":", 1)
-        parts = dict(part.split("=", 1) for part in body.split(";"))
+        parts = _rrule_parts(line)
         interval = int(parts.get("INTERVAL", "1"))
         estimated = ceil(seconds / (_FREQUENCY_SECONDS[parts["FREQ"]] * interval)) + 1
         bound += min(int(parts["COUNT"]), estimated) if "COUNT" in parts else estimated
@@ -301,63 +380,45 @@ def _occurrence_upper_bound(payload: dict, start: datetime, end: datetime) -> in
 
 
 def _replay_upper_bound(payload: dict, end: datetime) -> int:
-    content = _library_payload(payload)
-    all_day = "date" in content["start"]
-    starting = _key(content["start"], all_day)
+    all_day = "date" in payload["start"]
+    starting = _key(payload["start"], all_day)
     if all_day:
         starting = datetime.combine(starting, time.min, tzinfo=_UTC)
     seconds = max(0, (end - starting).total_seconds())
     bound = 0
-    for line in content.get("recurrence", []):
-        if _kind(line) != "RRULE":
-            continue
-        _, body = line.split(":", 1)
-        parts = dict(part.split("=", 1) for part in body.split(";"))
-        frequency = parts["FREQ"]
-        estimated = ceil(seconds / (_FREQUENCY_SECONDS[frequency] * int(parts.get("INTERVAL", "1")))) + 1
-        if "BYDAY" in parts and not {"BYMONTHDAY", "BYYEARDAY", "BYWEEKNO"}.intersection(parts):
-            if frequency == "YEARLY":
-                estimated *= 53
-            elif frequency == "MONTHLY":
-                estimated *= 5
-        for selector, values in parts.items():
-            if selector.startswith("BY"):
-                estimated *= len(values.split(","))
-        bound += estimated
-    return bound
-
-
-def _impossible_rule(payload: dict) -> bool:
-    limits = {2: 29, 4: 30, 6: 30, 9: 30, 11: 30}
     for line in payload.get("recurrence", []):
         if _kind(line) != "RRULE":
             continue
-        _, body = line.split(":", 1)
-        parts = dict(part.split("=", 1) for part in body.split(";"))
-        if "BYMONTH" not in parts or "BYMONTHDAY" not in parts:
-            continue
-        days = [int(value) for value in parts["BYMONTHDAY"].split(",")]
-        possible = any(1 <= abs(day) <= limits.get(int(month), 31)
-                       for month in parts["BYMONTH"].split(",") for day in days)
-        if not possible:
-            return True
-    return False
+        parts = _rrule_parts(line)
+        frequency = parts["FREQ"]
+        periods = ceil(seconds / (_FREQUENCY_SECONDS[frequency] * int(parts.get("INTERVAL", "1")))) + 1
+        if _DAY_SELECTORS.intersection(parts) or (frequency == "YEARLY" and "BYMONTH" in parts):
+            per_period = _DAY_CANDIDATES[frequency]
+        else:
+            per_period = 1
+        bound += periods * per_period
+    return bound
 
 
 def _expand_event(event: dict, window: _Window) -> tuple[list[dict], bool]:
     payload = event["payload"]
     if not payload.get("recurrence"):
         return ([_instance(event, payload, None)] if _overlaps(payload, window) else []), False
-    if _high_frequency(payload):
-        _LOG.warning("Calendar event %s uses SECONDLY, MINUTELY or HOURLY recurrence; using DTSTART only", event["id"])
+    reason = _unsupported_rule_reason(payload)
+    if reason is not None:
+        _LOG.warning("Calendar event %s %s; using DTSTART only", event["id"], reason)
         first = _first_instance(event, window)
         return ([first] if first is not None else []), True
-    if _impossible_rule(payload):
-        _LOG.warning("Calendar event %s has impossible month/day recurrence selectors; using DTSTART only", event["id"])
-        first = _first_instance(event, window)
-        return ([first] if first is not None else []), True
-    query_start, query_end = _query_bounds(window)
     all_day = "date" in payload["start"]
+    if all_day:
+        first, last = _shift_date(window.start, -1), _shift_date(window.end, 1)
+        query_start = datetime.combine(first, time.min, tzinfo=_UTC)
+        try:
+            query_end = datetime.combine(last + timedelta(days=1), time.min, tzinfo=_UTC)
+        except OverflowError:
+            query_end = _MAX_UTC
+    else:
+        query_start, query_end = _query_bounds(window)
     exceptions = {_key(item["originalStartTime"], all_day): item for item in payload.get("exceptions", [])}
     pending = {original: item for original, item in exceptions.items() if _overlaps(item, window)}
     if _occurrence_upper_bound(payload, query_start, query_end) > OCCURRENCE_BOUND:
@@ -418,12 +479,7 @@ def _expand_event(event: dict, window: _Window) -> tuple[list[dict], bool]:
         if original in seen_overrides or original in exdates:
             continue
         if original not in explicit and original not in series_slots:
-            if all_day:
-                first = query_start.astimezone(window.zone).date()
-                last = query_end.astimezone(window.zone).date()
-                near = first <= original <= last
-            else:
-                near = query_start <= original <= query_end
+            near = first <= original <= last if all_day else query_start <= original <= query_end
             if near:
                 _LOG.debug("Skipping orphan override for calendar event %s at %s", event["id"], original.isoformat())
                 continue
