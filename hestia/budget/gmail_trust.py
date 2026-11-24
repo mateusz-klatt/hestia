@@ -75,13 +75,14 @@ def _mailbox(value):
     return None
 
 
-def _domain_matches(domain, rule):
+def domain_matches(domain: str, rule: str) -> bool:
+    """Match a canonical domain to a rule for that domain and its subdomains."""
     return domain == rule or domain.endswith(f".{rule}")
 
 
 def _on_allowlist(address, rules):
     domain = address.rpartition("@")[2]
-    return any(address == rule or (rule.startswith("@") and _domain_matches(domain, rule[1:]))
+    return any(address == rule or (rule.startswith("@") and domain_matches(domain, rule[1:]))
                for rule in rules)
 
 

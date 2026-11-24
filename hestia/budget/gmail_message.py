@@ -12,7 +12,7 @@ from .gmail_address import canonical_mailbox
 from .gmail_client import GmailError
 from .gmail_invoice import _FORWARDED_INVOICE_NUMBERS, extract_invoice
 from .gmail_store import RFC_MESSAGE_DOMAIN, PendingMessage, digest
-from .gmail_trust import _domain_matches, classify_sender, forward_sender_domain, mime_parts, unwrap_trusted_forward
+from .gmail_trust import classify_sender, domain_matches, forward_sender_domain, mime_parts, unwrap_trusted_forward
 from .gmail_worker import MAX_HTML_BYTES, MAX_PDF_BYTES, WorkerRejected, WorkerUnavailable
 
 
@@ -144,7 +144,7 @@ class GmailMessageProcessor:
                 continue
             invoice = extract_invoice(text)
             if invoice is not None and any(
-                _domain_matches(sender_domain, domain) for domain in _ISSUER_SENDER_DOMAINS.get(invoice.issuer, ())
+                domain_matches(sender_domain, domain) for domain in _ISSUER_SENDER_DOMAINS.get(invoice.issuer, ())
             ):
                 return replace(pending, outcome="imported", invoice=invoice,
                                rfc_message_id_hmac=_rfc_message_hmac(message, self.settings.hmac_secret),

@@ -14,6 +14,7 @@ from hestia.budget.gmail_invoice import (
 
 
 _FIXTURES = Path(__file__).parent / "fixtures" / "gmail" / "pdf_text"
+_RESPECT_FIXTURE = _FIXTURES.parent / "respect-energy.txt"
 _TMOBILE_NUMBER_LINE = "Numer faktury: 501234567890"
 _TMOBILE_ISSUE_LINE = "Data i miejsce wystawienia: 09.09.2026, Warszawa"
 _TMOBILE_HEADER = "Faktura nr: 501234567890 z dnia 09.09.2026"
@@ -91,23 +92,41 @@ class IssuerInvoiceFixtureTests(unittest.TestCase):
             "T-Mobile": _fixture("tmobile_invoice.txt"),
             "Orange": _fixture("orange_invoice.txt"),
             "Play": _fixture("play_invoice.txt"),
-            "Respect Energy": (_FIXTURES.parent / "respect-energy.txt").read_text(encoding="utf-8"),
+            "Respect Energy": _RESPECT_FIXTURE.read_text(encoding="utf-8"),
         }
         for issuer, invoice in invoices.items():
-            for marker in ("FAKTURA KORYGUJĄCA", "faktura\tkorygująca", "faktura\n korygująca", "korekta",
-                           "Numer faktury\u2003\n korygującej: 509100000001"):
+            for marker in (
+                "FAKTURA KORYGUJĄCA", "faktura\tkorygująca", "faktura\n korygująca", "korekta",
+                "Numer faktury\u2003\n korygującej: 509100000001", "FAKTURA VAT KORYGUJĄCA",
+                "Numer faktury\tVAT\n korygującej: 509100000001", "Dokument: KOREKTA DO\nFAKTURY",
+                "KOREKTA VAT", "KOREKTA nr 1", "KOREKTA FAKTURY nr 1", "STRONA 1 KOREKTA",
+                "Korekta\u00a0faktury", "kore\u200dkta\u00a0faktury", "faktura koryguja\u200b\u0328ca",
+                "faktura\n\x00\nkorygująca",
+            ):
                 with self.subTest(issuer=issuer, marker=marker):
                     self.assertIsNone(extract_invoice(invoice + "\n" + marker))
-            with self.subTest(issuer=issuer, marker="line item"):
-                self.assertEqual(
-                    extract_invoice(invoice + "\nUsługi telekomunikacyjne - korekta 14 lis 2026 1 23% -7,11 -8,75\n"),
-                    extract_invoice(invoice),
-                )
-                self.assertIsNone(extract_invoice(invoice + "\nKOREKTA FAKTURY nr 1\n"))
+            item = "Usługi telekomunikacyjne - korekta 14 lis 2026 1 23% -7,11 -8,75"
+            with self.subTest(issuer=issuer, item=item):
+                self.assertEqual(extract_invoice(invoice + "\n" + item), extract_invoice(invoice))
+
+    def test_inline_and_wrapped_adjustments_are_payable_orange_invoices(self):
+        invoice = _fixture("orange_invoice.txt")
+        for adjustment in (
+            "Usługi telekomunikacyjne - korekta 14 lis 2026 - 13 gru 2026 1 23% -7,11 -8,75",
+            "Usługi telekomunikacyjne -\nkorekta 14 lis 2026 - 13 gru 2026 1 23% -7,11 -8,75",
+            "Usługi telekomunikacyjne -\nkorekta",
+            "Usługi telekomunikacyjne / \nkorekta",
+        ):
+            with self.subTest(adjustment=adjustment):
+                self.assertEqual(extract_invoice(invoice + "\n" + adjustment), extract_invoice(invoice))
 
     def test_correction_detection_skips_long_lines_without_joining_words(self):
         invoice = _fixture("tmobile_invoice.txt")
-        for text in ("Korekta ".ljust(513, "x"), "faktura\n" + "x" * 513 + "\nkorygująca"):
+        for text in (
+            "Korekta ".ljust(513, "x"),
+            "faktura\n" + "x" * 513 + "\nkorygująca",
+            "STRONA " + "\ufb03" * 171 + " KOREKTA",  # NFKC expands each ligature to three characters.
+        ):
             with self.subTest(text=text[:16]):
                 self.assertEqual(extract_invoice(invoice + text + "\n"), extract_invoice(invoice))
         split_marker = "faktura\n" + " " * 513 + "\nkorygująca\n"
@@ -126,6 +145,87 @@ class IssuerInvoiceFixtureTests(unittest.TestCase):
         self.assertEqual(extract_invoice(without_summary).amount, "150.37")
         equivalent_amount = original.replace(summary, f"{label}: 000150,37\u00a0ZŁ")
         self.assertEqual(extract_invoice(equivalent_amount).amount, "150.37")
+
+    def test_all_layouts_accept_nbsp_next_to_the_currency(self):
+        for path, old, new in (
+            (_FIXTURES / "tmobile_invoice.txt", "59,99 zł", "59,99\u00a0zł"),
+            (_FIXTURES / "play_invoice.txt", "150,37 zł", "150,37\u00a0zł"),
+            (_FIXTURES / "orange_invoice.txt", "88,10 zł", "88,10\u00a0zł"),
+            (_RESPECT_FIXTURE, "231,80 PLN", "231,80\u00a0PLN"),
+        ):
+            with self.subTest(name=path.name):
+                original = path.read_text(encoding="utf-8")
+                self.assertIn(old, original)
+                self.assertEqual(extract_invoice(original.replace(old, new)), extract_invoice(original))
+
+    def test_scoped_fields_use_normalized_text_before_redaction(self):
+        tmobile = _fixture("tmobile_invoice.txt")
+        normalized_number = "Nu\u200bmer faktury:\u00a0５０１２３４５６７８９０"
+        self.assertEqual(
+            extract_invoice(tmobile.replace(_TMOBILE_NUMBER_LINE, normalized_number)), extract_invoice(tmobile),
+        )
+        footer = _TMOBILE_FOOTER.replace("Okres rozliczeniowy: ", "Okres rozliczeniowy: I\u200bBAN ")
+        self.assertIsNone(extract_invoice(tmobile + footer + "\n"))
+        orange = _fixture("orange_invoice.txt")
+        self.assertIsNone(extract_invoice(orange + "Tytuł\u00a0przelewu: 26110200000002\n"))
+        play = _fixture("play_invoice.txt")
+        self.assertIsNone(extract_invoice(play + "PODSUMOWANIE\u00a0KWOTY DO ZAPŁATY: -10,00 zł\n"))
+
+    def test_duplicate_amount_labels_must_have_matching_valid_amounts(self):
+        for name, equivalent, invalid in (
+            (
+                "tmobile_invoice.txt",
+                "A+C Prosimy o wpłatę 059,99 zł brutto i",
+                ("A+C Prosimy o wpłatę 60,00 zł brutto i", "A+C Prosimy o wpłatę -59,99 zł brutto i",
+                 "A+C Prosimy o wpłatę 59,99 zł", "A+C Prosimy o wpłatę"),
+            ),
+            (
+                "play_invoice.txt",
+                "PROSIMY O WPŁATĘ: 000150,37 zł",
+                ("PROSIMY O WPŁATĘ: 150,38 zł", "PROSIMY O WPŁATĘ: -10,00 zł", "PROSIMY O WPŁATĘ:",
+                 "PROSIMY O WPŁATĘ: nie podano", "PROSIMY O WPŁATĘ: 0000 0000 0000 0000",
+                 "TERMIN PŁATNOŚCI: 23.11.2026 PROSIMY O WPŁATĘ: -10,00 zł",
+                 "TERMIN PŁATNOŚCI: nie podano PROSIMY O WPŁATĘ: 150,37 zł"),
+            ),
+        ):
+            original = _fixture(name)
+            with self.subTest(name=name, duplicate=equivalent):
+                self.assertEqual(extract_invoice(original + equivalent + "\n"), extract_invoice(original))
+            for duplicate in invalid:
+                with self.subTest(name=name, duplicate=duplicate):
+                    self.assertIsNone(extract_invoice(original + duplicate + "\n"))
+
+    def test_duplicate_due_date_labels_must_have_matching_valid_dates(self):
+        for name, label, date, other_date in (
+            ("tmobile_invoice.txt", "Termin płatności:", "23.09.2026", "24.09.2026"),
+            ("orange_invoice.txt", "Zapłać do:", "30.11.2026", "29.11.2026"),
+        ):
+            original = _fixture(name)
+            self.assertEqual(extract_invoice(original + f"{label} {date}\n"), extract_invoice(original))
+            for duplicate_date in (other_date, "31.11.2026", "nie podano", "", f"{date} dopisek"):
+                with self.subTest(name=name, duplicate_date=duplicate_date):
+                    self.assertIsNone(extract_invoice(original + f"{label} {duplicate_date}\n"))
+
+    def test_duplicate_issue_date_labels_must_have_matching_valid_dates(self):
+        for name, equivalent, invalid in (
+            (
+                "play_invoice.txt", "Data wystawienia\n08.11.2026",
+                ("Data wystawienia\n09.11.2026", "Data wystawienia\n31.11.2026",
+                 "Data wystawienia\nnie podano", "Data wystawienia"),
+            ),
+            (
+                "orange_invoice.txt", "Data wystawienia: 14 LISTOPADA 2026",
+                ("Data wystawienia: 15 listopada 2026", "Data wystawienia: 31 listopada 2026",
+                 "Data wystawienia: 14 lİstopada 2026", "Data wystawienia: 14 listopada 2026 dopisek",
+                 "Data wystawienia:"),
+            ),
+        ):
+            original = _fixture(name)
+            with self.subTest(name=name, duplicate=equivalent):
+                self.assertEqual(extract_invoice(original + equivalent + "\n"), extract_invoice(original))
+            for duplicate in invalid:
+                with self.subTest(name=name, duplicate=duplicate):
+                    self.assertIsNone(extract_invoice(original + duplicate + "\n"))
 
     def test_missing_due_date_is_rejected_for_each_real_layout(self):
         cases = (
@@ -225,21 +325,25 @@ class IssuerInvoiceFixtureTests(unittest.TestCase):
         )
         self.assertIsNone(extract_invoice(text))
 
-    def test_orange_issue_date_is_optional_but_other_fields_remain_structured(self):
+    def test_orange_issue_date_is_optional_but_must_parse_if_present(self):
         original = _fixture("orange_invoice.txt")
         for unknown_month in ("listopad", "İ", "lİstopada"):
             with self.subTest(month=unknown_month):
-                parsed = extract_invoice(original.replace("listopada", unknown_month))
-                self.assertIsNotNone(parsed)
-                self.assertIsNone(parsed.issue_date)
-                self.assertEqual(parsed.invoice_number, "26110200000001")
+                self.assertIsNone(extract_invoice(original.replace("listopada", unknown_month)))
         self.assertEqual(extract_invoice(original.replace("listopada", "LISTOPADA")), extract_invoice(original))
 
-        for issue_line in ("", "Data wystawienia: 14 listopada 2026\nData wystawienia: 15 listopada 2026\n"):
-            with self.subTest(issue_line=issue_line):
-                parsed = extract_invoice(original.replace("Data wystawienia: 14 listopada 2026\n", issue_line))
-                self.assertIsNotNone(parsed)
-                self.assertIsNone(parsed.issue_date)
+        parsed = extract_invoice(original.replace("Data wystawienia: 14 listopada 2026\n", ""))
+        self.assertIsNotNone(parsed)
+        self.assertIsNone(parsed.issue_date)
+        self.assertEqual(parsed.invoice_number, "26110200000001")
+
+    def test_play_issue_date_is_optional_but_must_parse_if_present(self):
+        original = _fixture("play_invoice.txt")
+        issue_line = "Data wystawienia\n08.11.2026\n"
+        parsed = extract_invoice(original.replace(issue_line, ""))
+        self.assertIsNotNone(parsed)
+        self.assertIsNone(parsed.issue_date)
+        self.assertIsNone(extract_invoice(original.replace(issue_line, "Data wystawienia\nnie podano\n")))
 
     def test_scoped_labels_are_anchored_to_their_lines(self):
         for name, label in (
@@ -256,6 +360,7 @@ class IssuerInvoiceFixtureTests(unittest.TestCase):
         bounded = conflict.ljust(512)
         self.assertIsNone(extract_invoice(original + bounded + "\n"))
         self.assertEqual(extract_invoice(original + bounded + " \n"), extract_invoice(original))
+        self.assertEqual(extract_invoice(original + conflict.ljust(513, "\u200b") + "\n"), extract_invoice(original))
 
         noisy_footer = "Numer Klienta: 0 Numer faktury: 501234567891 Okres rozliczeniowy: "
         footer_end = " Data wystawienia: 09.09.2026\n"
@@ -263,6 +368,12 @@ class IssuerInvoiceFixtureTests(unittest.TestCase):
         hostile = original + (noisy_footer * 512)[:repeated_size] + footer_end
         self.assertEqual(len(hostile.encode("utf-8")), 32768)
         self.assertEqual(extract_invoice(hostile), extract_invoice(original))
+
+    def test_text_byte_limit_is_enforced_before_normalization(self):
+        original = _fixture("tmobile_invoice.txt")
+        for filler in ("x" * 32768, "\u00a0" * 16384):
+            with self.subTest(filler_chars=len(filler)):
+                self.assertIsNone(extract_invoice(original + filler))
 
     def test_play_multiline_invoice_number_cannot_bridge_a_skipped_line(self):
         text = _fixture("play_invoice.txt").replace("Numer faktury\n", "Numer faktury\n" + "x" * 513 + "\n")
@@ -277,7 +388,7 @@ class IssuerInvoiceFixtureTests(unittest.TestCase):
 
 class RespectCompatibilityTests(unittest.TestCase):
     def test_existing_respect_fixture_is_unchanged(self):
-        text = (Path(__file__).parent / "fixtures" / "gmail" / "respect-energy.txt").read_text(encoding="utf-8")
+        text = _RESPECT_FIXTURE.read_text(encoding="utf-8")
         self.assertEqual(
             extract_invoice(text),
             ImportedInvoice("Respect Energy", "7791011327", "RE/09/2026/042", "231.8", "PLN",

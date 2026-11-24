@@ -8,7 +8,9 @@ import re
 import unicodedata
 
 from .analytics_core import canonical_money
-from .receipt_parser import MAX_LINE_CHARS, ReceiptError, redact_digit_field, redact_pan, valid_nip
+from .receipt_parser import (
+    MAX_LINE_CHARS, MAX_TEXT_BYTES, ReceiptError, _normalize_receipt_text, redact_digit_field, redact_pan, valid_nip,
+)
 
 
 @dataclass(frozen=True)
@@ -41,12 +43,12 @@ _FORWARDED_INVOICE_NUMBERS = {
     "T-Mobile": re.compile(r"[0-9]{12}", re.ASCII),
 }
 _ACCOUNT_WORD = re.compile(r"rachunk|konto|IBAN", re.IGNORECASE)
-# "Korekta" alone marks a correction only as a heading line. Regular invoices
-# list prorated adjustments such as "Usługi telekomunikacyjne - korekta".
 _CORRECTION = re.compile(
-    r"\b(?:faktura\s+korygująca|faktury\s+korygującej)\b|^[ \t]*korekta(?:[ \t]+faktury\b[^\n]*)?[ \t]*$",
-    re.IGNORECASE | re.MULTILINE,
+    r"\b(?:faktura\s+(?:vat\s+)?korygująca|faktury\s+(?:vat\s+)?korygującej"
+    r"|korekta\s+(?:(?:do\s+)?faktury|vat|nr))\b", re.IGNORECASE,
 )
+_CORRECTION_HEADING = re.compile(r"\bkorekta\Z", re.IGNORECASE)
+_CORRECTION_START = re.compile(r"korekta\b", re.IGNORECASE)
 _SKIPPED_LINE = "\0"
 _LABEL = re.compile(
     r"(?<!\w)(?:"
@@ -77,7 +79,7 @@ _SELLER_NIP = re.compile(r"NIP:?[ \t]*((?:PL)?[0-9][0-9 -]{8,16}[0-9])", re.IGNO
 
 _TMOBILE_NUMBER = re.compile(r"Numer faktury:[ \t]*(.*)", re.IGNORECASE)
 _TMOBILE_HEADER = re.compile(r"Faktura nr:[ \t]*(\S+)[ \t]+z dnia[ \t]*(.*)", re.IGNORECASE)
-_TMOBILE_DUE = re.compile(rf"Termin płatności:[ \t]*({_DATE_VALUE})", re.IGNORECASE)
+_TMOBILE_DUE = re.compile(r"Termin płatności\b:?[ \t]*(.*)", re.IGNORECASE)
 _TMOBILE_ISSUE = re.compile(
     r"Data i miejsce wystawienia:[ \t]*([^,\s]+)(?:,.*)?", re.IGNORECASE,
 )
@@ -88,24 +90,28 @@ _TMOBILE_FOOTER = re.compile(
     r"Okres rozliczeniowy:.*?\bData wystawienia:[ \t]*(.*)", re.IGNORECASE,
 )
 _TMOBILE_AMOUNT = re.compile(
-    rf"A\+C[ \t]+Prosimy o wpłatę[ \t]+({_PLN_VALUE})[ \t]+brutto i", re.IGNORECASE,
+    rf"A\+C[ \t]+Prosimy o wpłatę\b(?:[ \t]+({_PLN_VALUE})[ \t]+brutto i|.*)", re.IGNORECASE,
 )
 
 _PLAY_NUMBER_LABEL = re.compile(r"Numer faktury", re.IGNORECASE)
-_PLAY_ISSUE_LABEL = re.compile(r"Data wystawienia", re.IGNORECASE)
+_PLAY_ISSUE_LABEL = re.compile(r"Data wystawienia\b:?[ \t]*(.*)", re.IGNORECASE)
 _PLAY_DUE_LABEL = re.compile(r"TERMIN PŁATNOŚCI:?[ \t]*(.*)", re.IGNORECASE)
 _PLAY_DUE = re.compile(
     rf"({_DATE_VALUE})(?:[ \t]*(?:Numer konta bankowego:?|PROSIMY O WPŁATĘ:.*))?", re.IGNORECASE,
 )
+# Capture the amount on either supported payment line. The second alternative
+# reports a payment label with a malformed due-date prefix as an invalid amount.
 _PLAY_PAYMENT = re.compile(
-    rf"(?:TERMIN PŁATNOŚCI:?[ \t]*{_DATE_VALUE}[ \t]+)?PROSIMY O WPŁATĘ:[ \t]*({_PLN_VALUE})", re.IGNORECASE,
+    rf"(?:TERMIN PŁATNOŚCI:?[ \t]*{_DATE_VALUE}[ \t]+)?PROSIMY O WPŁATĘ\b:?[ \t]*(.*)"
+    r"|TERMIN PŁATNOŚCI\b.*?[ \t]PROSIMY O WPŁATĘ\b.*", re.IGNORECASE,
 )
 _PLAY_SUMMARY = re.compile(r"PODSUMOWANIE KWOTY DO ZAPŁATY\b:?[ \t]*(.*)", re.IGNORECASE)
 
 _ORANGE_NUMBER = re.compile(r"Do faktury VAT numer:[ \t]*(.*)", re.IGNORECASE)
 _ORANGE_TRANSFER = re.compile(r"Tytuł przelewu\b:?[ \t]*(.*)", re.IGNORECASE)
-_ORANGE_DUE = re.compile(rf"Zapłać do:[ \t]*({_DATE_VALUE})", re.IGNORECASE)
-_ORANGE_ISSUE = re.compile(r"data wystawienia:[ \t]*([0-9]{2})[ \t]+(\S+)[ \t]+([0-9]{4})")
+_ORANGE_DUE = re.compile(r"Zapłać do\b:?[ \t]*(.*)", re.IGNORECASE)
+_ORANGE_ISSUE_LABEL = re.compile(r"Data wystawienia\b:?[ \t]*(.*)", re.IGNORECASE)
+_ORANGE_ISSUE = re.compile(r"([0-9]{2})[ \t]+(\S+)[ \t]+([0-9]{4})")
 _ORANGE_PAYMENT_START = re.compile(r"Prosimy", re.IGNORECASE)
 _ORANGE_PAYMENT_LABEL = re.compile(r"o wpłatę do:", re.IGNORECASE)
 _MONTHS = {
@@ -132,15 +138,35 @@ def _safe_field(value: str) -> str | None:
     return value
 
 
-def _bounded_lines(text: str, *, skipped: str = "") -> list[str]:
-    # Keep a placeholder in place of a dropped line to preserve field adjacency.
-    bounded = []
+def _bounded_lines(text: str) -> list[str]:
+    return [line.strip() if len(line) <= MAX_LINE_CHARS else "" for line in text.splitlines()]
+
+
+def _normalized_invoice_lines(text: str) -> list[str]:
+    normalized = []
     for line in text.splitlines():
-        if len(line) <= MAX_LINE_CHARS:
-            bounded.append(line.strip(" \t"))
-        else:
-            bounded.append("" if line.isspace() else skipped)
-    return bounded
+        if len(line) > MAX_LINE_CHARS:
+            # A skipped row still separates fields and correction words.
+            normalized.append("" if line.isspace() else _SKIPPED_LINE)
+            continue
+        # Preserve word separation and let NFKC compose letters across format characters.
+        visible = "".join(
+            " " if char.isspace() else char for char in line if unicodedata.category(char) != "Cf"
+        )
+        line = _normalize_receipt_text(visible).strip()
+        normalized.append(line if len(line) <= MAX_LINE_CHARS else _SKIPPED_LINE)
+    return normalized
+
+
+def _is_correction(lines: list[str]) -> bool:
+    if _CORRECTION.search("\n".join(lines)):
+        return True
+    # A bare heading can wrap from a table line ending with '-' or '/'.
+    return any(
+        _CORRECTION_HEADING.search(line)
+        and not (previous.endswith(("-", "/")) and _CORRECTION_START.match(line))
+        for previous, line in zip(["", *lines], lines)
+    )
 
 
 def _line_pairs(lines: list[str]) -> Iterable[tuple[str, str]]:
@@ -204,6 +230,18 @@ def _parse_date(value: str) -> str | None:
         return None
 
 
+def _parse_dot_date(value: str) -> str | None:
+    return _parse_date(value) if _DOT_DATE.fullmatch(value) else None
+
+
+def _parse_orange_issue_date(value: str) -> str | None:
+    if match := _ORANGE_ISSUE.fullmatch(value.casefold()):
+        day, month, year = match.groups()
+        if month_number := _MONTHS.get(month):
+            return _parse_date(f"{day}.{month_number}.{year}")
+    return None
+
+
 def _parse_nip(value: str) -> str | None:
     digits = value.removeprefix("PL").replace("-", "").replace(" ", "")
     return _safe_field(digits) if valid_nip(digits) else None
@@ -212,7 +250,6 @@ def _parse_nip(value: str) -> str | None:
 def _parse_pln_amount(value: str | None) -> str | None:
     if value is None:
         return None
-    value = unicodedata.normalize("NFKC", value)
     if _safe_field(value) is None:
         return None
     match = _PLN_AMOUNT.fullmatch(value)
@@ -266,8 +303,8 @@ def _extract_tmobile(raw: list[str], clean: list[str]) -> ImportedInvoice | None
     issue_date = _parse_date(issue_value)
     if issue_date is None:
         return None
-    due_date = _parse_date(_one(_TMOBILE_DUE, clean) or "")
-    amount = _parse_pln_amount(_one(_TMOBILE_AMOUNT, clean))
+    due_date = _one_value(_parse_dot_date(match[1]) for match in _matches(_TMOBILE_DUE, raw))
+    amount = _one_value(_parse_pln_amount(match[1]) for match in _matches(_TMOBILE_AMOUNT, raw))
     return _pln_invoice(
         "T-Mobile", number, _one(_SELLER_NIP, clean), amount, issue_date, due_date
     )
@@ -281,10 +318,14 @@ def _extract_play(raw: list[str], clean: list[str]) -> ImportedInvoice | None:
     due_values = (
         match[1] or value for label, value in _line_pairs(clean) if (match := _PLAY_DUE_LABEL.fullmatch(label))
     )
-    issue_values = (value for label, value in _line_pairs(clean) if _PLAY_ISSUE_LABEL.fullmatch(label))
     due_date = _parse_date(_one(_PLAY_DUE, due_values) or "")
-    issue_date = _parse_date(_one_value(match[0] for match in _matches(_DOT_DATE, issue_values)) or "")
-    payment = _one_value(_parse_pln_amount(match[1]) for match in _matches(_PLAY_PAYMENT, clean))
+    issue_values = [
+        match[1] or value for label, value in _line_pairs(raw) if (match := _PLAY_ISSUE_LABEL.fullmatch(label))
+    ]
+    issue_date = _one_value(map(_parse_dot_date, issue_values))
+    if issue_values and issue_date is None:
+        return None
+    payment = _one_value(_parse_pln_amount(match[1]) for match in _matches(_PLAY_PAYMENT, raw))
     if payment is None or any(_parse_pln_amount(match[1]) != payment for match in _matches(_PLAY_SUMMARY, raw)):
         return None
     return _pln_invoice("Play", number, _one(_SELLER_NIP, clean), payment, issue_date, due_date)
@@ -302,15 +343,13 @@ def _extract_orange(raw: list[str], clean: list[str]) -> ImportedInvoice | None:
     if len(payment_blocks) != 1:
         return None
     payment_date, amount_value = payment_blocks.pop()
-    if payment_date != _one(_ORANGE_DUE, clean):
+    due_date = _one_value(_parse_dot_date(match[1]) for match in _matches(_ORANGE_DUE, raw))
+    if due_date is None or _parse_dot_date(payment_date) != due_date:
         return None
-    due_date = _parse_date(payment_date)
-    issue_parts = {match.groups() for match in _matches(_ORANGE_ISSUE, (line.casefold() for line in clean))}
-    issue_date = None
-    if len(issue_parts) == 1:
-        day, month, year = issue_parts.pop()
-        if month_number := _MONTHS.get(month):
-            issue_date = _parse_date(f"{day}.{month_number}.{year}")
+    issue_fields = list(_matches(_ORANGE_ISSUE_LABEL, raw))
+    issue_date = _one_value(_parse_orange_issue_date(match[1]) for match in issue_fields)
+    if issue_fields and issue_date is None:
+        return None
     amount = _parse_pln_amount(amount_value)
     return _pln_invoice("Orange", number, _one(_SELLER_NIP, clean), amount, issue_date, due_date)
 
@@ -325,14 +364,17 @@ _EXTRACTORS = {
 
 def extract_invoice(text: str) -> ImportedInvoice | None:
     """Recognize one supported issuer and apply only that issuer's template."""
-    try:
-        sanitized = _bounded_lines(redact_pan(text))
-        clean = _bounded_lines(redact_pan("\n".join(_EMAIL.sub(" ", line) for line in sanitized)))
-    except ReceiptError:
+    if not isinstance(text, str) or len(text) > MAX_TEXT_BYTES:
         return None
-    # Keep skipped lines from creating a correction marker across unrelated lines.
-    raw = _bounded_lines(text, skipped=_SKIPPED_LINE)
-    if _CORRECTION.search("\n".join(raw)):
+    try:
+        if len(text.encode("utf-8")) > MAX_TEXT_BYTES:
+            return None
+        raw = _normalized_invoice_lines(text)
+        if _is_correction(raw):
+            return None
+        sanitized = _bounded_lines(redact_pan("\n".join(raw)))
+        clean = _bounded_lines(redact_pan("\n".join(_EMAIL.sub(" ", line) for line in sanitized)))
+    except (ReceiptError, UnicodeEncodeError):
         return None
     issuers = {_ISSUERS[match.lastgroup] for line in clean for match in _BRAND.finditer(line)}
     if len(issuers) != 1:

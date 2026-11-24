@@ -1,6 +1,7 @@
 """Gmail message processing against synthetic metadata, MIME, and worker fixtures."""
 import base64
 from email.message import EmailMessage
+from itertools import permutations
 from pathlib import Path
 from types import SimpleNamespace
 import unittest
@@ -112,13 +113,50 @@ class GmailMessageProcessorTests(unittest.TestCase):
 
     def test_direct_orange_invoice_from_other_domains_is_skipped(self):
         text = (PDF_TEXT / "orange_invoice.txt").read_text(encoding="utf-8")
-        for sender in (MERCHANT, "synthetic-billing@notorange.com", "synthetic-billing@orange.com.example.test"):
+        for sender in ("synthetic-billing@notorange.com", "synthetic-billing@orange.com.example.test"):
             with self.subTest(sender=sender):
                 self.settings.sender_allowlist = (sender,)
                 no_invoice = _email(sender, "Synthetic body without an invoice")
                 invoice = _email(sender, text)
                 pending = self._process(_metadata(invoice), _raw(invoice))
                 self.assertEqual(pending, self._process(_metadata(no_invoice), _raw(no_invoice)))
+                self.assertEqual((pending.trust_path, pending.outcome, pending.invoice),
+                                 ("direct_allowlist", "skipped_non_receipt", None))
+
+    def test_invoices_from_each_other_provider_are_rejected(self):
+        bodies_by_domain = {
+            "t-mobile.pl": (PDF_TEXT / "tmobile_invoice.txt").read_text(encoding="utf-8"),
+            "orange.pl": (PDF_TEXT / "orange_invoice.txt").read_text(encoding="utf-8"),
+            "play.pl": (PDF_TEXT / "play_invoice.txt").read_text(encoding="utf-8"),
+            "respectenergy.pl": INVOICE,
+        }
+        for invoice_domain, sender_domain in permutations(bodies_by_domain, 2):
+            with self.subTest(invoice_domain=invoice_domain, sender_domain=sender_domain):
+                sender = f"synthetic-billing@{sender_domain}"
+                self.settings.sender_allowlist = (sender,)
+                invoice = _email(sender, bodies_by_domain[invoice_domain])
+                direct = self._process(_metadata(invoice), _raw(invoice))
+                self.assertEqual((direct.trust_path, direct.outcome, direct.invoice),
+                                 ("direct_allowlist", "skipped_non_receipt", None))
+
+                forwarded = _email(SPOUSE, "Synthetic cover note")
+                forwarded.add_attachment(invoice)
+                pending = self._process(_metadata(forwarded), _raw(forwarded))
+                self.assertEqual((pending.trust_path, pending.outcome, pending.forwarded_manually,
+                                  pending.sender_domain, pending.invoice),
+                                 ("spouse_forward", "imported", True, sender_domain, None))
+
+    def test_display_name_and_reply_to_do_not_supply_the_issuer_domain(self):
+        sender = "x@evil.example"
+        self.settings.sender_allowlist = (sender,)
+        text = (PDF_TEXT / "tmobile_invoice.txt").read_text(encoding="utf-8")
+        display_name = _email(sender, text)
+        display_name.replace_header("From", f"T-Mobile <{sender}>")
+        reply_to = _email(sender, text)
+        reply_to["Reply-To"] = "synthetic-billing@t-mobile.pl"
+        for header, message in (("From", display_name), ("Reply-To", reply_to)):
+            with self.subTest(header=header):
+                pending = self._process(_metadata(message), _raw(message))
                 self.assertEqual((pending.trust_path, pending.outcome, pending.invoice),
                                  ("direct_allowlist", "skipped_non_receipt", None))
 
