@@ -516,3 +516,12 @@ class GmailMessageProcessorTests(unittest.TestCase):
             pending = self._process(_metadata(oversized), _raw(oversized))
         self.assertEqual(pending.outcome, "skipped_oversized")
         self.worker.parse.assert_not_called()
+
+    def test_unknown_rejected_reason_normalizes_to_other_in_logs_and_result(self):
+        secret = "raw-sensitive-error"
+        self.worker.parse.side_effect = gmail_message._Rejected(secret)
+        with self.assertLogs("hestia.budget.gmail_message", level="WARNING") as logs:
+            pending = self._process(_metadata(), _raw(_email()))
+        self.assertEqual((pending.outcome, pending.parse_failed_reason), ("parse_failed", "other"))
+        self.assertEqual(logs.output, ["WARNING:hestia.budget.gmail_message:gmail parse_failed reason=other"])
+        self.assertNotIn(secret, logs.output[0])

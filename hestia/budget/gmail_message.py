@@ -12,7 +12,7 @@ import re
 from .gmail_address import canonical_mailbox
 from .gmail_client import GmailError
 from .gmail_invoice import _FORWARDED_INVOICE_NUMBERS, extract_invoice
-from .gmail_store import RFC_MESSAGE_DOMAIN, PendingMessage, digest
+from .gmail_store import RFC_MESSAGE_DOMAIN, PendingMessage, digest, normalize_parse_failed_reason
 from .gmail_trust import classify_sender, forward_sender_domain, mime_parts, unwrap_trusted_forward
 from .gmail_worker import MAX_HTML_BYTES, MAX_PDF_BYTES, PDFUnsupported, WorkerRejected, WorkerUnavailable
 
@@ -45,7 +45,7 @@ def _worker_reason(error):
 
 
 def _parse_failed(pending, reason):
-    return replace(pending, outcome=_PARSE_FAILED, parse_failed_reason=reason)
+    return replace(pending, outcome=_PARSE_FAILED, parse_failed_reason=normalize_parse_failed_reason(reason))
 
 
 def _metadata(response, message_id):

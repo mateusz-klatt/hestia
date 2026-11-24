@@ -178,11 +178,11 @@ class GmailSync:
             self.store.transition(owner, expected_version, status, mailbox_hmac, queue_sync=defer_profile)
             return self.store.status(owner)
 
-    def _commit(self, owner, progress, changes, pending=(), *, reset_reasons=False, retry_full_cutoff=None):
+    def _commit(self, owner, progress, changes, pending=(), *, reset_reasons=False, starting_recovery=False):
         should_reset = reset_reasons or (progress.reset_reasons and bool(pending))
         imported, skipped, drained = self.store.commit(
             owner, progress.generation, changes, pending,
-            reset_reasons=should_reset, retry_full_cutoff=retry_full_cutoff,
+            reset_reasons=should_reset, starting_recovery=starting_recovery,
         )
         if should_reset:
             progress.reset_reasons = False
@@ -195,7 +195,7 @@ class GmailSync:
         now = self.store.clock()
         full_cutoff = max(0, now - self.settings.backfill_days * DAY)
         cutoff = full_cutoff
-        if full and not self.store.retry_full_window(owner):
+        if full:
             last_sync = state.last_sync_at if state.last_sync_at is not None else now
             cutoff = max(full_cutoff, last_sync - 7 * DAY)
         changes = {
@@ -204,8 +204,8 @@ class GmailSync:
         }
         if full:
             changes["force_full_resync"] = 0
-        progress.reset_reasons = False
-        self._commit(owner, progress, changes, reset_reasons=True, retry_full_cutoff=full_cutoff)
+        progress.reset_reasons = True
+        self._commit(owner, progress, changes, starting_recovery=True)
 
     def _completion(self, state):
         now = self.store.clock()
@@ -393,7 +393,7 @@ class GmailSync:
                 self.store.retain(owner, generation)
                 progress.label_id = self._label(run)
                 state = self.store.state(owner)
-                force = bool(force_full_resync or state.force_full_resync or self.store.has_pending_retry_window(owner))
+                force = bool(force_full_resync or state.force_full_resync)
                 while True:
                     if force or (state.history_id is None and state.pending_history_id is None):
                         self._start_recovery(owner, progress, profile_history, state, full=force)

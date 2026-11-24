@@ -178,19 +178,24 @@ class GmailStore(BudgetStore):
             if not row.run_requested and row.last_attempt_at is not None and row.last_attempt_at + cooldown > now:
                 raise GmailError("budget_receipt_gmail_cooldown", 429)
             if retry_parse_failed:
-                cutoff = max(0, now - backfill_days * DAY)
+                cutoff = max(0, int(now) - backfill_days * DAY)
+                key = _retry_window_key(owner)
+                meta = session.get(AppMeta, key)
+                if meta is not None:
+                    existing = json.loads(meta.value)
+                    if existing["state"] == "pending":
+                        cutoff = min(cutoff, existing["cutoff"])
                 session.execute(delete(BudgetGmailMessage).where(
                     BudgetGmailMessage.owner == owner,
                     BudgetGmailMessage.outcome == "parse_failed",
                     BudgetGmailMessage.receipt_id.is_(None),
                     BudgetGmailMessage.internal_date >= cutoff,
                 ))
-                key = _retry_window_key(owner)
-                meta = session.get(AppMeta, key)
+                encoded = json.dumps({"state": "pending", "cutoff": cutoff})
                 if meta is None:
-                    session.add(AppMeta(key=key, value="pending"))
+                    session.add(AppMeta(key=key, value=encoded))
                 else:
-                    meta.value = "pending"
+                    meta.value = encoded
                 force_full_resync = True
             if row.run_requested:
                 if force_full_resync and (retry_parse_failed or row.sync_phase != "full_resync"):
@@ -207,11 +212,6 @@ class GmailStore(BudgetStore):
     def retry_full_window(self, owner):
         with self.sessions() as session:
             return session.get(AppMeta, _retry_window_key(owner)) is not None
-
-    def has_pending_retry_window(self, owner):
-        with self.sessions() as session:
-            row = session.get(AppMeta, _retry_window_key(owner))
-            return row is not None and row.value != "running"
 
     def check_version(self, owner, expected):
         self._version(self.state(owner), expected)
@@ -314,7 +314,7 @@ class GmailStore(BudgetStore):
         session.flush()
         return receipt.id
 
-    def commit(self, owner, generation, changes, pending=(), *, reset_reasons=False, retry_full_cutoff=None):
+    def commit(self, owner, generation, changes, pending=(), *, reset_reasons=False, starting_recovery=False):
         """Commit up to one chunk; never advance a page past an uncommitted message."""
         imported = skipped = 0
         drained = True
@@ -350,6 +350,19 @@ class GmailStore(BudgetStore):
                                                outcome=outcome, created_at=now, receipt_id=receipt_id))
             if row.sync_phase in ("backfill", "full_resync"):
                 row.batch_processed_count += imported + skipped
+            if starting_recovery:
+                retry_meta = session.get(AppMeta, _retry_window_key(owner))
+                if retry_meta is not None:
+                    marker = json.loads(retry_meta.value)
+                    changes = {
+                        **changes,
+                        "resume_cutoff_ts": min(changes["resume_cutoff_ts"], marker["cutoff"]),
+                        "force_full_resync": 0,
+                        "sync_phase": "full_resync",
+                    }
+                    if marker["state"] == "pending":
+                        reset_reasons = True
+                        retry_meta.value = json.dumps({"state": "running", "cutoff": marker["cutoff"]})
             if reset_reasons or new_reasons:
                 key = _reasons_key(owner)
                 meta = session.get(AppMeta, key)
@@ -364,11 +377,6 @@ class GmailStore(BudgetStore):
                         meta.value = encoded
                 elif meta is not None:
                     session.delete(meta)
-            if retry_full_cutoff is not None:
-                retry_meta = session.get(AppMeta, _retry_window_key(owner))
-                if retry_meta is not None:
-                    changes = {**changes, "resume_cutoff_ts": retry_full_cutoff}
-                    retry_meta.value = "running"
             if drained:
                 was_recovery = row.sync_phase != "incremental"
                 for key, value in changes.items():
@@ -377,10 +385,9 @@ class GmailStore(BudgetStore):
                     # A force request may arrive after the worker chose what to scan.
                     row.run_requested = int(bool(row.force_full_resync))
                     if was_recovery:
-                        session.execute(delete(AppMeta).where(
-                            AppMeta.key == _retry_window_key(owner),
-                            AppMeta.value == "running",
-                        ))
+                        retry_meta = session.get(AppMeta, _retry_window_key(owner))
+                        if retry_meta is not None and json.loads(retry_meta.value)["state"] == "running":
+                            session.delete(retry_meta)
         return imported, skipped, drained
 
     def retain(self, owner, generation):
