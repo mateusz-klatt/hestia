@@ -490,8 +490,8 @@ class DeviceTokenStore:
     def _make_token_room(self, session, owner, name, moment, *, rotate):
         rotated = False
         if rotate:
-            # A name alone is not proof of an existing password login. Pairing
-            # and expired credentials must still produce a new-device alert.
+            # A name alone is not proof of an earlier new-device alert.
+            # Unaudited and expired credentials must still produce an alert.
             replacing = session.scalar(select(DeviceToken).where(
                 DeviceToken.owner == owner, DeviceToken.device_name == name, DeviceToken.revoked_at.is_(None),
                 DeviceToken.expires_at > moment, DeviceToken.hard_expires_at > moment,
@@ -537,10 +537,9 @@ class DeviceTokenStore:
             )
 
         row = _insert_unique(session, factory)
-        if rotate:
-            write_device_audit(session, owner, row.id, NEW_DEVICE_LOGIN, moment)
-            if rotated:
-                write_device_audit(session, owner, row.id, DEVICE_ROTATE, moment)
+        write_device_audit(session, owner, row.id, NEW_DEVICE_LOGIN, moment)
+        if rotated:
+            write_device_audit(session, owner, row.id, DEVICE_ROTATE, moment)
         expires_at = datetime.fromtimestamp(row.expires_at, timezone.utc).isoformat(timespec="seconds")
         return {"token": issued["token"], "token_id": row.id, "scope": "receipts", "expires_at": expires_at}
 
