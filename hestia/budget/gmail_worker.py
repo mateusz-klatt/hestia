@@ -1,11 +1,13 @@
 """Length-framed client and isolated parser for in-memory Gmail documents.
 
-The sidecar image runs this standard-library-only module directly. Hestia uses
-the client and never invokes the renderer in its own process for live input.
+The sidecar image runs this module directly. Only the PDF renderer imports
+pypdf. Hestia uses the client for all live input.
 """
 from __future__ import annotations
 
 from html.parser import HTMLParser
+from io import BytesIO
+import logging
 import os
 from pathlib import Path
 import re
@@ -20,6 +22,7 @@ import tempfile
 import threading
 import time
 import unicodedata
+import zlib
 
 
 PARSER_SOCKET = "/run/hestia-receipt-parser/worker.sock"
@@ -27,6 +30,11 @@ PARSE_TIMEOUT_SECONDS = 5.0
 _READY_TIMEOUT_SECONDS = 1.0
 MAX_HTML_BYTES = 1024 * 1024
 MAX_PDF_BYTES = 5 * 1024 * 1024
+MAX_PDF_PAGES = 10
+MAX_PDF_STREAM_BYTES = 4 * 1024 * 1024
+MAX_PDF_DECOMPRESSED_BYTES = 8 * 1024 * 1024
+MAX_PDF_RECURSION = 64
+_PDF_CHILD_ADDRESS_SPACE = 192 * 1024 * 1024
 MAX_TEXT_BYTES = 32 * 1024
 MAX_TEXT_LINES = 500
 _MAX_REQUEST_BYTES = 11 * 1024 * 1024 // 2
@@ -51,7 +59,7 @@ class WorkerRejected(ValueError):
 
 
 class PDFUnsupported(WorkerRejected):
-    """PDF template extraction is pending."""
+    """The parser reported an unsupported PDF."""
 
 
 def _remaining(deadline: float) -> float:
@@ -200,14 +208,138 @@ def _bounded_text(raw: str, *, html: bool) -> bytes:
     return result
 
 
+def _pdf_text(payload: bytes) -> bytes:
+    # These hooks are scoped to a single render in the disposable child. They
+    # cover streams pypdf reads before it exposes any pages (xref and objects).
+    from pypdf import PdfReader, apply_configuration, filters
+    from pypdf.generic import StreamObject
+
+    class RejectPDF(BaseException):
+        """Abort pypdf recovery paths that catch Exception and return partial text."""
+
+    class RejectPDFWarning(logging.Handler):
+        def emit(self, record):
+            # Recovery can silently omit PDF content and diagnostics can quote it.
+            raise RejectPDF
+
+    class UnencryptedReader(PdfReader):
+        def _handle_encryption(self, password):
+            # PdfReader otherwise tries the empty password during construction.
+            raise RejectPDF
+
+    initialize_stream = StreamObject.initialize_from_dictionary
+    decode_stream = filters.decode_stream_data
+    decompress = filters.decompress
+    decode_ascii85 = filters.ASCII85Decode.decode
+    total = 0
+
+    def remaining_stream_bytes() -> int:
+        return min(MAX_PDF_STREAM_BYTES, MAX_PDF_DECOMPRESSED_BYTES - total)
+
+    def charge_stream(data: bytes) -> None:
+        nonlocal total
+        total += len(data)
+        if len(data) > MAX_PDF_STREAM_BYTES or total > MAX_PDF_DECOMPRESSED_BYTES:
+            raise RejectPDF
+
+    def read_stream(data):
+        if "/F" in data:
+            raise RejectPDF
+        if "/Filter" not in data:
+            charge_stream(data["__streamdata__"])
+        return initialize_stream(data)
+
+    def read_filtered_stream(stream):
+        # EncodedStreamObject caches this result, so rereads do not spend budget.
+        limit = max(1, remaining_stream_bytes())
+        with apply_configuration(
+            lzw_maximum_output_length=limit,
+            run_length_maximum_output_length=limit,
+            brotli_maximum_output_length=limit,
+        ):
+            data = decode_stream(stream)
+        charge_stream(data)
+        return data
+
+    def strict_flate(data):
+        # pypdf's default Flate recovery can accept a truncated zlib member.
+        decoder = zlib.decompressobj()
+        limit = remaining_stream_bytes()
+        result = decoder.decompress(data, limit + 1)
+        if len(result) > limit or not decoder.eof or decoder.unused_data:
+            raise RejectPDF
+        return result
+
+    def bounded_ascii85(data):
+        # The decoder has no output cap. Each 'z' encodes four zero bytes.
+        digits = data.translate(None, b"\0\t\n\f\r ").removeprefix(b"<~").removesuffix(b"~>")
+        zero_groups = digits.count(b"z")
+        if 4 * zero_groups + 4 * (len(digits) - zero_groups) // 5 > remaining_stream_bytes():
+            raise RejectPDF
+        return decode_ascii85(data)
+
+    logger = logging.getLogger("pypdf")
+    handlers, level, propagate = logger.handlers, logger.level, logger.propagate
+    recursion_limit = sys.getrecursionlimit()
+    depth, frame = 0, sys._getframe()
+    while frame is not None:
+        depth += 1
+        frame = frame.f_back
+
+    logger.handlers = [RejectPDFWarning(logging.WARNING)]
+    logger.setLevel(logging.WARNING)
+    logger.propagate = False
+    StreamObject.initialize_from_dictionary = staticmethod(read_stream)
+    filters.decode_stream_data = read_filtered_stream
+    filters.decompress = strict_flate
+    filters.ASCII85Decode.decode = staticmethod(bounded_ascii85)
+    try:
+        with apply_configuration(
+            maximum_declared_stream_length=MAX_PDF_STREAM_BYTES,
+            array_based_stream_maximum_output_length=MAX_PDF_DECOMPRESSED_BYTES,
+            stream_decoding_work_maximum_length=3 * MAX_PDF_STREAM_BYTES,
+            page_tree_maximum_depth=MAX_PDF_RECURSION,
+            page_tree_maximum_entries=MAX_PDF_PAGES * MAX_PDF_RECURSION,
+            jbig2dec_binary=None,
+            disable_legacy_handling=True,
+        ):
+            # The page tree is traversed iteratively. The interpreter limit
+            # separately bounds recursive object parsing and form extraction.
+            sys.setrecursionlimit(depth + MAX_PDF_RECURSION)
+            reader = UnencryptedReader(BytesIO(payload), strict=True)
+            if len(reader.pages) > MAX_PDF_PAGES:
+                raise RejectPDF
+            pages = []
+            characters = 0
+            for page in reader.pages:
+                # pypdf's text extractor skips /Contents when resources are absent.
+                page.get_contents()
+                page_text = page.extract_text().strip()
+                characters += len(page_text)
+                if characters > MAX_TEXT_BYTES:
+                    raise RejectPDF
+                if page_text:
+                    pages.append(page_text)
+    except (Exception, RejectPDF):
+        raise WorkerRejected from None
+    finally:
+        sys.setrecursionlimit(recursion_limit)
+        filters.ASCII85Decode.decode = staticmethod(decode_ascii85)
+        filters.decompress = decompress
+        filters.decode_stream_data = decode_stream
+        StreamObject.initialize_from_dictionary = staticmethod(initialize_stream)
+        logger.handlers, logger.propagate = handlers, propagate
+        logger.setLevel(level)
+    return _bounded_text("\n".join(pages), html=False)
+
+
 def _render(request: bytes) -> bytes:
     """Run only in the sidecar child or the bounded fixture subprocess."""
     kind, payload = request[:1], request[1:]
     try:
         _validate_request(kind, payload)
         if kind == b"P":
-            # TODO(v1d-b): bounded pypdf extraction (pages, streams and recursion).
-            return b"!"
+            return b"+" + _pdf_text(payload)
         text = payload.decode("utf-8")
         if kind == b"H":
             parser = _InvoiceHTML()
@@ -225,6 +357,9 @@ def _parser_child(listener: socket.socket, client: socket.socket, parent: socket
     client.close()
     parent.close()
     with writer:
+        if request.startswith(b"P"):
+            # Leave headroom for the supervisor under the 256 MiB cgroup cap.
+            resource.setrlimit(resource.RLIMIT_AS, (_PDF_CHILD_ADDRESS_SPACE,) * 2)
         _send_frame(writer, _render(request), deadline)
 
 

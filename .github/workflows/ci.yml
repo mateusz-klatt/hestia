@@ -54,11 +54,12 @@ jobs:
         with:
           python-version: "3.14"
 
-      # Runtime deps (cryptography) + the `coverage` dev tool.
+      # Runtime deps, the receipt-parser test dependency, and coverage.
       - name: Install dependencies
         run: |
           python -m pip install --upgrade coverage
           python -m pip install -r requirements.txt
+          python -m pip install -r requirements-receipt-parser.txt
 
       - name: Unit tests + 100% line+branch gate + coverage.xml
         run: |
