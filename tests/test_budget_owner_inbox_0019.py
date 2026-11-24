@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import json
+import os
 from pathlib import Path
 import tempfile
 import threading
@@ -16,7 +17,7 @@ from sqlalchemy import inspect, select
 from sqlalchemy.exc import IntegrityError
 
 from hestia import api_contract, db
-from hestia.budget import analytics_api, owner_inbox as inbox_mod
+from hestia.budget import analytics_api, device_token, owner_inbox as inbox_mod
 from hestia.budget.analytics_core import AnalyticsError
 from hestia.budget.analytics_views import BudgetAnalyticsViews
 from tests import test_budget_analytics_api as analytics_fixture
@@ -399,6 +400,28 @@ class OwnerInboxViewsAndCAS0019Tests(AnalyticsCase):
         super().setUp()
         self.now = FROZEN_NOW
         self.views = BudgetAnalyticsViews(self.sessions, clock=lambda: self.now, cursor_secret=b"synthetic-only")
+
+    def test_pairing_code_redeem_lists_new_device(self):
+        key_file = self.path.parent / "device-rule.key"
+        key_file.touch(mode=0o600)
+        key_file.write_bytes(bytes(32))
+        with mock.patch.dict(os.environ, {device_token._RULE_KEY_FILE: str(key_file)}):
+            devices = device_token.DeviceTokenStore(self.sessions, clock=lambda: self.now)
+            pair = devices.issue_code("owner")
+            redeemed = devices.redeem(pair["code"], "Paired phone")
+
+        audit, = [row for row in self.rows(db.BudgetAnalyticsAudit)
+                  if row.subject_id == redeemed["token_id"]]
+        self.assertEqual((audit.owner, audit.subject_type, audit.action),
+                         ("owner", "receipt_device_token", device_token.NEW_DEVICE_LOGIN))
+        result = self.views.inbox("owner")
+        api_contract.BudgetAnalyticsInbox.model_validate(result)
+        item, = [entry for entry in result["items"] if entry["kind"] == inbox_mod.KIND_DEVICE]
+        self.assertEqual(item["ref"], {"token_id": redeemed["token_id"]})
+        self.assertEqual(item["params"], {"device_name": "Paired phone", "status": "added", "date": "2026-11-21"})
+        self.assertFalse(item["read"])
+        self.assertFalse(any(entry["kind"] == inbox_mod.KIND_DEVICE
+                             for entry in self.views.inbox("other")["items"]))
 
     def _seed_all_three_sources(self):
         # 1. Consent renewal: expire owner's existing connection ("bank") within 5 days (lead tier 7).
