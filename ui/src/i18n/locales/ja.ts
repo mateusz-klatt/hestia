@@ -1034,7 +1034,7 @@ const messages: Partial<Messages> = {
   "budget.forecast.merged": "返済と統合済み",
   "budget.forecast.matchedDue": "返済期日 {date}",
   "budget.forecast.lastObserved": "最終確認 {date}",
-  "budget.forecast.baselineConflict": "推定を省略：{names} （固定支払いとして予測済み）",
+  "budget.forecast.baselineConflict": "推定を省略：{names}（固定支払いとして予測済み）",
   "budget.forecast.baselineConflictUnnamed": "別のカテゴリ",
   "budget.forecast.baselineConflictUnknown": "固定支払いとして予測済みのカテゴリの推定を省略しました",
   "budget.monthBudget.title": "月間予算",

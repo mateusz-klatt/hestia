@@ -1034,7 +1034,7 @@ const messages: Partial<Messages> = {
   "budget.forecast.merged": "已与分期还款合并",
   "budget.forecast.matchedDue": "还款到期日 {date}",
   "budget.forecast.lastObserved": "最近一次发现于 {date}",
-  "budget.forecast.baselineConflict": "已跳过以下估算：{names} （已作为固定付款预测）",
+  "budget.forecast.baselineConflict": "已跳过以下估算：{names}（已作为固定付款预测）",
   "budget.forecast.baselineConflictUnnamed": "其他类别",
   "budget.forecast.baselineConflictUnknown": "已跳过某类别的估算，该类别已作为固定付款预测",
   "budget.monthBudget.title": "月度预算",

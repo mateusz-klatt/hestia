@@ -1060,7 +1060,7 @@ const messages: Partial<Messages> = {
   "budget.monthBudget.staleData": "قد تكون البيانات قديمة",
   "budget.monthBudget.staleAccounts.zero": "{n} حساب غير محدّث",
   "budget.monthBudget.staleAccounts.one": "{n} حساب غير محدّث",
-  "budget.monthBudget.staleAccounts.two": "{n} حسابان غير محدّثين",
+  "budget.monthBudget.staleAccounts.two": "{n} حسابان غير محدّثان",
   "budget.monthBudget.staleAccounts.few": "{n} حسابات غير محدّثة",
   "budget.monthBudget.staleAccounts.many": "{n} حسابًا غير محدّث",
   "budget.monthBudget.staleAccounts.other": "{n} حساب غير محدّث",
