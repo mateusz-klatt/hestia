@@ -190,7 +190,14 @@ class DeviceTokenStoreTests(unittest.TestCase):
 
     def test_redeem_rolls_back_token_and_code_when_audit_insert_fails(self):
         issued = self.store.issue_code("alice")
-        with mock.patch.object(device_token, "write_device_audit", side_effect=RuntimeError("synthetic")):
+        real_writer = device_token.write_device_audit
+
+        def stage_then_fail(session, *args):
+            real_writer(session, *args)
+            session.flush()
+            raise RuntimeError("synthetic")
+
+        with mock.patch.object(device_token, "write_device_audit", side_effect=stage_then_fail):
             with self.assertRaises(RuntimeError):
                 self.store.redeem(issued["code"], "Vesta")
         self.assertEqual(self._tokens(), [])
